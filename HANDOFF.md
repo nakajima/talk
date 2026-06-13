@@ -373,7 +373,11 @@ One file (`mod.rs`) so far. The shape:
   Occurrences carry their *checker* types alongside λ_G values — payload
   types come from `VariantInfo.payloads` substituted with the scrutinee's
   enum args. Note: `{ y: pat }` binds `y` *and* matches `pat` (the
-  checker binds both).
+  checker binds both). The checker proves coverage *before* lowering:
+  `src/types/exhaustiveness.rs` (Maranget JFP 2007 usefulness) errors on
+  non-exhaustive matches with example values and warns on unreachable
+  arms (`Severity::Warn` — the first warning-severity diagnostic), so
+  `match_failed` really is unreachable from checked code.
 - **Destructuring lets** (M4): irrefutable record/tuple lhs patterns bind
   via `collect_irrefutable_binds` (Extract chains). The checker routes
   top-level destructuring lets through `check_local_decl` with the phase-2c

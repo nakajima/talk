@@ -282,19 +282,32 @@ fn diagnostic_for_any(
     asts: &[Option<AST<NameResolved>>],
     diagnostic: &AnyDiagnostic,
 ) -> Option<(DocumentId, Diagnostic)> {
-    let (id, message, parse_error, prefer_identifier) = match diagnostic {
+    let (id, message, parse_error, prefer_identifier, severity) = match diagnostic {
         AnyDiagnostic::Parsing(diagnostic) => (
             diagnostic.id,
             diagnostic.kind.to_string(),
             Some(&diagnostic.kind),
             false,
+            &diagnostic.severity,
         ),
-        AnyDiagnostic::NameResolution(diagnostic) => {
-            (diagnostic.id, diagnostic.kind.to_string(), None, true)
-        }
-        AnyDiagnostic::Types(diagnostic) => {
-            (diagnostic.id, diagnostic.kind.to_string(), None, false)
-        }
+        AnyDiagnostic::NameResolution(diagnostic) => (
+            diagnostic.id,
+            diagnostic.kind.to_string(),
+            None,
+            true,
+            &diagnostic.severity,
+        ),
+        AnyDiagnostic::Types(diagnostic) => (
+            diagnostic.id,
+            diagnostic.kind.to_string(),
+            None,
+            false,
+            &diagnostic.severity,
+        ),
+    };
+    let severity = match severity {
+        crate::diagnostic::Severity::Error => DiagnosticSeverity::Error,
+        crate::diagnostic::Severity::Warn => DiagnosticSeverity::Warning,
     };
 
     let file_idx = id.0.0 as usize;
@@ -319,7 +332,7 @@ fn diagnostic_for_any(
         doc_id,
         Diagnostic {
             range,
-            severity: DiagnosticSeverity::Error,
+            severity,
             message,
         },
     ))
@@ -384,6 +397,41 @@ mod tests {
             workspace.diagnostics.is_empty(),
             "expected no core diagnostics, got {:?}",
             workspace.diagnostics
+        );
+    }
+
+    #[test]
+    fn diagnostic_severities_survive_into_the_workspace() {
+        // An unreachable match arm is a warning; a non-exhaustive match is
+        // an error. `talk check`'s exit code and the editor's squiggle
+        // color both key on this mapping.
+        let text = "enum Color {\n\tcase red, green\n}\nlet c = Color.red\nmatch c {\n\t_ -> 1,\n\tColor.red -> 2\n}\nmatch c {\n\tColor.red -> 1\n}\n";
+        let docs = vec![DocumentInput {
+            id: "test.tlk".to_string(),
+            path: "test.tlk".to_string(),
+            version: 0,
+            text: text.to_string(),
+        }];
+        let workspace = Workspace::new(docs).expect("workspace");
+        let diagnostics = workspace
+            .diagnostics
+            .get("test.tlk")
+            .expect("diagnostics for the document");
+        let severities: Vec<(DiagnosticSeverity, &str)> = diagnostics
+            .iter()
+            .map(|d| (d.severity, d.message.as_str()))
+            .collect();
+        assert!(
+            severities
+                .iter()
+                .any(|(s, m)| *s == DiagnosticSeverity::Warning && m.contains("never runs")),
+            "expected an unreachable-arm warning, got {severities:?}"
+        );
+        assert!(
+            severities
+                .iter()
+                .any(|(s, m)| *s == DiagnosticSeverity::Error && m.contains(".green")),
+            "expected a non-exhaustive error naming .green, got {severities:?}"
         );
     }
 }

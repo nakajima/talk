@@ -268,7 +268,7 @@ async fn main() {
             let mut doc_ids: Vec<_> = workspace.diagnostics.keys().cloned().collect();
             doc_ids.sort();
 
-            let mut has_diagnostics = false;
+            let mut has_errors = false;
             let mut json_entries = Vec::new();
             for doc_id in doc_ids {
                 let text = workspace.text_for(&doc_id).unwrap_or("");
@@ -282,7 +282,9 @@ async fn main() {
                                 render_text(&doc_id, text, diagnostic, ColorMode::Auto)
                             );
                         }
-                        has_diagnostics = true;
+                        // Warnings print but don't fail the check.
+                        has_errors |= diagnostic.severity
+                            == talk::analysis::DiagnosticSeverity::Error;
                     }
                 }
             }
@@ -291,7 +293,7 @@ async fn main() {
                 println!("{}", render_json_output(&json_entries));
             }
 
-            if has_diagnostics {
+            if has_errors {
                 std::process::exit(1);
             }
         }

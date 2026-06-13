@@ -744,7 +744,7 @@ pub mod tests {
     #[test]
     fn vm_matches_evaluator_on_literal_match() {
         let (value, _) = run_on_both_engines_io(
-            "match 789 {\n\t123 -> 1,\n\t456 -> 2,\n\t789 -> 3\n}",
+            "match 789 {\n\t123 -> 1,\n\t456 -> 2,\n\t789 -> 3,\n\t_ -> 0\n}",
         );
         assert_eq!(value, Value::I64(3));
     }

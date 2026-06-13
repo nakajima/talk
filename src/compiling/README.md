@@ -75,7 +75,9 @@ mapping here:
 - `src/bin/talk.rs` — the CLI (`run`, `check` (`--json`), `parse`,
   `lower` (the λ_G program), `ir` (the VM bytecode), `hover`,
   `format`, `repl`, `lsp`, …), each command a short wrapper over a
-  driver at the right stage.
+  driver at the right stage. The printed `lower`/`ir` formats, plus
+  source-level `@_ir`, are documented in
+  `../../docs/ir-and-lambda-g-format.md`.
 - `src/cli/` — terminal concerns: diagnostic rendering with source
   excerpts and carets (`diagnostics.rs`, colors off under
   `NO_COLOR`), and the interactive REPL frontend (line editing,

@@ -3,7 +3,9 @@
 This directory is the execution engine: it takes the λ_G program the
 lowerer produced (see `src/lower/README.md` and
 `src/lambda_g/README.md`) and turns it into register bytecode, then
-runs it on a frame-stack interpreter. There are two engines for every
+runs it on a frame-stack interpreter. The exact `talk ir` listing
+format is documented alongside `@_ir` and λ_G in
+`../../docs/ir-and-lambda-g-format.md`. There are two engines for every
 program — this VM and the reference evaluator in `src/lambda_g/eval.rs`
 — and the test suite requires them to produce identical results, so
 the slow-but-obvious one keeps the fast one honest.

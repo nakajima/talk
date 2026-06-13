@@ -100,6 +100,7 @@ pub fn check_types(
         store: VarStore::default(),
         catalog,
         errors: vec![],
+        warnings: vec![],
         schemes,
         mono: FxHashMap::default(),
         node_types: FxHashMap::default(),
@@ -166,6 +167,9 @@ struct Checker<'a> {
     store: VarStore,
     catalog: TypeCatalog,
     errors: Vec<(TypeError, NodeID)>,
+    /// Diagnostics that don't make the program wrong (unreachable match
+    /// arms); reported with `Severity::Warn`.
+    warnings: Vec<(TypeError, NodeID)>,
     /// Finished types, one entry per binder; monomorphic entries keep
     /// sharing their unsolved variables until the final zonk.
     schemes: FxHashMap<Symbol, Scheme>,
@@ -411,7 +415,58 @@ impl<'a> Checker<'a> {
         self.report_unresolved_residuals(residuals);
         self.solve_deferred();
 
+        // Phase 3 — match coverage: every scrutinee's type is now solved,
+        // so check each `match` covers its type and each arm is reachable
+        // (src/types/exhaustiveness.rs).
+        self.check_matches(asts);
+
         self.finalize()
+    }
+
+    /// Walk every `match` in the checked sources and report non-exhaustive
+    /// matches (errors) and unreachable arms (warnings).
+    fn check_matches(&mut self, asts: &IndexMap<Source, AST<NameResolved>>) {
+        use derive_visitor::Drive;
+        let mut sites: Vec<(NodeID, Vec<Pattern>)> = vec![];
+        {
+            let mut collector = derive_visitor::visitor_enter_fn(|expr: &Expr| {
+                if let ExprKind::Match(scrutinee, arms) = &expr.kind {
+                    sites.push((
+                        scrutinee.id,
+                        arms.iter().map(|arm| arm.pattern.clone()).collect(),
+                    ));
+                }
+            });
+            for ast in asts.values() {
+                for root in &ast.roots {
+                    root.drive(&mut collector);
+                }
+            }
+        }
+        for (scrutinee, patterns) in sites {
+            let Some(ty) = self.node_types.get(&scrutinee) else {
+                continue;
+            };
+            let ty = self.store.zonk_ty(ty);
+            // A scrutinee that already failed to type would only produce
+            // noise on top of its real error.
+            if matches!(ty, Ty::Error) {
+                continue;
+            }
+            let arms: Vec<&Pattern> = patterns.iter().collect();
+            let report = crate::types::exhaustiveness::check_match(&self.catalog, &ty, &arms);
+            if !report.missing.is_empty() {
+                self.errors.push((
+                    TypeError::NonExhaustiveMatch {
+                        missing: report.missing,
+                    },
+                    scrutinee,
+                ));
+            }
+            for arm in report.unreachable_arms {
+                self.warnings.push((TypeError::UnreachableMatchArm, arm));
+            }
+        }
     }
 
     // ----- Declaration collection ---------------------------------------
@@ -1534,12 +1589,14 @@ impl<'a> Checker<'a> {
         let diagnostics = self
             .errors
             .into_iter()
-            .map(|(kind, id)| {
-                AnyDiagnostic::Types(Diagnostic {
-                    id,
-                    severity: Severity::Error,
-                    kind,
-                })
+            .map(|(kind, id)| (kind, id, Severity::Error))
+            .chain(
+                self.warnings
+                    .into_iter()
+                    .map(|(kind, id)| (kind, id, Severity::Warn)),
+            )
+            .map(|(kind, id, severity)| {
+                AnyDiagnostic::Types(Diagnostic { id, severity, kind })
             })
             .collect();
 

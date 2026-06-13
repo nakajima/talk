@@ -1,7 +1,9 @@
 # How the lowerer works
 
 This directory translates the type-checked AST into λ_G, the IR
-described in `src/lambda_g/README.md`. Everything the type checker
+described in `src/lambda_g/README.md`. The detailed source-level
+`@_ir`, printed λ_G, and `talk ir` bytecode formats are documented in
+`../../docs/ir-and-lambda-g-format.md`. Everything the type checker
 learned — per-node types, per-call-site instantiations, member
 resolutions — gets spent here; what comes out is a fully monomorphic,
 continuation-passing program that the λ_G verifier re-checks and the

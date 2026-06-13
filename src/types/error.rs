@@ -54,6 +54,16 @@ pub enum TypeError {
     UndeclaredEffect {
         effect: String,
     },
+    /// Some value of the scrutinee's type reaches no arm (the usefulness
+    /// check of Maranget, *Warnings for pattern matching*, JFP 2007 —
+    /// see src/types/exhaustiveness.rs). Carries example values rendered
+    /// as patterns.
+    NonExhaustiveMatch {
+        missing: Vec<String>,
+    },
+    /// Everything this arm matches is already matched by an earlier arm
+    /// (reported as a warning, not an error).
+    UnreachableMatchArm,
     CannotInfer,
     Unsupported(String),
 }
@@ -110,6 +120,23 @@ impl Display for TypeError {
                 write!(
                     f,
                     "Performs '{effect}, which the function's effect annotation does not declare"
+                )
+            }
+            TypeError::NonExhaustiveMatch { missing } => {
+                if missing.iter().all(|m| m == "_") {
+                    write!(f, "Match does not cover every case; add a catch-all arm: _ -> …")
+                } else {
+                    write!(
+                        f,
+                        "Match does not cover every case; unhandled: {}",
+                        missing.join(", ")
+                    )
+                }
+            }
+            TypeError::UnreachableMatchArm => {
+                write!(
+                    f,
+                    "This arm never runs: the arms above it already match everything it could"
                 )
             }
             TypeError::CannotInfer => {

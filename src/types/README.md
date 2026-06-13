@@ -72,7 +72,17 @@ effects); `output.rs` is `TypeOutput`, the checker's public product;
 6. **The final solve.** Constraints that earlier phases couldn't
    resolve locally (see "floating" below) get one last pass with
    defaulting enabled; whatever still survives becomes an error.
-7. **Finalize.** Everything the checker stores — node types, schemes,
+7. **Match coverage** (`exhaustiveness.rs`). With every scrutinee's
+   type now solved, each `match` is checked two ways: does some value
+   of the scrutinee's type reach no arm (an error, reported with
+   example values like `.blue` or `.some(false)`), and can any value
+   reach each arm (an arm shadowed by the ones above it is a
+   warning). Both are the "usefulness" question from Maranget's
+   *Warnings for pattern matching* (JFP 2007), and the matrix
+   machinery is the same shape the lowerer's decision-tree compiler
+   uses — this pass answers "is anything missed?", that one picks
+   which tests to emit.
+8. **Finalize.** Everything the checker stores — node types, schemes,
    instantiation tables — gets its solved variables substituted in
    ("zonked") and is packaged into `TypeOutput`.
 

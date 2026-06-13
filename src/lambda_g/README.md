@@ -2,10 +2,12 @@
 
 This directory is the compiler's middle language. The lowerer
 (`src/lower`) translates type-checked Talk into it; the bytecode VM
-(`src/vm`) runs what comes out. The whole design is one bet: **if the
-only thing in the language is small functions calling each other, then
-every compiler problem becomes a question about functions** — and
-those questions have simple answers.
+(`src/vm`) runs what comes out. For the exact textual syntax printed by
+`talk lower`, and how it differs from `@_ir` source splices and
+`talk ir` bytecode listings, see `../../docs/ir-and-lambda-g-format.md`.
+The whole design is one bet: **if the only thing in the language is
+small functions calling each other, then every compiler problem becomes
+a question about functions** — and those questions have simple answers.
 
 ## Everything is a function call
 

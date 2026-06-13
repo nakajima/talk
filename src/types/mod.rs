@@ -8,6 +8,7 @@
 pub mod catalog;
 pub mod constraint;
 pub mod error;
+pub mod exhaustiveness;
 pub mod generate;
 pub mod output;
 pub mod solve;

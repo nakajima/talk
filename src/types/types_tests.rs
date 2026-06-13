@@ -46,12 +46,25 @@ pub mod tests {
     }
 
     pub fn type_errors(driver: &Driver<Typed>) -> Vec<String> {
+        types_with_severity(driver, crate::diagnostic::Severity::Error)
+    }
+
+    pub fn type_warnings(driver: &Driver<Typed>) -> Vec<String> {
+        types_with_severity(driver, crate::diagnostic::Severity::Warn)
+    }
+
+    fn types_with_severity(
+        driver: &Driver<Typed>,
+        severity: crate::diagnostic::Severity,
+    ) -> Vec<String> {
         driver
             .phase
             .diagnostics
             .iter()
             .filter_map(|d| match d {
-                AnyDiagnostic::Types(diag) => Some(diag.kind.to_string()),
+                AnyDiagnostic::Types(diag) if diag.severity == severity => {
+                    Some(diag.kind.to_string())
+                }
                 _ => None,
             })
             .collect()
@@ -1114,6 +1127,157 @@ pub mod tests {
             "expected an instantiation at Int, got: {instantiations:?}"
         );
     }
+    // ----- Match exhaustiveness and reachable arms -----------------------
+    // The usefulness analysis of Maranget, *Warnings for pattern matching*
+    // (JFP 2007): a match must cover every value of the scrutinee's type
+    // (error), and every arm must be reachable (warning).
+
+    #[test]
+    fn match_missing_an_enum_variant_errors_and_names_it() {
+        let t = check(
+            "// no-core\nenum Color {\n\tcase red, green, blue\n}\nlet c = Color.red\nmatch c {\n\tColor.red -> 1,\n\tColor.green -> 2\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains(".blue"),
+            "the error should name the unhandled case: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn match_covering_every_variant_is_clean() {
+        let t = check(
+            "// no-core\nenum Color {\n\tcase red, green, blue\n}\nlet c = Color.red\nmatch c {\n\tColor.red -> 1,\n\tColor.green -> 2,\n\tColor.blue -> 3\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(type_warnings(&t), Vec::<String>::new());
+    }
+
+    #[test]
+    fn wildcard_arm_covers_the_remaining_variants() {
+        let t = check(
+            "// no-core\nenum Color {\n\tcase red, green, blue\n}\nlet c = Color.red\nmatch c {\n\tColor.red -> 1,\n\t_ -> 2\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(type_warnings(&t), Vec::<String>::new());
+    }
+
+    #[test]
+    fn or_pattern_arms_count_toward_coverage() {
+        let t = check(
+            "// no-core\nenum Color {\n\tcase red, green, blue\n}\nlet c = Color.red\nmatch c {\n\tColor.red | Color.green -> 1,\n\tColor.blue -> 2\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(type_warnings(&t), Vec::<String>::new());
+    }
+
+    #[test]
+    fn bool_match_missing_false_errors() {
+        let t = check("// no-core\nmatch true {\n\ttrue -> 1\n}");
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("false"),
+            "the error should name the unhandled case: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn int_match_without_a_catch_all_errors() {
+        let t = check("// no-core\nmatch 123 {\n\t1 -> 1,\n\t2 -> 2\n}");
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+    }
+
+    #[test]
+    fn missing_nested_payload_case_is_reported_with_its_shape() {
+        let t = check(
+            "// no-core\nenum Maybe<T> {\n\tcase some(T), none\n}\nlet m = Maybe.some(true)\nmatch m {\n\tMaybe.some(true) -> 1,\n\tMaybe.none -> 2\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains(".some(false)"),
+            "the error should show the unhandled shape: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn tuple_patterns_cover_componentwise() {
+        let t = check(
+            "// no-core\nmatch (true, 1) {\n\t(true, _) -> 1,\n\t(false, _) -> 2\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(type_warnings(&t), Vec::<String>::new());
+    }
+
+    #[test]
+    fn arm_after_a_wildcard_warns_as_unreachable() {
+        let t = check(
+            "// no-core\nenum Color {\n\tcase red, green, blue\n}\nlet c = Color.red\nmatch c {\n\t_ -> 1,\n\tColor.red -> 2\n}",
+        );
+        assert_clean(&t);
+        let warnings = type_warnings(&t);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("never"),
+            "the warning should say the arm never runs: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_arm_warns_as_unreachable() {
+        let t = check(
+            "// no-core\nmatch true {\n\ttrue -> 1,\n\tfalse -> 2,\n\ttrue -> 3\n}",
+        );
+        assert_clean(&t);
+        let warnings = type_warnings(&t);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn binder_arm_is_exhaustive_and_later_arms_warn() {
+        let t = check("// no-core\nmatch 123 {\n\ta -> a,\n\t1 -> 1\n}");
+        assert_clean(&t);
+        let warnings = type_warnings(&t);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn record_patterns_cover_by_field() {
+        let t = check(
+            "// no-core\nlet r = { on: true }\nmatch r {\n\t{ on: true } -> 1,\n\t{ on: false } -> 2\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(type_warnings(&t), Vec::<String>::new());
+    }
+
+    #[test]
+    fn record_match_missing_a_field_case_errors() {
+        let t = check(
+            "// no-core\nlet r = { on: true }\nmatch r {\n\t{ on: true } -> 1\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("false"),
+            "the error should show the unhandled shape: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn generic_enum_method_match_on_self_is_checked() {
+        // `match self` inside an enum method: the scrutinee is the enum
+        // applied to its own parameters, so coverage still checks.
+        let t = check(
+            "// no-core\nenum Fizz<T> {\n\tcase foo(T), bar(T)\n\n\tfunc partial() {\n\t\tmatch self {\n\t\t\tFizz.foo(t) -> t\n\t\t}\n\t}\n}\nFizz.foo(123).partial()",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains(".bar"), "{errors:?}");
+    }
+
 }
 
 
