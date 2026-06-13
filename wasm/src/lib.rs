@@ -38,7 +38,7 @@ pub fn run_program(source: &str) -> Result<Object, JsValue> {
 #[wasm_bindgen]
 pub fn show_ir(source: &str) -> Result<Object, JsValue> {
     init();
-    let ir = talk::compiling::driver::render_ir("Playground", source)
+    let ir = talk::compiling::driver::render_lowered("Playground", source)
         .map_err(|message| JsValue::from_str(&message))?;
     let obj = Object::new();
     set_str(&obj, "ir", &ir)?;

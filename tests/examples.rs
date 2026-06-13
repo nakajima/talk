@@ -232,6 +232,6 @@ fn fib() {
     // smaller depth in src/vm/vm_tests.rs.
     let mut driver = lowered(&["Fib.tlk"]);
     let (value, out) = driver.run_vm_with_output().expect("vm");
-    assert_eq!(value, talk::vm::interp::Value::I64(46368));
-    assert_eq!(out, "");
+    assert_eq!(value, talk::vm::interp::Value::Void);
+    assert_eq!(out, "46368\n");
 }

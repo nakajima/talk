@@ -189,3 +189,174 @@ pub struct Module {
     pub statics: Vec<u8>,
     pub entry: u32,
 }
+
+impl Module {
+    /// Human-readable listing (`talk ir`): one line per instruction, with
+    /// pool references resolved — callee names instead of chunk indices,
+    /// register lists instead of pool offsets, trap message text.
+    pub fn render(&self) -> String {
+        self.render_styled(&crate::lambda_g::print::Styles::plain())
+    }
+
+    pub fn render_ansi(&self) -> String {
+        self.render_styled(&crate::lambda_g::print::Styles::ansi())
+    }
+
+    pub fn render_styled(&self, s: &crate::lambda_g::print::Styles) -> String {
+        let mut out = String::new();
+        for (i, chunk) in self.chunks.iter().enumerate() {
+            out.push_str(&format!(
+                "chunk {i}: {}{}{} (arity {}, regs {})\n",
+                s.func, chunk.name, s.reset, chunk.arity, chunk.n_regs
+            ));
+            for (pc, insn) in chunk.code.iter().enumerate() {
+                let text = self.render_insn(insn);
+                // Color the mnemonic (the first word).
+                let styled = match text.split_once(' ') {
+                    Some((mnemonic, rest)) => {
+                        format!("{}{mnemonic}{} {rest}", s.keyword, s.reset)
+                    }
+                    None => format!("{}{text}{}", s.keyword, s.reset),
+                };
+                out.push_str(&format!("  {pc}: {styled}\n"));
+            }
+        }
+        out
+    }
+
+    fn render_args(&self, start: u32, len: u16) -> String {
+        self.arg_pool[start as usize..start as usize + len as usize]
+            .iter()
+            .map(|r| format!("r{r}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn render_insn(&self, insn: &Insn) -> String {
+        match insn {
+            Insn::Const { dest, k } => format!("const r{dest} <- consts[{k}]"),
+            Insn::Move { dest, src } => format!("move r{dest} <- r{src}"),
+            Insn::Add { dest, a, b } => format!("add r{dest} <- r{a}, r{b}"),
+            Insn::Sub { dest, a, b } => format!("sub r{dest} <- r{a}, r{b}"),
+            Insn::Mul { dest, a, b } => format!("mul r{dest} <- r{a}, r{b}"),
+            Insn::Div { dest, a, b } => format!("div r{dest} <- r{a}, r{b}"),
+            Insn::Cmp { dest, a, b, op } => {
+                format!("cmp_{} r{dest} <- r{a}, r{b}", format!("{op:?}").to_lowercase())
+            }
+            Insn::Trunc { dest, src } => format!("trunc r{dest} <- r{src}"),
+            Insn::IToF { dest, src } => format!("itof r{dest} <- r{src}"),
+            Insn::CellNew { dest, init } => format!("cell_new r{dest} <- r{init}"),
+            Insn::CellGet { dest, cell } => format!("cell_get r{dest} <- r{cell}"),
+            Insn::CellSet { cell, src } => format!("cell_set r{cell} <- r{src}"),
+            Insn::RecordNew {
+                dest,
+                symbol,
+                args_start,
+                args_len,
+            } => format!(
+                "record_new r{dest} <- {symbol}({})",
+                self.render_args(*args_start, *args_len)
+            ),
+            Insn::GetField { dest, rec, index } => {
+                format!("get_field r{dest} <- r{rec}.{index}")
+            }
+            Insn::VariantNew {
+                dest,
+                symbol,
+                tag,
+                args_start,
+                args_len,
+            } => format!(
+                "variant_new r{dest} <- {symbol}#{tag}({})",
+                self.render_args(*args_start, *args_len)
+            ),
+            Insn::GetTag { dest, src } => format!("get_tag r{dest} <- r{src}"),
+            Insn::GetPayload { dest, src, index } => {
+                format!("get_payload r{dest} <- r{src}.{index}")
+            }
+            Insn::TupleNew {
+                dest,
+                args_start,
+                args_len,
+            } => format!(
+                "tuple r{dest} <- ({})",
+                self.render_args(*args_start, *args_len)
+            ),
+            Insn::Extract { dest, src, index } => format!("extract r{dest} <- r{src}.{index}"),
+            Insn::SetField {
+                dest,
+                rec,
+                src,
+                index,
+            } => format!("set_field r{dest} <- r{rec} with .{index} = r{src}"),
+            Insn::Alloc { dest, count } => format!("alloc r{dest} <- r{count} bytes"),
+            Insn::Load { dest, ptr, kind } => {
+                format!("load_{} r{dest} <- [r{ptr}]", format!("{kind:?}").to_lowercase())
+            }
+            Insn::Store { ptr, src, kind } => {
+                format!("store_{} [r{ptr}] <- r{src}", format!("{kind:?}").to_lowercase())
+            }
+            Insn::Copy { from, to, len } => format!("copy [r{to}] <- [r{from}], r{len} bytes"),
+            Insn::Io { dest, op, a, b, c } => {
+                format!(
+                    "io_{} r{dest} <- r{a}, r{b}, r{c}",
+                    format!("{op:?}").to_lowercase()
+                )
+            }
+            Insn::Call {
+                dest,
+                chunk,
+                args_start,
+                args_len,
+            } => format!(
+                "call r{dest} <- {}({})",
+                self.chunks[*chunk as usize].name,
+                self.render_args(*args_start, *args_len)
+            ),
+            Insn::MakeClosure {
+                dest,
+                chunk,
+                args_start,
+                args_len,
+            } => format!(
+                "closure r{dest} <- {} capturing ({})",
+                self.chunks[*chunk as usize].name,
+                self.render_args(*args_start, *args_len)
+            ),
+            Insn::EnvGet { dest, index } => format!("env_get r{dest} <- env[{index}]"),
+            Insn::CallIndirect {
+                dest,
+                callee,
+                args_start,
+                args_len,
+            } => format!(
+                "call_indirect r{dest} <- r{callee}({})",
+                self.render_args(*args_start, *args_len)
+            ),
+            Insn::Jump { target } => format!("jump {target}"),
+            Insn::Branch {
+                cond,
+                then_target,
+                else_target,
+            } => format!("branch r{cond} ? {then_target} : {else_target}"),
+            Insn::Switch {
+                tag,
+                targets_start,
+                targets_len,
+            } => {
+                let targets = &self.switch_pool
+                    [*targets_start as usize..*targets_start as usize + *targets_len as usize];
+                let (default, arms) = targets.split_last().unwrap_or((&0, &[]));
+                let arms: Vec<String> = arms.iter().map(|t| t.to_string()).collect();
+                format!(
+                    "switch r{tag} -> [{}] default {default}",
+                    arms.join(", ")
+                )
+            }
+            Insn::Ret { src } => format!("ret r{src}"),
+            Insn::Trap { message } => {
+                format!("trap {:?}", self.traps[*message as usize])
+            }
+        }
+    }
+}

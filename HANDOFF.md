@@ -67,7 +67,7 @@ cargo build --features cli
 | B-M7 abort effects (lexical handlers, capability-passing CPS) | **Done** |
 | B-M8 full io dialect (files, sockets, poll; servers run for real) | **Done** |
 | B-M9 resumable handlers (`continue v`; one-shot by construction) | **Done** |
-| Feature parity with the previous backend (playground wasm, `talk ir`/`hover`, open_path, hover) | **Done** (see below) |
+| Feature parity with the previous backend (playground wasm, `talk lower`/`hover`, open_path, hover) | **Done** (see below) |
 | Type-system GADTs; tail-resumptive fast path; dynamic io_perform; computed globals; multi-shot | **Next** (§7) |
 
 **Examples running today** (both engines; stdout frozen or value asserted):
@@ -86,8 +86,10 @@ Everything the old system *shipped* works again. Restored this pass:
 the playground's wasm `run_program` (a non-persisting `ReplSession::
 eval_program` — the REPL's persist shortcut would have swallowed
 programs that begin with a declaration) and `show_ir`
-(`driver::render_ir`; both were stubbed "pending rewrite" and
-www/assets/page.js calls them); `talk ir` and `talk hover`; wasm
+(`driver::render_lowered`, née render_ir; both were stubbed "pending rewrite" and
+www/assets/page.js calls them); `talk lower` (plain function-syntax
+rendering; `talk ir` now prints the VM bytecode listing) and `talk
+hover`; wasm
 `hover` (new `analysis/hover.rs` over `TypeOutput.node_types`/
 `schemes`; the Workspace now keeps the checker's tables); and
 `open_path`/File.tlk (rewritten in pure Talk — copy the path with a NUL

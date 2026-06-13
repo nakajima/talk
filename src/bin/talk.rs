@@ -21,7 +21,14 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
-        /// Print the lowered λ_G program for a file (or stdin).
+        /// Show what a file compiles to in the intermediate form
+        /// produced by lowering (the λ_G program).
+        Lower {
+            #[arg(value_hint = ValueHint::FilePath)]
+            filename: Option<String>,
+        },
+        /// Show the VM bytecode for a file (or stdin): chunks,
+        /// registers, instructions.
         Ir {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
@@ -89,10 +96,22 @@ async fn main() {
             let driver = Driver::new(vec![source], DriverConfig::new(module_name));
             let _ = driver.parse().unwrap();
         }
+        Commands::Lower { filename } => {
+            let (module_name, source) = single_source_for(filename.as_deref());
+            let styles = talk::lambda_g::print::Styles::auto();
+            match talk::compiling::driver::render_lowered_from(&module_name, source, &styles) {
+                Ok(ir) => println!("{ir}"),
+                Err(message) => {
+                    eprintln!("{message}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Commands::Ir { filename } => {
             let (module_name, source) = single_source_for(filename.as_deref());
-            match talk::compiling::driver::render_ir_from(&module_name, source) {
-                Ok(ir) => println!("{ir}"),
+            let styles = talk::lambda_g::print::Styles::auto();
+            match talk::compiling::driver::render_bytecode_from(&module_name, source, &styles) {
+                Ok(listing) => println!("{listing}"),
                 Err(message) => {
                     eprintln!("{message}");
                     std::process::exit(1);

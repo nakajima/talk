@@ -412,6 +412,103 @@ pub mod tests {
     }
 
     #[test]
+    fn rendering_reads_like_plain_functions() {
+        // The textual form is for humans debugging the pipeline
+        // (`talk lower`): function syntax, named ops, no notation that
+        // needs a paper to decode.
+        let mut p = Program::new();
+        let int = p.ty_i64();
+        let bot = p.ty_bot();
+        let ret_ty = p.ty_fn(int, bot);
+        let dom = p.ty_tuple(&[int, ret_ty]);
+        let double = p.func("double", dom, bot);
+        let v = p.var(double);
+        let x = p.extract(v, 0);
+        let k = p.extract(v, 1);
+        let two = p.int(2);
+        let doubled = p.primop(crate::lambda_g::expr::Op::Mul, &[x, two], int);
+        let body = p.app(k, doubled);
+        p.set_body(double, body);
+        // Without parameter names, references are positional.
+        assert_eq!(
+            p.render_func(double),
+            "func double(int, fn(int)) { var double.1(mul(var double.0, 2)) }"
+        );
+        // With names (the lowerer records them), the header and every
+        // reference use them.
+        p.name_params(double, &["x", "k"]);
+        assert_eq!(
+            p.render_func(double),
+            "func double(x: int, k: fn(int)) { var double.k(mul(var double.x, 2)) }"
+        );
+        // A function whose body is not set yet renders honestly.
+        let pending = p.func("pending", int, bot);
+        assert_eq!(p.render_func(pending), "func pending(int) { unset }");
+    }
+
+    #[test]
+    fn rendering_can_color_with_ansi() {
+        // `talk lower` on a terminal: keywords, function names, types,
+        // and constants get the same palette the REPL highlighter uses.
+        let mut p = Program::new();
+        let int = p.ty_i64();
+        let bot = p.ty_bot();
+        let ret_ty = p.ty_fn(int, bot);
+        let dom = p.ty_tuple(&[int, ret_ty]);
+        let double = p.func("double", dom, bot);
+        p.name_params(double, &["x", "k"]);
+        let v = p.var(double);
+        let x = p.extract(v, 0);
+        let k = p.extract(v, 1);
+        let two = p.int(2);
+        let doubled = p.primop(crate::lambda_g::expr::Op::Mul, &[x, two], int);
+        let body = p.app(k, doubled);
+        p.set_body(double, body);
+        let colored = p.render_ansi();
+        assert!(colored.contains("\x1b[1;35mfunc\x1b[0m"), "{colored:?}");
+        assert!(colored.contains("\x1b[1;33mdouble\x1b[0m"), "{colored:?}");
+        assert!(colored.contains("\x1b[1;34mint\x1b[0m"), "{colored:?}");
+        assert!(colored.contains("\x1b[36m2\x1b[0m"), "{colored:?}");
+        // The plain rendering stays plain.
+        assert!(!p.render().contains('\x1b'));
+    }
+
+    #[test]
+    fn rendering_groups_continuations_under_their_owner() {
+        // The whole-program rendering nests each function under the one
+        // whose variable it uses (the nesting tree), so a function's
+        // helper continuations read like local functions.
+        let mut p = Program::new();
+        let int = p.ty_i64();
+        let bot = p.ty_bot();
+        let ret_ty = p.ty_fn(int, bot);
+        let outer = p.func("outer", ret_ty, bot);
+        let inner = p.func("inner", int, bot);
+        p.name_params(outer, &["k"]);
+        p.name_params(inner, &["x"]);
+        let vo = p.var(outer);
+        let vi = p.var(inner);
+        let inner_body = p.app(vo, vi);
+        p.set_body(inner, inner_body);
+        let inner_ref = p.func_ref(inner);
+        let seven = p.int(7);
+        let outer_body = p.app(inner_ref, seven);
+        p.set_body(outer, outer_body);
+        assert_eq!(
+            p.render(),
+            "\
+func outer(k: fn(int)) {
+  inner(7)
+
+  func inner(x: int) {
+    var outer(var inner)
+  }
+}
+"
+        );
+    }
+
+    #[test]
     fn hash_consing_shares_structurally_equal_expressions() {
         let mut p = Program::new();
         let a1 = p.int(42);

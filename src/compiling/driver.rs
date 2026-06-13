@@ -621,12 +621,37 @@ impl Driver<Lowered> {
 
 /// Compile a source string through the whole pipeline and render its
 /// λ_G program — the playground's show_ir.
-pub fn render_ir(name: &str, source: &str) -> Result<String, String> {
-    render_ir_from(name, Source::from(source))
+pub fn render_lowered(name: &str, source: &str) -> Result<String, String> {
+    render_lowered_from(
+        name,
+        Source::from(source),
+        &crate::lambda_g::print::Styles::plain(),
+    )
 }
 
-/// `render_ir` over any Source (`talk ir <file>` reads from disk or stdin).
-pub fn render_ir_from(name: &str, source: Source) -> Result<String, String> {
+/// `render_lowered` over any Source (`talk lower <file>` reads from disk
+/// or stdin); `styles` picks plain or ANSI-colored text.
+pub fn render_lowered_from(
+    name: &str,
+    source: Source,
+    styles: &crate::lambda_g::print::Styles,
+) -> Result<String, String> {
+    let mut lowered = lower_for_display(name, source)?;
+    Ok(lowered.phase.program.render_styled(styles))
+}
+
+/// Compile and schedule, rendering the VM bytecode (`talk ir <file>`).
+pub fn render_bytecode_from(
+    name: &str,
+    source: Source,
+    styles: &crate::lambda_g::print::Styles,
+) -> Result<String, String> {
+    let mut lowered = lower_for_display(name, source)?;
+    let module = lowered.schedule()?;
+    Ok(module.render_styled(styles))
+}
+
+fn lower_for_display(name: &str, source: Source) -> Result<Driver<Lowered>, String> {
     let driver = Driver::new(vec![source], DriverConfig::new(name));
     let parsed = driver.parse().map_err(|err| format!("{err:?}"))?;
     let resolved = parsed.resolve_names().map_err(|err| format!("{err:?}"))?;
@@ -646,7 +671,7 @@ pub fn render_ir_from(name: &str, source: Source) -> Result<String, String> {
             lowered.phase.diagnostics.join("; ")
         ));
     }
-    Ok(lowered.phase.program.render())
+    Ok(lowered)
 }
 
 #[cfg(test)]
@@ -656,17 +681,48 @@ pub mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn render_ir_shows_the_lowered_program() {
-        let ir = render_ir("IrTest", "func double(x: Int) -> Int { x * 2 }\ndouble(21)")
+    fn render_lowered_shows_the_program_plainly() {
+        let ir = render_lowered("IrTest", "func double(x: Int) -> Int { x * 2 }\ndouble(21)")
             .expect("ir");
-        assert!(ir.contains("main"), "{ir}");
-        assert!(ir.contains("double"), "{ir}");
+        assert!(ir.contains("func main(k: fn"), "{ir}");
+        assert!(ir.contains("func double(x: int, k: fn(int))"), "{ir}");
+        assert!(ir.contains("var double.x"), "{ir}");
+        assert!(!ir.contains('\u{21a6}') && !ir.contains('\u{22a5}'), "no notation: {ir}");
     }
 
     #[test]
-    fn render_ir_reports_type_errors() {
-        let result = render_ir("IrTest", "let x: Int = \"nope\"\nx");
+    fn render_lowered_names_types_and_specializations() {
+        // Struct heads print by name, and a generic's specialization is
+        // named by its concrete types, not a counter.
+        let ir = render_lowered("IrTest", "func id(x) { x }\nprint(id(\"hi\"))").expect("ir");
+        assert!(ir.contains("id<String>"), "{ir}");
+        assert!(ir.contains("boxed(String)"), "{ir}");
+        assert!(!ir.contains("Struct(C:"), "{ir}");
+    }
+
+    #[test]
+    fn render_lowered_annotates_string_statics() {
+        // A string literal's static pointer shows the bytes it points at.
+        let ir = render_lowered("IrTest", "print(\"hi\")").expect("ir");
+        assert!(ir.contains("static+0 (\"hi\")"), "{ir}");
+    }
+
+    #[test]
+    fn render_lowered_reports_type_errors() {
+        let result = render_lowered("IrTest", "let x: Int = \"nope\"\nx");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn render_bytecode_lists_chunks() {
+        let listing = render_bytecode_from(
+            "IrTest",
+            Source::from("func double(x: Int) -> Int { x * 2 }\ndouble(21)"),
+            &crate::lambda_g::print::Styles::plain(),
+        )
+        .expect("bytecode");
+        assert!(listing.contains("chunk 0: main"), "{listing}");
+        assert!(listing.contains("ret r"), "{listing}");
     }
 
     #[test]

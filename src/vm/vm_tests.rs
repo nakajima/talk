@@ -3,6 +3,7 @@ pub mod tests {
     use crate::compiling::driver::{Driver, DriverConfig, Source};
     use crate::lambda_g::eval::EvalValue;
     use crate::vm::interp::Value;
+    use crate::vm::{Chunk, Insn, Module};
 
     /// The same program runs on the reference evaluator (a direct
     /// transcription of the paper's semantics — our trusted baseline) and
@@ -1231,6 +1232,84 @@ pub mod tests {
             "protocol Aa {\n\tfunc m() -> Int\n}\nprotocol Bb {\n\tfunc m() -> Int\n}\nextend Int: Aa {\n\tfunc m() -> Int { 1 }\n}\nextend Int: Bb {\n\tfunc m() -> Int { 2 }\n}\nAa.m(5) + Bb.m(5)",
         );
         assert_eq!(value, Value::I64(3));
+    }
+
+    #[test]
+    fn bytecode_renders_readably() {
+        // `talk ir` shows the scheduled bytecode; pin the format on a
+        // hand-built module so it stays readable and stable.
+        let module = Module {
+            chunks: vec![
+                Chunk {
+                    name: "main".into(),
+                    code: vec![
+                        Insn::Const { dest: 0, k: 0 },
+                        Insn::Call {
+                            dest: 1,
+                            chunk: 1,
+                            args_start: 0,
+                            args_len: 1,
+                        },
+                        Insn::Branch {
+                            cond: 1,
+                            then_target: 3,
+                            else_target: 4,
+                        },
+                        Insn::Ret { src: 1 },
+                        Insn::Trap { message: 0 },
+                    ],
+                    arity: 0,
+                    n_regs: 2,
+                },
+                Chunk {
+                    name: "is_even".into(),
+                    code: vec![Insn::Ret { src: 0 }],
+                    arity: 1,
+                    n_regs: 1,
+                },
+            ],
+            consts: vec![Value::I64(42)],
+            arg_pool: vec![0],
+            switch_pool: vec![],
+            traps: vec!["boom".into()],
+            statics: vec![],
+            entry: 0,
+        };
+        assert_eq!(
+            module.render(),
+            "\
+chunk 0: main (arity 0, regs 2)
+  0: const r0 <- consts[0]
+  1: call r1 <- is_even(r0)
+  2: branch r1 ? 3 : 4
+  3: ret r1
+  4: trap \"boom\"
+chunk 1: is_even (arity 1, regs 1)
+  0: ret r0
+"
+        );
+    }
+
+    #[test]
+    fn bytecode_rendering_can_color_with_ansi() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![Insn::Ret { src: 0 }],
+                arity: 0,
+                n_regs: 1,
+            }],
+            consts: vec![],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let colored = module.render_ansi();
+        assert!(colored.contains("\x1b[1;33mmain\x1b[0m"), "{colored:?}");
+        assert!(colored.contains("\x1b[1;35mret\x1b[0m"), "{colored:?}");
+        assert!(!module.render().contains('\x1b'));
     }
 
     #[test]

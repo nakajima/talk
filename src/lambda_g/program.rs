@@ -46,6 +46,11 @@ pub struct Program {
     pub(crate) run: u64,
     /// Static memory (string literal bytes), referenced by StaticPtr.
     pub static_mem: Vec<u8>,
+    /// Display names for source symbols (struct/enum heads) — rendering
+    /// only; the IR itself never consults them.
+    pub symbol_names: FxHashMap<crate::name_resolution::symbol::Symbol, String>,
+    /// Optional per-function parameter names — rendering only.
+    param_names: FxHashMap<Label, Vec<String>>,
 }
 
 impl Default for Program {
@@ -67,6 +72,8 @@ impl Program {
             sets: SetArena::new(),
             run: 0,
             static_mem: vec![],
+            symbol_names: FxHashMap::default(),
+            param_names: FxHashMap::default(),
         }
     }
 
@@ -136,6 +143,20 @@ impl Program {
         self.by_name.insert(unique.clone(), label);
         self.names.push(unique);
         label
+    }
+
+    /// Record parameter names for rendering (positions match the domain
+    /// tuple's elements).
+    pub fn name_params(&mut self, label: Label, names: &[&str]) {
+        self.param_names
+            .insert(label, names.iter().map(|n| n.to_string()).collect());
+    }
+
+    pub fn param_name(&self, label: Label, index: u32) -> Option<&str> {
+        self.param_names
+            .get(&label)
+            .and_then(|names| names.get(index as usize))
+            .map(String::as_str)
     }
 
     pub fn func_count(&self) -> usize {

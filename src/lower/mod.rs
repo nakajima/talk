@@ -113,7 +113,6 @@ pub struct Lowering<'a> {
     /// closure machinery carries it, exactly like handler capabilities).
     top_level_cells: FxHashMap<Symbol, ExprId>,
     pub diagnostics: Vec<String>,
-    fresh: u32,
 }
 
 /// A lowered `@handle`: the capability closure performs call into, and the
@@ -223,8 +222,15 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
         handler_caps: FxHashMap::default(),
         top_level_cells: FxHashMap::default(),
         diagnostics: vec![],
-        fresh: 0,
     };
+    for unit in &lowering.units {
+        for (symbol, name) in &unit.resolved.symbol_names {
+            lowering.p.symbol_names.insert(*symbol, name.clone());
+        }
+        for (symbol, name) in &unit.types.display_names {
+            lowering.p.symbol_names.insert(*symbol, name.clone());
+        }
+    }
     lowering.index_sources();
     lowering.collect_abortable();
     let (main, result_ty) = lowering.lower_main();
@@ -520,18 +526,24 @@ impl<'a> Lowering<'a> {
         Some(raw.substitute(theta, &Default::default(), &Default::default()))
     }
 
+    /// A specialization's display name: the source name plus the concrete
+    /// types it was specialized at (`id<Int>`), in a stable order.
     fn spec_name(&mut self, symbol: Symbol, theta: &Theta) -> String {
-        self.fresh += 1;
         let base = self
             .units
             .iter()
             .find_map(|u| u.resolved.symbol_names.get(&symbol).cloned())
             .unwrap_or_else(|| format!("{symbol}"));
         if theta.is_empty() {
-            base
-        } else {
-            format!("{base}${}", self.fresh)
+            return base;
         }
+        let mut args: Vec<(String, String)> = theta
+            .iter()
+            .map(|(param, ty)| (format!("{param:?}"), ty.render_mono()))
+            .collect();
+        args.sort();
+        let rendered: Vec<String> = args.into_iter().map(|(_, ty)| ty).collect();
+        format!("{base}<{}>", rendered.join(", "))
     }
 
     // ----- Function lowering ----------------------------------------------
@@ -567,6 +579,14 @@ impl<'a> Lowering<'a> {
             }
         }
         let ret_k = self.p.extract(self_var, source_params.len() as u32);
+        let mut param_names: Vec<String> =
+            source_params.iter().map(|p| p.name.name_str()).collect();
+        param_names.push("k".into());
+        if self.abort_shape(symbol) {
+            param_names.push("slot".into());
+        }
+        let name_refs: Vec<&str> = param_names.iter().map(String::as_str).collect();
+        self.p.name_params(label, &name_refs);
 
         let mut ctx = Ctx {
             unit,
@@ -3292,6 +3312,7 @@ impl<'a> Lowering<'a> {
         let ret_k_ty = self.p.ty_fn(result_ty, bot);
         let dom = self.p.ty_tuple(&[ret_k_ty]);
         let main = self.p.func("main", dom, bot);
+        self.p.name_params(main, &["k"]);
         let main_var = self.p.var(main);
         let ret_k = self.p.extract(main_var, 0);
 
@@ -3387,6 +3408,7 @@ impl<'a> Lowering<'a> {
         let ret_k_ty = self.p.ty_fn(result_ty, bot);
         let dom = self.p.ty_tuple(&[ret_k_ty]);
         let main = self.p.func("main", dom, bot);
+        self.p.name_params(main, &["k"]);
         let main_var = self.p.var(main);
         let ret_k = self.p.extract(main_var, 0);
 
