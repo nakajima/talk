@@ -15,7 +15,7 @@ Why λ_G over the previous register-IR draft (user direction, and on the merits)
 
 ## Verified constraints (unchanged)
 
-- `@_ir` dialect: core uses 13 opcodes (`cmp add sub mul div trunc itof load gep alloc copy io_write io_open`); all other I/O is `'io(.variant(args))` performs. `_alloc(count)` allocates bytes while Array calls `_alloc<Element>(capacity)` — latent sizing bug, fixed when Array lands (make `_alloc` generic, `alloc Element`).
+- `@_ir` dialect: core uses 13 opcodes (`cmp add sub mul div trunc itof alloc load store gep copy io_write`); all other I/O is `'io(.variant(args))` performs. `_alloc(count)` allocates bytes while Array calls `_alloc<Element>(capacity)` — latent sizing bug, fixed when Array lands (make `_alloc` generic, `alloc Element`).
 - TypeOutput (node_types, instantiations, member_resolutions, catalog witnesses/derivable/EffectSig) + ResolvedNames (captures, mutated_symbols, effect_handlers) are the lowerer's complete input.
 - ArrayIterator.next() mutates self observably → inout-self write-back. No example needs resumable effects today. core.rs must cache typed artifacts (ASTs + TypeOutput + ResolvedNames) for whole-program lowering.
 
@@ -57,8 +57,8 @@ Program:  labels ℓ → Function { ty: [t,…] → u, body: Expr | Unset, uf: U
 Types t:  I64 | F64 | Bool | Byte | Ptr | Void | ⊥ | [t,…] (tuple) | t → u | Boxed(RecordId) | Variant(EnumId)
 Exprs e (immutable, hash-consed; LV/LF stored at construction):
           Const(c) | ℓ | var ℓ | App(e, e) | Tuple(e,…) | Extract(e, i) | PrimOp(op, [e,…], t)
-PrimOps:  the @_ir dialect in direct style (cmp/add/sub/mul/div/trunc/itof/alloc/free/load/store/copy/move/gep/
-          record/getfield/setfield/io_*) + variant/get_tag/get_payload + io_perform + cell_new/cell_get/cell_set
+PrimOps:  the @_ir dialect in direct style (cmp/add/sub/mul/div/trunc/itof/alloc/load/store/copy/gep/io_write)
+          + records/get_field/set_field + variant/get_tag/get_payload + io_* + io_perform + cell_new/cell_get/cell_set
 Builtins: br_⊥(cond, then_k, else_k) ; switch_⊥(tag, [k_0…k_n], default_k)   (paper §2.2's br, plus tags)
 ```
 - Continuations (codomain ⊥) are basic blocks/join points/loop headers/return continuations — per Table 2.

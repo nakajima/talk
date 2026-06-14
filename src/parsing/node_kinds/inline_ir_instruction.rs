@@ -61,13 +61,7 @@ impl Eq for Value {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InlineIRInstructionKind {
-    #[doc = "$dest = const $ty $val $meta"]
-    Constant {
-        dest: Register,
-        ty: TypeAnnotation,
-        val: Value,
-    },
-    #[doc = "$dest = cmp $ty $lhs $op $rhs $meta"]
+    #[doc = "$dest = cmp $ty $lhs $op $rhs"]
     Cmp {
         dest: Register,
         lhs: Value,
@@ -75,67 +69,33 @@ pub enum InlineIRInstructionKind {
         ty: TypeAnnotation,
         op: TokenKind,
     },
-    #[doc = "$dest = add $ty $a $b $meta"]
+    #[doc = "$dest = add $ty $a $b"]
     Add {
         dest: Register,
         ty: TypeAnnotation,
         a: Value,
         b: Value,
     },
-    #[doc = "$dest = sub $ty $a $b $meta"]
+    #[doc = "$dest = sub $ty $a $b"]
     Sub {
         dest: Register,
         ty: TypeAnnotation,
         a: Value,
         b: Value,
     },
-    #[doc = "$dest = mul $ty $a $b $meta"]
+    #[doc = "$dest = mul $ty $a $b"]
     Mul {
         dest: Register,
         ty: TypeAnnotation,
         a: Value,
         b: Value,
     },
-    #[doc = "$dest = div $ty $a $b $meta"]
+    #[doc = "$dest = div $ty $a $b"]
     Div {
         dest: Register,
         ty: TypeAnnotation,
         a: Value,
         b: Value,
-    },
-    #[doc = "$dest = ref $ty $val"]
-    Ref {
-        dest: Register,
-        ty: TypeAnnotation,
-        val: Value,
-    },
-    #[doc = "$dest = call $ty $callee $args $meta"]
-    Call {
-        dest: Register,
-        ty: TypeAnnotation,
-        callee: Value,
-        args: Vec<Value>,
-    },
-    #[doc = "$dest = record $ty $record $meta"]
-    Record {
-        dest: Register,
-        ty: TypeAnnotation,
-        record: Vec<Value>,
-    },
-    #[doc = "$dest = getfield $ty $record $field $meta"]
-    GetField {
-        dest: Register,
-        ty: TypeAnnotation,
-        record: Register,
-        field: Value,
-    },
-    #[doc = "setfield $ty $record $field $val $meta"]
-    SetField {
-        dest: Register,
-        val: Value,
-        ty: TypeAnnotation,
-        record: Register,
-        field: Value,
     },
     #[doc = "$dest = alloc $ty $count"]
     Alloc {
@@ -143,8 +103,6 @@ pub enum InlineIRInstructionKind {
         ty: TypeAnnotation,
         count: Value,
     },
-    #[doc = "free $addr"]
-    Free { addr: Value },
     #[doc = "$dest = load $ty $addr"]
     Load {
         dest: Register,
@@ -156,12 +114,6 @@ pub enum InlineIRInstructionKind {
         value: Value,
         ty: TypeAnnotation,
         addr: Value,
-    },
-    #[doc = "move $ty $from $to"]
-    Move {
-        from: Value,
-        ty: TypeAnnotation,
-        to: Value,
     },
     #[doc = "copy $ty $from $to $length"]
     Copy {
@@ -177,21 +129,6 @@ pub enum InlineIRInstructionKind {
         addr: Value,
         offset_index: Value,
     },
-    // I/O Instructions
-    #[doc = "$dest = io_open $path $flags $mode"]
-    IoOpen {
-        dest: Register,
-        path: Value,
-        flags: Value,
-        mode: Value,
-    },
-    #[doc = "$dest = io_read $fd $buf $count"]
-    IoRead {
-        dest: Register,
-        fd: Value,
-        buf: Value,
-        count: Value,
-    },
     #[doc = "$dest = io_write $fd $buf $count"]
     IoWrite {
         dest: Register,
@@ -199,53 +136,6 @@ pub enum InlineIRInstructionKind {
         buf: Value,
         count: Value,
     },
-    #[doc = "$dest = io_close $fd"]
-    IoClose { dest: Register, fd: Value },
-    #[doc = "$dest = io_ctl $fd $op $arg"]
-    IoCtl {
-        dest: Register,
-        fd: Value,
-        op: Value,
-        arg: Value,
-    },
-    #[doc = "$dest = io_poll $fds $count $timeout"]
-    IoPoll {
-        dest: Register,
-        fds: Value,
-        count: Value,
-        timeout: Value,
-    },
-    #[doc = "$dest = io_socket $domain $socktype $protocol"]
-    IoSocket {
-        dest: Register,
-        domain: Value,
-        socktype: Value,
-        protocol: Value,
-    },
-    #[doc = "$dest = io_bind $fd $addr $port"]
-    IoBind {
-        dest: Register,
-        fd: Value,
-        addr: Value,
-        port: Value,
-    },
-    #[doc = "$dest = io_listen $fd $backlog"]
-    IoListen {
-        dest: Register,
-        fd: Value,
-        backlog: Value,
-    },
-    #[doc = "$dest = io_connect $fd $addr $port"]
-    IoConnect {
-        dest: Register,
-        fd: Value,
-        addr: Value,
-        port: Value,
-    },
-    #[doc = "$dest = io_accept $fd"]
-    IoAccept { dest: Register, fd: Value },
-    #[doc = "$dest = io_sleep $ms"]
-    IoSleep { dest: Register, ms: Value },
     #[doc = "$dest = trunc $val"]
     Trunc { dest: Register, val: Value },
     #[doc = "$dest = itof $val"]
@@ -310,9 +200,6 @@ impl TypeAnnotation {
 impl Display for InlineIRInstruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
-            InlineIRInstructionKind::Constant { dest, ty, val } => {
-                write!(f, "{dest} = const {} {val}", ty.simple_display())
-            }
             InlineIRInstructionKind::Cmp {
                 dest,
                 lhs,
@@ -339,72 +226,14 @@ impl Display for InlineIRInstruction {
             InlineIRInstructionKind::Div { dest, ty, a, b } => {
                 write!(f, "{dest} = div {} {} {}", ty.simple_display(), a, b)
             }
-            InlineIRInstructionKind::Ref { dest, ty, val } => {
-                write!(f, "{dest} = ref {} {}", ty.simple_display(), val)
-            }
-            InlineIRInstructionKind::Call {
-                dest,
-                ty,
-                callee,
-                args,
-            } => write!(
-                f,
-                "{dest} = call {} {} {{{}}}",
-                ty.simple_display(),
-                callee,
-                args.iter()
-                    .map(|a| format!("{a}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            InlineIRInstructionKind::Record { dest, ty, record } => write!(
-                f,
-                "{dest} = record {} {{{}}}",
-                ty.simple_display(),
-                record
-                    .iter()
-                    .map(|a| format!("{a}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            InlineIRInstructionKind::GetField {
-                dest,
-                ty,
-                record,
-                field,
-            } => write!(
-                f,
-                "{dest} = getfield {} {} {}",
-                ty.simple_display(),
-                record,
-                field
-            ),
-            InlineIRInstructionKind::SetField {
-                dest,
-                val,
-                ty,
-                record,
-                field,
-            } => write!(
-                f,
-                "setfield {dest} {} {} {} {}",
-                ty.simple_display(),
-                record,
-                field,
-                val
-            ),
             InlineIRInstructionKind::Alloc { dest, ty, count } => {
                 write!(f, "{dest} = alloc {} {}", ty.simple_display(), count)
             }
-            InlineIRInstructionKind::Free { addr } => write!(f, "free {}", addr),
             InlineIRInstructionKind::Load { dest, ty, addr } => {
                 write!(f, "{dest} = load {} {}", ty.simple_display(), addr)
             }
             InlineIRInstructionKind::Store { value, ty, addr } => {
                 write!(f, "store {} {} {}", ty.simple_display(), value, addr)
-            }
-            InlineIRInstructionKind::Move { from, ty, to } => {
-                write!(f, "move {} {} {}", ty.simple_display(), from, to)
             }
             InlineIRInstructionKind::Copy {
                 ty,
@@ -428,64 +257,12 @@ impl Display for InlineIRInstruction {
                     offset_index
                 )
             }
-            // I/O Instructions
-            InlineIRInstructionKind::IoOpen {
-                dest,
-                path,
-                flags,
-                mode,
-            } => write!(f, "{dest} = io_open {} {} {}", path, flags, mode),
-            InlineIRInstructionKind::IoRead {
-                dest,
-                fd,
-                buf,
-                count,
-            } => write!(f, "{dest} = io_read {} {} {}", fd, buf, count),
             InlineIRInstructionKind::IoWrite {
                 dest,
                 fd,
                 buf,
                 count,
             } => write!(f, "{dest} = io_write {} {} {}", fd, buf, count),
-            InlineIRInstructionKind::IoClose { dest, fd } => {
-                write!(f, "{dest} = io_close {}", fd)
-            }
-            InlineIRInstructionKind::IoCtl { dest, fd, op, arg } => {
-                write!(f, "{dest} = io_ctl {} {} {}", fd, op, arg)
-            }
-            InlineIRInstructionKind::IoPoll {
-                dest,
-                fds,
-                count,
-                timeout,
-            } => write!(f, "{dest} = io_poll {} {} {}", fds, count, timeout),
-            InlineIRInstructionKind::IoSocket {
-                dest,
-                domain,
-                socktype,
-                protocol,
-            } => write!(f, "{dest} = io_socket {} {} {}", domain, socktype, protocol),
-            InlineIRInstructionKind::IoBind {
-                dest,
-                fd,
-                addr,
-                port,
-            } => write!(f, "{dest} = io_bind {} {} {}", fd, addr, port),
-            InlineIRInstructionKind::IoListen { dest, fd, backlog } => {
-                write!(f, "{dest} = io_listen {} {}", fd, backlog)
-            }
-            InlineIRInstructionKind::IoConnect {
-                dest,
-                fd,
-                addr,
-                port,
-            } => write!(f, "{dest} = io_connect {} {} {}", fd, addr, port),
-            InlineIRInstructionKind::IoAccept { dest, fd } => {
-                write!(f, "{dest} = io_accept {}", fd)
-            }
-            InlineIRInstructionKind::IoSleep { dest, ms } => {
-                write!(f, "{dest} = io_sleep {}", ms)
-            }
             InlineIRInstructionKind::Trunc { dest, val } => {
                 write!(f, "{dest} = trunc {}", val)
             }

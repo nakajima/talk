@@ -128,34 +128,25 @@ result type it should have, and the low-level operation must match that.
 
 ### Operations that work today
 
-The parser accepts more operation names than the lowerer supports. Use
-the forms marked "yes" unless you are also implementing lowering for a
-new operation.
+The parser accepts only the operation names that lower to lambda G today.
+Use normal Talk syntax for literals, calls, records, field access, and
+assignment/update paths.
 
-| Source form | Works today? | Plain meaning |
-|---|---:|---|
-| `%? = cmp T a == b` | yes | Compare two values. Also supports `!=`, `<`, `<=`, `>`, `>=`. Result is `Bool`. |
-| `%? = add T a b` | yes | Add two values. |
-| `%? = sub T a b` | yes | Subtract `b` from `a`. |
-| `%? = mul T a b` | yes | Multiply two values. |
-| `%? = div T a b` | yes | Divide `a` by `b`. |
-| `%? = trunc value` | yes | Convert `Float` to `Int` by dropping the fractional part. |
-| `%? = itof value` | yes | Convert `Int` to `Float`. |
-| `%? = alloc T count` | yes | Allocate enough raw bytes for `count` values of type `T`. Result is `RawPtr`. |
-| `%? = load T addr` | yes | Read one value of type `T` from raw memory. |
-| `store T value addr` | yes | Write one value to raw memory. |
-| `%? = gep T addr index` | yes | Compute the address of item `index` in an array of `T`. |
-| `copy T from to length` | yes | Copy `length` bytes from one raw address to another. Core normally uses `Byte` here. |
-| `%? = io_write fd buf count` | yes | Write `count` bytes from `buf` to file descriptor `fd`. Returns an integer: non-negative means success, negative means an error code. |
-| `%? = const T value` | no | Parsed old form. Use a normal Talk literal. |
-| `%? = ref T value` | no | Old register-reference idea. Do not use. |
-| `%? = call T callee (args...)` | no | Use normal Talk calls. |
-| `%? = record T (fields...)` | no | Use normal Talk records/structs. |
-| `%? = getfield T record field` | no | Use normal Talk member access. |
-| `%? = setfield T record field value` | no | Use normal Talk assignment/update paths. |
-| `%? = io_open/read/close/...` | no | Parsed, but current core routes most IO through `'io` effects. Direct `io_write` is the supported splice. |
-| `move T from to` | no | Reserved old form. |
-| `free addr` | no | Memory is currently bump-allocated by the engines. |
+| Source form | Plain meaning |
+|---|---|
+| `%? = cmp T a == b` | Compare two values. Also supports `!=`, `<`, `<=`, `>`, `>=`. Result is `Bool`. |
+| `%? = add T a b` | Add two values. |
+| `%? = sub T a b` | Subtract `b` from `a`. |
+| `%? = mul T a b` | Multiply two values. |
+| `%? = div T a b` | Divide `a` by `b`. |
+| `%? = trunc value` | Convert `Float` to `Int` by dropping the fractional part. |
+| `%? = itof value` | Convert `Int` to `Float`. |
+| `%? = alloc T count` | Allocate enough raw bytes for `count` values of type `T`. Result is `RawPtr`. |
+| `%? = load T addr` | Read one value of type `T` from raw memory. |
+| `store T value addr` | Write one value to raw memory. |
+| `%? = gep T addr index` | Compute the address of item `index` in an array of `T`. |
+| `copy T from to length` | Copy `length` bytes from one raw address to another. Core normally uses `Byte` here. |
+| `%? = io_write fd buf count` | Write `count` bytes from `buf` to file descriptor `fd`. Returns an integer: non-negative means success, negative means an error code. |
 
 ### Memory examples
 

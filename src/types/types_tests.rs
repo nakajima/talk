@@ -292,6 +292,69 @@ pub mod tests {
 
 
     #[test]
+    fn type_aliases_are_transparent_in_type_positions() {
+        let t = check("// no-core\ntypealias Inty = Int\nlet a: Inty = 123");
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "a"), "Int");
+    }
+
+    #[test]
+    fn type_aliases_can_name_generic_applications() {
+        let t = check(
+            "// no-core\nstruct Box<T> { let value: T }\ntypealias IntBox = Box<Int>\nlet b: IntBox = Box(value: 1)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "b"), "Box<Int>");
+    }
+
+    #[test]
+    fn type_aliases_capture_nominal_generics() {
+        let t = check(
+            "// no-core\nstruct Box<T> {\n  typealias Item = T\n  let value: Item\n}\nfunc get(box: Box<Int>) -> Box<Int>.Item { box.value }",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "get"), "(Box<Int>) -> Int");
+    }
+
+    #[test]
+    fn type_aliases_can_apply_captured_generics() {
+        let t = check(
+            "// no-core\nstruct T<U> { let value: U }\nstruct Box<U> {\n  typealias F = T<U>\n  let value: F\n}\nfunc get(box: Box<Int>) -> T<Int> { box.value }",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "get"), "(Box<Int>) -> T<Int>");
+    }
+
+    #[test]
+    fn local_type_aliases_work_in_block_scopes() {
+        let t = check("// no-core\nfunc f() -> Int {\n  typealias I = Int\n  let x: I = 1\n  x\n}");
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "f"), "() -> Int");
+    }
+
+    #[test]
+    fn extend_type_aliases_bind_associated_types() {
+        let t = check(
+            "// no-core\nprotocol HasItem {\n  associated Item\n  func getItem() -> Item\n}\nstruct Box {}\nextend Box: HasItem {\n  typealias Item = Bool\n  func getItem() -> Int { 1 }\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("expected Bool, found Int")),
+            "expected associated type alias to constrain the witness, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn recursive_type_aliases_are_rejected() {
+        let t = check("// no-core\ntypealias A = B\ntypealias B = A\nlet x: A = 1");
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("recursive type alias")),
+            "expected a recursive type alias error, got {errors:?}"
+        );
+    }
+
+    #[test]
     fn types_int_literal() {
         let t = check("// no-core\nlet a = 123");
         assert_clean(&t);
@@ -1421,6 +1484,56 @@ mod with_core {
             .map(|(sym, _)| *sym)
             .expect("v scheme");
         assert_eq!(typed.phase.types.schemes[&v].render(), "Int");
+    }
+
+    #[test]
+    fn public_type_aliases_cross_module_boundary() {
+        use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
+
+        let driver_a = Driver::new(
+            vec![Source::from(
+                "public typealias UserId = Int\npublic func make() -> UserId { 1 }",
+            )],
+            DriverConfig::new("A"),
+        );
+        let module_a = driver_a
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check()
+            .module("A");
+
+        let mut modules = ModuleEnvironment::default();
+        modules.import(module_a);
+        let config = crate::compiling::driver::DriverConfig {
+            module_id: ModuleId::Current,
+            modules: Rc::new(modules),
+            mode: crate::compiling::driver::CompilationMode::Library,
+            module_name: "B".to_string(),
+            parse_mode: crate::compiling::driver::ParseMode::Strict,
+            preserve_comments: false,
+        };
+        let driver_b = Driver::new(vec![Source::from("let id: UserId = make()")], config);
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+        let resolved = &typed.phase.resolved_names;
+        let _names =
+            crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
+        let symbol = resolved
+            .symbol_names
+            .iter()
+            .find(|(sym, n)| n.as_str() == "id" && typed.phase.types.schemes.contains_key(sym))
+            .map(|(sym, _)| *sym)
+            .expect("id scheme");
+        assert_eq!(typed.phase.types.schemes[&symbol].render(), "Int");
     }
 
     #[test]

@@ -328,6 +328,26 @@ impl NameResolver {
             declarer.predeclare_effects(&decls);
         }
 
+        // Predeclare module-scope type aliases after nominals/effects so imports can
+        // see public aliases without perturbing the hardcoded Core nominal IDs.
+        for ast in asts.iter_mut() {
+            let file_scope_id = NodeID(ast.file_id, 0);
+            self.current_scope_id = Some(file_scope_id);
+            let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
+            let decls: Vec<&Decl> = ast
+                .roots
+                .iter()
+                .filter_map(|r| {
+                    if let Node::Decl(decl) = r {
+                        Some(decl)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            declarer.predeclare_type_aliases(&decls);
+        }
+
         // Process imports (before full declaration phase so extends can see imported types)
         {
             // Build a map from file paths to FileIDs
@@ -895,7 +915,11 @@ impl NameResolver {
         // If so, return the existing symbol to avoid duplicate creation
         if matches!(
             kind,
-            Symbol::Struct(..) | Symbol::Enum(..) | Symbol::Protocol(..) | Symbol::Effect(..)
+            Symbol::Struct(..)
+                | Symbol::Enum(..)
+                | Symbol::Protocol(..)
+                | Symbol::Effect(..)
+                | Symbol::TypeAlias(..)
         ) && let Some(&existing) = self
             .scopes
             .get(&scope_id)
@@ -1259,39 +1283,19 @@ impl NameResolver {
             }
 
             match &mut instr.kind {
-                InlineIRInstructionKind::Constant { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Cmp { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Add { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Sub { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Mul { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Div { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Ref { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Call { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Record { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::GetField { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::SetField { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Alloc { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Free { .. } => (),
-                InlineIRInstructionKind::Load { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Store { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Move { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Copy { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::Gep { ty, .. } => self.enter_type_annotation(ty),
-                // I/O instructions have no type annotations
-                InlineIRInstructionKind::IoOpen { .. } => (),
-                InlineIRInstructionKind::IoRead { .. } => (),
-                InlineIRInstructionKind::IoWrite { .. } => (),
-                InlineIRInstructionKind::IoClose { .. } => (),
-                InlineIRInstructionKind::IoCtl { .. } => (),
-                InlineIRInstructionKind::IoPoll { .. } => (),
-                InlineIRInstructionKind::IoSocket { .. } => (),
-                InlineIRInstructionKind::IoBind { .. } => (),
-                InlineIRInstructionKind::IoListen { .. } => (),
-                InlineIRInstructionKind::IoConnect { .. } => (),
-                InlineIRInstructionKind::IoAccept { .. } => (),
-                InlineIRInstructionKind::IoSleep { .. } => (),
-                InlineIRInstructionKind::Trunc { .. } => (),
-                InlineIRInstructionKind::IntToFloat { .. } => (),
+                InlineIRInstructionKind::Cmp { ty, .. }
+                | InlineIRInstructionKind::Add { ty, .. }
+                | InlineIRInstructionKind::Sub { ty, .. }
+                | InlineIRInstructionKind::Mul { ty, .. }
+                | InlineIRInstructionKind::Div { ty, .. }
+                | InlineIRInstructionKind::Alloc { ty, .. }
+                | InlineIRInstructionKind::Load { ty, .. }
+                | InlineIRInstructionKind::Store { ty, .. }
+                | InlineIRInstructionKind::Copy { ty, .. }
+                | InlineIRInstructionKind::Gep { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::IoWrite { .. }
+                | InlineIRInstructionKind::Trunc { .. }
+                | InlineIRInstructionKind::IntToFloat { .. } => (),
             }
         });
 

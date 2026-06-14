@@ -61,14 +61,14 @@ use crate::node_kinds::{
 use crate::node_kinds::func_signature::FuncSignature;
 use crate::node_kinds::generic_decl::GenericDecl;
 use crate::types::catalog::{
-    Conformance, EnumInfo, MemberOwner, ProtocolInfo, Requirement, StructInfo, TypeCatalog,
-    VariantInfo,
+    Conformance, EnumInfo, MemberOwner, ProtocolInfo, Requirement, StructInfo, TypeAliasInfo,
+    TypeCatalog, VariantInfo,
 };
 use crate::types::constraint::{Constraint, CtOrigin, CtReason};
 use crate::types::error::TypeError;
 use crate::types::output::{MemberResolution, TypeOutput};
 use crate::types::solve::{Generalizer, Solver, VarStore};
-use crate::types::ty::{Bound, EffTail, EffectRow, Row, Scheme, SchemeParam, Ty};
+use crate::types::ty::{Bound, EffTail, EffectRow, Row, RowTail, Scheme, SchemeParam, Ty};
 
 /// The level at which top-level binding groups solve; their skeletons and
 /// body variables live above it so generalization (base = OUTER_LEVEL)
@@ -120,6 +120,8 @@ pub fn check_types(
         extends: vec![],
         protocol_defaults: vec![],
         deferred: vec![],
+        type_aliases: FxHashMap::default(),
+        alias_stack: vec![],
         level: GROUP_LEVEL,
     };
     checker.run(asts)
@@ -132,6 +134,13 @@ struct ExtendWork<'a> {
     self_ty: Ty,
     decl: &'a Decl,
     protocols: Vec<Symbol>,
+}
+
+#[derive(Clone)]
+struct TypeAliasDef {
+    rhs: TypeAnnotation,
+    owner: Option<Symbol>,
+    exportable: bool,
 }
 
 /// A top-level binder's declaration site, indexed by symbol.
@@ -215,6 +224,12 @@ struct Checker<'a> {
     /// outer-level variable a later group may solve (OutsideIn's floating);
     /// re-solved once at finalization.
     deferred: Vec<Constraint>,
+    /// Transparent aliases keyed by their resolved alias symbol. The RHS AST
+    /// is lowered at each use so function-type aliases get fresh row tails.
+    type_aliases: FxHashMap<Symbol, TypeAliasDef>,
+    /// Aliases currently being expanded; catches recursive synonyms before
+    /// they can build an infinite type.
+    alias_stack: Vec<Symbol>,
     level: Level,
 }
 
@@ -239,6 +254,7 @@ impl<'a> Checker<'a> {
         display_names.extend(self.resolved.symbol_names.clone());
         self.display_names = display_names.clone();
         let _names = crate::name_resolution::symbol::set_symbol_names(display_names);
+        self.collect_type_aliases(asts);
 
         // Phase 1 — declaration collection (signatures only, no bodies).
         // Variables minted while lowering declaration annotations live at the
@@ -298,6 +314,8 @@ impl<'a> Checker<'a> {
             }
         }
 
+        self.register_catalog_type_aliases();
+
         // Pass B: extends (top-level and nested in struct bodies) and lets.
         for decl in &top_decls {
             match &decl.kind {
@@ -344,6 +362,7 @@ impl<'a> Checker<'a> {
                 | DeclKind::Enum { .. }
                 | DeclKind::Protocol { .. }
                 | DeclKind::Effect { .. }
+                | DeclKind::TypeAlias(..)
                 | DeclKind::Import(_) => {}
                 other => self.unsupported(decl.id, decl_kind_name(other)),
             }
@@ -471,6 +490,100 @@ impl<'a> Checker<'a> {
 
     // ----- Declaration collection ---------------------------------------
 
+    fn collect_type_aliases(&mut self, asts: &'a IndexMap<Source, AST<NameResolved>>) {
+        use derive_visitor::{Drive, Visitor};
+
+        #[derive(Visitor)]
+        #[visitor(Decl(enter))]
+        struct AliasCollector {
+            aliases: Vec<(Symbol, TypeAnnotation)>,
+        }
+
+        impl AliasCollector {
+            fn enter_decl(&mut self, decl: &Decl) {
+                if let DeclKind::TypeAlias(name, _, rhs) = &decl.kind
+                    && let Ok(symbol) = name.symbol()
+                {
+                    self.aliases.push((symbol, rhs.clone()));
+                }
+            }
+        }
+
+        let mut owners: FxHashMap<Symbol, Symbol> = FxHashMap::default();
+        for (owner, children) in &self.resolved.child_types {
+            for child in children.values() {
+                if matches!(child, Symbol::TypeAlias(_)) {
+                    owners.insert(*child, *owner);
+                }
+            }
+        }
+
+        let mut scopes: FxHashMap<Symbol, NodeID> = FxHashMap::default();
+        for (scope_id, scope) in &self.resolved.scopes {
+            for symbol in scope.types.values() {
+                if matches!(symbol, Symbol::TypeAlias(_)) {
+                    scopes.insert(*symbol, *scope_id);
+                }
+            }
+        }
+
+        let mut collector = AliasCollector { aliases: vec![] };
+        for ast in asts.values() {
+            for root in &ast.roots {
+                root.drive(&mut collector);
+            }
+        }
+
+        for (symbol, rhs) in collector.aliases {
+            let owner = owners.get(&symbol).copied();
+            let exportable = owner.is_some()
+                || scopes
+                    .get(&symbol)
+                    .map(|scope_id| scope_id.1 == 0)
+                    .unwrap_or(false);
+            self.type_aliases.insert(
+                symbol,
+                TypeAliasDef {
+                    rhs,
+                    owner,
+                    exportable,
+                },
+            );
+        }
+    }
+
+    fn register_catalog_type_aliases(&mut self) {
+        let aliases: Vec<(Symbol, TypeAliasDef)> = self
+            .type_aliases
+            .iter()
+            .filter_map(|(symbol, alias)| alias.exportable.then_some((*symbol, alias.clone())))
+            .collect();
+
+        for (symbol, alias) in aliases {
+            let ty = self.lower_type_alias(symbol, alias.rhs.id, None);
+            let params = alias
+                .owner
+                .map(|owner| self.nominal_params(owner))
+                .unwrap_or_default();
+            self.catalog.type_aliases.insert(
+                symbol,
+                TypeAliasInfo {
+                    params,
+                    ty: ty.sanitize_for_export(symbol),
+                },
+            );
+        }
+    }
+
+    fn nominal_params(&self, symbol: Symbol) -> Vec<Symbol> {
+        self.catalog
+            .structs
+            .get(&symbol)
+            .map(|info| info.params.clone())
+            .or_else(|| self.catalog.enums.get(&symbol).map(|info| info.params.clone()))
+            .unwrap_or_default()
+    }
+
     fn register_struct(&mut self, symbol: Symbol, decl: &Decl) {
         let DeclKind::Struct { generics, body, .. } = &decl.kind else {
             return;
@@ -520,8 +633,9 @@ impl<'a> Checker<'a> {
                         info.inits.push(init);
                     }
                 }
-                // Nested `extend Self: P` registers in pass B.
-                DeclKind::Extend { .. } => {}
+                // Nested `extend Self: P` registers in pass B. Type aliases
+                // are transparent type declarations, not value members.
+                DeclKind::Extend { .. } | DeclKind::TypeAlias(..) => {}
                 other => self.unsupported(member.id, decl_kind_name(other)),
             }
         }
@@ -566,6 +680,7 @@ impl<'a> Checker<'a> {
                         info.methods.insert(func.name.name_str(), method);
                     }
                 }
+                DeclKind::TypeAlias(..) => {}
                 other => self.unsupported(member.id, decl_kind_name(other)),
             }
         }
@@ -623,6 +738,7 @@ impl<'a> Checker<'a> {
                         info.requirements.insert(func.name.name_str(), requirement);
                     }
                 }
+                DeclKind::TypeAlias(..) => {}
                 other => self.unsupported(member.id, decl_kind_name(other)),
             }
         }
@@ -796,6 +912,14 @@ impl<'a> Checker<'a> {
             }
         }
         let mut witnessed: Vec<String> = vec![];
+        let mut declared_assoc: FxHashMap<String, Ty> = FxHashMap::default();
+        self.self_types.push(self_ty.clone());
+        for member in &body.decls {
+            if let DeclKind::TypeAlias(name, _, rhs) = &member.kind {
+                declared_assoc.insert(name.name_str(), self.lower_annotation(rhs));
+            }
+        }
+        self.self_types.pop();
 
         let mut protocols = vec![];
         for conformance_annotation in conformances {
@@ -825,6 +949,11 @@ impl<'a> Checker<'a> {
                 for (assoc_symbol, arg) in info.assoc.values().zip(assoc_args) {
                     let binding = self.lower_annotation(arg);
                     conformance.assoc.insert(*assoc_symbol, binding);
+                }
+            }
+            for (name, assoc_symbol) in &info.assoc {
+                if let Some(binding) = declared_assoc.get(name) {
+                    conformance.assoc.insert(*assoc_symbol, binding.clone());
                 }
             }
 
@@ -2659,7 +2788,7 @@ impl<'a> Checker<'a> {
                     _ => self.check_pattern(lhs, &ty),
                 }
             }
-            DeclKind::Import(_) => {}
+            DeclKind::Import(_) | DeclKind::TypeAlias(..) => {}
             other => self.unsupported(decl.id, decl_kind_name(other)),
         }
     }
@@ -3032,12 +3161,228 @@ impl<'a> Checker<'a> {
         None
     }
 
+    fn lower_type_alias(
+        &mut self,
+        symbol: Symbol,
+        node: NodeID,
+        owner_args: Option<(Symbol, Vec<Ty>)>,
+    ) -> Ty {
+        if self.alias_stack.contains(&symbol) {
+            self.errors.push((
+                TypeError::Unsupported(format!("recursive type alias {symbol}")),
+                node,
+            ));
+            return Ty::Error;
+        }
+
+        if let Some(alias) = self.type_aliases.get(&symbol).cloned() {
+            self.alias_stack.push(symbol);
+            let ty = self.lower_annotation(&alias.rhs);
+            self.alias_stack.pop();
+            return self.substitute_alias_owner(alias.owner, ty, owner_args);
+        }
+
+        if let Some(alias) = self.catalog.type_aliases.get(&symbol).cloned() {
+            return self.instantiate_catalog_alias(symbol, &alias, node, owner_args);
+        }
+
+        self.unsupported(node, "unknown type alias");
+        Ty::Error
+    }
+
+    fn substitute_alias_owner(
+        &mut self,
+        owner: Option<Symbol>,
+        ty: Ty,
+        owner_args: Option<(Symbol, Vec<Ty>)>,
+    ) -> Ty {
+        let Some(alias_owner) = owner else {
+            return ty;
+        };
+        let Some((path_owner, args)) = owner_args else {
+            return ty;
+        };
+        if alias_owner != path_owner {
+            return ty;
+        }
+        let params = self.nominal_params(alias_owner);
+        let substitution = param_subst(&params, &args);
+        ty.substitute(&substitution, &Default::default(), &Default::default())
+    }
+
+    fn instantiate_catalog_alias(
+        &mut self,
+        symbol: Symbol,
+        alias: &TypeAliasInfo,
+        node: NodeID,
+        owner_args: Option<(Symbol, Vec<Ty>)>,
+    ) -> Ty {
+        let mut tys = FxHashMap::default();
+        if let Some((_, args)) = owner_args {
+            tys.extend(alias.params.iter().copied().zip(args));
+        }
+        let mut effs = FxHashMap::default();
+        effs.insert(
+            symbol,
+            EffTail::Var(self.store.fresh_eff(self.level, node)),
+        );
+        let mut rows = FxHashMap::default();
+        rows.insert(
+            symbol,
+            RowTail::Var(self.store.fresh_row(self.level, node)),
+        );
+        alias.ty.substitute(&tys, &effs, &rows)
+    }
+
+    fn lower_nominal_path(
+        &mut self,
+        base: &TypeAnnotation,
+        member: &Label,
+        member_generics: &[TypeAnnotation],
+        node: NodeID,
+    ) -> Ty {
+        let base_ty = self.lower_annotation(base);
+        let label = member.to_string();
+        match self.store.shallow(&base_ty) {
+            Ty::Nominal(owner, args) => {
+                self.lower_nominal_child(owner, args, &label, member_generics, node)
+            }
+            Ty::Param(param) => {
+                self.lower_associated_projection(Ty::Param(param), param, &label, node)
+            }
+            Ty::Proj(_, _, assoc) => self.lower_associated_projection(base_ty, assoc, &label, node),
+            Ty::Error => Ty::Error,
+            other => {
+                let receiver = self.store.render(&other);
+                self.errors.push((
+                    TypeError::UnknownMember {
+                        receiver,
+                        label,
+                    },
+                    node,
+                ));
+                Ty::Error
+            }
+        }
+    }
+
+    fn lower_nominal_child(
+        &mut self,
+        owner: Symbol,
+        args: Vec<Ty>,
+        label: &str,
+        member_generics: &[TypeAnnotation],
+        node: NodeID,
+    ) -> Ty {
+        let Some(child) = self
+            .resolved
+            .child_types
+            .get(&owner)
+            .and_then(|children| children.get(&Label::Named(label.to_string())))
+            .copied()
+        else {
+            self.errors.push((
+                TypeError::UnknownMember {
+                    receiver: owner.to_string(),
+                    label: label.to_string(),
+                },
+                node,
+            ));
+            return Ty::Error;
+        };
+
+        match child {
+            Symbol::TypeAlias(_) => {
+                if !member_generics.is_empty() {
+                    self.errors.push((
+                        TypeError::ArityMismatch {
+                            expected: 0,
+                            found: member_generics.len(),
+                        },
+                        node,
+                    ));
+                }
+                self.lower_type_alias(child, node, Some((owner, args)))
+            }
+            Symbol::AssociatedType(_) => {
+                if !member_generics.is_empty() {
+                    self.errors.push((
+                        TypeError::ArityMismatch {
+                            expected: 0,
+                            found: member_generics.len(),
+                        },
+                        node,
+                    ));
+                }
+                Ty::Param(child)
+            }
+            Symbol::Struct(_) | Symbol::Enum(_) | Symbol::Protocol(_) | Symbol::Builtin(_) => {
+                let lowered_args = member_generics
+                    .iter()
+                    .map(|generic| self.lower_annotation(generic))
+                    .collect();
+                Ty::Nominal(child, lowered_args)
+            }
+            _ => {
+                self.errors.push((
+                    TypeError::UnknownMember {
+                        receiver: owner.to_string(),
+                        label: label.to_string(),
+                    },
+                    node,
+                ));
+                Ty::Error
+            }
+        }
+    }
+
+    fn lower_associated_projection(
+        &mut self,
+        base: Ty,
+        param: Symbol,
+        label: &str,
+        node: NodeID,
+    ) -> Ty {
+        let bounds = self
+            .catalog
+            .param_bounds
+            .get(&param)
+            .cloned()
+            .unwrap_or_default();
+        for protocol in bounds {
+            if let Some((owner, assoc)) = self.catalog.associated_type_in(protocol, label) {
+                return Ty::Proj(Box::new(base), owner, assoc);
+            }
+        }
+        let receiver = self.store.render(&base);
+        self.errors.push((
+            TypeError::UnknownMember {
+                receiver,
+                label: label.to_string(),
+            },
+            node,
+        ));
+        Ty::Error
+    }
+
     fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
         match &annotation.kind {
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 let Ok(symbol) = name.symbol() else {
                     return Ty::Error;
                 };
+                if matches!(symbol, Symbol::TypeAlias(_)) {
+                    if !generics.is_empty() {
+                        self.errors.push((
+                            TypeError::ArityMismatch {
+                                expected: 0,
+                                found: generics.len(),
+                            },
+                            annotation.id,
+                        ));
+                    }
+                    return self.lower_type_alias(symbol, annotation.id, None);
+                }
                 let args: Vec<Ty> = generics.iter().map(|g| self.lower_annotation(g)).collect();
                 match symbol {
                     Symbol::TypeParameter(_) | Symbol::AssociatedType(_) => Ty::Param(symbol),
@@ -3077,10 +3422,12 @@ impl<'a> Checker<'a> {
                     Ty::Error
                 }
             },
-            TypeAnnotationKind::NominalPath { .. } => {
-                self.unsupported(annotation.id, "nominal path type annotations");
-                Ty::Error
-            }
+            TypeAnnotationKind::NominalPath {
+                base,
+                member,
+                member_generics,
+                ..
+            } => self.lower_nominal_path(base, member, member_generics, annotation.id),
         }
     }
 

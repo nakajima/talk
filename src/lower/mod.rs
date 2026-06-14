@@ -3063,12 +3063,6 @@ impl<'a> Lowering<'a> {
                     operand(self, count)?,
                 ],
             ),
-            other => {
-                self.diagnostics.push(format!(
-                    "lowering: @_ir instruction not yet supported: {other:?}"
-                ));
-                return None;
-            }
         };
         let result_ty = match op {
             Op::Cmp(_) => self.p.ty_bool(),

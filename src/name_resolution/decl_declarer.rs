@@ -337,6 +337,23 @@ impl<'a> DeclDeclarer<'a> {
         }
     }
 
+    /// Predeclare module-scope type aliases so imports can resolve public aliases
+    /// before the full declaration walk resolves alias RHS annotations.
+    pub(super) fn predeclare_type_aliases(&mut self, decls: &[&Decl]) {
+        for decl in decls.iter() {
+            if let DeclKind::TypeAlias(name, name_span, ..) = &decl.kind {
+                let resolved = self
+                    .resolver
+                    .declare(name, some!(TypeAlias), decl.id, *name_span);
+                if decl.visibility == Visibility::Public
+                    && let Ok(sym) = resolved.symbol()
+                {
+                    self.resolver.mark_public(sym);
+                }
+            }
+        }
+    }
+
     /// Predeclare public top-level Let bindings as Globals so they're available during import resolution.
     /// Only handles simple Bind patterns (not destructuring).
     /// Only public bindings are predeclared since they're the only ones that can be imported.

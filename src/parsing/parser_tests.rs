@@ -2710,38 +2710,23 @@ pub mod tests {
     fn parses_inline_ir() {
         let parsed = parse(
             "
-           @_ir { %? = const Int 123 }
            @_ir { %? = cmp Int %0 < %1 }
            @_ir { %? = add Int 123 %1 }
            @_ir { %? = sub Int 123 %1 }
            @_ir { %? = mul Int 123 %1 }
            @_ir { %? = div Int 123 %1 }
-           @_ir { %? = ref Int 123 }
-           @_ir { %? = call Int %1 () }
-           @_ir { %? = record { fizz: Int } (123) }
-           @_ir { %? = getfield Int %1 0 }
-           @_ir { %? = setfield Int %1 0 123 }
            @_ir { %? = alloc Int 1 }
-           @_ir { free %1 }
            @_ir { %? = load Int %1 }
-           @_ir { move Int %1 %2 }
+           @_ir { store Int %1 %2 }
            @_ir { copy Int %1 %2 3 }
+           @_ir { %? = gep Int %1 2 }
+           @_ir { %? = io_write %0 %1 %2 }
+           @_ir { %? = trunc %0 }
+           @_ir { %? = itof %0 }
             ",
         );
         assert_eq!(
             *parsed.roots[0].as_stmt(),
-            any_expr_stmt!(ExprKind::InlineIR(any!(InlineIRInstruction, {
-                instr_name_span: Span::ANY,
-                binds: vec![],
-                kind: InlineIRInstructionKind::Constant {
-                    dest: Register("?".to_string()),
-                    ty: nominal_annotation!("Int"),
-                    val: Value::Int(123)
-                }
-            })))
-        );
-        assert_eq!(
-            *parsed.roots[1].as_stmt(),
             any_expr_stmt!(ExprKind::InlineIR(any!(InlineIRInstruction, {
                 instr_name_span: Span::ANY,
                 binds: vec![],
@@ -2754,6 +2739,42 @@ pub mod tests {
                 }
             })))
         );
+        assert_eq!(
+            *parsed.roots[1].as_stmt(),
+            any_expr_stmt!(ExprKind::InlineIR(any!(InlineIRInstruction, {
+                instr_name_span: Span::ANY,
+                binds: vec![],
+                kind: InlineIRInstructionKind::Add {
+                    dest: Register("?".to_string()),
+                    ty: nominal_annotation!("Int"),
+                    a: Value::Int(123),
+                    b: Value::Reg(1)
+                }
+            })))
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_inline_ir() {
+        let unsupported = [
+            "@_ir { %? = const Int 123 }",
+            "@_ir { %? = ref Int 123 }",
+            "@_ir { %? = call Int %1 () }",
+            "@_ir { %? = getfield Int %1 0 }",
+            "@_ir { free %1 }",
+            "@_ir { move Int %1 %2 }",
+            "@_ir { %? = io_open %0 %1 %2 }",
+            "@_ir { %? = cmp Int %0 + %1 }",
+        ];
+
+        for code in unsupported {
+            let lexer = Lexer::new(code);
+            let parser = Parser::new("-", FileID(0), lexer);
+            assert!(
+                matches!(parser.parse(), Err(ParserError::UnexpectedToken { .. })),
+                "parsed unsupported inline IR: {code}"
+            );
+        }
     }
 
     #[test]

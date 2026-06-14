@@ -193,9 +193,9 @@ the matching vm test. `(x as P).m()` does not steer resolution: `as`
 with a protocol annotation is part of the existentials gap below.
 
 Known gaps still documented rather than fixed (each loud, none silent
-— see the audit doc): Showable for function values, `typealias`
-outside extends, protocol-typed values (existentials), super-protocol
-conformance completeness, and partially-concrete inherent extends.
+— see the audit doc): Showable for function values, protocol-typed
+values (existentials), super-protocol conformance completeness, and
+partially-concrete inherent extends.
 
 ---
 

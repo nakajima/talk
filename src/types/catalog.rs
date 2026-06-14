@@ -110,6 +110,15 @@ pub struct EffectSig {
     pub ret: Ty,
 }
 
+/// A transparent type alias. `params` are captured nominal parameters when
+/// the alias is a child type (`struct Box<T> { typealias Item = T }`), so a
+/// path use like `Box<Int>.Item` can substitute the base application's args.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TypeAliasInfo {
+    pub params: Vec<Symbol>,
+    pub ty: Ty,
+}
+
 /// A candidate owner of a member name, for the unique-owner improvement rule
 /// (Jones, FPCA 1995): protocols own their requirement labels, nominals own
 /// their fields/methods.
@@ -135,6 +144,9 @@ pub struct TypeCatalog {
     pub extend_members: FxHashMap<Symbol, IndexMap<String, InherentMember>>,
     /// Effect operation signatures.
     pub effects: FxHashMap<Symbol, EffectSig>,
+    /// Transparent type aliases exported through the catalog for imports.
+    #[serde(default)]
+    pub type_aliases: FxHashMap<Symbol, TypeAliasInfo>,
     /// Protocols auto-derived for structs and enums when no explicit
     /// conformance exists (today: Showable, matching the previous
     /// implementation's show-derivation). The derived instance's context is
@@ -347,6 +359,19 @@ impl TypeCatalog {
                     )
                 })
                 .collect(),
+            type_aliases: self
+                .type_aliases
+                .into_iter()
+                .map(|(s, alias)| {
+                    (
+                        imp(s, target),
+                        TypeAliasInfo {
+                            params: alias.params.iter().map(|p| imp(*p, target)).collect(),
+                            ty: imp_ty(&alias.ty),
+                        },
+                    )
+                })
+                .collect(),
             derivable: self.derivable.iter().map(|s| imp(*s, target)).collect(),
         }
     }
@@ -376,6 +401,7 @@ impl TypeCatalog {
             self.extend_members.entry(head).or_default().extend(members);
         }
         self.effects.extend(other.effects);
+        self.type_aliases.extend(other.type_aliases);
         for protocol in other.derivable {
             if !self.derivable.contains(&protocol) {
                 self.derivable.push(protocol);
@@ -408,6 +434,26 @@ impl TypeCatalog {
             }
         }
         false
+    }
+
+    /// Find an associated type named `label` reachable from a protocol
+    /// (through supers). Returns (owning protocol, associated type symbol).
+    pub fn associated_type_in(&self, protocol: Symbol, label: &str) -> Option<(Symbol, Symbol)> {
+        let mut queue: Vec<Symbol> = vec![protocol];
+        let mut seen: Vec<Symbol> = vec![];
+        while let Some(current) = queue.pop() {
+            if seen.contains(&current) {
+                continue;
+            }
+            seen.push(current);
+            if let Some(info) = self.protocols.get(&current) {
+                if let Some(&assoc) = info.assoc.get(label) {
+                    return Some((current, assoc));
+                }
+                queue.extend(info.supers.iter().copied());
+            }
+        }
+        None
     }
 
     /// Find a requirement named `label` reachable from a protocol (through

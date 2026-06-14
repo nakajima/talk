@@ -1194,27 +1194,6 @@ impl<'a> Parser<'a> {
         Err(ParserError::CannotAssign) //TODO
     }
 
-    fn consume_register(&mut self) -> Result<Register, ParserError> {
-        let Some(current) = self.current.clone() else {
-            return Err(ParserError::UnexpectedEndOfInput(Some(
-                "IR Register".into(),
-            )));
-        };
-
-        if current.kind != TokenKind::IRRegister {
-            return Err(ParserError::UnexpectedToken {
-                expected: "IR Register".into(),
-                actual: current.kind.as_str().to_string(),
-                token: Some(current),
-            });
-        }
-
-        let reg = self.lexeme(&current);
-        self.advance();
-
-        Ok(Register(reg.to_string()))
-    }
-
     fn inline_ir(&mut self, tok: LocToken) -> Result<Node, ParserError> {
         let mut binds = vec![];
 
@@ -1237,36 +1216,17 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::Equals)?;
             let (instr, instr_span) = self.identifier()?;
             match instr.as_str() {
-                "const" => {
-                    let ty = self.type_annotation()?;
-                    let val = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::Constant { dest, ty, val },
-                    })
-                }
                 "cmp" => {
                     let ty = self.type_annotation()?;
                     let lhs = self.ir_value()?;
                     let op = self
                         .consume_any(vec![
-                            TokenKind::Plus,
-                            TokenKind::Minus,
-                            TokenKind::Star,
-                            TokenKind::Slash,
                             TokenKind::Less,
                             TokenKind::BangEquals,
                             TokenKind::EqualsEquals,
                             TokenKind::LessEquals,
                             TokenKind::Greater,
                             TokenKind::GreaterEquals,
-                            TokenKind::Caret,
-                            TokenKind::Pipe,
-                            TokenKind::PipePipe,
-                            TokenKind::AmpAmp,
                         ])?
                         .kind;
                     let rhs = self.ir_value()?;
@@ -1301,81 +1261,6 @@ impl<'a> Parser<'a> {
                         binds,
                         instr_name_span: instr_span,
                         kind,
-                    })
-                }
-                "ref" => {
-                    let ty = self.type_annotation()?;
-                    let val = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::Ref { dest, ty, val },
-                    })
-                }
-                "call" => {
-                    let ty = self.type_annotation()?;
-                    let callee = self.ir_value()?;
-                    let args = self.ir_values()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::Call {
-                            dest,
-                            ty,
-                            callee,
-                            args,
-                        },
-                    })
-                }
-                "record" => {
-                    let ty = self.type_annotation()?;
-                    let record = self.ir_values()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::Record { dest, ty, record },
-                    })
-                }
-                "getfield" => {
-                    let ty = self.type_annotation()?;
-                    let record = self.consume_register()?;
-                    let field = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::GetField {
-                            dest,
-                            ty,
-                            record,
-                            field,
-                        },
-                    })
-                }
-                "setfield" => {
-                    let ty = self.type_annotation()?;
-                    let record = self.consume_register()?;
-                    let field = self.ir_value()?;
-                    let val = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::SetField {
-                            dest,
-                            ty,
-                            record,
-                            field,
-                            val,
-                        },
                     })
                 }
                 "alloc" => {
@@ -1417,41 +1302,6 @@ impl<'a> Parser<'a> {
                         },
                     })
                 }
-                // I/O Instructions
-                "io_open" => {
-                    let path = self.ir_value()?;
-                    let flags = self.ir_value()?;
-                    let mode = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoOpen {
-                            dest,
-                            path,
-                            flags,
-                            mode,
-                        },
-                    })
-                }
-                "io_read" => {
-                    let fd = self.ir_value()?;
-                    let buf = self.ir_value()?;
-                    let count = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoRead {
-                            dest,
-                            fd,
-                            buf,
-                            count,
-                        },
-                    })
-                }
                 "io_write" => {
                     let fd = self.ir_value()?;
                     let buf = self.ir_value()?;
@@ -1467,127 +1317,6 @@ impl<'a> Parser<'a> {
                             buf,
                             count,
                         },
-                    })
-                }
-                "io_close" => {
-                    let fd = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoClose { dest, fd },
-                    })
-                }
-                "io_ctl" => {
-                    let fd = self.ir_value()?;
-                    let op = self.ir_value()?;
-                    let arg = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoCtl { dest, fd, op, arg },
-                    })
-                }
-                "io_poll" => {
-                    let fds = self.ir_value()?;
-                    let count = self.ir_value()?;
-                    let timeout = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoPoll {
-                            dest,
-                            fds,
-                            count,
-                            timeout,
-                        },
-                    })
-                }
-                "io_socket" => {
-                    let domain = self.ir_value()?;
-                    let socktype = self.ir_value()?;
-                    let protocol = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoSocket {
-                            dest,
-                            domain,
-                            socktype,
-                            protocol,
-                        },
-                    })
-                }
-                "io_bind" => {
-                    let fd = self.ir_value()?;
-                    let addr = self.ir_value()?;
-                    let port = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoBind {
-                            dest,
-                            fd,
-                            addr,
-                            port,
-                        },
-                    })
-                }
-                "io_listen" => {
-                    let fd = self.ir_value()?;
-                    let backlog = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoListen { dest, fd, backlog },
-                    })
-                }
-                "io_connect" => {
-                    let fd = self.ir_value()?;
-                    let addr = self.ir_value()?;
-                    let port = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoConnect {
-                            dest,
-                            fd,
-                            addr,
-                            port,
-                        },
-                    })
-                }
-                "io_accept" => {
-                    let fd = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoAccept { dest, fd },
-                    })
-                }
-                "io_sleep" => {
-                    let ms = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoSleep { dest, ms },
                     })
                 }
                 "trunc" => {
@@ -1612,7 +1341,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     return Err(ParserError::UnexpectedToken {
-                        expected: "ir instr".into(),
+                        expected: "supported @_ir instr".into(),
                         actual: instr,
                         token: self.previous.clone(),
                     });
@@ -1633,18 +1362,6 @@ impl<'a> Parser<'a> {
                         kind: InlineIRInstructionKind::Store { value, ty, addr },
                     })
                 }
-                "move" => {
-                    let ty = self.type_annotation()?;
-                    let from = self.ir_value()?;
-                    let to = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::Move { ty, from, to },
-                    })
-                }
                 "copy" => {
                     let ty = self.type_annotation()?;
                     let from = self.ir_value()?;
@@ -1663,26 +1380,14 @@ impl<'a> Parser<'a> {
                         },
                     })
                 }
-
-                "free" => {
-                    let addr = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::Free { addr },
-                    })
-                }
                 _ => {
                     return Err(ParserError::UnexpectedToken {
-                        expected: "ir instr".into(),
+                        expected: "supported @_ir instr".into(),
                         actual: instr,
                         token: self.previous.clone(),
                     });
                 }
             }
-            // It's one of the instructions that doesn't start with a register
         }?;
 
         self.consume(TokenKind::RightBrace)?;
@@ -1692,16 +1397,6 @@ impl<'a> Parser<'a> {
             span: ir_instr.span,
             kind: ExprKind::InlineIR(ir_instr),
         }))
-    }
-
-    fn ir_values(&mut self) -> Result<Vec<Value>, ParserError> {
-        self.consume(TokenKind::LeftParen)?;
-        let mut args = vec![];
-        while !(self.did_match(TokenKind::RightParen)? || self.did_match(TokenKind::EOF)?) {
-            args.push(self.ir_value()?);
-            self.consume(TokenKind::Comma).ok();
-        }
-        Ok(args)
     }
 
     fn ir_value(&mut self) -> Result<Value, ParserError> {

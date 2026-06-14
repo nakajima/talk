@@ -169,8 +169,6 @@ forms (`Aa.m(…)`), with LSP quick-fixes that apply the rewrite —
 `ambiguous_member_quick_fix_offers_each_protocol`.
 
 **Known gaps** (real features the old checker had):
-- `resolves_nominal_type_member_alias`, `types_protocol_associated_types`
-  — `typealias` outside extend blocks.
 - `types_as` — protocol-typed values (`A() as Fizz` — existentials).
 - `checks_protocol_protocol_conformance` — conforming to a derived
   protocol (`B: A`) does not require A's members (super-protocol
