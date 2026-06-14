@@ -194,8 +194,7 @@ with a protocol annotation is part of the existentials gap below.
 
 Known gaps still documented rather than fixed (each loud, none silent
 — see the audit doc): Showable for function values, protocol-typed
-values (existentials), super-protocol conformance completeness, and
-partially-concrete inherent extends.
+values (existentials), and partially-concrete inherent extends.
 
 ---
 

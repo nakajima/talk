@@ -1135,6 +1135,46 @@ pub mod tests {
         assert!(errors[0].contains("RHS"), "{errors:?}");
     }
 
+    #[test]
+    fn super_protocol_requirements_are_required_by_subprotocol_conformance() {
+        let t = check(
+            "// no-core\nprotocol A {\n\tfunc a() -> Int\n}\nprotocol B: A {}\nstruct S {}\nextend S: B {}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("Missing 'a' required by A")),
+            "expected inherited requirement to be missing, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn subprotocol_conformance_satisfies_superprotocol_bounds() {
+        let t = check(
+            "// no-core\nprotocol A {\n\tfunc a() -> Int\n}\nprotocol B: A {}\nstruct S {}\nextend S: B {\n\tfunc a() -> Int { 1 }\n}\nfunc useA<T: A>(x: T) -> Int { x.a() }\nlet value = useA(S())",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "value"), "Int");
+    }
+
+    #[test]
+    fn inherited_associated_types_reduce_through_subprotocol_conformance() {
+        let t = check(
+            "// no-core\nprotocol A {\n\tassociated Item\n\tfunc get() -> Item\n}\nprotocol B: A {}\nstruct S {}\nextend S: B {\n\tfunc get() -> Int { 1 }\n}\nfunc useA<T: A>(x: T) -> T.Item { x.get() }\nlet value = useA(S())",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "value"), "Int");
+    }
+
+    #[test]
+    fn subprotocol_conformance_can_rely_on_later_superprotocol_conformance() {
+        let t = check(
+            "// no-core\nprotocol A {\n\tfunc a() -> Int\n}\nprotocol B: A {}\nstruct S {}\nextend S: B {}\nextend S: A {\n\tfunc a() -> Int { 1 }\n}\nfunc useA<T: A>(x: T) -> Int { x.a() }\nlet genericValue = useA(S())\nlet directValue = S().a()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "genericValue"), "Int");
+        assert_eq!(ty_of(&t, "directValue"), "Int");
+    }
+
     // ----- Protocol default bodies ---------------------------------------
 
     #[test]

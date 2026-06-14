@@ -416,6 +416,50 @@ impl TypeCatalog {
         }
     }
 
+    /// Return `protocol` followed by all transitive super-protocols, with
+    /// duplicates removed. Conformance to a protocol entails conformance to
+    /// every super-protocol, so both registration and lookup use this closure.
+    pub fn protocol_and_supers(&self, protocol: Symbol) -> Vec<Symbol> {
+        let mut result = vec![];
+        let mut queue = vec![protocol];
+        while let Some(current) = queue.pop() {
+            if result.contains(&current) {
+                continue;
+            }
+            result.push(current);
+            if let Some(info) = self.protocols.get(&current) {
+                queue.extend(info.supers.iter().rev().copied());
+            }
+        }
+        result
+    }
+
+    /// Every requirement that a conformance to `protocol` must satisfy,
+    /// including inherited requirements. The owning protocol is retained
+    /// because associated-type projections and default bodies are keyed by the
+    /// protocol that declared the requirement.
+    pub fn requirements_for_conformance(
+        &self,
+        protocol: Symbol,
+    ) -> Vec<(Symbol, String, Requirement)> {
+        let mut requirements: Vec<(Symbol, String, Requirement)> = vec![];
+        for owner in self.protocol_and_supers(protocol) {
+            let Some(info) = self.protocols.get(&owner) else {
+                continue;
+            };
+            for (label, requirement) in &info.requirements {
+                if requirements
+                    .iter()
+                    .any(|(_, _, existing)| existing.symbol == requirement.symbol)
+                {
+                    continue;
+                }
+                requirements.push((owner, label.clone(), requirement.clone()));
+            }
+        }
+        requirements
+    }
+
     /// Does a bound set satisfy `target`, directly or through super-protocol
     /// closure?
     pub fn bounds_satisfy(&self, bounds: &[Symbol], target: Symbol) -> bool {

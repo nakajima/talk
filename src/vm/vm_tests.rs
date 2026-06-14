@@ -351,6 +351,14 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_subprotocol_conformance_dispatch() {
+        let (value, _) = run_on_both_engines_io(
+            "protocol A {\n\tfunc a() -> Int\n}\nprotocol B: A {}\nstruct S {}\nextend S: B {}\nextend S: A {\n\tfunc a() -> Int { 1 }\n}\nS().a()",
+        );
+        assert_eq!(value, Value::I64(1));
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_array_iterator_next() {
         // ArrayIterator.next() is a mutating witness: inout self writes
         // back into the iterator's cell between calls.

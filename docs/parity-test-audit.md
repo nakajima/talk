@@ -170,9 +170,6 @@ forms (`Aa.m(…)`), with LSP quick-fixes that apply the rewrite —
 
 **Known gaps** (real features the old checker had):
 - `types_as` — protocol-typed values (`A() as Fizz` — existentials).
-- `checks_protocol_protocol_conformance` — conforming to a derived
-  protocol (`B: A`) does not require A's members (super-protocol
-  completeness unchecked).
 - `extend_with_concrete_type_arg` — inherent extends with partially
   concrete type arguments (`extend Pair<Y, Void>`).
 

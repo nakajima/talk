@@ -122,6 +122,7 @@ pub fn check_types(
         deferred: vec![],
         type_aliases: FxHashMap::default(),
         alias_stack: vec![],
+        explicit_conformances: FxHashSet::default(),
         level: GROUP_LEVEL,
     };
     checker.run(asts)
@@ -230,6 +231,10 @@ struct Checker<'a> {
     /// Aliases currently being expanded; catches recursive synonyms before
     /// they can build an infinite type.
     alias_stack: Vec<Symbol>,
+    /// Explicit conformance claims in this module, pre-scanned so a
+    /// sub-protocol conformance can rely on a super-protocol conformance that
+    /// appears later in source order.
+    explicit_conformances: FxHashSet<(Symbol, Symbol)>,
     level: Level,
 }
 
@@ -315,6 +320,7 @@ impl<'a> Checker<'a> {
         }
 
         self.register_catalog_type_aliases();
+        self.collect_explicit_conformance_claims(&top_decls, &struct_decls);
 
         // Pass B: extends (top-level and nested in struct bodies) and lets.
         for decl in &top_decls {
@@ -582,6 +588,41 @@ impl<'a> Checker<'a> {
             .map(|info| info.params.clone())
             .or_else(|| self.catalog.enums.get(&symbol).map(|info| info.params.clone()))
             .unwrap_or_default()
+    }
+
+    fn collect_explicit_conformance_claims(
+        &mut self,
+        top_decls: &[&'a Decl],
+        struct_decls: &[(Symbol, &'a Decl)],
+    ) {
+        for decl in top_decls {
+            if let DeclKind::Extend {
+                name, conformances, ..
+            } = &decl.kind
+                && let Ok(head) = name.symbol()
+            {
+                for conformance in conformances {
+                    if let Ok(protocol) = conformance.symbol() {
+                        self.explicit_conformances.insert((head, protocol));
+                    }
+                }
+            }
+        }
+
+        for (head, decl) in struct_decls {
+            let DeclKind::Struct { body, .. } = &decl.kind else {
+                continue;
+            };
+            for member in &body.decls {
+                if let DeclKind::Extend { conformances, .. } = &member.kind {
+                    for conformance in conformances {
+                        if let Ok(protocol) = conformance.symbol() {
+                            self.explicit_conformances.insert((*head, protocol));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn register_struct(&mut self, symbol: Symbol, decl: &Decl) {
@@ -911,7 +952,7 @@ impl<'a> Checker<'a> {
                 members.insert(func.name.name_str(), (method, func));
             }
         }
-        let mut witnessed: Vec<String> = vec![];
+        let mut witnessed: FxHashSet<String> = FxHashSet::default();
         let mut declared_assoc: FxHashMap<String, Ty> = FxHashMap::default();
         self.self_types.push(self_ty.clone());
         for member in &body.decls {
@@ -922,67 +963,108 @@ impl<'a> Checker<'a> {
         self.self_types.pop();
 
         let mut protocols = vec![];
+        let mut rows: IndexMap<Symbol, Conformance> = IndexMap::default();
+        let mut missing_requirements: FxHashSet<Symbol> = FxHashSet::default();
         for conformance_annotation in conformances {
             let Ok(protocol) = conformance_annotation.symbol() else {
                 continue;
             };
-            let Some(info) = self.catalog.protocols.get(&protocol).cloned() else {
+            if !self.catalog.protocols.contains_key(&protocol) {
                 self.unsupported(decl.id, "conforming to an unknown protocol");
                 continue;
-            };
+            }
             protocols.push(protocol);
 
-            let mut conformance = Conformance {
-                params: params.clone(),
-                self_args: self_args.clone(),
-                context: context.clone(),
-                ..Default::default()
-            };
+            // A conformance to `B` is also a conformance to every super `A`.
+            // Build a real row for each protocol in the closure so later
+            // `T: A` constraints reduce through the same conformance table as
+            // direct conformances.
+            for conformed in self.catalog.protocol_and_supers(protocol) {
+                let Some(info) = self.catalog.protocols.get(&conformed).cloned() else {
+                    continue;
+                };
+                let requirements = self.catalog.requirements_for_conformance(conformed);
+                let conformance = rows.entry(conformed).or_insert_with(|| Conformance {
+                    params: params.clone(),
+                    self_args: self_args.clone(),
+                    context: context.clone(),
+                    ..Default::default()
+                });
 
-            // Positional associated-type application: `Iterator<Element>`
-            // binds the protocol's assoc params in declaration order.
-            if let TypeAnnotationKind::Nominal {
-                generics: assoc_args,
-                ..
-            } = &conformance_annotation.kind
-            {
-                for (assoc_symbol, arg) in info.assoc.values().zip(assoc_args) {
-                    let binding = self.lower_annotation(arg);
-                    conformance.assoc.insert(*assoc_symbol, binding);
-                }
-            }
-            for (name, assoc_symbol) in &info.assoc {
-                if let Some(binding) = declared_assoc.get(name) {
-                    conformance.assoc.insert(*assoc_symbol, binding.clone());
-                }
-            }
-
-            self.self_types.push(self_ty.clone());
-            for (label, requirement) in &info.requirements {
-                match members.get(label) {
-                    Some((witness, func)) => {
-                        conformance.witnesses.insert(label.clone(), *witness);
-                        witnessed.push(label.clone());
-                        self.infer_assoc_bindings(requirement, func, &mut conformance);
+                // Positional associated-type application: `Iterator<Element>`
+                // binds the named protocol's own assoc params in declaration
+                // order. Inherited assoc params bind through same-named
+                // `typealias` declarations or witness inference below.
+                if conformed == protocol
+                    && let TypeAnnotationKind::Nominal {
+                        generics: assoc_args,
+                        ..
+                    } = &conformance_annotation.kind
+                {
+                    for (assoc_symbol, arg) in info.assoc.values().zip(assoc_args) {
+                        let binding = self.lower_annotation(arg);
+                        conformance.assoc.insert(*assoc_symbol, binding);
                     }
-                    None => {
-                        if !requirement.has_default {
-                            self.errors.push((
-                                TypeError::MissingWitness {
-                                    protocol: protocol.to_string(),
-                                    requirement: label.clone(),
-                                },
-                                decl.id,
-                            ));
+                }
+                for (name, assoc_symbol) in &info.assoc {
+                    if let Some(binding) = declared_assoc.get(name) {
+                        conformance.assoc.insert(*assoc_symbol, binding.clone());
+                    }
+                }
+
+                self.self_types.push(self_ty.clone());
+                for (owner, label, requirement) in requirements {
+                    match members.get(&label) {
+                        Some((witness, func)) => {
+                            conformance.witnesses.insert(label.clone(), *witness);
+                            witnessed.insert(label.clone());
+                            self.infer_assoc_bindings(&requirement, func, conformance);
+                        }
+                        None => {
+                            let already_conforms_to_owner =
+                                self.catalog.conformances.contains_key(&(head, owner));
+                            let separately_claims_owner = owner != protocol
+                                && self.explicit_conformances.contains(&(head, owner));
+                            if !requirement.has_default
+                                && !already_conforms_to_owner
+                                && !separately_claims_owner
+                                && missing_requirements.insert(requirement.symbol)
+                            {
+                                self.errors.push((
+                                    TypeError::MissingWitness {
+                                        protocol: owner.to_string(),
+                                        requirement: label.clone(),
+                                    },
+                                    decl.id,
+                                ));
+                            }
                         }
                     }
                 }
+                self.self_types.pop();
             }
-            self.self_types.pop();
+        }
 
-            self.catalog
-                .conformances
-                .insert((head, protocol), conformance);
+        for (protocol, conformance) in rows {
+            match self.catalog.conformances.entry((head, protocol)) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let existing = entry.get_mut();
+                    for (label, witness) in conformance.witnesses {
+                        existing.witnesses.entry(label).or_insert(witness);
+                    }
+                    for (assoc, ty) in conformance.assoc {
+                        existing.assoc.entry(assoc).or_insert(ty);
+                    }
+                    for context in conformance.context {
+                        if !existing.context.contains(&context) {
+                            existing.context.push(context);
+                        }
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(conformance);
+                }
+            }
             let by_head = self.catalog.conformances_by_head.entry(head).or_default();
             if !by_head.contains(&protocol) {
                 by_head.push(protocol);
