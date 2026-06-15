@@ -755,15 +755,19 @@ pub mod tests {
     fn zero_annotation_fib_with_operators() {
         // The milestone-3 capstone: operators desugar to protocol-static
         // calls (Add.add(lhs, rhs)); HasMember/Conforms predicates collect on
-        // n, improvement and generalization produce a bounded scheme, and
-        // the call site discharges against Int's conformances with
-        // associated-type bindings (Chakravarty et al., ICFP 2005).
+        // n, improvement and generalization produce a qualified scheme, and
+        // the call site discharges associated-type projection equalities
+        // against Int's conformances (Chakravarty/Keller/Peyton Jones,
+        // Associated Type Synonyms).
         let t = check(
             "// no-core\nprotocol Add {\n\tassociated RHS\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nprotocol Subtract {\n\tassociated RHS\n\tassociated Ret\n\tfunc minus(rhs: RHS) -> Ret\n}\nprotocol Comparable {\n\tassociated RHS\n\tfunc lte(rhs: RHS) -> Bool\n}\nextend Int: Add {\n\tfunc add(rhs: Int) -> Int { 0 }\n}\nextend Int: Subtract {\n\tfunc minus(rhs: Int) -> Int { 0 }\n}\nextend Int: Comparable {\n\tfunc lte(rhs: Int) -> Bool { true }\n}\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n - 2) + fib(n - 1)\n}\nlet x = fib(24)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "x"), "Int");
-        assert_eq!(ty_of(&t, "fib"), "<T0: Add + Subtract + Comparable>(T0) -> T0");
+        assert_eq!(
+            ty_of(&t, "fib"),
+            "<T0: Add & Comparable & Subtract>(T0) -> T0 where Int == T0.RHS && T0 == T0.RHS && T0 == T0.Ret"
+        );
     }
 
     #[test]
@@ -775,13 +779,131 @@ pub mod tests {
         assert_clean(&t);
     }
 
+    #[test]
+    fn effect_where_clause_constrains_perform_type_arguments() {
+        let t = check(
+            "// no-core\nprotocol P {}\nextend Int: P {}\neffect 'choose<T>(value: T) -> T where T: P\n@handle 'choose { v in continue v }\n'choose(true)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("does not conform")),
+            "expected effect where predicate error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn associated_where_clause_bounds_associated_type() {
+        let t = check(
+            "// no-core\nprotocol Showy {\n\tfunc show() -> Int\n}\nprotocol Container {\n\tassociated Item where Item: Showy\n\tfunc feed(item: Item) -> Int {\n\t\titem.show()\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn nominal_where_clause_is_well_formedness_context() {
+        let t = check(
+            "// no-core\nprotocol Showy {\n\tfunc show() -> Int\n}\nextend Int: Showy {\n\tfunc show() -> Int { 1 }\n}\nstruct Box<T> where T: Showy {\n\tlet item: T\n\tfunc itemShow() -> Int {\n\t\tself.item.show()\n\t}\n}\nlet good = Box(item: 1).itemShow()\nlet bad = Box(item: true)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("does not conform")),
+            "expected nominal well-formedness error, got {errors:?}"
+        );
+        assert_eq!(ty_of(&t, "good"), "Int");
+    }
+
+    #[test]
+    fn associated_where_same_type_is_protocol_refinement() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tassociated Item where Item == Int\n\tfunc item() -> Item\n}\nfunc f<T: P>(x: T) -> Int {\n\tx.item()\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_requirement_where_is_used_at_dispatch() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tassociated Item\n\tfunc item() -> Item where Item == Int\n}\nstruct S {}\nextend S: P {\n\tfunc item() -> Int { 1 }\n}\nfunc f<T: P>(x: T) -> Int {\n\tx.item()\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_where_refinement_is_inherited_by_bounds() {
+        let t = check(
+            "// no-core\nprotocol Iterable {\n\tassociated Element\n\tfunc next() -> Element\n}\nprotocol IntIterable: Iterable where Self.Element == Int {}\nfunc first<T: IntIterable>(x: T) -> Int {\n\tx.next()\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn rejects_global_where_predicates() {
+        let t = check("// no-core\nprotocol P {}\nextend Int: P {}\nfunc f() -> Int where Int: P { 1 }");
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("must mention")),
+            "expected invalid where predicate error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_where_predicates_warn() {
+        let t = check("// no-core\nprotocol P {}\nfunc f<T>(x: T) where T: P && T: P { x }");
+        let warnings = type_warnings(&t);
+        assert!(
+            warnings.iter().any(|warning| warning.contains("Duplicate where predicate")),
+            "expected duplicate predicate warning, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn extend_where_clause_is_conditional_conformance_context() {
+        let t = check(
+            "// no-core\nprotocol Showy {\n\tfunc show() -> Int\n}\nprotocol BoxShow {\n\tfunc boxShow() -> Int\n}\nextend Int: Showy {\n\tfunc show() -> Int { 1 }\n}\nstruct Box<T> {\n\tlet item: T\n}\nextend Box<T>: BoxShow where T: Showy {\n\tfunc boxShow() -> Int {\n\t\tself.item.show()\n\t}\n}\nlet good = Box(item: 1).boxShow()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "good"), "Int");
+    }
+
+    #[test]
+    fn extend_where_same_type_is_available_in_witness_body() {
+        let t = check(
+            "// no-core\nprotocol IntBox {\n\tfunc intItem() -> Int\n}\nstruct Box<T> {\n\tlet item: T\n}\nextend Box<T>: IntBox where T == Int {\n\tfunc intItem() -> Int {\n\t\tself.item\n\t}\n}\nlet good = Box(item: 1).intItem()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "good"), "Int");
+    }
+
+    #[test]
+    fn declaration_where_conformance_and_same_type_are_scheme_predicates() {
+        let t = check(
+            "// no-core\nprotocol Boxy {\n\tassociated Item\n\tfunc item() -> Item\n}\nstruct S {}\nextend S: Boxy {\n\tfunc item() -> Int { 1 }\n}\nfunc intItem<T>(x: T) -> Int where T: Boxy && T.Item == Int {\n\tx.item()\n}\nlet y = intItem(S())",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "y"), "Int");
+        let scheme = ty_of(&t, "intItem");
+        assert!(scheme.contains("where"), "expected predicates in {scheme}");
+        assert!(scheme.contains("Boxy"), "expected conformance in {scheme}");
+        assert!(scheme.contains("Int"), "expected same-type predicate in {scheme}");
+    }
+
+    #[test]
+    fn rejects_ambiguous_predicate_constrained_generic() {
+        let t = check("// no-core\nprotocol P {}\nfunc make<T>() -> Int where T: P {\n\t1\n}");
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("not determined")),
+            "expected ambiguous type parameter error, got {errors:?}"
+        );
+    }
+
     // ----- Milestone 5: effects -----------------------------------------
 
     #[test]
     fn lexically_handled_effects_do_not_escape() {
         // The resolver routes each perform to its lexical handler; a handled
-        // perform never reaches the function's latent row (the row-typing
-        // reading of handler discharge, Leijen POPL 2017).
+        // perform never reaches the function's latent row (the row-typed
+        // algebraic-effects reading).
         let t = check(
             "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}",
         );

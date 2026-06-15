@@ -209,6 +209,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    where_clause: None,
                     effects: Default::default(),
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y"),],
                     body: any_block!(vec![
@@ -252,6 +253,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "odd".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    where_clause: None,
                     params: vec![],
                     effects: Default::default(),
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
@@ -283,6 +285,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "even".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    where_clause: None,
                     params: vec![],
                     effects: Default::default(),
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
@@ -319,6 +322,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    where_clause: None,
                     effects: Default::default(),
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y")],
                     body: any_block!(vec![
@@ -340,6 +344,7 @@ pub mod tests {
                                 ),
                                 name_span: Span::ANY,
                                 generics: vec![],
+                                where_clause: None,
                                 effects: Default::default(),
                                 params: vec![param!(ParamLocalId(3), "x")],
                                 body: any_block!(vec![
@@ -390,6 +395,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "fizz".into()),
                     name_span: Span::ANY,
                     generics: Default::default(),
+                    where_clause: None,
                     params: Default::default(),
                     effects: Default::default(),
                     body: any_block!(vec![
@@ -416,6 +422,7 @@ pub mod tests {
                                 ),
                                 name_span: Span::ANY,
                                 generics: vec![],
+                                where_clause: None,
                                 effects: Default::default(),
                                 params: vec![param!(ParamLocalId(1), "x")],
                                 body: any_block!(vec![
@@ -557,6 +564,7 @@ pub mod tests {
                         generics: vec![],
                         conformances: vec![],
                     }],
+                    where_clause: None,
                     effects: Default::default(),
                     params: vec![param!(
                         ParamLocalId(1),
@@ -671,6 +679,7 @@ pub mod tests {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
                     params: vec![param!(
@@ -705,6 +714,7 @@ pub mod tests {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
@@ -775,6 +785,7 @@ pub mod tests {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: Name::Resolved(
                         Symbol::Initializer(InitializerId::from(1)),
@@ -816,6 +827,7 @@ pub mod tests {
                     conformances: vec![],
                     span: Span::ANY
                 }],
+                where_clause: None,
                 body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
@@ -884,6 +896,7 @@ pub mod tests {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
@@ -910,6 +923,7 @@ pub mod tests {
                             name_span: Span::ANY,
                             effects: Default::default(),
                             generics: vec![],
+                            where_clause: None,
                             params: vec![],
                             body: any_block!(vec![]),
                             ret: None,
@@ -941,6 +955,7 @@ pub mod tests {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
@@ -966,6 +981,7 @@ pub mod tests {
                             ),
                             name_span: Span::ANY,
                             generics: vec![],
+                            where_clause: None,
                             effects: Default::default(),
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(1)),
@@ -1007,6 +1023,7 @@ pub mod tests {
                             name_span: Span::ANY,
                             effects: Default::default(),
                             generics: vec![],
+                            where_clause: None,
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(2)),
                                 "self",
@@ -1077,6 +1094,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![])
             }),
         )
@@ -1099,6 +1117,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     func: Box::new(Func {
                         id: NodeID::ANY,
@@ -1108,6 +1127,7 @@ pub mod tests {
                         ),
                         name_span: Span::ANY,
                         generics: vec![],
+                        where_clause: None,
                         effects: Default::default(),
                         params: vec![Parameter {
                             id: NodeID::ANY,
@@ -1224,6 +1244,7 @@ pub mod tests {
                 name: Name::Resolved(Symbol::Enum(EnumId::from(1)), "Fizz".into()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Resolved(Symbol::Variant(VariantId::from(1)), "foo".into()),
@@ -1257,6 +1278,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::MethodRequirement(
                     FuncSignature {
                         id: NodeID::ANY,
@@ -1276,6 +1298,7 @@ pub mod tests {
                             span: Span::ANY
                         }],
                         generics: vec![],
+                        where_clause: None,
                         ret: Some(Box::new(annotation!(TypeAnnotationKind::Tuple(vec![]))))
                     }
                 ))])
@@ -1302,6 +1325,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![
                     any_decl!(DeclKind::Associated {
                         generic: GenericDecl {
@@ -1314,7 +1338,8 @@ pub mod tests {
                             generics: vec![],
                             conformances: vec![],
                             span: Span::ANY
-                        }
+                        },
+                        where_clause: None
                     }),
                     any_decl!(DeclKind::MethodRequirement(FuncSignature {
                         id: NodeID::ANY,
@@ -1334,6 +1359,7 @@ pub mod tests {
                         }],
                         effects: Default::default(),
                         generics: vec![],
+                        where_clause: None,
                         ret: Some(Box::new(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(
                                 Symbol::AssociatedType(AssociatedTypeId::from(1)),
@@ -1592,6 +1618,7 @@ pub mod tests {
                         is_open: false
                     },
                     generics: vec![],
+                    where_clause: None,
                     params: vec![],
                     body: any_block!(vec![]),
                     ret: None,

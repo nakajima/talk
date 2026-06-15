@@ -1,16 +1,17 @@
 //! Type representation for the Talk type system.
 //!
-//! Schemes are qualified types ∀ᾱ. P ⇒ τ (Jones, *A theory of qualified
-//! types*, ESOP 1992): `SchemeParam.bounds` is the context P, restricted to
-//! protocol predicates on quantified parameters. Quantified variables are
-//! rigid `Ty::Param(Symbol)`s — first-class rigids keep GADT given-equalities
-//! (milestone 8) out of the union-find entirely.
+//! Schemes are qualified types `forall params. predicates => type`:
+//! `Scheme.predicates` is the context P from Jones, *A Theory of Qualified
+//! Types* (ESOP 1992; revised SCP version). Quantified
+//! variables are rigid `Ty::Param(Symbol)`s; first-class rigids keep GADT
+//! given-equalities out of the union-find entirely.
 //!
 //! Records are row types in the scoped-labels style (Leijen, *Extensible
-//! Records with Scoped Labels*, Trends in FP 2005) — no lacks predicates.
-//! Effect rows follow Koka (Leijen, *Koka: Programming with Row-polymorphic
-//! Effect Types*, MSFP 2014), restricted to label-only entries: an effect's
-//! operation signature lives in the catalog, never in the row.
+//! Records with Scoped Labels*, TFP 2005) with Talk choosing no lacks
+//! predicates. Effect rows follow Leijen, *Koka: Programming with
+//! Row-Polymorphic Effect Types* (MSR-TR-2013-79), restricted to label-only
+//! entries: an effect's operation signature lives in the catalog, never in
+//! the row.
 
 use std::collections::BTreeSet;
 
@@ -68,8 +69,8 @@ impl Row {
 }
 
 /// An effect row: a set of effect symbols plus an optional tail.
-/// Operation signatures live in the catalog, not here (Koka MSFP 2014's
-/// effect labels, without the duplicate-label refinement — labels are a set).
+/// Operation signatures live in the catalog, not here (Leijen's Koka effect
+/// labels, without the duplicate-label refinement: labels are a set).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct EffectRow {
     pub effects: BTreeSet<Symbol>,
@@ -120,6 +121,42 @@ pub enum Ty {
     /// Poison type for error recovery: equalities involving it succeed
     /// silently so one mistake doesn't cascade.
     Error,
+}
+
+/// One logical predicate in the checker's constraint domain. Jones's
+/// qualified types use predicates to restrict type-scheme quantification;
+/// OutsideIn(X) separates origin-free facts from the originated wanteds/givens
+/// that carry blame. This enum is the shared fact language for schemes,
+/// declaration contexts, solver givens, and future GADT refinements.
+///
+/// Research anchors: Jones, *A Theory of Qualified Types*;
+/// Vytiniotis/Peyton Jones/Schrijvers/Sulzmann, *OutsideIn(X)*;
+/// Wadler/Blott type classes; Chakravarty/Keller/Peyton Jones associated
+/// type synonyms; Gaster/Jones extensible-record predicates; and Leijen row
+/// polymorphism for records/effects.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum Predicate {
+    /// Same-type constraint. Associated-type applications lower to `Ty::Proj`
+    /// plus this equality, following Chakravarty/Keller/Peyton Jones.
+    TypeEq(Ty, Ty),
+    /// Same-effect-row constraint; part of the internal predicate language so
+    /// Koka-style effect polymorphism does not need a separate architecture.
+    EffectEq(EffectRow, EffectRow),
+    /// Same-record-row constraint for row-polymorphic records.
+    RowEq(Row, Row),
+    /// Protocol conformance as a class predicate in the Wadler/Blott sense.
+    /// Associated types are projections plus `TypeEq`, not payloads here.
+    Conforms {
+        ty: Ty,
+        protocol: Symbol,
+    },
+    /// A member-access predicate carried by schemes when the receiver head is
+    /// not yet known; the record-predicate lineage is Gaster/Jones.
+    HasMember {
+        receiver: Ty,
+        label: Label,
+        member: Ty,
+    },
 }
 
 impl Ty {
@@ -194,6 +231,45 @@ impl Ty {
     }
 }
 
+impl Predicate {
+    pub fn render_mono(&self) -> String {
+        render_predicate(self, &FxHashMap::default())
+    }
+
+    pub fn substitute(
+        &self,
+        tys: &FxHashMap<Symbol, Ty>,
+        effs: &FxHashMap<Symbol, EffTail>,
+        rows: &FxHashMap<Symbol, RowTail>,
+    ) -> Predicate {
+        match self {
+            Predicate::TypeEq(a, b) => {
+                Predicate::TypeEq(a.substitute(tys, effs, rows), b.substitute(tys, effs, rows))
+            }
+            Predicate::EffectEq(a, b) => {
+                Predicate::EffectEq(substitute_eff(a, effs), substitute_eff(b, effs))
+            }
+            Predicate::RowEq(a, b) => Predicate::RowEq(
+                substitute_row(a, tys, effs, rows),
+                substitute_row(b, tys, effs, rows),
+            ),
+            Predicate::Conforms { ty, protocol } => Predicate::Conforms {
+                ty: ty.substitute(tys, effs, rows),
+                protocol: *protocol,
+            },
+            Predicate::HasMember {
+                receiver,
+                label,
+                member,
+            } => Predicate::HasMember {
+                receiver: receiver.substitute(tys, effs, rows),
+                label: label.clone(),
+                member: member.substitute(tys, effs, rows),
+            },
+        }
+    }
+}
+
 fn substitute_eff(eff: &EffectRow, effs: &FxHashMap<Symbol, EffTail>) -> EffectRow {
     let tail = match &eff.tail {
         Some(EffTail::Param(sym)) => Some(effs.get(sym).cloned().unwrap_or(EffTail::Param(*sym))),
@@ -205,13 +281,22 @@ fn substitute_eff(eff: &EffectRow, effs: &FxHashMap<Symbol, EffTail>) -> EffectR
     }
 }
 
+fn substitute_row(
+    row: &Row,
+    tys: &FxHashMap<Symbol, Ty>,
+    effs: &FxHashMap<Symbol, EffTail>,
+    rows: &FxHashMap<Symbol, RowTail>,
+) -> Row {
+    match Ty::Record(row.clone()).substitute(tys, effs, rows) {
+        Ty::Record(row) => row,
+        _ => row.clone(),
+    }
+}
+
 /// Remap a symbol minted by the exporting module (ModuleId::Current from its
 /// own point of view) to the importer's id for it; symbols referencing other
 /// modules (core, transitive imports) keep theirs.
-pub(crate) fn import_symbol(
-    symbol: Symbol,
-    target: crate::compiling::module::ModuleId,
-) -> Symbol {
+pub(crate) fn import_symbol(symbol: Symbol, target: crate::compiling::module::ModuleId) -> Symbol {
     if symbol.module_id() == Some(crate::compiling::module::ModuleId::Current) {
         symbol.import(target)
     } else {
@@ -235,9 +320,7 @@ impl Ty {
                 Box::new(ret.import_symbols(target)),
                 eff.import_symbols(target),
             ),
-            Ty::Tuple(items) => {
-                Ty::Tuple(items.iter().map(|i| i.import_symbols(target)).collect())
-            }
+            Ty::Tuple(items) => Ty::Tuple(items.iter().map(|i| i.import_symbols(target)).collect()),
             Ty::Record(row) => Ty::Record(Row {
                 fields: row
                     .fields
@@ -275,6 +358,51 @@ impl EffectRow {
     }
 }
 
+impl Row {
+    pub fn import_symbols(&self, target: crate::compiling::module::ModuleId) -> Row {
+        Row {
+            fields: self
+                .fields
+                .iter()
+                .map(|(label, ty)| (label.clone(), ty.import_symbols(target)))
+                .collect(),
+            tail: self.tail.as_ref().map(|tail| match tail {
+                RowTail::Var(v) => RowTail::Var(*v),
+                RowTail::Param(sym) => RowTail::Param(import_symbol(*sym, target)),
+            }),
+        }
+    }
+}
+
+impl Predicate {
+    pub fn import_symbols(&self, target: crate::compiling::module::ModuleId) -> Predicate {
+        match self {
+            Predicate::TypeEq(a, b) => {
+                Predicate::TypeEq(a.import_symbols(target), b.import_symbols(target))
+            }
+            Predicate::EffectEq(a, b) => {
+                Predicate::EffectEq(a.import_symbols(target), b.import_symbols(target))
+            }
+            Predicate::RowEq(a, b) => {
+                Predicate::RowEq(a.import_symbols(target), b.import_symbols(target))
+            }
+            Predicate::Conforms { ty, protocol } => Predicate::Conforms {
+                ty: ty.import_symbols(target),
+                protocol: import_symbol(*protocol, target),
+            },
+            Predicate::HasMember {
+                receiver,
+                label,
+                member,
+            } => Predicate::HasMember {
+                receiver: receiver.import_symbols(target),
+                label: label.clone(),
+                member: member.import_symbols(target),
+            },
+        }
+    }
+}
+
 impl Scheme {
     pub fn import_symbols(&self, target: crate::compiling::module::ModuleId) -> Scheme {
         Scheme {
@@ -283,20 +411,6 @@ impl Scheme {
                 .iter()
                 .map(|p| SchemeParam {
                     symbol: import_symbol(p.symbol, target),
-                    bounds: p
-                        .bounds
-                        .iter()
-                        .map(|b| Bound {
-                            protocol: import_symbol(b.protocol, target),
-                            assoc: b
-                                .assoc
-                                .iter()
-                                .map(|(s, t)| {
-                                    (import_symbol(*s, target), t.import_symbols(target))
-                                })
-                                .collect(),
-                        })
-                        .collect(),
                 })
                 .collect(),
             eff_params: self
@@ -309,29 +423,14 @@ impl Scheme {
                 .iter()
                 .map(|s| import_symbol(*s, target))
                 .collect(),
-            member_constraints: self
-                .member_constraints
+            predicates: self
+                .predicates
                 .iter()
-                .map(|mc| MemberConstraint {
-                    receiver: mc.receiver.import_symbols(target),
-                    label: mc.label.clone(),
-                    member: mc.member.import_symbols(target),
-                })
+                .map(|predicate| predicate.import_symbols(target))
                 .collect(),
             ty: self.ty.import_symbols(target),
         }
     }
-}
-
-/// One protocol obligation on a quantified parameter, together with the
-/// associated-type bindings this use determined (Chakravarty, Keller &
-/// Peyton Jones, *Associated Type Synonyms*, ICFP 2005). Keeping bindings on
-/// the bound is the flattened form of a class constraint plus equality
-/// constraints over its associated types.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct Bound {
-    pub protocol: Symbol,
-    pub assoc: Vec<(Symbol, Ty)>,
 }
 
 impl Ty {
@@ -357,14 +456,17 @@ impl Ty {
                     },
                 };
                 Ty::Func(
-                    params.iter().map(|p| p.sanitize_for_export(owner)).collect(),
+                    params
+                        .iter()
+                        .map(|p| p.sanitize_for_export(owner))
+                        .collect(),
                     Box::new(ret.sanitize_for_export(owner)),
                     eff,
                 )
             }
-            Ty::Tuple(items) => Ty::Tuple(
-                items.iter().map(|i| i.sanitize_for_export(owner)).collect(),
-            ),
+            Ty::Tuple(items) => {
+                Ty::Tuple(items.iter().map(|i| i.sanitize_for_export(owner)).collect())
+            }
             Ty::Record(row) => Ty::Record(Row {
                 fields: row
                     .fields
@@ -376,52 +478,40 @@ impl Ty {
                     other => other.clone(),
                 },
             }),
-            Ty::Proj(base, protocol, assoc) => Ty::Proj(
-                Box::new(base.sanitize_for_export(owner)),
-                *protocol,
-                *assoc,
-            ),
+            Ty::Proj(base, protocol, assoc) => {
+                Ty::Proj(Box::new(base.sanitize_for_export(owner)), *protocol, *assoc)
+            }
             Ty::Error => Ty::Error,
         }
     }
 }
 
-/// A quantified type parameter with its protocol bounds (the qualified-type
-/// context P restricted to this parameter — Jones, ESOP 1992).
+/// A quantified type parameter. The qualified context lives on `Scheme` as
+/// predicates, not on individual parameters, matching Jones's qualified-type
+/// shape while letting inline bounds and declaration `where` share one P.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SchemeParam {
     pub symbol: Symbol,
-    pub bounds: Vec<Bound>,
 }
 
-/// A type scheme ∀ᾱ. P ⇒ τ. Monomorphic bindings are schemes with no params.
+/// A type scheme `forall params. P => type`. Monomorphic bindings are schemes
+/// with no params and no predicates.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Scheme {
     pub params: Vec<SchemeParam>,
     pub eff_params: Vec<Symbol>,
     pub row_params: Vec<Symbol>,
-    /// Member uses the body could not discharge (`func g(x) { x.go() }`):
-    /// qualified-type constraints over the scheme's parameters,
-    /// re-emitted at each instantiation and discharged against the call's
-    /// concrete receiver (Jones, *Qualified Types*, 1994).
-    pub member_constraints: Vec<MemberConstraint>,
+    /// The qualified context P: declared bounds, inferred HasMember
+    /// constraints, same-type equalities, and future row/effect predicates.
+    pub predicates: Vec<Predicate>,
     pub ty: Ty,
-}
-
-/// One scheme-carried member obligation: `receiver` has a member
-/// `label` of type `member` (types range over the scheme's parameters).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct MemberConstraint {
-    pub receiver: Ty,
-    pub label: Label,
-    pub member: Ty,
 }
 
 impl Scheme {
     pub fn mono(ty: Ty) -> Self {
         Scheme {
             params: vec![],
-            member_constraints: vec![],
+            predicates: vec![],
             eff_params: vec![],
             row_params: vec![],
             ty,
@@ -429,28 +519,37 @@ impl Scheme {
     }
 
     /// Render for display/tests: quantified type params are named
-    /// positionally (T0, T1, …); pure or quantified-tail effect rows are
-    /// elided.
+    /// positionally (T0, T1, …); simple parameter conformances render inline,
+    /// and the remaining qualified context renders after `where`.
     pub fn render(&self) -> String {
         let mut names = FxHashMap::default();
         for (i, param) in self.params.iter().enumerate() {
             names.insert(param.symbol, format!("T{i}"));
         }
+
+        let mut inline_bounds: FxHashMap<Symbol, Vec<Symbol>> = FxHashMap::default();
+        let mut where_predicates = vec![];
+        for predicate in &self.predicates {
+            match predicate {
+                Predicate::Conforms {
+                    ty: Ty::Param(param),
+                    protocol,
+                } if self.params.iter().any(|p| p.symbol == *param) => {
+                    inline_bounds.entry(*param).or_default().push(*protocol);
+                }
+                _ => where_predicates.push(predicate),
+            }
+        }
+
         let mut body = render_ty(&self.ty, &names);
-        if !self.member_constraints.is_empty() {
-            let constraints: Vec<String> = self
-                .member_constraints
+        if !where_predicates.is_empty() {
+            let mut constraints: Vec<String> = where_predicates
                 .iter()
-                .map(|c| {
-                    format!(
-                        "{}.{}: {}",
-                        render_ty(&c.receiver, &names),
-                        c.label,
-                        render_ty(&c.member, &names)
-                    )
-                })
+                .map(|predicate| render_predicate(predicate, &names))
                 .collect();
-            body = format!("{body} where {}", constraints.join(", "));
+            constraints.sort();
+            constraints.dedup();
+            body = format!("{body} where {}", constraints.join(" && "));
         }
         if self.params.is_empty() {
             body
@@ -459,17 +558,15 @@ impl Scheme {
                 .params
                 .iter()
                 .enumerate()
-                .map(|(i, param)| {
-                    if param.bounds.is_empty() {
-                        format!("T{i}")
-                    } else {
-                        let bounds: Vec<String> = param
-                            .bounds
-                            .iter()
-                            .map(|b| format!("{}", b.protocol))
-                            .collect();
-                        format!("T{i}: {}", bounds.join(" + "))
+                .map(|(i, param)| match inline_bounds.get(&param.symbol) {
+                    Some(bounds) if !bounds.is_empty() => {
+                        let mut bounds: Vec<String> =
+                            bounds.iter().map(|b| format!("{b}")).collect();
+                        bounds.sort();
+                        bounds.dedup();
+                        format!("T{i}: {}", bounds.join(" & "))
                     }
+                    _ => format!("T{i}"),
                 })
                 .collect();
             format!("<{}>{}", params.join(", "), body)
@@ -503,7 +600,12 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
         Ty::Func(params, ret, eff) => {
             let params: Vec<String> = params.iter().map(|p| render_ty(p, param_names)).collect();
             let eff = render_effect_row(eff);
-            format!("({}) -> {}{}", params.join(", "), render_ty(ret, param_names), eff)
+            format!(
+                "({}) -> {}{}",
+                params.join(", "),
+                render_ty(ret, param_names),
+                eff
+            )
         }
         Ty::Tuple(items) => {
             let items: Vec<String> = items.iter().map(|i| render_ty(i, param_names)).collect();
@@ -527,6 +629,49 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
         }
         Ty::Error => "<error>".to_string(),
     }
+}
+
+fn render_predicate(predicate: &Predicate, param_names: &FxHashMap<Symbol, String>) -> String {
+    match predicate {
+        Predicate::TypeEq(a, b) => {
+            let mut rendered = [render_ty(a, param_names), render_ty(b, param_names)];
+            rendered.sort();
+            format!("{} == {}", rendered[0], rendered[1])
+        }
+        Predicate::EffectEq(a, b) => format!(
+            "{} == {}",
+            render_full_effect_row(a),
+            render_full_effect_row(b)
+        ),
+        Predicate::RowEq(a, b) => format!(
+            "{} == {}",
+            render_ty(&Ty::Record(a.clone()), param_names),
+            render_ty(&Ty::Record(b.clone()), param_names)
+        ),
+        Predicate::Conforms { ty, protocol } => {
+            format!("{}: {protocol}", render_ty(ty, param_names))
+        }
+        Predicate::HasMember {
+            receiver,
+            label,
+            member,
+        } => format!(
+            "{}.{}: {}",
+            render_ty(receiver, param_names),
+            label,
+            render_ty(member, param_names)
+        ),
+    }
+}
+
+fn render_full_effect_row(eff: &EffectRow) -> String {
+    let mut labels: Vec<String> = eff.effects.iter().map(|sym| format!("'{sym}")).collect();
+    match &eff.tail {
+        Some(EffTail::Var(v)) => labels.push(format!("..?e{}", v.0)),
+        Some(EffTail::Param(sym)) => labels.push(format!("..{sym}")),
+        None => {}
+    }
+    format!("! <{}>", labels.join(", "))
 }
 
 /// Concrete effects render as `! <'a, 'b>`; pure rows and rows that are just

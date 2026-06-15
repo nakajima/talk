@@ -295,7 +295,7 @@ impl<'a> Higlighter<'a> {
                 DeclKind::Method { box func, .. } => {
                     result.extend(self.tokens_from_expr(func, ast));
                 }
-                DeclKind::Associated { generic } => {
+                DeclKind::Associated { generic, .. } => {
                     result.extend(self.tokens_from_expr(generic, ast));
                 }
                 DeclKind::Func(func) => {

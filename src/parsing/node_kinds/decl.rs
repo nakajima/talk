@@ -7,7 +7,7 @@ use crate::{
     node_kinds::{
         block::Block, body::Body, expr::Expr, func::Func, func_signature::FuncSignature,
         generic_decl::GenericDecl, parameter::Parameter, pattern::Pattern,
-        type_annotation::TypeAnnotation,
+        type_annotation::TypeAnnotation, where_clause::WhereClause,
     },
     parsing::span::Span,
 };
@@ -67,6 +67,7 @@ pub enum DeclKind {
         #[drive(skip)]
         name_span: Span,
         generics: Vec<GenericDecl>,
+        where_clause: Option<WhereClause>,
         params: Vec<Parameter>,
         ret: TypeAnnotation,
     },
@@ -76,6 +77,7 @@ pub enum DeclKind {
         #[drive(skip)]
         name_span: Span,
         generics: Vec<GenericDecl>, /* generics */
+        where_clause: Option<WhereClause>,
         body: Body,                 /* body */
     },
 
@@ -91,6 +93,7 @@ pub enum DeclKind {
         #[drive(skip)]
         name_span: Span,
         generics: Vec<GenericDecl>,
+        where_clause: Option<WhereClause>,
         body: Body,
         conformances: Vec<TypeAnnotation>,
     },
@@ -121,6 +124,7 @@ pub enum DeclKind {
 
     Associated {
         generic: GenericDecl,
+        where_clause: Option<WhereClause>,
     },
 
     // Function stuff
@@ -133,6 +137,7 @@ pub enum DeclKind {
         name_span: Span,
         conformances: Vec<TypeAnnotation>,
         generics: Vec<GenericDecl>, // Generics TypeParams <T>
+        where_clause: Option<WhereClause>,
         body: Body,
     },
 
@@ -143,6 +148,7 @@ pub enum DeclKind {
         #[drive(skip)]
         name_span: Span,
         generics: Vec<GenericDecl>, // Generics TypeParams <T>
+        where_clause: Option<WhereClause>,
         body: Body,
     },
 

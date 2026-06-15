@@ -47,6 +47,13 @@ pub enum TypeError {
         protocol: String,
         requirement: String,
     },
+    AmbiguousTypeParameter {
+        param: String,
+    },
+    DuplicatePredicate {
+        predicate: String,
+    },
+    InvalidWherePredicate,
     /// A closed effect annotation (`func f() 'a -> ()`) is an exact upper
     /// bound: performing anything outside it is an error. (Checked at the
     /// declaration, keeping arrow rows open — the deviation from Koka's
@@ -115,6 +122,21 @@ impl Display for TypeError {
                 requirement,
             } => {
                 write!(f, "Missing '{requirement}' required by {protocol}")
+            }
+            TypeError::AmbiguousTypeParameter { param } => {
+                write!(
+                    f,
+                    "Type parameter {param} is constrained but not determined by the declaration's type"
+                )
+            }
+            TypeError::DuplicatePredicate { predicate } => {
+                write!(f, "Duplicate where predicate: {predicate}")
+            }
+            TypeError::InvalidWherePredicate => {
+                write!(
+                    f,
+                    "Where predicates must mention a declaration type parameter or Self"
+                )
             }
             TypeError::UndeclaredEffect { effect } => {
                 write!(

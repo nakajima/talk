@@ -11,14 +11,16 @@
 //!   will enforce implication untouchability in milestone 8 (OutsideIn §5,
 //!   as in GHC's TcLevel).
 //! - Record rows unify by decomposition in the scoped-labels style (Leijen,
-//!   *Extensible Records with Scoped Labels*, Trends in FP 2005). Effect rows
-//!   are the same algorithm over a label set (Koka: Leijen, MSFP 2014 §4.2).
+//!   *Extensible Records with Scoped Labels*, TFP 2005). Effect rows are the
+//!   same algorithm over a label set (Leijen, *Koka: Programming with
+//!   Row-Polymorphic Effect Types*, MSR-TR-2013-79).
 //!   There is no published OutsideIn(X)-with-rows; the composition is ours,
 //!   but row equalities canonicalize into smaller constraints exactly like
 //!   constructor decomposition, which is the property the framework needs.
 //! - `Conforms` is a class constraint (Wadler & Blott, POPL 1989) solved by
-//!   conformance-table lookup; its associated-type bindings discharge as
-//!   equalities (Chakravarty, Keller & Peyton Jones, ICFP 2005).
+//!   conformance-table lookup. Associated-type bindings are not carried on
+//!   `Conforms`; they are ordinary projections that reduce through the
+//!   conformance row (Chakravarty, Keller & Peyton Jones, ICFP 2005).
 //! - `HasMember` is a Has predicate (Gaster & Jones, TR NOTTCS-TR-96-3,
 //!   1996). A stuck predicate set is retried while unification makes
 //!   progress; at quiescence the unique-owner *improvement* rule applies
@@ -29,12 +31,13 @@
 //!   generator handles (Pierce & Turner, TOPLAS 2000 joins).
 //!
 //! Constraints live for one binding group: `solve` consumes them and returns
-//! only the residual variable-headed `Conforms` (which generalization turns
-//! into scheme bounds, THIH §11.6.2's context splitting). Nothing is stored.
+//! residual variable-headed predicates, which generalization turns into a
+//! scheme's qualified context (THIH section 11.6's split between deferred and
+//! retained predicates). Nothing is stored.
 
 use std::collections::BTreeSet;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::label::Label;
 use crate::name_resolution::scc_graph::Level;
@@ -45,7 +48,7 @@ use crate::types::constraint::{Constraint, CtOrigin, CtReason};
 use crate::types::error::TypeError;
 use crate::types::output::MemberResolution;
 use crate::types::ty::{
-    Bound, EffTail, EffVar, EffectRow, Row, RowTail, RowVar, Scheme, SchemeParam, Ty, TyVar,
+    EffTail, EffVar, EffectRow, Predicate, Row, RowTail, RowVar, Scheme, SchemeParam, Ty, TyVar,
 };
 
 #[derive(Clone, Debug)]
@@ -339,6 +342,10 @@ pub struct Solver<'s> {
     /// constraints instead, so they ride the binder's scheme (qualified
     /// types — Jones, *Qualified Types*, 1994).
     pub defaulting: bool,
+    /// Local assumptions from declaration `where` clauses and future GADT
+    /// match refinements. They are erased evidence: used only to discharge
+    /// wanteds while solving this implication.
+    pub givens: Vec<Predicate>,
     /// In-flight auto-derived conformances, so recursive nominals resolve
     /// coinductively instead of looping.
     pub derived_seen: rustc_hash::FxHashSet<(Symbol, Symbol)>,
@@ -359,6 +366,11 @@ impl<'s> Solver<'s> {
                     Constraint::Eq(a, b, origin) => {
                         let a = normalize_ty(self.store, self.catalog, &a);
                         let b = normalize_ty(self.store, self.catalog, &b);
+                        let a = self.rewrite_ty_from_givens(a);
+                        let b = self.rewrite_ty_from_givens(b);
+                        if a == b {
+                            continue;
+                        }
                         if stuck_projection(self.store, &a) || stuck_projection(self.store, &b) {
                             stuck.push(Constraint::Eq(a, b, origin));
                         } else {
@@ -369,11 +381,10 @@ impl<'s> Solver<'s> {
                     Constraint::Conforms {
                         ty,
                         protocol,
-                        assoc,
                         origin,
                     } => {
                         if let Some(unsolved) =
-                            self.try_conforms(ty, protocol, assoc, origin, &mut queue)
+                            self.try_conforms(ty, protocol, origin, &mut queue)
                         {
                             stuck.push(unsolved);
                         }
@@ -391,16 +402,14 @@ impl<'s> Solver<'s> {
                         }
                     }
                     Constraint::Implic(implication) => {
-                        // v1 generates no givens; nested wanteds just solve
-                        // in the same store (OutsideIn §5 with an empty
-                        // assumption set is plain solving).
                         if implication.givens.is_empty() {
                             queue.extend(implication.wanteds);
                         } else {
-                            self.errors.push((
-                                TypeError::Unsupported("local given equalities".into()),
-                                NodeID::SYNTHESIZED,
-                            ));
+                            let original_given_len = self.givens.len();
+                            self.givens.extend(implication.givens);
+                            let residual = self.solve(implication.wanteds);
+                            self.givens.truncate(original_given_len);
+                            stuck.extend(residual);
                         }
                     }
                 }
@@ -425,14 +434,12 @@ impl<'s> Solver<'s> {
                 Constraint::Conforms {
                     ty,
                     protocol,
-                    assoc,
                     origin,
                 } => {
                     if matches!(self.store.shallow(&ty), Ty::Var(_)) {
                         residual.push(Constraint::Conforms {
                             ty,
                             protocol,
-                            assoc,
                             origin,
                         });
                     } else {
@@ -477,6 +484,121 @@ impl<'s> Solver<'s> {
         residual
     }
 
+    fn rewrite_ty_from_givens(&mut self, ty: Ty) -> Ty {
+        let mut seen = FxHashSet::default();
+        self.rewrite_ty_from_givens_inner(ty, &mut seen)
+    }
+
+    fn rewrite_ty_from_givens_inner(&mut self, ty: Ty, seen: &mut FxHashSet<Ty>) -> Ty {
+        let ty = normalize_ty(self.store, self.catalog, &ty);
+        if !seen.insert(ty.clone()) {
+            return ty;
+        }
+        let rebuilt = match ty {
+            Ty::Nominal(symbol, args) => Ty::Nominal(
+                symbol,
+                args.into_iter()
+                    .map(|arg| {
+                        let mut seen = seen.clone();
+                        self.rewrite_ty_from_givens_inner(arg, &mut seen)
+                    })
+                    .collect(),
+            ),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| {
+                        let mut seen = seen.clone();
+                        self.rewrite_ty_from_givens_inner(item, &mut seen)
+                    })
+                    .collect(),
+            ),
+            Ty::Func(params, ret, eff) => Ty::Func(
+                params
+                    .into_iter()
+                    .map(|param| {
+                        let mut seen = seen.clone();
+                        self.rewrite_ty_from_givens_inner(param, &mut seen)
+                    })
+                    .collect(),
+                Box::new({
+                    let mut seen = seen.clone();
+                    self.rewrite_ty_from_givens_inner(*ret, &mut seen)
+                }),
+                eff,
+            ),
+            Ty::Record(row) => Ty::Record(Row {
+                fields: row
+                    .fields
+                    .into_iter()
+                    .map(|(label, field)| {
+                        let mut seen = seen.clone();
+                        (label, self.rewrite_ty_from_givens_inner(field, &mut seen))
+                    })
+                    .collect(),
+                tail: row.tail,
+            }),
+            Ty::Proj(base, protocol, assoc) => {
+                let base = self.rewrite_ty_from_givens_inner(*base, seen);
+                normalize_ty(
+                    self.store,
+                    self.catalog,
+                    &Ty::Proj(Box::new(base), protocol, assoc),
+                )
+            }
+            other => other,
+        };
+
+        for given in self.givens.clone() {
+            let Predicate::TypeEq(lhs, rhs) = given else {
+                continue;
+            };
+            let lhs = normalize_ty(self.store, self.catalog, &lhs);
+            let rhs = normalize_ty(self.store, self.catalog, &rhs);
+            let (from, to) = Self::oriented_given_rewrite(lhs, rhs);
+            if rebuilt == from {
+                return self.rewrite_ty_from_givens_inner(to, seen);
+            }
+        }
+        rebuilt
+    }
+
+    fn oriented_given_rewrite(lhs: Ty, rhs: Ty) -> (Ty, Ty) {
+        if Self::rewrite_specificity(&lhs) <= Self::rewrite_specificity(&rhs) {
+            (lhs, rhs)
+        } else {
+            (rhs, lhs)
+        }
+    }
+
+    fn rewrite_specificity(ty: &Ty) -> u8 {
+        match ty {
+            Ty::Var(_) | Ty::Param(_) => 0,
+            Ty::Proj(..) => 1,
+            Ty::Func(..) | Ty::Record(_) | Ty::Tuple(_) => 2,
+            Ty::Nominal(..) => 3,
+            Ty::Error => 4,
+        }
+    }
+
+    fn given_conformance_satisfies(&mut self, ty: &Ty, protocol: Symbol) -> bool {
+        for given in self.givens.clone() {
+            let Predicate::Conforms {
+                ty: given_ty,
+                protocol: given_protocol,
+            } = given
+            else {
+                continue;
+            };
+            let given_ty = normalize_ty(self.store, self.catalog, &given_ty);
+            let given_ty = self.rewrite_ty_from_givens(given_ty);
+            if &given_ty == ty && self.catalog.bounds_satisfy(&[given_protocol], protocol) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// One step on a Conforms constraint: discharge against the conformance
     /// table (OutsideIn's class-constraint reaction; instance contexts will
     /// emit further wanteds when conditional conformance lands).
@@ -484,16 +606,18 @@ impl<'s> Solver<'s> {
         &mut self,
         ty: Ty,
         protocol: Symbol,
-        assoc: Vec<(Symbol, Ty)>,
         origin: CtOrigin,
         queue: &mut Vec<Constraint>,
     ) -> Option<Constraint> {
         let normalized = normalize_ty(self.store, self.catalog, &ty);
+        let normalized = self.rewrite_ty_from_givens(normalized);
+        if self.given_conformance_satisfies(&normalized, protocol) {
+            return None;
+        }
         match normalized.clone() {
             Ty::Var(_) => Some(Constraint::Conforms {
                 ty,
                 protocol,
-                assoc,
                 origin,
             }),
             Ty::Error => None,
@@ -505,17 +629,6 @@ impl<'s> Solver<'s> {
                     .cloned()
                     .unwrap_or_default();
                 if self.catalog.bounds_satisfy(&bounds, protocol) {
-                    // Associated expectations become equalities with
-                    // irreducible projections off the rigid parameter
-                    // (Chakravarty et al. 2005): provable only when the
-                    // expectation is the same projection — never guessed.
-                    for (assoc_symbol, expected) in assoc {
-                        queue.push(Constraint::Eq(
-                            expected,
-                            Ty::Proj(Box::new(normalized.clone()), protocol, assoc_symbol),
-                            origin,
-                        ));
-                    }
                     None
                 } else {
                     let rendered = self.store.render(&ty);
@@ -536,7 +649,6 @@ impl<'s> Solver<'s> {
                     return Some(Constraint::Conforms {
                         ty,
                         protocol,
-                        assoc,
                         origin,
                     });
                 }
@@ -547,13 +659,6 @@ impl<'s> Solver<'s> {
                     .cloned()
                     .unwrap_or_default();
                 if self.catalog.bounds_satisfy(&bounds, protocol) {
-                    for (owner_assoc, expected) in assoc {
-                        queue.push(Constraint::Eq(
-                            expected,
-                            Ty::Proj(Box::new(normalized.clone()), protocol, owner_assoc),
-                            origin,
-                        ));
-                    }
                     None
                 } else {
                     let rendered = self.store.render(&ty);
@@ -573,34 +678,21 @@ impl<'s> Solver<'s> {
                         let conformance = conformance.clone();
                         // Bind the row's rigid params against the actual
                         // head arguments, then discharge the instance
-                        // context as new wanteds (instances with contexts:
-                        // Hall et al., TOPLAS 1996) and the assoc bindings
-                        // as equalities (Chakravarty et al., ICFP 2005).
+                        // context as new wanteds (Hall/Hammond/Peyton
+                        // Jones/Wadler, *Type Classes in Haskell*).
+                        // Associated types are ordinary projections
+                        // normalized by `normalize_ty` (Chakravarty/Keller/
+                        // Peyton Jones, *Associated Type Synonyms*).
                         let mut substitution: FxHashMap<Symbol, Ty> = FxHashMap::default();
                         for (pattern, actual) in conformance.self_args.iter().zip(&args) {
                             bind_param_pattern(pattern, actual, &mut substitution);
                         }
-                        for (param, bounds) in &conformance.context {
-                            if let Some(bound_ty) = substitution.get(param) {
-                                for bound in bounds {
-                                    queue.push(Constraint::Conforms {
-                                        ty: bound_ty.clone(),
-                                        protocol: *bound,
-                                        assoc: vec![],
-                                        origin,
-                                    });
-                                }
-                            }
-                        }
-                        for (assoc_symbol, expected) in assoc {
-                            if let Some(binding) = conformance.assoc.get(&assoc_symbol) {
-                                let binding = binding.substitute(
-                                    &substitution,
-                                    &Default::default(),
-                                    &Default::default(),
-                                );
-                                queue.push(Constraint::Eq(expected, binding, origin));
-                            }
+                        for predicate in &conformance.context {
+                            queue.push(
+                                predicate
+                                    .substitute(&substitution, &Default::default(), &Default::default())
+                                    .into_constraint(origin),
+                            );
                         }
                         None
                     }
@@ -665,7 +757,6 @@ impl<'s> Solver<'s> {
                 queue.push(Constraint::Conforms {
                     ty: field_ty,
                     protocol,
-                    assoc: vec![],
                     origin,
                 });
             }
@@ -680,15 +771,11 @@ impl<'s> Solver<'s> {
                 .collect();
             for variant in info.variants.values() {
                 for payload in &variant.payloads {
-                    let payload = payload.substitute(
-                        &substitution,
-                        &Default::default(),
-                        &Default::default(),
-                    );
+                    let payload =
+                        payload.substitute(&substitution, &Default::default(), &Default::default());
                     queue.push(Constraint::Conforms {
                         ty: payload,
                         protocol,
-                        assoc: vec![],
                         origin,
                     });
                 }
@@ -724,7 +811,10 @@ impl<'s> Solver<'s> {
             };
             // Two protocols inheriting one base share its requirement —
             // that is one candidate, not an ambiguity.
-            if candidates.iter().any(|(_, _, r)| r.symbol == requirement.symbol) {
+            if candidates
+                .iter()
+                .any(|(_, _, r)| r.symbol == requirement.symbol)
+            {
                 continue;
             }
             candidates.push((protocol, owner, requirement.clone()));
@@ -773,6 +863,7 @@ impl<'s> Solver<'s> {
     ) -> Option<Constraint> {
         let label_str = label.to_string();
         let normalized = normalize_ty(self.store, self.catalog, &receiver);
+        let normalized = self.rewrite_ty_from_givens(normalized);
         if stuck_projection(self.store, &normalized) {
             return Some(Constraint::HasMember {
                 receiver,
@@ -849,8 +940,12 @@ impl<'s> Solver<'s> {
             }
             Ty::Nominal(symbol, args) => {
                 if let Some(info) = self.catalog.structs.get(&symbol) {
-                    let substitution: FxHashMap<Symbol, Ty> =
-                        info.params.iter().copied().zip(args.iter().cloned()).collect();
+                    let substitution: FxHashMap<Symbol, Ty> = info
+                        .params
+                        .iter()
+                        .copied()
+                        .zip(args.iter().cloned())
+                        .collect();
                     if let Some((property, field_ty)) = info.fields.get(&label_str) {
                         let field_ty = field_ty.substitute(
                             &substitution,
@@ -904,8 +999,12 @@ impl<'s> Solver<'s> {
                     && let Some(&method) = info.methods.get(&label_str)
                 {
                     {
-                        let substitution: FxHashMap<Symbol, Ty> =
-                            info.params.iter().copied().zip(args.iter().cloned()).collect();
+                        let substitution: FxHashMap<Symbol, Ty> = info
+                            .params
+                            .iter()
+                            .copied()
+                            .zip(args.iter().cloned())
+                            .collect();
                         let signature = self.symbol_ty(method, origin.node, queue);
                         let signature = signature.substitute(
                             &substitution,
@@ -1041,16 +1140,12 @@ impl<'s> Solver<'s> {
 
     /// Type a member through a protocol requirement: substitute Self and the
     /// associated types into the requirement's signature, bind self, and
-    /// demand conformance. How associated types substitute depends on the
-    /// receiver:
-    /// - a variable or concrete head gets fresh holes, filled by the
-    ///   conformance row at discharge;
-    /// - a rigid parameter (or irreducible projection) gets irreducible
-    ///   projections `recv.Assoc` (Chakravarty et al., ICFP 2005);
-    /// - a protocol's own Self (default-body checking) gets the protocol's
-    ///   same-named associated param where one exists — a sub-protocol's
-    ///   redeclared `associated` refines its super's — and a Self-projection
-    ///   otherwise.
+    /// demand conformance. Associated types substitute as projections
+    /// `recv.Assoc` and reduce through `normalize_ty` once the receiver is
+    /// concrete. A protocol's own Self
+    /// (default-body checking) gets the protocol's same-named associated param
+    /// where one exists — a sub-protocol's redeclared `associated` refines its
+    /// super's — and a Self-projection otherwise.
     #[allow(clippy::too_many_arguments)]
     fn bind_requirement(
         &mut self,
@@ -1071,8 +1166,6 @@ impl<'s> Solver<'s> {
 
         let receiver_head = self.store.shallow(receiver);
         let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
-        // Holes that the Conforms discharge fills from the conformance row.
-        let mut assoc: Vec<(Symbol, Ty)> = vec![];
         match &receiver_head {
             Ty::Param(self_symbol @ Symbol::Protocol(_)) => {
                 let receiver_assoc = self
@@ -1101,9 +1194,10 @@ impl<'s> Solver<'s> {
             }
             _ => {
                 for (_, owner_symbol) in &owner_assoc {
-                    let hole = Ty::Var(self.store.fresh_ty(self.level, origin.node));
-                    assoc.push((*owner_symbol, hole.clone()));
-                    tys.insert(*owner_symbol, hole);
+                    tys.insert(
+                        *owner_symbol,
+                        Ty::Proj(Box::new(receiver.clone()), protocol, *owner_symbol),
+                    );
                 }
             }
         }
@@ -1113,24 +1207,36 @@ impl<'s> Solver<'s> {
             requirement.symbol,
             EffTail::Var(self.store.fresh_eff(self.level, origin.node)),
         );
-        let signature = requirement
-            .sig
-            .substitute(&tys, &effs, &Default::default());
+        let signature = requirement.sig.substitute(&tys, &effs, &Default::default());
 
+        let mut local_wanteds = vec![];
         if let Ty::Func(params, ret, eff) = signature
             && !params.is_empty()
         {
-            queue.push(Constraint::Eq(params[0].clone(), receiver.clone(), origin));
-            queue.push(Constraint::Eq(
+            local_wanteds.push(Constraint::Eq(params[0].clone(), receiver.clone(), origin));
+            local_wanteds.push(Constraint::Eq(
                 member.clone(),
                 Ty::Func(params[1..].to_vec(), ret, eff),
                 origin,
             ));
         }
+        let givens: Vec<Predicate> = requirement
+            .predicates
+            .iter()
+            .map(|predicate| predicate.substitute(&tys, &effs, &Default::default()))
+            .collect();
+        if givens.is_empty() {
+            queue.extend(local_wanteds);
+        } else if !local_wanteds.is_empty() {
+            queue.push(Constraint::Implic(Box::new(crate::types::constraint::Implication {
+                level: self.level,
+                givens,
+                wanteds: local_wanteds,
+            })));
+        }
         queue.push(Constraint::Conforms {
             ty: receiver.clone(),
             protocol,
-            assoc,
             origin,
         });
         self.member_resolutions.insert(
@@ -1280,7 +1386,7 @@ impl<'s> Solver<'s> {
     }
 
     /// Solver-side symbol lookup: in-flight monomorphic signature, or a
-    /// scheme instantiation (with its bounds emitted as new wanteds).
+    /// scheme instantiation (with its predicates emitted as new wanteds).
     fn symbol_ty(&mut self, symbol: Symbol, node: NodeID, queue: &mut Vec<Constraint>) -> Ty {
         if let Some(ty) = self.mono.get(&symbol) {
             return ty.clone();
@@ -1311,10 +1417,7 @@ impl<'s> Solver<'s> {
         }
         let mut effs = FxHashMap::default();
         for param in &scheme.eff_params {
-            effs.insert(
-                *param,
-                EffTail::Var(self.store.fresh_eff(self.level, node)),
-            );
+            effs.insert(*param, EffTail::Var(self.store.fresh_eff(self.level, node)));
         }
         let mut rows = FxHashMap::default();
         for param in &scheme.row_params {
@@ -1331,36 +1434,17 @@ impl<'s> Solver<'s> {
             ));
             rows.insert(*param, RowTail::Var(var));
         }
-        for param in &scheme.params {
-            let fresh = tys[&param.symbol].clone();
-            for bound in &param.bounds {
-                let assoc = bound
-                    .assoc
-                    .iter()
-                    .map(|(s, t)| (*s, t.substitute(&tys, &effs, &rows)))
-                    .collect();
-                queue.push(Constraint::Conforms {
-                    ty: fresh.clone(),
-                    protocol: bound.protocol,
-                    assoc,
-                    origin: CtOrigin::new(node, CtReason::Apply),
-                });
-            }
+        for predicate in &scheme.predicates {
+            queue.push(
+                predicate
+                    .substitute(&tys, &effs, &rows)
+                    .into_constraint(CtOrigin::new(node, CtReason::Apply)),
+            );
         }
         self.instantiations
             .entry(node)
             .or_default()
             .extend(recorded);
-        // Scheme-carried member uses become fresh wanteds, discharged
-        // against this call's concrete receiver.
-        for constraint in &scheme.member_constraints {
-            queue.push(Constraint::HasMember {
-                receiver: constraint.receiver.substitute(&tys, &effs, &rows),
-                label: constraint.label.clone(),
-                member: constraint.member.substitute(&tys, &effs, &rows),
-                origin: CtOrigin::new(node, CtReason::Apply),
-            });
-        }
         scheme.ty.substitute(&tys, &effs, &rows)
     }
 
@@ -1512,9 +1596,10 @@ impl<'s> Solver<'s> {
         false
     }
 
-    /// Effect-row unification: Leijen 2005's row rewriting specialized to a
-    /// label set (Koka MSFP 2014 §4.2). The leftover labels of each side flow
-    /// into the other side's tail via a fresh shared tail.
+    /// Effect-row unification: Leijen's scoped-label row rewriting,
+    /// specialized to the Koka-style effect-label set Talk uses. The leftover
+    /// labels of each side flow into the other side's tail via a fresh shared
+    /// tail.
     fn unify_eff(&mut self, a: &EffectRow, b: &EffectRow, origin: CtOrigin) {
         let (sa, ta) = self.store.flatten_eff(a);
         let (sb, tb) = self.store.flatten_eff(b);
@@ -1759,15 +1844,18 @@ impl<'s> Solver<'s> {
 /// `Param` for each and binding the variable to it in the store, so every
 /// type that shared the variable (other binders in the group, node types for
 /// hover) sees the same parameter — THIH §11.6.3's per-group quantification.
-/// Residual variable-headed Conforms constraints attach as bounds on the
-/// minted parameters (THIH §11.6.2's context splitting into qualified types).
+/// Residual variable-headed predicates attach to the minted parameters'
+/// scheme context (THIH section 11.6's retained predicates for implicitly
+/// typed binding groups).
 pub struct Generalizer<'s> {
     pub store: &'s mut VarStore,
     pub symbols: &'s mut Symbols,
     pub module_id: crate::compiling::module::ModuleId,
     pub base_level: Level,
-    /// Residual protocol obligations keyed by variable root.
-    var_bounds: FxHashMap<u32, Vec<Bound>>,
+    /// Residual predicates keyed by the type-variable root that caused them
+    /// to float out of solving. Generalization quantifies those variables and
+    /// attaches the predicates to the scheme's qualified context.
+    var_predicates: FxHashMap<u32, Vec<Predicate>>,
     /// Params minted by THIS group's generalization (plus declared generics
     /// seeded per binder). A scheme quantifies a rigid `Param` only if this
     /// group minted it — pre-existing rigids (e.g. the enclosing struct's
@@ -1777,6 +1865,7 @@ pub struct Generalizer<'s> {
     params: Vec<SchemeParam>,
     eff_params: Vec<Symbol>,
     row_params: Vec<Symbol>,
+    predicates: Vec<Predicate>,
 }
 
 impl<'s> Generalizer<'s> {
@@ -1785,18 +1874,19 @@ impl<'s> Generalizer<'s> {
         symbols: &'s mut Symbols,
         module_id: crate::compiling::module::ModuleId,
         base_level: Level,
-        var_bounds: FxHashMap<u32, Vec<Bound>>,
+        var_predicates: FxHashMap<u32, Vec<Predicate>>,
     ) -> Self {
         Generalizer {
             store,
             symbols,
             module_id,
             base_level,
-            var_bounds,
+            var_predicates,
             minted: Default::default(),
             params: vec![],
             eff_params: vec![],
             row_params: vec![],
+            predicates: vec![],
         }
     }
 
@@ -1812,12 +1902,13 @@ impl<'s> Generalizer<'s> {
         }
         self.eff_params.clear();
         self.row_params.clear();
+        self.predicates.clear();
         let ty = self.quantify_ty(&zonked);
         Scheme {
             params: std::mem::take(&mut self.params),
             eff_params: std::mem::take(&mut self.eff_params),
             row_params: std::mem::take(&mut self.row_params),
-            member_constraints: vec![],
+            predicates: std::mem::take(&mut self.predicates),
             ty,
         }
     }
@@ -1828,6 +1919,36 @@ impl<'s> Generalizer<'s> {
         param
     }
 
+    fn quantify_predicate(&mut self, predicate: &Predicate) -> Predicate {
+        match predicate {
+            Predicate::TypeEq(a, b) => Predicate::TypeEq(self.quantify_ty(a), self.quantify_ty(b)),
+            Predicate::EffectEq(a, b) => {
+                Predicate::EffectEq(self.quantify_eff(a), self.quantify_eff(b))
+            }
+            Predicate::RowEq(a, b) => Predicate::RowEq(self.quantify_row(a), self.quantify_row(b)),
+            Predicate::Conforms { ty, protocol } => Predicate::Conforms {
+                ty: self.quantify_ty(ty),
+                protocol: *protocol,
+            },
+            Predicate::HasMember {
+                receiver,
+                label,
+                member,
+            } => Predicate::HasMember {
+                receiver: self.quantify_ty(receiver),
+                label: label.clone(),
+                member: self.quantify_ty(member),
+            },
+        }
+    }
+
+    fn quantify_row(&mut self, row: &Row) -> Row {
+        match self.quantify_ty(&Ty::Record(row.clone())) {
+            Ty::Record(row) => row,
+            _ => row.clone(),
+        }
+    }
+
     fn quantify_ty(&mut self, ty: &Ty) -> Ty {
         match self.store.shallow(ty) {
             Ty::Var(v) => {
@@ -1835,29 +1956,15 @@ impl<'s> Generalizer<'s> {
                 if self.store.level(root) > self.base_level {
                     let param = self.mint_param();
                     self.store.bind(root, VarValue::Ty(Ty::Param(param)));
-                    let index = self.params.len();
-                    self.params.push(SchemeParam {
-                        symbol: param,
-                        bounds: vec![],
-                    });
-                    // Attach residual bounds; their assoc bindings may
-                    // reference variables of this same group (including this
-                    // one), so quantify them too.
-                    let raw = self.var_bounds.remove(&root).unwrap_or_default();
-                    let mut bounds: Vec<Bound> = raw
-                        .into_iter()
-                        .map(|bound| Bound {
-                            protocol: bound.protocol,
-                            assoc: bound
-                                .assoc
-                                .iter()
-                                .map(|(s, t)| (*s, self.quantify_ty(t)))
-                                .collect(),
-                        })
-                        .collect();
-                    bounds.sort_by_key(|b| b.protocol);
-                    bounds.dedup();
-                    self.params[index].bounds = bounds;
+                    self.params.push(SchemeParam { symbol: param });
+                    if let Some(predicates) = self.var_predicates.remove(&root) {
+                        for predicate in predicates {
+                            let predicate = self.quantify_predicate(&predicate);
+                            if !self.predicates.contains(&predicate) {
+                                self.predicates.push(predicate);
+                            }
+                        }
+                    }
                     Ty::Param(param)
                 } else {
                     Ty::Var(TyVar(root))
@@ -1868,10 +1975,7 @@ impl<'s> Generalizer<'s> {
                 // scheme's parameter list too (params are per-scheme). Rigid
                 // params from elsewhere (a nominal's generics) stay free.
                 if self.minted.contains(&sym) && !self.params.iter().any(|p| p.symbol == sym) {
-                    self.params.push(SchemeParam {
-                        symbol: sym,
-                        bounds: vec![],
-                    });
+                    self.params.push(SchemeParam { symbol: sym });
                 }
                 Ty::Param(sym)
             }
@@ -2027,6 +2131,7 @@ mod tests {
                 member_resolutions: &mut self.member_resolutions,
                 level: Level(1),
                 defaulting: false,
+                givens: vec![],
                 derived_seen: Default::default(),
             };
             solver.solve(wanteds)
@@ -2053,7 +2158,11 @@ mod tests {
         let inner = h.store.fresh_ty(Level(1), NodeID::ANY);
         h.solve(vec![Constraint::Eq(
             Ty::Var(outer),
-            Ty::Func(vec![Ty::Var(inner)], Box::new(Ty::unit()), EffectRow::pure()),
+            Ty::Func(
+                vec![Ty::Var(inner)],
+                Box::new(Ty::unit()),
+                EffectRow::pure(),
+            ),
             origin(),
         )]);
         assert!(h.errors.is_empty(), "{:?}", h.errors);
@@ -2062,7 +2171,7 @@ mod tests {
 
     #[test]
     fn effect_rows_merge_through_open_tails() {
-        // Leijen 2005 row rewriting over a label set (Koka MSFP 2014 §4.2):
+        // Leijen-style row rewriting over a Koka-style effect-label set:
         // <'a | t1> ~ <'b | t2> leaves both flattening to {'a, 'b | t3}.
         let mut h = Harness::new();
         let t1 = h.store.fresh_eff(Level(1), NodeID::ANY);
@@ -2108,10 +2217,7 @@ mod tests {
             tail: Some(RowTail::Var(r1)),
         };
         let b = Row {
-            fields: vec![(
-                Label::Named("y".into()),
-                Ty::Nominal(Symbol::Float, vec![]),
-            )],
+            fields: vec![(Label::Named("y".into()), Ty::Nominal(Symbol::Float, vec![]))],
             tail: Some(RowTail::Var(r2)),
         };
         h.solve(vec![Constraint::Eq(

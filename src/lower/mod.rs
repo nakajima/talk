@@ -3102,7 +3102,65 @@ impl<'a> Lowering<'a> {
             .get(&expr.id)
             .cloned()
             .unwrap_or(CheckTy::Error);
-        raw.substitute(&ctx.theta, &Default::default(), &Default::default())
+        let substituted = raw.substitute(&ctx.theta, &Default::default(), &Default::default());
+        self.normalize_check_ty(substituted, ctx.unit)
+    }
+
+    fn normalize_check_ty(&self, ty: CheckTy, unit: usize) -> CheckTy {
+        match ty {
+            CheckTy::Nominal(symbol, args) => CheckTy::Nominal(
+                symbol,
+                args.into_iter()
+                    .map(|arg| self.normalize_check_ty(arg, unit))
+                    .collect(),
+            ),
+            CheckTy::Func(params, ret, eff) => CheckTy::Func(
+                params
+                    .into_iter()
+                    .map(|param| self.normalize_check_ty(param, unit))
+                    .collect(),
+                Box::new(self.normalize_check_ty(*ret, unit)),
+                eff,
+            ),
+            CheckTy::Tuple(items) => CheckTy::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| self.normalize_check_ty(item, unit))
+                    .collect(),
+            ),
+            CheckTy::Record(row) => CheckTy::Record(crate::types::ty::Row {
+                fields: row
+                    .fields
+                    .into_iter()
+                    .map(|(label, field)| (label, self.normalize_check_ty(field, unit)))
+                    .collect(),
+                tail: row.tail,
+            }),
+            CheckTy::Proj(base, protocol, assoc) => {
+                let base = self.normalize_check_ty(*base, unit);
+                if let CheckTy::Nominal(symbol, args) = &base
+                    && let Some(conformance) = self.units[unit]
+                        .types
+                        .catalog
+                        .conformances
+                        .get(&(*symbol, protocol))
+                    && let Some(binding) = conformance.assoc.get(&assoc)
+                {
+                    let mut substitution = FxHashMap::default();
+                    for (pattern, actual) in conformance.self_args.iter().zip(args) {
+                        crate::types::solve::bind_param_pattern(pattern, actual, &mut substitution);
+                    }
+                    let reduced = binding.substitute(
+                        &substitution,
+                        &Default::default(),
+                        &Default::default(),
+                    );
+                    return self.normalize_check_ty(reduced, unit);
+                }
+                CheckTy::Proj(Box::new(base), protocol, assoc)
+            }
+            other => other,
+        }
     }
 
     fn expr_lambda_ty(&mut self, expr: &Expr, ctx: &Ctx) -> TyId {

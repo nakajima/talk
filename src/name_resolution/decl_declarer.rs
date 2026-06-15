@@ -784,7 +784,7 @@ impl<'a> DeclDeclarer<'a> {
             }
         );
 
-        on!(&mut decl.kind, DeclKind::Associated { generic }, {
+        on!(&mut decl.kind, DeclKind::Associated { generic, .. }, {
             generic.name = self.resolver.declare(
                 &generic.name,
                 some!(AssociatedType),

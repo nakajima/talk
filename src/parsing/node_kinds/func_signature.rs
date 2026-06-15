@@ -6,7 +6,7 @@ use crate::{
     node_id::NodeID,
     node_kinds::{
         func::EffectSet, generic_decl::GenericDecl, parameter::Parameter,
-        type_annotation::TypeAnnotation,
+        type_annotation::TypeAnnotation, where_clause::WhereClause,
     },
     span::Span,
 };
@@ -23,6 +23,7 @@ pub struct FuncSignature {
     #[drive(skip)]
     pub effects: EffectSet,
     pub generics: Vec<GenericDecl>,
+    pub where_clause: Option<WhereClause>,
     pub ret: Option<Box<TypeAnnotation>>,
 }
 

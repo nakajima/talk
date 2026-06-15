@@ -21,10 +21,10 @@
 //! Polymorphism*, 1995) via `is_syntactic_value` + `mutated_symbols`.
 //!
 //! Each function body carries an ambient effect row; calls unify the callee's
-//! latent row with it (Koka's application rule, Leijen MSFP 2014). Deviation
-//! from Koka: closed effect annotations will be checked as bounds at
-//! declaration sites (milestone 5) instead of inserting open-coercions
-//! (Leijen POPL 2017 §3) — arrow rows under inference stay open.
+//! latent row with it (Koka's application rule, Leijen MSR-TR-2013-79).
+//! Deviation from Koka's row-typed algebraic-effects work: closed effect
+//! annotations are checked as bounds at declaration sites, so arrow rows under
+//! inference stay open.
 //!
 //! Member access on a known head resolves directly against the catalog;
 //! methods are self-prepended functions, so `recv.m(args)` checks the full
@@ -47,6 +47,8 @@ use crate::name_resolution::scc_graph::Level;
 use crate::name_resolution::symbol::{Symbol, Symbols};
 use crate::node::Node;
 use crate::node_id::NodeID;
+use crate::node_kinds::func_signature::FuncSignature;
+use crate::node_kinds::generic_decl::GenericDecl;
 use crate::node_kinds::{
     block::Block,
     call_arg::CallArg,
@@ -57,18 +59,17 @@ use crate::node_kinds::{
     pattern::{Pattern, PatternKind, RecordFieldPatternKind},
     stmt::{Stmt, StmtKind},
     type_annotation::{TypeAnnotation, TypeAnnotationKind},
+    where_clause::{WhereClause, WherePredicateKind},
 };
-use crate::node_kinds::func_signature::FuncSignature;
-use crate::node_kinds::generic_decl::GenericDecl;
 use crate::types::catalog::{
     Conformance, EnumInfo, MemberOwner, ProtocolInfo, Requirement, StructInfo, TypeAliasInfo,
     TypeCatalog, VariantInfo,
 };
-use crate::types::constraint::{Constraint, CtOrigin, CtReason};
+use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
 use crate::types::output::{MemberResolution, TypeOutput};
-use crate::types::solve::{Generalizer, Solver, VarStore};
-use crate::types::ty::{Bound, EffTail, EffectRow, Row, RowTail, Scheme, SchemeParam, Ty};
+use crate::types::solve::{normalize_ty, Generalizer, Solver, VarStore};
+use crate::types::ty::{EffTail, EffectRow, Predicate, Row, RowTail, Scheme, SchemeParam, Ty};
 
 /// The level at which top-level binding groups solve; their skeletons and
 /// body variables live above it so generalization (base = OUTER_LEVEL)
@@ -123,6 +124,8 @@ pub fn check_types(
         type_aliases: FxHashMap::default(),
         alias_stack: vec![],
         explicit_conformances: FxHashSet::default(),
+        reported_where_diagnostics: FxHashSet::default(),
+        enforce_well_formedness: false,
         level: GROUP_LEVEL,
     };
     checker.run(asts)
@@ -133,6 +136,7 @@ pub fn check_types(
 /// never depend on this ordering).
 struct ExtendWork<'a> {
     self_ty: Ty,
+    context: Vec<Predicate>,
     decl: &'a Decl,
     protocols: Vec<Symbol>,
 }
@@ -142,6 +146,13 @@ struct TypeAliasDef {
     rhs: TypeAnnotation,
     owner: Option<Symbol>,
     exportable: bool,
+}
+
+#[derive(Clone, Default)]
+struct DeclaredSchemeContext {
+    params: Vec<SchemeParam>,
+    param_nodes: Vec<(Symbol, NodeID)>,
+    predicates: Vec<Predicate>,
 }
 
 /// A top-level binder's declaration site, indexed by symbol.
@@ -235,6 +246,8 @@ struct Checker<'a> {
     /// sub-protocol conformance can rely on a super-protocol conformance that
     /// appears later in source order.
     explicit_conformances: FxHashSet<(Symbol, Symbol)>,
+    reported_where_diagnostics: FxHashSet<(NodeID, &'static str)>,
+    enforce_well_formedness: bool,
     level: Level,
 }
 
@@ -307,12 +320,13 @@ impl<'a> Checker<'a> {
                 DeclKind::Effect {
                     name,
                     generics,
+                    where_clause,
                     params,
                     ret,
                     ..
                 } => {
                     if let Ok(symbol) = name.symbol() {
-                        self.register_effect(symbol, generics, params, ret);
+                        self.register_effect(symbol, generics, where_clause.as_ref(), params, ret);
                     }
                 }
                 _ => {}
@@ -343,7 +357,7 @@ impl<'a> Checker<'a> {
                             ..
                         }) = rhs
                         {
-                            self.register_generic_bounds(&func.generics);
+                            self.register_func_bounds(func);
                         }
                         decls.insert(
                             symbol,
@@ -387,6 +401,8 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+
+        self.enforce_well_formedness = true;
 
         // Phase 2 — solve binding groups in dependency order. Groups come
         // from our own free-variable dependency analysis (THIH §11.6.2
@@ -586,7 +602,12 @@ impl<'a> Checker<'a> {
             .structs
             .get(&symbol)
             .map(|info| info.params.clone())
-            .or_else(|| self.catalog.enums.get(&symbol).map(|info| info.params.clone()))
+            .or_else(|| {
+                self.catalog
+                    .enums
+                    .get(&symbol)
+                    .map(|info| info.params.clone())
+            })
             .unwrap_or_default()
     }
 
@@ -626,12 +647,25 @@ impl<'a> Checker<'a> {
     }
 
     fn register_struct(&mut self, symbol: Symbol, decl: &Decl) {
-        let DeclKind::Struct { generics, body, .. } = &decl.kind else {
+        let DeclKind::Struct {
+            generics,
+            where_clause,
+            body,
+            ..
+        } = &decl.kind
+        else {
             return;
         };
+        self.register_generic_bounds(generics);
+        self.register_where_bounds(where_clause.as_ref());
         let params = generic_symbols(generics);
+        let self_ty = Ty::Nominal(symbol, params.iter().map(|p| Ty::Param(*p)).collect());
+        self.self_types.push(self_ty);
+        let predicates = self.declared_predicates(generics, where_clause.as_ref());
+        self.self_types.pop();
         let mut info = StructInfo {
             params,
+            predicates,
             ..Default::default()
         };
         for member in &body.decls {
@@ -646,7 +680,9 @@ impl<'a> Checker<'a> {
                         self.unsupported(member.id, "static properties");
                         continue;
                     }
-                    let Ok(property) = name.symbol() else { continue };
+                    let Ok(property) = name.symbol() else {
+                        continue;
+                    };
                     let ty = match type_annotation {
                         Some(annotation) => self.lower_annotation(annotation),
                         None => {
@@ -687,13 +723,25 @@ impl<'a> Checker<'a> {
     }
 
     fn register_enum(&mut self, symbol: Symbol, decl: &Decl) {
-        let DeclKind::Enum { generics, body, .. } = &decl.kind else {
+        let DeclKind::Enum {
+            generics,
+            where_clause,
+            body,
+            ..
+        } = &decl.kind
+        else {
             return;
         };
+        self.register_generic_bounds(generics);
+        self.register_where_bounds(where_clause.as_ref());
         let params = generic_symbols(generics);
         let result = Ty::Nominal(symbol, params.iter().map(|p| Ty::Param(*p)).collect());
+        self.self_types.push(result.clone());
+        let predicates = self.declared_predicates(generics, where_clause.as_ref());
+        self.self_types.pop();
         let mut info = EnumInfo {
             params,
+            predicates,
             ..Default::default()
         };
         for member in &body.decls {
@@ -734,6 +782,7 @@ impl<'a> Checker<'a> {
     fn register_protocol(&mut self, symbol: Symbol, decl: &'a Decl) {
         let DeclKind::Protocol {
             generics,
+            where_clause,
             body,
             conformances,
             ..
@@ -754,16 +803,49 @@ impl<'a> Checker<'a> {
             ..Default::default()
         };
         self.self_types.push(Ty::Param(symbol));
+        self.register_where_bounds(where_clause.as_ref());
+        self.catalog
+            .param_bounds
+            .entry(symbol)
+            .or_insert_with(|| vec![symbol]);
         for member in &body.decls {
-            match &member.kind {
-                DeclKind::Associated { generic } => {
-                    if let Ok(assoc) = generic.name.symbol() {
-                        info.assoc.insert(generic.name.name_str(), assoc);
-                        // `associated T: Iterator` — bounds on the assoc
-                        // param discharge member access through it.
-                        self.register_generic_bounds(std::slice::from_ref(generic));
+            if let DeclKind::Associated {
+                generic,
+                where_clause,
+            } = &member.kind
+                && let Ok(assoc) = generic.name.symbol()
+            {
+                info.assoc.insert(generic.name.name_str(), assoc);
+                // `associated T: Iterator` — bounds on the assoc
+                // param discharge member access through it.
+                self.register_generic_bounds(std::slice::from_ref(generic));
+                self.register_where_bounds(where_clause.as_ref());
+                let assoc_predicates =
+                    self.declared_predicates(std::slice::from_ref(generic), where_clause.as_ref());
+                for predicate in assoc_predicates {
+                    if !info.predicates.contains(&predicate) {
+                        info.predicates.push(predicate);
                     }
                 }
+            }
+        }
+        self.catalog.protocols.insert(symbol, info.clone());
+        for predicate in self.declared_predicates(&[], where_clause.as_ref()) {
+            if !info.predicates.contains(&predicate) {
+                info.predicates.push(predicate);
+            }
+        }
+        for predicate in &info.predicates {
+            if let Predicate::Conforms { ty, protocol } = predicate
+                && *ty == Ty::Param(symbol)
+                && !info.supers.contains(protocol)
+            {
+                info.supers.push(*protocol);
+            }
+        }
+        for member in &body.decls {
+            match &member.kind {
+                DeclKind::Associated { .. } => {}
                 DeclKind::MethodRequirement(signature) | DeclKind::FuncSignature(signature) => {
                     if let Some(requirement) = self.lower_requirement(signature, false) {
                         info.requirements
@@ -804,6 +886,9 @@ impl<'a> Checker<'a> {
         signature: &FuncSignature,
         has_default: bool,
     ) -> Option<Requirement> {
+        self.register_generic_bounds(&signature.generics);
+        self.register_where_bounds(signature.where_clause.as_ref());
+        let predicates = self.declared_predicates(&signature.generics, signature.where_clause.as_ref());
         let symbol = signature.name.symbol().ok()?;
         let params: Vec<Ty> = signature
             .params
@@ -832,11 +917,14 @@ impl<'a> Checker<'a> {
         Some(Requirement {
             symbol,
             sig: Ty::Func(params, Box::new(ret), eff),
+            predicates,
             has_default,
         })
     }
 
     fn lower_default_requirement(&mut self, func: &Func) -> Option<Requirement> {
+        self.register_func_bounds(func);
+        let predicates = self.declared_predicates(&func.generics, func.where_clause.as_ref());
         let symbol = func.name.symbol().ok()?;
         let params: Vec<Ty> = func
             .params
@@ -857,6 +945,7 @@ impl<'a> Checker<'a> {
         Some(Requirement {
             symbol,
             sig: Ty::Func(params, Box::new(ret), eff),
+            predicates,
             has_default: true,
         })
     }
@@ -865,9 +954,13 @@ impl<'a> Checker<'a> {
         &mut self,
         symbol: Symbol,
         generics: &[crate::node_kinds::generic_decl::GenericDecl],
+        where_clause: Option<&WhereClause>,
         params: &[Parameter],
         ret: &TypeAnnotation,
     ) {
+        self.register_generic_bounds(generics);
+        self.register_where_bounds(where_clause);
+        let predicates = self.declared_predicates(generics, where_clause);
         let generics: Vec<Symbol> = generics
             .iter()
             .filter_map(|generic| generic.name.symbol().ok())
@@ -887,6 +980,7 @@ impl<'a> Checker<'a> {
             symbol,
             crate::types::catalog::EffectSig {
                 generics,
+                predicates,
                 params,
                 ret,
             },
@@ -900,11 +994,16 @@ impl<'a> Checker<'a> {
     /// al. TOPLAS 1996), inherent members, and completeness errors. Bodies
     /// check later (`check_extend`). `enclosing` is the struct whose body a
     /// nested `extend Self: P` appears in.
-    fn register_extend(&mut self, decl: &'a Decl, enclosing: Option<Symbol>) -> Option<ExtendWork<'a>> {
+    fn register_extend(
+        &mut self,
+        decl: &'a Decl,
+        enclosing: Option<Symbol>,
+    ) -> Option<ExtendWork<'a>> {
         let DeclKind::Extend {
             name,
             conformances,
             generics,
+            where_clause,
             body,
             ..
         } = &decl.kind
@@ -916,6 +1015,7 @@ impl<'a> Checker<'a> {
             _ => name.symbol().ok()?,
         };
         self.register_generic_bounds(generics);
+        self.register_where_bounds(where_clause.as_ref());
 
         // The row's own rigid params and the head application they index:
         // a nested extend uses the enclosing struct's generics; a top-level
@@ -933,15 +1033,9 @@ impl<'a> Checker<'a> {
         };
         let self_args: Vec<Ty> = params.iter().map(|p| Ty::Param(*p)).collect();
         let self_ty = Ty::Nominal(head, self_args.clone());
-        let context: Vec<(Symbol, Vec<Symbol>)> = generics
-            .iter()
-            .filter_map(|g| {
-                let symbol = g.name.symbol().ok()?;
-                let bounds: Vec<Symbol> =
-                    g.conformances.iter().filter_map(|c| c.symbol().ok()).collect();
-                (!bounds.is_empty()).then_some((symbol, bounds))
-            })
-            .collect();
+        self.self_types.push(self_ty.clone());
+        let context = self.declared_predicates(generics, where_clause.as_ref());
+        self.self_types.pop();
 
         // Collect declared members (witnesses and inherent methods).
         let mut members: IndexMap<String, (Symbol, &'a Func)> = IndexMap::default();
@@ -1111,6 +1205,7 @@ impl<'a> Checker<'a> {
 
         Some(ExtendWork {
             self_ty,
+            context,
             decl,
             protocols,
         })
@@ -1158,12 +1253,242 @@ impl<'a> Checker<'a> {
             let Ok(symbol) = generic.name.symbol() else {
                 continue;
             };
-            let bounds: Vec<Symbol> = generic
+            for protocol in generic
                 .conformances
                 .iter()
-                .filter_map(|c| c.symbol().ok())
+                .filter_map(Self::annotation_symbol)
+            {
+                self.register_param_bound(symbol, protocol);
+            }
+        }
+    }
+
+    fn register_func_bounds(&mut self, func: &Func) {
+        self.register_generic_bounds(&func.generics);
+        self.register_where_bounds(func.where_clause.as_ref());
+    }
+
+    fn register_where_bounds(&mut self, where_clause: Option<&WhereClause>) {
+        let Some(where_clause) = where_clause else {
+            return;
+        };
+        for predicate in &where_clause.predicates {
+            let WherePredicateKind::Conforms { ty, protocols } = &predicate.kind else {
+                continue;
+            };
+            let TypeAnnotationKind::Nominal { name, .. } = &ty.kind else {
+                continue;
+            };
+            let Ok(param @ (Symbol::TypeParameter(_) | Symbol::AssociatedType(_))) = name.symbol()
+            else {
+                continue;
+            };
+            for protocol in protocols.iter().filter_map(Self::annotation_symbol) {
+                self.register_param_bound(param, protocol);
+            }
+        }
+    }
+
+    fn annotation_symbol(annotation: &TypeAnnotation) -> Option<Symbol> {
+        match &annotation.kind {
+            TypeAnnotationKind::Nominal { name, .. } | TypeAnnotationKind::SelfType(name) => {
+                name.symbol().ok()
+            }
+            _ => None,
+        }
+    }
+
+    fn register_param_bound(&mut self, param: Symbol, protocol: Symbol) {
+        let bounds = self.catalog.param_bounds.entry(param).or_default();
+        if !bounds.contains(&protocol) {
+            bounds.push(protocol);
+        }
+    }
+
+    fn declared_predicates(
+        &mut self,
+        generics: &[GenericDecl],
+        where_clause: Option<&WhereClause>,
+    ) -> Vec<Predicate> {
+        let mut predicates = vec![];
+        for generic in generics {
+            let Ok(symbol) = generic.name.symbol() else {
+                continue;
+            };
+            for conformance in &generic.conformances {
+                predicates.extend(
+                    self.lower_protocol_application_predicates(Ty::Param(symbol), conformance),
+                );
+            }
+        }
+        if let Some(where_clause) = where_clause {
+            let self_ty = self.self_types.last().cloned();
+            let mut context_params: FxHashSet<Symbol> = generics
+                .iter()
+                .filter_map(|generic| generic.name.symbol().ok())
+                .chain(self_ty.as_ref().and_then(self_context_param))
                 .collect();
-            self.catalog.param_bounds.insert(symbol, bounds);
+            if let Some(Ty::Param(protocol)) = &self_ty
+                && let Some(info) = self.catalog.protocols.get(protocol)
+            {
+                context_params.extend(info.assoc.values().copied());
+            }
+            predicates.extend(self.lower_where_clause_predicates(
+                where_clause,
+                &context_params,
+                self_ty.as_ref(),
+            ));
+        }
+        let mut deduped = vec![];
+        for predicate in predicates {
+            if !deduped.contains(&predicate) {
+                deduped.push(predicate);
+            }
+        }
+        deduped
+    }
+
+    fn lower_where_clause_predicates(
+        &mut self,
+        where_clause: &WhereClause,
+        context_params: &FxHashSet<Symbol>,
+        self_ty: Option<&Ty>,
+    ) -> Vec<Predicate> {
+        let mut predicates = vec![];
+        for predicate in &where_clause.predicates {
+            let lowered = match &predicate.kind {
+                WherePredicateKind::TypeEq { lhs, rhs } => vec![Predicate::TypeEq(
+                    self.lower_annotation(lhs),
+                    self.lower_annotation(rhs),
+                )],
+                WherePredicateKind::Conforms { ty, protocols } => {
+                    let ty = self.lower_annotation(ty);
+                    let mut lowered = vec![];
+                    for protocol in protocols {
+                        lowered.extend(
+                            self.lower_protocol_application_predicates(ty.clone(), protocol),
+                        );
+                    }
+                    lowered
+                }
+            };
+            for lowered in lowered {
+                if !predicate_mentions_context(&lowered, context_params, self_ty)
+                    && self.reported_where_diagnostics.insert((predicate.id, "invalid"))
+                {
+                    self.errors.push((TypeError::InvalidWherePredicate, predicate.id));
+                }
+                if predicates.contains(&lowered) {
+                    if self
+                        .reported_where_diagnostics
+                        .insert((predicate.id, "duplicate"))
+                    {
+                        self.warnings.push((
+                            TypeError::DuplicatePredicate {
+                                predicate: lowered.render_mono(),
+                            },
+                            predicate.id,
+                        ));
+                    }
+                } else {
+                    predicates.push(lowered);
+                }
+            }
+        }
+        predicates
+    }
+
+    fn lower_protocol_application_predicates(
+        &mut self,
+        ty: Ty,
+        protocol_annotation: &TypeAnnotation,
+    ) -> Vec<Predicate> {
+        let (protocol, assoc_args) = match &protocol_annotation.kind {
+            TypeAnnotationKind::Nominal { name, generics, .. } => {
+                let Ok(protocol) = name.symbol() else {
+                    return vec![];
+                };
+                (protocol, generics.as_slice())
+            }
+            TypeAnnotationKind::SelfType(name) => {
+                let Ok(protocol) = name.symbol() else {
+                    return vec![];
+                };
+                (protocol, [].as_slice())
+            }
+            _ => {
+                self.unsupported(
+                    protocol_annotation.id,
+                    "non-nominal protocol names in where clauses",
+                );
+                return vec![];
+            }
+        };
+
+        let mut predicates = vec![Predicate::Conforms {
+            ty: ty.clone(),
+            protocol,
+        }];
+        self.protocol_refinement_predicates(protocol, ty.clone(), &mut FxHashSet::default(), &mut predicates);
+        if assoc_args.is_empty() {
+            return predicates;
+        }
+
+        let assoc_symbols: Vec<Symbol> = self
+            .catalog
+            .protocols
+            .get(&protocol)
+            .map(|info| info.assoc.values().copied().collect())
+            .unwrap_or_default();
+        if assoc_args.len() != assoc_symbols.len() {
+            self.errors.push((
+                TypeError::ArityMismatch {
+                    expected: assoc_symbols.len(),
+                    found: assoc_args.len(),
+                },
+                protocol_annotation.id,
+            ));
+            return predicates;
+        }
+        for (assoc, arg) in assoc_symbols.into_iter().zip(assoc_args) {
+            predicates.push(Predicate::TypeEq(
+                Ty::Proj(Box::new(ty.clone()), protocol, assoc),
+                self.lower_annotation(arg),
+            ));
+        }
+        predicates
+    }
+
+    fn protocol_refinement_predicates(
+        &mut self,
+        protocol: Symbol,
+        ty: Ty,
+        seen: &mut FxHashSet<Symbol>,
+        out: &mut Vec<Predicate>,
+    ) {
+        if !seen.insert(protocol) {
+            return;
+        }
+        let Some(info) = self.catalog.protocols.get(&protocol).cloned() else {
+            return;
+        };
+        let mut substitution = FxHashMap::default();
+        substitution.insert(protocol, ty.clone());
+        for assoc in info.assoc.values() {
+            substitution.insert(
+                *assoc,
+                Ty::Proj(Box::new(ty.clone()), protocol, *assoc),
+            );
+        }
+        for predicate in info.predicates {
+            let predicate =
+                predicate.substitute(&substitution, &Default::default(), &Default::default());
+            if !out.contains(&predicate) {
+                out.push(predicate);
+            }
+        }
+        for super_protocol in info.supers {
+            self.protocol_refinement_predicates(super_protocol, ty.clone(), seen, out);
         }
     }
 
@@ -1182,8 +1507,9 @@ impl<'a> Checker<'a> {
         self.eff_stack.push(group_eff);
         self.ret_stack.push(group_ret);
         self.self_types.push(work.self_ty.clone());
+        let extend_wanted_start = self.wanteds.len();
 
-        let mut outputs: Vec<(Symbol, Ty, Vec<SchemeParam>)> = vec![];
+        let mut outputs: Vec<(Symbol, Ty, DeclaredSchemeContext)> = vec![];
         // Associated types without a declared binding are inferred from
         // the member bodies: remember the fresh variables so the solved
         // bindings can be written back into the conformance row (the
@@ -1196,7 +1522,8 @@ impl<'a> Checker<'a> {
             let Ok(method) = func.name.symbol() else {
                 continue;
             };
-            let declared = self.declared_scheme_params(&func.generics);
+            self.register_func_bounds(func);
+            let declared = self.declared_scheme_context(&func.generics, func.where_clause.as_ref());
             let ty = self.with_binder(method, |this| this.infer_func(func));
 
             // Witness ~ requirement (substituting Self and the conformance's
@@ -1244,11 +1571,40 @@ impl<'a> Checker<'a> {
                     EffTail::Var(self.store.fresh_eff(self.level, member.id)),
                 );
                 let expected = requirement.sig.substitute(&tys, &effs, &Default::default());
-                self.emit_eq(expected, ty.clone(), member.id, CtReason::Annotation);
+                let wanted = Constraint::Eq(
+                    expected,
+                    ty.clone(),
+                    CtOrigin::new(member.id, CtReason::Annotation),
+                );
+                let givens: Vec<Predicate> = requirement
+                    .predicates
+                    .iter()
+                    .map(|predicate| predicate.substitute(&tys, &effs, &Default::default()))
+                    .collect();
+                if givens.is_empty() {
+                    self.wanteds.push(wanted);
+                } else {
+                    self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                        level: self.level,
+                        givens,
+                        wanteds: vec![wanted],
+                    })));
+                }
                 break;
             }
 
             outputs.push((method, ty, declared));
+        }
+
+        if !work.context.is_empty() {
+            let wanteds = self.wanteds.split_off(extend_wanted_start);
+            if !wanteds.is_empty() {
+                self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                    level: self.level,
+                    givens: work.context.clone(),
+                    wanteds,
+                })));
+            }
         }
 
         self.self_types.pop();
@@ -1263,7 +1619,10 @@ impl<'a> Checker<'a> {
             let zonked = self.store.zonk_ty(&ty);
             let mut scheme = Scheme::mono(zonked);
             // The witness's own generics quantify its scheme.
-            scheme.params = declared;
+            scheme.params = declared.params.clone();
+            scheme.predicates = declared.predicates.clone();
+            self.errors
+                .extend(Self::ambiguous_declared_predicate_errors(&scheme, &declared));
             self.schemes.insert(symbol, scheme);
         }
         // Write the solved associated-type bindings back into the row.
@@ -1343,6 +1702,7 @@ impl<'a> Checker<'a> {
             member_resolutions: &mut self.member_resolutions,
             level: self.level,
             defaulting,
+            givens: vec![],
             derived_seen: Default::default(),
         };
         solver.solve(wanteds)
@@ -1371,7 +1731,6 @@ impl<'a> Checker<'a> {
                     ty,
                     protocol,
                     origin,
-                    ..
                 } => {
                     let rendered = self.store.render(&ty);
                     self.errors.push((
@@ -1418,8 +1777,8 @@ impl<'a> Checker<'a> {
         self.level = GROUP_LEVEL;
         debug_assert!(self.wanteds.is_empty());
 
-        // (symbol, type, passes value restriction, was annotated, declared generics)
-        let mut outputs: Vec<(Symbol, Ty, bool, bool, Vec<SchemeParam>)> = vec![];
+        // (symbol, type, passes value restriction, was annotated, declared generics/predicates)
+        let mut outputs: Vec<(Symbol, Ty, bool, bool, DeclaredSchemeContext)> = vec![];
         // Binders with a closed effect annotation (`func f() 'a -> ()`),
         // checked as an exact upper bound after the solve.
         let mut closed_annotations: Vec<(Symbol, &'a Func)> = vec![];
@@ -1476,16 +1835,14 @@ impl<'a> Checker<'a> {
                 }
                 // Value restriction (Wright 1995): only syntactic values of
                 // unmutated binders generalize.
-                let is_value = rhs
-                    .map(|rhs| rhs.kind.is_syntactic_value())
-                    .unwrap_or(true);
+                let is_value = rhs.map(|rhs| rhs.kind.is_syntactic_value()).unwrap_or(true);
                 let passes = is_value && !self.resolved.mutated_symbols.contains(binder);
                 let declared = match rhs {
                     Some(Expr {
                         kind: ExprKind::Func(func),
                         ..
-                    }) => self.declared_scheme_params(&func.generics),
-                    _ => vec![],
+                    }) => self.declared_scheme_context(&func.generics, func.where_clause.as_ref()),
+                    _ => DeclaredSchemeContext::default(),
                 };
                 if let Some(Expr {
                     kind: ExprKind::Func(func),
@@ -1506,14 +1863,19 @@ impl<'a> Checker<'a> {
         }
 
         for (self_ty, members) in member_queue {
+            let nominal_givens = self.nominal_predicates_for(&self_ty);
+            let nominal_wanted_start = self.wanteds.len();
             self.self_types.push(self_ty);
             for (symbol, work) in members {
                 // A method's own declared generics quantify its scheme
                 // (instantiated fresh at each call site, like any other
                 // polymorphic binder).
                 let declared = match &work {
-                    MemberWork::Method(func) => self.declared_scheme_params(&func.generics),
-                    MemberWork::Init { .. } => vec![],
+                    MemberWork::Method(func) => {
+                        self.register_func_bounds(func);
+                        self.declared_scheme_context(&func.generics, func.where_clause.as_ref())
+                    }
+                    MemberWork::Init { .. } => DeclaredSchemeContext::default(),
                 };
                 let ty = self.with_binder(symbol, |this| match work {
                     MemberWork::Method(func) => this.infer_func(func),
@@ -1522,9 +1884,24 @@ impl<'a> Checker<'a> {
                     }
                 });
                 let skeleton = self.mono[&symbol].clone();
-                self.emit_eq(skeleton.clone(), ty, NodeID::SYNTHESIZED, CtReason::Recursion);
+                self.emit_eq(
+                    skeleton.clone(),
+                    ty,
+                    NodeID::SYNTHESIZED,
+                    CtReason::Recursion,
+                );
                 // Member bodies are function literals: always values.
                 outputs.push((symbol, skeleton, true, false, declared));
+            }
+            if !nominal_givens.is_empty() {
+                let wanteds = self.wanteds.split_off(nominal_wanted_start);
+                if !wanteds.is_empty() {
+                    self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                        level: self.level,
+                        givens: nominal_givens,
+                        wanteds,
+                    })));
+                }
             }
             self.self_types.pop();
         }
@@ -1537,7 +1914,7 @@ impl<'a> Checker<'a> {
 
         // Closed effect annotations are exact upper bounds on the inferred
         // row, checked at the declaration site so arrow rows stay open
-        // (deviation from Koka's open-coercion elaboration, POPL 2017 §3).
+        // (a deliberate deviation from Koka's row-typed effect system).
         for (binder, func) in closed_annotations {
             let declared: Vec<Symbol> = func
                 .effects
@@ -1564,17 +1941,17 @@ impl<'a> Checker<'a> {
         // whole group monomorphic.
         let generalizable = outputs.iter().all(|(_, _, passes, ..)| *passes);
 
-        // Residual variable-headed Conforms become bounds on the parameters
-        // about to be quantified (THIH §11.6.2 context splitting); in a
-        // monomorphic group they are inference failures.
-        let mut var_bounds: FxHashMap<u32, Vec<Bound>> = FxHashMap::default();
+        // Residual variable-headed predicates become the qualified context
+        // on the parameters about to be quantified: THIH section 11.6's
+        // retained predicates, generalized from class predicates to Talk's
+        // unified predicate language.
+        let mut var_predicates: FxHashMap<u32, Vec<Predicate>> = FxHashMap::default();
         let mut held_members: Vec<(Ty, crate::label::Label, Ty, CtOrigin)> = vec![];
         for residual in residuals {
             match &residual {
                 Constraint::Conforms {
                     ty,
                     protocol,
-                    assoc,
                     ..
                 } => {
                     let Ty::Var(v) = self.store.shallow(ty) else {
@@ -1587,17 +1964,14 @@ impl<'a> Checker<'a> {
                         self.deferred.push(residual);
                         continue;
                     }
-                    let assoc: Vec<(Symbol, Ty)> = assoc
-                        .iter()
-                        .map(|(s, t)| (*s, self.store.zonk_ty(t)))
-                        .collect();
-                    let bound = Bound {
+                    let receiver = self.store.zonk_ty(ty);
+                    let predicates = var_predicates.entry(root).or_default();
+                    let conformance = Predicate::Conforms {
+                        ty: receiver.clone(),
                         protocol: *protocol,
-                        assoc,
                     };
-                    let bounds = var_bounds.entry(root).or_default();
-                    if !bounds.contains(&bound) {
-                        bounds.push(bound);
+                    if !predicates.contains(&conformance) {
+                        predicates.push(conformance);
                     }
                 }
                 Constraint::HasMember {
@@ -1618,12 +1992,37 @@ impl<'a> Checker<'a> {
                         _ => false,
                     };
                     if generalizable && group_owned {
-                        held_members.push((receiver.clone(), label.clone(), member.clone(), *origin));
+                        held_members.push((
+                            receiver.clone(),
+                            label.clone(),
+                            member.clone(),
+                            *origin,
+                        ));
                     } else {
                         self.deferred.push(residual)
                     }
                 }
-                Constraint::Eq(..) => self.deferred.push(residual),
+                Constraint::Eq(a, b, _) => {
+                    let mut roots = vec![];
+                    self.group_owned_roots(a, &mut roots);
+                    self.group_owned_roots(b, &mut roots);
+                    roots.sort_unstable();
+                    roots.dedup();
+                    if generalizable
+                        && let Some(root) = roots.first().copied()
+                    {
+                        let predicate = Predicate::TypeEq(
+                            self.store.zonk_ty(a),
+                            self.store.zonk_ty(b),
+                        );
+                        let predicates = var_predicates.entry(root).or_default();
+                        if !predicates.contains(&predicate) {
+                            predicates.push(predicate);
+                        }
+                    } else {
+                        self.deferred.push(residual)
+                    }
+                }
                 _ => {}
             }
         }
@@ -1634,14 +2033,19 @@ impl<'a> Checker<'a> {
                 self.symbols,
                 self.module_id,
                 OUTER_LEVEL,
-                var_bounds,
+                var_predicates,
             );
             for (symbol, ty, _, annotated, declared) in &outputs {
-                let scheme = if *annotated {
+                let mut scheme = if *annotated {
                     Scheme::mono(generalizer.store.zonk_ty(ty))
                 } else {
-                    generalizer.generalize(ty, declared)
+                    generalizer.generalize(ty, &declared.params)
                 };
+                let mut predicates = declared.predicates.clone();
+                predicates.extend(scheme.predicates);
+                scheme.predicates = predicates;
+                self.errors
+                    .extend(Self::ambiguous_declared_predicate_errors(&scheme, declared));
                 self.schemes.insert(*symbol, scheme);
             }
             // Held member uses: quantification turned their receivers'
@@ -1661,15 +2065,15 @@ impl<'a> Checker<'a> {
                             || ty_mentions_param(&member, p.symbol)
                     });
                     if mentions {
-                        let constraint = crate::types::ty::MemberConstraint {
+                        let predicate = Predicate::HasMember {
                             receiver: receiver.clone(),
                             label: label.clone(),
                             member: member.clone(),
                         };
                         if let Some(scheme) = self.schemes.get_mut(symbol)
-                            && !scheme.member_constraints.contains(&constraint)
+                            && !scheme.predicates.contains(&predicate)
                         {
-                            scheme.member_constraints.push(constraint);
+                            scheme.predicates.push(predicate);
                             attached = true;
                         }
                     }
@@ -1695,23 +2099,79 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn declared_scheme_params(&mut self, generics: &[GenericDecl]) -> Vec<SchemeParam> {
-        generics
-            .iter()
-            .filter_map(|generic| {
-                let symbol = generic.name.symbol().ok()?;
-                let bounds = generic
-                    .conformances
-                    .iter()
-                    .filter_map(|c| c.symbol().ok())
-                    .map(|protocol| Bound {
-                        protocol,
-                        assoc: vec![],
-                    })
-                    .collect();
-                Some(SchemeParam { symbol, bounds })
-            })
-            .collect()
+    fn declared_scheme_context(
+        &mut self,
+        generics: &[GenericDecl],
+        where_clause: Option<&WhereClause>,
+    ) -> DeclaredSchemeContext {
+        let mut context = DeclaredSchemeContext::default();
+        for generic in generics {
+            let Ok(symbol) = generic.name.symbol() else {
+                continue;
+            };
+            context.params.push(SchemeParam { symbol });
+            context.param_nodes.push((symbol, generic.id));
+        }
+        context.predicates = self.declared_predicates(generics, where_clause);
+        context
+    }
+
+    fn ambiguous_declared_predicate_errors(
+        scheme: &Scheme,
+        declared: &DeclaredSchemeContext,
+    ) -> Vec<(TypeError, NodeID)> {
+        if declared.predicates.is_empty() || declared.params.is_empty() {
+            return vec![];
+        }
+
+        let declared_symbols: FxHashSet<Symbol> =
+            declared.params.iter().map(|param| param.symbol).collect();
+        let mut constrained = FxHashSet::default();
+        for predicate in &declared.predicates {
+            collect_predicate_params(predicate, &declared_symbols, &mut constrained);
+        }
+
+        let mut determined = FxHashSet::default();
+        collect_ty_params(&scheme.ty, &declared_symbols, &mut determined);
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for predicate in &declared.predicates {
+                let Predicate::TypeEq(lhs, rhs) = predicate else {
+                    continue;
+                };
+                let mut lhs_params = FxHashSet::default();
+                let mut rhs_params = FxHashSet::default();
+                collect_ty_params(lhs, &declared_symbols, &mut lhs_params);
+                collect_ty_params(rhs, &declared_symbols, &mut rhs_params);
+                let lhs_known = lhs_params.iter().any(|param| determined.contains(param));
+                let rhs_known = rhs_params.iter().any(|param| determined.contains(param));
+                if lhs_known {
+                    for param in rhs_params {
+                        changed |= determined.insert(param);
+                    }
+                }
+                if rhs_known {
+                    for param in lhs_params {
+                        changed |= determined.insert(param);
+                    }
+                }
+            }
+        }
+
+        let mut errors = vec![];
+        for (symbol, node) in &declared.param_nodes {
+            if constrained.contains(symbol) && !determined.contains(symbol) {
+                errors.push((
+                    TypeError::AmbiguousTypeParameter {
+                        param: symbol.to_string(),
+                    },
+                    *node,
+                ));
+            }
+        }
+        errors
     }
 
     /// Create member skeletons for a struct's methods and initializers and
@@ -1726,7 +2186,12 @@ impl<'a> Checker<'a> {
             .structs
             .get(&symbol)
             .map(|info| info.params.clone())
-            .or_else(|| self.catalog.enums.get(&symbol).map(|info| info.params.clone()))
+            .or_else(|| {
+                self.catalog
+                    .enums
+                    .get(&symbol)
+                    .map(|info| info.params.clone())
+            })
             .unwrap_or_default();
         let self_ty = Ty::Nominal(symbol, params.iter().map(|p| Ty::Param(*p)).collect());
 
@@ -1770,30 +2235,31 @@ impl<'a> Checker<'a> {
         // a later group solved.
         let mut schemes = FxHashMap::default();
         for (symbol, mut scheme) in std::mem::take(&mut self.schemes) {
-            let ty = self.store.zonk_ty(&scheme.ty);
-            for constraint in &mut scheme.member_constraints {
-                constraint.receiver = self.store.zonk_ty(&constraint.receiver);
-                constraint.member = self.store.zonk_ty(&constraint.member);
-            }
+            let ty = self.final_ty(&scheme.ty);
+            scheme.predicates = scheme
+                .predicates
+                .into_iter()
+                .map(|predicate| self.zonk_predicate(predicate))
+                .collect();
             schemes.insert(symbol, Scheme { ty, ..scheme });
         }
         let mut node_types = FxHashMap::default();
         for (node, ty) in std::mem::take(&mut self.node_types) {
-            node_types.insert(node, self.store.zonk_ty(&ty));
+            node_types.insert(node, self.final_ty(&ty));
         }
         let mut instantiations = FxHashMap::default();
         for (node, subst) in std::mem::take(&mut self.instantiations) {
-            let subst = subst
-                .into_iter()
-                .map(|(sym, ty)| (sym, self.store.zonk_ty(&ty)))
-                .collect();
-            instantiations.insert(node, subst);
+            let mut finalized = vec![];
+            for (sym, ty) in subst {
+                finalized.push((sym, self.final_ty(&ty)));
+            }
+            instantiations.insert(node, finalized);
         }
         // Handler payload types pick up everything the perform sites
         // taught their (possibly unannotated) effect parameters.
         let mut handler_payload_tys = FxHashMap::default();
         for (handler, tys) in std::mem::take(&mut self.handler_payload_tys) {
-            let tys = tys.iter().map(|ty| self.store.zonk_ty(ty)).collect();
+            let tys = tys.iter().map(|ty| self.final_ty(ty)).collect();
             handler_payload_tys.insert(handler, tys);
         }
 
@@ -1806,9 +2272,7 @@ impl<'a> Checker<'a> {
                     .into_iter()
                     .map(|(kind, id)| (kind, id, Severity::Warn)),
             )
-            .map(|(kind, id, severity)| {
-                AnyDiagnostic::Types(Diagnostic { id, severity, kind })
-            })
+            .map(|(kind, id, severity)| AnyDiagnostic::Types(Diagnostic { id, severity, kind }))
             .collect();
 
         (
@@ -2121,18 +2585,17 @@ impl<'a> Checker<'a> {
                         .extend(sig.generics.iter().map(|g| (*g, tys[g].clone())));
                 }
                 if type_args.len() > sig.generics.len() {
-                    self.unsupported(
-                        expr.id,
-                        "more type arguments than the effect declares",
-                    );
+                    self.unsupported(expr.id, "more type arguments than the effect declares");
                 }
                 for (annotation, param) in type_args.iter().zip(&sig.generics) {
                     let annotated = self.lower_annotation(annotation);
-                    self.emit_eq(
-                        tys[param].clone(),
-                        annotated,
-                        expr.id,
-                        CtReason::Annotation,
+                    self.emit_eq(tys[param].clone(), annotated, expr.id, CtReason::Annotation);
+                }
+                for predicate in &sig.predicates {
+                    self.wanteds.push(
+                        predicate
+                            .substitute(&tys, &Default::default(), &Default::default())
+                            .into_constraint(CtOrigin::new(expr.id, CtReason::Apply)),
                     );
                 }
                 let instantiate =
@@ -2151,9 +2614,9 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 // A perform the resolver routed to a lexical handler is
-                // discharged right there — it never escapes into the
-                // function's latent row (handler discharge in the row
-                // reading, Leijen POPL 2017 §3). The discharge is still
+                // discharged right there: it never escapes into the
+                // function's latent row (handler discharge in the row-typed
+                // algebraic-effects reading). The discharge is still
                 // recorded in the capability tables: the lowerer needs to
                 // know which functions can abort, and the row no longer
                 // says (effects as capabilities — Brachthäuser et al.,
@@ -2161,7 +2624,10 @@ impl<'a> Checker<'a> {
                 match self.resolved.effect_handlers.get(&expr.id) {
                     Some(&handler) => {
                         if let Some(&binder) = self.binder_stack.last() {
-                            self.performs_into.entry(binder).or_default().insert(handler);
+                            self.performs_into
+                                .entry(binder)
+                                .or_default()
+                                .insert(handler);
                         }
                     }
                     None => {
@@ -2318,6 +2784,7 @@ impl<'a> Checker<'a> {
             self.emit_eq(target.clone(), ty, annotation.id, CtReason::Annotation);
         }
         let self_ty = Ty::Nominal(symbol, theta.clone());
+        self.emit_nominal_well_formedness(symbol, &theta, expr.id);
 
         let arg_count = args.len() + usize::from(trailing_block.is_some());
         let init = info
@@ -2334,9 +2801,11 @@ impl<'a> Checker<'a> {
             .insert(callee.id, MemberResolution::Direct(init));
 
         let substitution = param_subst(&info.params, &theta);
-        let signature = self
-            .lookup_symbol_ty(init, expr.id)
-            .substitute(&substitution, &Default::default(), &Default::default());
+        let signature = self.lookup_symbol_ty(init, expr.id).substitute(
+            &substitution,
+            &Default::default(),
+            &Default::default(),
+        );
 
         match self.store.shallow(&signature) {
             Ty::Func(params, _ret, eff) => {
@@ -2389,11 +2858,7 @@ impl<'a> Checker<'a> {
                 if let Some(block) = trailing_block {
                     arg_tys.push(self.infer_closure_block(block));
                 }
-                let expected = Ty::Func(
-                    arg_tys,
-                    Box::new(self_ty.clone()),
-                    self.ambient_eff(),
-                );
+                let expected = Ty::Func(arg_tys, Box::new(self_ty.clone()), self.ambient_eff());
                 self.emit_eq(signature, expected, expr.id, CtReason::Apply);
                 self_ty
             }
@@ -2434,6 +2899,7 @@ impl<'a> Checker<'a> {
                 variant
                     .result
                     .substitute(&substitution, &Default::default(), &Default::default());
+            self.emit_nominal_well_formedness(symbol, &theta, node);
             if variant.payloads.is_empty() {
                 return Some(result);
             }
@@ -2460,11 +2926,10 @@ impl<'a> Checker<'a> {
                 .unwrap_or_default();
 
             let self_var = Ty::Var(self.store.fresh_ty(self.level, node));
-            let assoc: Vec<(Symbol, Ty)> = assoc_symbols
+            let mut tys: FxHashMap<Symbol, Ty> = assoc_symbols
                 .iter()
-                .map(|a| (*a, Ty::Var(self.store.fresh_ty(self.level, node))))
+                .map(|a| (*a, Ty::Proj(Box::new(self_var.clone()), owner, *a)))
                 .collect();
-            let mut tys: FxHashMap<Symbol, Ty> = assoc.iter().cloned().collect();
             tys.insert(owner, self_var.clone());
             let mut effs = FxHashMap::default();
             effs.insert(
@@ -2476,7 +2941,6 @@ impl<'a> Checker<'a> {
             self.wanteds.push(Constraint::Conforms {
                 ty: self_var,
                 protocol: owner,
-                assoc,
                 origin: CtOrigin::new(node, CtReason::Apply),
             });
             self.member_resolutions.insert(
@@ -2501,9 +2965,11 @@ impl<'a> Checker<'a> {
                 self.record_instantiation(node, &info.params, &theta);
             }
             let substitution = param_subst(&info.params, &theta);
-            let signature = self
-                .lookup_symbol_ty(method, node)
-                .substitute(&substitution, &Default::default(), &Default::default());
+            let signature = self.lookup_symbol_ty(method, node).substitute(
+                &substitution,
+                &Default::default(),
+                &Default::default(),
+            );
             self.member_resolutions
                 .insert(node, MemberResolution::Direct(method));
             return Some(signature);
@@ -2517,7 +2983,32 @@ impl<'a> Checker<'a> {
     /// a fresh open ambient effect row (Koka-style), body joined into the
     /// return type.
     fn infer_func(&mut self, func: &Func) -> Ty {
-        self.infer_callable(&func.params, func.ret.as_ref(), &func.body, func.id)
+        self.register_func_bounds(func);
+        self.with_declared_givens(&func.generics, func.where_clause.as_ref(), |this| {
+            this.infer_callable(&func.params, func.ret.as_ref(), &func.body, func.id)
+        })
+    }
+
+    fn with_declared_givens<T>(
+        &mut self,
+        generics: &[GenericDecl],
+        where_clause: Option<&WhereClause>,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let givens = self.declared_predicates(generics, where_clause);
+        let start = self.wanteds.len();
+        let result = f(self);
+        if !givens.is_empty() {
+            let wanteds = self.wanteds.split_off(start);
+            if !wanteds.is_empty() {
+                self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                    level: self.level,
+                    givens,
+                    wanteds,
+                })));
+            }
+        }
+        result
     }
 
     fn infer_callable(
@@ -2567,6 +3058,19 @@ impl<'a> Checker<'a> {
     /// are pushed into the body (the bidirectional payoff: unannotated
     /// closure params get their types from context).
     fn infer_func_against(
+        &mut self,
+        func: &Func,
+        expected_params: &[Ty],
+        expected_ret: &Ty,
+        expected_eff: &EffectRow,
+    ) -> Ty {
+        self.register_func_bounds(func);
+        self.with_declared_givens(&func.generics, func.where_clause.as_ref(), |this| {
+            this.infer_func_against_inner(func, expected_params, expected_ret, expected_eff)
+        })
+    }
+
+    fn infer_func_against_inner(
         &mut self,
         func: &Func,
         expected_params: &[Ty],
@@ -2796,7 +3300,10 @@ impl<'a> Checker<'a> {
                     .ok()
                     .and_then(|symbol| self.catalog.effects.get(&symbol))
                     .cloned();
-                let params = sig.as_ref().map(|sig| sig.params.clone()).unwrap_or_default();
+                let params = sig
+                    .as_ref()
+                    .map(|sig| sig.params.clone())
+                    .unwrap_or_default();
                 // A handler block either ignores every payload (no
                 // arguments) or names all of them.
                 if !body.args.is_empty() && body.args.len() != params.len() {
@@ -2820,7 +3327,10 @@ impl<'a> Checker<'a> {
                 if let Some(&handler) = self.resolved.effect_handler_definitions.get(&stmt.id) {
                     self.handler_payload_tys.insert(handler, params.clone());
                     if let Some(&binder) = self.binder_stack.last() {
-                        self.handlers_defined.entry(binder).or_default().insert(handler);
+                        self.handlers_defined
+                            .entry(binder)
+                            .or_default()
+                            .insert(handler);
                     }
                 }
                 // `continue v` inside this block resumes the perform: v
@@ -3159,39 +3669,20 @@ impl<'a> Checker<'a> {
             rows.insert(*param, crate::types::ty::RowTail::Var(var));
         }
 
-        // Each bound becomes a wanted Conforms on the fresh variable, with
-        // the bound's associated bindings substituted (qualified-type
-        // instantiation: Jones, ESOP 1992).
-        for param in &scheme.params {
-            let fresh = tys[&param.symbol].clone();
-            for bound in &param.bounds {
-                let assoc = bound
-                    .assoc
-                    .iter()
-                    .map(|(s, t)| (*s, t.substitute(&tys, &effs, &rows)))
-                    .collect();
-                self.wanteds.push(Constraint::Conforms {
-                    ty: fresh.clone(),
-                    protocol: bound.protocol,
-                    assoc,
-                    origin: CtOrigin::new(node, CtReason::Apply),
-                });
-            }
+        // The scheme's qualified context becomes fresh wanteds under the
+        // instantiation substitution (Jones's qualified-type instantiation).
+        // This subsumes inline bounds and scheme-carried HasMember facts.
+        for predicate in &scheme.predicates {
+            self.wanteds.push(
+                predicate
+                    .substitute(&tys, &effs, &rows)
+                    .into_constraint(CtOrigin::new(node, CtReason::Apply)),
+            );
         }
         self.instantiations
             .entry(node)
             .or_default()
             .extend(recorded);
-        // Scheme-carried member uses become fresh wanteds, discharged
-        // against this call's concrete receiver.
-        for constraint in &scheme.member_constraints {
-            self.wanteds.push(Constraint::HasMember {
-                receiver: constraint.receiver.substitute(&tys, &effs, &rows),
-                label: constraint.label.clone(),
-                member: constraint.member.substitute(&tys, &effs, &rows),
-                origin: CtOrigin::new(node, CtReason::Apply),
-            });
-        }
         scheme.ty.substitute(&tys, &effs, &rows)
     }
 
@@ -3304,15 +3795,9 @@ impl<'a> Checker<'a> {
             tys.extend(alias.params.iter().copied().zip(args));
         }
         let mut effs = FxHashMap::default();
-        effs.insert(
-            symbol,
-            EffTail::Var(self.store.fresh_eff(self.level, node)),
-        );
+        effs.insert(symbol, EffTail::Var(self.store.fresh_eff(self.level, node)));
         let mut rows = FxHashMap::default();
-        rows.insert(
-            symbol,
-            RowTail::Var(self.store.fresh_row(self.level, node)),
-        );
+        rows.insert(symbol, RowTail::Var(self.store.fresh_row(self.level, node)));
         alias.ty.substitute(&tys, &effs, &rows)
     }
 
@@ -3336,13 +3821,8 @@ impl<'a> Checker<'a> {
             Ty::Error => Ty::Error,
             other => {
                 let receiver = self.store.render(&other);
-                self.errors.push((
-                    TypeError::UnknownMember {
-                        receiver,
-                        label,
-                    },
-                    node,
-                ));
+                self.errors
+                    .push((TypeError::UnknownMember { receiver, label }, node));
                 Ty::Error
             }
         }
@@ -3447,9 +3927,50 @@ impl<'a> Checker<'a> {
         Ty::Error
     }
 
+    fn nominal_predicates_for(&self, ty: &Ty) -> Vec<Predicate> {
+        let Ty::Nominal(symbol, args) = ty else {
+            return vec![];
+        };
+        let (params, predicates) = self
+            .catalog
+            .structs
+            .get(symbol)
+            .map(|info| (info.params.clone(), info.predicates.clone()))
+            .or_else(|| {
+                self.catalog
+                    .enums
+                    .get(symbol)
+                    .map(|info| (info.params.clone(), info.predicates.clone()))
+            })
+            .unwrap_or_default();
+        let substitution = param_subst(&params, args);
+        predicates
+            .into_iter()
+            .map(|predicate| predicate.substitute(&substitution, &Default::default(), &Default::default()))
+            .collect()
+    }
+
+    fn emit_nominal_well_formedness(&mut self, symbol: Symbol, args: &[Ty], node: NodeID) {
+        if !self.enforce_well_formedness {
+            return;
+        }
+        for predicate in self.nominal_predicates_for(&Ty::Nominal(symbol, args.to_vec())) {
+            self.wanteds.push(predicate.into_constraint(CtOrigin::new(
+                node,
+                CtReason::Annotation,
+            )));
+        }
+    }
+
     fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
         match &annotation.kind {
             TypeAnnotationKind::Nominal { name, generics, .. } => {
+                if name.name_str() == "Self"
+                    && generics.is_empty()
+                    && let Some(self_ty) = self.self_types.last()
+                {
+                    return self_ty.clone();
+                }
                 let Ok(symbol) = name.symbol() else {
                     return Ty::Error;
                 };
@@ -3468,7 +3989,10 @@ impl<'a> Checker<'a> {
                 let args: Vec<Ty> = generics.iter().map(|g| self.lower_annotation(g)).collect();
                 match symbol {
                     Symbol::TypeParameter(_) | Symbol::AssociatedType(_) => Ty::Param(symbol),
-                    _ => Ty::Nominal(symbol, args),
+                    _ => {
+                        self.emit_nominal_well_formedness(symbol, &args, annotation.id);
+                        Ty::Nominal(symbol, args)
+                    }
                 }
             }
             TypeAnnotationKind::Func { params, returns } => {
@@ -3531,6 +4055,112 @@ impl<'a> Checker<'a> {
             .last()
             .cloned()
             .unwrap_or_else(EffectRow::pure)
+    }
+
+    fn group_owned_roots(&mut self, ty: &Ty, roots: &mut Vec<u32>) {
+        match self.store.shallow(ty) {
+            Ty::Var(v) => {
+                let root = self.store.find(v.0);
+                if self.store.level(root) > OUTER_LEVEL {
+                    roots.push(root);
+                }
+            }
+            Ty::Nominal(_, args) | Ty::Tuple(args) => {
+                for arg in args {
+                    self.group_owned_roots(&arg, roots);
+                }
+            }
+            Ty::Func(params, ret, _) => {
+                for param in params {
+                    self.group_owned_roots(&param, roots);
+                }
+                self.group_owned_roots(&ret, roots);
+            }
+            Ty::Record(row) => {
+                for (_, field) in row.fields {
+                    self.group_owned_roots(&field, roots);
+                }
+            }
+            Ty::Proj(base, _, _) => self.group_owned_roots(&base, roots),
+            Ty::Param(_) | Ty::Error => {}
+        }
+    }
+
+    fn final_ty(&mut self, ty: &Ty) -> Ty {
+        let zonked = self.store.zonk_ty(ty);
+        self.normalize_deep(zonked)
+    }
+
+    fn normalize_deep(&mut self, ty: Ty) -> Ty {
+        let normalized = normalize_ty(&mut self.store, &self.catalog, &ty);
+        match normalized {
+            Ty::Nominal(symbol, args) => Ty::Nominal(
+                symbol,
+                args.into_iter().map(|arg| self.normalize_deep(arg)).collect(),
+            ),
+            Ty::Func(params, ret, eff) => Ty::Func(
+                params
+                    .into_iter()
+                    .map(|param| self.normalize_deep(param))
+                    .collect(),
+                Box::new(self.normalize_deep(*ret)),
+                eff,
+            ),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| self.normalize_deep(item))
+                    .collect(),
+            ),
+            Ty::Record(row) => Ty::Record(self.final_row(row)),
+            Ty::Proj(base, protocol, assoc) => {
+                let base = self.normalize_deep(*base);
+                normalize_ty(
+                    &mut self.store,
+                    &self.catalog,
+                    &Ty::Proj(Box::new(base), protocol, assoc),
+                )
+            }
+            other => other,
+        }
+    }
+
+    fn final_row(&mut self, row: Row) -> Row {
+        Row {
+            fields: row
+                .fields
+                .into_iter()
+                .map(|(label, ty)| (label, self.normalize_deep(ty)))
+                .collect(),
+            tail: row.tail,
+        }
+    }
+
+    fn zonk_predicate(&mut self, predicate: Predicate) -> Predicate {
+        match predicate {
+            Predicate::TypeEq(a, b) => Predicate::TypeEq(self.final_ty(&a), self.final_ty(&b)),
+            Predicate::EffectEq(a, b) => {
+                Predicate::EffectEq(self.store.zonk_eff(&a), self.store.zonk_eff(&b))
+            }
+            Predicate::RowEq(a, b) => {
+                let a = self.store.zonk_row(&a);
+                let b = self.store.zonk_row(&b);
+                Predicate::RowEq(self.final_row(a), self.final_row(b))
+            }
+            Predicate::Conforms { ty, protocol } => Predicate::Conforms {
+                ty: self.final_ty(&ty),
+                protocol,
+            },
+            Predicate::HasMember {
+                receiver,
+                label,
+                member,
+            } => Predicate::HasMember {
+                receiver: self.final_ty(&receiver),
+                label,
+                member: self.final_ty(&member),
+            },
+        }
     }
 
     fn emit_eq(&mut self, expected: Ty, found: Ty, node: NodeID, reason: CtReason) {
@@ -3663,6 +4293,118 @@ fn collect_assoc_bindings(pattern: &Ty, witness: &Ty, bindings: &mut FxHashMap<S
             }
         }
         _ => {}
+    }
+}
+
+fn self_context_param(ty: &Ty) -> Option<Symbol> {
+    match ty {
+        Ty::Param(param) => Some(*param),
+        _ => None,
+    }
+}
+
+fn predicate_mentions_context(
+    predicate: &Predicate,
+    universe: &FxHashSet<Symbol>,
+    self_ty: Option<&Ty>,
+) -> bool {
+    let mut found = FxHashSet::default();
+    collect_predicate_params(predicate, universe, &mut found);
+    !found.is_empty()
+        || self_ty.is_some_and(|self_ty| match predicate {
+            Predicate::TypeEq(lhs, rhs) => {
+                ty_mentions_self(lhs, self_ty) || ty_mentions_self(rhs, self_ty)
+            }
+            Predicate::Conforms { ty, .. } => ty_mentions_self(ty, self_ty),
+            Predicate::HasMember {
+                receiver, member, ..
+            } => ty_mentions_self(receiver, self_ty) || ty_mentions_self(member, self_ty),
+            Predicate::RowEq(lhs, rhs) => {
+                row_mentions_self(lhs, self_ty) || row_mentions_self(rhs, self_ty)
+            }
+            Predicate::EffectEq(..) => false,
+        })
+}
+
+fn row_mentions_self(row: &Row, self_ty: &Ty) -> bool {
+    row.fields
+        .iter()
+        .any(|(_, field)| ty_mentions_self(field, self_ty))
+}
+
+fn ty_mentions_self(ty: &Ty, self_ty: &Ty) -> bool {
+    if ty == self_ty {
+        return true;
+    }
+    match ty {
+        Ty::Nominal(_, args) | Ty::Tuple(args) => args.iter().any(|arg| ty_mentions_self(arg, self_ty)),
+        Ty::Func(params, ret, _) => {
+            params.iter().any(|param| ty_mentions_self(param, self_ty))
+                || ty_mentions_self(ret, self_ty)
+        }
+        Ty::Record(row) => row_mentions_self(row, self_ty),
+        Ty::Proj(base, ..) => ty_mentions_self(base, self_ty),
+        Ty::Var(_) | Ty::Param(_) | Ty::Error => false,
+    }
+}
+
+fn collect_predicate_params(
+    predicate: &Predicate,
+    universe: &FxHashSet<Symbol>,
+    out: &mut FxHashSet<Symbol>,
+) {
+    match predicate {
+        Predicate::TypeEq(lhs, rhs) => {
+            collect_ty_params(lhs, universe, out);
+            collect_ty_params(rhs, universe, out);
+        }
+        Predicate::Conforms { ty, .. } => collect_ty_params(ty, universe, out),
+        Predicate::HasMember {
+            receiver, member, ..
+        } => {
+            collect_ty_params(receiver, universe, out);
+            collect_ty_params(member, universe, out);
+        }
+        Predicate::RowEq(lhs, rhs) => {
+            collect_row_params(lhs, universe, out);
+            collect_row_params(rhs, universe, out);
+        }
+        Predicate::EffectEq(..) => {}
+    }
+}
+
+fn collect_row_params(row: &Row, universe: &FxHashSet<Symbol>, out: &mut FxHashSet<Symbol>) {
+    for (_, field) in &row.fields {
+        collect_ty_params(field, universe, out);
+    }
+    if let Some(RowTail::Param(param)) = row.tail
+        && universe.contains(&param)
+    {
+        out.insert(param);
+    }
+}
+
+fn collect_ty_params(ty: &Ty, universe: &FxHashSet<Symbol>, out: &mut FxHashSet<Symbol>) {
+    match ty {
+        Ty::Param(param) => {
+            if universe.contains(param) {
+                out.insert(*param);
+            }
+        }
+        Ty::Var(_) | Ty::Error => {}
+        Ty::Nominal(_, args) | Ty::Tuple(args) => {
+            for arg in args {
+                collect_ty_params(arg, universe, out);
+            }
+        }
+        Ty::Func(params, ret, _) => {
+            for param in params {
+                collect_ty_params(param, universe, out);
+            }
+            collect_ty_params(ret, universe, out);
+        }
+        Ty::Record(row) => collect_row_params(row, universe, out),
+        Ty::Proj(base, ..) => collect_ty_params(base, universe, out),
     }
 }
 

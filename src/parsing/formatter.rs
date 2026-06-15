@@ -24,6 +24,7 @@ use crate::{
         record_field::{RecordField, RecordFieldTypeAnnotation},
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
+        where_clause::{WhereClause, WherePredicateKind},
     },
     node_meta::NodeMeta,
     node_meta_storage::NodeMetaStorage,
@@ -508,6 +509,7 @@ impl<'a> Formatter<'a> {
             DeclKind::Effect {
                 name,
                 generics,
+                where_clause,
                 params,
                 ret,
                 ..
@@ -525,7 +527,7 @@ impl<'a> Formatter<'a> {
                         )
                         + text(">")
                 };
-                text("effect '")
+                let result = text("effect '")
                     + self.format_name(name)
                     + generics_doc
                     + text("(")
@@ -535,15 +537,21 @@ impl<'a> Formatter<'a> {
                     )
                     + text(")")
                     + text(" -> ")
-                    + self.format_type_annotation(ret)
+                    + self.format_type_annotation(ret);
+                if let Some(where_clause) = where_clause {
+                    concat_space(result, self.format_where_clause(where_clause))
+                } else {
+                    result
+                }
             }
             DeclKind::Import(import) => self.format_import(import),
             DeclKind::Struct {
                 name,
                 generics,
+                where_clause,
                 body,
                 ..
-            } => self.format_struct(name, generics, body),
+            } => self.format_struct(name, generics, where_clause.as_ref(), body),
             DeclKind::Let {
                 lhs,
                 type_annotation,
@@ -552,10 +560,11 @@ impl<'a> Formatter<'a> {
             DeclKind::Protocol {
                 name,
                 generics,
+                where_clause,
                 body,
                 conformances,
                 ..
-            } => self.format_protocol(name, generics, conformances, body),
+            } => self.format_protocol(name, generics, conformances, where_clause.as_ref(), body),
             DeclKind::Init { name, params, body } => self.format_init(name, params, body),
             DeclKind::Property {
                 name,
@@ -570,21 +579,26 @@ impl<'a> Formatter<'a> {
                 default_value.as_ref(),
             ),
             DeclKind::Method { func, is_static } => self.format_method(func, *is_static),
-            DeclKind::Associated { generic } => self.format_associated(generic),
+            DeclKind::Associated {
+                generic,
+                where_clause,
+            } => self.format_associated(generic, where_clause.as_ref()),
             DeclKind::Func(func) => self.format_func(func),
             DeclKind::Extend {
                 name,
                 conformances,
                 generics,
+                where_clause,
                 body,
                 ..
-            } => self.format_extend(name, generics, conformances, body),
+            } => self.format_extend(name, generics, conformances, where_clause.as_ref(), body),
             DeclKind::Enum {
                 name,
                 generics,
+                where_clause,
                 body,
                 ..
-            } => self.format_enum_decl(name, generics, body),
+            } => self.format_enum_decl(name, generics, where_clause.as_ref(), body),
             DeclKind::EnumVariant(name, .., types) => self.format_enum_variant(name, types),
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
             DeclKind::MethodRequirement(sig) => self.format_func_signature(sig),
@@ -1250,7 +1264,13 @@ impl<'a> Formatter<'a> {
         join(vec![text("import"), symbols, text("from"), path], text(" "))
     }
 
-    fn format_struct(&self, name: &Name, generics: &[GenericDecl], body: &Body) -> Doc {
+    fn format_struct(
+        &self,
+        name: &Name,
+        generics: &[GenericDecl],
+        where_clause: Option<&WhereClause>,
+        body: &Body,
+    ) -> Doc {
         let mut result = concat_space(text("struct"), self.format_name(name));
 
         if !generics.is_empty() {
@@ -1268,6 +1288,10 @@ impl<'a> Formatter<'a> {
             );
         }
 
+        if let Some(where_clause) = where_clause {
+            result = concat_space(result, self.format_where_clause(where_clause));
+        }
+
         concat_space(result, self.format_body(body))
     }
 
@@ -1276,6 +1300,7 @@ impl<'a> Formatter<'a> {
         name: &Name,
         generics: &[GenericDecl],
         conformances: &[TypeAnnotation],
+        where_clause: Option<&WhereClause>,
         body: &Body,
     ) -> Doc {
         let mut result = concat_space(text("extend"), self.format_name(name));
@@ -1306,6 +1331,10 @@ impl<'a> Formatter<'a> {
             );
         }
 
+        if let Some(where_clause) = where_clause {
+            result = concat_space(result, self.format_where_clause(where_clause));
+        }
+
         concat_space(result, self.format_body(body))
     }
 
@@ -1314,6 +1343,7 @@ impl<'a> Formatter<'a> {
         name: &Name,
         generics: &[GenericDecl],
         conformances: &[TypeAnnotation],
+        where_clause: Option<&WhereClause>,
         body: &Body,
     ) -> Doc {
         let mut result = concat_space(text("protocol"), self.format_name(name));
@@ -1342,6 +1372,10 @@ impl<'a> Formatter<'a> {
                 result,
                 concat(text(": "), join(conformances_docs, text(", "))),
             );
+        }
+
+        if let Some(where_clause) = where_clause {
+            result = concat_space(result, self.format_where_clause(where_clause));
         }
 
         concat_space(result, self.format_body(body))
@@ -1552,6 +1586,10 @@ impl<'a> Formatter<'a> {
             );
         }
 
+        if let Some(where_clause) = &func.where_clause {
+            result = concat_space(result, self.format_where_clause(where_clause));
+        }
+
         let has_comments = self.has_comments_between(func.body.span.start, func.body.span.end);
 
         // Check if the body could be formatted inline
@@ -1658,7 +1696,13 @@ impl<'a> Formatter<'a> {
         result
     }
 
-    fn format_enum_decl(&self, name: &Name, generics: &[GenericDecl], body: &Body) -> Doc {
+    fn format_enum_decl(
+        &self,
+        name: &Name,
+        generics: &[GenericDecl],
+        where_clause: Option<&WhereClause>,
+        body: &Body,
+    ) -> Doc {
         let mut result = concat_space(text("enum"), self.format_name(name));
 
         if !generics.is_empty() {
@@ -1674,6 +1718,10 @@ impl<'a> Formatter<'a> {
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
             );
+        }
+
+        if let Some(where_clause) = where_clause {
+            result = concat_space(result, self.format_where_clause(where_clause));
         }
 
         concat_space(result, self.format_enum_body(body))
@@ -1822,8 +1870,13 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn format_associated(&self, generic: &GenericDecl) -> Doc {
-        concat_space(text("associated"), self.format_generic_decl(generic))
+    fn format_associated(&self, generic: &GenericDecl, where_clause: Option<&WhereClause>) -> Doc {
+        let result = concat_space(text("associated"), self.format_generic_decl(generic));
+        if let Some(where_clause) = where_clause {
+            concat_space(result, self.format_where_clause(where_clause))
+        } else {
+            result
+        }
     }
 
     fn format_func_signature(&self, sig: &FuncSignature) -> Doc {
@@ -1859,16 +1912,48 @@ impl<'a> Formatter<'a> {
             ),
         );
 
-        result = if let Some(ret) = &sig.ret {
-            concat_space(
+        if let Some(ret) = &sig.ret {
+            result = concat_space(
                 result,
                 concat_space(text("->"), self.format_type_annotation(ret)),
-            )
-        } else {
-            empty()
-        };
+            );
+        }
+
+        if let Some(where_clause) = &sig.where_clause {
+            result = concat_space(result, self.format_where_clause(where_clause));
+        }
 
         result
+    }
+
+    fn format_where_clause(&self, where_clause: &WhereClause) -> Doc {
+        text("where")
+            + text(" ")
+            + join(
+                where_clause
+                    .predicates
+                    .iter()
+                    .map(|predicate| match &predicate.kind {
+                        WherePredicateKind::TypeEq { lhs, rhs } => {
+                            self.format_type_annotation(lhs)
+                                + text(" == ")
+                                + self.format_type_annotation(rhs)
+                        }
+                        WherePredicateKind::Conforms { ty, protocols } => {
+                            self.format_type_annotation(ty)
+                                + text(": ")
+                                + join(
+                                    protocols
+                                        .iter()
+                                        .map(|p| self.format_type_annotation(p))
+                                        .collect(),
+                                    text(" & "),
+                                )
+                        }
+                    })
+                    .collect(),
+                text(" && "),
+            )
     }
 
     fn format_generic_decl(&self, generic: &GenericDecl) -> Doc {

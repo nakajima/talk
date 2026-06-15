@@ -15,6 +15,7 @@ pub mod pattern;
 pub mod record_field;
 pub mod stmt;
 pub mod type_annotation;
+pub mod where_clause;
 
 #[macro_export]
 macro_rules! impl_into_node {

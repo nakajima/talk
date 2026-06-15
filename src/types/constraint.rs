@@ -1,10 +1,12 @@
 //! Constraints — the X in OutsideIn(X) (Vytiniotis, Peyton Jones, Schrijvers
 //! & Sulzmann, JFP 2011) instantiated for Talk:
 //!
-//! - `Eq`: syntactic equality over `Ty`, including record rows (Leijen 2005)
-//!   and effect rows (Koka, MSFP 2014) via decomposition in the solver.
-//! - `Conforms(τ, P)`: protocol conformance — a class constraint in the sense
-//!   of Wadler & Blott, POPL 1989 (solved from milestone 3).
+//! - `Eq`: syntactic equality over `Ty`, including record rows (Leijen,
+//!   *Extensible Records with Scoped Labels*, TFP 2005) and effect rows
+//!   (Leijen, *Koka: Programming with Row-Polymorphic Effect Types*,
+//!   MSR-TR-2013-79) via decomposition in the solver.
+//! - `Conforms(ty, P)`: protocol conformance — a class constraint in the
+//!   sense of Wadler & Blott, POPL 1989 (solved from milestone 3).
 //! - `HasMember`: a Has-style predicate (Gaster & Jones, TR NOTTCS-TR-96-3,
 //!   1996) for member access on a type whose head is not yet known (solved
 //!   from milestone 3).
@@ -19,7 +21,7 @@
 use crate::label::Label;
 use crate::name_resolution::scc_graph::Level;
 use crate::node_id::NodeID;
-use crate::types::ty::{EffectRow, Ty};
+use crate::types::ty::{EffectRow, Predicate, Ty};
 
 /// Why a constraint exists — the blame half of GHC's CtOrigin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +62,6 @@ pub enum Constraint {
     Conforms {
         ty: Ty,
         protocol: crate::name_resolution::symbol::Symbol,
-        assoc: Vec<(crate::name_resolution::symbol::Symbol, Ty)>,
         origin: CtOrigin,
     },
     HasMember {
@@ -72,11 +73,36 @@ pub enum Constraint {
     Implic(Box<Implication>),
 }
 
+impl Predicate {
+    pub(crate) fn into_constraint(self, origin: CtOrigin) -> Constraint {
+        match self {
+            Predicate::TypeEq(a, b) => Constraint::Eq(a, b, origin),
+            Predicate::EffectEq(a, b) => Constraint::EffEq(a, b, origin),
+            Predicate::RowEq(a, b) => Constraint::Eq(Ty::Record(a), Ty::Record(b), origin),
+            Predicate::Conforms { ty, protocol } => Constraint::Conforms {
+                ty,
+                protocol,
+                origin,
+            },
+            Predicate::HasMember {
+                receiver,
+                label,
+                member,
+            } => Constraint::HasMember {
+                receiver,
+                label,
+                member,
+                origin,
+            },
+        }
+    }
+}
+
 /// OutsideIn(X) §5: wanteds solved under local given equalities; variables
 /// from outside `level` are untouchable inside.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Implication {
     pub level: Level,
-    pub givens: Vec<Constraint>,
+    pub givens: Vec<Predicate>,
     pub wanteds: Vec<Constraint>,
 }

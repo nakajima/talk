@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::name_resolution::symbol::Symbol;
-use crate::types::ty::Ty;
+use crate::types::ty::{Predicate, Ty};
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct StructInfo {
@@ -26,6 +26,9 @@ pub struct StructInfo {
     pub statics: IndexMap<String, Symbol>,
     /// Initializer symbols (explicit or resolver-synthesized memberwise).
     pub inits: Vec<Symbol>,
+    /// Well-formedness predicates over `params` for every application of
+    /// this nominal.
+    pub predicates: Vec<Predicate>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -45,6 +48,9 @@ pub struct EnumInfo {
     /// Instance method name → method symbol (methods on enums dispatch
     /// exactly like struct methods).
     pub methods: IndexMap<String, Symbol>,
+    /// Well-formedness predicates over `params` for every application of
+    /// this nominal.
+    pub predicates: Vec<Predicate>,
 }
 
 /// A protocol method requirement. The signature is self-prepended and ranges
@@ -55,6 +61,7 @@ pub struct EnumInfo {
 pub struct Requirement {
     pub symbol: Symbol,
     pub sig: Ty,
+    pub predicates: Vec<Predicate>,
     pub has_default: bool,
 }
 
@@ -66,6 +73,8 @@ pub struct ProtocolInfo {
     /// Super-protocols (`protocol Comparable: Equatable`): a bound on P
     /// satisfies its supers transitively.
     pub supers: Vec<Symbol>,
+    /// Protocol refinements over `Self = Ty::Param(protocol symbol)`.
+    pub predicates: Vec<Predicate>,
     pub requirements: IndexMap<String, Requirement>,
 }
 
@@ -76,12 +85,12 @@ pub struct ProtocolInfo {
 /// Array<Element: Showable>: Showable`) is an instance with a context (Hall,
 /// Hammond, Peyton Jones & Wadler, TOPLAS 1996): `params` are the row's own
 /// rigid variables, `self_args` the head application they appear in, and
-/// `context` the bounds discharged as new wanteds at use.
+/// `context` the predicates discharged as new wanteds at use.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Conformance {
     pub params: Vec<Symbol>,
     pub self_args: Vec<Ty>,
-    pub context: Vec<(Symbol, Vec<Symbol>)>,
+    pub context: Vec<Predicate>,
     pub witnesses: FxHashMap<String, Symbol>,
     pub assoc: FxHashMap<Symbol, Ty>,
 }
@@ -106,6 +115,7 @@ pub struct EffectSig {
     /// Declared generic parameters (`effect 'state<T>(value: T) -> T`),
     /// instantiated fresh at each perform site; rigid in the handler.
     pub generics: Vec<Symbol>,
+    pub predicates: Vec<Predicate>,
     pub params: Vec<Ty>,
     pub ret: Ty,
 }
@@ -185,6 +195,11 @@ impl TypeCatalog {
                                 .map(|(l, s)| (l, imp(s, target)))
                                 .collect(),
                             inits: v.inits.iter().map(|s| imp(*s, target)).collect(),
+                            predicates: v
+                                .predicates
+                                .into_iter()
+                                .map(|predicate| predicate.import_symbols(target))
+                                .collect(),
                         },
                     )
                 })
@@ -216,6 +231,11 @@ impl TypeCatalog {
                                 .into_iter()
                                 .map(|(l, s)| (l, imp(s, target)))
                                 .collect(),
+                            predicates: v
+                                .predicates
+                                .into_iter()
+                                .map(|predicate| predicate.import_symbols(target))
+                                .collect(),
                         },
                     )
                 })
@@ -233,6 +253,11 @@ impl TypeCatalog {
                                 .map(|(name, s)| (name, imp(s, target)))
                                 .collect(),
                             supers: v.supers.iter().map(|s| imp(*s, target)).collect(),
+                            predicates: v
+                                .predicates
+                                .into_iter()
+                                .map(|predicate| predicate.import_symbols(target))
+                                .collect(),
                             requirements: v
                                 .requirements
                                 .into_iter()
@@ -242,6 +267,11 @@ impl TypeCatalog {
                                         Requirement {
                                             symbol: imp(r.symbol, target),
                                             sig: imp_ty(&r.sig),
+                                            predicates: r
+                                                .predicates
+                                                .into_iter()
+                                                .map(|predicate| predicate.import_symbols(target))
+                                                .collect(),
                                             has_default: r.has_default,
                                         },
                                     )
@@ -263,12 +293,7 @@ impl TypeCatalog {
                             context: c
                                 .context
                                 .into_iter()
-                                .map(|(s, bounds)| {
-                                    (
-                                        imp(s, target),
-                                        bounds.iter().map(|b| imp(*b, target)).collect(),
-                                    )
-                                })
+                                .map(|predicate| predicate.import_symbols(target))
                                 .collect(),
                             witnesses: c
                                 .witnesses
@@ -353,6 +378,11 @@ impl TypeCatalog {
                         imp(s, target),
                         EffectSig {
                             generics: sig.generics.iter().map(|g| imp(*g, target)).collect(),
+                            predicates: sig
+                                .predicates
+                                .into_iter()
+                                .map(|predicate| predicate.import_symbols(target))
+                                .collect(),
                             params: sig.params.iter().map(&imp_ty).collect(),
                             ret: imp_ty(&sig.ret),
                         },

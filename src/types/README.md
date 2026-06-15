@@ -16,17 +16,21 @@ specific to this codebase are introduced as they come up.
 The checker is split into a **constraint generator** (`generate.rs`)
 and a **solver** (`solve.rs`). The generator walks the AST and never
 decides anything on the spot; it allocates type variables for the
-unknowns and emits constraints relating them:
+unknowns and emits **wanteds**: an origin-free predicate plus a source
+origin for blame.
 
-- `Eq(a, b)` — these two types must unify.
-- `EffEq(a, b)` — two effect rows must unify.
-- `Conforms { ty, protocol, assoc }` — `ty` must conform to the
-  protocol, with the given associated-type bindings.
+The predicate language is shared by schemes, wanteds, and future givens:
+
+- `TypeEq(a, b)` — these two types must unify.
+- `EffectEq(a, b)` — two effect rows must unify.
+- `RowEq(a, b)` — two record rows must unify.
+- `Conforms { ty, protocol }` — `ty` must conform to the protocol.
 - `HasMember { receiver, label, member }` — the receiver type has a
   member named `label` whose type is `member`.
 
-(`constraint.rs` defines these; each carries an origin — the AST node
-and the reason it was emitted — so errors point at real source.)
+`constraint.rs` contains the originated solver forms. `ty.rs` contains
+`Predicate`, because schemes, conformance contexts, and future GADT
+givens store predicates without source origins.
 
 The solver then works the constraint set to a fixed point. The reason
 for the split is that constraints arrive in source order but their
@@ -37,8 +41,8 @@ to apply *global* policy — what to do with constraints that can't make
 progress — in one place instead of scattered through the AST walk.
 
 The remaining files: `ty.rs` is the type representation and `Scheme`
-(a polymorphic signature: quantified parameters, their protocol
-bounds, carried member constraints, and a body type); `catalog.rs` is
+(a polymorphic signature shaped as `forall params. predicates => type`);
+`catalog.rs` is
 the table of declared things (structs with fields/methods, enums with
 variants, protocols with requirements, conformances with witnesses,
 effects); `output.rs` is `TypeOutput`, the checker's public product;
@@ -217,9 +221,9 @@ touched by sibling groups or by top-level statements. `check_group`
 triages residuals:
 
 - Variable-headed `Conforms` on a variable the group owns become
-  protocol bounds on the quantified parameter (`<T0: Showable>…`).
+  conformance predicates on the quantified parameter (`<T0: Showable>…`).
 - `HasMember` on a group-owned variable is held and attached to the
-  scheme (next section).
+  scheme as a predicate (next section).
 - Everything else **floats**: it's pushed onto a deferred list that
   the final solve (phase 6) retries with the whole program's
   information available. Only the final solve runs with `defaulting`
@@ -232,10 +236,10 @@ triages residuals:
 ## Instantiation, and how the lowerer specializes
 
 Every use of a polymorphic binding instantiates its scheme: fresh
-variables replace the quantified parameters, bounds are re-emitted as
-new conformance constraints, and — crucially for this compiler — the
-chosen substitution is **recorded in a table keyed by the call's AST
-node**. After solving, that table says "at this call, T0 = Int". The
+variables replace the quantified parameters, predicates are re-emitted
+as new wanteds, and — crucially for this compiler — the chosen
+substitution is **recorded in a table keyed by the call's AST node**.
+After solving, that table says "at this call, T0 = Int". The
 lowerer reads it to stamp out one specialized copy of the function per
 distinct type assignment, so generated code is fully monomorphic: no
 boxing, no runtime type tags, field offsets computed per
@@ -265,6 +269,46 @@ code it wraps. A *closed* effect annotation (`func f() 'io -> …`) is
 checked as an exact upper bound at the declaration: performing
 anything not listed is an error there, not at the call.
 
+## Qualified predicates and declaration `where`
+
+Schemes have one qualified context: `forall params. predicates =>
+type`. Inline bounds such as `<T: Showable>` lower to the same predicate
+language as inferred constraints and declaration-level `where` clauses.
+Predicates are origin-free; wanteds add source origins for blame.
+
+Declaration `where` clauses are supported for functions, methods,
+protocol requirements, structs, enums, extends, effects, associated types,
+and protocols. Function, method, and requirement clauses parse after the
+signature; extend clauses parse after the conformance list; nominal and
+protocol clauses parse before the body; effect clauses parse after the
+operation return type; associated-type clauses parse after the associated
+declaration. They use `&&` between predicates, use `&` for protocol
+composition inside one conformance predicate, and lower after name
+resolution into the same predicate language. Function/method clauses become
+scheme predicates plus local erased givens while the body is checked.
+Extend clauses become the conditional-conformance context emitted as
+wanteds when the conformance is used. Nominal clauses are stored as
+well-formedness predicates checked at every nominal type application.
+Protocol clauses become inherited refinements. Effect clauses constrain each
+perform-site instantiation, and associated-type clauses add bounds on the
+associated parameter. Protocol-application sugar such as `T:
+Iterator<Element>` lowers to `T: Iterator` plus `T.Item == Element`.
+Predicate-constrained generics must be determined by the declaration's
+exposed function type, `Self`, nominal parameters, or by same-type
+predicates that connect them to determined parameters; `func make<T>() ->
+Int where T: P` is rejected as ambiguous.
+
+A nominal `where` clause is a **well-formedness predicate** on the type
+application, not a constructor-only hidden constraint. `struct Box<T> where T:
+Showable` means every `Box<A>` formation must prove `A: Showable`; it
+does not merely add a hidden constraint to constructors.
+
+The predicate framework is kind-aware from the start, including type,
+row, and effect equalities, so future effect polymorphism and GADT
+refinements use the same architecture instead of a parallel constraint
+system. Runtime evidence is still erased: monomorphization and concrete
+witness selection remain the backend story for now.
+
 ## Member constraints ride schemes
 
 `x.m` emits `HasMember`. When the receiver's head type is known, the
@@ -277,7 +321,7 @@ conformances (dispatches through the conformance's witness).
 
 When the receiver is still a variable at the end of a group, the
 constraint is *held* through generalization and attached to the
-binding's scheme as a `MemberConstraint`. So
+binding's scheme as a `Predicate::HasMember`. So
 
 ```talk
 func g(x) { x.go() }
@@ -310,11 +354,11 @@ optionally associated types. A conformance (`extend Int: Showable`)
 records a **witness** — the concrete function implementing each
 requirement — or falls back to the protocol's default body,
 specialized at `Self :=` the conforming type. Conformance constraints
-on quantified parameters become bounds in the scheme and are checked
-at instantiation against the catalog's conformance rows; associated
-types are carried as bindings on the bound and as projections
-(`T.Element`) that reduce once `T` is known. A projection whose base
-never resolves in its group floats, like any other stuck constraint.
+on quantified parameters become predicates in the scheme and are
+checked at instantiation against the catalog's conformance rows;
+associated types are represented as projections (`T.Element`) that
+reduce once `T` is known. A projection whose base never resolves in its
+group floats, like any other stuck constraint.
 
 `Showable` is auto-derivable: a struct/enum with no explicit
 conformance gets one synthesized structurally, and recursive types are
@@ -333,16 +377,30 @@ handlers are self-contained, and display names for rendering.
 
 ## Further reading
 
-The source comments cite chapter and verse; the map: the
-generate/solve split, floating, and group-at-a-time scoping is
-OutsideIn(X) (Vytiniotis, Peyton Jones, Schrijvers & Sulzmann, JFP
-2011). Level-based generalization is Rémy's. The binding-group
-treatment and the restricted-group rule follow *Typing Haskell in
-Haskell* (Jones, 2000) §11.6.2; the value restriction is Wright
-(1995). Record rows are Leijen (2005) and Gaster & Jones (POPL 1996);
-effect rows are Koka (Leijen, POPL 2017). Protocols-as-predicates
-with witnesses is Wadler & Blott (1989) via Hall et al. (TOPLAS
-1996); associated types are Chakravarty et al. (ICFP 2005).
-Schemes that carry member constraints are qualified types (Jones,
-1994), with `HasMember` from Gaster & Jones; the refusal to pick among
-overlapping providers is that book's coherence argument (§2.4).
+PDFs for these references are mirrored under `papers/`. Verified during the predicate refactor:
+
+- Qualified schemes and predicate contexts: Mark P. Jones, *A Theory
+  of Qualified Types* (ESOP 1992; revised SCP paper).
+- Constraint generation/solving with wanteds, givens, implication
+  constraints, and ambiguity: Vytiniotis, Peyton Jones, Schrijvers,
+  and Sulzmann, *OutsideIn(X): Modular type inference with local
+  assumptions* (JFP 2011).
+- Binding-group splitting into deferred and retained predicates:
+  Jones, *Typing Haskell in Haskell*, section 11.6.
+- Type classes and evidence/witness translation: Wadler and Blott,
+  *How to make ad-hoc polymorphism less ad hoc* (POPL 1989), and Hall,
+  Hammond, Peyton Jones, and Wadler, *Type Classes in Haskell*.
+- Associated type projections and equality constraints: Chakravarty,
+  Keller, and Peyton Jones, *Associated Type Synonyms* (ICFP 2005).
+- Row-polymorphic records and `HasMember`-style predicates: Gaster and
+  Jones, *A Polymorphic Type System for Extensible Records and
+  Variants* (NOTTCS-TR-96-3, 1996), and Leijen, *Extensible Records
+  with Scoped Labels* (TFP 2005).
+- Effect rows: Leijen, *Koka: Programming with Row-Polymorphic Effect
+  Types* (MSR-TR-2013-79, 2013).
+- Improvement of qualified predicates: Jones, *Simplifying and
+  Improving Qualified Types* (Yale research report YALEU/DCS/RR-1040,
+  1994).
+- The value restriction used by binding-group generalization: Wright,
+  *Simple Imperative Polymorphism* (LISP and Symbolic Computation,
+  1995).

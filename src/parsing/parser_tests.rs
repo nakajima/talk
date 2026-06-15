@@ -26,6 +26,7 @@ pub mod tests {
             record_field::{RecordField, RecordFieldTypeAnnotation},
             stmt::{Stmt, StmtKind},
             type_annotation::{TypeAnnotation, TypeAnnotationKind},
+            where_clause::WherePredicateKind,
         },
         parser::{BlockContext, Parser},
         parser_error::ParserError,
@@ -222,6 +223,7 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![])
             })
         );
@@ -603,6 +605,7 @@ pub mod tests {
                     name: "foo".into(),
                     name_span: Span::ANY,
                     generics: vec![],
+                    where_clause: None,
                     params: vec![],
                     body: Block {
                         id: NodeID::ANY,
@@ -720,6 +723,7 @@ pub mod tests {
                 name: Name::Raw("greet".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 params: vec![Parameter {
                     id: NodeID::ANY,
                     span: Span::ANY,
@@ -762,6 +766,7 @@ pub mod tests {
                     generics: vec![],
                     conformances: vec![],
                 }],
+                where_clause: None,
                 params: vec![Parameter::new(
                     NodeID::ANY,
                     "t".into(),
@@ -788,6 +793,24 @@ pub mod tests {
                 attributes: vec![],
             }))
         );
+    }
+
+    #[test]
+    fn parses_func_where_clause() {
+        let parsed = parse("func pick<T>(x: T) -> T where T: Showable & Equatable && T.Item == Int { x }");
+        let DeclKind::Func(func) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        let where_clause = func.where_clause.as_ref().expect("where clause");
+        assert_eq!(where_clause.predicates.len(), 2);
+        assert!(matches!(
+            where_clause.predicates[0].kind,
+            WherePredicateKind::Conforms { .. }
+        ));
+        assert!(matches!(
+            where_clause.predicates[1].kind,
+            WherePredicateKind::TypeEq { .. }
+        ));
     }
 
     #[test]
@@ -823,6 +846,7 @@ pub mod tests {
                 name: Name::Raw("hello".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 params: vec![],
                 body: Block {
                     id: NodeID::ANY,
@@ -843,6 +867,7 @@ pub mod tests {
                 name: Name::Raw("world".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 params: vec![],
                 body: Block {
                     id: NodeID::ANY,
@@ -868,6 +893,7 @@ pub mod tests {
                 name: Name::Raw("greet".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 params: vec![
                     Parameter {
                         id: NodeID::ANY,
@@ -907,6 +933,7 @@ pub mod tests {
                 name: Name::Raw("greet".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 params: vec![Parameter {
                     id: NodeID::ANY,
                     span: Span::ANY,
@@ -1288,6 +1315,7 @@ pub mod tests {
                 name: Name::Raw("fizz".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 params: vec![],
                 body: Block {
                     id: NodeID::ANY,
@@ -1523,6 +1551,7 @@ pub mod tests {
                 name: "Fizz".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![])
             })
         );
@@ -1603,6 +1632,7 @@ pub mod tests {
                         conformances: vec![]
                     },
                 ],
+                where_clause: None,
                 body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("foo".into()),
@@ -1652,6 +1682,7 @@ pub mod tests {
                 name: "Fizz".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(
                     (vec![
                         any_decl!(DeclKind::EnumVariant(
@@ -1688,6 +1719,7 @@ pub mod tests {
                 name: "Fizz".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("foo".into()),
@@ -1890,6 +1922,7 @@ pub mod tests {
                 name: Name::Raw("greet".into()),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 params: vec![Parameter {
                     id: NodeID::ANY,
                     span: Span::ANY,
@@ -1948,6 +1981,7 @@ pub mod tests {
                 name: "MyEnum".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("val".into()),
@@ -1974,6 +2008,7 @@ pub mod tests {
                             name: Name::Raw("fizz".into()),
                             name_span: Span::ANY,
                             generics: vec![],
+                            where_clause: None,
                             params: vec![],
                             effects: Default::default(),
                             body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
@@ -2153,12 +2188,14 @@ pub mod tests {
                         }]
                     }
                 }],
+                where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     func: Box::new(Func {
                         id: NodeID::ANY,
                         name: "foo".into(),
                         name_span: Span::ANY,
                         generics: vec![],
+                        where_clause: None,
                         params: vec![],
                         effects: Default::default(),
                         body: any_block!(vec![]),
@@ -2169,6 +2206,20 @@ pub mod tests {
                 })])
             })
         );
+    }
+
+    #[test]
+    fn parses_extend_where_clause() {
+        let parsed = parse("extend Box<T>: P where T: Showable {}");
+        let DeclKind::Extend { where_clause, .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected extend")
+        };
+        let where_clause = where_clause.as_ref().expect("where clause");
+        assert_eq!(where_clause.predicates.len(), 1);
+        assert!(matches!(
+            where_clause.predicates[0].kind,
+            WherePredicateKind::Conforms { .. }
+        ));
     }
 
     #[test]
@@ -2185,6 +2236,7 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![])
             })
         );
@@ -2208,6 +2260,7 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![
                     any_decl!(DeclKind::Property {
                         name: "age".into(),
@@ -2261,6 +2314,7 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![
                     any_decl!(DeclKind::Property {
                         name: "age".into(),
@@ -2314,6 +2368,7 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     is_static: true,
                     func: Func {
@@ -2321,6 +2376,7 @@ pub mod tests {
                         name: "getAge".into(),
                         name_span: Span::ANY,
                         generics: vec![],
+                        where_clause: None,
                         params: vec![],
                         effects: Default::default(),
                         body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
@@ -2351,6 +2407,7 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     is_static: false,
                     func: Func {
@@ -2358,6 +2415,7 @@ pub mod tests {
                         name: "getAge".into(),
                         name_span: Span::ANY,
                         generics: vec![],
+                        where_clause: None,
                         params: vec![],
                         effects: Default::default(),
                         body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
@@ -2388,6 +2446,7 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: Name::Raw("init".into()),
                     params: vec![Parameter {
@@ -2432,6 +2491,7 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 conformances: vec![],
                 body: any_body!(vec![])
             })
@@ -2454,6 +2514,7 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 conformances: vec![],
                 body: any_body!(vec![any_decl!(DeclKind::MethodRequirement(
                     FuncSignature {
@@ -2462,6 +2523,7 @@ pub mod tests {
                         name: "me".into(),
                         params: vec![],
                         generics: vec![],
+                        where_clause: None,
                         effects: Default::default(),
                         ret: Some(
                             annotation!(TypeAnnotationKind::Nominal {
@@ -2555,6 +2617,7 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 conformances: vec![],
                 body: any_body!(vec![any_decl!(DeclKind::Associated {
                     generic: GenericDecl {
@@ -2564,7 +2627,8 @@ pub mod tests {
                         generics: vec![],
                         conformances: vec![],
                         span: Span::ANY
-                    }
+                    },
+                    where_clause: None
                 })])
             })
         );
@@ -2800,6 +2864,7 @@ pub mod tests {
                 name: "fizz".into(),
                 name_span: Span::ANY,
                 generics: vec![],
+                where_clause: None,
                 params: vec![any!(Parameter, {
                     name: "x".into(),
                     name_span: Span::ANY,
@@ -2834,6 +2899,7 @@ pub mod tests {
                 name: "fizzes".into(),
                 name_span: Span::ANY,
                 generics: Default::default(),
+                where_clause: None,
                 params: vec![any!(Parameter, {
                     name: "x".into(),
                     name_span: Span::ANY,

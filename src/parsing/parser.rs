@@ -29,6 +29,7 @@ use crate::node_kinds::pattern::{
 use crate::node_kinds::record_field::{RecordField, RecordFieldTypeAnnotation};
 use crate::node_kinds::stmt::{Stmt, StmtKind};
 use crate::node_kinds::type_annotation::{TypeAnnotation, TypeAnnotationKind};
+use crate::node_kinds::where_clause::{WhereClause, WherePredicate, WherePredicateKind};
 use crate::node_meta::NodeMeta;
 use crate::parser_error::ParserError;
 use crate::precedence::Precedence;
@@ -302,6 +303,7 @@ impl<'a> Parser<'a> {
 
         self.consume(TokenKind::Arrow)?;
         let ret = self.type_annotation()?;
+        let where_clause = self.where_clause()?;
 
         self.save_meta(tok, |id, span| Decl {
             id,
@@ -311,6 +313,7 @@ impl<'a> Parser<'a> {
                 name: effect_name.clone().into(),
                 name_span,
                 generics,
+                where_clause,
                 params,
                 ret,
             },
@@ -562,6 +565,8 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
+        let where_clause = self.where_clause()?;
+
         let body = self.body_block(context)?;
 
         let kind = match context {
@@ -569,12 +574,14 @@ impl<'a> Parser<'a> {
                 name: name.into(),
                 name_span,
                 generics,
+                where_clause,
                 body,
             },
             BlockContext::Struct => DeclKind::Struct {
                 name: name.into(),
                 name_span,
                 generics,
+                where_clause,
                 body,
             },
             BlockContext::Extend => DeclKind::Extend {
@@ -582,6 +589,7 @@ impl<'a> Parser<'a> {
                 name_span,
                 conformances,
                 generics,
+                where_clause,
                 body,
             },
             BlockContext::Protocol => DeclKind::Protocol {
@@ -589,6 +597,7 @@ impl<'a> Parser<'a> {
                 name_span,
                 conformances,
                 generics,
+                where_clause,
                 body,
             },
             _ => {
@@ -739,6 +748,8 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let where_clause = self.where_clause()?;
+
         if context == BlockContext::Protocol && !self.peek_is(TokenKind::LeftBrace) {
             let ret = ret.map(Box::new);
 
@@ -748,6 +759,7 @@ impl<'a> Parser<'a> {
                     span,
                     name: name.into(),
                     generics,
+                    where_clause,
                     params,
                     effects: EffectSet {
                         names,
@@ -771,6 +783,7 @@ impl<'a> Parser<'a> {
                     is_open,
                 },
                 generics,
+                where_clause,
                 params,
                 body,
                 ret,
@@ -2377,6 +2390,56 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn where_clause(&mut self) -> Result<Option<WhereClause>, ParserError> {
+        self.skip_newlines();
+        let Some(current) = self.current.clone() else {
+            return Ok(None);
+        };
+        if current.kind != TokenKind::Identifier || self.lexeme(&current) != "where" {
+            return Ok(None);
+        }
+
+        let tok = self.push_source_location();
+        self.advance();
+        let mut predicates = vec![];
+        loop {
+            predicates.push(self.where_predicate()?);
+            if !self.did_match(TokenKind::AmpAmp)? {
+                break;
+            }
+        }
+
+        self.save_meta(tok, |id, span| {
+            Some(WhereClause {
+                id,
+                span,
+                predicates,
+            })
+        })
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn where_predicate(&mut self) -> Result<WherePredicate, ParserError> {
+        let tok = self.push_source_location();
+        let lhs = self.type_annotation()?;
+        let kind = if self.did_match(TokenKind::EqualsEquals)? {
+            WherePredicateKind::TypeEq {
+                lhs,
+                rhs: self.type_annotation()?,
+            }
+        } else {
+            self.consume(TokenKind::Colon)?;
+            let mut protocols = vec![self.type_annotation()?];
+            while self.did_match(TokenKind::Amp)? {
+                protocols.push(self.type_annotation()?);
+            }
+            WherePredicateKind::Conforms { ty: lhs, protocols }
+        };
+
+        self.save_meta(tok, |id, span| WherePredicate { id, span, kind })
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn type_annotations(&mut self, closer: TokenKind) -> Result<Vec<TypeAnnotation>, ParserError> {
         let mut annotations: Vec<TypeAnnotation> = vec![];
 
@@ -2644,11 +2707,15 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Associated)?;
         let generic = self.generic()?;
+        let where_clause = self.where_clause()?;
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
             visibility: Visibility::default(),
-            kind: DeclKind::Associated { generic },
+            kind: DeclKind::Associated {
+                generic,
+                where_clause,
+            },
         })
     }
 

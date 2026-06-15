@@ -6,7 +6,7 @@ use crate::{
     node_id::NodeID,
     node_kinds::{
         attribute::Attribute, block::Block, generic_decl::GenericDecl, parameter::Parameter,
-        type_annotation::TypeAnnotation,
+        type_annotation::TypeAnnotation, where_clause::WhereClause,
     },
     span::Span,
 };
@@ -39,6 +39,7 @@ pub struct Func {
     #[drive(skip)]
     pub effects: EffectSet,
     pub generics: Vec<GenericDecl>,
+    pub where_clause: Option<WhereClause>,
     pub params: Vec<Parameter>, /* params tuple */
     pub body: Block,
     pub ret: Option<TypeAnnotation>, /* return type */
