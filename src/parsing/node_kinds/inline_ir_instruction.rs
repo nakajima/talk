@@ -189,10 +189,87 @@ impl Display for Value {
 impl TypeAnnotation {
     fn simple_display(&self) -> String {
         match &self.kind {
-            TypeAnnotationKind::Nominal { name, .. } => name.name_str(),
+            TypeAnnotationKind::Nominal { name, generics, .. } => {
+                if generics.is_empty() {
+                    name.name_str()
+                } else {
+                    let args = generics
+                        .iter()
+                        .map(TypeAnnotation::simple_display)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}<{args}>", name.name_str())
+                }
+            }
+            TypeAnnotationKind::NominalPath {
+                base,
+                member,
+                member_generics,
+                ..
+            } => {
+                if member_generics.is_empty() {
+                    format!("{}.{}", base.simple_display(), member)
+                } else {
+                    let args = member_generics
+                        .iter()
+                        .map(TypeAnnotation::simple_display)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}.{}<{args}>", base.simple_display(), member)
+                }
+            }
             TypeAnnotationKind::SelfType(name) => name.name_str(),
-            #[allow(clippy::todo)]
-            _ => todo!(),
+            TypeAnnotationKind::Func { params, returns } => {
+                let params = params
+                    .iter()
+                    .map(TypeAnnotation::simple_display)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({params}) -> {}", returns.simple_display())
+            }
+            TypeAnnotationKind::Tuple(items) => {
+                let items = items
+                    .iter()
+                    .map(TypeAnnotation::simple_display)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({items})")
+            }
+            TypeAnnotationKind::Record { fields } => {
+                let fields = fields
+                    .iter()
+                    .map(|field| {
+                        format!(
+                            "{}: {}",
+                            field.label.name_str(),
+                            field.value.simple_display()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{ {fields} }}")
+            }
+            TypeAnnotationKind::Any {
+                protocol,
+                assoc_bindings,
+            } => {
+                if assoc_bindings.is_empty() {
+                    format!("any {}", protocol.simple_display())
+                } else {
+                    let bindings = assoc_bindings
+                        .iter()
+                        .map(|binding| {
+                            format!(
+                                "{} = {}",
+                                binding.name.name_str(),
+                                binding.value.simple_display()
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("any {}<{bindings}>", protocol.simple_display())
+                }
+            }
         }
     }
 }

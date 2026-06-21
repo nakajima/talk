@@ -749,11 +749,19 @@ impl<'a> DeclDeclarer<'a> {
 
         on!(
             &mut decl.kind,
-            DeclKind::EnumVariant(name, name_span, ..),
+            DeclKind::EnumVariant {
+                name,
+                name_span,
+                generics,
+                ..
+            },
             {
                 *name = self
                     .resolver
                     .declare(name, some!(Variant), decl.id, *name_span);
+                let variant_symbol = name.symbol().unwrap_or_else(|_| unreachable!());
+                self.start_scope(Some(variant_symbol), decl.id, false, false);
+                self.declare_generics(generics, false);
             }
         );
 
@@ -955,7 +963,8 @@ impl<'a> DeclDeclarer<'a> {
                 | DeclKind::Enum { .. }
                 | DeclKind::Extend { .. }
                 | DeclKind::Init { .. }
-                | DeclKind::Effect { .. },
+                | DeclKind::Effect { .. }
+                | DeclKind::EnumVariant { .. },
             {
                 self.end_scope();
             }
@@ -1010,7 +1019,7 @@ impl<'a> DeclDeclarer<'a> {
                                     self.resolver.mark_public(sym);
                                 }
                             }
-                            DeclKind::EnumVariant(name, ..) => {
+                            DeclKind::EnumVariant { name, .. } => {
                                 if let Ok(sym) = name.symbol() {
                                     self.resolver.mark_public(sym);
                                 }

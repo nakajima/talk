@@ -32,6 +32,8 @@ pub enum EvalValue {
     /// A tagged enum value: the enum symbol, the variant's declaration
     /// index, and its payloads (pure, like records).
     Variant(Symbol, u16, Vec<EvalValue>),
+    /// A protocol existential: hidden payload plus erased witness closures.
+    Existential(Symbol, Box<EvalValue>, Vec<EvalValue>),
     /// Index into the evaluator's slot store (a mutable cell).
     Cell(usize),
 }
@@ -290,6 +292,13 @@ impl Evaluator {
                 let ty = p.ty(TyKind::Variant(*symbol));
                 p.primop(Op::VariantNew(*symbol, *tag), &reified, ty)
             }
+            EvalValue::Existential(protocol, payload, witnesses) => {
+                let mut reified = Vec::with_capacity(witnesses.len() + 1);
+                reified.push(self.reify(p, payload));
+                reified.extend(witnesses.iter().map(|witness| self.reify(p, witness)));
+                let ty = p.ty(TyKind::Existential(*protocol));
+                p.primop(Op::ExistentialPack(*protocol), &reified, ty)
+            }
             EvalValue::Cell(index) => {
                 let ty = self.slot_tys[*index];
                 p.constant(Const::Slot(*index as u32), ty)
@@ -408,6 +417,34 @@ impl Evaluator {
                     .cloned()
                     .ok_or_else(|| EvalError::Unsupported("payload index out of range".into())),
                 _ => Err(EvalError::Unsupported("get_payload on non-variant".into())),
+            },
+            Op::ExistentialPack(protocol) => {
+                let Some((payload, witnesses)) = args.split_first() else {
+                    return Err(EvalError::Unsupported(
+                        "existential_pack without a payload".into(),
+                    ));
+                };
+                let payload = self.eval_sub(p, *payload)?;
+                let mut table = Vec::with_capacity(witnesses.len());
+                for witness in witnesses {
+                    table.push(self.eval_sub(p, *witness)?);
+                }
+                Ok(EvalValue::Existential(protocol, Box::new(payload), table))
+            }
+            Op::ExistentialWitness(index) => match self.eval_sub(p, args[0])? {
+                EvalValue::Existential(_, _, witnesses) => witnesses
+                    .get(index as usize)
+                    .cloned()
+                    .ok_or_else(|| EvalError::Unsupported("witness index out of range".into())),
+                _ => Err(EvalError::Unsupported(
+                    "existential_witness on non-existential".into(),
+                )),
+            },
+            Op::ExistentialPayload => match self.eval_sub(p, args[0])? {
+                EvalValue::Existential(_, payload, _) => Ok(*payload),
+                _ => Err(EvalError::Unsupported(
+                    "existential_payload on non-existential".into(),
+                )),
             },
             Op::SetField(index) => {
                 let record = self.eval_sub(p, args[0])?;
@@ -595,7 +632,11 @@ impl Evaluator {
             TyKind::F64 => Ok(EvalValue::F64(f64::from_bits(self.read_word(addr)?))),
             TyKind::Bool => Ok(EvalValue::Bool(self.read_word(addr)? != 0)),
             TyKind::Ptr => Ok(EvalValue::Ptr(self.read_word(addr)? as u32)),
-            TyKind::Boxed(_) | TyKind::Variant(_) | TyKind::Tuple(_) => {
+            TyKind::Boxed(_)
+            | TyKind::Variant(_)
+            | TyKind::Tuple(_)
+            | TyKind::Existential(_)
+            | TyKind::Erased => {
                 let handle = self.read_word(addr)? as usize;
                 self.boxed
                     .get(handle)
@@ -651,7 +692,11 @@ impl Evaluator {
                 };
                 v as u64
             }
-            TyKind::Boxed(_) | TyKind::Variant(_) | TyKind::Tuple(_) => {
+            TyKind::Boxed(_)
+            | TyKind::Variant(_)
+            | TyKind::Tuple(_)
+            | TyKind::Existential(_)
+            | TyKind::Erased => {
                 self.boxed.push(value);
                 (self.boxed.len() - 1) as u64
             }

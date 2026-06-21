@@ -134,7 +134,7 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
                                 .get(owner)
                                 .cloned()
                                 .unwrap_or_else(|| owner.to_string());
-                            (owner, case.clone(), variant.payloads.clone())
+                            (owner, case.clone(), variant.argument_types().to_vec())
                         })
                     })
                 })?;

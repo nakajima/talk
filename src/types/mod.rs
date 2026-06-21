@@ -13,6 +13,7 @@ pub mod generate;
 pub mod output;
 pub mod solve;
 pub mod ty;
+pub mod variant;
 
 #[cfg(test)]
 pub mod types_tests;

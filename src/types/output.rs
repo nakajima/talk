@@ -9,6 +9,12 @@ use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
 use crate::types::ty::{Scheme, Ty};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExistentialPack {
+    pub existential: Ty,
+    pub payload: Ty,
+}
+
 /// How a member access resolved: directly on a nominal type, or through a
 /// protocol requirement witnessed by a conformance (dictionary passing's
 /// witness selection).
@@ -32,6 +38,9 @@ pub struct TypeOutput {
     /// monomorphization or dictionary passing.
     pub instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    /// Expression nodes implicitly packed into an existential expected type.
+    /// Lowering turns these into payload-plus-witness-table packages.
+    pub existential_packs: FxHashMap<NodeID, ExistentialPack>,
     /// Capability flow for the lowerer's abort analysis (lexical effect
     /// handlers compile capability-passing — Brachthäuser, Schuster &
     /// Ostermann, "Effects as Capabilities", OOPSLA 2020; Schuster et

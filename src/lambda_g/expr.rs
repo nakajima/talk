@@ -37,6 +37,10 @@ pub enum TyKind {
     Boxed(Symbol),
     /// A Talk enum value (tagged variant).
     Variant(Symbol),
+    /// A first-class protocol existential: payload plus erased witness table.
+    Existential(Symbol),
+    /// A runtime-erased payload whose static type is a GADT-local skolem.
+    Erased,
     /// A mutable cell (assignment-converted local — ORBIT-style).
     Cell(TyId),
 }
@@ -52,7 +56,11 @@ impl TyKind {
         match self {
             TyKind::Byte => Some(1),
             TyKind::I64 | TyKind::F64 | TyKind::Bool | TyKind::Ptr => Some(8),
-            TyKind::Boxed(_) | TyKind::Variant(_) | TyKind::Tuple(_) => Some(8),
+            TyKind::Boxed(_)
+            | TyKind::Variant(_)
+            | TyKind::Tuple(_)
+            | TyKind::Existential(_)
+            | TyKind::Erased => Some(8),
             TyKind::Void | TyKind::Bot | TyKind::Fn(..) | TyKind::Cell(_) => None,
         }
     }
@@ -113,6 +121,9 @@ pub enum Op {
     VariantNew(Symbol, u16),
     GetTag,
     GetPayload(u32),
+    ExistentialPack(Symbol),
+    ExistentialWitness(u32),
+    ExistentialPayload,
     CellNew,
     CellGet,
     CellSet,

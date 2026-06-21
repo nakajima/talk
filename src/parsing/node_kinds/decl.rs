@@ -78,7 +78,7 @@ pub enum DeclKind {
         name_span: Span,
         generics: Vec<GenericDecl>, /* generics */
         where_clause: Option<WhereClause>,
-        body: Body,                 /* body */
+        body: Body, /* body */
     },
 
     Let {
@@ -153,11 +153,15 @@ pub enum DeclKind {
     },
 
     // Individual enum variant in declaration
-    EnumVariant(
-        #[drive(skip)] Name, // name: "some"
-        #[drive(skip)] Span, // name_span
-        Vec<TypeAnnotation>, // associated types: [TypeRepr("T")]
-    ),
+    EnumVariant {
+        #[drive(skip)]
+        name: Name,
+        #[drive(skip)]
+        name_span: Span,
+        generics: Vec<GenericDecl>,
+        payloads: Vec<TypeAnnotation>,
+        result: Option<TypeAnnotation>,
+    },
 
     FuncSignature(FuncSignature),
     MethodRequirement(FuncSignature),

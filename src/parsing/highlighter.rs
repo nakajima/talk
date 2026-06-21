@@ -116,6 +116,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Percent => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::IRRegister => self.make(tok, Kind::PARAMETER, &mut tokens),
                 TokenKind::Attribute => self.make(tok, Kind::DECORATOR, &mut tokens),
+                TokenKind::Any => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::As => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::At => self.make(tok, Kind::DECORATOR, &mut tokens),
                 TokenKind::LineComment => self.make(tok, Kind::COMMENT, &mut tokens),
@@ -323,9 +324,19 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_exprs(generics, ast));
                     result.extend(self.tokens_from_expr(body, ast));
                 }
-                DeclKind::EnumVariant(.., name_span, type_annotations) => {
+                DeclKind::EnumVariant {
+                    name_span,
+                    generics,
+                    payloads,
+                    result: case_result,
+                    ..
+                } => {
                     result.push(self.make_span(Kind::ENUM_MEMBER, *name_span));
-                    result.extend(self.tokens_from_exprs(type_annotations, ast));
+                    result.extend(self.tokens_from_exprs(generics, ast));
+                    result.extend(self.tokens_from_exprs(payloads, ast));
+                    if let Some(case_result) = case_result {
+                        result.extend(self.tokens_from_expr(case_result, ast));
+                    }
                 }
                 DeclKind::FuncSignature(func_signature) => {
                     result.extend(self.tokens_from_expr(func_signature, ast));
@@ -402,6 +413,16 @@ impl<'a> Higlighter<'a> {
                     {
                         result.push(self.make_span(Kind::PARAMETER, *label_span));
                         result.extend(self.tokens_from_expr(value, ast));
+                    }
+                }
+                TypeAnnotationKind::Any {
+                    box protocol,
+                    assoc_bindings,
+                } => {
+                    result.extend(self.tokens_from_expr(protocol, ast));
+                    for binding in assoc_bindings {
+                        result.push(self.make_span(Kind::TYPE, binding.name_span));
+                        result.extend(self.tokens_from_expr(&binding.value, ast));
                     }
                 }
             },

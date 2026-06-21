@@ -25,7 +25,7 @@ pub mod tests {
             pattern::{Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind},
             record_field::{RecordField, RecordFieldTypeAnnotation},
             stmt::{Stmt, StmtKind},
-            type_annotation::{TypeAnnotation, TypeAnnotationKind},
+            type_annotation::{AnyAssocBinding, TypeAnnotation, TypeAnnotationKind},
             where_clause::WherePredicateKind,
         },
         parser::{BlockContext, Parser},
@@ -35,6 +35,16 @@ pub mod tests {
     };
 
     use crate::node_id::NodeID;
+
+    fn enum_variant(name: Name, name_span: Span, payloads: Vec<TypeAnnotation>) -> DeclKind {
+        DeclKind::EnumVariant {
+            name,
+            name_span,
+            generics: vec![],
+            payloads,
+            result: None,
+        }
+    }
 
     #[macro_export]
     macro_rules! expr {
@@ -797,7 +807,8 @@ pub mod tests {
 
     #[test]
     fn parses_func_where_clause() {
-        let parsed = parse("func pick<T>(x: T) -> T where T: Showable & Equatable && T.Item == Int { x }");
+        let parsed =
+            parse("func pick<T>(x: T) -> T where T: Showable & Equatable && T.Item == Int { x }");
         let DeclKind::Func(func) = &parsed.roots[0].as_decl().kind else {
             panic!("expected func")
         };
@@ -1634,7 +1645,7 @@ pub mod tests {
                 ],
                 where_clause: None,
                 body: any_body!(vec![
-                    any_decl!(DeclKind::EnumVariant(
+                    any_decl!(enum_variant(
                         Name::Raw("foo".into()),
                         Span::ANY,
                         vec![
@@ -1658,11 +1669,7 @@ pub mod tests {
                             }
                         ]
                     )),
-                    any_decl!(DeclKind::EnumVariant(
-                        Name::Raw("bar".into()),
-                        Span::ANY,
-                        vec![]
-                    ))
+                    any_decl!(enum_variant(Name::Raw("bar".into()), Span::ANY, vec![]))
                 ])
             })
         );
@@ -1685,25 +1692,54 @@ pub mod tests {
                 where_clause: None,
                 body: any_body!(
                     (vec![
-                        any_decl!(DeclKind::EnumVariant(
-                            Name::Raw("foo".into()),
-                            Span::ANY,
-                            vec![]
-                        )),
-                        any_decl!(DeclKind::EnumVariant(
-                            Name::Raw("bar".into()),
-                            Span::ANY,
-                            vec![]
-                        )),
-                        any_decl!(DeclKind::EnumVariant(
-                            Name::Raw("fizz".into()),
-                            Span::ANY,
-                            vec![]
-                        )),
+                        any_decl!(enum_variant(Name::Raw("foo".into()), Span::ANY, vec![])),
+                        any_decl!(enum_variant(Name::Raw("bar".into()), Span::ANY, vec![])),
+                        any_decl!(enum_variant(Name::Raw("fizz".into()), Span::ANY, vec![])),
                     ])
                 )
             })
         );
+    }
+
+    #[test]
+    fn parses_gadt_enum_case_results_and_case_generics() {
+        let parsed = parse(
+            "enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case pair<A, B>(Expr<A>, Expr<B>) -> Expr<(A, B)>
+                case unit -> Expr<Void>
+            }",
+        );
+        let DeclKind::Enum { body, .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected enum");
+        };
+        assert_eq!(body.decls.len(), 3);
+        let DeclKind::EnumVariant {
+            name,
+            generics,
+            payloads,
+            result,
+            ..
+        } = &body.decls[1].kind
+        else {
+            panic!("expected variant");
+        };
+        assert_eq!(name.name_str(), "pair");
+        assert_eq!(generics.len(), 2);
+        assert_eq!(payloads.len(), 2);
+        assert!(result.is_some());
+        let DeclKind::EnumVariant {
+            name,
+            payloads,
+            result,
+            ..
+        } = &body.decls[2].kind
+        else {
+            panic!("expected variant");
+        };
+        assert_eq!(name.name_str(), "unit");
+        assert!(payloads.is_empty());
+        assert!(result.is_some());
     }
 
     #[test]
@@ -1721,7 +1757,7 @@ pub mod tests {
                 generics: vec![],
                 where_clause: None,
                 body: any_body!(vec![
-                    any_decl!(DeclKind::EnumVariant(
+                    any_decl!(enum_variant(
                         Name::Raw("foo".into()),
                         Span::ANY,
                         vec![
@@ -1745,7 +1781,7 @@ pub mod tests {
                             },
                         ]
                     )),
-                    any_decl!(DeclKind::EnumVariant(
+                    any_decl!(enum_variant(
                         Name::Raw("bar".into()),
                         Span::ANY,
                         vec![
@@ -1983,7 +2019,7 @@ pub mod tests {
                 generics: vec![],
                 where_clause: None,
                 body: any_body!(vec![
-                    any_decl!(DeclKind::EnumVariant(
+                    any_decl!(enum_variant(
                         Name::Raw("val".into()),
                         Span::ANY,
                         vec![TypeAnnotation {
@@ -1996,11 +2032,7 @@ pub mod tests {
                             }
                         }]
                     )),
-                    any_decl!(DeclKind::EnumVariant(
-                        Name::Raw("nope".into()),
-                        Span::ANY,
-                        vec![]
-                    )),
+                    any_decl!(enum_variant(Name::Raw("nope".into()), Span::ANY, vec![])),
                     any_decl!(DeclKind::Method {
                         is_static: false,
                         func: Box::new(Func {
@@ -2563,6 +2595,82 @@ pub mod tests {
                 })
             ))
         );
+    }
+
+    #[test]
+    fn parses_any_protocol_type() {
+        let parsed = parse(
+            "
+        typealias AnyShowable = any Showable
+        ",
+        );
+
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::TypeAlias(
+                "AnyShowable".into(),
+                Span::ANY,
+                annotation!(TypeAnnotationKind::Any {
+                    protocol: annotation!(TypeAnnotationKind::Nominal {
+                        name: "Showable".into(),
+                        name_span: Span::ANY,
+                        generics: vec![]
+                    })
+                    .into(),
+                    assoc_bindings: vec![]
+                })
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_any_protocol_associated_type_bindings() {
+        let parsed = parse(
+            "
+        typealias AnyIntIterator = any Iterator<Element = Int>
+        ",
+        );
+
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::TypeAlias(
+                "AnyIntIterator".into(),
+                Span::ANY,
+                annotation!(TypeAnnotationKind::Any {
+                    protocol: annotation!(TypeAnnotationKind::Nominal {
+                        name: "Iterator".into(),
+                        name_span: Span::ANY,
+                        generics: vec![]
+                    })
+                    .into(),
+                    assoc_bindings: vec![AnyAssocBinding {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        name: "Element".into(),
+                        name_span: Span::ANY,
+                        value: annotation!(TypeAnnotationKind::Nominal {
+                            name: "Int".into(),
+                            name_span: Span::ANY,
+                            generics: vec![]
+                        })
+                    }]
+                })
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_positional_any_associated_type_bindings() {
+        let parser = Parser::new(
+            "-",
+            FileID(0),
+            Lexer::new("typealias Bad = any Iterator<Int>"),
+        );
+
+        assert!(matches!(
+            parser.parse(),
+            Err(ParserError::UnexpectedToken { .. })
+        ));
     }
 
     #[test]

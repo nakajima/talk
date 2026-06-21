@@ -7,6 +7,19 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+pub struct AnyAssocBinding {
+    #[drive(skip)]
+    pub id: NodeID,
+    #[drive(skip)]
+    pub name: Name,
+    #[drive(skip)]
+    pub name_span: Span,
+    pub value: TypeAnnotation,
+    #[drive(skip)]
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum TypeAnnotationKind {
     SelfType(#[drive(skip)] Name),
     Func {
@@ -31,6 +44,10 @@ pub enum TypeAnnotationKind {
     Tuple(Vec<TypeAnnotation>),
     Record {
         fields: Vec<RecordFieldTypeAnnotation>,
+    },
+    Any {
+        protocol: Box<TypeAnnotation>,
+        assoc_bindings: Vec<AnyAssocBinding>,
     },
 }
 

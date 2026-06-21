@@ -40,7 +40,11 @@ impl MemKind {
             TyKind::F64 => Some(MemKind::F64),
             TyKind::Bool => Some(MemKind::Bool),
             TyKind::Ptr => Some(MemKind::Ptr),
-            TyKind::Boxed(_) | TyKind::Variant(_) | TyKind::Tuple(_) => Some(MemKind::Boxed),
+            TyKind::Boxed(_)
+            | TyKind::Variant(_)
+            | TyKind::Tuple(_)
+            | TyKind::Existential(_)
+            | TyKind::Erased => Some(MemKind::Boxed),
             TyKind::Void | TyKind::Bot | TyKind::Fn(..) | TyKind::Cell(_) => None,
         }
     }
@@ -49,18 +53,60 @@ impl MemKind {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Insn {
     /// dest ← consts[k]
-    Const { dest: u16, k: u32 },
-    Move { dest: u16, src: u16 },
-    Add { dest: u16, a: u16, b: u16 },
-    Sub { dest: u16, a: u16, b: u16 },
-    Mul { dest: u16, a: u16, b: u16 },
-    Div { dest: u16, a: u16, b: u16 },
-    Cmp { dest: u16, a: u16, b: u16, op: CmpOp },
-    Trunc { dest: u16, src: u16 },
-    IToF { dest: u16, src: u16 },
-    CellNew { dest: u16, init: u16 },
-    CellGet { dest: u16, cell: u16 },
-    CellSet { cell: u16, src: u16 },
+    Const {
+        dest: u16,
+        k: u32,
+    },
+    Move {
+        dest: u16,
+        src: u16,
+    },
+    Add {
+        dest: u16,
+        a: u16,
+        b: u16,
+    },
+    Sub {
+        dest: u16,
+        a: u16,
+        b: u16,
+    },
+    Mul {
+        dest: u16,
+        a: u16,
+        b: u16,
+    },
+    Div {
+        dest: u16,
+        a: u16,
+        b: u16,
+    },
+    Cmp {
+        dest: u16,
+        a: u16,
+        b: u16,
+        op: CmpOp,
+    },
+    Trunc {
+        dest: u16,
+        src: u16,
+    },
+    IToF {
+        dest: u16,
+        src: u16,
+    },
+    CellNew {
+        dest: u16,
+        init: u16,
+    },
+    CellGet {
+        dest: u16,
+        cell: u16,
+    },
+    CellSet {
+        cell: u16,
+        src: u16,
+    },
     /// dest ← fresh record with fields from the arg pool (registers).
     RecordNew {
         dest: u16,
@@ -68,7 +114,11 @@ pub enum Insn {
         args_start: u32,
         args_len: u16,
     },
-    GetField { dest: u16, rec: u16, index: u16 },
+    GetField {
+        dest: u16,
+        rec: u16,
+        index: u16,
+    },
     /// dest ← fresh variant (enum value) with payloads from the arg pool.
     VariantNew {
         dest: u16,
@@ -78,9 +128,34 @@ pub enum Insn {
         args_len: u16,
     },
     /// dest ← the variant's tag, as an integer (feeds Switch).
-    GetTag { dest: u16, src: u16 },
+    GetTag {
+        dest: u16,
+        src: u16,
+    },
     /// dest ← payload `index` of the variant in src.
-    GetPayload { dest: u16, src: u16, index: u16 },
+    GetPayload {
+        dest: u16,
+        src: u16,
+        index: u16,
+    },
+    /// dest ← existential package with payload followed by witness closures.
+    ExistentialPack {
+        dest: u16,
+        protocol: crate::name_resolution::symbol::Symbol,
+        args_start: u32,
+        args_len: u16,
+    },
+    /// dest ← witness closure at `index` from the existential in src.
+    ExistentialWitness {
+        dest: u16,
+        src: u16,
+        index: u16,
+    },
+    /// dest ← hidden payload from the existential in src.
+    ExistentialPayload {
+        dest: u16,
+        src: u16,
+    },
     /// dest ← tuple of the arg-pool registers (kept boxed in v1; Thorin
     /// CGO 2015 flattens tuples into registers — the documented
     /// optimization path).
@@ -90,24 +165,54 @@ pub enum Insn {
         args_len: u16,
     },
     /// dest ← element `index` of the tuple in src.
-    Extract { dest: u16, src: u16, index: u16 },
+    Extract {
+        dest: u16,
+        src: u16,
+        index: u16,
+    },
     /// dest ← rec with field `index` replaced by src (functional update —
     /// mutable value semantics; the Rc copy is CoW).
-    SetField { dest: u16, rec: u16, src: u16, index: u16 },
+    SetField {
+        dest: u16,
+        rec: u16,
+        src: u16,
+        index: u16,
+    },
     /// dest ← address of `count` fresh zero bytes (bump allocation).
-    Alloc { dest: u16, count: u16 },
+    Alloc {
+        dest: u16,
+        count: u16,
+    },
     /// dest ← one `kind`-sized read at the address in ptr.
-    Load { dest: u16, ptr: u16, kind: MemKind },
+    Load {
+        dest: u16,
+        ptr: u16,
+        kind: MemKind,
+    },
     /// One `kind`-sized write of src at the address in ptr.
-    Store { ptr: u16, src: u16, kind: MemKind },
-    Copy { from: u16, to: u16, len: u16 },
+    Store {
+        ptr: u16,
+        src: u16,
+        kind: MemKind,
+    },
+    Copy {
+        from: u16,
+        to: u16,
+        len: u16,
+    },
     /// dest ← one io operation through the machine's IO boundary
     /// (POSIX return conventions; negative = errno). `a`, `b`, `c` are
     /// the operation's register operands in core/IO.tlk's IORequest
     /// order; unused trailing operands are 0. Pointer operands are
     /// marshaled against byte memory at execution (read fills it, open
     /// scans a NUL-terminated path, poll round-trips pollfd records).
-    Io { dest: u16, op: IoOp, a: u16, b: u16, c: u16 },
+    Io {
+        dest: u16,
+        op: IoOp,
+        a: u16,
+        b: u16,
+        c: u16,
+    },
     /// Call chunks[chunk] with args regs listed in the arg pool; the
     /// callee's Ret writes `dest` in this frame.
     Call {
@@ -126,7 +231,10 @@ pub enum Insn {
         args_len: u16,
     },
     /// dest ← the current frame's closure environment at `index`.
-    EnvGet { dest: u16, index: u16 },
+    EnvGet {
+        dest: u16,
+        index: u16,
+    },
     /// Call the closure in register `callee` (its chunk, with its
     /// environment installed in the new frame).
     CallIndirect {
@@ -135,8 +243,14 @@ pub enum Insn {
         args_start: u32,
         args_len: u16,
     },
-    Jump { target: u32 },
-    Branch { cond: u16, then_target: u32, else_target: u32 },
+    Jump {
+        target: u32,
+    },
+    Branch {
+        cond: u16,
+        then_target: u32,
+        else_target: u32,
+    },
     /// Jump-table dispatch on an integer tag: targets live in the switch
     /// pool as [arm_0, …, arm_n, default]; a tag outside 0..n takes the
     /// default (decision-tree dispatch — Maranget, ML 2008).
@@ -145,10 +259,14 @@ pub enum Insn {
         targets_start: u32,
         targets_len: u16,
     },
-    Ret { src: u16 },
+    Ret {
+        src: u16,
+    },
     /// A lowering/scheduling hole (unsupported construct); trapping keeps
     /// partial programs honest instead of silently misbehaving.
-    Trap { message: u32 },
+    Trap {
+        message: u32,
+    },
 }
 
 /// The io dialect — one operation per core/IO.tlk IORequest case.
@@ -241,7 +359,10 @@ impl Module {
             Insn::Mul { dest, a, b } => format!("mul r{dest} <- r{a}, r{b}"),
             Insn::Div { dest, a, b } => format!("div r{dest} <- r{a}, r{b}"),
             Insn::Cmp { dest, a, b, op } => {
-                format!("cmp_{} r{dest} <- r{a}, r{b}", format!("{op:?}").to_lowercase())
+                format!(
+                    "cmp_{} r{dest} <- r{a}, r{b}",
+                    format!("{op:?}").to_lowercase()
+                )
             }
             Insn::Trunc { dest, src } => format!("trunc r{dest} <- r{src}"),
             Insn::IToF { dest, src } => format!("itof r{dest} <- r{src}"),
@@ -274,6 +395,21 @@ impl Module {
             Insn::GetPayload { dest, src, index } => {
                 format!("get_payload r{dest} <- r{src}.{index}")
             }
+            Insn::ExistentialPack {
+                dest,
+                protocol,
+                args_start,
+                args_len,
+            } => format!(
+                "existential_pack r{dest} <- any {protocol}({})",
+                self.render_args(*args_start, *args_len)
+            ),
+            Insn::ExistentialWitness { dest, src, index } => {
+                format!("existential_witness r{dest} <- r{src}.{index}")
+            }
+            Insn::ExistentialPayload { dest, src } => {
+                format!("existential_payload r{dest} <- r{src}")
+            }
             Insn::TupleNew {
                 dest,
                 args_start,
@@ -291,10 +427,16 @@ impl Module {
             } => format!("set_field r{dest} <- r{rec} with .{index} = r{src}"),
             Insn::Alloc { dest, count } => format!("alloc r{dest} <- r{count} bytes"),
             Insn::Load { dest, ptr, kind } => {
-                format!("load_{} r{dest} <- [r{ptr}]", format!("{kind:?}").to_lowercase())
+                format!(
+                    "load_{} r{dest} <- [r{ptr}]",
+                    format!("{kind:?}").to_lowercase()
+                )
             }
             Insn::Store { ptr, src, kind } => {
-                format!("store_{} [r{ptr}] <- r{src}", format!("{kind:?}").to_lowercase())
+                format!(
+                    "store_{} [r{ptr}] <- r{src}",
+                    format!("{kind:?}").to_lowercase()
+                )
             }
             Insn::Copy { from, to, len } => format!("copy [r{to}] <- [r{from}], r{len} bytes"),
             Insn::Io { dest, op, a, b, c } => {
@@ -348,10 +490,7 @@ impl Module {
                     [*targets_start as usize..*targets_start as usize + *targets_len as usize];
                 let (default, arms) = targets.split_last().unwrap_or((&0, &[]));
                 let arms: Vec<String> = arms.iter().map(|t| t.to_string()).collect();
-                format!(
-                    "switch r{tag} -> [{}] default {default}",
-                    arms.join(", ")
-                )
+                format!("switch r{tag} -> [{}] default {default}", arms.join(", "))
             }
             Insn::Ret { src } => format!("ret r{src}"),
             Insn::Trap { message } => {

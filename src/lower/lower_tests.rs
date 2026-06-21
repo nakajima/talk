@@ -45,7 +45,11 @@ pub mod tests {
             .resolve_names()
             .expect("resolve")
             .type_check();
-        assert!(!typed.has_errors(), "type errors: {:?}", typed.diagnostics());
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
         let lowered = typed.lower();
         assert!(
             lowered
@@ -108,7 +112,9 @@ pub mod tests {
         // Mutable locals are assignment-converted to cells (ORBIT-style);
         // loops are recursive continuations.
         assert_eq!(
-            run("func count() -> Int {\n\tlet i = 0\n\tloop {\n\t\tif i >= 5 { break }\n\t\ti = i + 1\n\t}\n\ti\n}\ncount()"),
+            run(
+                "func count() -> Int {\n\tlet i = 0\n\tloop {\n\t\tif i >= 5 { break }\n\t\ti = i + 1\n\t}\n\ti\n}\ncount()"
+            ),
             EvalValue::I64(5)
         );
     }
@@ -116,7 +122,9 @@ pub mod tests {
     #[test]
     fn conditional_loops() {
         assert_eq!(
-            run("func sum() -> Int {\n\tlet total = 0\n\tlet i = 0\n\tloop i < 4 {\n\t\ttotal = total + i\n\t\ti = i + 1\n\t}\n\ttotal\n}\nsum()"),
+            run(
+                "func sum() -> Int {\n\tlet total = 0\n\tlet i = 0\n\tloop i < 4 {\n\t\ttotal = total + i\n\t\ti = i + 1\n\t}\n\ttotal\n}\nsum()"
+            ),
             EvalValue::I64(6)
         );
     }
@@ -124,7 +132,9 @@ pub mod tests {
     #[test]
     fn continue_skips() {
         assert_eq!(
-            run("func evens() -> Int {\n\tlet total = 0\n\tlet i = 0\n\tloop {\n\t\tif i >= 6 {\n\t\t\tbreak\n\t\t}\n\t\ti = i + 1\n\t\tif i > 3 {\n\t\t\tcontinue\n\t\t}\n\t\ttotal = total + i\n\t}\n\ttotal\n}\nevens()"),
+            run(
+                "func evens() -> Int {\n\tlet total = 0\n\tlet i = 0\n\tloop {\n\t\tif i >= 6 {\n\t\t\tbreak\n\t\t}\n\t\ti = i + 1\n\t\tif i > 3 {\n\t\t\tcontinue\n\t\t}\n\t\ttotal = total + i\n\t}\n\ttotal\n}\nevens()"
+            ),
             EvalValue::I64(6)
         );
     }
@@ -136,7 +146,9 @@ pub mod tests {
         // Equatable/Comparable witnesses), Subtract/Add witnesses, and
         // monomorphization of fib itself.
         assert_eq!(
-            run("func fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n - 2) + fib(n - 1)\n}\nfib(10)"),
+            run(
+                "func fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n - 2) + fib(n - 1)\n}\nfib(10)"
+            ),
             EvalValue::I64(55)
         );
     }

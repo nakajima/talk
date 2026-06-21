@@ -19,7 +19,7 @@ use crate::lambda_g::program::Label;
 use crate::name_resolution::symbol::Symbol;
 use crate::types::ty::Ty as CheckTy;
 
-use super::{theta_key, Lowering, Theta};
+use super::{Lowering, Theta, theta_key};
 
 /// One piece of the rendered output.
 enum Piece {
@@ -76,38 +76,41 @@ impl<'a> Lowering<'a> {
                 .copied()
                 .zip(head_args.iter().cloned())
                 .collect();
+            let no_effs = Default::default();
+            let no_rows = Default::default();
+            let self_check_ty = CheckTy::Nominal(*head_symbol, head_args.to_vec());
             // One switch arm per variant, each rendering its own pieces.
             let void_ty = self.p.ty_void();
             let trap = self.p.func("derived_show_failed", void_ty, bot);
             let trap_ref = self.p.func_ref(trap);
             let mut arm_refs = Vec::with_capacity(info.variants.len());
             for (variant_name, variant) in info.variants.iter() {
+                let Some(instantiation) = variant
+                    .instantiate(&subst, &no_effs, &no_rows)
+                    .refined_by_result(&self_check_ty)
+                else {
+                    arm_refs.push(trap_ref);
+                    continue;
+                };
                 let mut pieces = vec![];
-                if variant.payloads.is_empty() {
+                if instantiation.argument_types.is_empty() {
                     pieces.push(Piece::Lit(format!("{type_name}.{variant_name}")));
                 } else {
                     pieces.push(Piece::Lit(format!("{type_name}.{variant_name}(")));
-                    for (i, payload) in variant.payloads.iter().enumerate() {
+                    for (i, payload_ty) in instantiation.argument_types.iter().enumerate() {
                         if i > 0 {
                             pieces.push(Piece::Lit(", ".into()));
                         }
-                        let payload_ty = payload.substitute(
-                            &subst,
-                            &Default::default(),
-                            &Default::default(),
-                        );
-                        let lam_ty = self.map_ty(&payload_ty);
-                        let value =
-                            self.p
-                                .primop(Op::GetPayload(i as u32), &[self_value], lam_ty);
-                        pieces.push(Piece::Show(value, payload_ty));
+                        let lam_ty = self.map_ty(payload_ty);
+                        let value = self
+                            .p
+                            .primop(Op::GetPayload(i as u32), &[self_value], lam_ty);
+                        pieces.push(Piece::Show(value, payload_ty.clone()));
                     }
                     pieces.push(Piece::Lit(")".into()));
                 }
                 let arm_body = self.render_pieces(protocol, requirement, pieces, k)?;
-                let case = self
-                    .p
-                    .func(&format!("show_{variant_name}"), void_ty, bot);
+                let case = self.p.func(&format!("show_{variant_name}"), void_ty, bot);
                 self.p.set_body(case, arm_body);
                 arm_refs.push(self.p.func_ref(case));
             }
@@ -139,9 +142,7 @@ impl<'a> Lowering<'a> {
                     let field_ty =
                         field_ty.substitute(&subst, &Default::default(), &Default::default());
                     let lam_ty = self.map_ty(&field_ty);
-                    let value = self
-                        .p
-                        .primop(Op::GetField(i as u32), &[self_value], lam_ty);
+                    let value = self.p.primop(Op::GetField(i as u32), &[self_value], lam_ty);
                     pieces.push(Piece::Show(value, field_ty));
                 }
                 pieces.push(Piece::Lit(")".into()));
@@ -209,13 +210,11 @@ impl<'a> Lowering<'a> {
             }
             Piece::Show(value, ty) => {
                 // s ← show(value); acc ← acc + s; continue.
-                let (show, _) =
-                    self.resolve_witness(protocol, requirement, "show".into(), ty)?;
+                let (show, _) = self.resolve_witness(protocol, requirement, "show".into(), ty)?;
                 let add = self.string_add()?;
                 let joined = self.p.func("show_acc", string_ty, bot);
                 let joined_var = self.p.var(joined);
-                let joined_body =
-                    self.render_rest(protocol, requirement, joined_var, rest, k)?;
+                let joined_body = self.render_rest(protocol, requirement, joined_var, rest, k)?;
                 self.p.set_body(joined, joined_body);
                 let joined_ref = self.p.func_ref(joined);
 

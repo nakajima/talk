@@ -3,6 +3,7 @@ use crate::token_kind::TokenKind;
 pub(super) fn handle(string: &str) -> TokenKind {
     use TokenKind::*;
     match string {
+        "any" => Any,
         "as" => As,
         "func" => Func,
         "let" => Let,

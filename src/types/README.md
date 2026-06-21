@@ -365,6 +365,58 @@ conformance gets one synthesized structurally, and recursive types are
 handled by assuming the conformance while deriving it (otherwise a
 recursive enum would recurse forever).
 
+Future first-class protocol existentials are specified in ADR 0003.
+They use a real `Ty::Any { protocol, assoc }` type, interpreted as an
+existential package of payload plus protocol evidence. Implicit packing
+is allowed only when an expected `any P` type is known. The pack path
+must first check whether the source is already an existential: the same
+canonical `any P` assigns directly, but a different `any Q` is rejected
+in v1 instead of being repacked through synthesized self-conformance.
+That guard preserves the documented no-upcasting boundary.
+
+## Enum variant constructor schemes
+
+Enum variants are cataloged as constructor schemes, following the
+GADT reading that data constructors are ordinary polymorphic functions
+at construction sites (Peyton Jones, Vytiniotis, Weirich, and
+Washburn, ICFP 2006). Ordinary cases default their result to the
+enclosing enum applied to its parameters:
+
+```talk
+enum Option<T> {
+    case some(T) // constructor scheme: forall T. T -> Option<T>
+}
+```
+
+Cases may also spell an explicit result type and case-local generics:
+
+```talk
+enum Expr<T> {
+    case int(Int) -> Expr<Int>
+    case pair<A, B>(Expr<A>, Expr<B>) -> Expr<(A, B)>
+}
+```
+
+The catalog records exactly the variables mentioned by the
+constructor type and inline bounds. Pattern-time GADT refinements are
+separate: matching a constructor instantiates any case-local variables
+as arm-local rigid parameters, decomposes the constructor result into
+local equality givens, and checks the arm body inside an OutsideIn-style
+implication. Constructor-local variables may not escape the arm unless
+first-class existentials are added later.
+
+Coverage uses the same constructor schemes: impossible variants are
+filtered out by result-type satisfiability before Maranget usefulness
+runs, so `Expr<Int>` does not require an `Expr<Bool>` case.
+
+When a GADT match has no expected result type, the checker creates one
+fresh result variable shared by all arms. Arm implications may float
+simplified residuals outward when they do not mention constructor-local
+existentials, so matches whose branches agree on a concrete result can
+still infer that result. If branches require different refinement-specific
+results, the checker asks for a return or let annotation instead of
+inventing a non-principal type.
+
 ## What comes out
 
 `TypeOutput` carries: per-node types (hover and the REPL), finished

@@ -18,7 +18,11 @@ pub mod tests {
             .resolve_names()
             .expect("resolve")
             .type_check();
-        assert!(!typed.has_errors(), "type errors: {:?}", typed.diagnostics());
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
         let mut lowered = typed.lower();
         assert!(
             lowered.phase.diagnostics.is_empty(),
@@ -41,10 +45,7 @@ pub mod tests {
             (EvalValue::Void, Value::Void) => true,
             _ => false,
         };
-        assert!(
-            matches,
-            "evaluator {evaluator_value:?} != vm {vm_value:?}"
-        );
+        assert!(matches, "evaluator {evaluator_value:?} != vm {vm_value:?}");
         vm_value
     }
 
@@ -55,12 +56,18 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_branches() {
-        assert_eq!(run_on_both_engines("if 2 > 3 { 1 } else { 2 }"), Value::I64(2));
+        assert_eq!(
+            run_on_both_engines("if 2 > 3 { 1 } else { 2 }"),
+            Value::I64(2)
+        );
     }
 
     #[test]
     fn vm_matches_evaluator_on_locals() {
-        assert_eq!(run_on_both_engines("let a = 4\nlet b = a + 1\nb * 2"), Value::I64(10));
+        assert_eq!(
+            run_on_both_engines("let a = 4\nlet b = a + 1\nb * 2"),
+            Value::I64(10)
+        );
     }
 
     #[test]
@@ -68,6 +75,76 @@ pub mod tests {
         assert_eq!(
             run_on_both_engines("func double(x: Int) -> Int { x * 2 }\ndouble(21)"),
             Value::I64(42)
+        );
+    }
+
+    #[test]
+    fn vm_runs_existential_member_dispatch() {
+        assert_eq!(
+            run_on_both_engines(
+                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nlet x: any Number = 41\nx.value()"
+            ),
+            Value::I64(41)
+        );
+    }
+
+    #[test]
+    fn vm_runs_existential_return_and_generic_bound_dispatch() {
+        assert_eq!(
+            run_on_both_engines(
+                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nfunc make() -> any Number { 9 }\nfunc render<T: Number>(x: T) -> Int { x.value() }\nrender(make())"
+            ),
+            Value::I64(9)
+        );
+    }
+
+    #[test]
+    fn vm_runs_existentials_in_records_and_enums() {
+        assert_eq!(
+            run_on_both_engines(
+                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nstruct Box {\n\tlet item: any Number\n}\nenum MaybeNumber {\n\tcase some(any Number)\n}\nlet box = Box(item: 12)\nlet maybe = MaybeNumber.some(box.item)\nmatch maybe {\n\tMaybeNumber.some(value) -> value.value()\n}"
+            ),
+            Value::I64(12)
+        );
+    }
+
+    #[test]
+    fn vm_runs_existentials_in_arrays() {
+        assert_eq!(
+            run_on_both_engines(
+                "protocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nlet values: Array<any Number> = [3, 4]\nvalues.get(1).value()"
+            ),
+            Value::I64(4)
+        );
+    }
+
+    #[test]
+    fn vm_runs_gadt_hidden_payload_packed_as_existential() {
+        assert_eq!(
+            run_on_both_engines(
+                "// no-core\nprotocol Showable {\n\tfunc show() -> Int\n}\nextend Int: Showable {\n\tfunc show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n\tmatch box {\n\t\t.hidden(value) -> value\n\t}\n}\nerase(GBox.hidden(5)).show()"
+            ),
+            Value::I64(5)
+        );
+    }
+
+    #[test]
+    fn vm_runs_gadt_hidden_payload_direct_bound_call() {
+        assert_eq!(
+            run_on_both_engines(
+                "// no-core\nprotocol Showable {\n\tfunc show() -> Int\n}\nextend Int: Showable {\n\tfunc show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc render(box: GBox<Bool>) -> Int {\n\tmatch box {\n\t\t.hidden(value) -> value.show()\n\t}\n}\nrender(GBox.hidden(6))"
+            ),
+            Value::I64(6)
+        );
+    }
+
+    #[test]
+    fn vm_runs_existential_member_dispatch_with_associated_binding() {
+        assert_eq!(
+            run_on_both_engines(
+                "// no-core\nprotocol Iterator {\n\tassociated Element\n\tfunc next() -> Element\n}\nstruct One {\n\tlet value: Int\n}\nextend One: Iterator {\n\ttypealias Element = Int\n\tfunc next() -> Int { self.value }\n}\nlet it: any Iterator<Element = Int> = One(value: 7)\nit.next()"
+            ),
+            Value::I64(7)
         );
     }
 
@@ -111,7 +188,11 @@ pub mod tests {
             .resolve_names()
             .expect("resolve")
             .type_check();
-        assert!(!typed.has_errors(), "type errors: {:?}", typed.diagnostics());
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
         let mut lowered = typed.lower();
         assert!(
             lowered.phase.diagnostics.is_empty(),
@@ -134,10 +215,7 @@ pub mod tests {
             (EvalValue::Tuple(..), Value::Tuple(..)) => true,
             _ => false,
         };
-        assert!(
-            matches,
-            "evaluator {evaluator_value:?} != vm {vm_value:?}"
-        );
+        assert!(matches, "evaluator {evaluator_value:?} != vm {vm_value:?}");
         assert_eq!(evaluator_out, vm_out, "stdout diverged");
         (vm_value, vm_out)
     }
@@ -232,9 +310,8 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_or_patterns() {
-        let (value, _) = run_on_both_engines_io(
-            "match 3 {\n\t1 | 2 -> 10,\n\t3 | 4 -> 20,\n\t_ -> 0\n}",
-        );
+        let (value, _) =
+            run_on_both_engines_io("match 3 {\n\t1 | 2 -> 10,\n\t3 | 4 -> 20,\n\t_ -> 0\n}");
         assert_eq!(value, Value::I64(20));
     }
 
@@ -296,9 +373,7 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_record_destructuring_let() {
-        let (value, _) = run_on_both_engines_io(
-            "let { x, y } = { x: 3, y: 4 }\nx + y",
-        );
+        let (value, _) = run_on_both_engines_io("let { x, y } = { x: 3, y: 4 }\nx + y");
         assert_eq!(value, Value::I64(7));
     }
 
@@ -535,9 +610,8 @@ pub mod tests {
     fn vm_matches_evaluator_on_main_with_top_level_bindings() {
         // Top-level lets initialize before main runs; main's value is the
         // program's value.
-        let (value, _) = run_on_both_engines_io(
-            "let base = 40\nfunc main() -> Int {\n\tbase + 2\n}",
-        );
+        let (value, _) =
+            run_on_both_engines_io("let base = 40\nfunc main() -> Int {\n\tbase + 2\n}");
         assert_eq!(value, Value::I64(42));
     }
 
@@ -687,12 +761,9 @@ pub mod tests {
     fn vm_matches_evaluator_on_empty_poll() {
         // Zero descriptors: poll reports zero ready (the marshaling
         // boundary, without hand-building pollfd records in Talk).
-        let (value, _) = run_on_both_engines_io(
-            "let fds = _alloc<Byte>(8)\n_io_poll(fds, 0, 0)",
-        );
+        let (value, _) = run_on_both_engines_io("let fds = _alloc<Byte>(8)\n_io_poll(fds, 0, 0)");
         assert_eq!(value, Value::I64(0));
     }
-
 
     // ----- Ports from the previous backend's interpreter suite (each old
     // test's behavior pinned here or noted in docs/parity-test-audit.md) --
@@ -714,11 +785,9 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_record_literal_members() {
-        let (value, _) =
-            run_on_both_engines_io("let r = { fizz: 123, buzz: 1.23 }\nr.fizz");
+        let (value, _) = run_on_both_engines_io("let r = { fizz: 123, buzz: 1.23 }\nr.fizz");
         assert_eq!(value, Value::I64(123));
-        let (value, _) =
-            run_on_both_engines_io("let r = { fizz: 123, buzz: 1.23 }\nr.buzz");
+        let (value, _) = run_on_both_engines_io("let r = { fizz: 123, buzz: 1.23 }\nr.buzz");
         assert_eq!(value, Value::F64(1.23));
     }
 
@@ -732,20 +801,17 @@ pub mod tests {
     fn vm_matches_evaluator_on_nested_record_field_assignment() {
         // a.b.c = 2 rebuilds b with c replaced, then a with b replaced
         // (value semantics, one store).
-        let (value, _) =
-            run_on_both_engines_io("let a = { b: { c: 1 } }\na.b.c = 2\na.b.c");
+        let (value, _) = run_on_both_engines_io("let a = { b: { c: 1 } }\na.b.c = 2\na.b.c");
         assert_eq!(value, Value::I64(2));
     }
 
     #[test]
     fn vm_matches_evaluator_on_generic_struct_field() {
-        let (value, _) = run_on_both_engines_io(
-            "struct Fizz<T> {\n\tlet buzz: T\n}\nFizz(buzz: 123).buzz",
-        );
+        let (value, _) =
+            run_on_both_engines_io("struct Fizz<T> {\n\tlet buzz: T\n}\nFizz(buzz: 123).buzz");
         assert_eq!(value, Value::I64(123));
-        let (value, _) = run_on_both_engines_io(
-            "struct Fizz<T> {\n\tlet buzz: T\n}\nFizz(buzz: 1.23).buzz",
-        );
+        let (value, _) =
+            run_on_both_engines_io("struct Fizz<T> {\n\tlet buzz: T\n}\nFizz(buzz: 1.23).buzz");
         assert_eq!(value, Value::F64(1.23));
     }
 
@@ -781,9 +847,8 @@ pub mod tests {
     fn vm_matches_evaluator_on_top_level_mut_closure() {
         // The closure mutates the top-level binding; the change is
         // visible after the call.
-        let (value, _) = run_on_both_engines_io(
-            "let a = 123\nfunc b() {\n\ta = a + 1\n\ta\n}\nb()\na",
-        );
+        let (value, _) =
+            run_on_both_engines_io("let a = 123\nfunc b() {\n\ta = a + 1\n\ta\n}\nb()\na");
         assert_eq!(value, Value::I64(124));
     }
 
@@ -955,9 +1020,8 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_float_trunc_then_show() {
-        let (_, out) = run_on_both_engines_io(
-            "let x = 1.5\nlet i = x._trunc()\nprint_raw(i.show())",
-        );
+        let (_, out) =
+            run_on_both_engines_io("let x = 1.5\nlet i = x._trunc()\nprint_raw(i.show())");
         assert_eq!(out, "1");
     }
 
@@ -1019,13 +1083,11 @@ pub mod tests {
     fn vm_matches_evaluator_on_negative_io_counts_pass_through() {
         // A failed read's errno fed straight into the next write (the
         // chat client's loop) must come back untouched, not trap.
-        let (value, _) = run_on_both_engines_io(
-            "let buf = _alloc<Byte>(16)\n_io_write(STDOUT_FD, buf, 0 - 91)",
-        );
+        let (value, _) =
+            run_on_both_engines_io("let buf = _alloc<Byte>(16)\n_io_write(STDOUT_FD, buf, 0 - 91)");
         assert_eq!(value, Value::I64(-91));
-        let (value, _) = run_on_both_engines_io(
-            "let buf = _alloc<Byte>(16)\n_io_read(STDIN_FD, buf, 0 - 91)",
-        );
+        let (value, _) =
+            run_on_both_engines_io("let buf = _alloc<Byte>(16)\n_io_read(STDIN_FD, buf, 0 - 91)");
         assert_eq!(value, Value::I64(-91));
     }
 
@@ -1116,7 +1178,6 @@ pub mod tests {
         assert!(out.contains("\r\n\r\nok"), "{out:?}");
     }
 
-
     /// Real libc descriptors (StdioIO): heap bytes round-trip through an
     /// actual Unix socketpair, bypassing CaptureIO's simulated loopback —
     /// the byte-level check on the host io marshaling.
@@ -1158,7 +1219,11 @@ pub mod tests {
             .resolve_names()
             .expect("resolve")
             .type_check();
-        assert!(!typed.has_errors(), "type errors: {:?}", typed.diagnostics());
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
         let mut lowered = typed.lower();
         assert!(
             lowered.phase.diagnostics.is_empty(),

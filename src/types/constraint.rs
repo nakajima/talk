@@ -10,9 +10,10 @@
 //! - `HasMember`: a Has-style predicate (Gaster & Jones, TR NOTTCS-TR-96-3,
 //!   1996) for member access on a type whose head is not yet known (solved
 //!   from milestone 3).
-//! - `Implic`: implication constraints carrying local given equalities under
-//!   untouchability levels (OutsideIn(X) §5). v1 generates none; GADT match
-//!   arms (milestone 8) will.
+//! - `Implic`: implication constraints carrying local givens, optional
+//!   untouchability levels, and future GADT existentials (OutsideIn(X) §5).
+//!   Declaration `where` clauses already use givens; GADT match arms will
+//!   additionally set touchability and local skolem parameters.
 //!
 //! Constraints are data with the lifetime of ONE binding group: created
 //! during generation, consumed by one `solve` call, then dropped. No store
@@ -29,6 +30,7 @@ pub enum CtReason {
     Annotation,
     Apply,
     Branch,
+    GadtBranch,
     Assignment,
     Return,
     Recursion,
@@ -98,11 +100,17 @@ impl Predicate {
     }
 }
 
-/// OutsideIn(X) §5: wanteds solved under local given equalities; variables
-/// from outside `level` are untouchable inside.
+/// OutsideIn(X) implication constraints (Vytiniotis, Peyton Jones,
+/// Schrijvers, Sulzmann, JFP 2011): wanteds solved under local givens. When
+/// `touchable_level` is set, variables from outside that level are
+/// untouchable inside. `local_params` are rigid skolems introduced by GADT
+/// patterns; Peyton Jones, Vytiniotis, Weirich, and Washburn (ICFP 2006)
+/// describe such constructor-local variables as existential and non-escaping.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Implication {
     pub level: Level,
     pub givens: Vec<Predicate>,
     pub wanteds: Vec<Constraint>,
+    pub local_params: Vec<crate::name_resolution::symbol::Symbol>,
+    pub touchable_level: Option<Level>,
 }

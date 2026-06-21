@@ -35,7 +35,7 @@ use crate::node_kinds::{
 };
 use crate::types::ty::Ty as CheckTy;
 
-use super::{Binding, Ctx, Lowering};
+use super::{Binding, Ctx, EvidenceBinding, Lowering};
 
 /// A matrix column's subject: a pure λ_G value plus its checker type.
 #[derive(Clone)]
@@ -68,6 +68,8 @@ struct Row<'p> {
     pats: Vec<Pat<'p>>,
     /// Binders whose columns have been consumed: symbol → bound value.
     binds: Vec<(Symbol, ExprId)>,
+    /// Runtime dictionaries brought into scope by consumed GADT constructors.
+    evidence: Vec<((Symbol, Symbol), EvidenceBinding)>,
     /// Index of the source arm this row came from.
     arm: usize,
 }
@@ -82,6 +84,16 @@ impl<'p> Row<'p> {
             && let Ok(symbol) = name.symbol()
         {
             row.binds.push((symbol, occ.value));
+        }
+        row
+    }
+
+    fn with_evidence(&self, evidence: &[((Symbol, Symbol), EvidenceBinding)]) -> Row<'p> {
+        let mut row = self.clone();
+        for (key, binding) in evidence {
+            if !row.evidence.iter().any(|(existing, _)| existing == key) {
+                row.evidence.push((*key, *binding));
+            }
         }
         row
     }
@@ -105,6 +117,7 @@ impl<'p> Row<'p> {
 /// shared by every later one.
 struct ArmTarget {
     binders: Vec<Symbol>,
+    evidence: Vec<(Symbol, Symbol)>,
     label: Option<Label>,
 }
 
@@ -132,6 +145,7 @@ pub(super) fn compile_match(
             }
             ArmTarget {
                 binders,
+                evidence: vec![],
                 label: None,
             }
         })
@@ -142,6 +156,7 @@ pub(super) fn compile_match(
         .map(|(arm, a)| Row {
             pats: vec![Pat::Source(&a.pattern)],
             binds: vec![],
+            evidence: vec![],
             arm,
         })
         .collect();
@@ -209,9 +224,9 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             PatternKind::Tuple(_) => self.tuple_column(occs, rows, column),
             PatternKind::Record { .. } => self.record_column(occs, rows, column),
             other => {
-                self.lowering.diagnostics.push(format!(
-                    "lowering: pattern not yet supported: {other:?}"
-                ));
+                self.lowering
+                    .diagnostics
+                    .push(format!("lowering: pattern not yet supported: {other:?}"));
                 self.trap_jump()
             }
         }
@@ -245,25 +260,53 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                 }
             }
         }
+        let evidence_by_key: FxHashMap<(Symbol, Symbol), EvidenceBinding> =
+            row.evidence.iter().copied().collect();
+        let mut evidence_values = vec![];
         let label = match self.targets[row.arm].label {
-            Some(label) => label,
-            None => self.make_arm(row.arm, &binders, &values),
+            Some(label) => {
+                for key in &self.targets[row.arm].evidence {
+                    match evidence_by_key.get(key) {
+                        Some(binding) => evidence_values.push(binding.table),
+                        None => {
+                            self.lowering
+                                .diagnostics
+                                .push(format!("lowering: missing GADT evidence for {key:?}"));
+                        }
+                    }
+                }
+                label
+            }
+            None => {
+                evidence_values.extend(row.evidence.iter().map(|(_, binding)| binding.table));
+                self.make_arm(row.arm, &binders, &values, &row.evidence)
+            }
         };
+        values.extend(evidence_values);
         let arg = self.lowering.p.tuple(&values);
         let func = self.lowering.p.func_ref(label);
         self.lowering.p.app(func, arg)
     }
 
     /// Lower the arm's body once, as a join point taking its binders.
-    fn make_arm(&mut self, arm: usize, binders: &[Symbol], values: &[ExprId]) -> Label {
-        let tys: Vec<_> = values
-            .iter()
-            .map(|v| self.lowering.p.expr_ty(*v))
-            .collect();
+    fn make_arm(
+        &mut self,
+        arm: usize,
+        binders: &[Symbol],
+        values: &[ExprId],
+        evidence: &[((Symbol, Symbol), EvidenceBinding)],
+    ) -> Label {
+        let mut tys: Vec<_> = values.iter().map(|v| self.lowering.p.expr_ty(*v)).collect();
+        tys.extend(
+            evidence
+                .iter()
+                .map(|(_, binding)| self.lowering.p.expr_ty(binding.table)),
+        );
         let dom = self.lowering.p.ty_tuple(&tys);
         let bot = self.lowering.p.ty_bot();
         let label = self.lowering.p.func("arm", dom, bot);
         self.targets[arm].label = Some(label);
+        self.targets[arm].evidence = evidence.iter().map(|(key, _)| *key).collect();
 
         let var = self.lowering.p.var(label);
         let mut inner = self.ctx.clone();
@@ -277,6 +320,16 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             } else {
                 inner.env.insert(*symbol, Binding::Value(value));
             }
+        }
+        for (i, (key, binding)) in evidence.iter().enumerate() {
+            let table = self.lowering.p.extract(var, (binders.len() + i) as u32);
+            inner.local_evidence.insert(
+                *key,
+                EvidenceBinding {
+                    protocol: binding.protocol,
+                    table,
+                },
+            );
         }
         let body_block = &self.arms[arm].body;
         let k = self.k;
@@ -306,9 +359,9 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             return self.trap_jump();
         };
         let Some(info) = self.lowering.enum_info(*enum_symbol) else {
-            self.lowering.diagnostics.push(format!(
-                "lowering: no enum catalog entry for {enum_symbol}"
-            ));
+            self.lowering
+                .diagnostics
+                .push(format!("lowering: no enum catalog entry for {enum_symbol}"));
             return self.trap_jump();
         };
         let subst: FxHashMap<Symbol, CheckTy> = info
@@ -317,6 +370,8 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             .copied()
             .zip(enum_args.iter().cloned())
             .collect();
+        let no_effs = FxHashMap::default();
+        let no_rows = FxHashMap::default();
 
         let void_ty = self.lowering.p.ty_void();
         let bot = self.lowering.p.ty_bot();
@@ -328,24 +383,36 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
         // from the matrix specialize to an empty matrix, which is the trap.
         let mut arm_refs = Vec::with_capacity(info.variants.len());
         for (variant_name, variant) in info.variants.iter() {
-            let payload_occs: Vec<Occurrence> = variant
-                .payloads
+            let Some(instantiation) = variant
+                .instantiate(&subst, &no_effs, &no_rows)
+                .refined_by_result(&occ.ty)
+            else {
+                arm_refs.push(trap_ref);
+                continue;
+            };
+            let payload_occs: Vec<Occurrence> = instantiation
+                .argument_types
                 .iter()
                 .enumerate()
-                .map(|(i, payload)| {
-                    let payload_ty =
-                        payload.substitute(&subst, &Default::default(), &Default::default());
-                    let lam_ty = self.lowering.map_ty(&payload_ty);
+                .map(|(i, payload_ty)| {
+                    let lam_ty = self.lowering.map_ty(payload_ty);
                     let value =
                         self.lowering
                             .p
                             .primop(Op::GetPayload(i as u32), &[occ.value], lam_ty);
                     Occurrence {
                         value,
-                        ty: payload_ty,
+                        ty: payload_ty.clone(),
                     }
                 })
                 .collect();
+            let gadt_evidence = self.lowering.variant_pattern_evidence(
+                variant,
+                &instantiation,
+                occ.value,
+                payload_occs.len(),
+                self.ctx.unit,
+            );
 
             let mut spec_rows: Vec<Row<'p>> = vec![];
             for row in &rows {
@@ -369,7 +436,10 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                     continue;
                 }
                 let cells: Vec<Pat<'p>> = fields.iter().map(Pat::Source).collect();
-                spec_rows.push(row.with_column_expanded(column, &occ, cells));
+                spec_rows.push(
+                    row.with_column_expanded(column, &occ, cells)
+                        .with_evidence(&gadt_evidence),
+                );
             }
 
             if spec_rows.is_empty() {
@@ -465,12 +535,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
 
     // ----- Irrefutable aggregate columns (expand in place, no branching) ------
 
-    fn tuple_column(
-        &mut self,
-        occs: Vec<Occurrence>,
-        rows: Vec<Row<'p>>,
-        column: usize,
-    ) -> ExprId {
+    fn tuple_column(&mut self, occs: Vec<Occurrence>, rows: Vec<Row<'p>>, column: usize) -> ExprId {
         let occ = occs[column].clone();
         let CheckTy::Tuple(items) = &occ.ty else {
             self.lowering.diagnostics.push(format!(
@@ -527,9 +592,9 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             return self.trap_jump();
         };
         if row_ty.tail.is_some() {
-            self.lowering.diagnostics.push(
-                "lowering: record pattern on an open row (not yet supported)".into(),
-            );
+            self.lowering
+                .diagnostics
+                .push("lowering: record pattern on an open row (not yet supported)".into());
             return self.trap_jump();
         }
         // One sub-occurrence per row field, in the row's canonical
@@ -668,10 +733,7 @@ pub(super) fn collect_irrefutable_binds(
                     RecordFieldPatternKind::Rest => continue,
                 };
                 let label = name.name_str();
-                let Some(index) = row
-                    .fields
-                    .iter()
-                    .position(|(l, _)| l.to_string() == label)
+                let Some(index) = row.fields.iter().position(|(l, _)| l.to_string() == label)
                 else {
                     lowering.diagnostics.push(format!(
                         "lowering: record pattern field '{label}' is not in the row"

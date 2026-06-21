@@ -9,7 +9,10 @@
 //! one the lowerer's decision-tree compiler uses (`src/lower/patterns.rs`,
 //! Maranget ICFP 2008) — there it picks tests to compile, here it answers
 //! the coverage question, so it runs over the checker's types and reports
-//! example values for anything missed.
+//! example values for anything missed. For GADTs, constructor universes are
+//! filtered by satisfiability of the constructor result against the scrutinee
+//! type, matching the type-directed applicability condition from Peyton
+//! Jones, Vytiniotis, Weirich, and Washburn (ICFP 2006).
 
 use rustc_hash::FxHashMap;
 
@@ -202,6 +205,42 @@ impl Coverage<'_> {
         }
     }
 
+    fn ctor_possible(&self, ctor: &Ctor, ty: &Ty) -> bool {
+        match ctor {
+            Ctor::Bool(_) => matches!(ty, Ty::Nominal(symbol, _) if *symbol == Symbol::Bool),
+            Ctor::Int(_) | Ctor::Float(_) => true,
+            Ctor::Tuple(n) => matches!(ty, Ty::Tuple(items) if items.len() == *n),
+            Ctor::Record(labels) => {
+                matches!(ty, Ty::Record(row) if row.fields.len() == labels.len())
+            }
+            Ctor::Variant(enum_symbol, name) => {
+                self.variant_instantiation(*enum_symbol, name, ty).is_some()
+            }
+        }
+    }
+
+    fn variant_instantiation(
+        &self,
+        enum_symbol: Symbol,
+        name: &str,
+        ty: &Ty,
+    ) -> Option<crate::types::variant::VariantInstantiation> {
+        let Ty::Nominal(symbol, args) = ty else {
+            return None;
+        };
+        if *symbol != enum_symbol {
+            return None;
+        }
+        let info = self.catalog.enums.get(&enum_symbol)?;
+        let variant = info.variants.get(name)?;
+        let tys: FxHashMap<Symbol, Ty> = info.params.iter().copied().zip(args.clone()).collect();
+        let no_effs = FxHashMap::default();
+        let no_rows = FxHashMap::default();
+        variant
+            .instantiate(&tys, &no_effs, &no_rows)
+            .refined_by_result(ty)
+    }
+
     fn arity(&self, ctor: &Ctor) -> usize {
         match ctor {
             Ctor::Bool(_) | Ctor::Int(_) | Ctor::Float(_) => 0,
@@ -212,7 +251,7 @@ impl Coverage<'_> {
                 .enums
                 .get(enum_symbol)
                 .and_then(|info| info.variants.get(name))
-                .map(|variant| variant.payloads.len())
+                .map(|variant| variant.argument_types().len())
                 .unwrap_or(0),
         }
     }
@@ -240,30 +279,10 @@ impl Coverage<'_> {
                     .map(|l| fields.get(l).copied().cloned().unwrap_or(Ty::Error))
                     .collect()
             }
-            Ctor::Variant(enum_symbol, name) => {
-                let Some(info) = self.catalog.enums.get(enum_symbol) else {
-                    return vec![];
-                };
-                let Some(variant) = info.variants.get(name) else {
-                    return vec![];
-                };
-                // Payloads range over the enum's parameters; instantiate
-                // them with the scrutinee's arguments (`Maybe<Bool>`'s
-                // `.some` payload is Bool).
-                let args = match ty {
-                    Ty::Nominal(symbol, args) if symbol == enum_symbol => args.clone(),
-                    _ => vec![],
-                };
-                let map: FxHashMap<Symbol, Ty> =
-                    info.params.iter().copied().zip(args).collect();
-                let no_effs = FxHashMap::default();
-                let no_rows = FxHashMap::default();
-                variant
-                    .payloads
-                    .iter()
-                    .map(|p| p.substitute(&map, &no_effs, &no_rows))
-                    .collect()
-            }
+            Ctor::Variant(enum_symbol, name) => self
+                .variant_instantiation(*enum_symbol, name, ty)
+                .map(|instantiation| instantiation.argument_types)
+                .unwrap_or_default(),
         }
     }
 
@@ -282,6 +301,7 @@ impl Coverage<'_> {
                     info.variants
                         .keys()
                         .map(|name| Ctor::Variant(*symbol, name.clone()))
+                        .filter(|ctor| self.ctor_possible(ctor, ty))
                         .collect(),
                 )
             }
@@ -378,7 +398,11 @@ impl Coverage<'_> {
         let Some((q_head, q_rest)) = q.split_first() else {
             // No columns left: q matches everything here, so it is useful
             // exactly when no row got here first.
-            return if rows.is_empty() { vec![vec![]] } else { vec![] };
+            return if rows.is_empty() {
+                vec![vec![]]
+            } else {
+                vec![]
+            };
         };
         let (ty_head, ty_rest) = match tys.split_first() {
             Some((head, rest)) => (head.clone(), rest),
@@ -398,6 +422,9 @@ impl Coverage<'_> {
                 out
             }
             Pat::Ctor(ctor, args) => {
+                if !self.ctor_possible(ctor, &ty_head) {
+                    return vec![];
+                }
                 let mut q = args.clone();
                 q.resize(self.arity(ctor), Pat::Wild);
                 q.extend_from_slice(q_rest);
@@ -501,19 +528,10 @@ fn rebuild(ctor: &Ctor, arity: usize, mut witness: Vec<Pat>) -> Vec<Pat> {
 
 /// Render a witness the way the user would write it as a pattern.
 fn render(pat: &Pat) -> String {
-    let list = |pats: &[Pat]| {
-        pats.iter()
-            .map(render)
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+    let list = |pats: &[Pat]| pats.iter().map(render).collect::<Vec<_>>().join(", ");
     match pat {
         Pat::Wild => "_".into(),
-        Pat::Or(alts) => alts
-            .iter()
-            .map(render)
-            .collect::<Vec<_>>()
-            .join(" | "),
+        Pat::Or(alts) => alts.iter().map(render).collect::<Vec<_>>().join(" | "),
         Pat::Ctor(ctor, args) => match ctor {
             Ctor::Bool(value) => value.to_string(),
             Ctor::Int(value) => value.to_string(),

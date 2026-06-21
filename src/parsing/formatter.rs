@@ -599,7 +599,13 @@ impl<'a> Formatter<'a> {
                 body,
                 ..
             } => self.format_enum_decl(name, generics, where_clause.as_ref(), body),
-            DeclKind::EnumVariant(name, .., types) => self.format_enum_variant(name, types),
+            DeclKind::EnumVariant {
+                name,
+                generics,
+                payloads,
+                result,
+                ..
+            } => self.format_enum_variant(name, generics, payloads, result.as_ref()),
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
             DeclKind::MethodRequirement(sig) => self.format_func_signature(sig),
             DeclKind::TypeAlias(lhs, .., rhs) => self.format_type_alias(lhs, rhs),
@@ -1415,6 +1421,30 @@ impl<'a> Formatter<'a> {
         match &ty.kind {
             TypeAnnotationKind::SelfType(..) => text("Self"),
             TypeAnnotationKind::Record { fields } => self.format_record_type_annotation(fields),
+            TypeAnnotationKind::Any {
+                protocol,
+                assoc_bindings,
+            } => {
+                let mut result = concat_space(text("any"), self.format_type_annotation(protocol));
+                if !assoc_bindings.is_empty() {
+                    let bindings: Vec<_> = assoc_bindings
+                        .iter()
+                        .map(|binding| {
+                            self.format_name(&binding.name)
+                                + text(" = ")
+                                + self.format_type_annotation(&binding.value)
+                        })
+                        .collect();
+                    result = concat(
+                        result,
+                        concat(
+                            text("<"),
+                            concat(join(bindings, concat(text(","), text(" "))), text(">")),
+                        ),
+                    );
+                }
+                result
+            }
             TypeAnnotationKind::NominalPath {
                 base,
                 member,
@@ -1746,8 +1776,28 @@ impl<'a> Formatter<'a> {
         )
     }
 
-    fn format_enum_variant(&self, name: &Name, types: &[TypeAnnotation]) -> Doc {
+    fn format_enum_variant(
+        &self,
+        name: &Name,
+        generics: &[GenericDecl],
+        types: &[TypeAnnotation],
+        case_result: Option<&TypeAnnotation>,
+    ) -> Doc {
         let mut result = concat_space(text("case"), self.format_name(name));
+
+        if !generics.is_empty() {
+            let generic_docs: Vec<_> = generics
+                .iter()
+                .map(|g| self.format_generic_decl(g))
+                .collect();
+            result = concat(
+                result,
+                concat(
+                    text("<"),
+                    concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
+                ),
+            );
+        }
 
         if !types.is_empty() {
             let type_docs: Vec<_> = types
@@ -1761,6 +1811,13 @@ impl<'a> Formatter<'a> {
                     text("("),
                     concat(join(type_docs, concat(text(","), text(" "))), text(")")),
                 ),
+            );
+        }
+
+        if let Some(case_result) = case_result {
+            result = concat_space(
+                result,
+                concat_space(text("->"), self.format_type_annotation(case_result)),
             );
         }
 

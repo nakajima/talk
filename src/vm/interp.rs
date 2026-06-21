@@ -28,6 +28,8 @@ pub enum Value {
     /// A tagged enum value: enum symbol, variant declaration index, and
     /// payloads (pure, like records).
     Variant(Symbol, u16, Rc<Vec<Value>>),
+    /// A protocol existential: hidden payload plus erased witness closures.
+    Existential(Symbol, Rc<Value>, Rc<Vec<Value>>),
     /// A flat closure: target chunk plus its captured environment
     /// (Cardelli, LFP 1984).
     Closure(u32, Rc<Vec<Value>>),
@@ -66,10 +68,7 @@ pub fn run_displayed(
     Ok((value, display))
 }
 
-fn run_machine<'io>(
-    module: &Module,
-    io: &'io mut dyn IO,
-) -> Result<(Value, Machine<'io>), String> {
+fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Machine<'io>), String> {
     let entry = chunk(module, module.entry)?;
     let empty_env: Rc<Vec<Value>> = Rc::new(vec![]);
     let mut frames = vec![Frame {
@@ -274,6 +273,7 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> String 
                 format!("{name}.{case}({})", payloads.join(", "))
             }
         }
+        Value::Existential(_, payload, _) => render_value(machine, names, payload),
         Value::Closure(..) => "<func>".to_string(),
         Value::Cell(_) => "<cell>".to_string(),
     }
@@ -384,8 +384,14 @@ fn run_io(
         }
         IoOp::Open => {
             let start = ptr(a)?;
-            let tail = machine.mem.get(start..).ok_or("vm: io open out of bounds")?;
-            let len = tail.iter().position(|&byte| byte == 0).unwrap_or(tail.len());
+            let tail = machine
+                .mem
+                .get(start..)
+                .ok_or("vm: io open out of bounds")?;
+            let len = tail
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(tail.len());
             let path = tail[..len].to_vec();
             machine.io.open(&path, int(b)?, int(c)?)
         }
@@ -574,6 +580,45 @@ fn exec_local(
                 .cloned()
                 .ok_or("vm: payload index out of range")?;
             frame.regs[dest as usize] = value;
+        }
+        Insn::ExistentialPack {
+            dest,
+            protocol,
+            args_start,
+            args_len,
+        } => {
+            let start = args_start as usize;
+            let end = start + args_len as usize;
+            let arg_regs = module
+                .arg_pool
+                .get(start..end)
+                .ok_or("vm: bad argument pool range")?;
+            let Some((&payload_reg, witness_regs)) = arg_regs.split_first() else {
+                return Err("vm: existential_pack without a payload".into());
+            };
+            let payload = frame.regs[payload_reg as usize].clone();
+            let witnesses: Vec<Value> = witness_regs
+                .iter()
+                .map(|&src| frame.regs[src as usize].clone())
+                .collect();
+            frame.regs[dest as usize] =
+                Value::Existential(protocol, Rc::new(payload), Rc::new(witnesses));
+        }
+        Insn::ExistentialWitness { dest, src, index } => {
+            let Value::Existential(_, _, witnesses) = &frame.regs[src as usize] else {
+                return Err("vm: existential_witness on a non-existential".into());
+            };
+            let witness = witnesses
+                .get(index as usize)
+                .cloned()
+                .ok_or("vm: existential witness index out of range")?;
+            frame.regs[dest as usize] = witness;
+        }
+        Insn::ExistentialPayload { dest, src } => {
+            let Value::Existential(_, payload, _) = &frame.regs[src as usize] else {
+                return Err("vm: existential_payload on a non-existential".into());
+            };
+            frame.regs[dest as usize] = (**payload).clone();
         }
         Insn::MakeClosure {
             dest,

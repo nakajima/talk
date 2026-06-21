@@ -35,6 +35,7 @@ pub enum TokenKind {
     Typealias,
 
     // More
+    Any,
     As,
     At,
     Extend,
@@ -114,6 +115,7 @@ impl TokenKind {
             TokenKind::BoundVar => "$<var>",
             TokenKind::Percent => "%",
             TokenKind::IRRegister => "%<reg>",
+            TokenKind::Any => "any",
             TokenKind::As => "as",
             TokenKind::Attribute => "@<attr>",
             TokenKind::Typealias => "typealias",

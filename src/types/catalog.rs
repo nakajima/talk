@@ -4,15 +4,15 @@
 //! tables are built here because the name resolver's `child_types` records
 //! only nested *type* declarations, not properties/methods/variants.
 //!
-//! GADT-readiness (approved plan): every variant stores a full result type,
-//! defaulting to the enum applied to its own parameters. GADT case syntax
-//! (milestone 8) overrides `result`; nothing else reshapes.
+//! GADT-readiness (approved plan): every variant stores a full constructor
+//! scheme whose result defaults to the enum applied to its own parameters.
+//! GADT case syntax will override that result without reshaping callers.
 
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::name_resolution::symbol::Symbol;
-use crate::types::ty::{Predicate, Ty};
+use crate::types::ty::{Predicate, Scheme, Ty};
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct StructInfo {
@@ -32,19 +32,18 @@ pub struct StructInfo {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct VariantInfo {
+pub struct Variant {
     pub symbol: Symbol,
-    /// Payload types over the enum's `params`.
-    pub payloads: Vec<Ty>,
-    /// The constructed type; `Enum<params...>` for ordinary enums, refined
-    /// for GADT variants in milestone 8.
-    pub result: Ty,
+    /// The constructor's qualified function type. Payload-less variants are
+    /// still recorded as nullary functions here; source member lookup unwraps
+    /// them back to bare values.
+    pub constructor_scheme: Scheme,
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub struct EnumInfo {
+pub struct Enum {
     pub params: Vec<Symbol>,
-    pub variants: IndexMap<String, VariantInfo>,
+    pub variants: IndexMap<String, Variant>,
     /// Instance method name → method symbol (methods on enums dispatch
     /// exactly like struct methods).
     pub methods: IndexMap<String, Symbol>,
@@ -141,7 +140,7 @@ pub enum MemberOwner {
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct TypeCatalog {
     pub structs: FxHashMap<Symbol, StructInfo>,
-    pub enums: FxHashMap<Symbol, EnumInfo>,
+    pub enums: FxHashMap<Symbol, Enum>,
     pub protocols: FxHashMap<Symbol, ProtocolInfo>,
     pub conformances: FxHashMap<(Symbol, Symbol), Conformance>,
     /// Type head → protocols it conforms to (for member search by head).
@@ -210,7 +209,7 @@ impl TypeCatalog {
                 .map(|(k, v)| {
                     (
                         imp(k, target),
-                        EnumInfo {
+                        Enum {
                             params: v.params.iter().map(|s| imp(*s, target)).collect(),
                             variants: v
                                 .variants
@@ -218,10 +217,11 @@ impl TypeCatalog {
                                 .map(|(l, variant)| {
                                     (
                                         l,
-                                        VariantInfo {
+                                        Variant {
                                             symbol: imp(variant.symbol, target),
-                                            payloads: variant.payloads.iter().map(&imp_ty).collect(),
-                                            result: imp_ty(&variant.result),
+                                            constructor_scheme: variant
+                                                .constructor_scheme
+                                                .import_symbols(target),
                                         },
                                     )
                                 })
@@ -328,9 +328,7 @@ impl TypeCatalog {
                         owners
                             .into_iter()
                             .map(|owner| match owner {
-                                MemberOwner::Protocol(s) => {
-                                    MemberOwner::Protocol(imp(s, target))
-                                }
+                                MemberOwner::Protocol(s) => MemberOwner::Protocol(imp(s, target)),
                                 MemberOwner::Nominal(s) => MemberOwner::Nominal(imp(s, target)),
                             })
                             .collect(),
@@ -508,6 +506,28 @@ impl TypeCatalog {
             }
         }
         false
+    }
+
+    /// All associated types reachable from a protocol (through supers), in a
+    /// stable traversal order. Same-named associated types are overridden by
+    /// the most-specific protocol reached first.
+    pub fn associated_types_in(&self, protocol: Symbol) -> Vec<(String, Symbol)> {
+        let mut result = IndexMap::new();
+        let mut queue: Vec<Symbol> = vec![protocol];
+        let mut seen: Vec<Symbol> = vec![];
+        while let Some(current) = queue.pop() {
+            if seen.contains(&current) {
+                continue;
+            }
+            seen.push(current);
+            if let Some(info) = self.protocols.get(&current) {
+                for (name, symbol) in &info.assoc {
+                    result.entry(name.clone()).or_insert(*symbol);
+                }
+                queue.extend(info.supers.iter().copied());
+            }
+        }
+        result.into_iter().collect()
     }
 
     /// Find an associated type named `label` reachable from a protocol

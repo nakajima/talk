@@ -17,6 +17,7 @@ use crate::{
     formatter,
     label::Label,
     name::Name,
+    name_resolution::scc_graph::Level,
     name_resolution::{
         builtins,
         decl_declarer::DeclDeclarer,
@@ -40,7 +41,6 @@ use crate::{
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
-    name_resolution::scc_graph::Level,
     on, some,
     span::Span,
 };
@@ -1429,6 +1429,13 @@ impl NameResolver {
             self.enter_scope(func.id, Some(vec![(sym, func.id)]));
         });
 
+        on!(&decl.kind, DeclKind::EnumVariant { name, .. }, {
+            let sym = name
+                .symbol()
+                .unwrap_or_else(|_| unreachable!("did not resolve enum variant name"));
+            self.enter_scope(decl.id, Some(vec![(sym, decl.id)]));
+        });
+
         on!(&decl.kind, DeclKind::Let { lhs, .. }, {
             self.current_level = self.current_level.next();
             let mut last = None;
@@ -1456,7 +1463,8 @@ impl NameResolver {
                 | DeclKind::Extend { .. }
                 | DeclKind::Method { .. }
                 | DeclKind::Init { .. }
-                | DeclKind::Effect { .. },
+                | DeclKind::Effect { .. }
+                | DeclKind::EnumVariant { .. },
             {
                 self.exit_scope(decl.id);
             }

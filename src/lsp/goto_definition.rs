@@ -40,12 +40,8 @@ pub fn goto_definition(
         };
 
         let symbol = match node {
-            crate::node::Node::Expr(expr) => {
-                goto_definition_symbol_from_expr(&expr, byte_offset)
-            }
-            crate::node::Node::Stmt(stmt) => {
-                goto_definition_symbol_from_stmt(&stmt, byte_offset)
-            }
+            crate::node::Node::Expr(expr) => goto_definition_symbol_from_expr(&expr, byte_offset),
+            crate::node::Node::Stmt(stmt) => goto_definition_symbol_from_stmt(&stmt, byte_offset),
             crate::node::Node::TypeAnnotation(ty) => {
                 goto_definition_symbol_from_type_annotation(&ty, byte_offset)
             }
@@ -272,6 +268,14 @@ fn goto_definition_symbol_from_type_annotation(
             name.symbol().ok()
         }
         TypeAnnotationKind::SelfType(name) => name.symbol().ok(),
+        TypeAnnotationKind::Any {
+            protocol,
+            assoc_bindings,
+        } => goto_definition_symbol_from_type_annotation(protocol, byte_offset).or_else(|| {
+            assoc_bindings.iter().find_map(|binding| {
+                goto_definition_symbol_from_type_annotation(&binding.value, byte_offset)
+            })
+        }),
         // NominalPath member resolution needs the type catalog, which is
         // unavailable until the type checker is rebuilt.
         _ => None,
@@ -314,7 +318,9 @@ fn goto_definition_symbol_from_decl(
             }
             name.symbol().ok()
         }
-        DeclKind::EnumVariant(name, name_span, ..) => {
+        DeclKind::EnumVariant {
+            name, name_span, ..
+        } => {
             if !span_contains(*name_span, byte_offset) {
                 return None;
             }

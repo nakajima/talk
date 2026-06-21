@@ -13,6 +13,7 @@ pub mod tests {
         diagnostic::{AnyDiagnostic, Diagnostic, Severity},
         label::Label,
         name::Name,
+        name_resolution::scc_graph::Level,
         name_resolution::{
             name_resolver::{Capture, NameResolver, NameResolverError, ResolvedNames},
             symbol::{
@@ -37,10 +38,19 @@ pub mod tests {
             stmt::{Stmt, StmtKind},
             type_annotation::{TypeAnnotation, TypeAnnotationKind},
         },
-        name_resolution::scc_graph::Level,
         parsing::parser_tests::tests::parse,
         span::Span,
     };
+
+    fn enum_variant(name: Name, name_span: Span, payloads: Vec<TypeAnnotation>) -> DeclKind {
+        DeclKind::EnumVariant {
+            name,
+            name_span,
+            generics: vec![],
+            payloads,
+            result: None,
+        }
+    }
 
     /// Helper to create a test TypeParameterId using ModuleId::Current
     fn test_type_param(id: u32) -> Symbol {
@@ -1246,12 +1256,12 @@ pub mod tests {
                 generics: vec![],
                 where_clause: None,
                 body: any_body!(vec![
-                    any_decl!(DeclKind::EnumVariant(
+                    any_decl!(enum_variant(
                         Name::Resolved(Symbol::Variant(VariantId::from(1)), "foo".into()),
                         Span::ANY,
                         vec![]
                     )),
-                    any_decl!(DeclKind::EnumVariant(
+                    any_decl!(enum_variant(
                         Name::Resolved(Symbol::Variant(VariantId::from(2)), "bar".into()),
                         Span::ANY,
                         vec![]

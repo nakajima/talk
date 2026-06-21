@@ -170,8 +170,7 @@ impl Program {
             TyKind::Fn(d, c) => {
                 let params = match self.ty_kind(*d) {
                     TyKind::Tuple(items) => {
-                        let inner: Vec<String> =
-                            items.iter().map(|t| self.render_ty(*t)).collect();
+                        let inner: Vec<String> = items.iter().map(|t| self.render_ty(*t)).collect();
                         inner.join(", ")
                     }
                     _ => self.render_ty(*d),
@@ -183,6 +182,8 @@ impl Program {
             }
             TyKind::Boxed(sym) => format!("boxed({})", self.render_symbol(sym)),
             TyKind::Variant(sym) => format!("variant({})", self.render_symbol(sym)),
+            TyKind::Existential(sym) => format!("existential({})", self.render_symbol(sym)),
+            TyKind::Erased => "erased".into(),
             TyKind::Cell(inner) => format!("cell({})", self.render_ty(*inner)),
         }
     }
@@ -245,13 +246,7 @@ impl Program {
                     parts[payload] =
                         format!("{} {}({text:?}){}", parts[payload], s.string, s.reset);
                 }
-                format!(
-                    "{}{}{}({})",
-                    s.op,
-                    op_name(op),
-                    s.reset,
-                    parts.join(", ")
-                )
+                format!("{}{}{}({})", s.op, op_name(op), s.reset, parts.join(", "))
             }
         }
     }
@@ -289,12 +284,13 @@ impl Program {
     /// Static operands an op carries in its variant (the struct symbol,
     /// the field index, …), printed ahead of the value arguments.
     fn op_payload(&self, op: &Op, s: &Styles) -> Vec<String> {
-        let styled_sym =
-            |sym| format!("{}{}{}", s.ty, self.render_symbol(sym), s.reset);
+        let styled_sym = |sym| format!("{}{}{}", s.ty, self.render_symbol(sym), s.reset);
         match op {
-            Op::RecordNew(sym) => vec![styled_sym(sym)],
+            Op::RecordNew(sym) | Op::ExistentialPack(sym) => vec![styled_sym(sym)],
             Op::VariantNew(sym, tag) => vec![styled_sym(sym), tag.to_string()],
-            Op::GetField(i) | Op::SetField(i) | Op::GetPayload(i) => vec![i.to_string()],
+            Op::GetField(i) | Op::SetField(i) | Op::GetPayload(i) | Op::ExistentialWitness(i) => {
+                vec![i.to_string()]
+            }
             _ => vec![],
         }
     }
@@ -309,6 +305,9 @@ fn op_name(op: &Op) -> String {
         Op::GetField(_) => "get_field".into(),
         Op::SetField(_) => "set_field".into(),
         Op::GetPayload(_) => "get_payload".into(),
+        Op::ExistentialPack(_) => "existential_pack".into(),
+        Op::ExistentialWitness(_) => "existential_witness".into(),
+        Op::ExistentialPayload => "existential_payload".into(),
         other => snake(&format!("{other:?}")),
     }
 }

@@ -19,8 +19,8 @@
 //! - **@_ir splices** become direct-style PrimOps with θ-resolved types.
 //! - Effect rows are erased here: they did their checking work upstream.
 
-pub mod lower_tests;
 mod derive;
+pub mod lower_tests;
 mod patterns;
 
 use indexmap::IndexMap;
@@ -28,12 +28,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ast::{AST, NameResolved};
 use crate::compiling::driver::Source;
+use crate::lambda_g::expr::Const;
 use crate::lambda_g::expr::{CmpOp, ExprId, Op, TyId, TyKind};
 use crate::lambda_g::program::{Label, Program};
 use crate::name_resolution::name_resolver::ResolvedNames;
 use crate::name_resolution::symbol::Symbol;
 use crate::node::Node;
-use crate::lambda_g::expr::Const;
 use crate::node_kinds::{
     block::Block,
     decl::{Decl, DeclKind},
@@ -47,6 +47,7 @@ use crate::node_kinds::{
 use crate::token_kind::TokenKind;
 use crate::types::TypeOutput;
 use crate::types::ty::Ty as CheckTy;
+use crate::types::ty::TyFold;
 
 pub struct LowerUnit<'a> {
     pub asts: &'a IndexMap<Source, AST<NameResolved>>,
@@ -129,6 +130,12 @@ struct HandlerCap {
     resume_pair_ty: Option<TyId>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct EvidenceBinding {
+    protocol: Symbol,
+    table: ExprId,
+}
+
 /// How a Talk symbol is realized in λ_G: a plain value, or a mutable cell
 /// (assignment conversion — Kranz et al., ORBIT, 1986; the alternative,
 /// rebuilding SSA form for mutables via Braun et al. CC 2013, is the
@@ -154,6 +161,9 @@ struct Ctx {
     theta: Theta,
     /// Talk symbol → λ_G binding (params, locals).
     env: FxHashMap<Symbol, Binding>,
+    /// GADT-local evidence: hidden type parameter + protocol bound →
+    /// runtime witness table extracted from the constructor payload.
+    local_evidence: FxHashMap<(Symbol, Symbol), EvidenceBinding>,
     /// The current function's return continuation (a Fn(R, ⊥) value).
     ret_k: ExprId,
     /// The current λ_G function's own machine-return slot, untouched by
@@ -340,7 +350,8 @@ impl<'a> Lowering<'a> {
         {
             self.mutating.insert(symbol);
         }
-        self.sources.insert(symbol, FuncSource { unit, params, body });
+        self.sources
+            .insert(symbol, FuncSource { unit, params, body });
     }
 
     // ----- Abort-capable functions (lexical effect handlers) --------------
@@ -362,11 +373,12 @@ impl<'a> Lowering<'a> {
                 contained.entry(binder).or_default().extend(handlers);
             }
         }
-        let escapes = |binder: Symbol, handler: Symbol, contained: &FxHashMap<Symbol, FxHashSet<Symbol>>| {
-            !contained
-                .get(&binder)
-                .is_some_and(|defined| defined.contains(&handler))
-        };
+        let escapes =
+            |binder: Symbol, handler: Symbol, contained: &FxHashMap<Symbol, FxHashSet<Symbol>>| {
+                !contained
+                    .get(&binder)
+                    .is_some_and(|defined| defined.contains(&handler))
+            };
 
         let mut reached: FxHashMap<Symbol, Vec<Symbol>> = FxHashMap::default();
         for unit in &self.units {
@@ -592,6 +604,7 @@ impl<'a> Lowering<'a> {
             unit,
             theta,
             env,
+            local_evidence: FxHashMap::default(),
             ret_k,
             raw_ret_k: ret_k,
             normal_k: None,
@@ -608,9 +621,7 @@ impl<'a> Lowering<'a> {
         // return is reserved for abort propagation (see Ctx::raw_ret_k).
         if self.abort_shape(symbol) {
             let normal_k = ret_k;
-            let slot = self
-                .p
-                .extract(self_var, (source_params.len() + 1) as u32);
+            let slot = self.p.extract(self_var, (source_params.len() + 1) as u32);
             let result_ty = self.normal_result_ty(normal_k);
             let bot = self.p.ty_bot();
             let wrap = self.p.func("ret_normal", result_ty, bot);
@@ -709,7 +720,8 @@ impl<'a> Lowering<'a> {
         #[derive(Visitor)]
         #[visitor(Expr(enter))]
         struct ReceiverScan<'s> {
-            resolutions: &'s FxHashMap<crate::node_id::NodeID, crate::types::output::MemberResolution>,
+            resolutions:
+                &'s FxHashMap<crate::node_id::NodeID, crate::types::output::MemberResolution>,
             mutating: &'s FxHashSet<Symbol>,
             found: FxHashSet<Symbol>,
         }
@@ -728,7 +740,8 @@ impl<'a> Lowering<'a> {
                 let target = match self.resolutions.get(&callee.id) {
                     Some(crate::types::output::MemberResolution::Direct(s)) => *s,
                     Some(crate::types::output::MemberResolution::ViaConformance {
-                        witness, ..
+                        witness,
+                        ..
                     }) => *witness,
                     None => return,
                 };
@@ -1025,16 +1038,12 @@ impl<'a> Lowering<'a> {
         match &lhs.kind {
             ExprKind::Variable(name) => {
                 let symbol = name.symbol().ok();
-                if let Some(Binding::Cell(cell)) =
-                    symbol.and_then(|s| ctx.env.get(&s).copied())
-                {
+                if let Some(Binding::Cell(cell)) = symbol.and_then(|s| ctx.env.get(&s).copied()) {
                     return Some((cell, vec![]));
                 }
                 // A mutable top-level binding assigned from inside a
                 // function: its registered cell (captured like any value).
-                if let Some(cell) =
-                    symbol.and_then(|s| self.top_level_cells.get(&s).copied())
-                {
+                if let Some(cell) = symbol.and_then(|s| self.top_level_cells.get(&s).copied()) {
                     return Some((cell, vec![]));
                 }
                 self.diagnostics
@@ -1130,8 +1139,10 @@ impl<'a> Lowering<'a> {
 
     fn lower_local_decl(&mut self, decl: &Decl, rest: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
         let DeclKind::Let { lhs, rhs, .. } = &decl.kind else {
-            self.diagnostics
-                .push(format!("lowering: declaration not yet supported: {:?}", decl.kind));
+            self.diagnostics.push(format!(
+                "lowering: declaration not yet supported: {:?}",
+                decl.kind
+            ));
             return self.lower_nodes(rest, ctx, k);
         };
         let Some(rhs) = rhs else {
@@ -1177,7 +1188,9 @@ impl<'a> Lowering<'a> {
         }
         let value_ty = self.expr_lambda_ty(rhs, ctx);
         let bot = self.p.ty_bot();
-        let bind = self.p.func(&format!("let_{}", name.name_str()), value_ty, bot);
+        let bind = self
+            .p
+            .func(&format!("let_{}", name.name_str()), value_ty, bot);
         let bound = self.p.var(bind);
         let mut inner = ctx.clone();
         let rest_body = if mutated {
@@ -1230,7 +1243,35 @@ impl<'a> Lowering<'a> {
 
     /// Lower `expr`, delivering its value to continuation `k : Fn(T, ⊥)`.
     fn lower_expr(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
-        if let Some(value) = self.try_pure(expr, ctx) {
+        if let Some(pack) = self.existential_pack_at(expr.id, ctx) {
+            if let CheckTy::Any { protocol, .. } = &pack.payload {
+                if *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol) {
+                    return self.lower_expr_unpacked(expr, ctx, k);
+                }
+            }
+            if let Some(payload) = self.try_pure_unpacked(expr, ctx) {
+                return match self.existential_pack_value(expr.id, payload, &pack, ctx) {
+                    Some(value) => self.p.app(k, value),
+                    None => self.dead_end("existential_pack"),
+                };
+            }
+            let payload_ty = self.map_ty(&pack.payload);
+            let bot = self.p.ty_bot();
+            let pack_k = self.p.func("pack_existential", payload_ty, bot);
+            let payload = self.p.var(pack_k);
+            let body = match self.existential_pack_value(expr.id, payload, &pack, ctx) {
+                Some(value) => self.p.app(k, value),
+                None => self.dead_end("existential_pack"),
+            };
+            self.p.set_body(pack_k, body);
+            let pack_ref = self.p.func_ref(pack_k);
+            return self.lower_expr_unpacked(expr, ctx, pack_ref);
+        }
+        self.lower_expr_unpacked(expr, ctx, k)
+    }
+
+    fn lower_expr_unpacked(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
+        if let Some(value) = self.try_pure_unpacked(expr, ctx) {
             return self.p.app(k, value);
         }
         match &expr.kind {
@@ -1242,10 +1283,19 @@ impl<'a> Lowering<'a> {
             } => {
                 // Variant construction with impure payloads: chain the
                 // arguments, then build the value (no function is called).
-                if let Some((enum_symbol, tag)) = self.variant_target(expr, callee, ctx) {
+                if let Some((enum_symbol, tag, variant_symbol, node)) =
+                    self.variant_target(expr, callee, ctx)
+                {
                     let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
                     return self.lower_args(&arg_exprs, ctx, vec![], &mut |this, values| {
-                        let value = this.variant_new(enum_symbol, tag, &values);
+                        let value = this.variant_new_for_expr(
+                            node,
+                            enum_symbol,
+                            tag,
+                            variant_symbol,
+                            &values,
+                            ctx,
+                        );
                         this.p.app(k, value)
                     });
                 }
@@ -1373,9 +1423,8 @@ impl<'a> Lowering<'a> {
                     return self.p.app(k, void);
                 }
                 let Some(order) = self.record_field_order(expr, fields, ctx) else {
-                    self.diagnostics.push(
-                        "lowering: record literal without a closed record type".into(),
-                    );
+                    self.diagnostics
+                        .push("lowering: record literal without a closed record type".into());
                     let void = self.p.void();
                     return self.p.app(k, void);
                 };
@@ -1399,25 +1448,16 @@ impl<'a> Lowering<'a> {
 
     /// Match compilation: bind the scrutinee to a pure value, then build
     /// the decision tree (Maranget, ML 2008 — `patterns.rs`).
-    fn lower_match(
-        &mut self,
-        scrutinee: &Expr,
-        arms: &[MatchArm],
-        ctx: &Ctx,
-        k: ExprId,
-    ) -> ExprId {
+    fn lower_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], ctx: &Ctx, k: ExprId) -> ExprId {
         let scrutinee_check_ty = self.checker_ty(scrutinee, ctx);
         match self.try_pure(scrutinee, ctx) {
-            Some(value) => {
-                patterns::compile_match(self, value, scrutinee_check_ty, arms, ctx, k)
-            }
+            Some(value) => patterns::compile_match(self, value, scrutinee_check_ty, arms, ctx, k),
             None => {
                 let scrutinee_ty = self.expr_lambda_ty(scrutinee, ctx);
                 let bot = self.p.ty_bot();
                 let cont = self.p.func("scrut", scrutinee_ty, bot);
                 let value = self.p.var(cont);
-                let body =
-                    patterns::compile_match(self, value, scrutinee_check_ty, arms, ctx, k);
+                let body = patterns::compile_match(self, value, scrutinee_check_ty, arms, ctx, k);
                 self.p.set_body(cont, body);
                 let cont_ref = self.p.func_ref(cont);
                 self.lower_expr(scrutinee, ctx, cont_ref)
@@ -1429,6 +1469,19 @@ impl<'a> Lowering<'a> {
     /// variables, field reads on pure receivers, and @_ir splices over
     /// pure operands.
     fn try_pure(&mut self, expr: &Expr, ctx: &Ctx) -> Option<ExprId> {
+        if let Some(pack) = self.existential_pack_at(expr.id, ctx) {
+            if let CheckTy::Any { protocol, .. } = &pack.payload {
+                if *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol) {
+                    return self.try_pure_unpacked(expr, ctx);
+                }
+            }
+            let payload = self.try_pure_unpacked(expr, ctx)?;
+            return self.existential_pack_value(expr.id, payload, &pack, ctx);
+        }
+        self.try_pure_unpacked(expr, ctx)
+    }
+
+    fn try_pure_unpacked(&mut self, expr: &Expr, ctx: &Ctx) -> Option<ExprId> {
         match &expr.kind {
             ExprKind::LiteralInt(text) => Some(self.p.int(text.parse().ok()?)),
             ExprKind::LiteralFloat(text) => Some(self.p.float(text.parse().ok()?)),
@@ -1448,7 +1501,10 @@ impl<'a> Lowering<'a> {
                 let base = self.p.constant(Const::StaticPtr(offset), ptr_ty);
                 let len = self.p.int(bytes.len() as i64);
                 let ty = self.p.ty(TyKind::Boxed(string_symbol));
-                Some(self.p.primop(Op::RecordNew(string_symbol), &[base, len, len], ty))
+                Some(
+                    self.p
+                        .primop(Op::RecordNew(string_symbol), &[base, len, len], ty),
+                )
             }
             // Field read on a pure receiver: GetField (records are pure
             // values). A member that resolves to a payload-less enum case
@@ -1464,12 +1520,20 @@ impl<'a> Lowering<'a> {
             // Variant construction over pure payloads (`.some(1)`,
             // `Maybe.definitely(x)`): pure, exactly like RecordNew.
             ExprKind::Call { callee, args, .. } => {
-                let (enum_symbol, tag) = self.variant_target(expr, callee, ctx)?;
+                let (enum_symbol, tag, variant_symbol, node) =
+                    self.variant_target(expr, callee, ctx)?;
                 let mut payloads = Vec::with_capacity(args.len());
                 for arg in args {
                     payloads.push(self.try_pure(&arg.value, ctx)?);
                 }
-                Some(self.variant_new(enum_symbol, tag, &payloads))
+                Some(self.variant_new_for_expr(
+                    node,
+                    enum_symbol,
+                    tag,
+                    variant_symbol,
+                    &payloads,
+                    ctx,
+                ))
             }
             // A record literal over pure fields: a tuple in the row's
             // canonical (label-sorted) field order.
@@ -1528,6 +1592,7 @@ impl<'a> Lowering<'a> {
                         unit,
                         theta: Theta::default(),
                         env: FxHashMap::default(),
+                        local_evidence: FxHashMap::default(),
                         ret_k: ctx.ret_k,
                         raw_ret_k: ctx.raw_ret_k,
                         normal_k: None,
@@ -1560,6 +1625,354 @@ impl<'a> Lowering<'a> {
             }
             _ => None,
         }
+    }
+
+    fn existential_pack_at(
+        &self,
+        node: crate::node_id::NodeID,
+        ctx: &Ctx,
+    ) -> Option<crate::types::output::ExistentialPack> {
+        let pack = self.units[ctx.unit].types.existential_packs.get(&node)?;
+        let existential =
+            pack.existential
+                .substitute(&ctx.theta, &Default::default(), &Default::default());
+        let payload = pack
+            .payload
+            .substitute(&ctx.theta, &Default::default(), &Default::default());
+        Some(crate::types::output::ExistentialPack {
+            existential: self.normalize_check_ty(existential, ctx.unit),
+            payload: self.normalize_check_ty(payload, ctx.unit),
+        })
+    }
+
+    fn any_protocol(&self, ty: &CheckTy) -> Option<Symbol> {
+        match ty {
+            CheckTy::Any { protocol, .. } => Some(*protocol),
+            _ => None,
+        }
+    }
+
+    fn existential_pack_value(
+        &mut self,
+        node: crate::node_id::NodeID,
+        payload: ExprId,
+        pack: &crate::types::output::ExistentialPack,
+        ctx: &Ctx,
+    ) -> Option<ExprId> {
+        let CheckTy::Any { protocol, assoc } = &pack.existential else {
+            self.diagnostics
+                .push("lowering: existential pack target is not an existential".into());
+            return None;
+        };
+        if let CheckTy::Any {
+            protocol: payload_protocol,
+            ..
+        } = &pack.payload
+        {
+            if payload_protocol == protocol {
+                return Some(payload);
+            }
+            self.diagnostics.push(
+                "lowering: existential upcast/repack reached lowering after type checking".into(),
+            );
+            return None;
+        }
+        if let CheckTy::Param(param) = &pack.payload {
+            return self
+                .existential_pack_from_local_evidence(*protocol, assoc, *param, payload, ctx);
+        }
+
+        let requirements = self.units[ctx.unit]
+            .types
+            .catalog
+            .requirements_for_conformance(*protocol);
+        let mut values = Vec::with_capacity(requirements.len() + 1);
+        values.push(payload);
+        for (owner, label, requirement) in requirements {
+            let witness = self.existential_witness_wrapper(
+                *protocol,
+                assoc,
+                owner,
+                &label,
+                &requirement,
+                &pack.payload,
+                ctx,
+                node,
+            )?;
+            values.push(witness);
+        }
+        let ty = self.p.ty(TyKind::Existential(*protocol));
+        Some(self.p.primop(Op::ExistentialPack(*protocol), &values, ty))
+    }
+
+    fn existential_pack_from_local_evidence(
+        &mut self,
+        protocol: Symbol,
+        assoc: &[(Symbol, CheckTy)],
+        param: Symbol,
+        payload: ExprId,
+        ctx: &Ctx,
+    ) -> Option<ExprId> {
+        let evidence = self.local_evidence_for(ctx, param, protocol)?;
+        let target_requirements = self.units[ctx.unit]
+            .types
+            .catalog
+            .requirements_for_conformance(protocol);
+        let source_requirements = self.units[ctx.unit]
+            .types
+            .catalog
+            .requirements_for_conformance(evidence.protocol);
+        let mut values = Vec::with_capacity(target_requirements.len() + 1);
+        values.push(payload);
+        for (owner, label, requirement) in target_requirements {
+            let source_index = source_requirements
+                .iter()
+                .position(|(_, _, source)| source.symbol == requirement.symbol)?;
+            let _signature =
+                self.erased_requirement_signature(protocol, assoc, owner, &requirement, ctx.unit)?;
+            values.push(self.p.extract(evidence.table, source_index as u32));
+            let _ = label;
+        }
+        let ty = self.p.ty(TyKind::Existential(protocol));
+        Some(self.p.primop(Op::ExistentialPack(protocol), &values, ty))
+    }
+
+    fn local_evidence_for(
+        &self,
+        ctx: &Ctx,
+        param: Symbol,
+        protocol: Symbol,
+    ) -> Option<EvidenceBinding> {
+        if let Some(binding) = ctx.local_evidence.get(&(param, protocol)).copied() {
+            return Some(binding);
+        }
+        if let Some((_, binding)) =
+            ctx.local_evidence
+                .iter()
+                .find(|((candidate_param, candidate_protocol), _)| {
+                    *candidate_param == param
+                        && self.units[ctx.unit]
+                            .types
+                            .catalog
+                            .bounds_satisfy(&[*candidate_protocol], protocol)
+                })
+        {
+            return Some(*binding);
+        }
+        let candidates: Vec<EvidenceBinding> = ctx
+            .local_evidence
+            .iter()
+            .filter(|((_, candidate_protocol), _)| {
+                self.units[ctx.unit]
+                    .types
+                    .catalog
+                    .bounds_satisfy(&[*candidate_protocol], protocol)
+            })
+            .map(|(_, binding)| *binding)
+            .collect();
+        match candidates.as_slice() {
+            [single] => Some(*single),
+            _ => None,
+        }
+    }
+
+    fn evidence_table_for_ty(
+        &mut self,
+        protocol: Symbol,
+        payload_ty: &CheckTy,
+        ctx: &Ctx,
+        node: crate::node_id::NodeID,
+    ) -> Option<ExprId> {
+        if let CheckTy::Param(param) = payload_ty
+            && let Some(evidence) = self.local_evidence_for(ctx, *param, protocol)
+        {
+            return Some(evidence.table);
+        }
+        let assoc = self.assoc_bindings_for_concrete(protocol, payload_ty, ctx.unit);
+        let requirements = self.units[ctx.unit]
+            .types
+            .catalog
+            .requirements_for_conformance(protocol);
+        let mut witnesses = Vec::with_capacity(requirements.len());
+        for (owner, label, requirement) in requirements {
+            let witness = self.existential_witness_wrapper(
+                protocol,
+                &assoc,
+                owner,
+                &label,
+                &requirement,
+                payload_ty,
+                ctx,
+                node,
+            )?;
+            witnesses.push(witness);
+        }
+        Some(self.p.tuple(&witnesses))
+    }
+
+    fn evidence_table_ty(
+        &mut self,
+        protocol: Symbol,
+        assoc: &[(Symbol, CheckTy)],
+        unit: usize,
+    ) -> TyId {
+        let requirements = self.units[unit]
+            .types
+            .catalog
+            .requirements_for_conformance(protocol);
+        let witness_tys: Vec<TyId> = requirements
+            .into_iter()
+            .filter_map(|(owner, _, requirement)| {
+                let signature =
+                    self.erased_requirement_signature(protocol, assoc, owner, &requirement, unit)?;
+                Some(self.map_ty(&signature))
+            })
+            .collect();
+        self.p.ty_tuple(&witness_tys)
+    }
+
+    fn assoc_bindings_for_concrete(
+        &self,
+        protocol: Symbol,
+        payload_ty: &CheckTy,
+        unit: usize,
+    ) -> Vec<(Symbol, CheckTy)> {
+        let required = self.units[unit].types.catalog.associated_types_in(protocol);
+        let CheckTy::Nominal(head, args) = payload_ty else {
+            return required
+                .into_iter()
+                .map(|(_, symbol)| (symbol, CheckTy::Param(symbol)))
+                .collect();
+        };
+        let Some(conformance) = self.units[unit]
+            .types
+            .catalog
+            .conformances
+            .get(&(*head, protocol))
+        else {
+            return required
+                .into_iter()
+                .map(|(_, symbol)| (symbol, CheckTy::Param(symbol)))
+                .collect();
+        };
+        let mut row_theta = Theta::default();
+        for (pattern, actual) in conformance.self_args.iter().zip(args) {
+            crate::types::solve::bind_param_pattern(pattern, actual, &mut row_theta);
+        }
+        required
+            .into_iter()
+            .map(|(_, symbol)| {
+                let ty = conformance
+                    .assoc
+                    .get(&symbol)
+                    .map(|ty| ty.substitute(&row_theta, &Default::default(), &Default::default()))
+                    .unwrap_or(CheckTy::Param(symbol));
+                (symbol, ty)
+            })
+            .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn existential_witness_wrapper(
+        &mut self,
+        root_protocol: Symbol,
+        assoc: &[(Symbol, CheckTy)],
+        owner: Symbol,
+        label: &str,
+        requirement: &crate::types::catalog::Requirement,
+        payload_ty: &CheckTy,
+        ctx: &Ctx,
+        node: crate::node_id::NodeID,
+    ) -> Option<ExprId> {
+        let signature =
+            self.erased_requirement_signature(root_protocol, assoc, owner, requirement, ctx.unit)?;
+        let CheckTy::Func(params, ret, _) = signature else {
+            self.diagnostics
+                .push("lowering: existential requirement is not a function".into());
+            return None;
+        };
+        let mut dom_items: Vec<TyId> = params.iter().map(|param| self.map_ty(param)).collect();
+        let ret_ty = self.map_ty(&ret);
+        let bot = self.p.ty_bot();
+        let ret_k_ty = self.p.ty_fn(ret_ty, bot);
+        dom_items.push(ret_k_ty);
+        let dom = self.p.ty_tuple(&dom_items);
+        let wrapper = self.p.func(
+            &format!("existential_{}_{}", root_protocol, label),
+            dom,
+            bot,
+        );
+        self.escaping.insert(wrapper);
+
+        let self_var = self.p.var(wrapper);
+        let erased_self = self.p.extract(self_var, 0);
+        let payload_lambda_ty = self.map_ty(payload_ty);
+        let payload = self
+            .p
+            .primop(Op::ExistentialPayload, &[erased_self], payload_lambda_ty);
+        let mut args = Vec::with_capacity(params.len() + 1);
+        args.push(payload);
+        for index in 1..params.len() {
+            args.push(self.p.extract(self_var, index as u32));
+        }
+        let ret_k = self.p.extract(self_var, params.len() as u32);
+        args.push(ret_k);
+        let arg_tuple = self.p.tuple(&args);
+        let Some((target, _)) =
+            self.resolve_witness(owner, requirement.symbol, label.to_string(), payload_ty)
+        else {
+            self.diagnostics.push(format!(
+                "lowering: cannot build existential witness for {label} at {:?}",
+                node
+            ));
+            return None;
+        };
+        let target_ref = self.p.func_ref(target);
+        let body = self.p.app(target_ref, arg_tuple);
+        self.p.set_body(wrapper, body);
+        Some(self.p.func_ref(wrapper))
+    }
+
+    fn erased_requirement_signature(
+        &mut self,
+        root_protocol: Symbol,
+        assoc: &[(Symbol, CheckTy)],
+        owner: Symbol,
+        requirement: &crate::types::catalog::Requirement,
+        unit: usize,
+    ) -> Option<CheckTy> {
+        let mut tys = Theta::default();
+        tys.insert(
+            owner,
+            CheckTy::Any {
+                protocol: root_protocol,
+                assoc: assoc.to_vec(),
+            },
+        );
+        for (assoc_symbol, ty) in assoc {
+            tys.insert(*assoc_symbol, ty.clone());
+        }
+        let signature = requirement
+            .sig
+            .substitute(&tys, &Default::default(), &Default::default());
+        Some(self.normalize_check_ty(signature, unit))
+    }
+
+    fn existential_requirement_index(
+        &self,
+        protocol: Symbol,
+        label: &str,
+        requirement_symbol: Symbol,
+        unit: usize,
+    ) -> Option<usize> {
+        self.units[unit]
+            .types
+            .catalog
+            .requirements_for_conformance(protocol)
+            .iter()
+            .position(|(_, candidate_label, requirement)| {
+                candidate_label == label && requirement.symbol == requirement_symbol
+            })
     }
 
     /// Branch on a condition expression: br(cond, then_thunk, else_thunk)
@@ -1709,7 +2122,7 @@ impl<'a> Lowering<'a> {
 
     /// The catalog row for an enum symbol (cloned: callers keep building
     /// the program while reading it).
-    fn enum_info(&self, symbol: Symbol) -> Option<crate::types::catalog::EnumInfo> {
+    fn enum_info(&self, symbol: Symbol) -> Option<crate::types::catalog::Enum> {
         self.units
             .iter()
             .find_map(|u| u.types.catalog.enums.get(&symbol).cloned())
@@ -1754,18 +2167,129 @@ impl<'a> Lowering<'a> {
         expr: &Expr,
         callee: &Expr,
         ctx: &Ctx,
-    ) -> Option<(Symbol, u16)> {
+    ) -> Option<(Symbol, u16, Symbol, crate::node_id::NodeID)> {
         let resolutions = &self.units[ctx.unit].types.member_resolutions;
-        let symbol = [callee.id, expr.id].iter().find_map(|node| {
-            match resolutions.get(node) {
-                Some(crate::types::output::MemberResolution::Direct(s)) => Some(*s),
-                _ => None,
-            }
-        })?;
-        self.variant_of(symbol)
+        let (node, symbol) =
+            [callee.id, expr.id]
+                .iter()
+                .find_map(|node| match resolutions.get(node) {
+                    Some(crate::types::output::MemberResolution::Direct(s)) => Some((*node, *s)),
+                    _ => None,
+                })?;
+        let (enum_symbol, tag) = self.variant_of(symbol)?;
+        Some((enum_symbol, tag, symbol, node))
     }
 
-    /// Construct a variant value: pure, exactly like `RecordNew`.
+    /// Construct a variant value: source payloads followed by hidden runtime
+    /// evidence for GADT-local constructor bounds.
+    fn variant_new_for_expr(
+        &mut self,
+        node: crate::node_id::NodeID,
+        enum_symbol: Symbol,
+        tag: u16,
+        variant_symbol: Symbol,
+        payloads: &[ExprId],
+        ctx: &Ctx,
+    ) -> ExprId {
+        let mut runtime_payloads = payloads.to_vec();
+        runtime_payloads.extend(self.variant_evidence_tables(node, variant_symbol, ctx));
+        self.variant_new(enum_symbol, tag, &runtime_payloads)
+    }
+
+    fn variant_evidence_tables(
+        &mut self,
+        node: crate::node_id::NodeID,
+        variant_symbol: Symbol,
+        ctx: &Ctx,
+    ) -> Vec<ExprId> {
+        let Some(variant) = self.variant_by_symbol(variant_symbol) else {
+            return vec![];
+        };
+        let theta = self.instantiation_at(node, ctx);
+        let mut tables = vec![];
+        for predicate in &variant.constructor_scheme.predicates {
+            let crate::types::ty::Predicate::Conforms { ty, protocol } = predicate else {
+                continue;
+            };
+            let CheckTy::Param(param) = ty else {
+                continue;
+            };
+            let concrete = theta
+                .get(param)
+                .cloned()
+                .unwrap_or_else(|| CheckTy::Param(*param));
+            match self.evidence_table_for_ty(*protocol, &concrete, ctx, node) {
+                Some(table) => tables.push(table),
+                None => {
+                    self.diagnostics.push(format!(
+                        "lowering: cannot store runtime evidence for constructor bound {param}: {protocol}"
+                    ));
+                    tables.push(self.p.tuple(&[]));
+                }
+            }
+        }
+        tables
+    }
+
+    pub(super) fn variant_pattern_evidence(
+        &mut self,
+        variant: &crate::types::catalog::Variant,
+        instantiation: &crate::types::variant::VariantInstantiation,
+        value: ExprId,
+        source_payload_count: usize,
+        unit: usize,
+    ) -> Vec<((Symbol, Symbol), EvidenceBinding)> {
+        let mut evidence = vec![];
+        let mut runtime_index = source_payload_count as u32;
+        let subst: Theta = instantiation.instantiations.iter().cloned().collect();
+        for source in &variant.constructor_scheme.predicates {
+            let crate::types::ty::Predicate::Conforms {
+                ty: CheckTy::Param(source_param),
+                protocol,
+            } = source
+            else {
+                continue;
+            };
+            let instantiated = source.substitute(&subst, &Default::default(), &Default::default());
+            if let crate::types::ty::Predicate::Conforms {
+                ty: CheckTy::Param(param),
+                ..
+            } = instantiated
+            {
+                let table_ty = self.evidence_table_ty(*protocol, &[], unit);
+                let table = self
+                    .p
+                    .primop(Op::GetPayload(runtime_index), &[value], table_ty);
+                evidence.push((
+                    (param, *protocol),
+                    EvidenceBinding {
+                        protocol: *protocol,
+                        table,
+                    },
+                ));
+            }
+            let _ = source_param;
+            runtime_index += 1;
+        }
+        evidence
+    }
+
+    fn variant_by_symbol(&self, variant_symbol: Symbol) -> Option<crate::types::catalog::Variant> {
+        for unit in &self.units {
+            for info in unit.types.catalog.enums.values() {
+                if let Some(variant) = info
+                    .variants
+                    .values()
+                    .find(|variant| variant.symbol == variant_symbol)
+                {
+                    return Some(variant.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Construct a raw variant value: pure, exactly like `RecordNew`.
     fn variant_new(&mut self, enum_symbol: Symbol, tag: u16, payloads: &[ExprId]) -> ExprId {
         let ty = self.p.ty(TyKind::Variant(enum_symbol));
         self.p
@@ -1791,12 +2315,12 @@ impl<'a> Lowering<'a> {
                 .enums
                 .get(&enum_symbol)
                 .and_then(|info| info.variants.get_index(tag as usize))
-                .is_some_and(|(_, v)| !v.payloads.is_empty())
+                .is_some_and(|(_, v)| !v.argument_types().is_empty())
         });
         if has_payloads {
             return None;
         }
-        Some(self.variant_new(enum_symbol, tag, &[]))
+        Some(self.variant_new_for_expr(expr.id, enum_symbol, tag, *symbol, &[], ctx))
     }
 
     /// For a record literal: row position → source field index, from the
@@ -1951,7 +2475,9 @@ impl<'a> Lowering<'a> {
         for (i, arg) in block.args.iter().enumerate().take(n_params) {
             let extract = self.p.extract(self_var, i as u32);
             params.push(extract);
-            let Ok(symbol) = arg.name.symbol() else { continue };
+            let Ok(symbol) = arg.name.symbol() else {
+                continue;
+            };
             if inner.cellable.contains(&symbol) {
                 celled.push((symbol, extract));
             } else {
@@ -1986,9 +2512,8 @@ impl<'a> Lowering<'a> {
         k: ExprId,
     ) -> ExprId {
         let Some(callee_value) = self.try_pure(callee, ctx) else {
-            self.diagnostics.push(
-                "lowering: computed callee expressions not yet supported".into(),
-            );
+            self.diagnostics
+                .push("lowering: computed callee expressions not yet supported".into());
             return self.dead_end("computed_callee");
         };
         let trailing_value = trailing_block.map(|b| {
@@ -2027,6 +2552,16 @@ impl<'a> Lowering<'a> {
         if is_value_callee {
             return self.lower_value_call(callee, args, trailing_block, ctx, k);
         }
+        if let Some(done) =
+            self.try_lower_existential_member_call(callee, args, trailing_block, ctx, k)
+        {
+            return done;
+        }
+        if let Some(done) =
+            self.try_lower_local_evidence_member_call(callee, args, trailing_block, ctx, k)
+        {
+            return done;
+        }
 
         // Resolve the target specialization.
         let target = self.resolve_callee(expr, callee, args, ctx);
@@ -2044,8 +2579,7 @@ impl<'a> Lowering<'a> {
         // expression position the abort linkage cannot thread through yet.
         if self.abort_shape(symbol) {
             self.diagnostics.push(
-                "lowering: a call that can abort in expression position (not yet supported)"
-                    .into(),
+                "lowering: a call that can abort in expression position (not yet supported)".into(),
             );
             return self.dead_end("abort_call_in_expression");
         }
@@ -2086,6 +2620,166 @@ impl<'a> Lowering<'a> {
             let arg_tuple = this.p.tuple(&tuple_items);
             this.p.app(func_ref, arg_tuple)
         })
+    }
+
+    /// Shared tail for dispatching a protocol-requirement call through an
+    /// erased witness: builds the CPS witness type from `signature`, lowers the
+    /// trailing block and arguments, then assembles the call. `build_witness`
+    /// produces the witness expression for the resolved receiver (and may
+    /// rewrite `values[0]`, e.g. to repack a payload); returning `Err` aborts
+    /// the call with that expression (a `dead_end`).
+    #[allow(clippy::too_many_arguments)]
+    fn lower_requirement_call(
+        &mut self,
+        receiver: &Expr,
+        args: &[crate::node_kinds::call_arg::CallArg],
+        trailing_block: Option<&Block>,
+        ctx: &Ctx,
+        k: ExprId,
+        signature: CheckTy,
+        not_a_function: &str,
+        dead_end_label: &str,
+        mut build_witness: impl FnMut(&mut Self, &mut Vec<ExprId>, TyId) -> Result<ExprId, ExprId>,
+    ) -> Option<ExprId> {
+        let CheckTy::Func(params, ret, _) = signature else {
+            self.diagnostics.push(not_a_function.into());
+            return Some(self.dead_end(dead_end_label));
+        };
+        let mut dom_items: Vec<TyId> = params.iter().map(|param| self.map_ty(param)).collect();
+        let ret_ty = self.map_ty(&ret);
+        let bot = self.p.ty_bot();
+        let ret_k_ty = self.p.ty_fn(ret_ty, bot);
+        dom_items.push(ret_k_ty);
+        let dom = self.p.ty_tuple(&dom_items);
+        let witness_ty = self.p.ty_fn(dom, bot);
+        let trailing_value = trailing_block.map(|block| {
+            let expected = self.final_param_ty(witness_ty);
+            self.lower_block_closure(block, expected, ctx)
+        });
+
+        let mut arg_exprs: Vec<&Expr> = vec![receiver];
+        arg_exprs.extend(args.iter().map(|arg| &arg.value));
+        Some(
+            self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
+                let witness = match build_witness(this, &mut values, witness_ty) {
+                    Ok(witness) => witness,
+                    Err(early) => return early,
+                };
+                if let Some(trailing) = trailing_value {
+                    values.push(trailing);
+                }
+                values.push(k);
+                let tuple = this.p.tuple(&values);
+                this.p.app(witness, tuple)
+            }),
+        )
+    }
+
+    fn try_lower_existential_member_call(
+        &mut self,
+        callee: &Expr,
+        args: &[crate::node_kinds::call_arg::CallArg],
+        trailing_block: Option<&Block>,
+        ctx: &Ctx,
+        k: ExprId,
+    ) -> Option<ExprId> {
+        let ExprKind::Member(Some(receiver), label, _) = &callee.kind else {
+            return None;
+        };
+        let CheckTy::Any { protocol, assoc } = self.checker_ty(receiver, ctx) else {
+            return None;
+        };
+        let label_str = label.to_string();
+        let (owner, requirement) = self.units[ctx.unit]
+            .types
+            .catalog
+            .requirement_in(protocol, &label_str)
+            .map(|(owner, requirement)| (owner, requirement.clone()))?;
+        let index =
+            self.existential_requirement_index(protocol, &label_str, requirement.symbol, ctx.unit)?;
+        let signature =
+            self.erased_requirement_signature(protocol, &assoc, owner, &requirement, ctx.unit)?;
+        self.lower_requirement_call(
+            receiver,
+            args,
+            trailing_block,
+            ctx,
+            k,
+            signature,
+            "lowering: existential requirement is not a function",
+            "existential_requirement",
+            |this, values, witness_ty| {
+                let receiver_value = values[0];
+                Ok(this.p.primop(
+                    Op::ExistentialWitness(index as u32),
+                    &[receiver_value],
+                    witness_ty,
+                ))
+            },
+        )
+    }
+
+    fn try_lower_local_evidence_member_call(
+        &mut self,
+        callee: &Expr,
+        args: &[crate::node_kinds::call_arg::CallArg],
+        trailing_block: Option<&Block>,
+        ctx: &Ctx,
+        k: ExprId,
+    ) -> Option<ExprId> {
+        let ExprKind::Member(Some(receiver), label, _) = &callee.kind else {
+            return None;
+        };
+        let CheckTy::Param(param) = self.checker_ty(receiver, ctx) else {
+            return None;
+        };
+        let resolution = self.units[ctx.unit]
+            .types
+            .member_resolutions
+            .get(&callee.id)
+            .cloned();
+        let protocol = match resolution {
+            Some(crate::types::output::MemberResolution::ViaConformance { protocol, .. }) => {
+                protocol
+            }
+            _ => return None,
+        };
+        let evidence = self.local_evidence_for(ctx, param, protocol)?;
+        let label_str = label.to_string();
+        let (owner, requirement) = self.units[ctx.unit]
+            .types
+            .catalog
+            .requirement_in(protocol, &label_str)
+            .map(|(owner, requirement)| (owner, requirement.clone()))?;
+        let source_requirements = self.units[ctx.unit]
+            .types
+            .catalog
+            .requirements_for_conformance(evidence.protocol);
+        let index = source_requirements
+            .iter()
+            .position(|(_, _, source)| source.symbol == requirement.symbol)?;
+        let signature =
+            self.erased_requirement_signature(protocol, &[], owner, &requirement, ctx.unit)?;
+        self.lower_requirement_call(
+            receiver,
+            args,
+            trailing_block,
+            ctx,
+            k,
+            signature,
+            "lowering: local-evidence requirement is not a function",
+            "local_evidence_requirement",
+            |this, values, _witness_ty| {
+                let payload = values[0];
+                let Some(package) =
+                    this.existential_pack_from_local_evidence(protocol, &[], param, payload, ctx)
+                else {
+                    return Err(this.dead_end("local_evidence_pack"));
+                };
+                values[0] = package;
+                Ok(this.p.extract(evidence.table, index as u32))
+            },
+        )
     }
 
     /// The write-back adapter for a mutating-method call: receives
@@ -2379,8 +3073,7 @@ impl<'a> Lowering<'a> {
             let mut theta = Theta::default();
             theta.insert(protocol, head.clone());
             for (assoc, ty) in &conformance.assoc {
-                let bound =
-                    ty.substitute(&row_theta, &Default::default(), &Default::default());
+                let bound = ty.substitute(&row_theta, &Default::default(), &Default::default());
                 theta.insert(*assoc, bound);
             }
             return Some((
@@ -2457,7 +3150,7 @@ impl<'a> Lowering<'a> {
                 args: payloads,
                 ..
             } => {
-                let (enum_symbol, tag) = self.variant_target(&request.value, callee, ctx)?;
+                let (enum_symbol, tag, _, _) = self.variant_target(&request.value, callee, ctx)?;
                 let name = self
                     .enum_info(enum_symbol)?
                     .variants
@@ -2593,9 +3286,8 @@ impl<'a> Lowering<'a> {
         if !sig.generics.is_empty() {
             // Each instantiation would need its own capability closure
             // (the same monomorphization the worklist does for functions).
-            self.diagnostics.push(
-                "lowering: handlers for generic effects (not yet supported)".into(),
-            );
+            self.diagnostics
+                .push("lowering: handlers for generic effects (not yet supported)".into());
             return self.dead_end("generic_effect_handler");
         }
         // Payload types: the checker's zonked record for this handler
@@ -2656,7 +3348,9 @@ impl<'a> Lowering<'a> {
         let mut celled: Vec<(Symbol, ExprId)> = vec![];
         for (i, arg) in handler_block.args.iter().enumerate() {
             let value = self.p.extract(cap_var, i as u32);
-            let Ok(symbol) = arg.name.symbol() else { continue };
+            let Ok(symbol) = arg.name.symbol() else {
+                continue;
+            };
             if inner.cellable.contains(&symbol) {
                 celled.push((symbol, value));
             } else {
@@ -2704,9 +3398,8 @@ impl<'a> Lowering<'a> {
         k: ExprId,
     ) -> ExprId {
         if !ctx.abort_ok && !ctx.local_handlers.contains(&handler_sym) {
-            self.diagnostics.push(
-                "lowering: perform inside a function value (not yet supported)".into(),
-            );
+            self.diagnostics
+                .push("lowering: perform inside a function value (not yet supported)".into());
             let _ = k;
             return self.dead_end("perform_in_function_value");
         }
@@ -2771,13 +3464,11 @@ impl<'a> Lowering<'a> {
         // Performs into a resuming handler: the rest of the block is the
         // resumption.
         if let ExprKind::CallEffect { args, .. } = &expr.kind
-            && let Some(&handler_sym) =
-                self.units[ctx.unit].resolved.effect_handlers.get(&expr.id)
+            && let Some(&handler_sym) = self.units[ctx.unit].resolved.effect_handlers.get(&expr.id)
             && let Some(cap) = self.handler_caps.get(&handler_sym).copied()
             && let Some(pair_ty) = cap.resume_pair_ty
         {
-            let handler_reachable =
-                ctx.abort_ok || ctx.local_handlers.contains(&handler_sym);
+            let handler_reachable = ctx.abort_ok || ctx.local_handlers.contains(&handler_sym);
             if !handler_reachable || k != ctx.ret_k {
                 self.diagnostics.push(
                     "lowering: a resumable perform outside the enclosing function's statement spine (not yet supported)"
@@ -2816,9 +3507,8 @@ impl<'a> Lowering<'a> {
             return Some(self.dead_end("abort_call_unresolved"));
         };
         if !matches!(prefix, Prefix::None) {
-            self.diagnostics.push(
-                "lowering: method or init calls that can abort (not yet supported)".into(),
-            );
+            self.diagnostics
+                .push("lowering: method or init calls that can abort (not yet supported)".into());
             return Some(self.dead_end("abort_call_method"));
         }
 
@@ -2860,12 +3550,14 @@ impl<'a> Lowering<'a> {
         let slot = ctx.raw_ret_k;
         let func_ref = self.p.func_ref(label);
         let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
-        Some(self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
-            values.push(rest_ref);
-            values.push(slot);
-            let tuple = this.p.tuple(&values);
-            this.p.app(func_ref, tuple)
-        }))
+        Some(
+            self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
+                values.push(rest_ref);
+                values.push(slot);
+                let tuple = this.p.tuple(&values);
+                this.p.app(func_ref, tuple)
+            }),
+        )
     }
 
     /// The rest of the block, reified as an escaping closure
@@ -3107,60 +3799,10 @@ impl<'a> Lowering<'a> {
     }
 
     fn normalize_check_ty(&self, ty: CheckTy, unit: usize) -> CheckTy {
-        match ty {
-            CheckTy::Nominal(symbol, args) => CheckTy::Nominal(
-                symbol,
-                args.into_iter()
-                    .map(|arg| self.normalize_check_ty(arg, unit))
-                    .collect(),
-            ),
-            CheckTy::Func(params, ret, eff) => CheckTy::Func(
-                params
-                    .into_iter()
-                    .map(|param| self.normalize_check_ty(param, unit))
-                    .collect(),
-                Box::new(self.normalize_check_ty(*ret, unit)),
-                eff,
-            ),
-            CheckTy::Tuple(items) => CheckTy::Tuple(
-                items
-                    .into_iter()
-                    .map(|item| self.normalize_check_ty(item, unit))
-                    .collect(),
-            ),
-            CheckTy::Record(row) => CheckTy::Record(crate::types::ty::Row {
-                fields: row
-                    .fields
-                    .into_iter()
-                    .map(|(label, field)| (label, self.normalize_check_ty(field, unit)))
-                    .collect(),
-                tail: row.tail,
-            }),
-            CheckTy::Proj(base, protocol, assoc) => {
-                let base = self.normalize_check_ty(*base, unit);
-                if let CheckTy::Nominal(symbol, args) = &base
-                    && let Some(conformance) = self.units[unit]
-                        .types
-                        .catalog
-                        .conformances
-                        .get(&(*symbol, protocol))
-                    && let Some(binding) = conformance.assoc.get(&assoc)
-                {
-                    let mut substitution = FxHashMap::default();
-                    for (pattern, actual) in conformance.self_args.iter().zip(args) {
-                        crate::types::solve::bind_param_pattern(pattern, actual, &mut substitution);
-                    }
-                    let reduced = binding.substitute(
-                        &substitution,
-                        &Default::default(),
-                        &Default::default(),
-                    );
-                    return self.normalize_check_ty(reduced, unit);
-                }
-                CheckTy::Proj(Box::new(base), protocol, assoc)
-            }
-            other => other,
+        CheckNormalizer {
+            catalog: &self.units[unit].types.catalog,
         }
+        .fold_ty(&ty)
     }
 
     fn expr_lambda_ty(&mut self, expr: &Expr, ctx: &Ctx) -> TyId {
@@ -3218,11 +3860,7 @@ impl<'a> Lowering<'a> {
     /// binding.
     fn call_theta(&self, symbol: Symbol, node: crate::node_id::NodeID, ctx: &Ctx) -> Theta {
         let mut theta = self.instantiation_at(node, ctx);
-        if let Some(scheme) = self
-            .units
-            .iter()
-            .find_map(|u| u.types.schemes.get(&symbol))
-        {
+        if let Some(scheme) = self.units.iter().find_map(|u| u.types.schemes.get(&symbol)) {
             for param in &scheme.params {
                 if !theta.contains_key(&param.symbol)
                     && let Some(ty) = ctx.theta.get(&param.symbol)
@@ -3296,6 +3934,8 @@ impl<'a> Lowering<'a> {
                 let mapped: Vec<TyId> = field_tys.iter().map(|t| self.map_ty(t)).collect();
                 self.p.ty_tuple(&mapped)
             }
+            CheckTy::Any { protocol, .. } => self.p.ty(TyKind::Existential(*protocol)),
+            CheckTy::Param(_) => self.p.ty(TyKind::Erased),
             // A residual solver variable on an error-free program is
             // unconstrained — its instantiation cannot matter, so default
             // it (the ambiguity-defaulting move; statement-position @_ir
@@ -3380,6 +4020,7 @@ impl<'a> Lowering<'a> {
             unit,
             theta: Theta::default(),
             env: FxHashMap::default(),
+            local_evidence: FxHashMap::default(),
             ret_k,
             raw_ret_k: ret_k,
             normal_k: None,
@@ -3473,6 +4114,7 @@ impl<'a> Lowering<'a> {
             unit,
             theta: Theta::default(),
             env: FxHashMap::default(),
+            local_evidence: FxHashMap::default(),
             ret_k,
             raw_ret_k: ret_k,
             normal_k: None,
@@ -3523,5 +4165,34 @@ fn block_value_ty(lowering: &mut Lowering, block: &Block, ctx: &Ctx) -> TyId {
     match last_expr {
         Some(e) => lowering.expr_lambda_ty(e, ctx),
         None => lowering.p.ty_void(),
+    }
+}
+
+/// Post-solve associated-type normalization over `CheckTy` (a bottom-up
+/// `TyFold`): recurse children first, then reduce a projection whose base is a
+/// concrete nominal through the conformance table. Catalog-only — the solver's
+/// `VarStore` is gone by lowering time.
+struct CheckNormalizer<'a> {
+    catalog: &'a crate::types::catalog::TypeCatalog,
+}
+
+impl TyFold for CheckNormalizer<'_> {
+    fn fold_ty(&mut self, ty: &CheckTy) -> CheckTy {
+        let rebuilt = self.fold_children(ty);
+        let CheckTy::Proj(base, protocol, assoc) = &rebuilt else {
+            return rebuilt;
+        };
+        let CheckTy::Nominal(symbol, args) = base.as_ref() else {
+            return rebuilt;
+        };
+        match crate::types::solve::reduce_projection(self.catalog, *symbol, args, *protocol, *assoc)
+        {
+            Some(reduced) => self.fold_ty(&reduced),
+            None => rebuilt,
+        }
+    }
+
+    fn fold_eff(&mut self, eff: &crate::types::ty::EffectRow) -> crate::types::ty::EffectRow {
+        eff.clone()
     }
 }

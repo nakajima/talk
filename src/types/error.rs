@@ -54,6 +54,42 @@ pub enum TypeError {
         predicate: String,
     },
     InvalidWherePredicate,
+    EscapingExistential {
+        param: String,
+    },
+    GenericShadowing {
+        name: String,
+    },
+    InvalidVariantResultType {
+        variant: String,
+    },
+    RedundantVariantResultType {
+        variant: String,
+    },
+    IncompatibleOrPatternRefinements,
+    AmbiguousGadtMatchResult,
+    InvalidExistentialProtocol {
+        ty: String,
+    },
+    MissingAssociatedTypeBinding {
+        protocol: String,
+        assoc: String,
+    },
+    UnknownAssociatedTypeBinding {
+        protocol: String,
+        assoc: String,
+    },
+    DuplicateAssociatedTypeBinding {
+        assoc: String,
+    },
+    NonObjectSafeExistential {
+        protocol: String,
+        reason: String,
+    },
+    UnsupportedExistentialUpcast {
+        expected: String,
+        found: String,
+    },
     /// A closed effect annotation (`func f() 'a -> ()`) is an exact upper
     /// bound: performing anything outside it is an error. (Checked at the
     /// declaration, keeping arrow rows open — the deviation from Koka's
@@ -138,6 +174,69 @@ impl Display for TypeError {
                     "Where predicates must mention a declaration type parameter or Self"
                 )
             }
+            TypeError::EscapingExistential { param } => {
+                write!(
+                    f,
+                    "Existential type {param} escapes this pattern arm; returning or storing hidden constructor types requires first-class existentials, which are not supported yet"
+                )
+            }
+            TypeError::GenericShadowing { name } => {
+                write!(
+                    f,
+                    "Generic parameter '{name}' shadows an enclosing generic parameter"
+                )
+            }
+            TypeError::InvalidVariantResultType { variant } => {
+                write!(
+                    f,
+                    "Variant result type for '{variant}' must be the enclosing enum with the correct number of type arguments"
+                )
+            }
+            TypeError::RedundantVariantResultType { variant } => {
+                write!(f, "Variant result type for '{variant}' is redundant")
+            }
+            TypeError::IncompatibleOrPatternRefinements => {
+                write!(
+                    f,
+                    "Or-pattern alternatives introduce different GADT refinements; split them into separate arms"
+                )
+            }
+            TypeError::AmbiguousGadtMatchResult => {
+                write!(
+                    f,
+                    "Cannot infer this GADT match result; add a return or let annotation so constructor refinements have a rigid expected type"
+                )
+            }
+            TypeError::InvalidExistentialProtocol { ty } => {
+                write!(f, "'any' expects a protocol, found {ty}")
+            }
+            TypeError::MissingAssociatedTypeBinding { protocol, assoc } => {
+                write!(
+                    f,
+                    "Missing associated type binding {assoc} for any {protocol}"
+                )
+            }
+            TypeError::UnknownAssociatedTypeBinding { protocol, assoc } => {
+                write!(
+                    f,
+                    "Unknown associated type binding {assoc} for any {protocol}"
+                )
+            }
+            TypeError::DuplicateAssociatedTypeBinding { assoc } => {
+                write!(
+                    f,
+                    "Duplicate associated type binding {assoc} in existential type"
+                )
+            }
+            TypeError::NonObjectSafeExistential { protocol, reason } => {
+                write!(f, "Cannot form any {protocol}: {reason}")
+            }
+            TypeError::UnsupportedExistentialUpcast { expected, found } => {
+                write!(
+                    f,
+                    "Existential upcasting is not supported in v1: cannot use {found} as {expected}"
+                )
+            }
             TypeError::UndeclaredEffect { effect } => {
                 write!(
                     f,
@@ -146,7 +245,10 @@ impl Display for TypeError {
             }
             TypeError::NonExhaustiveMatch { missing } => {
                 if missing.iter().all(|m| m == "_") {
-                    write!(f, "Match does not cover every case; add a catch-all arm: _ -> …")
+                    write!(
+                        f,
+                        "Match does not cover every case; add a catch-all arm: _ -> …"
+                    )
                 } else {
                     write!(
                         f,

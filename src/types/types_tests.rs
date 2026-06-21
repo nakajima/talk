@@ -20,9 +20,8 @@ pub mod tests {
     /// with their source names via the symbol-name context.
     pub fn ty_of(driver: &Driver<Typed>, name: &str) -> String {
         let resolved = &driver.phase.resolved_names;
-        let _names = crate::name_resolution::symbol::set_symbol_names(
-            resolved.symbol_names.clone(),
-        );
+        let _names =
+            crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
         let mut candidates: Vec<_> = resolved
             .symbol_names
             .iter()
@@ -72,7 +71,10 @@ pub mod tests {
 
     pub fn assert_clean(driver: &Driver<Typed>) {
         let errors = type_errors(driver);
-        assert!(errors.is_empty(), "expected no type errors, got: {errors:?}");
+        assert!(
+            errors.is_empty(),
+            "expected no type errors, got: {errors:?}"
+        );
     }
 
     /// The previous type checker's suite, replayed against this one
@@ -83,176 +85,996 @@ pub mod tests {
     fn previous_checker_suite_behaviors_hold() {
         // (name, source, expect_clean, with_core_prelude)
         let cases: &[(&str, &str, bool, bool)] = &[
-            ("types::row_projection_polymorphic", "\n        func fstA(r) { r.a }\n        (fstA({ a: 1 }), fstA({ a: 2, b: true }))\n    ", true, false),
-            ("types::row_presence_constraint_is_polymorphic", "\n        func useA(r) { r.a } // imposes HasField(row_var, \"a\", Int)\n        (useA({ a: 1 }), useA({ a: 2, c: true }))\n    ", true, false),
-            ("types::types_non_annotated_record_param", "\n        func foo(x) {\n            (x.y, x.z)\n        }\n\n        foo({ y: 123, z: 1.23 })\n        foo({ y: 123, z: 123 })\n        ", true, false),
-            ("types::checks_generic_struct_arg", "\n        struct Person {\n            func getAge<T>(t: T) -> T { t }\n        }\n\n        Person().getAge(123)\n        Person().getAge(1.23)\n        ", true, false),
-            ("types::types_enum_instance_methods", "\n            enum Fizz<T> {\n                case foo(T), bar(T)\n\n                func unwrap() {\n                    match self {\n                        Fizz.foo(t) -> t,\n                        Fizz.bar(t) -> t\n                    }\n                }\n            }\n\n            Fizz.foo(123).unwrap()\n            ", true, false),
-            ("types::record_field_func_generalizes_with_row_forall", "\n            func getX(r) { r.x }\n            getX({ x: 1 })\n            ", true, false),
+            (
+                "types::row_projection_polymorphic",
+                "\n        func fstA(r) { r.a }\n        (fstA({ a: 1 }), fstA({ a: 2, b: true }))\n    ",
+                true,
+                false,
+            ),
+            (
+                "types::row_presence_constraint_is_polymorphic",
+                "\n        func useA(r) { r.a } // imposes HasField(row_var, \"a\", Int)\n        (useA({ a: 1 }), useA({ a: 2, c: true }))\n    ",
+                true,
+                false,
+            ),
+            (
+                "types::types_non_annotated_record_param",
+                "\n        func foo(x) {\n            (x.y, x.z)\n        }\n\n        foo({ y: 123, z: 1.23 })\n        foo({ y: 123, z: 123 })\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::checks_generic_struct_arg",
+                "\n        struct Person {\n            func getAge<T>(t: T) -> T { t }\n        }\n\n        Person().getAge(123)\n        Person().getAge(1.23)\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_enum_instance_methods",
+                "\n            enum Fizz<T> {\n                case foo(T), bar(T)\n\n                func unwrap() {\n                    match self {\n                        Fizz.foo(t) -> t,\n                        Fizz.bar(t) -> t\n                    }\n                }\n            }\n\n            Fizz.foo(123).unwrap()\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::record_field_func_generalizes_with_row_forall",
+                "\n            func getX(r) { r.x }\n            getX({ x: 1 })\n            ",
+                true,
+                false,
+            ),
             ("types::types_int_literal", "123", true, false),
             ("types::types_int", "let a = 123; a", true, false),
             ("types::types_float", "let a = 1.23; a", true, false),
-            ("types::types_bool", "let a = true; a ; let b = false ; b", true, false),
+            (
+                "types::types_bool",
+                "let a = true; a ; let b = false ; b",
+                true,
+                false,
+            ),
             ("types::types_string", "\"hello\"", true, false),
-            ("types::types_string_concat", "\"hello\" + \"world\"", true, true),
-            ("types::types_string_slice", "\"hello\".slice(1, 3)", true, true),
-            ("types::types_string_find", "\"hello\".find(\"ll\"); \"hello\".find_from(\"l\", 3)", true, true),
+            (
+                "types::types_string_concat",
+                "\"hello\" + \"world\"",
+                true,
+                true,
+            ),
+            (
+                "types::types_string_slice",
+                "\"hello\".slice(1, 3)",
+                true,
+                true,
+            ),
+            (
+                "types::types_string_find",
+                "\"hello\".find(\"ll\"); \"hello\".find_from(\"l\", 3)",
+                true,
+                true,
+            ),
             ("types::types_equals_int", "1 == 2; 1 != 2", true, true),
-            ("types::types_equals_float", "1.0 == 2.0; 1.0 != 2.0", true, true),
-            ("types::types_equals_string", "\"hello\" == \"world\" ; \"hello\" != \"world\"", true, true),
-            ("types::types_array_literal", "[1,2,3]; [1.2, 3.4, 5.6]", true, true),
-            ("types::types_ir_builtin", "__IR<Int>(\"add int 1 2\"); __IR<Float>(\"add int 1 2\")", true, false),
-            ("types::types_alloc", "let x: RawPtr = __IR(\"$? = alloc int 1\"); x", true, false),
+            (
+                "types::types_equals_float",
+                "1.0 == 2.0; 1.0 != 2.0",
+                true,
+                true,
+            ),
+            (
+                "types::types_equals_string",
+                "\"hello\" == \"world\" ; \"hello\" != \"world\"",
+                true,
+                true,
+            ),
+            (
+                "types::types_array_literal",
+                "[1,2,3]; [1.2, 3.4, 5.6]",
+                true,
+                true,
+            ),
+            (
+                "types::types_ir_builtin",
+                "__IR<Int>(\"add int 1 2\"); __IR<Float>(\"add int 1 2\")",
+                true,
+                false,
+            ),
+            (
+                "types::types_alloc",
+                "let x: RawPtr = __IR(\"$? = alloc int 1\"); x",
+                true,
+                false,
+            ),
             ("types::types_array_properties", "[1,2,3].count", true, true),
-            ("types::types_basic_binary", "func a(x) { x + 1 } ; a(123)", true, true),
-            ("types::let_again", "\n        let a = 123\n        let a = 1.23\n        a\n    ", true, false),
-            ("types::monomorphic_let_annotation", "\n        let a: Int = 123\n        a\n    ", true, false),
-            ("types::monomorphic_let_annotation_mismatch", "\n        let a: Bool = 123\n        a\n    ", false, false),
-            ("types::types_identity", "\n        func identity(x) { x }\n        identity(123)\n        identity(true)\n        ", true, false),
-            ("types::stores_func_instantiations", "\n        func identity(x) { x }\n        identity(123)\n        identity(true)\n        ", true, false),
-            ("types::stores_struct_instantiations", "\n        struct Wrapper<T> {\n            let wrapped: T\n        }\n        Wrapper(wrapped: 123)\n        Wrapper(wrapped: true)\n        ", true, false),
-            ("types::types_nested_func", "\n        func fizz(x) {\n            func buzz() { x }\n            buzz()\n        }\n\n        fizz(123)\n        ", true, false),
-            ("types::infers_simple_recursion", "\n        func rec(x, y, z) {\n            if x == y { x } else { rec(y-z, y, z) }\n        }\n\n        rec(0, 2, 1)\n        rec(0.0, 2.0, 1.0)\n        ", true, true),
-            ("types::explicit_generic_function_instantiates", "\n        func id<T>(x: T) -> T { x }\n        id(123)\n        id(true)\n    ", true, false),
-            ("types::explicit_call_args", "\n        func id<T>(x) { x }\n        id<Byte>(123)\n    ", true, false),
-            ("types::generic_function_body_must_respect_its_own_type_vars", "\n        func bad<T>(x: T) -> T { 0 } // 0 == Int != T\n        bad(true)\n    ", false, false),
-            ("types::types_call_let", "\n        func id(x) { x }\n        let a = id(123)\n        let b = id(1.23)\n        a\n        b\n        ", true, false),
-            ("types::types_nested_identity", "\n        func identity(x) { x }\n        identity(identity(123))\n        identity(identity(true))\n        ", true, false),
-            ("types::types_multiple_args", "\n        func makeTuple(x, y) {\n            (x, y)\n        }\n\n        makeTuple(123, true)\n            ", true, false),
-            ("types::checks_returns_agree", "\n            func fizz() {\n                return 123\n                1.23\n            }\n            ", false, false),
-            ("types::types_single_tuple_value", "\n        let z = (123)\n        z\n        ", true, false),
-            ("types::types_tuple_value", "\n        let z = (123, true)\n        z\n        ", true, false),
-            ("types::types_tuple_assignment", "\n        let z = (123, 1.23)\n        let (x, y) = z\n        x\n        y\n        ", true, false),
-            ("types::types_record_assignment", "\n        let z = { x: 1, y: 1.23 }\n        let { x, y } = z\n        x\n        y\n        ", true, false),
-            ("types::types_if_expr", "\n        let z = if true { 123 } else { 456 }\n        z\n        ", true, false),
-            ("types::requires_if_expr_cond_to_be_bool", "\n        let z = if 123 { 123 } else { 456 }\n        z\n        ", false, false),
-            ("types::requires_if_expr_arms_to_match", "\n        let z = if true { 123 } else { false }\n        z\n        ", false, false),
-            ("types::requires_if_stmt_cond_to_be_bool", "\n        if 123 { 123 }\n        ", false, false),
-            ("types::types_match", "\n        match 123 {\n            123 -> true,\n            456 -> false,\n            _ -> true\n        }\n        ", true, false),
-            ("types::types_match_binding", "\n        match 123 {\n            a -> a,\n        }\n        ", true, false),
-            ("types::checks_match_pattern_type", "\n        match 123 {\n            true -> false,\n        }\n        ", false, false),
-            ("types::checks_or_pattern", "\n        match 123 {\n            123 | true -> true,\n            _ -> false\n        }\n        ", false, false),
-            ("types::checks_tuple_match", "\n        match (123, true) {\n            (a, b) -> (b, a),\n        }\n        ", true, false),
-            ("types::checks_loop_cond_is_bool", "\n        loop 123 {}\n        ", false, false),
-            ("types::checks_assignment", "\n        let bool = true\n        bool = 123\n        ", false, false),
-            ("types::call_time_type_args_are_checked", "\n        func id<T>(x: T) -> T { x }\n        id<Bool>(123)\n    ", false, false),
-            ("types::match_arms_must_agree_on_result_type", "\n        match 123 {\n            123 -> 1,\n            456 -> true,\n        }\n    ", false, false),
-            ("types::param_annotation_is_enforced_at_call", "\n        func f(x: Int) -> Int { x }\n        f(true)\n    ", false, false),
-            ("types::return_annotation_is_enforced_in_body", "\n        func f(x: Int) -> Int { true }\n        f(1)\n    ", false, false),
-            ("types::types_recursive_func", "\n        func fizz(n) {\n            if true {\n                123\n            } else {\n                fizz(n)\n            }\n        }\n\n        fizz(456)\n        ", true, false),
-            ("types::recursion_is_monomorphic_within_binding_group", "\n        func g(x) {\n            // Force a shape change on the recursive call to try to “polymorphically” recurse.\n            g( (x, x) )\n        }\n        g(1)\n    ", false, false),
-            ("types::tuple_type_annotation_on_let_is_honored", "\n        let z: (Int, Bool) = (123, true)\n        z\n    ", true, false),
-            ("types::concrete_func_type_annotation_works", "\n        let first: (Int, Bool) -> Int = func(a, b) { a }\n        first(1, true)\n    ", true, false),
-            ("types::let_generalization_for_value_bindings", "\n        let id = func(x) { x }\n        (id(123), id(true))\n    ", true, false),
-            ("types::types_record_literal", "\n        let rec = { a: true, b: 123, c: 1.23 }\n        rec\n        ", true, false),
-            ("types::types_record_type_out_of_order", "\n        let x: { a: Int, b: Bool } = { b: true, a: 1 }\n        x\n        ", true, false),
-            ("types::types_record_member", "\n        let rec = { a: true, b: 123, c: 1.23 }\n        rec.a\n        rec.b\n        rec.c\n        ", true, false),
-            ("types::types_nested_record", "\n        let rec = { a: { b: { c: 1.23 } } }\n        rec.a.b.c\n        ", true, false),
-            ("types::types_record_pattern_out_of_order", "\n        let rec = { a: 123, b: true }\n        match rec {\n            { b, a } -> (a, b)\n        }\n        ", true, false),
-            ("types::types_record_pattern_with_equalities", "\n        let rec = { a: 123, b: true }\n        match rec {\n            { a: 123, b } -> b,\n            _ -> false,\n        }\n        ", true, false),
-            ("types::type_nested_record_pattern", "\n        let rec = { a: 123, b: { c: true } }\n        match rec {\n            { a, b: { c } } -> c\n        }\n        ", true, false),
-            ("types::checks_fields_exist", "\n        let rec = { a: 123, b: true }\n        match rec {\n            { a, c } -> (a, c)\n        }\n        ", false, false),
-            ("types::checks_field_types", "\n        let rec = { a: 123 }\n        match rec {\n            { a: true } -> ()\n        }\n        ", false, false),
-            ("types::row_id_generalizes_and_instantiates", "\n        let id = func id(r) { r }\n        // project different fields from differently-shaped records\n        (id({ a: 1 }).a, id({ b: true }).b)\n    ", true, false),
-            ("types::row_env_tail_not_generalized_in_local_let", "\n        func outer(r) {\n            let _x = r.a;               // forces r to have field `a`\n            let k  = func() { r };      // returns the *same* env row (no row-generalization)\n            match k() {\n                { c } -> c              // `c` is not known; should produce one error\n            }\n        }\n        outer({ a: 1 })\n    ", false, false),
-            ("types::row_instantiation_stability_across_uses", "\n        let id = func id(r) { r }\n        let x  = id({ a: 1, b: true });\n        (x.a, x.b)\n    ", true, false),
-            ("types::row_meta_levels_prevent_leak", "\n        func outer(r) {\n            let x = r.a; // creates an internal Row::Var tail for r's row (your ensure_row/projection does this)\n            let k = func() { r } // local let; do NOT generalize the outer row var into a Row::Param\n            match k() {\n                { c } -> c // should be a missing-field error (no 'c' in r)\n            }\n        }\n        outer({ a: 1 })\n    ", false, false),
-            ("types::types_row_type_as_params", "\n        func foo(x: { y: Int, z: Bool }) {\n            (x.y, x.z)\n        }\n\n        foo({ y: 123, z: true })\n        ", true, false),
-            ("types::enforces_non_annotated_record", "\n        func foo(point) {\n            (point.x, point.y)\n        }\n\n        foo({ x: 123, z: 123 })\n        ", false, false),
-            ("types::enforces_row_type_as_params", "\n        func foo(x: { y: Int, z: Bool }) {\n            (x.y, x.z)\n        }\n\n        foo({ y: 123 })\n        ", false, false),
-            ("types::types_struct_constructor", "\n        struct Person {\n            let age: Int\n            let height: Float\n        }\n\n        Person(age: 123, height: 1.23)\n        ", true, false),
-            ("types::types_struct_referencing_another_struct", "\n        struct A {\n            let count: Int\n        }\n\n        struct B {\n            let a: A\n        }\n\n        B(a: A(count: 1)).a.count\n        ", true, false),
-            ("types::types_struct_member_access", "\n        struct Person {\n            let age: Int\n            let height: Float\n        }\n\n        Person(age: 123, height: 1.23).age\n        ", true, false),
-            ("types::type_generic_struct", "\n        struct Person<T> {\n            let age: T\n        }\n\n        Person(age: 123).age\n        ", true, false),
-            ("types::checks_struct_init_args", "\n        struct Person {\n            let age: Int\n\n            // init(age: Int) {\n            //     self.age = age\n            // }\n        }\n\n        Person(age: 1.23)\n        ", false, false),
-            ("types::types_generic_struct_init", "\n        struct Person<T> {\n            let age: T\n\n            init(other: T) {\n                self.age = other\n            }\n        }\n\n        Person(age: 123).age\n        ", true, false),
-            ("types::types_static_struct_methods", "\n        struct Person {\n           static func getAge() { 123 }\n        }\n\n        Person.getAge()\n        ", true, false),
-            ("types::type_struct_method", "\n        struct Person {\n            let age: Int\n\n            func getAge() {\n                self.age\n            }\n        }\n\n        Person(age: 123).getAge()\n        ", true, false),
-            ("types::types_explicit_type_application", "\n          struct Boxy<T> { let value: T }\n\n          // Explicit type application\n          let x: Boxy<Int> = Boxy(value: 42)\n          let y: Boxy<Float> = Boxy(value: 3.14)\n\n          x\n          ", true, false),
-            ("types::checks_struct_method_on_arg", "\n        struct Person {\n            let age: Int\n        }\n\n        let person = Person(age: 123)\n        callNonExisting(person)\n\n        func callNonExisting(aged) {\n            aged.getAge()\n        }\n        ", false, false),
-            ("types::types_generic_struct_method", "\n        struct Wrapper<T> {\n            let wrapped: T\n\n            func getWrapped() {\n                self.wrapped\n            }\n        }\n\n        Wrapper(wrapped: 123).getWrapped()\n        Wrapper(wrapped: 1.23).getWrapped()\n        ", true, false),
-            ("types::types_nested_generic_struct_method", "\n\n        struct Inner<T> {\n            let inner: T\n        }\n        struct Middle<T> {\n            let middle: T\n        }\n        struct Outer<T> {\n            let outer: T\n        }\n\n        let inner = Inner(inner: true)\n        let middle = Middle(middle: inner)\n        let outer = Outer(outer: middle)\n\n        outer.outer.middle.inner\n        inner.inner\n        ", true, false),
-            ("types::types_simple_enum_constructor", "\n            enum Fizz {\n                case foo, bar\n            }\n\n            Fizz.foo\n            Fizz.bar\n        ", true, false),
-            ("types::types_enum_constructor_with_values", "\n            enum Fizz {\n                case foo(Int, Bool), bar(Float)\n            }\n\n            Fizz.foo(123, true)\n            Fizz.bar(1.23)\n        ", true, false),
-            ("types::types_enum_constructor_with_generic_value", "\n            enum Opt<T> {\n                case some(T), none\n            }\n\n            Opt.some(123)\n            Opt.some(1.23)\n            Opt.none\n        ", true, false),
-            ("types::types_simple_enum_match", "\n            enum Fizz {\n                case foo, bar\n            }\n\n            match Fizz.foo {\n                Fizz.foo -> 1,\n                Fizz.bar -> 2\n            }\n            ", true, false),
-            ("types::types_nested_enum_match", "\n            enum Fizz<T> {\n                case foo(T)\n            }\n\n            match Fizz.foo(Fizz.foo(123)) {\n                Fizz.foo(Fizz.foo(x)) -> x,\n            }\n            ", true, false),
-            ("types::types_unqualified_variant", "\n            enum Fizz {\n                case foo(Int), bar(Int)\n            }\n\n            match Fizz.foo(123) {\n                .foo(x) -> x,\n                .bar(y) -> y\n            }\n            ", true, false),
-            ("types::types_unqualified_variant_as_param", "\n            enum Fizz {\n                case foo(Int), bar(Int)\n            }\n\n            func buzz(fizz: Fizz) {\n                match fizz {\n                    .foo(x) -> x,\n                    .bar(y) -> y\n                }\n            }\n\n            buzz(fizz: .foo(123))\n            ", true, false),
-            ("types::checks_or_pattern_in_let", "\n          enum Result<T, E> {\n              case ok(T)\n              case err(E)\n          }\n\n          let .ok(x) | .err(x) = Result.ok(42)\n          x\n          ", true, false),
-            ("types::checks_nested_or_patterns", "\n          enum Outer {\n              case a(Inner)\n              case b(Inner)\n          }\n\n          enum Inner {\n              case x(Int)\n              case y(Int)\n          }\n\n          func extract(o: Outer) -> Int {\n              match o {\n                  .a(.x(n) | .y(n)) | .b(.x(n) | .y(n)) -> n\n              }\n          }\n\n          extract(Outer.a(Inner.x(99)))\n          ", true, false),
-            ("types::rejects_unbounded_associated_type_projection", "\n            func bad<T>(x: T) -> T.Item {\n                x\n            }\n            ", false, false),
-            ("types::rejects_unknown_associated_type_projection_on_protocol_bound", "\n            protocol Aged {\n                associated T\n            }\n\n            func bad<A: Aged>(x: A) -> A.U {\n                x\n            }\n            ", false, false),
-            ("types::rejects_unknown_nominal_type_member", "\n            struct Box {}\n\n            func bad() -> Box.Item {\n                1\n            }\n            ", false, false),
-            ("types::rejects_nested_unknown_nominal_type_member", "\n            struct A {\n                typealias B = Int\n            }\n\n            func f() -> A.B.C {\n                1\n            }\n            ", false, false),
-            ("types::types_simple_conformance", "\n            protocol Countable {\n                func getCount() -> Int\n            }\n\n            struct Person {}\n\n            extend Person: Countable {\n                func getCount() {\n                    123\n                }\n            }\n            ", true, false),
-            ("types::records_conformance_claim_associated_type_candidates", "\n            protocol HasItem {\n                associated Item\n                func getItem() -> Int\n            }\n\n            struct Box {}\n\n            extend Box: HasItem {\n                typealias Item = Int\n                func getItem() { 1 }\n            }\n            ", true, false),
-            ("types::rejects_missing_concrete_conformance_for_generic_bound", "\n            protocol Marker {\n                func mark() -> Int\n            }\n\n            struct Foo {}\n\n            func takes<T: Marker>(x: T) {}\n\n            takes(Foo())\n            ", false, false),
-            ("types::rejects_missing_marker_conformance_without_requirements", "\n            protocol Marker {}\n\n            struct Foo {}\n\n            func takes<T: Marker>(x: T) {}\n\n            takes(Foo())\n            ", false, false),
-            ("types::generic_constructor_in_extension_block", "\n          struct Wrapper<T> {\n              let value: T\n\n              init(value: T) {\n                  self.value = value\n              }\n          }\n\n          struct Box<T> {\n              let inner: T\n          }\n\n          extend Box<T> {\n              func wrap() -> Wrapper<T> {\n                  Wrapper<T>(value: self.inner)\n              }\n          }\n          ", true, false),
-            ("types::generic_constructor_with_explicit_type_arg", "\n          struct Container<Element> {\n              let item: Element\n\n              init(item: Element) {\n                  self.item = item\n              }\n          }\n\n          struct MyList<Element> {\n              let first: Element\n          }\n\n          extend MyList<Element> {\n              func boxFirst() -> Container<Element> {\n                  Container<Element>(item: self.first)\n              }\n          }\n          ", true, false),
-            ("types::checks_method_protocol_conformance", "\n            protocol Countable {\n                func getCount() -> Int\n            }\n\n            struct Person {}\n\n            extend Person: Countable {\n                func getCount() -> Float {\n                    1.123 // This is wrong\n                }\n            }\n        ", false, false),
-            ("types::checks_protocol_method", "\n            protocol Countable {\n                func getCount() -> Int\n                func getOtherCount() {\n                    self.getCount()\n                }\n            }\n\n            struct Person {}\n\n            extend Person: Countable {\n                func getCount() { 123 }\n            }\n\n            Person().getOtherCount()\n        ", true, false),
-            ("types::types_simple_protocol", "\n            protocol Countable { func getCount() -> Int }\n            struct Person { let count: Int }\n            extend Person: Countable {\n                func getCount() {\n                    self.count\n                }\n            }\n\n            func getCount<T: Countable>(countable: T) {\n                countable.getCount()\n            }\n\n            let person = Person(count: 1)\n            getCount(person)\n            ", true, false),
-            ("types::tests_infers_associated_types", "\n        protocol Aged {\n            associated T\n\n            func getAge() -> T\n        }\n\n        struct Inty {}\n        extend Inty: Aged {\n            func getAge() {\n                123\n            }\n        }\n\n        struct Floaty {}\n        extend Floaty: Aged {\n            func getAge() {\n                1.23\n            }\n        }\n\n        func get<A: Aged>(aged: A) {\n            aged.getAge()\n        }\n\n        get(Inty())\n        get(Floaty())\n        ", true, false),
-            ("types::can_extend_builtins", "\n        protocol Foo {\n            func foo() -> Int\n        }\n        extend Int: Foo {\n            func foo() { 123 }\n        }\n        1.foo()\n        ", true, false),
-            ("types::add_protocol_prototype", "\n        protocol Addy {\n            associated RHS\n            associated Ret\n            func addy(rhs: RHS) -> Ret\n        }\n\n        extend Int: Addy {\n            func addy(rhs: Int) -> Int {\n                self\n            }\n        }\n\n        1.addy(2)\n        ", true, false),
-            ("types::includes_core_optional", "\n        enum Opt<T> {\n            case some(T), none\n        }\n\n        Optional.some(123)\n        Opt.some(1.23)\n        ", true, true),
-            ("types::types_plus", "\n        1 + 2\n        1.0 + 2.0\n        ", true, true),
-            ("types::checks_plus", "\n        let a: Int = 123\n        let b: Float = 1.23\n        let c = a + b\n        ", false, true),
-            ("types::types_minus", "\n        1 - 2\n        1.0 - 2.0\n        ", true, true),
-            ("types::types_multiplication", "\n        1 * 2\n        1.0 * 2.0\n        ", true, true),
-            ("types::types_division", "\n        1 / 2\n        1.0 / 2.0\n        ", true, true),
-            ("types::types_comparisons", "\n        1 == 2\n        1.0 == 2.0\n        1 > 2\n        1 >= 2\n        1 < 2\n        1 <= 2\n        1 < 2 && 2 < 3\n        1 < 2 || 2 < 3\n        ", true, true),
-            ("types::types_custom_add", "\n        struct A {}\n        struct B {}\n        struct C {}\n        extend A: Add {\n            func add(rhs: B) -> C {\n                C()\n            }\n        }\n        A() + B()\n        ", true, true),
-            ("types::types_add_method_in_func", "func add(x) { x + 1 }\n\n            add(2)\n            ", true, true),
-            ("types::check_as", "\n        protocol Fizz {\n            func fizz() -> Int\n            func buzz() -> Int {\n                self.fizz()\n            }\n        }\n\n        struct A {}\n\n        A() as Fizz\n        ", false, false),
-            ("types::checks_basic_conformance", "\n        protocol A {\n            func fizz() -> Int\n        }\n\n        struct B {}\n        extend B: A {} \n        ", false, false),
-            ("types::protocols_on_protocols", "\n        protocol A {\n            func fizz() -> Int\n        }\n\n        protocol B: A {\n            func buzz() -> Int\n        }\n\n        func get<T: B>(t: T) {\n            t.fizz()\n        }\n        ", true, false),
-            ("types::types_fib", "\n        func fib(n) {\n            if n <= 1 { return n }\n\n            return fib(n - 2) + fib(n - 1)\n        }\n\n        fib(3)\n        ", true, true),
-            ("types::tracks_transitive_witnesses", "\n            protocol A {\n                func default() { 123 }\n            }\n\n            protocol B: A {\n                func callsDefault() { self.default() }\n            }\n\n            extend Int: B {}\n\n            123.callsDefault()\n        ", true, false),
-            ("types::types_struct_call_regression", "\n            struct Person {\n                let firstName: String\n                let lastName: String\n\n                func greet() {\n                    // Strings can be concat'd\n                    print(\"hi i'm \" + self.firstName + \" \" + self.lastName)\n                }\n            }\n\n            Person(firstName: \"Pat\", lastName: \"N\").greet()\n            ", true, true),
-            ("types::types_associated_type_conformances", "\n            protocol Named {\n                func name() -> String\n            }\n\n            protocol Animal {\n                associated Food: Named\n\n                // Can call name() on Food because Food: Named\n                func feed(food: Food) {\n                    print(food.name())\n                }\n            }\n            ", true, true),
-            ("types::types_nested_extend_conformance", "\n            protocol Counter {\n                func next() -> Int\n            }\n\n            struct MyCounter {\n                let value: Int\n\n                extend Self: Counter {\n                    func next() -> Int {\n                        self.value\n                    }\n                }\n            }\n\n            func useCounter<T: Counter>(c: T) -> Int {\n                c.next()\n            }\n\n            useCounter(MyCounter(value: 42))\n            ", true, false),
-            ("types::nested_self_extend_can_use_protocol_default_method", "\n            protocol P {\n                func f() { 1 }\n            }\n\n            struct S {\n                extend Self: P {}\n            }\n\n            func call<T: P>(x: T) -> Int {\n                x.f()\n            }\n\n            call(S())\n            ", true, false),
-            ("types::nested_self_extend_does_not_use_outer_method_as_witness", "\n            protocol P {\n                func f() -> Int\n            }\n\n            struct S {\n                func f() -> Int { 1 }\n\n                extend Self: P {}\n            }\n\n            func call<T: P>(x: T) -> Int {\n                x.f()\n            }\n\n            call(S())\n            ", false, false),
-            ("types::types_nested_extend_with_enum_ref", "\n            protocol Getter {\n                func get() -> Int\n            }\n\n            enum Result<T> {\n                case ok(T)\n                case err\n            }\n\n            struct MyGetter {\n                let value: Int\n\n                extend Self: Getter {\n                    func get() -> Int {\n                        self.value\n                    }\n                }\n            }\n\n            Result.ok(123)\n            ", true, false),
-            ("types::types_nested_extend_with_member_method_call", "\n            struct Inner {\n                let data: Int\n\n                func getData() -> Int {\n                    self.data\n                }\n            }\n\n            protocol Wrapper {\n                func getValue() -> Int\n            }\n\n            struct Outer {\n                let inner: Inner\n\n                extend Self: Wrapper {\n                    func getValue() -> Int {\n                        self.inner.getData()\n                    }\n                }\n            }\n            ", true, false),
-            ("types::yield_is_not_available_as_a_builtin_anymore", "\n            yield(42)\n            ", false, true),
-            ("types::types_func_literal_call_arg_with_contextual_param_type", "\n            func transform(x: Int, f: (Int) -> Int) -> Int {\n                f(x)\n            }\n            transform(1, func(n) { n })\n            ", true, false),
-            ("types::types_func_literal_call_arg_return_mismatch_returns_error", "\n            func apply(f: () -> Int) -> Int {\n                f()\n            }\n            apply(func() { true })\n            ", false, false),
-            ("types::types_trailing_block_as_function_arg", "\n            func apply(f: () -> Int) -> Int {\n                f()\n            }\n            apply(){ 123 }\n            ", true, false),
-            ("types::types_trailing_block_with_params", "\n            func transform(x: Int, f: (Int) -> Int) -> Int {\n                f(x)\n            }\n            transform(1){ n in n }\n            ", true, false),
-            ("types::finalize_ty_produces_correct_poly_entry", "\n            func id(x) { x }\n            id(123)\n            ", true, false),
-            ("types::types_trailing_block_type_mismatch_returns_error", "\n            func apply(f: () -> Int) -> Int {\n                f()\n            }\n            apply(){ true }\n            ", false, false),
-            ("types::if_let_binds_variables", "\n            enum Opt<T> { case some(T), none }\n            let val = Opt.some(42)\n            let result: Int = if let .some(x) = val { x } else { 0 }\n            ", true, false),
-            ("types::if_let_unifies_arm_types", "\n            enum Opt<T> { case some(T), none }\n            let val = Opt.some(42)\n            if let .some(x) = val { x } else { true }\n            ", false, false),
-            ("types::if_let_stmt_no_else", "\n            enum Opt<T> { case some(T), none }\n            func use_int(x: Int) {}\n            let val = Opt.some(42)\n            if let .some(x) = val { use_int(x) }\n            ", true, false),
-            ("types::let_else_binds_in_enclosing_scope", "\n            enum Opt<T> { case some(T), none }\n            func f(val: Opt<Int>) -> Int {\n                let .some(x) = val else { return 0 }\n                x\n            }\n            ", true, false),
-            ("types::let_else_body_is_typechecked", "\n            enum Opt<T> { case some(T), none }\n            func f(val: Opt<Int>) -> Int {\n                let .some(x) = val else { return true }\n                x\n            }\n            ", false, false),
-            ("types::bounded_param_substitution_in_conditional_conformance", "\n            func printy<T: Showable>(showable: T) {\n                print_raw(showable.show())\n            }\n            printy([1, 2, 3])\n            ", true, true),
-            ("types::rejects_tuple_annotation_with_extra_elements", "\n            let x: (Int, Bool) = (1, true, 1.2)\n            x\n            ", false, false),
-            ("types::rejects_extra_explicit_function_type_args", "\n            func id<T>(x: T) -> T { x }\n            id<Int, Bool>(1)\n            ", false, false),
-            ("types::rejects_extra_explicit_nominal_type_args", "\n            struct Box<T> { let value: T }\n            let x: Box<Int, Bool> = Box(value: 1)\n            x\n            ", false, false),
-            ("types::substitutes_nested_generic_property_types", "\n            struct Box<T> { let xs: Array<T> }\n            let b = Box(xs: [1, 2])\n            b.xs\n            ", true, true),
-            ("types::substitutes_nested_generic_variant_payload_types", "\n            enum E<T> { case arr(Array<T>) }\n            E.arr([1])\n            ", true, true),
-            ("types::reports_unresolved_top_level_member_access", ".foo", false, false),
-            ("effects::infers_func_with_indirect_effect", "\n          effect 'fizz() -> Int\n\n          func fizzes() {\n            'fizz()\n          }\n\n          func callsFizzes() {\n              fizzes()\n          }\n        ", true, false),
-            ("effects::infers_func_with_effect", "\n          effect 'fizz() -> Int\n\n          func fizzes() {\n            'fizz()\n          }\n        ", true, false),
-            ("effects::checks_pure_func_has_no_effects", "\n          effect 'fizz() -> Int\n\n          func fizzes() '[] {\n            'fizz()\n          }\n        ", false, false),
-            ("effects::checks_pure_func_has_no_indirect_effects", "\n          effect 'fizz() -> Int\n\n          func callsFizzes() {\n              'fizz()\n          }\n\n          func fizzes() '[] {\n              callsFizzes()\n          }\n        ", false, false),
-            ("effects::types_handlers", "\n            effect 'fizz(x: Int, y: Bool) -> Int\n\n            @handle 'fizz { a, b in\n                0\n            }\n            ", true, false),
-            ("effects::checks_handler_args", "\n            effect 'fizz(x: Int, y: Bool) -> Bool\n\n            @handle 'fizz { a in\n                true\n            }\n            ", false, false),
-            ("effects::continue_in_handler_uses_effect_return_type", "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                continue 123\n            }\n            ", true, false),
-            ("effects::continue_in_handler_checks_return_type", "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                continue true\n            }\n            ", false, false),
-            ("effects::continue_with_value_outside_handler_errors", "continue 1", false, false),
-            ("effects::dupe_handlers_warn", "\n                effect 'fizz() -> Int\n\n                @handle 'fizz { continue 0 }\n                @handle 'fizz { continue 1 }\n\n                'fizz()\n                ", false, false),
-            ("effects::handler_removes_effect_from_enclosing_func", "\n          effect 'fizz() -> Int\n\n          func fizzes() '[] {\n            @handle 'fizz { continue 123 }\n\n            'fizz()\n          }\n        ", true, false),
-            ("effects::generic_effect_declaration", "effect 'state<T>(value: T) -> T", true, false),
-            ("effects::generic_effect_call_with_type_arg", "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in continue v }\n            'state<Int>(42)\n        ", true, false),
-            ("effects::generic_effect_call_inferred", "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in continue v }\n            'state(42)\n        ", true, false),
-            ("effects::generic_effect_type_mismatch", "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in continue v }\n            'state<Int>(true)\n        ", false, false),
-            ("effects::generic_effect_multiple_params", "\n            effect 'pair<A, B>(first: A, second: B) -> (A, B)\n            @handle 'pair { a, b in continue (a, b) }\n            'pair<Int, Bool>(42, true)\n        ", true, false),
+            (
+                "types::types_basic_binary",
+                "func a(x) { x + 1 } ; a(123)",
+                true,
+                true,
+            ),
+            (
+                "types::let_again",
+                "\n        let a = 123\n        let a = 1.23\n        a\n    ",
+                true,
+                false,
+            ),
+            (
+                "types::monomorphic_let_annotation",
+                "\n        let a: Int = 123\n        a\n    ",
+                true,
+                false,
+            ),
+            (
+                "types::monomorphic_let_annotation_mismatch",
+                "\n        let a: Bool = 123\n        a\n    ",
+                false,
+                false,
+            ),
+            (
+                "types::types_identity",
+                "\n        func identity(x) { x }\n        identity(123)\n        identity(true)\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::stores_func_instantiations",
+                "\n        func identity(x) { x }\n        identity(123)\n        identity(true)\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::stores_struct_instantiations",
+                "\n        struct Wrapper<T> {\n            let wrapped: T\n        }\n        Wrapper(wrapped: 123)\n        Wrapper(wrapped: true)\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_nested_func",
+                "\n        func fizz(x) {\n            func buzz() { x }\n            buzz()\n        }\n\n        fizz(123)\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::infers_simple_recursion",
+                "\n        func rec(x, y, z) {\n            if x == y { x } else { rec(y-z, y, z) }\n        }\n\n        rec(0, 2, 1)\n        rec(0.0, 2.0, 1.0)\n        ",
+                true,
+                true,
+            ),
+            (
+                "types::explicit_generic_function_instantiates",
+                "\n        func id<T>(x: T) -> T { x }\n        id(123)\n        id(true)\n    ",
+                true,
+                false,
+            ),
+            (
+                "types::explicit_call_args",
+                "\n        func id<T>(x) { x }\n        id<Byte>(123)\n    ",
+                true,
+                false,
+            ),
+            (
+                "types::generic_function_body_must_respect_its_own_type_vars",
+                "\n        func bad<T>(x: T) -> T { 0 } // 0 == Int != T\n        bad(true)\n    ",
+                false,
+                false,
+            ),
+            (
+                "types::types_call_let",
+                "\n        func id(x) { x }\n        let a = id(123)\n        let b = id(1.23)\n        a\n        b\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_nested_identity",
+                "\n        func identity(x) { x }\n        identity(identity(123))\n        identity(identity(true))\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_multiple_args",
+                "\n        func makeTuple(x, y) {\n            (x, y)\n        }\n\n        makeTuple(123, true)\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::checks_returns_agree",
+                "\n            func fizz() {\n                return 123\n                1.23\n            }\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::types_single_tuple_value",
+                "\n        let z = (123)\n        z\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_tuple_value",
+                "\n        let z = (123, true)\n        z\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_tuple_assignment",
+                "\n        let z = (123, 1.23)\n        let (x, y) = z\n        x\n        y\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_record_assignment",
+                "\n        let z = { x: 1, y: 1.23 }\n        let { x, y } = z\n        x\n        y\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_if_expr",
+                "\n        let z = if true { 123 } else { 456 }\n        z\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::requires_if_expr_cond_to_be_bool",
+                "\n        let z = if 123 { 123 } else { 456 }\n        z\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::requires_if_expr_arms_to_match",
+                "\n        let z = if true { 123 } else { false }\n        z\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::requires_if_stmt_cond_to_be_bool",
+                "\n        if 123 { 123 }\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::types_match",
+                "\n        match 123 {\n            123 -> true,\n            456 -> false,\n            _ -> true\n        }\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_match_binding",
+                "\n        match 123 {\n            a -> a,\n        }\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::checks_match_pattern_type",
+                "\n        match 123 {\n            true -> false,\n        }\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::checks_or_pattern",
+                "\n        match 123 {\n            123 | true -> true,\n            _ -> false\n        }\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::checks_tuple_match",
+                "\n        match (123, true) {\n            (a, b) -> (b, a),\n        }\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::checks_loop_cond_is_bool",
+                "\n        loop 123 {}\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::checks_assignment",
+                "\n        let bool = true\n        bool = 123\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::call_time_type_args_are_checked",
+                "\n        func id<T>(x: T) -> T { x }\n        id<Bool>(123)\n    ",
+                false,
+                false,
+            ),
+            (
+                "types::match_arms_must_agree_on_result_type",
+                "\n        match 123 {\n            123 -> 1,\n            456 -> true,\n        }\n    ",
+                false,
+                false,
+            ),
+            (
+                "types::param_annotation_is_enforced_at_call",
+                "\n        func f(x: Int) -> Int { x }\n        f(true)\n    ",
+                false,
+                false,
+            ),
+            (
+                "types::return_annotation_is_enforced_in_body",
+                "\n        func f(x: Int) -> Int { true }\n        f(1)\n    ",
+                false,
+                false,
+            ),
+            (
+                "types::types_recursive_func",
+                "\n        func fizz(n) {\n            if true {\n                123\n            } else {\n                fizz(n)\n            }\n        }\n\n        fizz(456)\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::recursion_is_monomorphic_within_binding_group",
+                "\n        func g(x) {\n            // Force a shape change on the recursive call to try to “polymorphically” recurse.\n            g( (x, x) )\n        }\n        g(1)\n    ",
+                false,
+                false,
+            ),
+            (
+                "types::tuple_type_annotation_on_let_is_honored",
+                "\n        let z: (Int, Bool) = (123, true)\n        z\n    ",
+                true,
+                false,
+            ),
+            (
+                "types::concrete_func_type_annotation_works",
+                "\n        let first: (Int, Bool) -> Int = func(a, b) { a }\n        first(1, true)\n    ",
+                true,
+                false,
+            ),
+            (
+                "types::let_generalization_for_value_bindings",
+                "\n        let id = func(x) { x }\n        (id(123), id(true))\n    ",
+                true,
+                false,
+            ),
+            (
+                "types::types_record_literal",
+                "\n        let rec = { a: true, b: 123, c: 1.23 }\n        rec\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_record_type_out_of_order",
+                "\n        let x: { a: Int, b: Bool } = { b: true, a: 1 }\n        x\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_record_member",
+                "\n        let rec = { a: true, b: 123, c: 1.23 }\n        rec.a\n        rec.b\n        rec.c\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_nested_record",
+                "\n        let rec = { a: { b: { c: 1.23 } } }\n        rec.a.b.c\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_record_pattern_out_of_order",
+                "\n        let rec = { a: 123, b: true }\n        match rec {\n            { b, a } -> (a, b)\n        }\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_record_pattern_with_equalities",
+                "\n        let rec = { a: 123, b: true }\n        match rec {\n            { a: 123, b } -> b,\n            _ -> false,\n        }\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::type_nested_record_pattern",
+                "\n        let rec = { a: 123, b: { c: true } }\n        match rec {\n            { a, b: { c } } -> c\n        }\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::checks_fields_exist",
+                "\n        let rec = { a: 123, b: true }\n        match rec {\n            { a, c } -> (a, c)\n        }\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::checks_field_types",
+                "\n        let rec = { a: 123 }\n        match rec {\n            { a: true } -> ()\n        }\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::row_id_generalizes_and_instantiates",
+                "\n        let id = func id(r) { r }\n        // project different fields from differently-shaped records\n        (id({ a: 1 }).a, id({ b: true }).b)\n    ",
+                true,
+                false,
+            ),
+            (
+                "types::row_env_tail_not_generalized_in_local_let",
+                "\n        func outer(r) {\n            let _x = r.a;               // forces r to have field `a`\n            let k  = func() { r };      // returns the *same* env row (no row-generalization)\n            match k() {\n                { c } -> c              // `c` is not known; should produce one error\n            }\n        }\n        outer({ a: 1 })\n    ",
+                false,
+                false,
+            ),
+            (
+                "types::row_instantiation_stability_across_uses",
+                "\n        let id = func id(r) { r }\n        let x  = id({ a: 1, b: true });\n        (x.a, x.b)\n    ",
+                true,
+                false,
+            ),
+            (
+                "types::row_meta_levels_prevent_leak",
+                "\n        func outer(r) {\n            let x = r.a; // creates an internal Row::Var tail for r's row (your ensure_row/projection does this)\n            let k = func() { r } // local let; do NOT generalize the outer row var into a Row::Param\n            match k() {\n                { c } -> c // should be a missing-field error (no 'c' in r)\n            }\n        }\n        outer({ a: 1 })\n    ",
+                false,
+                false,
+            ),
+            (
+                "types::types_row_type_as_params",
+                "\n        func foo(x: { y: Int, z: Bool }) {\n            (x.y, x.z)\n        }\n\n        foo({ y: 123, z: true })\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::enforces_non_annotated_record",
+                "\n        func foo(point) {\n            (point.x, point.y)\n        }\n\n        foo({ x: 123, z: 123 })\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::enforces_row_type_as_params",
+                "\n        func foo(x: { y: Int, z: Bool }) {\n            (x.y, x.z)\n        }\n\n        foo({ y: 123 })\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::types_struct_constructor",
+                "\n        struct Person {\n            let age: Int\n            let height: Float\n        }\n\n        Person(age: 123, height: 1.23)\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_struct_referencing_another_struct",
+                "\n        struct A {\n            let count: Int\n        }\n\n        struct B {\n            let a: A\n        }\n\n        B(a: A(count: 1)).a.count\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_struct_member_access",
+                "\n        struct Person {\n            let age: Int\n            let height: Float\n        }\n\n        Person(age: 123, height: 1.23).age\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::type_generic_struct",
+                "\n        struct Person<T> {\n            let age: T\n        }\n\n        Person(age: 123).age\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::checks_struct_init_args",
+                "\n        struct Person {\n            let age: Int\n\n            // init(age: Int) {\n            //     self.age = age\n            // }\n        }\n\n        Person(age: 1.23)\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::types_generic_struct_init",
+                "\n        struct Person<T> {\n            let age: T\n\n            init(other: T) {\n                self.age = other\n            }\n        }\n\n        Person(age: 123).age\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_static_struct_methods",
+                "\n        struct Person {\n           static func getAge() { 123 }\n        }\n\n        Person.getAge()\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::type_struct_method",
+                "\n        struct Person {\n            let age: Int\n\n            func getAge() {\n                self.age\n            }\n        }\n\n        Person(age: 123).getAge()\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_explicit_type_application",
+                "\n          struct Boxy<T> { let value: T }\n\n          // Explicit type application\n          let x: Boxy<Int> = Boxy(value: 42)\n          let y: Boxy<Float> = Boxy(value: 3.14)\n\n          x\n          ",
+                true,
+                false,
+            ),
+            (
+                "types::checks_struct_method_on_arg",
+                "\n        struct Person {\n            let age: Int\n        }\n\n        let person = Person(age: 123)\n        callNonExisting(person)\n\n        func callNonExisting(aged) {\n            aged.getAge()\n        }\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::types_generic_struct_method",
+                "\n        struct Wrapper<T> {\n            let wrapped: T\n\n            func getWrapped() {\n                self.wrapped\n            }\n        }\n\n        Wrapper(wrapped: 123).getWrapped()\n        Wrapper(wrapped: 1.23).getWrapped()\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_nested_generic_struct_method",
+                "\n\n        struct Inner<T> {\n            let inner: T\n        }\n        struct Middle<T> {\n            let middle: T\n        }\n        struct Outer<T> {\n            let outer: T\n        }\n\n        let inner = Inner(inner: true)\n        let middle = Middle(middle: inner)\n        let outer = Outer(outer: middle)\n\n        outer.outer.middle.inner\n        inner.inner\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_simple_enum_constructor",
+                "\n            enum Fizz {\n                case foo, bar\n            }\n\n            Fizz.foo\n            Fizz.bar\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_enum_constructor_with_values",
+                "\n            enum Fizz {\n                case foo(Int, Bool), bar(Float)\n            }\n\n            Fizz.foo(123, true)\n            Fizz.bar(1.23)\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_enum_constructor_with_generic_value",
+                "\n            enum Opt<T> {\n                case some(T), none\n            }\n\n            Opt.some(123)\n            Opt.some(1.23)\n            Opt.none\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_simple_enum_match",
+                "\n            enum Fizz {\n                case foo, bar\n            }\n\n            match Fizz.foo {\n                Fizz.foo -> 1,\n                Fizz.bar -> 2\n            }\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::types_nested_enum_match",
+                "\n            enum Fizz<T> {\n                case foo(T)\n            }\n\n            match Fizz.foo(Fizz.foo(123)) {\n                Fizz.foo(Fizz.foo(x)) -> x,\n            }\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::types_unqualified_variant",
+                "\n            enum Fizz {\n                case foo(Int), bar(Int)\n            }\n\n            match Fizz.foo(123) {\n                .foo(x) -> x,\n                .bar(y) -> y\n            }\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::types_unqualified_variant_as_param",
+                "\n            enum Fizz {\n                case foo(Int), bar(Int)\n            }\n\n            func buzz(fizz: Fizz) {\n                match fizz {\n                    .foo(x) -> x,\n                    .bar(y) -> y\n                }\n            }\n\n            buzz(fizz: .foo(123))\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::checks_or_pattern_in_let",
+                "\n          enum Result<T, E> {\n              case ok(T)\n              case err(E)\n          }\n\n          let .ok(x) | .err(x) = Result.ok(42)\n          x\n          ",
+                true,
+                false,
+            ),
+            (
+                "types::checks_nested_or_patterns",
+                "\n          enum Outer {\n              case a(Inner)\n              case b(Inner)\n          }\n\n          enum Inner {\n              case x(Int)\n              case y(Int)\n          }\n\n          func extract(o: Outer) -> Int {\n              match o {\n                  .a(.x(n) | .y(n)) | .b(.x(n) | .y(n)) -> n\n              }\n          }\n\n          extract(Outer.a(Inner.x(99)))\n          ",
+                true,
+                false,
+            ),
+            (
+                "types::rejects_unbounded_associated_type_projection",
+                "\n            func bad<T>(x: T) -> T.Item {\n                x\n            }\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::rejects_unknown_associated_type_projection_on_protocol_bound",
+                "\n            protocol Aged {\n                associated T\n            }\n\n            func bad<A: Aged>(x: A) -> A.U {\n                x\n            }\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::rejects_unknown_nominal_type_member",
+                "\n            struct Box {}\n\n            func bad() -> Box.Item {\n                1\n            }\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::rejects_nested_unknown_nominal_type_member",
+                "\n            struct A {\n                typealias B = Int\n            }\n\n            func f() -> A.B.C {\n                1\n            }\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::types_simple_conformance",
+                "\n            protocol Countable {\n                func getCount() -> Int\n            }\n\n            struct Person {}\n\n            extend Person: Countable {\n                func getCount() {\n                    123\n                }\n            }\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::records_conformance_claim_associated_type_candidates",
+                "\n            protocol HasItem {\n                associated Item\n                func getItem() -> Int\n            }\n\n            struct Box {}\n\n            extend Box: HasItem {\n                typealias Item = Int\n                func getItem() { 1 }\n            }\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::rejects_missing_concrete_conformance_for_generic_bound",
+                "\n            protocol Marker {\n                func mark() -> Int\n            }\n\n            struct Foo {}\n\n            func takes<T: Marker>(x: T) {}\n\n            takes(Foo())\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::rejects_missing_marker_conformance_without_requirements",
+                "\n            protocol Marker {}\n\n            struct Foo {}\n\n            func takes<T: Marker>(x: T) {}\n\n            takes(Foo())\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::generic_constructor_in_extension_block",
+                "\n          struct Wrapper<T> {\n              let value: T\n\n              init(value: T) {\n                  self.value = value\n              }\n          }\n\n          struct Box<T> {\n              let inner: T\n          }\n\n          extend Box<T> {\n              func wrap() -> Wrapper<T> {\n                  Wrapper<T>(value: self.inner)\n              }\n          }\n          ",
+                true,
+                false,
+            ),
+            (
+                "types::generic_constructor_with_explicit_type_arg",
+                "\n          struct Container<Element> {\n              let item: Element\n\n              init(item: Element) {\n                  self.item = item\n              }\n          }\n\n          struct MyList<Element> {\n              let first: Element\n          }\n\n          extend MyList<Element> {\n              func boxFirst() -> Container<Element> {\n                  Container<Element>(item: self.first)\n              }\n          }\n          ",
+                true,
+                false,
+            ),
+            (
+                "types::checks_method_protocol_conformance",
+                "\n            protocol Countable {\n                func getCount() -> Int\n            }\n\n            struct Person {}\n\n            extend Person: Countable {\n                func getCount() -> Float {\n                    1.123 // This is wrong\n                }\n            }\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::checks_protocol_method",
+                "\n            protocol Countable {\n                func getCount() -> Int\n                func getOtherCount() {\n                    self.getCount()\n                }\n            }\n\n            struct Person {}\n\n            extend Person: Countable {\n                func getCount() { 123 }\n            }\n\n            Person().getOtherCount()\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_simple_protocol",
+                "\n            protocol Countable { func getCount() -> Int }\n            struct Person { let count: Int }\n            extend Person: Countable {\n                func getCount() {\n                    self.count\n                }\n            }\n\n            func getCount<T: Countable>(countable: T) {\n                countable.getCount()\n            }\n\n            let person = Person(count: 1)\n            getCount(person)\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::tests_infers_associated_types",
+                "\n        protocol Aged {\n            associated T\n\n            func getAge() -> T\n        }\n\n        struct Inty {}\n        extend Inty: Aged {\n            func getAge() {\n                123\n            }\n        }\n\n        struct Floaty {}\n        extend Floaty: Aged {\n            func getAge() {\n                1.23\n            }\n        }\n\n        func get<A: Aged>(aged: A) {\n            aged.getAge()\n        }\n\n        get(Inty())\n        get(Floaty())\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::can_extend_builtins",
+                "\n        protocol Foo {\n            func foo() -> Int\n        }\n        extend Int: Foo {\n            func foo() { 123 }\n        }\n        1.foo()\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::add_protocol_prototype",
+                "\n        protocol Addy {\n            associated RHS\n            associated Ret\n            func addy(rhs: RHS) -> Ret\n        }\n\n        extend Int: Addy {\n            func addy(rhs: Int) -> Int {\n                self\n            }\n        }\n\n        1.addy(2)\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::includes_core_optional",
+                "\n        enum Opt<T> {\n            case some(T), none\n        }\n\n        Optional.some(123)\n        Opt.some(1.23)\n        ",
+                true,
+                true,
+            ),
+            (
+                "types::types_plus",
+                "\n        1 + 2\n        1.0 + 2.0\n        ",
+                true,
+                true,
+            ),
+            (
+                "types::checks_plus",
+                "\n        let a: Int = 123\n        let b: Float = 1.23\n        let c = a + b\n        ",
+                false,
+                true,
+            ),
+            (
+                "types::types_minus",
+                "\n        1 - 2\n        1.0 - 2.0\n        ",
+                true,
+                true,
+            ),
+            (
+                "types::types_multiplication",
+                "\n        1 * 2\n        1.0 * 2.0\n        ",
+                true,
+                true,
+            ),
+            (
+                "types::types_division",
+                "\n        1 / 2\n        1.0 / 2.0\n        ",
+                true,
+                true,
+            ),
+            (
+                "types::types_comparisons",
+                "\n        1 == 2\n        1.0 == 2.0\n        1 > 2\n        1 >= 2\n        1 < 2\n        1 <= 2\n        1 < 2 && 2 < 3\n        1 < 2 || 2 < 3\n        ",
+                true,
+                true,
+            ),
+            (
+                "types::types_custom_add",
+                "\n        struct A {}\n        struct B {}\n        struct C {}\n        extend A: Add {\n            func add(rhs: B) -> C {\n                C()\n            }\n        }\n        A() + B()\n        ",
+                true,
+                true,
+            ),
+            (
+                "types::types_add_method_in_func",
+                "func add(x) { x + 1 }\n\n            add(2)\n            ",
+                true,
+                true,
+            ),
+            (
+                "types::check_as",
+                "\n        protocol Fizz {\n            func fizz() -> Int\n            func buzz() -> Int {\n                self.fizz()\n            }\n        }\n\n        struct A {}\n\n        A() as Fizz\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::checks_basic_conformance",
+                "\n        protocol A {\n            func fizz() -> Int\n        }\n\n        struct B {}\n        extend B: A {} \n        ",
+                false,
+                false,
+            ),
+            (
+                "types::protocols_on_protocols",
+                "\n        protocol A {\n            func fizz() -> Int\n        }\n\n        protocol B: A {\n            func buzz() -> Int\n        }\n\n        func get<T: B>(t: T) {\n            t.fizz()\n        }\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_fib",
+                "\n        func fib(n) {\n            if n <= 1 { return n }\n\n            return fib(n - 2) + fib(n - 1)\n        }\n\n        fib(3)\n        ",
+                true,
+                true,
+            ),
+            (
+                "types::tracks_transitive_witnesses",
+                "\n            protocol A {\n                func default() { 123 }\n            }\n\n            protocol B: A {\n                func callsDefault() { self.default() }\n            }\n\n            extend Int: B {}\n\n            123.callsDefault()\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_struct_call_regression",
+                "\n            struct Person {\n                let firstName: String\n                let lastName: String\n\n                func greet() {\n                    // Strings can be concat'd\n                    print(\"hi i'm \" + self.firstName + \" \" + self.lastName)\n                }\n            }\n\n            Person(firstName: \"Pat\", lastName: \"N\").greet()\n            ",
+                true,
+                true,
+            ),
+            (
+                "types::types_associated_type_conformances",
+                "\n            protocol Named {\n                func name() -> String\n            }\n\n            protocol Animal {\n                associated Food: Named\n\n                // Can call name() on Food because Food: Named\n                func feed(food: Food) {\n                    print(food.name())\n                }\n            }\n            ",
+                true,
+                true,
+            ),
+            (
+                "types::types_nested_extend_conformance",
+                "\n            protocol Counter {\n                func next() -> Int\n            }\n\n            struct MyCounter {\n                let value: Int\n\n                extend Self: Counter {\n                    func next() -> Int {\n                        self.value\n                    }\n                }\n            }\n\n            func useCounter<T: Counter>(c: T) -> Int {\n                c.next()\n            }\n\n            useCounter(MyCounter(value: 42))\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::nested_self_extend_can_use_protocol_default_method",
+                "\n            protocol P {\n                func f() { 1 }\n            }\n\n            struct S {\n                extend Self: P {}\n            }\n\n            func call<T: P>(x: T) -> Int {\n                x.f()\n            }\n\n            call(S())\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::nested_self_extend_does_not_use_outer_method_as_witness",
+                "\n            protocol P {\n                func f() -> Int\n            }\n\n            struct S {\n                func f() -> Int { 1 }\n\n                extend Self: P {}\n            }\n\n            func call<T: P>(x: T) -> Int {\n                x.f()\n            }\n\n            call(S())\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::types_nested_extend_with_enum_ref",
+                "\n            protocol Getter {\n                func get() -> Int\n            }\n\n            enum Result<T> {\n                case ok(T)\n                case err\n            }\n\n            struct MyGetter {\n                let value: Int\n\n                extend Self: Getter {\n                    func get() -> Int {\n                        self.value\n                    }\n                }\n            }\n\n            Result.ok(123)\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::types_nested_extend_with_member_method_call",
+                "\n            struct Inner {\n                let data: Int\n\n                func getData() -> Int {\n                    self.data\n                }\n            }\n\n            protocol Wrapper {\n                func getValue() -> Int\n            }\n\n            struct Outer {\n                let inner: Inner\n\n                extend Self: Wrapper {\n                    func getValue() -> Int {\n                        self.inner.getData()\n                    }\n                }\n            }\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::yield_is_not_available_as_a_builtin_anymore",
+                "\n            yield(42)\n            ",
+                false,
+                true,
+            ),
+            (
+                "types::types_func_literal_call_arg_with_contextual_param_type",
+                "\n            func transform(x: Int, f: (Int) -> Int) -> Int {\n                f(x)\n            }\n            transform(1, func(n) { n })\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::types_func_literal_call_arg_return_mismatch_returns_error",
+                "\n            func apply(f: () -> Int) -> Int {\n                f()\n            }\n            apply(func() { true })\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::types_trailing_block_as_function_arg",
+                "\n            func apply(f: () -> Int) -> Int {\n                f()\n            }\n            apply(){ 123 }\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::types_trailing_block_with_params",
+                "\n            func transform(x: Int, f: (Int) -> Int) -> Int {\n                f(x)\n            }\n            transform(1){ n in n }\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::finalize_ty_produces_correct_poly_entry",
+                "\n            func id(x) { x }\n            id(123)\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::types_trailing_block_type_mismatch_returns_error",
+                "\n            func apply(f: () -> Int) -> Int {\n                f()\n            }\n            apply(){ true }\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::if_let_binds_variables",
+                "\n            enum Opt<T> { case some(T), none }\n            let val = Opt.some(42)\n            let result: Int = if let .some(x) = val { x } else { 0 }\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::if_let_unifies_arm_types",
+                "\n            enum Opt<T> { case some(T), none }\n            let val = Opt.some(42)\n            if let .some(x) = val { x } else { true }\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::if_let_stmt_no_else",
+                "\n            enum Opt<T> { case some(T), none }\n            func use_int(x: Int) {}\n            let val = Opt.some(42)\n            if let .some(x) = val { use_int(x) }\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::let_else_binds_in_enclosing_scope",
+                "\n            enum Opt<T> { case some(T), none }\n            func f(val: Opt<Int>) -> Int {\n                let .some(x) = val else { return 0 }\n                x\n            }\n            ",
+                true,
+                false,
+            ),
+            (
+                "types::let_else_body_is_typechecked",
+                "\n            enum Opt<T> { case some(T), none }\n            func f(val: Opt<Int>) -> Int {\n                let .some(x) = val else { return true }\n                x\n            }\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::bounded_param_substitution_in_conditional_conformance",
+                "\n            func printy<T: Showable>(showable: T) {\n                print_raw(showable.show())\n            }\n            printy([1, 2, 3])\n            ",
+                true,
+                true,
+            ),
+            (
+                "types::rejects_tuple_annotation_with_extra_elements",
+                "\n            let x: (Int, Bool) = (1, true, 1.2)\n            x\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::rejects_extra_explicit_function_type_args",
+                "\n            func id<T>(x: T) -> T { x }\n            id<Int, Bool>(1)\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::rejects_extra_explicit_nominal_type_args",
+                "\n            struct Box<T> { let value: T }\n            let x: Box<Int, Bool> = Box(value: 1)\n            x\n            ",
+                false,
+                false,
+            ),
+            (
+                "types::substitutes_nested_generic_property_types",
+                "\n            struct Box<T> { let xs: Array<T> }\n            let b = Box(xs: [1, 2])\n            b.xs\n            ",
+                true,
+                true,
+            ),
+            (
+                "types::substitutes_nested_generic_variant_payload_types",
+                "\n            enum E<T> { case arr(Array<T>) }\n            E.arr([1])\n            ",
+                true,
+                true,
+            ),
+            (
+                "types::reports_unresolved_top_level_member_access",
+                ".foo",
+                false,
+                false,
+            ),
+            (
+                "effects::infers_func_with_indirect_effect",
+                "\n          effect 'fizz() -> Int\n\n          func fizzes() {\n            'fizz()\n          }\n\n          func callsFizzes() {\n              fizzes()\n          }\n        ",
+                true,
+                false,
+            ),
+            (
+                "effects::infers_func_with_effect",
+                "\n          effect 'fizz() -> Int\n\n          func fizzes() {\n            'fizz()\n          }\n        ",
+                true,
+                false,
+            ),
+            (
+                "effects::checks_pure_func_has_no_effects",
+                "\n          effect 'fizz() -> Int\n\n          func fizzes() '[] {\n            'fizz()\n          }\n        ",
+                false,
+                false,
+            ),
+            (
+                "effects::checks_pure_func_has_no_indirect_effects",
+                "\n          effect 'fizz() -> Int\n\n          func callsFizzes() {\n              'fizz()\n          }\n\n          func fizzes() '[] {\n              callsFizzes()\n          }\n        ",
+                false,
+                false,
+            ),
+            (
+                "effects::types_handlers",
+                "\n            effect 'fizz(x: Int, y: Bool) -> Int\n\n            @handle 'fizz { a, b in\n                0\n            }\n            ",
+                true,
+                false,
+            ),
+            (
+                "effects::checks_handler_args",
+                "\n            effect 'fizz(x: Int, y: Bool) -> Bool\n\n            @handle 'fizz { a in\n                true\n            }\n            ",
+                false,
+                false,
+            ),
+            (
+                "effects::continue_in_handler_uses_effect_return_type",
+                "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                continue 123\n            }\n            ",
+                true,
+                false,
+            ),
+            (
+                "effects::continue_in_handler_checks_return_type",
+                "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                continue true\n            }\n            ",
+                false,
+                false,
+            ),
+            (
+                "effects::continue_with_value_outside_handler_errors",
+                "continue 1",
+                false,
+                false,
+            ),
+            (
+                "effects::dupe_handlers_warn",
+                "\n                effect 'fizz() -> Int\n\n                @handle 'fizz { continue 0 }\n                @handle 'fizz { continue 1 }\n\n                'fizz()\n                ",
+                false,
+                false,
+            ),
+            (
+                "effects::handler_removes_effect_from_enclosing_func",
+                "\n          effect 'fizz() -> Int\n\n          func fizzes() '[] {\n            @handle 'fizz { continue 123 }\n\n            'fizz()\n          }\n        ",
+                true,
+                false,
+            ),
+            (
+                "effects::generic_effect_declaration",
+                "effect 'state<T>(value: T) -> T",
+                true,
+                false,
+            ),
+            (
+                "effects::generic_effect_call_with_type_arg",
+                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in continue v }\n            'state<Int>(42)\n        ",
+                true,
+                false,
+            ),
+            (
+                "effects::generic_effect_call_inferred",
+                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in continue v }\n            'state(42)\n        ",
+                true,
+                false,
+            ),
+            (
+                "effects::generic_effect_type_mismatch",
+                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in continue v }\n            'state<Int>(true)\n        ",
+                false,
+                false,
+            ),
+            (
+                "effects::generic_effect_multiple_params",
+                "\n            effect 'pair<A, B>(first: A, second: B) -> (A, B)\n            @handle 'pair { a, b in continue (a, b) }\n            'pair<Int, Bool>(42, true)\n        ",
+                true,
+                false,
+            ),
         ];
         let mut failures = String::new();
         for (name, source, expect_clean, with_core) in cases {
@@ -289,7 +1111,6 @@ pub mod tests {
         }
         assert!(failures.is_empty(), "behaviors diverged:\n{failures}");
     }
-
 
     #[test]
     fn type_aliases_are_transparent_in_type_positions() {
@@ -339,8 +1160,151 @@ pub mod tests {
         );
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|error| error.contains("expected Bool, found Int")),
+            errors
+                .iter()
+                .any(|error| error.contains("expected Bool, found Int")),
             "expected associated type alias to constrain the witness, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn any_protocol_type_is_first_class_in_annotations() {
+        let t = check(
+            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\ntypealias AnyShowable = any Showable\nfunc idAny(x: AnyShowable) -> AnyShowable { x }",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "idAny"), "(any Showable) -> any Showable");
+    }
+
+    #[test]
+    fn expected_any_protocol_implicitly_packs_conforming_values() {
+        let t = check(
+            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\nextend Int: Showable {\n  func show() -> Int { self }\n}\nlet value: any Showable = 1",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "value"), "any Showable");
+        assert_eq!(t.phase.types.existential_packs.len(), 1);
+    }
+
+    #[test]
+    fn any_protocol_members_use_erased_requirement_signatures() {
+        let t = check(
+            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\nfunc render(value: any Showable) -> Int { value.show() }",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "render"), "(any Showable) -> Int");
+    }
+
+    #[test]
+    fn any_protocol_with_associated_binding_substitutes_members() {
+        let t = check(
+            "// no-core\nprotocol Iterator {\n  associated Element\n  func next() -> Element\n}\nfunc nextInt(it: any Iterator<Element = Int>) -> Int { it.next() }",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "nextInt"), "(any Iterator<Element = Int>) -> Int");
+    }
+
+    #[test]
+    fn object_safe_any_protocol_satisfies_generic_protocol_bounds() {
+        let t = check(
+            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\nextend Int: Showable {\n  func show() -> Int { self }\n}\nfunc render<T: Showable>(value: T) -> Int { value.show() }\nlet value: any Showable = 1\nlet rendered = render(value)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "rendered"), "Int");
+    }
+
+    #[test]
+    fn expected_any_protocol_rejects_existential_upcasts() {
+        let t = check(
+            "// no-core\nprotocol Readable {\n  func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> ()\n}\nfunc upcast(value: any ReadWrite) -> any Readable { value }",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("Existential upcasting is not supported in v1")
+                    && error.contains("any ReadWrite")
+                    && error.contains("any Readable")
+            }),
+            "expected existential upcast error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn existential_self_conformance_satisfies_superprotocol_bounds() {
+        let t = check(
+            "// no-core\nprotocol Readable {\n  func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> Int\n}\nextend Int: ReadWrite {\n  func read() -> Int { self }\n  func write(value: Int) -> Int { value }\n}\nfunc readIt<T: Readable>(value: T) -> Int { value.read() }\nlet value: any ReadWrite = 1\nlet result = readIt(value)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "result"), "Int");
+    }
+
+    #[test]
+    fn any_protocol_requires_all_associated_types() {
+        let t = check(
+            "// no-core\nprotocol Iterator {\n  associated Element\n  func next() -> Element\n}\nfunc use(it: any Iterator) { it }",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error
+                    .contains("Missing associated type binding Element for any Iterator")),
+            "expected missing associated binding error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn any_protocol_accepts_named_associated_type_bindings() {
+        let t = check(
+            "// no-core\nprotocol Iterator {\n  associated Element\n  func next() -> Element\n}\nfunc use(it: any Iterator<Element = Int>) -> any Iterator<Element = Int> { it }",
+        );
+        assert_clean(&t);
+        assert_eq!(
+            ty_of(&t, "use"),
+            "(any Iterator<Element = Int>) -> any Iterator<Element = Int>"
+        );
+    }
+
+    #[test]
+    fn any_protocol_rejects_unknown_associated_type_bindings() {
+        let t = check(
+            "// no-core\nprotocol Iterator {\n  associated Element\n  func next() -> Element\n}\nfunc use(it: any Iterator<Item = Int>) { it }",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(
+                |error| error.contains("Unknown associated type binding Item for any Iterator")
+            ),
+            "expected unknown associated binding error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn any_protocol_rejects_self_bearing_requirements() {
+        let t = check(
+            "// no-core\nprotocol Cloneable {\n  func clone() -> Self\n}\nfunc use(value: any Cloneable) { value }",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("Cannot form any Cloneable")
+                    && error.contains("mentions Self outside the receiver")
+            }),
+            "expected non-object-safe existential error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn any_protocol_rejects_duplicate_associated_type_bindings() {
+        let t = check(
+            "// no-core\nprotocol Iterator {\n  associated Element\n  func next() -> Element\n}\nfunc use(it: any Iterator<Element = Int, Element = Bool>) { it }",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Duplicate associated type binding Element")),
+            "expected duplicate associated binding error, got {errors:?}"
         );
     }
 
@@ -349,7 +1313,9 @@ pub mod tests {
         let t = check("// no-core\ntypealias A = B\ntypealias B = A\nlet x: A = 1");
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|error| error.contains("recursive type alias")),
+            errors
+                .iter()
+                .any(|error| error.contains("recursive type alias")),
             "expected a recursive type alias error, got {errors:?}"
         );
     }
@@ -425,7 +1391,9 @@ pub mod tests {
     #[test]
     fn nested_closure_types() {
         // Capture.tlk shape (minus operators, which arrive in M3)
-        let t = check("// no-core\nfunc makeCounter() {\n\tlet i = 0\n\treturn func() { i }\n}\nlet counter = makeCounter()");
+        let t = check(
+            "// no-core\nfunc makeCounter() {\n\tlet i = 0\n\treturn func() { i }\n}\nlet counter = makeCounter()",
+        );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "makeCounter"), "() -> () -> Int");
         assert_eq!(ty_of(&t, "counter"), "() -> Int");
@@ -786,7 +1754,9 @@ pub mod tests {
         );
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|error| error.contains("does not conform")),
+            errors
+                .iter()
+                .any(|error| error.contains("does not conform")),
             "expected effect where predicate error, got {errors:?}"
         );
     }
@@ -806,7 +1776,9 @@ pub mod tests {
         );
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|error| error.contains("does not conform")),
+            errors
+                .iter()
+                .any(|error| error.contains("does not conform")),
             "expected nominal well-formedness error, got {errors:?}"
         );
         assert_eq!(ty_of(&t, "good"), "Int");
@@ -838,7 +1810,9 @@ pub mod tests {
 
     #[test]
     fn rejects_global_where_predicates() {
-        let t = check("// no-core\nprotocol P {}\nextend Int: P {}\nfunc f() -> Int where Int: P { 1 }");
+        let t = check(
+            "// no-core\nprotocol P {}\nextend Int: P {}\nfunc f() -> Int where Int: P { 1 }",
+        );
         let errors = type_errors(&t);
         assert!(
             errors.iter().any(|error| error.contains("must mention")),
@@ -851,7 +1825,9 @@ pub mod tests {
         let t = check("// no-core\nprotocol P {}\nfunc f<T>(x: T) where T: P && T: P { x }");
         let warnings = type_warnings(&t);
         assert!(
-            warnings.iter().any(|warning| warning.contains("Duplicate where predicate")),
+            warnings
+                .iter()
+                .any(|warning| warning.contains("Duplicate where predicate")),
             "expected duplicate predicate warning, got {warnings:?}"
         );
     }
@@ -884,7 +1860,10 @@ pub mod tests {
         let scheme = ty_of(&t, "intItem");
         assert!(scheme.contains("where"), "expected predicates in {scheme}");
         assert!(scheme.contains("Boxy"), "expected conformance in {scheme}");
-        assert!(scheme.contains("Int"), "expected same-type predicate in {scheme}");
+        assert!(
+            scheme.contains("Int"),
+            "expected same-type predicate in {scheme}"
+        );
     }
 
     #[test]
@@ -1037,7 +2016,10 @@ pub mod tests {
         let t = check(
             "// no-core\nenum E {\n\tcase a(Int)\n\tcase b(Bool)\n}\nfunc f(e: E) -> Int {\n\tmatch e {\n\t\t.a(v) | .b(v) -> 1\n\t}\n}",
         );
-        assert!(!type_errors(&t).is_empty(), "Int and Bool binders should clash");
+        assert!(
+            !type_errors(&t).is_empty(),
+            "Int and Bool binders should clash"
+        );
     }
 
     #[test]
@@ -1094,9 +2076,8 @@ pub mod tests {
         // solver's fixpoint; the row tail generalizes (Gaster & Jones,
         // POPL 1996 / Leijen, Trends in FP 2005), and each call
         // instantiates it afresh.
-        let t = check(
-            "// no-core\nfunc fstA(r) { r.a }\n(fstA({ a: 1 }), fstA({ a: 2, b: true }))",
-        );
+        let t =
+            check("// no-core\nfunc fstA(r) { r.a }\n(fstA({ a: 1 }), fstA({ a: 2, b: true }))");
         assert_clean(&t);
 
         let t = check(
@@ -1154,7 +2135,10 @@ pub mod tests {
             "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\tcontinue true\n}\n'ask(1)",
         );
         let errors = type_errors(&t);
-        assert!(!errors.is_empty(), "expected a type error for continue true");
+        assert!(
+            !errors.is_empty(),
+            "expected a type error for continue true"
+        );
     }
 
     #[test]
@@ -1177,9 +2161,7 @@ pub mod tests {
 
     #[test]
     fn unhandled_effects_grow_the_latent_row() {
-        let t = check(
-            "// no-core\neffect 'oops(e) -> Never\nfunc risky() {\n\t'oops(1)\n\t2\n}",
-        );
+        let t = check("// no-core\neffect 'oops(e) -> Never\nfunc risky() {\n\t'oops(1)\n\t2\n}");
         assert_clean(&t);
         assert_eq!(ty_of(&t, "risky"), "() -> Int ! <'oops>");
     }
@@ -1196,9 +2178,7 @@ pub mod tests {
 
     #[test]
     fn closed_effect_annotation_accepts_declared_effects() {
-        let t = check(
-            "// no-core\neffect 'a() -> ()\nfunc f() 'a -> () {\n\t'a()\n}",
-        );
+        let t = check("// no-core\neffect 'a() -> ()\nfunc f() 'a -> () {\n\t'a()\n}");
         assert_clean(&t);
     }
 
@@ -1264,7 +2244,9 @@ pub mod tests {
         );
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|error| error.contains("Missing 'a' required by A")),
+            errors
+                .iter()
+                .any(|error| error.contains("Missing 'a' required by A")),
             "expected inherited requirement to be missing, got {errors:?}"
         );
     }
@@ -1342,11 +2324,9 @@ pub mod tests {
         let t = check("// no-core\nfunc identity(x) { x }\nlet a = identity(123)");
         assert_clean(&t);
         let instantiations = &t.phase.types.instantiations;
-        let int_instantiation = instantiations.values().any(|subst| {
-            subst
-                .iter()
-                .any(|(_, ty)| ty.render_mono() == "Int")
-        });
+        let int_instantiation = instantiations
+            .values()
+            .any(|subst| subst.iter().any(|(_, ty)| ty.render_mono() == "Int"));
         assert!(
             int_instantiation,
             "expected an instantiation at Int, got: {instantiations:?}"
@@ -1430,9 +2410,7 @@ pub mod tests {
 
     #[test]
     fn tuple_patterns_cover_componentwise() {
-        let t = check(
-            "// no-core\nmatch (true, 1) {\n\t(true, _) -> 1,\n\t(false, _) -> 2\n}",
-        );
+        let t = check("// no-core\nmatch (true, 1) {\n\t(true, _) -> 1,\n\t(false, _) -> 2\n}");
         assert_clean(&t);
         assert_eq!(type_warnings(&t), Vec::<String>::new());
     }
@@ -1453,9 +2431,7 @@ pub mod tests {
 
     #[test]
     fn duplicate_arm_warns_as_unreachable() {
-        let t = check(
-            "// no-core\nmatch true {\n\ttrue -> 1,\n\tfalse -> 2,\n\ttrue -> 3\n}",
-        );
+        let t = check("// no-core\nmatch true {\n\ttrue -> 1,\n\tfalse -> 2,\n\ttrue -> 3\n}");
         assert_clean(&t);
         let warnings = type_warnings(&t);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
@@ -1480,9 +2456,7 @@ pub mod tests {
 
     #[test]
     fn record_match_missing_a_field_case_errors() {
-        let t = check(
-            "// no-core\nlet r = { on: true }\nmatch r {\n\t{ on: true } -> 1\n}",
-        );
+        let t = check("// no-core\nlet r = { on: true }\nmatch r {\n\t{ on: true } -> 1\n}");
         let errors = type_errors(&t);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
@@ -1503,8 +2477,439 @@ pub mod tests {
         assert!(errors[0].contains(".bar"), "{errors:?}");
     }
 
-}
+    #[test]
+    fn gadt_variant_constructor_schemes_are_lowered() {
+        let typed = check(
+            "
+            protocol P {}
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case pair<A, B>(Expr<A>, Expr<B>) -> Expr<(A, B)>
+                case boxed<A: P>(A) -> Expr<A>
+            }
+            ",
+        );
+        assert_clean(&typed);
+        let resolved = &typed.phase.resolved_names;
+        let _names =
+            crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
+        let expr = resolved
+            .symbol_names
+            .iter()
+            .find(|(sym, name)| {
+                name.as_str() == "Expr" && typed.phase.types.catalog.enums.contains_key(sym)
+            })
+            .map(|(sym, _)| *sym)
+            .expect("Expr enum");
+        let info = &typed.phase.types.catalog.enums[&expr];
+        assert_eq!(
+            info.variants["int"].constructor_scheme.render(),
+            "(Int) -> Expr<Int>"
+        );
+        assert_eq!(
+            info.variants["pair"].constructor_scheme.render(),
+            "<T0, T1>(Expr<T0>, Expr<T1>) -> Expr<(T0, T1)>"
+        );
+        assert_eq!(
+            info.variants["boxed"].constructor_scheme.render(),
+            "<T0: P>(T0) -> Expr<T0>"
+        );
+    }
 
+    #[test]
+    fn gadt_variant_generic_shadowing_is_rejected() {
+        let typed = check(
+            "
+            enum Expr<T> {
+                case bad<T>(T) -> Expr<T>
+            }
+            ",
+        );
+        let errors = type_errors(&typed);
+        assert!(
+            errors.iter().any(|error| error.contains("shadows")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn redundant_variant_result_warns() {
+        let typed = check(
+            "
+            enum Color {
+                case red -> Color
+            }
+            ",
+        );
+        let warnings = type_warnings(&typed);
+        assert!(
+            warnings.iter().any(|warning| warning.contains("redundant")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn invalid_variant_result_head_is_rejected() {
+        let typed = check(
+            "
+            struct Other {}
+            enum E {
+                case bad -> Other
+            }
+            ",
+        );
+        let errors = type_errors(&typed);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("must be the enclosing enum")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn gadt_match_refines_arm_result_types() {
+        let typed = check(
+            "// no-core
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case bool(Bool) -> Expr<Bool>
+            }
+
+            func eval<T>(expr: Expr<T>) -> T {
+                match expr {
+                    .int(n) -> n,
+                    .bool(b) -> b
+                }
+            }
+
+            let i: Int = eval(Expr.int(1))
+            let b: Bool = eval(Expr.bool(true))
+            ",
+        );
+        assert_clean(&typed);
+    }
+
+    #[test]
+    fn gadt_match_rejects_escaping_existential_payloads() {
+        let typed = check(
+            "// no-core
+            enum Hidden<T> {
+                case hidden<A>(A) -> Hidden<T>
+            }
+
+            func leak<T>(value: Hidden<T>) -> T {
+                match value {
+                    .hidden(x) -> x
+                }
+            }
+            ",
+        );
+        let errors = type_errors(&typed);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("escapes this pattern arm")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn inferred_gadt_match_result_works_when_arms_agree() {
+        let typed = check(
+            "// no-core
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case bool(Bool) -> Expr<Bool>
+            }
+
+            func tag<T>(expr: Expr<T>) {
+                match expr {
+                    .int(_) -> 0,
+                    .bool(_) -> 1
+                }
+            }
+
+            let i: Int = tag(Expr.int(1))
+            let j: Int = tag(Expr.bool(true))
+            ",
+        );
+        assert_clean(&typed);
+    }
+
+    #[test]
+    fn inferred_gadt_match_result_can_use_local_refinements() {
+        let typed = check(
+            "// no-core
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case bool(Bool) -> Expr<Bool>
+            }
+
+            func to_int<T>(expr: Expr<T>, value: T) {
+                match expr {
+                    .int(_) -> value,
+                    .bool(_) -> if value { 1 } else { 0 }
+                }
+            }
+
+            let i: Int = to_int(Expr.int(1), 41)
+            let j: Int = to_int(Expr.bool(true), false)
+            ",
+        );
+        assert_clean(&typed);
+    }
+
+    #[test]
+    fn inferred_gadt_match_result_errors_when_arms_depend_on_different_refinements() {
+        let typed = check(
+            "// no-core
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case bool(Bool) -> Expr<Bool>
+            }
+
+            func eval<T>(expr: Expr<T>) {
+                match expr {
+                    .int(n) -> n,
+                    .bool(b) -> b
+                }
+            }
+            ",
+        );
+        let errors = type_errors(&typed);
+        assert!(
+            errors.iter().any(|error| error.contains("Type mismatch")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn gadt_leading_dot_construction_checks_result_type() {
+        let typed = check(
+            "// no-core
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case bool(Bool) -> Expr<Bool>
+            }
+
+            let bad: Expr<Int> = .bool(true)
+            ",
+        );
+        let errors = type_errors(&typed);
+        assert!(
+            errors.iter().any(|error| error.contains("Bool")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn gadt_type_member_construction_checks_result_well_formedness() {
+        let typed = check(
+            "// no-core
+            protocol P {}
+            extend Int: P {}
+            enum Box<T> where T: P {
+                case int(Int) -> Box<Int>
+            }
+
+            Box.int(1)
+            ",
+        );
+        assert_clean(&typed);
+    }
+
+    #[test]
+    fn gadt_constructor_bounds_are_wanteds_at_construction() {
+        let typed = check(
+            "// no-core
+            protocol P {}
+            enum Box<T> {
+                case boxed<A: P>(A) -> Box<A>
+            }
+
+            Box.boxed(1)
+            ",
+        );
+        let errors = type_errors(&typed);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("does not conform to P")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn gadt_constructor_bounds_are_givens_in_patterns() {
+        let typed = check(
+            "// no-core
+            protocol P {
+                func p() -> Int
+            }
+            struct S {}
+            extend S: P {
+                func p() -> Int { 1 }
+            }
+            enum Box<T> {
+                case boxed<A: P>(A) -> Box<A>
+            }
+
+            func read<T>(box: Box<T>) -> Int {
+                match box {
+                    .boxed(x) -> x.p()
+                }
+            }
+
+            read(Box.boxed(S()))
+            ",
+        );
+        assert_clean(&typed);
+    }
+
+    #[test]
+    fn gadt_exhaustiveness_ignores_impossible_variants() {
+        let typed = check(
+            "// no-core
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case bool(Bool) -> Expr<Bool>
+            }
+
+            func only_int(expr: Expr<Int>) -> Int {
+                match expr {
+                    .int(n) -> n
+                }
+            }
+            ",
+        );
+        assert_clean(&typed);
+    }
+
+    #[test]
+    fn gadt_exhaustiveness_uses_result_substitutions_for_payloads() {
+        let typed = check(
+            "// no-core
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case bool(Bool) -> Expr<Bool>
+                case pair<A, B>(Expr<A>, Expr<B>) -> Expr<(A, B)>
+            }
+
+            func only_int_bool_pair(expr: Expr<(Int, Bool)>) -> Int {
+                match expr {
+                    .pair(.int(n), .bool(_)) -> n
+                }
+            }
+            ",
+        );
+        assert_clean(&typed);
+    }
+
+    #[test]
+    fn gadt_impossible_variant_arm_warns_unreachable() {
+        let typed = check(
+            "// no-core
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case bool(Bool) -> Expr<Bool>
+            }
+
+            func only_int(expr: Expr<Int>) -> Int {
+                match expr {
+                    .bool(b) -> 0,
+                    .int(n) -> n
+                }
+            }
+            ",
+        );
+        let warnings = type_warnings(&typed);
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("never runs")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn gadt_hidden_payload_can_be_returned_as_existential() {
+        let typed = check(
+            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\nextend Int: Showable {\n  func show() -> Int { self }\n}\nenum GBox<T> {\n  case hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n  match box {\n    .hidden(value) -> value\n  }\n}",
+        );
+        assert_clean(&typed);
+        assert_eq!(ty_of(&typed, "erase"), "(GBox<Bool>) -> any Showable");
+    }
+
+    #[test]
+    fn gadt_derived_showable_ignores_impossible_payloads() {
+        let typed = check(
+            "// no-core
+            protocol Showable {
+                func show() -> Int
+            }
+            extend Int: Showable {
+                func show() -> Int { 1 }
+            }
+            enum GBox<T> {
+                case int(Int) -> GBox<Int>
+                case hidden<A>(A) -> GBox<Bool>
+            }
+
+            func render<T: Showable>(value: T) -> Int {
+                value.show()
+            }
+
+            render(GBox.int(1))
+            ",
+        );
+        assert_clean(&typed);
+    }
+
+    #[test]
+    fn gadt_or_pattern_accepts_alpha_equivalent_refinements() {
+        let typed = check(
+            "// no-core
+            enum E<T> {
+                case a<X>(X) -> E<X>
+                case b<Y>(Y) -> E<Y>
+            }
+
+            func f<T>(e: E<T>) -> Int {
+                match e {
+                    .a(x) | .b(x) -> 0
+                }
+            }
+            ",
+        );
+        assert_clean(&typed);
+    }
+
+    #[test]
+    fn gadt_or_pattern_with_different_refinements_is_rejected() {
+        let typed = check(
+            "// no-core
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case bool(Bool) -> Expr<Bool>
+            }
+
+            func bad<T>(expr: Expr<T>) -> T {
+                match expr {
+                    .int(x) | .bool(x) -> x
+                }
+            }
+            ",
+        );
+        let errors = type_errors(&typed);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Or-pattern alternatives")),
+            "{errors:?}"
+        );
+    }
+}
 
 #[cfg(test)]
 mod with_core {
@@ -1624,7 +3029,10 @@ mod with_core {
             parse_mode: crate::compiling::driver::ParseMode::Strict,
             preserve_comments: false,
         };
-        let driver_b = Driver::new(vec![Source::from("let v = make(3).x\nlet bad: Int = make(3)")], config);
+        let driver_b = Driver::new(
+            vec![Source::from("let v = make(3).x\nlet bad: Int = make(3)")],
+            config,
+        );
         let typed = driver_b
             .parse()
             .unwrap()
@@ -1700,7 +3108,9 @@ mod with_core {
 
     #[test]
     fn fib_against_core_is_int() {
-        let typed = check_with_core(Source::from("let x = fib(24)\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n - 2) + fib(n - 1)\n}"));
+        let typed = check_with_core(Source::from(
+            "let x = fib(24)\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n - 2) + fib(n - 1)\n}",
+        ));
         let errors = type_errors(&typed);
         assert!(errors.is_empty(), "{errors:?}");
         let resolved = &typed.phase.resolved_names;

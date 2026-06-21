@@ -136,12 +136,8 @@ fn rename_symbol_at_offset(
         };
 
         let symbol = match node {
-            crate::node::Node::Expr(expr) => {
-                goto_definition_symbol_from_expr(&expr, byte_offset)
-            }
-            crate::node::Node::Stmt(stmt) => {
-                goto_definition_symbol_from_stmt(&stmt, byte_offset)
-            }
+            crate::node::Node::Expr(expr) => goto_definition_symbol_from_expr(&expr, byte_offset),
+            crate::node::Node::Stmt(stmt) => goto_definition_symbol_from_stmt(&stmt, byte_offset),
             crate::node::Node::TypeAnnotation(ty) => {
                 goto_definition_symbol_from_type_annotation(&ty, byte_offset)
             }
@@ -243,6 +239,14 @@ fn goto_definition_symbol_from_type_annotation(
             }
             name.symbol().ok()
         }
+        TypeAnnotationKind::Any {
+            protocol,
+            assoc_bindings,
+        } => goto_definition_symbol_from_type_annotation(protocol, byte_offset).or_else(|| {
+            assoc_bindings.iter().find_map(|binding| {
+                goto_definition_symbol_from_type_annotation(&binding.value, byte_offset)
+            })
+        }),
         _ => None,
     }
 }
@@ -280,7 +284,9 @@ fn goto_definition_symbol_from_decl(
             }
             name.symbol().ok()
         }
-        DeclKind::EnumVariant(name, name_span, ..) => {
+        DeclKind::EnumVariant {
+            name, name_span, ..
+        } => {
             if !span_contains(*name_span, byte_offset) {
                 return None;
             }
@@ -369,8 +375,14 @@ impl RenameCollector<'_> {
                     self.push_span(*name_span);
                 }
             }
-            DeclKind::TypeAlias(name, name_span, ..)
-            | DeclKind::EnumVariant(name, name_span, ..) => {
+            DeclKind::TypeAlias(name, name_span, ..) => {
+                if name.symbol().ok() == Some(self.target) {
+                    self.push_span(*name_span);
+                }
+            }
+            DeclKind::EnumVariant {
+                name, name_span, ..
+            } => {
                 if name.symbol().ok() == Some(self.target) {
                     self.push_span(*name_span);
                 }
@@ -449,14 +461,11 @@ impl RenameCollector<'_> {
     fn enter_type_annotation(&mut self, ty: &crate::node_kinds::type_annotation::TypeAnnotation) {
         use crate::node_kinds::type_annotation::TypeAnnotationKind;
 
-        let TypeAnnotationKind::Nominal {
+        if let TypeAnnotationKind::Nominal {
             name, name_span, ..
         } = &ty.kind
-        else {
-            return;
-        };
-
-        if name.symbol().ok() == Some(self.target) {
+            && name.symbol().ok() == Some(self.target)
+        {
             self.push_span(*name_span);
         }
     }

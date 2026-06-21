@@ -28,7 +28,7 @@ use crate::node_kinds::pattern::{
 };
 use crate::node_kinds::record_field::{RecordField, RecordFieldTypeAnnotation};
 use crate::node_kinds::stmt::{Stmt, StmtKind};
-use crate::node_kinds::type_annotation::{TypeAnnotation, TypeAnnotationKind};
+use crate::node_kinds::type_annotation::{AnyAssocBinding, TypeAnnotation, TypeAnnotationKind};
 use crate::node_kinds::where_clause::{WhereClause, WherePredicate, WherePredicateKind};
 use crate::node_meta::NodeMeta;
 use crate::parser_error::ParserError;
@@ -526,17 +526,29 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::Case)?;
         }
         let (name, name_span) = self.identifier()?;
-        let values = if self.did_match(TokenKind::LeftParen)? {
+        let generics = self.generics()?;
+        let payloads = if self.did_match(TokenKind::LeftParen)? {
             self.type_annotations(TokenKind::RightParen)?
         } else {
             vec![]
+        };
+        let result = if self.did_match(TokenKind::Arrow)? {
+            Some(self.type_annotation()?)
+        } else {
+            None
         };
 
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
             visibility: Visibility::default(),
-            kind: DeclKind::EnumVariant(name.into(), name_span, values),
+            kind: DeclKind::EnumVariant {
+                name: name.into(),
+                name_span,
+                generics,
+                payloads,
+                result,
+            },
         })
     }
 
@@ -2294,6 +2306,10 @@ impl<'a> Parser<'a> {
             }
         }
 
+        if self.did_match(TokenKind::Any)? {
+            return self.any_type_annotation(tok);
+        }
+
         // // Check for record type: {x: Int, y: Int, ..R}
         if self.did_match(TokenKind::LeftBrace)? {
             let mut fields: Vec<RecordFieldTypeAnnotation> = vec![];
@@ -2372,6 +2388,68 @@ impl<'a> Parser<'a> {
             }
 
             break;
+        }
+
+        Ok(base)
+    }
+
+    fn any_type_annotation(&mut self, tok: LocToken) -> Result<TypeAnnotation, ParserError> {
+        let protocol = self.any_protocol_head()?;
+        let mut assoc_bindings = vec![];
+
+        if self.did_match(TokenKind::Less)? {
+            while !self.did_match(TokenKind::Greater)? {
+                let binding_tok = self.push_source_location();
+                let (name, name_span) = self.identifier()?;
+                self.consume(TokenKind::Equals)?;
+                let value = self.type_annotation()?;
+                assoc_bindings.push(self.save_meta(binding_tok, |id, span| AnyAssocBinding {
+                    id,
+                    span,
+                    name: name.into(),
+                    name_span,
+                    value,
+                })?);
+                self.consume(TokenKind::Comma).ok();
+            }
+        }
+
+        self.save_meta(tok, |id, span| TypeAnnotation {
+            id,
+            span,
+            kind: TypeAnnotationKind::Any {
+                protocol: Box::new(protocol),
+                assoc_bindings,
+            },
+        })
+    }
+
+    fn any_protocol_head(&mut self) -> Result<TypeAnnotation, ParserError> {
+        let tok = self.push_source_location();
+        let (name, name_span) = self.identifier()?;
+        let mut base = self.save_meta(tok, |id, span| TypeAnnotation {
+            id,
+            span,
+            kind: TypeAnnotationKind::Nominal {
+                name: name.into(),
+                name_span,
+                generics: vec![],
+            },
+        })?;
+
+        while self.did_match(TokenKind::Dot)? {
+            let tok = self.push_source_location();
+            let (member_name, member_span) = self.identifier()?;
+            base = self.save_meta(tok, |id, span| TypeAnnotation {
+                id,
+                span,
+                kind: TypeAnnotationKind::NominalPath {
+                    base: Box::new(base),
+                    member: member_name.into(),
+                    member_span,
+                    member_generics: vec![],
+                },
+            })?;
         }
 
         Ok(base)
@@ -3053,9 +3131,10 @@ fn collect_pattern_binder_names(pattern: &Pattern) -> Vec<Name> {
 fn pattern_contains_or(pattern: &Pattern) -> bool {
     match &pattern.kind {
         PatternKind::Or(_) => true,
-        PatternKind::Tuple(patterns) | PatternKind::Variant { fields: patterns, .. } => {
-            patterns.iter().any(pattern_contains_or)
-        }
+        PatternKind::Tuple(patterns)
+        | PatternKind::Variant {
+            fields: patterns, ..
+        } => patterns.iter().any(pattern_contains_or),
         PatternKind::Record { fields } => fields.iter().any(|field| match &field.kind {
             RecordFieldPatternKind::Equals { value, .. } => pattern_contains_or(value),
             _ => false,

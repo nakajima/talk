@@ -665,7 +665,12 @@ impl<'a> ChunkBuilder<'a> {
                 let a = self.eval(args[0])?;
                 let b = self.eval(args[1])?;
                 let dest = self.fresh();
-                self.code.push(Insn::Cmp { dest, a, b, op: cmp });
+                self.code.push(Insn::Cmp {
+                    dest,
+                    a,
+                    b,
+                    op: cmp,
+                });
                 self.memo.insert(e, dest);
                 Ok(dest)
             }
@@ -735,6 +740,42 @@ impl<'a> ChunkBuilder<'a> {
                     src,
                     index: index as u16,
                 });
+                self.memo.insert(e, dest);
+                Ok(dest)
+            }
+            Op::ExistentialPack(protocol) => {
+                let mut arg_regs = Vec::with_capacity(args.len());
+                for &a in args {
+                    arg_regs.push(self.eval(a)?);
+                }
+                let args_start = self.module.arg_pool.len() as u32;
+                let args_len = arg_regs.len() as u16;
+                self.module.arg_pool.extend(arg_regs);
+                let dest = self.fresh();
+                self.code.push(Insn::ExistentialPack {
+                    dest,
+                    protocol,
+                    args_start,
+                    args_len,
+                });
+                self.memo.insert(e, dest);
+                Ok(dest)
+            }
+            Op::ExistentialWitness(index) => {
+                let src = self.eval(args[0])?;
+                let dest = self.fresh();
+                self.code.push(Insn::ExistentialWitness {
+                    dest,
+                    src,
+                    index: index as u16,
+                });
+                self.memo.insert(e, dest);
+                Ok(dest)
+            }
+            Op::ExistentialPayload => {
+                let src = self.eval(args[0])?;
+                let dest = self.fresh();
+                self.code.push(Insn::ExistentialPayload { dest, src });
                 self.memo.insert(e, dest);
                 Ok(dest)
             }
