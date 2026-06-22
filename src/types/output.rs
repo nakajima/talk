@@ -1,7 +1,7 @@
-//! The type checker's outputs: everything later phases consume. The future
-//! lowerer reads tables (schemes, per-call-site instantiations, member
-//! resolutions — the dictionary-or-monomorphization surface of Wadler &
-//! Blott, POPL 1989); it never asks the checker questions.
+//! The type checker's outputs: everything later phases consume. The lowerer
+//! reads tables (schemes, per-call-site instantiations, member resolutions —
+//! the dictionary-or-monomorphization surface of Wadler & Blott, POPL 1989);
+//! it never asks the checker questions.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 

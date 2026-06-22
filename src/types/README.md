@@ -13,13 +13,13 @@ specific to this codebase are introduced as they come up.
 
 ## Architecture: generate constraints, then solve them
 
-The checker is split into a **constraint generator** (`generate.rs`)
-and a **solver** (`solve.rs`). The generator walks the AST and never
+The checker is split into a **constraint generator** (`generate/`)
+and a **solver** (`solve/`). The generator walks the AST and never
 decides anything on the spot; it allocates type variables for the
 unknowns and emits **wanteds**: an origin-free predicate plus a source
 origin for blame.
 
-The predicate language is shared by schemes, wanteds, and future givens:
+The predicate language is shared by schemes, wanteds, and givens:
 
 - `TypeEq(a, b)` — these two types must unify.
 - `EffectEq(a, b)` — two effect rows must unify.
@@ -29,8 +29,8 @@ The predicate language is shared by schemes, wanteds, and future givens:
   member named `label` whose type is `member`.
 
 `constraint.rs` contains the originated solver forms. `ty.rs` contains
-`Predicate`, because schemes, conformance contexts, and future GADT
-givens store predicates without source origins.
+`Predicate`, because schemes, conformance contexts, and GADT givens store
+predicates without source origins.
 
 The solver then works the constraint set to a fixed point. The reason
 for the split is that constraints arrive in source order but their
@@ -50,7 +50,7 @@ effects); `output.rs` is `TypeOutput`, the checker's public product;
 
 ## The pipeline, phase by phase
 
-`check_program` in `generate.rs` runs:
+`generate::check_types` runs:
 
 1. **Declaration collection.** Structs, enums, protocols, and effects
    register their shapes in the catalog; member functions get
@@ -303,10 +303,9 @@ application, not a constructor-only hidden constraint. `struct Box<T> where T:
 Showable` means every `Box<A>` formation must prove `A: Showable`; it
 does not merely add a hidden constraint to constructors.
 
-The predicate framework is kind-aware from the start, including type,
-row, and effect equalities, so future effect polymorphism and GADT
-refinements use the same architecture instead of a parallel constraint
-system. Runtime evidence is still erased: monomorphization and concrete
+The predicate framework is kind-aware, including type, row, and effect
+equalities, so effect polymorphism and GADT refinements use the same
+architecture instead of a parallel constraint system. Runtime evidence is still erased: monomorphization and concrete
 witness selection remain the backend story for now.
 
 ## Member constraints ride schemes
@@ -365,7 +364,7 @@ conformance gets one synthesized structurally, and recursive types are
 handled by assuming the conformance while deriving it (otherwise a
 recursive enum would recurse forever).
 
-Future first-class protocol existentials are specified in ADR 0003.
+First-class protocol existentials are implemented as specified in ADR 0003.
 They use a real `Ty::Any { protocol, assoc }` type, interpreted as an
 existential package of payload plus protocol evidence. Implicit packing
 is allowed only when an expected `any P` type is known. The pack path
@@ -402,8 +401,9 @@ constructor type and inline bounds. Pattern-time GADT refinements are
 separate: matching a constructor instantiates any case-local variables
 as arm-local rigid parameters, decomposes the constructor result into
 local equality givens, and checks the arm body inside an OutsideIn-style
-implication. Constructor-local variables may not escape the arm unless
-first-class existentials are added later.
+implication. Constructor-local variables may not escape the arm except by packing a value
+into an expected first-class protocol existential whose predicates can be
+satisfied.
 
 Coverage uses the same constructor schemes: impossible variants are
 filtered out by result-type satisfiability before Maranget usefulness

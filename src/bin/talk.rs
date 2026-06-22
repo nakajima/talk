@@ -169,9 +169,7 @@ async fn main() {
                     }
                 }
                 _ => {
-                    eprintln!(
-                        "error: provide --byte-offset, --line and --column, or --node-id"
-                    );
+                    eprintln!("error: provide --byte-offset, --line and --column, or --node-id");
                     std::process::exit(1);
                 }
             };
@@ -283,8 +281,8 @@ async fn main() {
                             );
                         }
                         // Warnings print but don't fail the check.
-                        has_errors |= diagnostic.severity
-                            == talk::analysis::DiagnosticSeverity::Error;
+                        has_errors |=
+                            diagnostic.severity == talk::analysis::DiagnosticSeverity::Error;
                     }
                 }
             }

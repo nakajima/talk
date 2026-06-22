@@ -4,9 +4,9 @@
 //! tables are built here because the name resolver's `child_types` records
 //! only nested *type* declarations, not properties/methods/variants.
 //!
-//! GADT-readiness (approved plan): every variant stores a full constructor
-//! scheme whose result defaults to the enum applied to its own parameters.
-//! GADT case syntax will override that result without reshaping callers.
+//! GADT support: every variant stores a full constructor scheme whose result
+//! defaults to the enum applied to its own parameters, and explicit GADT case
+//! results override that default without reshaping callers.
 
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;

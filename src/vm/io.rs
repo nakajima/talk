@@ -76,7 +76,10 @@ fn errno() -> i64 {
 impl IO for StdioIO {
     fn write(&mut self, fd: i64, bytes: &[u8]) -> i64 {
         match fd {
-            1 => match std::io::stdout().write_all(bytes).and_then(|()| std::io::stdout().flush()) {
+            1 => match std::io::stdout()
+                .write_all(bytes)
+                .and_then(|()| std::io::stdout().flush())
+            {
                 Ok(()) => bytes.len() as i64,
                 Err(_) => EIO,
             },
@@ -87,9 +90,8 @@ impl IO for StdioIO {
             _ => {
                 #[cfg(unix)]
                 {
-                    let n = unsafe {
-                        libc::write(fd as i32, bytes.as_ptr() as *const _, bytes.len())
-                    };
+                    let n =
+                        unsafe { libc::write(fd as i32, bytes.as_ptr() as *const _, bytes.len()) };
                     if n < 0 { errno() } else { n as i64 }
                 }
                 #[cfg(not(unix))]

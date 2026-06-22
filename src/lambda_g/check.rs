@@ -81,9 +81,7 @@ impl Program {
                 match self.ty_kind(f_ty).clone() {
                     TyKind::Fn(dom, cod) => {
                         if self.expr_ty(*a) != dom {
-                            errors.push(VerifyError(
-                                "T-App: argument/domain mismatch".to_string(),
-                            ));
+                            errors.push(VerifyError("T-App: argument/domain mismatch".to_string()));
                         }
                         if expr.ty != cod {
                             errors.push(VerifyError("T-App: stored type != codomain".to_string()));

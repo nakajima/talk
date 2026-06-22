@@ -93,7 +93,7 @@ pub enum TypeError {
     /// A closed effect annotation (`func f() 'a -> ()`) is an exact upper
     /// bound: performing anything outside it is an error. (Checked at the
     /// declaration, keeping arrow rows open — the deviation from Koka's
-    /// open-coercions noted in generate.rs.)
+    /// open-coercions noted in generate/.)
     UndeclaredEffect {
         effect: String,
     },
@@ -177,7 +177,7 @@ impl Display for TypeError {
             TypeError::EscapingExistential { param } => {
                 write!(
                     f,
-                    "Existential type {param} escapes this pattern arm; returning or storing hidden constructor types requires first-class existentials, which are not supported yet"
+                    "Existential type {param} escapes this pattern arm; return or store it by packing into an expected protocol existential, or keep it inside the arm"
                 )
             }
             TypeError::GenericShadowing { name } => {

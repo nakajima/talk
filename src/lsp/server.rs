@@ -16,8 +16,8 @@ use async_lsp::{
         InitializeParams, InitializeResult, MarkupContent, MarkupKind, OneOf,
         PublishDiagnosticsParams, Range as LspRange, SemanticTokensFullOptions,
         SemanticTokensLegend, SemanticTokensOptions, SemanticTokensServerCapabilities,
-        ServerCapabilities, TextDocumentItem, Url, WorkspaceEdit, WorkspaceFolder,
-        notification, request,
+        ServerCapabilities, TextDocumentItem, Url, WorkspaceEdit, WorkspaceFolder, notification,
+        request,
     },
     panic::CatchUnwindLayer,
     router::Router,
@@ -1133,8 +1133,7 @@ mod tests {
             })
             .collect();
         assert!(
-            titles.iter().any(|t| t.contains("Aa.m"))
-                && titles.iter().any(|t| t.contains("Bb.m")),
+            titles.iter().any(|t| t.contains("Aa.m")) && titles.iter().any(|t| t.contains("Bb.m")),
             "one quick-fix per candidate protocol: {titles:?}"
         );
         // Applying the Aa fix rewrites `n.m()` into `Aa.m(n)`.
@@ -1150,11 +1149,7 @@ mod tests {
         else {
             panic!("not a code action");
         };
-        let rewritten = apply_edits(
-            code,
-            aa.edit.as_ref().expect("edit"),
-            &uri,
-        );
+        let rewritten = apply_edits(code, aa.edit.as_ref().expect("edit"), &uri);
         assert!(
             rewritten.contains("let x = Aa.m(n)"),
             "rewritten source: {rewritten}"

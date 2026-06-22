@@ -147,9 +147,7 @@ impl Program {
             let mut index = FxHashMap::default();
             for &(a, b) in &level_edges {
                 for node in [a, b] {
-                    index
-                        .entry(node)
-                        .or_insert_with(|| graph.add_node(node));
+                    index.entry(node).or_insert_with(|| graph.add_node(node));
                 }
             }
             let mut has_self_loop = FxHashSet::default();

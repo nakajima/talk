@@ -107,9 +107,8 @@ pub fn hover(
             talk::analysis::hover_at(&workspace, &doc_id, offset)
         }
         (None, Some(line), Some(column), None) => {
-            let offset =
-                talk::common::text::byte_offset_for_line_column_utf8(source, line, column)
-                    .ok_or_else(|| JsValue::from_str("line/column is past end of document"))?;
+            let offset = talk::common::text::byte_offset_for_line_column_utf8(source, line, column)
+                .ok_or_else(|| JsValue::from_str("line/column is past end of document"))?;
             talk::analysis::hover_at(&workspace, &doc_id, offset)
         }
         _ => {
@@ -120,7 +119,6 @@ pub fn hover(
     };
     hover_to_js(&doc_id, source, hover)
 }
-
 
 fn hover_to_js(
     doc_id: &str,

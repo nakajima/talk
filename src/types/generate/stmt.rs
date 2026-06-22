@@ -78,8 +78,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 effect_name, body, ..
             } => {
                 // Handler block parameters take the effect's declared
-                // parameter types (handler-site inference for unannotated
-                // effects refines this in milestone 5; row subtraction too).
+                // parameter types; unannotated effect parameters are refined
+                // by the perform sites that route to this handler.
                 let sig = effect_name
                     .symbol()
                     .ok()

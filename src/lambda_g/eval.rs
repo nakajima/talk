@@ -573,7 +573,10 @@ impl Evaluator {
             Op::IoOpen => {
                 let start = ptr(0)?;
                 let tail = self.mem.get(start..).ok_or_else(oob)?;
-                let len = tail.iter().position(|&byte| byte == 0).unwrap_or(tail.len());
+                let len = tail
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(tail.len());
                 let path = tail[..len].to_vec();
                 self.io.open(&path, int(1)?, int(2)?)
             }

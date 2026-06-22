@@ -30,8 +30,8 @@
 //! methods are self-prepended functions, so `recv.m(args)` checks the full
 //! signature against `(recv, args...)` (the dictionary-free reading of
 //! Wadler & Blott's method lookup for the nominal case). Member access on a
-//! head that is still a variable becomes a `HasMember` predicate in
-//! milestone 3 (Gaster & Jones 1996); today it errors.
+//! head that is still a variable becomes a scheme-carried `HasMember`
+//! predicate (Gaster & Jones 1996), retried at each instantiation.
 
 use std::ops::ControlFlow;
 

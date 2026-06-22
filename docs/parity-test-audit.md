@@ -186,7 +186,7 @@ internal API of the deleted solver).
   (callee facts, cache roundtrips) does not exist in this architecture.
 - `src/types/matcher.rs` (6), `constraints/store.rs`,
   `constraints/row_subset.rs` (6) — old-solver internals; the new
-  solver has its own six tests in `solve.rs`.
+  solver has its own tests in `src/types/solve/`.
 - `src/lsp/server.rs` (27 → 27) and `src/analysis/hover.rs` (9 → 6+5) —
   hover and goto-on-variant-pattern restored and re-tested during this
   audit.

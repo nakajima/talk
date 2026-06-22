@@ -169,10 +169,7 @@ impl Module {
                     .schemes
                     .into_iter()
                     .map(|(symbol, scheme)| {
-                        (
-                            symbol.import(module_id),
-                            scheme.import_symbols(module_id),
-                        )
+                        (symbol.import(module_id), scheme.import_symbols(module_id))
                     })
                     .collect(),
                 catalog: self.types.catalog.import_as(module_id),

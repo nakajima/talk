@@ -173,7 +173,11 @@ pub mod tests {
         let p = &mut loops.p;
         let tree = p.nesting_tree(loops.f);
         assert_eq!(tree.parent(loops.hi), Some(loops.f));
-        assert_eq!(tree.parent(loops.hj), Some(loops.f), "independent inner loop");
+        assert_eq!(
+            tree.parent(loops.hj),
+            Some(loops.f),
+            "independent inner loop"
+        );
         assert_eq!(tree.parent(loops.bi), Some(loops.hi));
         assert_eq!(tree.parent(loops.xi), Some(loops.hi));
         assert_eq!(tree.parent(loops.bj), Some(loops.hj));

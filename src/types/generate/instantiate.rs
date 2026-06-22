@@ -39,8 +39,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     }
 
     /// Instantiate a scheme with fresh variables (Damas-Milner) and record
-    /// the substitution for the future lowerer (the "call sites and
-    /// substitutions" surface).
+    /// the substitution for the lowerer (the "call sites and substitutions"
+    /// surface).
     pub(super) fn instantiate(&mut self, scheme: &Scheme, node: NodeID) -> Ty {
         if scheme.params.is_empty() && scheme.eff_params.is_empty() && scheme.row_params.is_empty()
         {

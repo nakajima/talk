@@ -12,9 +12,9 @@ pub(super) struct VarInfo {
     pub(super) parent: u32,
     pub(super) value: Option<VarValue>,
     pub(super) level: Level,
-    /// Where the variable was introduced. Read by milestone 4's
-    /// finalization pass ("cannot infer, add an annotation" diagnostics
-    /// blame the variable's origin, per the approved plan's Phase 3).
+    /// Where the variable was introduced. Read by finalization diagnostics
+    /// ("cannot infer, add an annotation") so errors blame the variable's
+    /// origin.
     #[allow(dead_code)]
     origin: NodeID,
 }

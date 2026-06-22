@@ -223,7 +223,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
     // ----- Member resolution ----------------------------------------------
     // Value-receiver member access is a HasMember predicate solved in
-    // solve.rs. Only TYPE members (Constructor receivers) resolve here.
+    // solve/. Only TYPE members (Constructor receivers) resolve here.
 
     /// Resolve `Type.label`: enum variants (constructors, or bare values for
     /// payload-less cases), protocol requirements (the protocol-static form

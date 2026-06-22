@@ -6,14 +6,13 @@
 //!   (Leijen, *Koka: Programming with Row-Polymorphic Effect Types*,
 //!   MSR-TR-2013-79) via decomposition in the solver.
 //! - `Conforms(ty, P)`: protocol conformance — a class constraint in the
-//!   sense of Wadler & Blott, POPL 1989 (solved from milestone 3).
+//!   sense of Wadler & Blott, POPL 1989.
 //! - `HasMember`: a Has-style predicate (Gaster & Jones, TR NOTTCS-TR-96-3,
-//!   1996) for member access on a type whose head is not yet known (solved
-//!   from milestone 3).
+//!   1996) for member access on a type whose head is not yet known.
 //! - `Implic`: implication constraints carrying local givens, optional
-//!   untouchability levels, and future GADT existentials (OutsideIn(X) §5).
-//!   Declaration `where` clauses already use givens; GADT match arms will
-//!   additionally set touchability and local skolem parameters.
+//!   untouchability levels, and GADT existentials (OutsideIn(X) §5).
+//!   Declaration `where` clauses and GADT match arms both use givens; GADT
+//!   arms additionally set touchability and local skolem parameters.
 //!
 //! Constraints are data with the lifetime of ONE binding group: created
 //! during generation, consumed by one `solve` call, then dropped. No store

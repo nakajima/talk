@@ -158,7 +158,7 @@ pub enum Ty {
 /// qualified types use predicates to restrict type-scheme quantification;
 /// OutsideIn(X) separates origin-free facts from the originated wanteds/givens
 /// that carry blame. This enum is the shared fact language for schemes,
-/// declaration contexts, solver givens, and future GADT refinements.
+/// declaration contexts, solver givens, and GADT refinements.
 ///
 /// Research anchors: Jones, *A Theory of Qualified Types*;
 /// Vytiniotis/Peyton Jones/Schrijvers/Sulzmann, *OutsideIn(X)*;
@@ -775,7 +775,7 @@ pub struct Scheme {
     pub eff_params: Vec<Symbol>,
     pub row_params: Vec<Symbol>,
     /// The qualified context P: declared bounds, inferred HasMember
-    /// constraints, same-type equalities, and future row/effect predicates.
+    /// constraints, same-type equalities, and row/effect predicates.
     pub predicates: Vec<Predicate>,
     pub ty: Ty,
 }

@@ -379,7 +379,13 @@ impl Program {
         self.primop(Op::Br, &[cond, then_e, else_e], result)
     }
 
-    pub fn switch(&mut self, tag: ExprId, arms: &[ExprId], default: ExprId, result: TyId) -> ExprId {
+    pub fn switch(
+        &mut self,
+        tag: ExprId,
+        arms: &[ExprId],
+        default: ExprId,
+        result: TyId,
+    ) -> ExprId {
         let mut args = vec![tag];
         args.extend_from_slice(arms);
         args.push(default);

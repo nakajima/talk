@@ -578,7 +578,10 @@ impl Driver<Lowered> {
             self.phase.main,
             self.phase.result_ty,
         )?;
-        Ok((value, String::from_utf8_lossy(&evaluator.io.out).into_owned()))
+        Ok((
+            value,
+            String::from_utf8_lossy(&evaluator.io.out).into_owned(),
+        ))
     }
 
     /// Schedule to bytecode and execute on the VM against host stdio.
@@ -607,7 +610,11 @@ impl Driver<Lowered> {
         let module = self.schedule()?;
         let mut io = crate::vm::io::CaptureIO::default();
         let (value, display) = crate::vm::interp::run_displayed(&module, &mut io, names)?;
-        Ok((value, String::from_utf8_lossy(&io.out).into_owned(), display))
+        Ok((
+            value,
+            String::from_utf8_lossy(&io.out).into_owned(),
+            display,
+        ))
     }
 
     fn schedule(&mut self) -> Result<crate::vm::Module, String> {
@@ -687,7 +694,10 @@ pub mod tests {
         assert!(ir.contains("func main(k: fn"), "{ir}");
         assert!(ir.contains("func double(x: int, k: fn(int))"), "{ir}");
         assert!(ir.contains("var double.x"), "{ir}");
-        assert!(!ir.contains('\u{21a6}') && !ir.contains('\u{22a5}'), "no notation: {ir}");
+        assert!(
+            !ir.contains('\u{21a6}') && !ir.contains('\u{22a5}'),
+            "no notation: {ir}"
+        );
     }
 
     #[test]
@@ -736,11 +746,7 @@ pub mod tests {
         let driver = Driver::new(paths, DriverConfig::new("TestDriver"));
         let resolved = driver.parse().unwrap().resolve_names().unwrap();
 
-        assert!(
-            !resolved.has_errors(),
-            "{:?}",
-            resolved.phase.diagnostics
-        );
+        assert!(!resolved.has_errors(), "{:?}", resolved.phase.diagnostics);
     }
 
     #[test]
@@ -754,11 +760,7 @@ pub mod tests {
         let driver = Driver::new(paths, DriverConfig::new("TestDriver"));
         let resolved = driver.parse().unwrap().resolve_names().unwrap();
 
-        assert!(
-            !resolved.has_errors(),
-            "{:?}",
-            resolved.phase.diagnostics
-        );
+        assert!(!resolved.has_errors(), "{:?}", resolved.phase.diagnostics);
     }
 
     #[test]

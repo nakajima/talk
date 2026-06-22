@@ -71,9 +71,9 @@ pub struct Solver<'s> {
     /// constraints instead, so they ride the binder's scheme (qualified
     /// types — Jones, *Qualified Types*, 1994).
     pub defaulting: bool,
-    /// Local assumptions from declaration `where` clauses and future GADT
-    /// match refinements. They are erased evidence: used only to discharge
-    /// wanteds while solving this implication.
+    /// Local assumptions from declaration `where` clauses and GADT match
+    /// refinements. They are erased evidence: used only to discharge wanteds
+    /// while solving this implication.
     pub givens: Vec<Predicate>,
     /// When solving an implication, only variables at this level or deeper
     /// may be unified. Outer variables are untouchable in the OutsideIn(X)

@@ -259,23 +259,24 @@ component to its paper) is inlined in the repo at
 
 ### 4.1 `src/types/` — OutsideIn(X) (complete, ~6.4k lines)
 
-- `generate.rs` — constraint generation per binding group (own
+- `generate/` — constraint generation per binding group (own
   free-variable dependency analysis à la THIH §11.6.2 — the resolver's SCC
   graph lacks method-body edges, which once caused `_io_write` to be
   exported monomorphic; don't regress this).
-- `solve.rs` — the solver: equalities over types-with-rows, `Conforms`,
+- `solve/` — the solver: equalities over types-with-rows, `Conforms`,
   `HasMember` (Gaster & Jones); records `member_resolutions` at constraint
-  origin nodes. Rémy levels for generalization (and future GADT
-  untouchability).
+  origin nodes. Rémy levels support generalization and GADT untouchability.
 - `output.rs` — **the contract with the lowerer**: `TypeOutput { catalog,
-  node_types, schemes, instantiations, member_resolutions }`. The lowerer
-  never asks the checker questions; it only reads these tables.
-- `catalog.rs` — structs (ordered fields!), enums (`VariantInfo.result` is
-  the GADT hook), protocols/requirements, conformances (with `context` for
-  conditional conformance), effect signatures.
+  node_types, schemes, instantiations, member_resolutions, existential_packs,
+  ... }`. The lowerer never asks the checker questions; it only reads these
+  tables.
+- `catalog.rs` — structs (ordered fields!), enums (`Variant` constructor
+  schemes, including GADT result types), protocols/requirements, conformances
+  (with `context` for conditional conformance), effect signatures.
 
-GADTs (type-system M8) are architected-for but not built: levels, `Implic`
-constraints, and `VariantInfo.result` are the prepared hooks.
+GADTs are implemented: enum variants carry constructor schemes, match arms
+solve under implications with touchability, and coverage filters impossible
+constructors by result satisfiability.
 
 ### 4.2 `src/lambda_g/` — the calculus (B-M0, ~2.5k lines)
 
@@ -370,8 +371,8 @@ One file (`mod.rs`) so far. The shape:
   as join-point continuations taking the arm's binders as a tuple
   (binder types come from occurrence λ_G types at the first leaf).
   Occurrences carry their *checker* types alongside λ_G values — payload
-  types come from `VariantInfo.payloads` substituted with the scrutinee's
-  enum args. Note: `{ y: pat }` binds `y` *and* matches `pat` (the
+  types come from the variant constructor scheme refined by the scrutinee's
+  enum type. Note: `{ y: pat }` binds `y` *and* matches `pat` (the
   checker binds both). The checker proves coverage *before* lowering:
   `src/types/exhaustiveness.rs` (Maranget JFP 2007 usefulness) errors on
   non-exhaustive matches with example values and warns on unreachable
@@ -383,8 +384,8 @@ One file (`mod.rs`) so far. The shape:
   statements (they bind monomorphically — no scheme, no binding group).
 - **θ recovery for owners** (M5, `owner_theta`): methods/inits of a generic
   struct and inherent-extend members range over their *owner's* rigid
-  params, which the checker discharges by head substitution (solve.rs
-  `try_member`) — no instantiation is recorded. The lowerer re-derives the
+  params, which the checker discharges by head substitution
+  (`solve/member.rs::try_member`) — no instantiation is recorded. The lowerer re-derives the
   bindings by matching the declared self type against the concrete head
   (`bind_param_pattern`, shared with the solver). Same move in
   `resolve_witness` for conditional conformance rows: `self_args` matched

@@ -293,8 +293,9 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     let ty = match type_annotation {
                         Some(annotation) => self.lower_annotation(annotation),
                         None => {
-                            // Inference for default-valued properties lands
-                            // with the core prelude (milestone 4).
+                            // Default-valued properties still need explicit
+                            // type annotations so collection can catalog the
+                            // struct shape before bodies are checked.
                             self.unsupported(member.id, "properties without type annotations");
                             Ty::Error
                         }
@@ -677,9 +678,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             .iter()
             .map(|p| match &p.type_annotation {
                 Some(annotation) => self.lower_annotation(annotation),
-                // Unannotated effect params are handler-site inferred
-                // (milestone 5); a shared outer variable is the permissive
-                // placeholder until then.
+                // Unannotated effect params share an outer variable that
+                // perform sites and handlers refine during checking.
                 None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),
             })
             .collect();

@@ -3,8 +3,8 @@
 //! `schemes` for named binders). Serves the wasm `hover` entry point and
 //! `talk hover`.
 
-use crate::analysis::{DocumentId, TextRange, node_ids_at_offset};
 use crate::analysis::workspace::Workspace;
+use crate::analysis::{DocumentId, TextRange, node_ids_at_offset};
 use crate::node::Node;
 use crate::node_kinds::expr::ExprKind;
 
@@ -25,9 +25,8 @@ pub fn hover_at(
 ) -> Option<Hover> {
     let idx = workspace.document_index(document_id)?;
     let ast = workspace.asts.get(idx)?.as_ref()?;
-    let _names = crate::name_resolution::symbol::set_symbol_names(
-        workspace.types.display_names.clone(),
-    );
+    let _names =
+        crate::name_resolution::symbol::set_symbol_names(workspace.types.display_names.clone());
 
     for node_id in node_ids_at_offset(ast, byte_offset) {
         let Some(node) = ast.find(node_id) else {
@@ -49,9 +48,8 @@ pub fn hover_for_node_id(
 ) -> Option<Hover> {
     let idx = workspace.document_index(document_id)?;
     let ast = workspace.asts.get(idx)?.as_ref()?;
-    let _names = crate::name_resolution::symbol::set_symbol_names(
-        workspace.types.display_names.clone(),
-    );
+    let _names =
+        crate::name_resolution::symbol::set_symbol_names(workspace.types.display_names.clone());
     let node = ast.find(node_id)?;
     hover_for_node(workspace, &node)
 }
@@ -125,24 +123,28 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
                 return None;
             };
             let (enum_name, case, payloads) =
-                workspace.types.catalog.enums.iter().find_map(|(owner, info)| {
-                    info.variants.iter().find_map(|(case, variant)| {
-                        (variant.symbol == *symbol).then(|| {
-                            let owner = workspace
-                                .types
-                                .display_names
-                                .get(owner)
-                                .cloned()
-                                .unwrap_or_else(|| owner.to_string());
-                            (owner, case.clone(), variant.argument_types().to_vec())
+                workspace
+                    .types
+                    .catalog
+                    .enums
+                    .iter()
+                    .find_map(|(owner, info)| {
+                        info.variants.iter().find_map(|(case, variant)| {
+                            (variant.symbol == *symbol).then(|| {
+                                let owner = workspace
+                                    .types
+                                    .display_names
+                                    .get(owner)
+                                    .cloned()
+                                    .unwrap_or_else(|| owner.to_string());
+                                (owner, case.clone(), variant.argument_types().to_vec())
+                            })
                         })
-                    })
-                })?;
+                    })?;
             let contents = if payloads.is_empty() {
                 format!("{enum_name}.{case}")
             } else {
-                let payloads: Vec<String> =
-                    payloads.iter().map(|ty| ty.render_mono()).collect();
+                let payloads: Vec<String> = payloads.iter().map(|ty| ty.render_mono()).collect();
                 format!("{enum_name}.{case}({})", payloads.join(", "))
             };
             Some(Hover {
@@ -186,8 +188,7 @@ mod tests {
         let node_id = crate::analysis::node_ids_at_offset(ast, offset)
             .into_iter()
             .find(|id| {
-                hover_for_node_id(&ws, &doc, *id)
-                    .is_some_and(|hover| hover.contents == "Int")
+                hover_for_node_id(&ws, &doc, *id).is_some_and(|hover| hover.contents == "Int")
             })
             .expect("a node id that hovers as Int");
         let hover = hover_for_node_id(&ws, &doc, node_id).expect("hover");
@@ -196,14 +197,9 @@ mod tests {
 
     #[test]
     fn hover_on_a_variant_pattern_shows_the_case() {
-        let source =
-            "enum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet r = match Opt.some(123) {\n\t.some(x) -> x,\n\t.none -> 0\n}";
+        let source = "enum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet r = match Opt.some(123) {\n\t.some(x) -> x,\n\t.none -> 0\n}";
         let hover = hover(source, ".some(x)").expect("hover");
-        assert!(
-            hover.contents.contains("Opt.some"),
-            "{}",
-            hover.contents
-        );
+        assert!(hover.contents.contains("Opt.some"), "{}", hover.contents);
     }
 
     #[test]
@@ -212,11 +208,7 @@ mod tests {
         // render by name, not as a raw symbol.
         let source = "print(123)";
         let hover = hover(source, "print").expect("hover");
-        assert!(
-            hover.contents.contains("Showable"),
-            "{}",
-            hover.contents
-        );
+        assert!(hover.contents.contains("Showable"), "{}", hover.contents);
     }
 
     #[test]
@@ -241,9 +233,7 @@ mod tests {
     fn hover_on_a_local_use_shows_its_type() {
         let source = "let greeting = \"hi\"\ngreeting";
         let offset = source.rfind("greeting").expect("use site") as u32;
-        let hover =
-            hover_at(&workspace(source), &"<test>".to_string(), offset).expect("hover");
+        let hover = hover_at(&workspace(source), &"<test>".to_string(), offset).expect("hover");
         assert!(hover.contents.contains("String"), "{}", hover.contents);
     }
-
 }

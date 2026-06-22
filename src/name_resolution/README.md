@@ -75,7 +75,7 @@ While walking, the resolver also records things later stages want:
 - a **dependency graph** between top-level bindings (`scc_graph.rs`
   computes its strongly connected components — note the type checker
   builds its own grouping over a slightly different edge set in
-  `src/types/generate.rs`; see the README there).
+  `src/types/generate/`; see the README there).
 
 All of it lands in `ResolvedNames`, the stage's output, consumed by
 the checker, the lowerer, and the LSP (go to definition is "find the

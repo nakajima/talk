@@ -3083,7 +3083,7 @@ impl<'a> Lowering<'a> {
         }
         // No explicit row: an auto-derived protocol (today: Showable)
         // synthesizes its witness in λ_G — the checker discharged the
-        // conformance structurally (solve.rs `try_derive`).
+        // conformance structurally (`solve/conformance.rs::try_derive`).
         let derivable = self
             .units
             .iter()
@@ -3813,7 +3813,7 @@ impl<'a> Lowering<'a> {
     /// θ contribution from a member's owner: a method/init of a generic
     /// struct (or an inherent extend member) ranges over its owner's rigid
     /// params, which the checker discharges by head substitution rather
-    /// than scheme instantiation (solve.rs `try_member`) — so no
+    /// than scheme instantiation (`solve/member.rs::try_member`) — so no
     /// instantiation is recorded. Recover the same bindings by matching
     /// the declared self type against the concrete head. Existing θ
     /// entries win.

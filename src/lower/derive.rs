@@ -1,7 +1,7 @@
 //! Derived `Showable` witnesses, synthesized directly in λ_G.
 //!
 //! The checker discharges `Showable` *structurally* for structs and enums
-//! with no explicit conformance row (solve.rs `try_derive`) — so there is
+//! with no explicit conformance row (`solve/conformance.rs::try_derive`) — so there is
 //! no witness function to demand. The lowerer builds one here, in CPS λ_G,
 //! with the same output format the previous implementation synthesized as
 //! an AST (its `auto_derived_body_synthesis`): enums print

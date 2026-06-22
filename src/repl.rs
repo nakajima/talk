@@ -165,9 +165,8 @@ impl ReplSession {
         }
 
         let resolved_names = &typed.phase.resolved_names;
-        let _names = crate::name_resolution::symbol::set_symbol_names(
-            resolved_names.symbol_names.clone(),
-        );
+        let _names =
+            crate::name_resolution::symbol::set_symbol_names(resolved_names.symbol_names.clone());
 
         // A bare identifier shows its (possibly polymorphic) scheme; any
         // other expression shows the type of the final statement.
@@ -370,7 +369,9 @@ fn value_names(types: &crate::types::TypeOutput) -> crate::vm::interp::ValueName
         {
             names.string_struct = Some(*symbol);
         }
-        names.fields.insert(*symbol, info.fields.keys().cloned().collect());
+        names
+            .fields
+            .insert(*symbol, info.fields.keys().cloned().collect());
         names.types.insert(*symbol, display);
     }
     for (symbol, info) in &types.catalog.enums {
@@ -379,7 +380,9 @@ fn value_names(types: &crate::types::TypeOutput) -> crate::vm::interp::ValueName
             .get(symbol)
             .cloned()
             .unwrap_or_else(|| symbol.to_string());
-        names.cases.insert(*symbol, info.variants.keys().cloned().collect());
+        names
+            .cases
+            .insert(*symbol, info.variants.keys().cloned().collect());
         names.types.insert(*symbol, display);
     }
     names
@@ -559,7 +562,6 @@ mod tests {
         assert!(matches!(result, ReplEvalResult::Diagnostics { .. }));
     }
 
-
     #[test]
     fn values_render_talk_style() {
         let mut session = session();
@@ -577,7 +579,10 @@ mod tests {
             "struct Point {\n\tlet x: Int\n\tlet y: Int\n\n\tinit(x: Int, y: Int) {\n\t\tself.x = x\n\t\tself.y = y\n\t\tself\n\t}\n}",
         );
         assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
-        assert_eq!(value_of(session.eval("Point(x: 1, y: 2)")), "Point(x: 1, y: 2)");
+        assert_eq!(
+            value_of(session.eval("Point(x: 1, y: 2)")),
+            "Point(x: 1, y: 2)"
+        );
 
         let some: ReplEvalResult = session.eval("let v: Optional<Int> = Optional.some(5)");
         assert!(matches!(some, ReplEvalResult::Output { value: None, .. }));
@@ -586,7 +591,9 @@ mod tests {
 
     fn value_of(result: ReplEvalResult) -> String {
         match result {
-            ReplEvalResult::Output { value: Some(value), .. } => value,
+            ReplEvalResult::Output {
+                value: Some(value), ..
+            } => value,
             other => panic!("expected a value, got {other:?}"),
         }
     }

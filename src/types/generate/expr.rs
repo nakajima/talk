@@ -500,8 +500,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 // Performing an operation: arguments check against the
                 // declared signature, the effect joins the ambient row
                 // (Plotkin & Pretnar 2009 operations; row growth per Koka).
-                // Row subtraction at handlers and closed-annotation checks
-                // land in milestone 5.
+                // Lexically routed handlers discharge here; closed effect
+                // annotations are checked after the group solve.
                 let Ok(symbol) = effect_name.symbol() else {
                     return Ty::Error;
                 };
