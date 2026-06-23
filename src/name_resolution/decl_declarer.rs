@@ -316,8 +316,8 @@ impl<'a> DeclDeclarer<'a> {
 
     /// Predeclare effects across all ASTs so they're available for import resolution
     /// and cross-file effect references in function signatures.
-    /// Called after `predeclare_nominals` to preserve ID stability for Core types
-    /// (Array, String, etc. have hardcoded struct IDs that share the decl counter).
+    /// Called after `predeclare_nominals` so effect names are available across files
+    /// without changing nominal predeclaration behavior.
     pub(super) fn predeclare_effects(&mut self, decls: &[&Decl]) {
         for decl in decls.iter() {
             if let DeclKind::Effect {

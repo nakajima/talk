@@ -224,10 +224,10 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> String 
         }
         Value::Record(symbol, field_values) => {
             if names.string_struct == Some(*symbol)
-                && let [Value::Ptr(base), Value::I64(len), ..] = field_values.as_slice()
+                && let Some((base, len)) = string_bytes(field_values)
             {
-                let start = *base as usize;
-                let end = start + *len as usize;
+                let start = base as usize;
+                let end = start + len as usize;
                 if let Some(bytes) = machine.mem.get(start..end) {
                     return format!("\"{}\"", escape_string(&String::from_utf8_lossy(bytes)));
                 }
@@ -276,6 +276,25 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> String 
         Value::Existential(_, payload, _) => render_value(machine, names, payload),
         Value::Closure(..) => "<func>".to_string(),
         Value::Cell(_) => "<cell>".to_string(),
+    }
+}
+
+fn string_bytes(field_values: &[Value]) -> Option<(u32, i64)> {
+    match field_values {
+        [Value::Ptr(base), Value::I64(len), ..] => Some((*base, *len)),
+        [storage, Value::I64(len), ..] => storage_base(storage).map(|base| (base, *len)),
+        _ => None,
+    }
+}
+
+fn storage_base(value: &Value) -> Option<u32> {
+    match value {
+        Value::Ptr(base) => Some(*base),
+        Value::Record(_, fields) => match fields.as_slice() {
+            [Value::Ptr(base), ..] => Some(*base),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

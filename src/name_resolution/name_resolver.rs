@@ -286,9 +286,8 @@ impl NameResolver {
         }
 
         // Predeclare module-scope nominals across all ASTs first, so `extend` resolution
-        // doesn't depend on file order. Nominals (structs, enums, protocols) must be
-        // predeclared before effects because they share the decl ID counter and Core
-        // types like String and Array have hardcoded IDs.
+        // doesn't depend on file order. Core well-known structs are assigned reserved
+        // symbols by name when they are declared, not by declaration order.
         for ast in asts.iter_mut() {
             let file_scope_id = NodeID(ast.file_id, 0);
             self.current_scope_id = Some(file_scope_id);
@@ -308,8 +307,8 @@ impl NameResolver {
             declarer.predeclare_values(&decls);
         }
 
-        // Predeclare effects in a separate pass after all nominals, so that
-        // effect IDs don't shift the hardcoded Core struct/enum IDs.
+        // Predeclare effects in a separate pass after all nominals, so cross-file
+        // effect references resolve without changing nominal predeclaration behavior.
         for ast in asts.iter_mut() {
             let file_scope_id = NodeID(ast.file_id, 0);
             self.current_scope_id = Some(file_scope_id);
@@ -329,7 +328,7 @@ impl NameResolver {
         }
 
         // Predeclare module-scope type aliases after nominals/effects so imports can
-        // see public aliases without perturbing the hardcoded Core nominal IDs.
+        // see public aliases without changing nominal predeclaration behavior.
         for ast in asts.iter_mut() {
             let file_scope_id = NodeID(ast.file_id, 0);
             self.current_scope_id = Some(file_scope_id);
@@ -947,43 +946,56 @@ impl NameResolver {
         }
 
         let module_id = self.current_module_id;
-        let symbol = match kind {
-            Symbol::Main => Symbol::Main,
-            Symbol::Library => Symbol::Library,
-            Symbol::Effect(..) => Symbol::Effect(self.symbols.next_effect(module_id)),
-            Symbol::Struct(..) => Symbol::Struct(self.symbols.next_struct(module_id)),
-            Symbol::Enum(..) => Symbol::Enum(self.symbols.next_enum(module_id)),
-            Symbol::TypeAlias(..) => Symbol::TypeAlias(self.symbols.next_type_alias(module_id)),
-            Symbol::TypeParameter(..) => {
-                Symbol::TypeParameter(self.symbols.next_type_parameter(module_id))
-            }
-            Symbol::Global(..) => Symbol::Global(self.symbols.next_global(module_id)),
-            Symbol::DeclaredLocal(..) => Symbol::DeclaredLocal(self.symbols.next_local()),
-            Symbol::PatternBindLocal(..) => {
-                Symbol::PatternBindLocal(self.symbols.next_pattern_bind())
-            }
-            Symbol::ParamLocal(..) => Symbol::ParamLocal(self.symbols.next_param()),
-            Symbol::Builtin(..) => unreachable!("should not be generating symbols for builtins"),
-            Symbol::Property(..) => Symbol::Property(self.symbols.next_property(module_id)),
-            Symbol::Synthesized(..) => {
-                Symbol::Synthesized(self.symbols.next_synthesized(module_id))
-            }
-            Symbol::InstanceMethod(..) => {
-                Symbol::InstanceMethod(self.symbols.next_instance_method(module_id))
-            }
-            Symbol::Initializer(..) => {
-                Symbol::Initializer(self.symbols.next_initializer(module_id))
-            }
-            Symbol::MethodRequirement(..) => {
-                Symbol::MethodRequirement(self.symbols.next_method_requirement(module_id))
-            }
-            Symbol::StaticMethod(..) => {
-                Symbol::StaticMethod(self.symbols.next_static_method(module_id))
-            }
-            Symbol::Variant(..) => Symbol::Variant(self.symbols.next_variant(module_id)),
-            Symbol::Protocol(..) => Symbol::Protocol(self.symbols.next_protocol(module_id)),
-            Symbol::AssociatedType(..) => {
-                Symbol::AssociatedType(self.symbols.next_associated_type(module_id))
+        let well_known_core_struct =
+            if at_module_scope && module_id == ModuleId::Core && matches!(kind, Symbol::Struct(..))
+            {
+                Symbol::well_known_core_struct(&name_str)
+            } else {
+                None
+            };
+        let symbol = if let Some(symbol) = well_known_core_struct {
+            symbol
+        } else {
+            match kind {
+                Symbol::Main => Symbol::Main,
+                Symbol::Library => Symbol::Library,
+                Symbol::Effect(..) => Symbol::Effect(self.symbols.next_effect(module_id)),
+                Symbol::Struct(..) => Symbol::Struct(self.symbols.next_struct(module_id)),
+                Symbol::Enum(..) => Symbol::Enum(self.symbols.next_enum(module_id)),
+                Symbol::TypeAlias(..) => Symbol::TypeAlias(self.symbols.next_type_alias(module_id)),
+                Symbol::TypeParameter(..) => {
+                    Symbol::TypeParameter(self.symbols.next_type_parameter(module_id))
+                }
+                Symbol::Global(..) => Symbol::Global(self.symbols.next_global(module_id)),
+                Symbol::DeclaredLocal(..) => Symbol::DeclaredLocal(self.symbols.next_local()),
+                Symbol::PatternBindLocal(..) => {
+                    Symbol::PatternBindLocal(self.symbols.next_pattern_bind())
+                }
+                Symbol::ParamLocal(..) => Symbol::ParamLocal(self.symbols.next_param()),
+                Symbol::Builtin(..) => {
+                    unreachable!("should not be generating symbols for builtins")
+                }
+                Symbol::Property(..) => Symbol::Property(self.symbols.next_property(module_id)),
+                Symbol::Synthesized(..) => {
+                    Symbol::Synthesized(self.symbols.next_synthesized(module_id))
+                }
+                Symbol::InstanceMethod(..) => {
+                    Symbol::InstanceMethod(self.symbols.next_instance_method(module_id))
+                }
+                Symbol::Initializer(..) => {
+                    Symbol::Initializer(self.symbols.next_initializer(module_id))
+                }
+                Symbol::MethodRequirement(..) => {
+                    Symbol::MethodRequirement(self.symbols.next_method_requirement(module_id))
+                }
+                Symbol::StaticMethod(..) => {
+                    Symbol::StaticMethod(self.symbols.next_static_method(module_id))
+                }
+                Symbol::Variant(..) => Symbol::Variant(self.symbols.next_variant(module_id)),
+                Symbol::Protocol(..) => Symbol::Protocol(self.symbols.next_protocol(module_id)),
+                Symbol::AssociatedType(..) => {
+                    Symbol::AssociatedType(self.symbols.next_associated_type(module_id))
+                }
             }
         };
 

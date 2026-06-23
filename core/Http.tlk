@@ -5,7 +5,7 @@ import { _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM } fr
 import { From, Into } from ./Convert.tlk
 import { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
 import { Showable } from ./Showable.tlk
-import { String } from ./String.tlk
+import { String, Substring } from ./String.tlk
 
 public struct Request {
 	let raw: String
@@ -103,34 +103,34 @@ public struct HttpServer {
 		()
 	}
 
-	func extract_method(raw_request: String) -> String {
+	func extract_method(raw_request: String) -> Substring {
 		let first_space: Int = raw_request.find(" ")
-		if first_space < 0 { return "" }
+		if first_space < 0 { return "".as_substring() }
 
 		raw_request.slice(0, first_space)
 	}
 
-	func extract_path(raw_request: String) -> String {
+	func extract_path(raw_request: String) -> Substring {
 		let first_space: Int = raw_request.find(" ")
-		if first_space < 0 { return "" }
+		if first_space < 0 { return "".as_substring() }
 
 		let rest_start: Int = first_space + 1
 		let rest_len: Int = raw_request.length - rest_start
-		if rest_len <= 0 { return "" }
+		if rest_len <= 0 { return "".as_substring() }
 
-		let rest: String = raw_request.slice(rest_start, rest_len)
+		let rest: Substring = raw_request.slice(rest_start, rest_len)
 		let second_space: Int = rest.find(" ")
 		if second_space < 0 { return rest }
 
 		rest.slice(0, second_space)
 	}
 
-	func route_matches(index: Int, path: String) -> Bool {
+	func route_matches(index: Int, path: Substring) -> Bool {
 		match index {
-			0 -> self.route_path0.equals(path),
-			1 -> self.route_path1.equals(path),
-			2 -> self.route_path2.equals(path),
-			3 -> self.route_path3.equals(path),
+			0 -> path.equals_string(self.route_path0),
+			1 -> path.equals_string(self.route_path1),
+			2 -> path.equals_string(self.route_path2),
+			3 -> path.equals_string(self.route_path3),
 			_ -> false
 		}
 	}
@@ -145,7 +145,7 @@ public struct HttpServer {
 		}
 	}
 
-	func dispatch(path: String) -> Response {
+	func dispatch(path: Substring) -> Response {
 		let i = 0
 		loop i < self.route_count {
 			if self.route_matches(i, path) { return Response(200, self.route_call(i)) }
@@ -178,12 +178,12 @@ public struct HttpServer {
 	}
 
 	public func handle(raw_request: String) -> String {
-		let method: String = self.extract_method(raw_request)
-		if method.equals("GET") == false { return self.render(
+		let method: Substring = self.extract_method(raw_request)
+		if method.equals_string("GET") == false { return self.render(
 			Response(404, "Not Found")
 		) }
 
-		let path: String = self.extract_path(raw_request)
+		let path: Substring = self.extract_path(raw_request)
 		self.render(self.dispatch(path))
 	}
 
@@ -209,7 +209,7 @@ public struct HttpServer {
 
 			let raw_request = String(buf, n, max_request_size)
 			let wire = self.handle(raw_request)
-			_io_write(client_fd, wire.base, wire.length)
+			_io_write(client_fd, wire.storage.base, wire.length)
 			_io_close(client_fd)
 		}
 	}

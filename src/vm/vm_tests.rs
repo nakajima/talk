@@ -709,7 +709,7 @@ pub mod tests {
         // open mints a simulated fd; writes append; reads start at the
         // beginning — so a write then read round-trips the bytes.
         let (value, out) = run_on_both_engines_io(
-            "let path = _alloc<Byte>(1)\nlet fd = _io_open(path, 65, 384)\nlet hello = \"hello io\"\n_io_write(fd, hello.base, hello.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
+            "let path = _alloc<Byte>(1)\nlet fd = _io_open(path, 65, 384)\nlet hello = \"hello io\"\n_io_write(fd, hello.storage.base, hello.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
         );
         assert_eq!(out, "hello io");
         assert_eq!(value, Value::I64(0));
@@ -720,7 +720,7 @@ pub mod tests {
         // open_path takes a Talk String (copied with a NUL terminator
         // into fresh memory); the simulated fd then round-trips bytes.
         let (value, out) = run_on_both_engines_io(
-            "let fd = open_path(\"scratch.txt\", 65, 384)\nlet data = \"file data\"\n_io_write(fd, data.base, data.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
+            "let fd = open_path(\"scratch.txt\", 65, 384)\nlet data = \"file data\"\n_io_write(fd, data.storage.base, data.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
         );
         assert_eq!(out, "file data");
         assert_eq!(value, Value::I64(0));
@@ -731,7 +731,7 @@ pub mod tests {
         // CaptureIO sockets are buffers: what a test writes to a
         // connection it can read back — the scripted-client loop.
         let (_, out) = run_on_both_engines_io(
-            "let sock = _io_socket(AF_INET, SOCK_STREAM, 0)\n_io_connect(sock, LOCALHOST, 9900)\nlet msg = \"ping\"\n_io_write(sock, msg.base, msg.length)\nlet buf = _alloc<Byte>(8)\nlet n = _io_read(sock, buf, 8)\n_io_write(STDOUT_FD, buf, n)",
+            "let sock = _io_socket(AF_INET, SOCK_STREAM, 0)\n_io_connect(sock, LOCALHOST, 9900)\nlet msg = \"ping\"\n_io_write(sock, msg.storage.base, msg.length)\nlet buf = _alloc<Byte>(8)\nlet n = _io_read(sock, buf, 8)\n_io_write(STDOUT_FD, buf, n)",
         );
         assert_eq!(out, "ping");
     }
@@ -741,7 +741,7 @@ pub mod tests {
         // The ChatServer slice: bind/listen succeed, accept mints a
         // client fd, and the greeting written to it reads back.
         let (value, out) = run_on_both_engines_io(
-            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet b = _io_bind(server, INADDR_ANY, 9900)\nlet l = _io_listen(server, 128)\nlet client = _io_accept(server)\nlet hi = \"hi client\"\n_io_write(client, hi.base, hi.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(client, buf, 16)\n_io_write(STDOUT_FD, buf, n)\nb + l",
+            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet b = _io_bind(server, INADDR_ANY, 9900)\nlet l = _io_listen(server, 128)\nlet client = _io_accept(server)\nlet hi = \"hi client\"\n_io_write(client, hi.storage.base, hi.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(client, buf, 16)\n_io_write(STDOUT_FD, buf, n)\nb + l",
         );
         assert_eq!(out, "hi client");
         assert_eq!(value, Value::I64(0));
@@ -930,7 +930,10 @@ pub mod tests {
         assert_eq!(value, Value::Bool(true));
         let (value, _) = run_on_both_engines_io("\"hello\" == \"world\"");
         assert_eq!(value, Value::Bool(false));
-        let (_, out) = run_on_both_engines_io("print(\"hello\".slice(1, 3))");
+        let (_, out) = run_on_both_engines_io("print(\"hello\".slice(1, 3).to_string())");
+        assert_eq!(out, "ell\n");
+        let (_, out) =
+            run_on_both_engines_io("print(\"hello\".as_substring().slice(1, 3).to_string())");
         assert_eq!(out, "ell\n");
         let (value, _) = run_on_both_engines_io("\"hello world\".find(\"world\")");
         assert_eq!(value, Value::I64(6));
@@ -1096,7 +1099,7 @@ pub mod tests {
         // Two separate writes (prefix + buffer) read back through a loop
         // — the chat client's segment-splitting pattern.
         let (_, out) = run_on_both_engines_io(
-            "let fd = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet msg = \"hello\"\n_io_write(fd, msg.base, msg.length)\nlet buf = _alloc<Byte>(1024)\nlet n = _io_read(fd, buf, 1024)\nlet echo = \"echo: \"\n_io_write(fd, echo.base, echo.length)\n_io_write(fd, buf, n)\nlet rbuf = _alloc<Byte>(1024)\nloop {\n\tlet chunk = _io_read(fd, rbuf, 1024)\n\tif chunk <= 0 { break }\n\t_io_write(STDOUT_FD, rbuf, chunk)\n}",
+            "let fd = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet msg = \"hello\"\n_io_write(fd, msg.storage.base, msg.length)\nlet buf = _alloc<Byte>(1024)\nlet n = _io_read(fd, buf, 1024)\nlet echo = \"echo: \"\n_io_write(fd, echo.storage.base, echo.length)\n_io_write(fd, buf, n)\nlet rbuf = _alloc<Byte>(1024)\nloop {\n\tlet chunk = _io_read(fd, rbuf, 1024)\n\tif chunk <= 0 { break }\n\t_io_write(STDOUT_FD, rbuf, chunk)\n}",
         );
         assert_eq!(out, "echo: hello");
     }
@@ -1105,7 +1108,7 @@ pub mod tests {
     fn vm_matches_evaluator_on_echo_loop_over_two_connections() {
         // The ChatServer loop body twice over: greeting, read-back, echo.
         let (_, out) = run_on_both_engines_io(
-            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet i = 0\nloop {\n\tif i >= 2 { break }\n\tlet client = _io_accept(server)\n\tlet msg = \"hello\"\n\t_io_write(client, msg.base, msg.length)\n\tlet buf = _alloc<Byte>(1024)\n\tlet n = _io_read(client, buf, 1024)\n\t_io_write(STDOUT_FD, buf, n)\n\t_io_close(client)\n\ti = i + 1\n}",
+            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet i = 0\nloop {\n\tif i >= 2 { break }\n\tlet client = _io_accept(server)\n\tlet msg = \"hello\"\n\t_io_write(client, msg.storage.base, msg.length)\n\tlet buf = _alloc<Byte>(1024)\n\tlet n = _io_read(client, buf, 1024)\n\t_io_write(STDOUT_FD, buf, n)\n\t_io_close(client)\n\ti = i + 1\n}",
         );
         assert_eq!(out, "hellohello");
     }

@@ -360,12 +360,10 @@ fn value_names(types: &crate::types::TypeOutput) -> crate::vm::interp::ValueName
             .get(symbol)
             .cloned()
             .unwrap_or_else(|| symbol.to_string());
+        let fields: Vec<&str> = info.fields.keys().map(|name| name.as_str()).collect();
         if display == "String"
-            && info
-                .fields
-                .keys()
-                .map(|name| name.as_str())
-                .eq(["base", "length", "capacity"])
+            && (fields == ["base", "length", "capacity"]
+                || fields == ["storage", "length", "capacity"])
         {
             names.string_struct = Some(*symbol);
         }

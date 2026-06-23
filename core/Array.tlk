@@ -1,23 +1,22 @@
 // no-core
-import { _alloc, _load } from ./Memory.tlk
+import { Storage, _storage } from ./Memory.tlk
 import { String } from ./String.tlk
 import { Add, Subtract, Comparable } from ./Operators.tlk
 import { Showable } from ./Showable.tlk
 
 public struct Array<Element> {
-	let storage: RawPtr
+	let storage: Storage<Element>
 	let count: Int
 	let capacity: Int
 
 	init(capacity: Int) {
 		self.capacity = capacity
 		self.count = 0
-		self.storage = _alloc<Element>(capacity)
+		self.storage = _storage<Element>(capacity)
 	}
 
 	func get(index: Int) -> Element {
-		let ptr: RawPtr = @_ir(self.storage, index) { %? = gep Element $0 $1 }
-		_load(ptr)
+		self.storage.get(index)
 	}
 }
 

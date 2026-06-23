@@ -265,7 +265,8 @@ impl<'a> Lowering<'a> {
         let base = self.p.constant(Const::StaticPtr(offset), ptr_ty);
         let len = self.p.int(bytes.len() as i64);
         let ty = self.p.ty(TyKind::Boxed(Symbol::String));
+        let storage = self.string_storage_value(Symbol::String, base);
         self.p
-            .primop(Op::RecordNew(Symbol::String), &[base, len, len], ty)
+            .primop(Op::RecordNew(Symbol::String), &[storage, len, len], ty)
     }
 }

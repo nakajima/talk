@@ -714,7 +714,10 @@ pub mod tests {
     fn render_lowered_annotates_string_statics() {
         // A string literal's static pointer shows the bytes it points at.
         let ir = render_lowered("IrTest", "print(\"hi\")").expect("ir");
-        assert!(ir.contains("static+0 (\"hi\")"), "{ir}");
+        assert!(
+            ir.contains("record_new(ByteStorage, static+0) (\"hi\")"),
+            "{ir}"
+        );
     }
 
     #[test]

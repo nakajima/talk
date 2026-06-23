@@ -1,22 +1,66 @@
 // no-core
-public effect 'heap() -> ()
 
-public func _alloc<Element>(count: Int) 'heap -> RawPtr {
+public enum Allocation {
+	case allocate(Int)
+	case free
+	case retain
+	case release
+}
+
+public effect 'alloc(allocation: Allocation) -> Void
+
+public func _alloc<Element>(count: Int) 'alloc -> RawPtr {
 	@_ir(count) { %? = alloc Element $0 }
 }
 
-public func _store<Element>(ptr: RawPtr, value: Element) 'heap -> Void {
+public func _store<Element>(ptr: RawPtr, value: Element) 'alloc -> Void {
 	@_ir(value, ptr) { store Element $0 $1 }
 }
 
-public func _load<Element>(ptr: RawPtr) 'heap -> Element {
+public func _load<Element>(ptr: RawPtr) 'alloc -> Element {
 	@_ir(ptr) { %? = load Element $0 }
 }
 
-public func _copy(from: RawPtr, to: RawPtr, length: Int) 'heap -> Void {
+public func _copy(from: RawPtr, to: RawPtr, length: Int) 'alloc -> Void {
 	@_ir(from, to, length) { copy Byte $0 $1 $2 }
 }
 
-public func _ptr_add(ptr: RawPtr, offset: Int) 'heap -> RawPtr {
+public func _ptr_add(ptr: RawPtr, offset: Int) 'alloc -> RawPtr {
 	@_ir(ptr, offset) { %? = add RawPtr $0 $1 }
+}
+
+public struct Storage<Element> {
+	let base: RawPtr
+
+	func get(index: Int) -> Element {
+		let ptr: RawPtr = @_ir(self.base, index) { %? = gep Element $0 $1 }
+		_load<Element>(ptr)
+	}
+
+	func set(index: Int, value: Element) -> Void {
+		let ptr: RawPtr = @_ir(self.base, index) { %? = gep Element $0 $1 }
+		_store<Element>(ptr, value)
+	}
+}
+
+public func _storage<Element>(capacity: Int) 'alloc -> Storage<Element> {
+	Storage<Element>(base: _alloc<Element>(capacity))
+}
+
+public struct ByteStorage {
+	let base: RawPtr
+
+	func get(index: Int) -> Byte {
+		let ptr: RawPtr = @_ir(self.base, index) { %? = gep Byte $0 $1 }
+		_load<Byte>(ptr)
+	}
+
+	func set(index: Int, value: Byte) -> Void {
+		let ptr: RawPtr = @_ir(self.base, index) { %? = gep Byte $0 $1 }
+		_store<Byte>(ptr, value)
+	}
+}
+
+public func _byte_storage(capacity: Int) 'alloc -> ByteStorage {
+	ByteStorage(base: _alloc<Byte>(capacity))
 }

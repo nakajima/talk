@@ -228,6 +228,10 @@ impl std::fmt::Debug for Symbol {
 
 #[allow(non_upper_case_globals)]
 impl Symbol {
+    const WELL_KNOWN_CORE_STRING_ID: u32 = u32::MAX - 32;
+    const WELL_KNOWN_CORE_ARRAY_ID: u32 = u32::MAX - 31;
+    const WELL_KNOWN_CORE_STORAGE_ID: u32 = u32::MAX - 30;
+
     pub const Int: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
         local_id: 1,
@@ -267,12 +271,25 @@ impl Symbol {
 
     pub const String: Symbol = Symbol::Struct(StructId {
         module_id: ModuleId::Core,
-        local_id: 2,
+        local_id: Self::WELL_KNOWN_CORE_STRING_ID,
     });
     pub const Array: Symbol = Symbol::Struct(StructId {
         module_id: ModuleId::Core,
-        local_id: 3,
+        local_id: Self::WELL_KNOWN_CORE_ARRAY_ID,
     });
+    pub const Storage: Symbol = Symbol::Struct(StructId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_STORAGE_ID,
+    });
+
+    pub fn well_known_core_struct(name: &str) -> Option<Symbol> {
+        match name {
+            "String" => Some(Symbol::String),
+            "Array" => Some(Symbol::Array),
+            "Storage" => Some(Symbol::Storage),
+            _ => None,
+        }
+    }
 
     /// Special type parameter used for the IR builtin
     pub const IR_TYPE_PARAM: Symbol = Symbol::TypeParameter(TypeParameterId {

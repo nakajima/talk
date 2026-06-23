@@ -105,6 +105,7 @@ fn _compile() -> (Arc<Module>, Arc<CoreTyped>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::name_resolution::symbol::Symbol;
 
     #[test]
     fn core_resolves_without_errors() {
@@ -113,5 +114,21 @@ mod tests {
         assert_eq!(module.name, "Core");
         assert!(!module.exports.is_empty());
         assert!(!typed.types.schemes.is_empty());
+    }
+
+    #[test]
+    fn core_exports_use_well_known_symbols() {
+        let (module, typed) = _compile();
+
+        assert_eq!(module.exports.get("String").copied(), Some(Symbol::String));
+        assert_eq!(module.exports.get("Array").copied(), Some(Symbol::Array));
+        assert_eq!(
+            module.exports.get("Storage").copied(),
+            Some(Symbol::Storage)
+        );
+
+        assert!(typed.types.catalog.structs.contains_key(&Symbol::String));
+        assert!(typed.types.catalog.structs.contains_key(&Symbol::Array));
+        assert!(typed.types.catalog.structs.contains_key(&Symbol::Storage));
     }
 }

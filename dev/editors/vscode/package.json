@@ -1,6 +1,7 @@
 {
   "name": "talktalk",
   "displayName": "talktalk",
+  "publisher": "talktalk",
   "description": "",
   "version": "0.0.1",
   "engines": {
