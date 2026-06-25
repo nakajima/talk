@@ -1,5 +1,6 @@
 use super::*;
 use crate::mir;
+use crate::ownership::{BodyKind, DropKind};
 
 #[derive(Clone, Copy)]
 enum MirRestBinding {
@@ -48,10 +49,12 @@ impl<'a> Lowering<'a> {
             | mir::Statement::StorageDead { .. }
             | mir::Statement::Read { .. }
             | mir::Statement::AssignmentRootUse { .. }
-            | mir::Statement::Call { .. }
             | mir::Statement::Perform
-            | mir::Statement::Function { .. }
             | mir::Statement::DropCandidate { .. } => rest(self, ctx, k),
+            mir::Statement::Call { .. } | mir::Statement::Function { .. } => {
+                let rest_body = rest(self, ctx, k);
+                self.clear_moved_drop_flags_then(ctx, body, statement, rest_body)
+            }
             mir::Statement::Handling {
                 stmt,
                 effect_name,
@@ -72,13 +75,16 @@ impl<'a> Lowering<'a> {
             mir::Statement::Bind { lhs, rhs, .. } => {
                 self.lower_mir_bind(lhs, *rhs, body, block, index, statements, ctx, k, loops)
             }
-            mir::Statement::Assign { lhs, rhs, .. } => {
-                let drop_old_value = Self::assignment_drop_elaboration(statements, index)
-                    == Some(mir::DropElaboration::Static);
+            mir::Statement::Assign {
+                lhs, rhs, target, ..
+            } => {
+                let drop_elaboration =
+                    self.assignment_drop_elaboration(ctx, body, statements, index);
                 self.lower_mir_assignment(
                     lhs,
                     rhs,
-                    drop_old_value,
+                    target.as_ref(),
+                    drop_elaboration,
                     body,
                     block,
                     index,
@@ -113,6 +119,7 @@ impl<'a> Lowering<'a> {
                 ) {
                     return done;
                 }
+                let target = self.wrap_moved_value_cont(ctx, body, statement, target);
                 self.lower_expr(expr, ctx, target)
             }
             mir::Statement::ContinueValue { expr, .. } if ctx.resume_k.is_some() => {
@@ -125,8 +132,10 @@ impl<'a> Lowering<'a> {
                 let value = self.p.var(send);
                 let pair = self.p.tuple(&[value, ctx.raw_ret_k]);
                 let resume_body = self.p.app(resume_k, pair);
-                let body = self.lower_drop_bindings_then(ctx, &ctx.drop_stack, resume_body);
-                self.p.set_body(send, body);
+                let resume_body = self.lower_drop_bindings_then(ctx, &ctx.drop_stack, resume_body);
+                let resume_body =
+                    self.clear_moved_drop_flags_then(ctx, body, statement, resume_body);
+                self.p.set_body(send, resume_body);
                 let send_ref = self.p.func_ref(send);
                 self.lower_expr(expr, ctx, send_ref)
             }
@@ -169,16 +178,27 @@ impl<'a> Lowering<'a> {
                     inner.env.insert(symbol, Binding::Value(value));
                 }
                 if let Some(ty) = self.symbol_check_ty(symbol, &ctx.theta)
-                    && let Some(drop) = self.drop_binding_for_symbol(ctx.unit, symbol, ty)
+                    && let Some(drop) = self.drop_binding_for_mir_symbol(ctx, body, symbol, ty)
                 {
                     drop_bindings.push(drop);
                 }
             }
             let rest_body = self.with_cells(&celled, &mut inner, |this, inner| {
-                inner.drop_stack.extend(drop_bindings.clone());
-                let scope_k = this.wrap_cont_with_drop_bindings(inner, k, &drop_bindings);
-                inner.tail_k = scope_k;
-                this.lower_mir_statements(body, block, index + 1, statements, inner, scope_k, loops)
+                this.with_drop_flags(&drop_bindings, inner, |this, inner| {
+                    inner.drop_stack.extend(drop_bindings.clone());
+                    let scope_k = this.wrap_cont_with_drop_bindings(inner, k, &drop_bindings);
+                    inner.tail_k = scope_k;
+                    let rest_body = this.lower_mir_statements(
+                        body,
+                        block,
+                        index + 1,
+                        statements,
+                        inner,
+                        scope_k,
+                        loops,
+                    );
+                    this.clear_moved_drop_flags_then(inner, body, &statements[index], rest_body)
+                })
             });
             self.p.set_body(bind, rest_body);
             let bind_ref = self.p.func_ref(bind);
@@ -212,33 +232,287 @@ impl<'a> Lowering<'a> {
         let binding_ty = self
             .symbol_check_ty(symbol, &ctx.theta)
             .unwrap_or_else(|| self.checker_ty(rhs, ctx));
-        let drop_binding = self.drop_binding_for_symbol(ctx.unit, symbol, binding_ty);
+        let drop_binding = self.drop_binding_for_mir_symbol(ctx, body, symbol, binding_ty);
         let rest_body = if mutated {
             self.with_cells(&[(symbol, bound)], &mut inner, |this, inner| {
                 let drops = drop_binding.clone().into_iter().collect::<Vec<_>>();
-                inner.drop_stack.extend(drops.clone());
-                let scope_k = this.wrap_cont_with_drop_bindings(inner, k, &drops);
-                inner.tail_k = scope_k;
-                this.lower_mir_statements(body, block, index + 1, statements, inner, scope_k, loops)
+                this.with_drop_flags(&drops, inner, |this, inner| {
+                    inner.drop_stack.extend(drops.clone());
+                    let scope_k = this.wrap_cont_with_drop_bindings(inner, k, &drops);
+                    inner.tail_k = scope_k;
+                    let rest_body = this.lower_mir_statements(
+                        body,
+                        block,
+                        index + 1,
+                        statements,
+                        inner,
+                        scope_k,
+                        loops,
+                    );
+                    this.clear_moved_drop_flags_then(inner, body, &statements[index], rest_body)
+                })
             })
         } else {
             inner.env.insert(symbol, Binding::Value(bound));
             let drops = drop_binding.into_iter().collect::<Vec<_>>();
-            inner.drop_stack.extend(drops.clone());
-            let scope_k = self.wrap_cont_with_drop_bindings(&inner, k, &drops);
-            inner.tail_k = scope_k;
-            self.lower_mir_statements(body, block, index + 1, statements, &inner, scope_k, loops)
+            self.with_drop_flags(&drops, &mut inner, |this, inner| {
+                inner.drop_stack.extend(drops.clone());
+                let scope_k = this.wrap_cont_with_drop_bindings(inner, k, &drops);
+                inner.tail_k = scope_k;
+                let rest_body = this.lower_mir_statements(
+                    body,
+                    block,
+                    index + 1,
+                    statements,
+                    inner,
+                    scope_k,
+                    loops,
+                );
+                this.clear_moved_drop_flags_then(inner, body, &statements[index], rest_body)
+            })
         };
         self.p.set_body(bind, rest_body);
         let bind_ref = self.p.func_ref(bind);
         self.lower_expr(rhs, ctx, bind_ref)
     }
 
+    fn drop_binding_for_mir_symbol(
+        &self,
+        ctx: &Ctx,
+        body: &mir::Body<'_>,
+        symbol: Symbol,
+        ty: CheckTy,
+    ) -> Option<DropBinding> {
+        if !self.needs_drop_type(ctx.unit, &ty) {
+            return None;
+        }
+        let dynamic_flags = self.drop_flag_keys_for_symbol(ctx, body, symbol);
+        if dynamic_flags.is_empty() && self.symbol_has_move_fact(ctx.unit, symbol) {
+            return None;
+        }
+        Some(DropBinding {
+            symbol,
+            key_path: OwnershipKeyPath::root(symbol),
+            ty,
+            dynamic_flags,
+        })
+    }
+
+    fn drop_flag_keys_for_symbol(
+        &self,
+        ctx: &Ctx,
+        body: &mir::Body<'_>,
+        symbol: Symbol,
+    ) -> Vec<OwnershipKeyPath> {
+        let mut keys = Vec::new();
+        let root = OwnershipKeyPath::root(symbol);
+        let mut needs_root_flag = false;
+
+        for obligation in &self.units[ctx.unit].ownership.drop_plan.obligations {
+            if !self.ownership_point_matches_body(ctx, body, obligation.point) {
+                continue;
+            }
+            if obligation.key_path.root != symbol {
+                continue;
+            }
+            if !matches!(obligation.kind, DropKind::Conditional | DropKind::Open) {
+                continue;
+            }
+            needs_root_flag = true;
+            if !obligation.key_path.fields.is_empty() {
+                Self::push_unique_drop_flag_key(&mut keys, obligation.key_path.clone());
+            }
+        }
+
+        for fact in &self.units[ctx.unit].ownership.facts.moves {
+            if !self.ownership_point_matches_body(ctx, body, fact.point) {
+                continue;
+            }
+            if fact.source.root != symbol {
+                continue;
+            }
+            needs_root_flag = true;
+            if !fact.source.fields.is_empty() {
+                Self::push_unique_drop_flag_key(&mut keys, fact.source.clone());
+            }
+        }
+
+        if needs_root_flag {
+            keys.insert(0, root);
+        }
+        keys
+    }
+
+    fn push_unique_drop_flag_key(keys: &mut Vec<OwnershipKeyPath>, key: OwnershipKeyPath) {
+        if !keys.iter().any(|existing| existing == &key) {
+            keys.push(key);
+        }
+    }
+
+    fn ownership_point_matches_body(
+        &self,
+        ctx: &Ctx,
+        body: &mir::Body<'_>,
+        point: crate::ownership::OwnershipPoint,
+    ) -> bool {
+        let Some(fact_body) = self.units[ctx.unit]
+            .ownership
+            .facts
+            .bodies
+            .get(point.body.0 as usize)
+        else {
+            return false;
+        };
+        if fact_body.owner != body.owner {
+            return false;
+        }
+        if body.owner.is_some() {
+            return true;
+        }
+        matches!(
+            (&fact_body.kind, ctx.top_level),
+            (BodyKind::TopLevel, true) | (BodyKind::Function, false)
+        )
+    }
+
+    fn ownership_key_path_from_mir(
+        body: &mir::Body<'_>,
+        key_path: &mir::KeyPath,
+    ) -> Option<OwnershipKeyPath> {
+        let root = body.locals.get(key_path.root.0)?.symbol;
+        let mut result = OwnershipKeyPath::root(root);
+        for component in &key_path.components {
+            match component {
+                mir::KeyPathComponent::Field(field) => {
+                    result = result.child(*field);
+                }
+                mir::KeyPathComponent::TupleField(_)
+                | mir::KeyPathComponent::VariantPayload { .. }
+                | mir::KeyPathComponent::DerefBorrow
+                | mir::KeyPathComponent::Index(_) => return None,
+            }
+        }
+        Some(result)
+    }
+
+    fn ownership_key_path_from_assignment_lhs(
+        &self,
+        ctx: &Ctx,
+        lhs: &Expr,
+    ) -> Option<OwnershipKeyPath> {
+        match &lhs.kind {
+            ExprKind::Variable(name) => name.symbol().ok().map(OwnershipKeyPath::root),
+            ExprKind::Member(Some(receiver), ..) => {
+                let base = self.ownership_key_path_from_assignment_lhs(ctx, receiver)?;
+                let field =
+                    crate::types::output::stored_field_symbol(self.units[ctx.unit].types, lhs)?;
+                Some(base.child(field))
+            }
+            _ => None,
+        }
+    }
+
+    fn assignment_drop_elaboration(
+        &self,
+        ctx: &Ctx,
+        body: &mir::Body<'_>,
+        statements: &[mir::LocatedStatement<'_>],
+        assignment_index: usize,
+    ) -> Option<mir::DropElaboration> {
+        let previous = assignment_index.checked_sub(1)?;
+        let previous = statements.get(previous)?;
+        let mir::Statement::DropCandidate {
+            reason: mir::DropReason::AssignmentReplace,
+            ..
+        } = &previous.kind
+        else {
+            return None;
+        };
+        self.units[ctx.unit]
+            .ownership
+            .drop_plan
+            .obligations
+            .iter()
+            .find(|obligation| {
+                obligation.point.point == previous.point.0 as u32
+                    && self.ownership_point_matches_body(ctx, body, obligation.point)
+                    && obligation.reason == crate::ownership::DropReason::AssignmentReplace
+            })
+            .map(|obligation| match obligation.kind {
+                DropKind::Static => mir::DropElaboration::Static,
+                DropKind::Dead => mir::DropElaboration::Dead,
+                DropKind::Conditional => mir::DropElaboration::Conditional,
+                DropKind::Open => mir::DropElaboration::Open,
+            })
+    }
+
+    fn moved_key_paths_at_statement(
+        &self,
+        ctx: &Ctx,
+        body: &mir::Body<'_>,
+        statement: &mir::LocatedStatement<'_>,
+    ) -> Vec<OwnershipKeyPath> {
+        let mut moved = Vec::new();
+        for fact in &self.units[ctx.unit].ownership.facts.moves {
+            if fact.point.point != statement.point.0 as u32 {
+                continue;
+            }
+            if !self.ownership_point_matches_body(ctx, body, fact.point) {
+                continue;
+            }
+            Self::push_unique_drop_flag_key(&mut moved, fact.source.clone());
+        }
+        moved
+    }
+
+    fn clear_moved_drop_flags_then(
+        &mut self,
+        ctx: &Ctx,
+        body: &mir::Body<'_>,
+        statement: &mir::LocatedStatement<'_>,
+        next: ExprId,
+    ) -> ExprId {
+        let moved = self.moved_key_paths_at_statement(ctx, body, statement);
+        let mut result = next;
+        for key_path in moved.iter().rev() {
+            result = self.set_drop_flags_under_then(ctx, key_path, false, result);
+        }
+        result
+    }
+
+    fn wrap_moved_value_cont(
+        &mut self,
+        ctx: &Ctx,
+        body: &mir::Body<'_>,
+        statement: &mir::LocatedStatement<'_>,
+        target: ExprId,
+    ) -> ExprId {
+        if self
+            .moved_key_paths_at_statement(ctx, body, statement)
+            .is_empty()
+        {
+            return target;
+        }
+        let TyKind::Fn(value_ty, _) = *self.p.ty_kind(self.p.expr_ty(target)) else {
+            self.diagnostics
+                .push("lowering: moved-value target is not a function".into());
+            return target;
+        };
+        let bot = self.p.ty_bot();
+        let cont = self.p.func("after_move", value_ty, bot);
+        let value = self.p.var(cont);
+        let deliver = self.p.app(target, value);
+        let body_expr = self.clear_moved_drop_flags_then(ctx, body, statement, deliver);
+        self.p.set_body(cont, body_expr);
+        self.p.func_ref(cont)
+    }
+
     fn lower_mir_assignment(
         &mut self,
         lhs: &Expr,
         rhs: &Expr,
-        drop_old_value: bool,
+        target: Option<&mir::KeyPath>,
+        drop_elaboration: Option<mir::DropElaboration>,
         body: &mir::Body<'_>,
         block: mir::BlockId,
         index: usize,
@@ -247,8 +521,8 @@ impl<'a> Lowering<'a> {
         k: ExprId,
         loops: &[(mir::BlockId, ExprId, mir::BlockId, ExprId)],
     ) -> ExprId {
-        let target = self.assignment_target(lhs, ctx);
-        let Some((cell, path)) = target else {
+        let lowered_target = self.assignment_target(lhs, ctx);
+        let Some((cell, path)) = lowered_target else {
             return self.lower_mir_statements(body, block, index + 1, statements, ctx, k, loops);
         };
         let void_ty = self.p.ty_void();
@@ -258,6 +532,9 @@ impl<'a> Lowering<'a> {
             self.lower_mir_statements(body, block, index + 1, statements, ctx, k, loops);
         self.p.set_body(after, after_body);
         let after_ref = self.p.func_ref(after);
+        let target_key_path = target
+            .and_then(|target| Self::ownership_key_path_from_mir(body, target))
+            .or_else(|| self.ownership_key_path_from_assignment_lhs(ctx, lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
         let setter = self.p.func("set", rhs_ty, bot);
@@ -269,12 +546,40 @@ impl<'a> Lowering<'a> {
         };
         let cell_set = self.p.primop(Op::CellSet, &[cell, stored], void_ty);
         let setter_body = {
-            let after_set = self.p.app(after_ref, cell_set);
+            let void = self.p.void();
+            let after_set = self.p.app(after_ref, void);
+            let after_set = if let Some(target_key_path) = &target_key_path {
+                self.set_drop_flags_under_then(ctx, target_key_path, true, after_set)
+            } else {
+                after_set
+            };
+            let after_set = self.sequence_void_effect(cell_set, after_set);
+            let after_set =
+                self.clear_moved_drop_flags_then(ctx, body, &statements[index], after_set);
             let lhs_check_ty = self.checker_ty(lhs, ctx);
-            if drop_old_value && self.needs_drop_type(ctx.unit, &lhs_check_ty) {
+            if matches!(drop_elaboration, Some(mir::DropElaboration::Static))
+                && self.needs_drop_type(ctx.unit, &lhs_check_ty)
+            {
                 let old_ty = self.map_ty(&lhs_check_ty);
                 let old = self.assignment_old_value(cell, &path, old_ty);
                 self.lower_drop_value_then(ctx, old, &lhs_check_ty, after_set)
+            } else if matches!(
+                drop_elaboration,
+                Some(mir::DropElaboration::Conditional | mir::DropElaboration::Open)
+            ) && self.needs_drop_type(ctx.unit, &lhs_check_ty)
+            {
+                let Some(target_key_path) = &target_key_path else {
+                    return self.dead_end("dynamic_assignment_drop_without_key_path");
+                };
+                let old_ty = self.map_ty(&lhs_check_ty);
+                let old = self.assignment_old_value(cell, &path, old_ty);
+                self.lower_dynamic_assignment_drop_then(
+                    ctx,
+                    target_key_path,
+                    old,
+                    &lhs_check_ty,
+                    after_set,
+                )
             } else {
                 after_set
             }
@@ -282,22 +587,6 @@ impl<'a> Lowering<'a> {
         self.p.set_body(setter, setter_body);
         let setter_ref = self.p.func_ref(setter);
         self.lower_expr(rhs, ctx, setter_ref)
-    }
-
-    fn assignment_drop_elaboration(
-        statements: &[mir::LocatedStatement<'_>],
-        assignment_index: usize,
-    ) -> Option<mir::DropElaboration> {
-        let previous = assignment_index.checked_sub(1)?;
-        let mir::Statement::DropCandidate {
-            elaboration,
-            reason: mir::DropReason::AssignmentReplace,
-            ..
-        } = &statements.get(previous)?.kind
-        else {
-            return None;
-        };
-        *elaboration
     }
 
     fn lower_mir_discard(
@@ -332,6 +621,7 @@ impl<'a> Lowering<'a> {
         let drop_k = self.p.func("drop", value_ty, bot);
         let rest_body =
             self.lower_mir_statements(body, block, index + 1, statements, ctx, k, loops);
+        let rest_body = self.clear_moved_drop_flags_then(ctx, body, &statements[index], rest_body);
         self.p.set_body(drop_k, rest_body);
         let drop_ref = self.p.func_ref(drop_k);
         match pure_value {
@@ -427,6 +717,7 @@ impl<'a> Lowering<'a> {
         let cap_var = self.p.var(cap);
         let rk = self.p.extract(cap_var, (dom_items.len() - 1) as u32);
         let mut inner = self.rebase_into_closure(ctx, rk);
+        inner.owner = None;
         if resume_pair_ty.is_some() {
             inner.resume_k = Some(self.p.extract(cap_var, (dom_items.len() - 2) as u32));
         }
@@ -631,15 +922,40 @@ impl<'a> Lowering<'a> {
             MirRestBinding::Bind(symbol, mutated) => {
                 let drop_binding = self
                     .symbol_check_ty(symbol, &ctx.theta)
-                    .and_then(|ty| self.drop_binding_for_symbol(ctx.unit, symbol, ty));
+                    .and_then(|ty| self.drop_binding_for_mir_symbol(ctx, body, symbol, ty));
                 if mutated {
                     self.with_cells(&[(symbol, value)], &mut inner, |this, inner| {
                         let drops = drop_binding.clone().into_iter().collect::<Vec<_>>();
+                        this.with_drop_flags(&drops, inner, |this, inner| {
+                            inner.drop_stack.extend(drops.clone());
+                            let bound_k = inner.ret_k;
+                            let scope_k = this.wrap_cont_with_drop_bindings(inner, bound_k, &drops);
+                            inner.tail_k = scope_k;
+                            let rest_body = this.lower_mir_statements(
+                                body,
+                                block,
+                                index + 1,
+                                statements,
+                                inner,
+                                scope_k,
+                                loops,
+                            );
+                            this.clear_moved_drop_flags_then(
+                                inner,
+                                body,
+                                &statements[index],
+                                rest_body,
+                            )
+                        })
+                    })
+                } else {
+                    inner.env.insert(symbol, Binding::Value(value));
+                    let drops = drop_binding.into_iter().collect::<Vec<_>>();
+                    self.with_drop_flags(&drops, &mut inner, |this, inner| {
                         inner.drop_stack.extend(drops.clone());
-                        let bound_k = inner.ret_k;
-                        let scope_k = this.wrap_cont_with_drop_bindings(inner, bound_k, &drops);
+                        let scope_k = this.wrap_cont_with_drop_bindings(inner, inner_k, &drops);
                         inner.tail_k = scope_k;
-                        this.lower_mir_statements(
+                        let rest_body = this.lower_mir_statements(
                             body,
                             block,
                             index + 1,
@@ -647,35 +963,27 @@ impl<'a> Lowering<'a> {
                             inner,
                             scope_k,
                             loops,
-                        )
+                        );
+                        this.clear_moved_drop_flags_then(inner, body, &statements[index], rest_body)
                     })
-                } else {
-                    inner.env.insert(symbol, Binding::Value(value));
-                    let drops = drop_binding.into_iter().collect::<Vec<_>>();
-                    inner.drop_stack.extend(drops.clone());
-                    let scope_k = self.wrap_cont_with_drop_bindings(&inner, inner_k, &drops);
-                    inner.tail_k = scope_k;
-                    self.lower_mir_statements(
-                        body,
-                        block,
-                        index + 1,
-                        statements,
-                        &inner,
-                        scope_k,
-                        loops,
-                    )
                 }
             }
-            MirRestBinding::Discard => self.lower_mir_statements(
-                body,
-                block,
-                index + 1,
-                statements,
-                &inner,
-                inner_k,
-                loops,
-            ),
-            MirRestBinding::Deliver => self.p.app(inner_k, value),
+            MirRestBinding::Discard => {
+                let rest_body = self.lower_mir_statements(
+                    body,
+                    block,
+                    index + 1,
+                    statements,
+                    &inner,
+                    inner_k,
+                    loops,
+                );
+                self.clear_moved_drop_flags_then(&inner, body, &statements[index], rest_body)
+            }
+            MirRestBinding::Deliver => {
+                let deliver = self.p.app(inner_k, value);
+                self.clear_moved_drop_flags_then(&inner, body, &statements[index], deliver)
+            }
         };
         let _ = k;
         self.p.set_body(rest_k, body_expr);

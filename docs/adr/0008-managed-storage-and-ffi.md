@@ -66,6 +66,9 @@ surface pieces:
 - the ownership pass performs move, borrow, loop-carried move, use-before
   initialization, and escaping-borrow checks by executing source-near CFG
   ownership MIR bodies;
+- borrow loans are recorded at MIR points and pruned by CFG live-out
+  dataflow, so nonescaping borrows can end at last use while loop-carried
+  loans stay live across backedges;
 - escaping closure values are summarized through locals, returns,
   by-value arguments, aggregate literals, and trailing blocks; closure
   literals support explicit `copy`, `consuming`, `&`, and `&mut` capture
@@ -122,6 +125,16 @@ Ownership, borrowing, and effects answer different questions:
 The `'alloc` effect gates allocation, release, retain, and low-level
 storage mutation needed to implement safe storage types. It does not
 replace move checking or borrow checking.
+
+Region allocation follows Spegion's useful lesson: allocation and
+deallocation authority can be expressed with effects, and handlers can
+choose a heap, arena, bump allocator, or stack-like region without
+exposing raw pointers. Talk does not adopt Spegion's permissive mutable
+aliasing model. `&mut T` remains an exclusive mutable access, so a live
+`&mut` conflicts with every overlapping read or write and a live shared
+borrow conflicts with overlapping mutation. This preserves predictable
+value semantics, optimization headroom for native backends, and a later
+concurrency story.
 
 Compiler-inserted memory drops may lower directly to internal allocation
 ops after the ownership pass has proved they are needed and safe.
@@ -212,12 +225,8 @@ method `func` has a shared receiver, so `self.field = value` is rejected
 with a diagnostic telling the author to use `mut func` when mutation is
 intended.
 
-The remaining borrow work is:
-
-- richer region/lifetime dataflow for more precise nonescaping captures
-  and loop-carried loans;
-- executable dynamic drop flags for conditional/open drop obligations;
-- explicit lifetime syntax only if real APIs need it.
+The remaining borrow work is explicit lifetime syntax and deeper
+inter-body lifetime summaries only if real APIs need them.
 
 The current soundness boundary is conservative. Safe Talk should not
 accept dangling borrows, use-after-move, moves while borrowed, mutable
@@ -229,9 +238,9 @@ data until the lifetime model is explicit enough to describe that
 soundly. Safe sources also reject `RawPtr` and inline IR; raw pointer
 tests and low-level examples must opt into `// unsafe`. The evaluator and
 VM now track allocation records, reject double-free and use-after-free,
-and treat frees of static storage as no-ops. Drop lowering still needs
-dynamic flags for conditional/open obligations so it can free more paths
-without becoming unsound.
+and treat frees of static storage as no-ops. Drop lowering uses dynamic
+flags for conditional/open obligations so it can free more paths without
+becoming unsound.
 
 This follows the same broad shape as Rust's MIR borrow checker: check a
 desugared CFG representation, derive regions from CFG points, and use
@@ -246,6 +255,10 @@ recent place/path models such as
 [Place Capability Graphs](https://arxiv.org/abs/2503.21691). The
 receiver/exclusivity direction is also consistent with Swift's ownership
 manifesto, especially its [Law of Exclusivity](https://github.com/swiftlang/swift/blob/main/docs/OwnershipManifesto.md).
+For allocation regions specifically, the effect-and-region direction is
+informed by Spegion,
+[Implicit and Non-Lexical Regions with Sized Allocations](https://arxiv.org/abs/2506.02182),
+but Talk keeps exclusivity as a separate borrow-checker property.
 
 ## Lowering
 
@@ -269,9 +282,9 @@ scope drops and MIR-static assignment-replacement drops. Today those
 lower to ordered lambda-G `free` glue for managed storage wrappers that
 expose a `RawPtr`; the evaluator and VM track allocation records and make
 double-free/use-after-free observable. The ownership pass classifies
-conditional/open drop obligations, and lowering remains conservative
-around moved roots until executable dynamic drop flags exist.
-Retain/release accounting is not implemented. These operations are
+conditional/open drop obligations, and lowering uses runtime drop flags
+for those obligations. Retain/release accounting is not implemented.
+These operations are
 effectful in the same sense as
 allocation, raw memory access, and IO:
 
@@ -299,6 +312,10 @@ withRegion {
 The handler owns the arena and releases everything at scope exit.
 Native backends can lower such regions to stack allocation, bump
 allocation, or arena allocation depending on escape analysis.
+
+Longer term, region handlers may accept size/capacity information in the
+style of Spegion's sized regions. That should constrain allocation
+effects and handler lowering, not relax `&mut` exclusivity.
 
 ## FFI
 
@@ -349,13 +366,14 @@ It also avoids reference counting everywhere. The preferred order is:
    instead of `RawPtr`.
 6. Done for the current source model: extend the post-type-check ownership and borrow pass.
    The source-near CFG ownership MIR, per-body CFG worklist joins,
-   source-order use counts, internal facts, `needs_drop(T)`, use-before
-   initialization checks, explicit capture modes, conservative escaping
-   borrow rejection, and drop-plan elaboration are in place. Richer
-   lifetime precision remains.
-7. In progress: insert drop/release/free operations during lowering.
-   Deterministic local scope and MIR-static assignment-replacement `free`
-   glue is implemented; conditional/open drops and retain/release remain.
+   point-based loan liveness, internal facts, `needs_drop(T)`,
+   use-before initialization checks, explicit capture modes,
+   conservative escaping borrow rejection, and drop-plan elaboration are
+   in place.
+7. Done for `free`: insert drop/release/free operations during lowering.
+   Deterministic local scope drops, MIR-static assignment-replacement
+   drops, and dynamic flags for conditional/open `free` obligations are
+   implemented. Retain/release remains.
 8. Done for `free`: the evaluator and VM use allocation records, reject
    double-free/use-after-free, and leave static storage frees as no-ops.
    Retain/release accounting is not implemented.

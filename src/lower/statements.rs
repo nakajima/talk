@@ -8,7 +8,7 @@ impl<'a> Lowering<'a> {
     /// expression). A block's value is its final expression; divergent
     /// statements (return) ignore `k`.
     pub(super) fn lower_block(&mut self, block: &Block, ctx: &Ctx, k: ExprId) -> ExprId {
-        let body = mir::build_function(self.units[ctx.unit].types, None, block);
+        let body = mir::build_function(self.units[ctx.unit].types, ctx.owner, block);
         self.lower_mir_body(&body, ctx, k)
     }
 
@@ -174,23 +174,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    pub(super) fn drop_binding_for_symbol(
-        &self,
-        unit: usize,
-        symbol: Symbol,
-        ty: CheckTy,
-    ) -> Option<DropBinding> {
-        if self.should_drop_symbol(unit, symbol, &ty) {
-            Some(DropBinding { symbol, ty })
-        } else {
-            None
-        }
-    }
-
-    pub(super) fn should_drop_symbol(&self, unit: usize, symbol: Symbol, ty: &CheckTy) -> bool {
-        self.needs_drop_type(unit, ty) && !self.symbol_has_move_fact(unit, symbol)
-    }
-
     pub(super) fn symbol_has_move_fact(&self, unit: usize, symbol: Symbol) -> bool {
         self.units[unit]
             .ownership
@@ -242,7 +225,11 @@ impl<'a> Lowering<'a> {
             let Some(value) = self.binding_value(ctx, drop.symbol) else {
                 continue;
             };
-            body = self.lower_drop_value_then(ctx, value, &drop.ty, body);
+            body = if drop.dynamic_flags.is_empty() {
+                self.lower_drop_value_then(ctx, value, &drop.ty, body)
+            } else {
+                self.lower_dynamic_drop_binding_then(ctx, drop, value, body)
+            };
         }
         body
     }
@@ -338,6 +325,204 @@ impl<'a> Lowering<'a> {
         self.p.set_body(cont, next);
         let cont_ref = self.p.func_ref(cont);
         self.p.app(cont_ref, effect)
+    }
+
+    pub(super) fn with_drop_flags(
+        &mut self,
+        drops: &[DropBinding],
+        ctx: &mut Ctx,
+        finish: impl FnOnce(&mut Self, &mut Ctx) -> ExprId,
+    ) -> ExprId {
+        let mut keys = Vec::new();
+        for drop in drops {
+            for key in &drop.dynamic_flags {
+                if !ctx.drop_flags.contains_key(key) && !keys.iter().any(|seen| seen == key) {
+                    keys.push(key.clone());
+                }
+            }
+        }
+        self.with_drop_flag_keys(&keys, ctx, finish)
+    }
+
+    fn with_drop_flag_keys(
+        &mut self,
+        keys: &[OwnershipKeyPath],
+        ctx: &mut Ctx,
+        finish: impl FnOnce(&mut Self, &mut Ctx) -> ExprId,
+    ) -> ExprId {
+        let Some((key, rest)) = keys.split_first() else {
+            return finish(self, ctx);
+        };
+        let bool_ty = self.p.ty_bool();
+        let cell_ty = self.p.ty_cell(bool_ty);
+        let bot = self.p.ty_bot();
+        let bind = self.p.func("drop_flag", cell_ty, bot);
+        let cell = self.p.var(bind);
+        ctx.drop_flags.insert(key.clone(), cell);
+        let body = self.with_drop_flag_keys(rest, ctx, finish);
+        self.p.set_body(bind, body);
+        let bind_ref = self.p.func_ref(bind);
+        let initial = self.p.bool(true);
+        let flag_cell = self.p.primop(Op::CellNew, &[initial], cell_ty);
+        self.p.app(bind_ref, flag_cell)
+    }
+
+    pub(super) fn set_drop_flags_under_then(
+        &mut self,
+        ctx: &Ctx,
+        key_path: &OwnershipKeyPath,
+        live: bool,
+        next: ExprId,
+    ) -> ExprId {
+        let mut keys: Vec<OwnershipKeyPath> = ctx
+            .drop_flags
+            .keys()
+            .filter(|key| key_path.contains(key))
+            .cloned()
+            .collect();
+        keys.sort_by_key(|key| format!("{key:?}"));
+        let mut body = next;
+        for key in keys.iter().rev() {
+            body = self.set_drop_flag_then(ctx, key, live, body);
+        }
+        body
+    }
+
+    fn set_drop_flag_then(
+        &mut self,
+        ctx: &Ctx,
+        key_path: &OwnershipKeyPath,
+        live: bool,
+        next: ExprId,
+    ) -> ExprId {
+        let Some(&flag) = ctx.drop_flags.get(key_path) else {
+            return next;
+        };
+        let value = self.p.bool(live);
+        let void_ty = self.p.ty_void();
+        let set = self.p.primop(Op::CellSet, &[flag, value], void_ty);
+        self.sequence_void_effect(set, next)
+    }
+
+    pub(super) fn lower_dynamic_assignment_drop_then(
+        &mut self,
+        ctx: &Ctx,
+        key_path: &OwnershipKeyPath,
+        value: ExprId,
+        ty: &CheckTy,
+        next: ExprId,
+    ) -> ExprId {
+        self.lower_drop_key_path_if_live_then(ctx, key_path, value, ty, next)
+    }
+
+    fn lower_dynamic_drop_binding_then(
+        &mut self,
+        ctx: &Ctx,
+        drop: &DropBinding,
+        value: ExprId,
+        next: ExprId,
+    ) -> ExprId {
+        self.lower_drop_key_path_if_live_then(ctx, &drop.key_path, value, &drop.ty, next)
+    }
+
+    fn lower_drop_key_path_if_live_then(
+        &mut self,
+        ctx: &Ctx,
+        key_path: &OwnershipKeyPath,
+        value: ExprId,
+        ty: &CheckTy,
+        next: ExprId,
+    ) -> ExprId {
+        let Some(&flag) = ctx.drop_flags.get(key_path) else {
+            return self.lower_drop_value_with_dynamic_fields_then(ctx, key_path, value, ty, next);
+        };
+        let after_drop = self.set_drop_flag_then(ctx, key_path, false, next);
+        let drop_body =
+            self.lower_drop_value_with_dynamic_fields_then(ctx, key_path, value, ty, after_drop);
+        let bool_ty = self.p.ty_bool();
+        let live = self.p.primop(Op::CellGet, &[flag], bool_ty);
+        self.branch_value(live, drop_body, next)
+    }
+
+    fn lower_drop_value_with_dynamic_fields_then(
+        &mut self,
+        ctx: &Ctx,
+        key_path: &OwnershipKeyPath,
+        value: ExprId,
+        ty: &CheckTy,
+        next: ExprId,
+    ) -> ExprId {
+        if !self.needs_drop_type(ctx.unit, ty) {
+            return next;
+        }
+        match Self::borrow_erased_ty(ty.clone()) {
+            CheckTy::Nominal(symbol, args) => {
+                if self.symbol_is_borrowed(symbol) {
+                    return next;
+                }
+                if let Some(index) = self.rawptr_field_index(symbol) {
+                    let ptr_ty = self.p.ty_ptr();
+                    let ptr = self.p.primop(Op::GetField(index), &[value], ptr_ty);
+                    let void_ty = self.p.ty_void();
+                    let free = self.p.primop(Op::Free, &[ptr], void_ty);
+                    return self.sequence_void_effect(free, next);
+                }
+                let fields = self.field_types_for(symbol, &args);
+                let mut body = next;
+                for (index, (field_symbol, field_ty)) in fields.into_iter().enumerate().rev() {
+                    if !self.needs_drop_type(ctx.unit, &field_ty) {
+                        continue;
+                    }
+                    let field_key_path = key_path.child(field_symbol);
+                    let field_lambda_ty = self.map_ty(&field_ty);
+                    let field_value =
+                        self.p
+                            .primop(Op::GetField(index as u32), &[value], field_lambda_ty);
+                    body = if ctx.drop_flags.contains_key(&field_key_path) {
+                        self.lower_drop_key_path_if_live_then(
+                            ctx,
+                            &field_key_path,
+                            field_value,
+                            &field_ty,
+                            body,
+                        )
+                    } else {
+                        self.lower_drop_value_with_dynamic_fields_then(
+                            ctx,
+                            &field_key_path,
+                            field_value,
+                            &field_ty,
+                            body,
+                        )
+                    };
+                }
+                body
+            }
+            CheckTy::Tuple(items) => {
+                let mut body = next;
+                for (index, item_ty) in items.into_iter().enumerate().rev() {
+                    if !self.needs_drop_type(ctx.unit, &item_ty) {
+                        continue;
+                    }
+                    let field_value = self.p.extract(value, index as u32);
+                    body = self.lower_drop_value_then(ctx, field_value, &item_ty, body);
+                }
+                body
+            }
+            CheckTy::Record(row) if row.tail.is_none() => {
+                let mut body = next;
+                for (index, (_, field_ty)) in row.fields.into_iter().enumerate().rev() {
+                    if !self.needs_drop_type(ctx.unit, &field_ty) {
+                        continue;
+                    }
+                    let field_value = self.p.extract(value, index as u32);
+                    body = self.lower_drop_value_then(ctx, field_value, &field_ty, body);
+                }
+                body
+            }
+            CheckTy::Any { .. } => next,
+            _ => next,
+        }
     }
 
     pub(super) fn needs_drop_type(&self, unit: usize, ty: &CheckTy) -> bool {

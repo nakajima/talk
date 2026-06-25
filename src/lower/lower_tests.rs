@@ -50,6 +50,17 @@ pub mod tests {
         lowered.phase.program.render()
     }
 
+    fn has_drop_flag_set(ir: &str, value: bool) -> bool {
+        let suffix = if value { ", true)" } else { ", false)" };
+        ir.lines()
+            .any(|line| line.contains("cell_set(var drop_flag") && line.contains(suffix))
+    }
+
+    fn has_drop_flag_branch(ir: &str) -> bool {
+        ir.lines()
+            .any(|line| line.contains("br(cell_get(var drop_flag"))
+    }
+
     #[test]
     fn generic_effect_handlers_are_diagnosed() {
         // The checker accepts generic effects (instantiated per perform);
@@ -180,6 +191,37 @@ pub mod tests {
             "{continue_ir}"
         );
         assert!(continue_ir.contains("loop_head(())"), "{continue_ir}");
+    }
+
+    #[test]
+    fn conditional_owned_drop_uses_runtime_drop_flag() {
+        let ir = lowered_ir(
+            "func maybe(flag: Bool) -> Int {\n\tlet s = \"hi\" + \"!\"\n\tif flag {\n\t\tlet t = s\n\t\tt.length\n\t} else {\n\t\t2\n\t}\n\t0\n}\nmaybe(false)",
+        );
+        assert!(ir.contains("cell_new(true)"), "{ir}");
+        assert!(has_drop_flag_set(&ir, false), "{ir}");
+        assert!(has_drop_flag_branch(&ir), "{ir}");
+    }
+
+    #[test]
+    fn open_field_move_drop_uses_field_drop_flag() {
+        let ir = lowered_ir(
+            "struct Person {\n\tlet name: String\n\tlet title: String\n\tlet age: Int\n}\nfunc f() -> Int {\n\tlet person = Person(name: \"Pat\" + \"\", title: \"Dr\" + \"\", age: 41)\n\tlet name = person.name\n\tname.length + person.title.length + person.age\n}\nf()",
+        );
+        assert!(ir.contains("cell_new(true)"), "{ir}");
+        assert!(has_drop_flag_set(&ir, false), "{ir}");
+        assert!(has_drop_flag_branch(&ir), "{ir}");
+        assert!(ir.contains("get_field(1, var let_person)"), "{ir}");
+    }
+
+    #[test]
+    fn field_assignment_reinitializes_drop_flag() {
+        let ir = lowered_ir(
+            "struct Person {\n\tlet name: String\n\tlet title: String\n}\nfunc f() -> Int {\n\tlet person = Person(name: \"Pat\" + \"\", title: \"Dr\" + \"\")\n\tlet old = person.name\n\tperson.name = \"Sue\" + \"\"\n\told.length + person.name.length + person.title.length\n}\nf()",
+        );
+        assert!(has_drop_flag_set(&ir, false), "{ir}");
+        assert!(has_drop_flag_set(&ir, true), "{ir}");
+        assert!(has_drop_flag_branch(&ir), "{ir}");
     }
 
     #[test]

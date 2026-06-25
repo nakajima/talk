@@ -47,7 +47,7 @@ use crate::node_kinds::{
     stmt::{Stmt, StmtKind},
     type_annotation::{TypeAnnotation, TypeAnnotationKind},
 };
-use crate::ownership::OwnershipOutput;
+use crate::ownership::{KeyPath as OwnershipKeyPath, OwnershipOutput};
 use crate::token_kind::TokenKind;
 use crate::types::TypeOutput;
 use crate::types::ty::Ty as CheckTy;
@@ -154,7 +154,9 @@ enum Binding {
 #[derive(Clone)]
 struct DropBinding {
     symbol: Symbol,
+    key_path: OwnershipKeyPath,
     ty: CheckTy,
+    dynamic_flags: Vec<OwnershipKeyPath>,
 }
 
 #[derive(Clone, Copy)]
@@ -176,6 +178,7 @@ enum Prefix<'e> {
 #[derive(Clone)]
 struct Ctx {
     unit: usize,
+    owner: Option<Symbol>,
     theta: Theta,
     /// Talk symbol → λ_G binding (params, locals).
     env: FxHashMap<Symbol, Binding>,
@@ -222,6 +225,9 @@ struct Ctx {
     /// locals introduced by that scope; early exits wrap their continuation
     /// with the active suffix recorded here.
     drop_stack: Vec<DropBinding>,
+    /// Runtime initializedness flags for owned locals whose drop obligation
+    /// is path-sensitive (`Conditional`/`Open` in the MIR drop plan).
+    drop_flags: FxHashMap<OwnershipKeyPath, ExprId>,
     /// During an initializer, assignments through this self root fill
     /// uninitialized storage rather than replacing a live value.
     initializing_self: Option<Symbol>,
@@ -789,6 +795,7 @@ impl<'a> Lowering<'a> {
 
         let mut ctx = Ctx {
             unit,
+            owner: Some(symbol),
             theta,
             env,
             local_evidence: FxHashMap::default(),
@@ -803,6 +810,7 @@ impl<'a> Lowering<'a> {
             params,
             loops: vec![],
             drop_stack: vec![],
+            drop_flags: FxHashMap::default(),
             initializing_self: None,
             cellable,
         };
@@ -1346,6 +1354,7 @@ impl<'a> Lowering<'a> {
                 if let Some(&(unit, rhs)) = self.globals.get(&symbol) {
                     let global_ctx = Ctx {
                         unit,
+                        owner: None,
                         theta: Theta::default(),
                         env: FxHashMap::default(),
                         local_evidence: FxHashMap::default(),
@@ -1360,6 +1369,7 @@ impl<'a> Lowering<'a> {
                         params: vec![],
                         loops: vec![],
                         drop_stack: vec![],
+                        drop_flags: FxHashMap::default(),
                         initializing_self: None,
                         cellable: FxHashSet::default(),
                     };
@@ -2231,6 +2241,7 @@ impl<'a> Lowering<'a> {
         // The enclosing environment stays visible: references to it become
         // the closure's free variables.
         let mut inner = ctx.clone();
+        inner.owner = None;
         inner.loops = vec![];
         inner.drop_stack = vec![];
         inner.initializing_self = None;
@@ -2314,6 +2325,7 @@ impl<'a> Lowering<'a> {
         self.escaping.insert(label);
         let self_var = self.p.var(label);
         let mut inner = ctx.clone();
+        inner.owner = None;
         inner.loops = vec![];
         inner.drop_stack = vec![];
         inner.initializing_self = None;
@@ -3540,6 +3552,7 @@ impl<'a> Lowering<'a> {
 
         let ctx = Ctx {
             unit,
+            owner: None,
             theta: Theta::default(),
             env: FxHashMap::default(),
             local_evidence: FxHashMap::default(),
@@ -3555,6 +3568,7 @@ impl<'a> Lowering<'a> {
             params: vec![],
             loops: vec![],
             drop_stack: vec![],
+            drop_flags: FxHashMap::default(),
             initializing_self: None,
             cellable,
         };
@@ -3638,6 +3652,7 @@ impl<'a> Lowering<'a> {
         }
         let ctx = Ctx {
             unit,
+            owner: None,
             theta: Theta::default(),
             env: FxHashMap::default(),
             local_evidence: FxHashMap::default(),
@@ -3652,6 +3667,7 @@ impl<'a> Lowering<'a> {
             params: vec![],
             loops: vec![],
             drop_stack: vec![],
+            drop_flags: FxHashMap::default(),
             initializing_self: None,
             cellable,
         };

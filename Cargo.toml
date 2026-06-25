@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "talk"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2024"
 
 [dev-dependencies]
