@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "talk"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "async-lsp",
@@ -1910,6 +1910,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tracing-tree",
+]
+
+[[package]]
+name = "talk-static"
+version = "0.1.0"
+dependencies = [
+ "talk",
 ]
 
 [[package]]

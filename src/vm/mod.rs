@@ -8,6 +8,7 @@
 //! and pooled constants/argument lists — register-bytecode semantics; byte
 //! packing is a later, mechanical optimization.
 
+pub mod bytecode;
 pub mod interp;
 pub mod io;
 pub mod schedule;

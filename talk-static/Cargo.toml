@@ -1,0 +1,13 @@
+[package]
+name = "talk-static"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+talk = { path = "..", default-features = false }
+
+[lints.clippy]
+approx_constant = "allow"

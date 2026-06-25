@@ -630,6 +630,10 @@ impl Driver<Lowered> {
         ))
     }
 
+    pub fn schedule_module(&mut self) -> Result<crate::vm::Module, String> {
+        self.schedule()
+    }
+
     fn schedule(&mut self) -> Result<crate::vm::Module, String> {
         crate::vm::schedule::schedule(
             &mut self.phase.program,
@@ -669,6 +673,13 @@ pub fn render_bytecode_from(
     let mut lowered = lower_for_display(name, source)?;
     let module = lowered.schedule()?;
     Ok(module.render_styled(styles))
+}
+
+/// Compile, schedule, and encode a VM module as Talk bytecode.
+pub fn compile_bytecode_from(name: &str, source: Source) -> Result<Vec<u8>, String> {
+    let mut lowered = lower_for_display(name, source)?;
+    let module = lowered.schedule()?;
+    module.encode_bytecode().map_err(|err| err.to_string())
 }
 
 /// Compile and schedule, dumping the raw VM module (`talk bytecode <file>`).
@@ -769,6 +780,19 @@ pub mod tests {
         assert!(dump.contains("chunks:"), "{dump}");
         assert!(dump.contains("code:"), "{dump}");
         assert!(dump.contains("entry:"), "{dump}");
+    }
+
+    #[test]
+    fn compile_bytecode_from_runs_decoded_module() {
+        let bytes = compile_bytecode_from(
+            "BytecodeTest",
+            Source::from("func double(x: Int) -> Int { x * 2 }\ndouble(21)"),
+        )
+        .expect("bytecode");
+        let module = crate::vm::Module::decode_bytecode(&bytes).expect("decode");
+        let mut io = crate::vm::io::CaptureIO::default();
+        let value = crate::vm::interp::run(&module, &mut io).expect("vm");
+        assert_eq!(value, crate::vm::interp::Value::I64(42));
     }
 
     #[test]

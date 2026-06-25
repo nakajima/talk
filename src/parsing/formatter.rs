@@ -2288,6 +2288,22 @@ pub fn format_string(string: &str) -> String {
 }
 
 #[allow(clippy::unwrap_used)]
+pub fn format_string_with_width(string: &str, width: usize) -> String {
+    let lexer = Lexer::preserving_comments(string);
+    match Parser::new("", FileID(0), lexer).parse_with_comments() {
+        Ok((ast, _diagnostics, comments)) => {
+            let formatted = if ast.roots.is_empty() {
+                string.to_string()
+            } else {
+                format_with_comments(&ast, width, comments_from_tokens(comments, string))
+            };
+            adjust_trailing_newlines(string, formatted)
+        }
+        Err(_err) => string.to_string(),
+    }
+}
+
+#[allow(clippy::unwrap_used)]
 pub fn format_node(node: &Node, meta: &NodeMetaStorage) -> String {
     let formatter = Formatter::new(meta);
     formatter.format(std::slice::from_ref(node), 80)

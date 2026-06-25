@@ -56,6 +56,8 @@ async fn main() {
         Format {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
+            #[arg(long)]
+            width: Option<usize>,
         },
         Debug {
             #[arg(value_hint = ValueHint::FilePath)]
@@ -76,6 +78,8 @@ async fn main() {
             filenames: Vec<String>,
         },
         Repl,
+        /// Print a dense Talk language reference for LLMs.
+        Llm,
         // Run { filename: PathBuf },
         Completions {
             #[arg(value_enum)]
@@ -208,6 +212,9 @@ async fn main() {
         Commands::Repl => {
             talk::cli::repl::run();
         }
+        Commands::Llm => {
+            println!("{LLM_REFERENCE}");
+        }
         Commands::Run { filenames } => {
             use talk::compiling::driver::Driver;
 
@@ -319,12 +326,15 @@ async fn main() {
             let html = highlight_html(&source);
             println!("{html}");
         }
-        Commands::Format { filename } => {
+        Commands::Format { filename, width } => {
             use talk::formatter;
 
             init();
             let source = input_text(filename.as_deref());
-            println!("{}", formatter::format_string(&source));
+            println!(
+                "{}",
+                formatter::format_string_with_width(&source, width.unwrap_or(80))
+            );
         }
         Commands::Debug { filename } => {
             init();
@@ -359,6 +369,96 @@ async fn main() {
 
 #[cfg(feature = "cli")]
 const STDIN_NAME: &str = "<stdin>";
+
+#[cfg(feature = "cli")]
+const LLM_REFERENCE: &str = r#"# Talk language reference for LLMs
+
+Talk is a statically typed, Swift-flavored language with local type inference, generics, protocols, algebraic effects, value-semantics aggregates, and a bytecode VM backend. Files normally use `.tlk`; core library files live in `core/` and are implicitly imported unless a file starts with `// no-core`.
+
+## CLI
+
+    talk run [files...]       parse, resolve, typecheck, lower, and run; no file reads stdin
+    talk check [--json] files typecheck and print diagnostics
+    talk repl                 interactive declarations and expressions
+    talk format [file]        format source from file or stdin
+    talk hover file --line N --column N | --byte-offset N | --node-id ID
+    talk lower file           print lowered lambda-G IR
+    talk ir file              print scheduled VM bytecode listing
+    talk bytecode file        print raw bytecode module
+    talk html/debug/parse     development views
+    talk lsp --stdio          language server
+    talk completions SHELL    shell completion script
+    talk llm                  print this reference
+
+## Lexical and module basics
+
+Comments are `//` line comments. Identifiers are ordinary words; type names are conventionally upper camel case. Semicolons are not used. Blocks are `{ ... }`. Top-level declarations may be prefixed with `public` to export them. Imports are explicit: `import { Foo, bar } from ./path.tlk`, `import { Foo: LocalFoo } from ./path.tlk`, `import _ from ./path.tlk`, or package-style `import { Foo } from package`.
+
+## Declarations
+
+    public let name: Type = expr
+    func f<T>(x: T, y: Int) -> Result { body }
+    struct Point {
+        let x: Int
+        let y: Int
+        init(x: Int, y: Int) { self.x = x; self.y = y; self }
+    }
+    enum Optional<T> { case some(T) case none }
+    protocol P { associated type Element func next() -> Element? }
+    extend Type: P { typealias Element = Int func next() -> Int? { ... } }
+    extend Type { func method() -> R { ... } static func make() -> Type { ... } }
+    typealias Name = Type
+    effect 'name(payload: Type) -> ReturnType
+
+Function result annotations are optional when inferable. `init` bodies assign `self.field` and return `self`. Methods have implicit `self`; do not declare a self parameter. Receiver modes: plain `func` reads a shared value, `mut func` may update `self` and writes the receiver back at the call site, `consuming func` takes ownership. `static func` is called on the type/protocol namespace.
+
+## Expressions and control flow
+
+Literals: integers, floats, strings, `true`, `false`, arrays `[a, b]`, closures `func(x: Int) -> Int { x + 1 }`. Calls use labels only through ordinary parameter order: `f(a, b)`. Constructors look like calls: `Point(x: 1, y: 2)`, enum cases may be qualified or inferred: `Optional<Int>.some(1)` or `.some(1)`. Field/member access is `value.field` and `value.method(args)`. Generic arguments may be explicit: `id<Int>(1)`.
+
+Bindings and mutation: `let x = expr`; assignment is `x = expr` or `self.field = expr`. `let` variables are mutable by assignment in current Talk. Type ascription is `let x: Type = expr`.
+
+Blocks are expressions. `if cond { a } else { b }` is an expression; branches must agree. `loop { ... }` loops forever until `break`; `loop condition { ... }` is while-like. `break`, `continue`, and `return expr` are supported. `for x in iterable { ... }` uses the iterable/iterator protocols.
+
+Pattern matching:
+
+    match expr {
+        .caseName(payload) -> result,
+        .none -> other,
+        0 -> zero,
+        _ -> fallback
+    }
+
+Patterns can bind enum payloads. GADT-style enum cases may refine the result type, e.g. `case int(Int) -> Expr<Int>`.
+
+Trailing block syntax passes a final closure argument: `f { body }` is `f(func() { body })`.
+
+## Types
+
+Builtin scalar/value types include `Int`, `Float`, `Bool`, `Byte`, `RawPtr`, `Void`/`()`, and `Never`. Core nominal types include `String`, `Substring`, `Array<T>`, and `Optional<T>`; `T?` is syntax for optional. Function types are `(A, B) -> R`; effectful functions write effects before the arrow, e.g. `(A) 'io -> R` or `func read() 'io -> Int`. Borrow types use `&T` and exclusive borrows use `&mut T`. Protocol existential types use `any P`; associated type constraints use `any Iterator<Element = Int>`. Protocol composition in constraints uses `&`; where clauses and qualified predicates are supported internally and in declarations where implemented.
+
+Generics are written with angle brackets: `func id<T>(x: T) -> T`. Simple bounds use `T: Protocol`; associated types use `associated type Name` in protocols and `typealias Name = Type` in conforming extensions. Protocol requirements can include funcs, mut/consuming funcs, static funcs, associated types, and defaults in extensions.
+
+## Operators and builtins
+
+Common operators are library-backed or builtin-resolved: arithmetic `+ - * /`, comparison `== != < <= > >=`, boolean values, string concatenation via `+`, member calls, and casts/ascriptions using `as` for protocol existentials where supported. `print(x)` prints Showable-ish values; `sleep(ms)` and I/O live in core effects. The core library defines protocols such as `Showable`, `Add`, `Equatable`, `Iterable`, `Iterator`, `From`, `Into`, `Borrowed`, and `Owner`.
+
+Low-level trusted IR escapes use `@_ir(args...) { ... }` and appear mainly in core. Operations include integer/float math, comparisons, `alloc`, `load`, `store`, `gep`, `copy`, and I/O shims. The type checker trusts the surrounding Talk type; keep `_ir` isolated.
+
+## Effects
+
+Effects are named with a leading tick: `effect 'throws(error: String) -> Never`. Calling an effect is expression syntax: `'throws("bad")`. Effect rows appear on functions before `->`: `func f() 'throws -> ()`. Handlers use `@handle 'effect { payload in body }` for abortive handling and handler forms can resume when the effect return type is not `Never`. Handlers are statically routed by name resolution/lowering rather than dynamically searched by the VM.
+
+## Memory and value model
+
+Source-level structs, enums, arrays, strings, records, and function values have value semantics. Struct/record updates rebuild values unless stored in a mutable cell; mutable locals/captures lower to cells when needed. Aggregates are represented in the VM as boxed handles; scalars are unboxed. Raw memory exists only through `RawPtr` and core `_alloc`, `_load`, `_store`, `_copy`, pointer arithmetic, and host I/O intrinsics. `Int` is 64-bit in raw memory; `Float` is 64-bit; `Bool` and `Byte` are one byte; `RawPtr` and boxed handles are pointer-sized. The backend uses copy-on-write-style mutable value semantics for source receivers; `mut func` receiver calls write the new self back to the original place.
+
+Ownership checking is source-near: `&T` borrows, `&mut T` is exclusive, `consuming` moves, and marker protocols like `Owner`/`Borrowed` describe library-level ownership roles. The low-level allocator is an effect (`'alloc`); memory safety around `@_ir` is trusted code responsibility.
+
+## Compiler model
+
+Pipeline: parse -> name resolution/imports -> OutsideIn-style type checking with qualified predicates, protocols, associated types, existentials, and GADT refinements -> lambda-G CPS-like graph IR -> scheduling -> register bytecode VM. Useful inspection commands: `talk check`, `talk hover`, `talk lower`, `talk ir`, and `talk bytecode`.
+"#;
 
 #[cfg(feature = "cli")]
 fn read_stdin() -> String {
