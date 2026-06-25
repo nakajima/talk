@@ -990,11 +990,10 @@ impl<'a> Lowering<'a> {
     /// Lower `expr`, delivering its value to continuation `k : Fn(T, ⊥)`.
     fn lower_expr(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
         if let Some(pack) = self.existential_pack_at(expr.id, ctx) {
-            if let CheckTy::Any { protocol, .. } = &pack.payload {
-                if *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol) {
+            if let CheckTy::Any { protocol, .. } = &pack.payload
+                && *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol) {
                     return self.lower_expr_unpacked(expr, ctx, k);
                 }
-            }
             if let Some(payload) = self.try_pure_unpacked(expr, ctx) {
                 return match self.existential_pack_value(expr.id, payload, &pack, ctx) {
                     Some(value) => self.p.app(k, value),
@@ -1221,11 +1220,10 @@ impl<'a> Lowering<'a> {
     /// pure operands.
     fn try_pure(&mut self, expr: &Expr, ctx: &Ctx) -> Option<ExprId> {
         if let Some(pack) = self.existential_pack_at(expr.id, ctx) {
-            if let CheckTy::Any { protocol, .. } = &pack.payload {
-                if *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol) {
+            if let CheckTy::Any { protocol, .. } = &pack.payload
+                && *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol) {
                     return self.try_pure_unpacked(expr, ctx);
                 }
-            }
             let payload = self.try_pure_unpacked(expr, ctx)?;
             return self.existential_pack_value(expr.id, payload, &pack, ctx);
         }
@@ -2062,7 +2060,7 @@ impl<'a> Lowering<'a> {
             let concrete = theta
                 .get(param)
                 .cloned()
-                .unwrap_or_else(|| CheckTy::Param(*param));
+                .unwrap_or(CheckTy::Param(*param));
             match self.evidence_table_for_ty(*protocol, &concrete, ctx, node) {
                 Some(table) => tables.push(table),
                 None => {

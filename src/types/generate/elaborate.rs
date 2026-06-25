@@ -574,7 +574,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let Ty::Nominal(symbol, args) = self.store.shallow(ty) else {
             return;
         };
-        for predicate in nominal_predicates_for(&self.catalog, &Ty::Nominal(symbol, args)) {
+        for predicate in nominal_predicates_for(self.catalog, &Ty::Nominal(symbol, args)) {
             self.wanteds
                 .push(predicate.into_constraint(CtOrigin::new(node, CtReason::Annotation)));
         }

@@ -57,7 +57,7 @@ impl<'a> Lowering<'a> {
                 effect_name,
                 body: handler_body,
             } => self.lower_mir_handling(
-                *stmt,
+                stmt,
                 effect_name,
                 handler_body,
                 body,

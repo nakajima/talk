@@ -206,7 +206,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             let ty = self.lower_type_alias(symbol, alias.rhs.id, None);
             let params = alias
                 .owner
-                .map(|owner| nominal_params(&self.catalog, owner))
+                .map(|owner| nominal_params(self.catalog, owner))
                 .unwrap_or_default();
             self.catalog.type_aliases.insert(
                 symbol,
