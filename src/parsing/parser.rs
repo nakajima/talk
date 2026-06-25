@@ -904,7 +904,10 @@ impl<'a> Parser<'a> {
                 name: name.into(),
                 span,
             });
-            self.consume(TokenKind::Comma).ok();
+            if self.did_match(TokenKind::RightBracket)? {
+                return Ok(captures);
+            }
+            self.consume(TokenKind::Comma)?;
         }
 
         Ok(captures)

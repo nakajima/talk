@@ -2,7 +2,8 @@
 pub mod tests {
     use crate::compiling::driver::{Driver, DriverConfig, Source};
     use crate::lambda_g::eval::EvalValue;
-    use crate::vm::interp::{Value, run};
+    use crate::name_resolution::symbol::Symbol;
+    use crate::vm::interp::{Value, ValueNames, run, run_displayed};
     use crate::vm::io::CaptureIO;
     use crate::vm::{Chunk, Insn, MemKind, Module};
 
@@ -1462,6 +1463,104 @@ pub mod tests {
         )
         .expect_err("zero-length heap pointer should fail");
         assert!(error.contains("invalid pointer"), "{error}");
+    }
+
+    #[test]
+    fn vm_display_rejects_freed_string_storage() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::Const { dest: 2, k: 0 },
+                    Insn::Alloc { dest: 1, count: 0 },
+                    Insn::RecordNew {
+                        dest: 3,
+                        symbol: Symbol::String,
+                        args_start: 0,
+                        args_len: 3,
+                    },
+                    Insn::Free { dest: 4, ptr: 1 },
+                    Insn::Ret { src: 3 },
+                ],
+                arity: 0,
+                n_regs: 6,
+            }],
+            consts: vec![Value::I64(4)],
+            arg_pool: vec![1, 2, 2],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let names = ValueNames {
+            string_struct: Some(Symbol::String),
+            ..ValueNames::default()
+        };
+        let mut io = CaptureIO::default();
+        let error =
+            run_displayed(&module, &mut io, &names).expect_err("freed string should not display");
+        assert!(error.contains("invalid pointer"), "{error}");
+    }
+
+    #[test]
+    fn vm_display_rejects_negative_string_length() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::Const { dest: 2, k: 1 },
+                    Insn::Alloc { dest: 1, count: 0 },
+                    Insn::RecordNew {
+                        dest: 3,
+                        symbol: Symbol::String,
+                        args_start: 0,
+                        args_len: 3,
+                    },
+                    Insn::Ret { src: 3 },
+                ],
+                arity: 0,
+                n_regs: 4,
+            }],
+            consts: vec![Value::I64(1), Value::I64(-1)],
+            arg_pool: vec![1, 2, 2],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let names = ValueNames {
+            string_struct: Some(Symbol::String),
+            ..ValueNames::default()
+        };
+        let mut io = CaptureIO::default();
+        let error = run_displayed(&module, &mut io, &names)
+            .expect_err("negative length should not display");
+        assert!(error.contains("invalid length"), "{error}");
+    }
+
+    #[test]
+    fn vm_rejects_negative_io_poll_count_before_scaling() {
+        let error = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Const { dest: 2, k: 1 },
+                Insn::Const { dest: 3, k: 2 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Io {
+                    dest: 4,
+                    op: crate::vm::IoOp::Poll,
+                    a: 1,
+                    b: 2,
+                    c: 3,
+                },
+                Insn::Ret { src: 4 },
+            ],
+            vec![Value::I64(8), Value::I64(-1), Value::I64(0)],
+        )
+        .expect_err("negative poll count should fail before count * 8");
+        assert!(error.contains("negative count"), "{error}");
     }
 
     #[test]

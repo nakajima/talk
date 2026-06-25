@@ -59,10 +59,10 @@ impl VariantInstantiation {
 
 impl Variant {
     fn constructor_parts(&self) -> (&[Ty], &Ty) {
-        let Ty::Func(arguments, result, _) = &self.constructor_scheme.ty else {
-            panic!("variant constructor scheme must be a function type");
+        if let Ty::Func(arguments, result, _) = &self.constructor_scheme.ty {
+            return (arguments, result);
         };
-        (arguments, result)
+        (&[], &self.constructor_scheme.ty)
     }
 
     pub fn argument_types(&self) -> &[Ty] {

@@ -1916,6 +1916,15 @@ pub mod tests {
     }
 
     #[test]
+    fn mutable_self_can_call_shared_self_method() {
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet n: Int\n\tfunc peek() -> Int { self.n }\n\tmut func bump() -> Int { self.peek() }\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "bump"), "(&mut Counter) -> Int");
+    }
+
+    #[test]
     fn shared_borrows_do_not_satisfy_mutable_borrow_parameters() {
         let t = check(
             "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc takes_mut(s: &mut String) -> Int {\n\ts.length\n}\nfunc bad(s: &String) -> Int {\n\ttakes_mut(s)\n}",
@@ -1934,7 +1943,7 @@ pub mod tests {
         let t = check(
             "// no-core\nstruct Counter {\n\tlet n: Int\n\n\tfunc bump() -> () {\n\t\tself.n = 2\n\t\t()\n\t}\n}",
         );
-        let errors = type_errors(&t);
+        let errors: Vec<String> = t.diagnostics().iter().map(|d| d.to_string()).collect();
         assert!(
             errors
                 .iter()
@@ -1948,7 +1957,7 @@ pub mod tests {
         let t = check(
             "// no-core\nstruct Counter {\n\tlet n: Int\n\n\tmut func bump() -> () {\n\t\tself.n = 2\n\t\t()\n\t}\n}",
         );
-        assert_clean(&t);
+        assert!(t.diagnostics().is_empty(), "{:?}", t.diagnostics());
     }
 
     // ----- Milestone 5: effects -----------------------------------------

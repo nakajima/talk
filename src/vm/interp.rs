@@ -56,7 +56,7 @@ const MAX_FRAMES: usize = 1 << 20;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AllocationRecord {
     start: u32,
-    len: u32,
+    len: usize,
     live: bool,
 }
 
@@ -72,7 +72,7 @@ pub fn run_displayed(
     names: &ValueNames,
 ) -> Result<(Value, String), String> {
     let (value, machine) = run_machine(module, io)?;
-    let display = render_value(&machine, names, &value);
+    let display = render_value(&machine, names, &value)?;
     Ok((value, display))
 }
 
@@ -211,37 +211,39 @@ pub struct ValueNames {
 /// Talk-style rendering, matching the derived-show formats:
 /// `2`, `1.5`, `true`, `"hi"`, `(1, true)`, `Name(field: v…)`,
 /// `Enum.case(payload…)`.
-fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> String {
+fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> Result<String, String> {
     match value {
-        Value::I64(v) => v.to_string(),
+        Value::I64(v) => Ok(v.to_string()),
         Value::F64(v) => {
             let rendered = v.to_string();
-            if rendered.contains('.') || rendered.contains('e') || !v.is_finite() {
-                rendered
-            } else {
-                format!("{rendered}.0")
-            }
+            Ok(
+                if rendered.contains('.') || rendered.contains('e') || !v.is_finite() {
+                    rendered
+                } else {
+                    format!("{rendered}.0")
+                },
+            )
         }
-        Value::Bool(v) => v.to_string(),
-        Value::Byte(v) => v.to_string(),
-        Value::Void => "()".to_string(),
-        Value::Ptr(addr) => format!("RawPtr({addr})"),
+        Value::Bool(v) => Ok(v.to_string()),
+        Value::Byte(v) => Ok(v.to_string()),
+        Value::Void => Ok("()".to_string()),
+        Value::Ptr(addr) => Ok(format!("RawPtr({addr})")),
         Value::Tuple(items) => {
             let items: Vec<String> = items
                 .iter()
                 .map(|item| render_value(machine, names, item))
-                .collect();
-            format!("({})", items.join(", "))
+                .collect::<Result<_, _>>()?;
+            Ok(format!("({})", items.join(", ")))
         }
         Value::Record(symbol, field_values) => {
             if names.string_struct == Some(*symbol)
                 && let Some((base, len)) = string_bytes(field_values)
             {
-                let start = base as usize;
-                let end = start + len as usize;
-                if let Some(bytes) = machine.mem.get(start..end) {
-                    return format!("\"{}\"", escape_string(&String::from_utf8_lossy(bytes)));
-                }
+                let bytes = machine.string_display_bytes(base, len)?;
+                return Ok(format!(
+                    "\"{}\"",
+                    escape_string(&String::from_utf8_lossy(bytes))
+                ));
             }
             let name = names
                 .types
@@ -253,14 +255,14 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> String 
                 .iter()
                 .enumerate()
                 .map(|(index, field)| {
-                    let value = render_value(machine, names, field);
-                    match field_names.and_then(|fields| fields.get(index)) {
+                    let value = render_value(machine, names, field)?;
+                    Ok(match field_names.and_then(|fields| fields.get(index)) {
                         Some(field_name) => format!("{field_name}: {value}"),
                         None => value,
-                    }
+                    })
                 })
-                .collect();
-            format!("{name}({})", rendered.join(", "))
+                .collect::<Result<_, String>>()?;
+            Ok(format!("{name}({})", rendered.join(", ")))
         }
         Value::Variant(symbol, tag, payloads) => {
             let name = names
@@ -275,18 +277,18 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> String 
                 .cloned()
                 .unwrap_or_else(|| format!("case{tag}"));
             if payloads.is_empty() {
-                format!("{name}.{case}")
+                Ok(format!("{name}.{case}"))
             } else {
                 let payloads: Vec<String> = payloads
                     .iter()
                     .map(|payload| render_value(machine, names, payload))
-                    .collect();
-                format!("{name}.{case}({})", payloads.join(", "))
+                    .collect::<Result<_, _>>()?;
+                Ok(format!("{name}.{case}({})", payloads.join(", ")))
             }
         }
         Value::Existential(_, payload, _) => render_value(machine, names, payload),
-        Value::Closure(..) => "<func>".to_string(),
-        Value::Cell(_) => "<cell>".to_string(),
+        Value::Closure(..) => Ok("<func>".to_string()),
+        Value::Cell(_) => Ok("<cell>".to_string()),
     }
 }
 
@@ -393,7 +395,7 @@ impl Machine<'_> {
             .allocation_record_containing(addr)
             .is_some_and(|record| {
                 let alloc_start = record.start as usize;
-                let alloc_end = alloc_start + record.len as usize;
+                let alloc_end = alloc_start + record.len;
                 record.live && start >= alloc_start && end <= alloc_end
             })
         {
@@ -415,15 +417,28 @@ impl Machine<'_> {
         }
         let Some(record) = self.allocation_record_containing(addr).filter(|record| {
             let alloc_start = record.start as usize;
-            let alloc_end = alloc_start + record.len as usize;
+            let alloc_end = alloc_start + record.len;
             record.live && start >= alloc_start && start < alloc_end
         }) else {
             return Err("vm: io through invalid pointer".into());
         };
-        let end = record.start as usize + record.len as usize;
+        let end = record.start as usize + record.len;
         self.mem
             .get(start..end)
             .ok_or_else(|| "vm: io open out of bounds".to_string())
+    }
+
+    fn string_display_bytes(&self, addr: u32, len: i64) -> Result<&[u8], String> {
+        let len = usize::try_from(len)
+            .map_err(|_| "vm: display string has invalid length".to_string())?;
+        self.check_access(addr, len, "display")?;
+        let start = addr as usize;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| "vm: display out of bounds".to_string())?;
+        self.mem
+            .get(start..end)
+            .ok_or_else(|| "vm: display out of bounds".to_string())
     }
 
     fn allocation_record_containing(&self, addr: u32) -> Option<&AllocationRecord> {
@@ -501,8 +516,14 @@ fn run_io(
         IoOp::Sleep => machine.io.sleep(int(a)?),
         IoOp::Ctl => machine.io.ctl(int(a)?, int(b)?, int(c)?),
         IoOp::Poll => {
-            let (start, count, timeout) = (ptr(a)?, int(b)? as usize, int(c)?);
-            let len = count * 8;
+            let (start, count, timeout) = (ptr(a)?, int(b)?, int(c)?);
+            if count < 0 {
+                return Err("vm: io poll negative count".into());
+            }
+            let count = usize::try_from(count).map_err(|_| "vm: io poll count out of range")?;
+            let len = count
+                .checked_mul(8)
+                .ok_or("vm: io poll count out of range")?;
             machine.check_access(start as u32, len, "io")?;
             let records = machine
                 .mem
@@ -806,13 +827,20 @@ fn exec_local(
             if count < 0 {
                 return Err("vm: alloc of a negative count".into());
             }
-            let addr = machine.mem.len() as u32;
-            let reserve = (count as usize).max(1);
-            machine.mem.resize(machine.mem.len() + reserve, 0);
+            let addr =
+                u32::try_from(machine.mem.len()).map_err(|_| "vm: memory address out of range")?;
+            let count = usize::try_from(count).map_err(|_| "vm: alloc count out of range")?;
+            let reserve = count.max(1);
+            let new_len = machine
+                .mem
+                .len()
+                .checked_add(reserve)
+                .ok_or("vm: alloc count out of range")?;
+            machine.mem.resize(new_len, 0);
             let index = machine.allocations.len();
             machine.allocations.push(AllocationRecord {
                 start: addr,
-                len: count as u32,
+                len: count,
                 live: true,
             });
             machine.allocation_index.insert(addr, index);

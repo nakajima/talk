@@ -598,7 +598,6 @@ struct MoveState {
     borrowed_roots: FxHashMap<Symbol, String>,
     shared_borrow_roots: FxHashMap<Symbol, String>,
     active_loans: Vec<ActiveLoan>,
-    use_counts: FxHashMap<Symbol, usize>,
     closure_captures: FxHashMap<KeyPath, ClosureCaptureSummary>,
 }
 
@@ -640,13 +639,6 @@ struct ClosureCapture {
 }
 
 impl MoveState {
-    fn with_use_counts(use_counts: FxHashMap<Symbol, usize>) -> Self {
-        Self {
-            use_counts,
-            ..Default::default()
-        }
-    }
-
     fn invalidate_borrows_of(&mut self, owner: &KeyPath) {
         for (borrow, info) in &self.borrows {
             if info
@@ -694,11 +686,6 @@ impl MoveState {
         });
     }
 
-    fn release_loan_for_borrower(&mut self, borrower: &KeyPath) {
-        self.active_loans
-            .retain(|loan| !borrower.contains(&loan.borrower));
-    }
-
     fn finish_storage(&mut self, key_path: &KeyPath) {
         self.invalidate_borrows_of(key_path);
         self.restore_key_path(key_path);
@@ -718,10 +705,6 @@ impl MoveState {
             if !self.active_loans.contains(loan) {
                 self.active_loans.push(loan.clone());
             }
-        }
-        for (symbol, count) in &other.use_counts {
-            let entry = self.use_counts.entry(*symbol).or_insert(0);
-            *entry = (*entry).max(*count);
         }
         for (path, summary) in &other.closure_captures {
             self.closure_captures
@@ -925,7 +908,7 @@ impl OwnershipChecker<'_> {
         let mut body = mir::build_nodes(self.types, nodes);
         let body_id = self.record_mir_body(&body, BodyKind::TopLevel);
         self.elaborate_drops(body_id, &mut body);
-        let mut state = MoveState::with_use_counts(mir::use_counts_ref(&body));
+        let mut state = MoveState::default();
         self.check_mir_body(&body, &mut state);
     }
 
@@ -934,7 +917,7 @@ impl OwnershipChecker<'_> {
             let mut body = mir::build_decls(self.types, std::slice::from_ref(decl));
             let body_id = self.record_mir_body(&body, BodyKind::DeclBody);
             self.elaborate_drops(body_id, &mut body);
-            let mut state = MoveState::with_use_counts(mir::use_counts_ref(&body));
+            let mut state = MoveState::default();
             self.check_mir_body(&body, &mut state);
         }
     }
@@ -953,7 +936,7 @@ impl OwnershipChecker<'_> {
         if parent_state.is_some() {
             self.check_closure_captures(captures, params, source_body, &body, parent_state);
         }
-        let mut state = MoveState::with_use_counts(mir::use_counts_ref(&body));
+        let mut state = MoveState::default();
         self.seed_shared_borrow_params(params, &mut state);
         self.check_mir_body(&body, &mut state);
     }
@@ -1864,12 +1847,17 @@ impl OwnershipChecker<'_> {
     }
 
     fn check_mir_body(&mut self, body: &mir::Body<'_>, state: &mut MoveState) {
+        let _ = self.check_mir_body_exit_state(body, state);
+    }
+
+    fn check_mir_body_exit_state(&mut self, body: &mir::Body<'_>, state: &MoveState) -> MoveState {
         if body.blocks.is_empty() {
-            return;
+            return state.clone();
         }
 
         let mut in_states: Vec<Option<MoveState>> = vec![None; body.blocks.len()];
         in_states[body.entry.0] = Some(state.clone());
+        let mut exit_state = MoveState::default();
 
         let mut worklist = VecDeque::new();
         worklist.push_back(body.entry);
@@ -1880,7 +1868,12 @@ impl OwnershipChecker<'_> {
             };
             self.check_mir_block(body, block, &mut block_state);
 
-            for successor in terminator_successors(&body.blocks[block.0].terminator) {
+            let successors = terminator_successors(&body.blocks[block.0].terminator);
+            if successors.is_empty() {
+                exit_state.merge_from(&block_state);
+            }
+
+            for successor in successors {
                 let changed = match &mut in_states[successor.0] {
                     Some(existing) => existing.merge_from(&block_state),
                     slot @ None => {
@@ -1893,6 +1886,8 @@ impl OwnershipChecker<'_> {
                 }
             }
         }
+
+        exit_state
     }
 
     fn check_mir_block(
@@ -1945,17 +1940,36 @@ impl OwnershipChecker<'_> {
             mir::Statement::ContinueValue { expr, .. } => self.check_consumed_expr(expr, state),
             mir::Statement::Function {
                 owner,
+                captures_parent,
                 captures,
                 params,
                 body,
-            } => self.check_func_moves(*owner, captures, params, body, Some(state)),
+            } => {
+                let parent_state = state.clone();
+                self.check_func_moves(*owner, captures, params, body, Some(&parent_state));
+                if *captures_parent {
+                    let function_body = mir::build_function(self.types, *owner, body);
+                    let summary = self.closure_capture_summary(
+                        captures,
+                        params,
+                        body,
+                        &function_body,
+                        Some(&parent_state),
+                    );
+                    self.apply_closure_capture_effects(&summary, None, state);
+                }
+            }
             mir::Statement::Handling { body, .. } => {
-                let mut body_state = state.clone();
                 let handler_body = mir::build_block(self.types, body);
-                self.check_mir_body(&handler_body, &mut body_state);
+                self.check_nested_mir_body(&handler_body, state);
             }
             mir::Statement::DeclBody { body } => self.check_body_moves(body),
         }
+    }
+
+    fn check_nested_mir_body(&mut self, body: &mir::Body<'_>, state: &mut MoveState) {
+        let body_state = self.check_mir_body_exit_state(body, state);
+        state.merge_from(&body_state);
     }
 
     fn check_binding(
@@ -1995,8 +2009,7 @@ impl OwnershipChecker<'_> {
             } else {
                 state.closure_captures.remove(&key_path);
             }
-            if let Some(info) = &borrow_info {
-                let rhs = rhs.expect("borrow info requires rhs");
+            if let (Some(info), Some(rhs)) = (&borrow_info, rhs) {
                 self.install_borrow(key_path, info.clone(), rhs.id, state);
             }
         }
@@ -2118,8 +2131,7 @@ impl OwnershipChecker<'_> {
             self.check_escaping_closure_summary(&summary);
         }
         if let Some(body) = trailing_body {
-            let mut body_state = state.clone();
-            self.check_mir_body(body, &mut body_state);
+            self.check_nested_mir_body(body, state);
         }
     }
 
@@ -2142,6 +2154,9 @@ impl OwnershipChecker<'_> {
                             Some(&key_path),
                             state,
                         );
+                        if *kind == BorrowKind::Mutable {
+                            state.invalidate_borrows_of(&owner);
+                        }
                     }
                 }
                 _ => {
@@ -2189,7 +2204,6 @@ impl OwnershipChecker<'_> {
                 },
             );
         }
-        self.note_key_path_use(&key_path, state);
     }
 
     fn check_return_value(&mut self, expr: &Expr, state: &mut MoveState) {
@@ -2288,7 +2302,6 @@ impl OwnershipChecker<'_> {
         }
         let owner = self.loan_owner_for_key_path(key_path, state);
         self.check_borrow_conflicts(id, &owner, BorrowKind::Shared, Some(key_path), state);
-        self.note_key_path_use(key_path, state);
     }
 
     fn moved_key_path_for_use<'a>(
@@ -2688,19 +2701,6 @@ impl OwnershipChecker<'_> {
         self.borrowed_value_root(&root, state)
     }
 
-    fn note_key_path_use(&self, key_path: &KeyPath, state: &mut MoveState) {
-        let Some(count) = state.use_counts.get_mut(&key_path.root) else {
-            return;
-        };
-        if *count == 0 {
-            return;
-        }
-        *count -= 1;
-        if *count == 0 {
-            state.release_loan_for_borrower(&KeyPath::root(key_path.root));
-        }
-    }
-
     fn stored_field_symbol(&self, expr: &Expr) -> Option<Symbol> {
         stored_field_symbol(self.types, expr)
     }
@@ -2789,8 +2789,7 @@ impl OwnershipChecker<'_> {
                 Err(_) => BorrowInfo::new(BorrowOrigin::Unknown, None),
             },
             ExprKind::LiteralString(_) => BorrowInfo::new(BorrowOrigin::Static, None),
-            ExprKind::Member(Some(_), ..) if self.key_path(expr).is_some() => {
-                let owner = self.key_path(expr).expect("checked above");
+            ExprKind::Member(Some(_), ..) if let Some(owner) = self.key_path(expr) => {
                 self.key_path_borrow_info(&owner, expr, env)
             }
             ExprKind::Call { callee, args, .. } => self.call_borrow_info(callee, args, env),
@@ -2838,13 +2837,10 @@ impl OwnershipChecker<'_> {
                 Err(_) => BorrowInfo::new(BorrowOrigin::Unknown, None),
             },
             ExprKind::LiteralString(_) => BorrowInfo::new(BorrowOrigin::Static, None),
-            _ if self.key_path(receiver).is_some() => {
-                let owner = self.key_path(receiver).expect("checked above");
-                self.borrow_info_with_default_owner(
-                    self.key_path_borrow_info(&owner, receiver, env),
-                    receiver,
-                )
-            }
+            _ if let Some(owner) = self.key_path(receiver) => self.borrow_info_with_default_owner(
+                self.key_path_borrow_info(&owner, receiver, env),
+                receiver,
+            ),
             _ if self.expr_is_borrowed(receiver) => self.borrow_info(receiver, env),
             _ => BorrowInfo::new(BorrowOrigin::Unknown, None),
         }
@@ -4355,10 +4351,10 @@ mod tests {
     }
 
     #[test]
-    fn allows_borrow_use_before_owner_move() {
+    fn rejects_owner_move_while_borrow_storage_is_live() {
         let errors = ownership_errors(
             "
-            func ok() -> Int {
+            func bad() -> Int {
                 let s = \"hello\" + \" world\"
                 let sub = s.slice(0, 1)
                 let n = sub.length
@@ -4367,7 +4363,12 @@ mod tests {
             }
             ",
         );
-        assert!(errors.is_empty(), "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Cannot move 's' while it is borrowed as 'sub'")),
+            "{errors:?}"
+        );
     }
 
     #[test]
@@ -4774,7 +4775,7 @@ mod tests {
     }
 
     #[test]
-    fn mutable_borrow_expires_after_last_borrow_use() {
+    fn shared_borrow_lives_until_borrow_storage_dead() {
         let errors = ownership_errors(
             "
             struct Box {
@@ -4793,7 +4794,12 @@ mod tests {
             }
             ",
         );
-        assert!(errors.is_empty(), "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("already shared borrowed as 'sub'")),
+            "{errors:?}"
+        );
     }
 
     #[test]
@@ -4812,6 +4818,134 @@ mod tests {
             errors
                 .iter()
                 .any(|error| error.contains("already mutable borrowed as 'borrow'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn loop_carried_mutable_borrow_lives_until_storage_dead() {
+        let errors = ownership_errors(
+            "
+            func observe(s: &String) -> Int {
+                s.length
+            }
+
+            func mutate(s: &mut String) -> Int {
+                s.length
+            }
+
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                let r: &mut String = s
+                let i = 0
+                loop i < 2 {
+                    let n = observe(r)
+                    let m = mutate(s)
+                    i = i + 1
+                }
+                0
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("already mutable borrowed as 'r'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn mutable_call_argument_invalidates_shared_borrow() {
+        let errors = ownership_errors(
+            "
+            func mutate(s: &mut String) -> Int {
+                s.length
+            }
+
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                let sub = s.slice(0, 1)
+                let n = mutate(s)
+                sub.length + n
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Use of borrowed value 'sub'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn nested_function_capture_move_propagates_to_parent() {
+        let errors = ownership_errors(
+            "
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                func inner [consuming s]() -> Int {
+                    s.length
+                }
+                s.length
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Use of moved value 's'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn handler_body_move_propagates_to_parent() {
+        let errors = ownership_errors(
+            "
+            effect 'ask() -> Int
+
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                @handle 'ask {
+                    let moved = s
+                    continue 0
+                }
+                s.length
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Use of moved value 's'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn trailing_block_body_move_propagates_to_parent() {
+        let errors = ownership_errors(
+            "
+            func run(block: () -> Int) -> Int {
+                block()
+            }
+
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                let n = run() {
+                    let moved = s
+                    0
+                }
+                s.length + n
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Use of moved value 's'")),
             "{errors:?}"
         );
     }

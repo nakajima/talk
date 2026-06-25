@@ -42,7 +42,7 @@ pub enum EvalValue {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AllocationRecord {
     start: u32,
-    len: u32,
+    len: usize,
     live: bool,
 }
 
@@ -480,13 +480,21 @@ impl Evaluator {
             // free/use-after-free are observable.
             Op::Alloc => match self.eval_sub(p, args[0])? {
                 EvalValue::I64(count) if count >= 0 => {
-                    let addr = self.mem.len() as u32;
-                    let reserve = (count as usize).max(1);
-                    self.mem.resize(self.mem.len() + reserve, 0);
+                    let addr = u32::try_from(self.mem.len()).map_err(|_| {
+                        EvalError::Unsupported("memory address out of range".into())
+                    })?;
+                    let count = usize::try_from(count)
+                        .map_err(|_| EvalError::Unsupported("alloc count out of range".into()))?;
+                    let reserve = count.max(1);
+                    let new_len =
+                        self.mem.len().checked_add(reserve).ok_or_else(|| {
+                            EvalError::Unsupported("alloc count out of range".into())
+                        })?;
+                    self.mem.resize(new_len, 0);
                     let index = self.allocations.len();
                     self.allocations.push(AllocationRecord {
                         start: addr,
-                        len: count as u32,
+                        len: count,
                         live: true,
                     });
                     self.allocation_index.insert(addr, index);
@@ -619,8 +627,15 @@ impl Evaluator {
             Op::IoSleep => self.io.sleep(int(0)?),
             Op::IoCtl => self.io.ctl(int(0)?, int(1)?, int(2)?),
             Op::IoPoll => {
-                let (start, count, timeout) = (ptr(0)?, int(1)? as usize, int(2)?);
-                let len = count * 8;
+                let (start, count, timeout) = (ptr(0)?, int(1)?, int(2)?);
+                if count < 0 {
+                    return Err(EvalError::Unsupported("io poll negative count".into()));
+                }
+                let count = usize::try_from(count)
+                    .map_err(|_| EvalError::Unsupported("io poll count out of range".into()))?;
+                let len = count
+                    .checked_mul(8)
+                    .ok_or_else(|| EvalError::Unsupported("io poll count out of range".into()))?;
                 self.check_access(start as u32, len, "io")?;
                 let records = self.mem.get(start..start + len).ok_or_else(oob)?;
                 let mut fds: Vec<(i32, i16, i16)> = records
@@ -800,7 +815,7 @@ impl Evaluator {
             .allocation_record_containing(addr)
             .is_some_and(|record| {
                 let alloc_start = record.start as usize;
-                let alloc_end = alloc_start + record.len as usize;
+                let alloc_end = alloc_start + record.len;
                 record.live && start >= alloc_start && end <= alloc_end
             })
         {
@@ -824,12 +839,12 @@ impl Evaluator {
         }
         let Some(record) = self.allocation_record_containing(addr).filter(|record| {
             let alloc_start = record.start as usize;
-            let alloc_end = alloc_start + record.len as usize;
+            let alloc_end = alloc_start + record.len;
             record.live && start >= alloc_start && start < alloc_end
         }) else {
             return Err(EvalError::Unsupported("io through invalid pointer".into()));
         };
-        let end = record.start as usize + record.len as usize;
+        let end = record.start as usize + record.len;
         self.mem
             .get(start..end)
             .ok_or_else(|| EvalError::Unsupported("io access out of bounds".into()))

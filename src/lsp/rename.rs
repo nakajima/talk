@@ -372,15 +372,42 @@ fn identifier_span_at_offset(
         .map(|tok| (tok.start, tok.end))
 }
 
+fn target_imported_with_alias(
+    module: &AnalysisWorkspace,
+    ast: &crate::ast::AST<crate::ast::NameResolved>,
+    symbol: Symbol,
+) -> bool {
+    use crate::node_kinds::decl::{DeclKind, ImportedSymbols};
+
+    ast.roots.iter().any(|node| {
+        let crate::node::Node::Decl(decl) = node else {
+            return false;
+        };
+        let DeclKind::Import(import) = &decl.kind else {
+            return false;
+        };
+        let ImportedSymbols::Named(imported_symbols) = &import.symbols else {
+            return false;
+        };
+        imported_symbols.iter().any(|imported| {
+            imported.alias.is_some()
+                && symbol_exported_by_import(module, &ast.path, import, &imported.name)
+                    == Some(symbol)
+        })
+    })
+}
+
 fn rename_spans_in_ast(
     module: &AnalysisWorkspace,
     ast: &crate::ast::AST<crate::ast::NameResolved>,
     symbol: Symbol,
 ) -> Vec<(u32, u32)> {
+    let target_imported_with_alias = target_imported_with_alias(module, ast, symbol);
     let mut collector = RenameCollector {
         module,
         ast,
         target: symbol,
+        target_imported_with_alias,
         spans: FxHashSet::default(),
     };
 
@@ -409,6 +436,7 @@ struct RenameCollector<'a> {
     module: &'a AnalysisWorkspace,
     ast: &'a crate::ast::AST<crate::ast::NameResolved>,
     target: Symbol,
+    target_imported_with_alias: bool,
     spans: FxHashSet<(u32, u32)>,
 }
 
@@ -419,6 +447,10 @@ impl RenameCollector<'_> {
 
     fn push_u32_span(&mut self, start: u32, end: u32) {
         self.spans.insert((start, end));
+    }
+
+    fn should_rename_visible_reference(&self) -> bool {
+        !self.target_imported_with_alias
     }
 
     fn enter_decl(&mut self, decl: &crate::node_kinds::decl::Decl) {
@@ -551,6 +583,7 @@ impl RenameCollector<'_> {
             name, name_span, ..
         } = &ty.kind
             && name.symbol().ok() == Some(self.target)
+            && self.should_rename_visible_reference()
         {
             self.push_span(*name_span);
         }
@@ -561,7 +594,8 @@ impl RenameCollector<'_> {
 
         match &expr.kind {
             ExprKind::Variable(name) | ExprKind::Constructor(name) => {
-                if name.symbol().ok() == Some(self.target) {
+                if name.symbol().ok() == Some(self.target) && self.should_rename_visible_reference()
+                {
                     self.push_span(expr.span);
                 }
             }

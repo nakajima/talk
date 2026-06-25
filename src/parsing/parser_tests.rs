@@ -3152,6 +3152,26 @@ pub mod tests {
     }
 
     #[test]
+    fn rejects_capture_specs_without_commas() {
+        let lexer = Lexer::new("func [a b]() { }");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(matches!(
+            parser.parse(),
+            Err(ParserError::UnexpectedToken { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_unknown_capture_mode_as_missing_comma() {
+        let lexer = Lexer::new("func [move x]() { }");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(matches!(
+            parser.parse(),
+            Err(ParserError::UnexpectedToken { .. })
+        ));
+    }
+
+    #[test]
     #[ignore = "todo"]
     fn handles_unclosed_paren() {
         let parsed = parse("func foo(");

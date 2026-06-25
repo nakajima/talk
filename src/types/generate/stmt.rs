@@ -176,11 +176,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     fn infer_assignment_target(&mut self, lhs: &Expr, ctx: &Ctx) -> Ty {
         match &lhs.kind {
             ExprKind::Variable(_) => self.infer_expr(lhs, ctx),
-            ExprKind::Member(Some(receiver), ..) => {
-                let lhs_ty = self.infer_expr(lhs, ctx);
-                self.check_assignment_receiver_writable(receiver);
-                lhs_ty
-            }
+            ExprKind::Member(Some(_), ..) => self.infer_expr(lhs, ctx),
             _ => {
                 let ty = self.infer_expr(lhs, ctx);
                 self.diagnostics
@@ -189,34 +185,5 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 ty
             }
         }
-    }
-
-    fn check_assignment_receiver_writable(&mut self, receiver: &Expr) {
-        if let ExprKind::Member(Some(parent), ..) = &receiver.kind {
-            self.check_assignment_receiver_writable(parent);
-        }
-
-        let Some(receiver_ty) = self.artifacts.node_types.get(&receiver.id) else {
-            return;
-        };
-        if let Ty::Borrow(BorrowKind::Shared, _) = self.store.shallow(receiver_ty) {
-            self.diagnostics.errors.push((
-                TypeError::AssignThroughSharedBorrow {
-                    target: render_assignment_target(receiver),
-                    ty: self.store.render(receiver_ty),
-                },
-                receiver.id,
-            ));
-        }
-    }
-}
-
-fn render_assignment_target(expr: &Expr) -> String {
-    match &expr.kind {
-        ExprKind::Variable(name) => name.name_str(),
-        ExprKind::Member(Some(receiver), label, _) => {
-            format!("{}.{}", render_assignment_target(receiver), label)
-        }
-        _ => "value".to_string(),
     }
 }

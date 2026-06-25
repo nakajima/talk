@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::ty::BorrowKind;
 
 /// Where a leftover row/effect-row binds its tail when it flows into a
 /// variable. Kind-agnostic: `unify_row_like` decides it from the flattened
@@ -40,6 +41,16 @@ impl<'s> Solver<'s> {
             (Ty::Error, _) | (_, Ty::Error) => {}
 
             (Ty::Borrow(k1, inner1), Ty::Borrow(k2, inner2)) if k1 == k2 => {
+                worklist.push(Constraint::Eq(
+                    (**inner1).clone(),
+                    (**inner2).clone(),
+                    origin,
+                ));
+            }
+
+            (Ty::Borrow(BorrowKind::Shared, inner1), Ty::Borrow(BorrowKind::Mutable, inner2))
+                if origin.reason == CtReason::Apply =>
+            {
                 worklist.push(Constraint::Eq(
                     (**inner1).clone(),
                     (**inner2).clone(),

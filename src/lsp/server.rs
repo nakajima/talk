@@ -1345,6 +1345,53 @@ mod tests {
     }
 
     #[test]
+    fn rename_imported_symbol_with_alias_preserves_alias_uses() {
+        let uri_a =
+            Url::from_file_path(std::env::temp_dir().join("rename_alias_a.tlk")).expect("file uri");
+        let uri_b =
+            Url::from_file_path(std::env::temp_dir().join("rename_alias_b.tlk")).expect("file uri");
+        let code_a = "public struct Point {}\n";
+        let code_b = "import { Point: Pt } from ./rename_alias_a.tlk\nlet p = Pt()\n";
+
+        let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
+        let alias_use = code_b.rfind("Pt").expect("alias use");
+        let edit =
+            super::rename_at(&module, &uri_b, alias_use as u32, "Vec3").expect("workspace edit");
+        let import_edit = super::rename_at(
+            &module,
+            &uri_b,
+            code_b.find("Point").expect("imported name") as u32,
+            "Vec3",
+        )
+        .expect("workspace edit from import");
+
+        let range_a = super::byte_span_to_range_utf16(
+            code_a,
+            code_a.find("Point").expect("Point") as u32,
+            (code_a.find("Point").expect("Point") + 5) as u32,
+        )
+        .expect("range a");
+        let range_b_import = super::byte_span_to_range_utf16(
+            code_b,
+            code_b.find("Point").expect("Point") as u32,
+            (code_b.find("Point").expect("Point") + 5) as u32,
+        )
+        .expect("range b import");
+
+        assert_eq!(edit_ranges_for_uri(&edit, &uri_a), vec![range_a]);
+        assert_eq!(edit_ranges_for_uri(&edit, &uri_b), vec![range_b_import]);
+        assert_eq!(edit_ranges_for_uri(&import_edit, &uri_a), vec![range_a]);
+        assert_eq!(
+            edit_ranges_for_uri(&import_edit, &uri_b),
+            vec![range_b_import]
+        );
+
+        let rewritten_b = apply_edits(code_b, &edit, &uri_b);
+        assert!(rewritten_b.contains("import { Vec3: Pt }"), "{rewritten_b}");
+        assert!(rewritten_b.contains("let p = Pt()"), "{rewritten_b}");
+    }
+
+    #[test]
     fn goto_definition_finds_unopened_file_in_workspace() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -294,6 +294,7 @@ pub(crate) enum Statement<'a> {
     },
     Function {
         owner: Option<Symbol>,
+        captures_parent: bool,
         captures: &'a [CaptureSpec],
         params: &'a [crate::node_kinds::parameter::Parameter],
         body: &'a Block,
@@ -673,6 +674,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                             current,
                             Statement::Function {
                                 owner: function_owner,
+                                captures_parent: false,
                                 captures: &func.captures,
                                 params: &func.params,
                                 body: &func.body,
@@ -711,6 +713,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                     current,
                     Statement::Function {
                         owner,
+                        captures_parent: true,
                         captures: &func.captures,
                         params: &func.params,
                         body: &func.body,
@@ -724,6 +727,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                     current,
                     Statement::Function {
                         owner,
+                        captures_parent: true,
                         captures: &func.captures,
                         params: &func.params,
                         body: &func.body,
@@ -740,6 +744,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                     current,
                     Statement::Function {
                         owner,
+                        captures_parent: true,
                         captures: &[],
                         params,
                         body,
@@ -948,6 +953,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                     current,
                     Statement::Function {
                         owner: None,
+                        captures_parent: false,
                         captures: &func.captures,
                         params: &func.params,
                         body: &func.body,
