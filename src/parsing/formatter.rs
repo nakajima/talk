@@ -37,6 +37,7 @@ use crate::{
 pub enum Doc {
     Empty,
     Text(String),
+    Comment(String),
     Line,
     Softline,
     Hardline,
@@ -291,7 +292,7 @@ impl<'a> Formatter<'a> {
     }
 
     fn comment_doc(comment: Comment) -> Doc {
-        text(comment.text)
+        Doc::Comment(comment.text)
     }
 
     fn append_doc_with_spacing(
@@ -359,7 +360,7 @@ impl<'a> Formatter<'a> {
             if let Some(meta) = meta
                 && let Some(comment) = self.take_inline_comment(meta)
             {
-                doc = concat(doc, concat(text(" "), text(comment.text)));
+                doc = concat(doc, concat(text(" "), Self::comment_doc(comment)));
             }
 
             Self::push_doc_output(
@@ -905,7 +906,7 @@ impl<'a> Formatter<'a> {
             if let Some(meta) = meta
                 && let Some(comment) = self.take_inline_comment(meta)
             {
-                stmt_doc = concat(stmt_doc, concat(text(" "), text(comment.text)));
+                stmt_doc = concat(stmt_doc, concat(text(" "), Self::comment_doc(comment)));
             }
 
             final_doc = Self::append_doc_with_spacing(
@@ -1014,7 +1015,7 @@ impl<'a> Formatter<'a> {
             if let Some(meta) = meta
                 && let Some(comment) = self.take_inline_comment(meta)
             {
-                decl_doc = concat(decl_doc, concat(text(" "), text(comment.text)));
+                decl_doc = concat(decl_doc, concat(text(" "), Self::comment_doc(comment)));
             }
 
             final_doc = Self::append_doc_with_spacing(
@@ -2140,6 +2141,14 @@ impl<'a> Formatter<'a> {
                     output.push_str(&s);
                     column += s.len();
                 }
+                Doc::Comment(s) => {
+                    if was_newline {
+                        output.push_str(&"\t".repeat(indent as usize));
+                        column += indent as usize;
+                        was_newline = false;
+                    }
+                    Self::render_comment(&mut output, &s, width, indent as usize, &mut column);
+                }
                 Doc::Line | Doc::Softline | Doc::Hardline => {
                     output.push('\n');
                     was_newline = true;
@@ -2166,9 +2175,73 @@ impl<'a> Formatter<'a> {
         output
     }
 
+    fn render_comment(
+        output: &mut String,
+        comment: &str,
+        width: usize,
+        indent: usize,
+        column: &mut usize,
+    ) {
+        let (prefix, body) = Self::line_comment_parts(comment);
+        if body.is_empty() {
+            output.push_str(comment);
+            *column += comment.len();
+            return;
+        }
+
+        let words: Vec<&str> = body.split_whitespace().collect();
+        if words.is_empty() {
+            output.push_str(&prefix);
+            *column += prefix.len();
+            return;
+        }
+
+        let mut line_body = String::new();
+        let mut current_column = *column;
+
+        for word in words {
+            let separator_width = usize::from(!line_body.is_empty());
+            let projected_width =
+                current_column + prefix.len() + line_body.len() + separator_width + word.len();
+            if !line_body.is_empty() && projected_width > width {
+                output.push_str(&prefix);
+                output.push_str(&line_body);
+                output.push('\n');
+                output.push_str(&"\t".repeat(indent));
+                current_column = indent;
+                line_body.clear();
+            }
+
+            if !line_body.is_empty() {
+                line_body.push(' ');
+            }
+            line_body.push_str(word);
+        }
+
+        output.push_str(&prefix);
+        output.push_str(&line_body);
+        *column = current_column + prefix.len() + line_body.len();
+    }
+
+    fn line_comment_parts(comment: &str) -> (String, &str) {
+        let Some(after_slashes) = comment.strip_prefix("//") else {
+            return (String::new(), comment);
+        };
+
+        let slash_count = 2 + after_slashes.chars().take_while(|ch| *ch == '/').count();
+        let rest = &comment[slash_count..];
+        let body = rest.trim_start();
+        if body.is_empty() {
+            (comment.to_string(), body)
+        } else {
+            let body_offset = comment.len() - body.len();
+            (comment[..body_offset].to_string(), body)
+        }
+    }
+
     fn flatten(doc: Doc) -> Doc {
         match doc {
-            Doc::Empty | Doc::Text(_) => doc,
+            Doc::Empty | Doc::Text(_) | Doc::Comment(_) => doc,
             Doc::Hardline => Doc::Hardline,
             Doc::Softline => Doc::Empty,
             Doc::Annotation(_) => doc,
@@ -2192,7 +2265,7 @@ impl<'a> Formatter<'a> {
             match current_doc {
                 Doc::Empty => continue,
                 Doc::Annotation(_) => continue,
-                Doc::Text(s) => width += s.len(),
+                Doc::Text(s) | Doc::Comment(s) => width += s.len(),
                 Doc::Line => width += 1,
                 Doc::Softline => continue,
                 Doc::Hardline => return None,
@@ -2217,7 +2290,7 @@ impl<'a> Formatter<'a> {
             match queue.pop().unwrap() {
                 Doc::Empty => continue,
                 Doc::Annotation(_) => continue,
-                Doc::Text(s) => width -= s.len() as isize,
+                Doc::Text(s) | Doc::Comment(s) => width -= s.len() as isize,
                 Doc::Line | Doc::Softline | Doc::Hardline => return true,
                 Doc::Concat(left, right) => {
                     queue.push(right);
@@ -2752,6 +2825,27 @@ mod formatter_tests {
         let input = "func foo() {\n// note\n}";
         let expected = "func foo() {\n\t// note\n}";
         assert_eq!(format_string(input), expected);
+    }
+
+    #[test]
+    fn test_wraps_long_standalone_line_comments() {
+        let input = "// alpha beta gamma delta\nlet x = 1";
+        let expected = "// alpha beta\n// gamma delta\nlet x = 1";
+        assert_eq!(format_string_with_width(input, 18), expected);
+    }
+
+    #[test]
+    fn test_wraps_long_inline_line_comments() {
+        let input = "let x = 1 // alpha beta gamma";
+        let expected = "let x = 1 // alpha\n// beta gamma";
+        assert_eq!(format_string_with_width(input, 20), expected);
+    }
+
+    #[test]
+    fn test_wraps_long_line_comments_in_block() {
+        let input = "func foo() {\n// alpha beta gamma delta\n}";
+        let expected = "func foo() {\n\t// alpha beta\n\t// gamma delta\n}";
+        assert_eq!(format_string_with_width(input, 18), expected);
     }
 
     #[test]
