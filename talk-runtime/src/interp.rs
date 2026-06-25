@@ -4,10 +4,10 @@
 //! conversion put them there — Kranz et al., ORBIT, 1986). Dispatch is a
 //! plain `match` over the decoded instruction (Ertl & Gregg, JILP 2003).
 
-use crate::lambda_g::expr::{CmpOp, Op};
-use crate::name_resolution::symbol::Symbol;
-use crate::vm::io::IO;
-use crate::vm::{Chunk, Insn, MemKind, Module};
+use crate::CmpOp;
+use crate::symbol::Symbol;
+use crate::io::IO;
+use crate::{Chunk, Insn, MemKind, Module};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -454,12 +454,12 @@ impl Machine<'_> {
 fn run_io(
     machine: &mut Machine,
     frame: &Frame,
-    op: crate::vm::IoOp,
+    op: crate::IoOp,
     a: u16,
     b: u16,
     c: u16,
 ) -> Result<i64, String> {
-    use crate::vm::IoOp;
+    use crate::IoOp;
     let int = |reg: u16| -> Result<i64, String> {
         match frame.regs[reg as usize] {
             Value::I64(v) => Ok(v),
@@ -578,7 +578,7 @@ fn exec_local(
         Insn::Move { dest, src } => frame.regs[dest as usize] = frame.regs[src as usize].clone(),
         Insn::Add { dest, a, b } => {
             frame.regs[dest as usize] = arith(
-                Op::Add,
+                ArithOp::Add,
                 &frame.regs[a as usize],
                 &frame.regs[b as usize],
                 i64::wrapping_add,
@@ -587,7 +587,7 @@ fn exec_local(
         }
         Insn::Sub { dest, a, b } => {
             frame.regs[dest as usize] = arith(
-                Op::Sub,
+                ArithOp::Sub,
                 &frame.regs[a as usize],
                 &frame.regs[b as usize],
                 i64::wrapping_sub,
@@ -596,7 +596,7 @@ fn exec_local(
         }
         Insn::Mul { dest, a, b } => {
             frame.regs[dest as usize] = arith(
-                Op::Mul,
+                ArithOp::Mul,
                 &frame.regs[a as usize],
                 &frame.regs[b as usize],
                 i64::wrapping_mul,
@@ -975,8 +975,15 @@ fn chunk(module: &Module, index: u32) -> Result<&Chunk, String> {
         .ok_or_else(|| format!("vm: bad chunk index {index}"))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+}
+
 fn arith(
-    op: Op,
+    op: ArithOp,
     a: &Value,
     b: &Value,
     ints: fn(i64, i64) -> i64,
@@ -986,10 +993,10 @@ fn arith(
         (Value::I64(x), Value::I64(y)) => Ok(Value::I64(ints(*x, *y))),
         (Value::F64(x), Value::F64(y)) => Ok(Value::F64(floats(*x, *y))),
         // Pointer arithmetic (`add RawPtr p offset`).
-        (Value::Ptr(p), Value::I64(off)) if op == Op::Add => {
+        (Value::Ptr(p), Value::I64(off)) if op == ArithOp::Add => {
             Ok(Value::Ptr((*p as i64 + off) as u32))
         }
-        (Value::Ptr(p), Value::I64(off)) if op == Op::Sub => {
+        (Value::Ptr(p), Value::I64(off)) if op == ArithOp::Sub => {
             Ok(Value::Ptr((*p as i64 - off) as u32))
         }
         _ => Err(format!("vm: arithmetic on {a:?} and {b:?}")),

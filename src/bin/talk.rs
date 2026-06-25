@@ -77,6 +77,13 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
         },
+        /// Compile Talk source to bytecode or a standalone executable.
+        Build(BuildArgs),
+        /// Run a serialized Talk bytecode image.
+        RunBytecode {
+            #[arg(value_hint = ValueHint::FilePath)]
+            filename: String,
+        },
         Repl,
         /// Print a dense Talk language reference for LLMs.
         Llm,
@@ -86,6 +93,24 @@ async fn main() {
             shell: Shell,
         },
         Lsp(LspArgs),
+    }
+
+    #[derive(Debug, Args)]
+    struct BuildArgs {
+        #[arg(value_hint = ValueHint::FilePath)]
+        filenames: Vec<String>,
+        #[arg(short, long, value_hint = ValueHint::FilePath)]
+        output: String,
+        #[arg(long)]
+        emit_bytecode: bool,
+        #[arg(long, value_hint = ValueHint::FilePath)]
+        runtime: Option<String>,
+        #[arg(long)]
+        cc: Option<String>,
+        #[arg(long)]
+        keep_temps: bool,
+        #[arg(long)]
+        no_strip: bool,
     }
 
     #[derive(Debug, Args)]
@@ -214,6 +239,63 @@ async fn main() {
         }
         Commands::Llm => {
             println!("{LLM_REFERENCE}");
+        }
+        Commands::RunBytecode { filename } => {
+            let bytes = match std::fs::read(filename) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    std::process::exit(1);
+                }
+            };
+            let module = match talk::vm::Module::decode_bytecode(&bytes) {
+                Ok(module) => module,
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    std::process::exit(1);
+                }
+            };
+            let mut io = talk::vm::io::StdioIO;
+            match talk::vm::interp::run(&module, &mut io) {
+                Ok(talk::vm::interp::Value::Void) => {}
+                Ok(value) => println!("{value:?}"),
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Build(args) => {
+            let module_name = args
+                .filenames
+                .first()
+                .cloned()
+                .unwrap_or_else(|| STDIN_NAME.to_string());
+            let sources = sources_for_filenames(&args.filenames);
+            let bytecode =
+                match talk::compiling::driver::compile_bytecode_sources(&module_name, sources) {
+                    Ok(bytecode) => bytecode,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        std::process::exit(1);
+                    }
+                };
+            if args.emit_bytecode {
+                if let Err(err) = std::fs::write(&args.output, &bytecode) {
+                    eprintln!("error: {err}");
+                    std::process::exit(1);
+                }
+            } else if let Err(err) = build_static_executable(
+                &bytecode,
+                std::path::Path::new(&args.output),
+                args.runtime.as_deref(),
+                args.cc.as_deref(),
+                args.keep_temps,
+                !args.no_strip,
+            ) {
+                eprintln!("error: {err}");
+                std::process::exit(1);
+            }
         }
         Commands::Run { filenames } => {
             use talk::compiling::driver::Driver;
@@ -459,6 +541,150 @@ Ownership checking is source-near: `&T` borrows, `&mut T` is exclusive, `consumi
 
 Pipeline: parse -> name resolution/imports -> OutsideIn-style type checking with qualified predicates, protocols, associated types, existentials, and GADT refinements -> lambda-G CPS-like graph IR -> scheduling -> register bytecode VM. Useful inspection commands: `talk check`, `talk hover`, `talk lower`, `talk ir`, and `talk bytecode`.
 "#;
+
+#[cfg(feature = "cli")]
+fn build_static_executable(
+    bytecode: &[u8],
+    output: &std::path::Path,
+    runtime: Option<&str>,
+    cc: Option<&str>,
+    keep_temps: bool,
+    strip: bool,
+) -> Result<(), String> {
+    let runtime = match runtime {
+        Some(path) => std::path::PathBuf::from(path),
+        None => RuntimeArchive::locate()?,
+    };
+    let temp = BuildTemp::new(output)?;
+    temp.write_launcher(bytecode)?;
+    let compiler = cc.unwrap_or("cc");
+    let status = std::process::Command::new(compiler)
+        .arg(temp.launcher())
+        .arg(&runtime)
+        .arg("-o")
+        .arg(output)
+        .status()
+        .map_err(|err| format!("failed to run {compiler}: {err}"))?;
+    if !status.success() {
+        return Err(format!("{compiler} failed with status {status}"));
+    }
+    if strip {
+        Strip::run(output)?;
+    }
+    if !keep_temps {
+        temp.clean()?;
+    } else {
+        eprintln!("kept temporary build files in {}", temp.dir().display());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+struct Strip;
+
+#[cfg(feature = "cli")]
+impl Strip {
+    fn run(output: &std::path::Path) -> Result<(), String> {
+        match std::process::Command::new("strip").arg(output).status() {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(format!("strip failed with status {status}; pass --no-strip to keep the unstripped executable")),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!("failed to run strip: {err}")),
+        }
+    }
+}
+
+#[cfg(feature = "cli")]
+struct RuntimeArchive;
+
+#[cfg(feature = "cli")]
+impl RuntimeArchive {
+    fn locate() -> Result<std::path::PathBuf, String> {
+        let mut candidates = Vec::new();
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            if let Some(profile_dir) = dir.parent() {
+                candidates.push(profile_dir.join("release/libtalk_static.a"));
+            }
+            candidates.push(dir.join("libtalk_static.a"));
+            candidates.push(dir.join("../lib/libtalk_static.a"));
+            if let Some(profile_dir) = dir.parent() {
+                candidates.push(profile_dir.join("debug/libtalk_static.a"));
+            }
+        }
+        candidates.push(std::path::PathBuf::from("target/release/libtalk_static.a"));
+        candidates.push(std::path::PathBuf::from("target/debug/libtalk_static.a"));
+
+        for candidate in candidates {
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+        Err(
+            "could not find libtalk_static.a; run `cargo build -p talk-static` or pass --runtime"
+                .into(),
+        )
+    }
+}
+
+#[cfg(feature = "cli")]
+struct BuildTemp {
+    dir: std::path::PathBuf,
+    launcher: std::path::PathBuf,
+}
+
+#[cfg(feature = "cli")]
+impl BuildTemp {
+    fn new(output: &std::path::Path) -> Result<Self, String> {
+        let stem = output
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("talk-build");
+        let dir = std::env::temp_dir().join(format!("talk-static-{}-{stem}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|err| format!("failed to create temp dir: {err}"))?;
+        let launcher = dir.join("main.c");
+        Ok(Self { dir, launcher })
+    }
+
+    fn dir(&self) -> &std::path::Path {
+        &self.dir
+    }
+
+    fn launcher(&self) -> &std::path::Path {
+        &self.launcher
+    }
+
+    fn write_launcher(&self, bytecode: &[u8]) -> Result<(), String> {
+        let mut c = String::new();
+        c.push_str("#include <stdint.h>\n#include <stddef.h>\n\n");
+        c.push_str("extern int talk_runtime_run(const uint8_t *bytes, size_t len);\n\n");
+        c.push_str("static const uint8_t TALK_PROGRAM[] = {\n");
+        for (i, byte) in bytecode.iter().enumerate() {
+            if i % 12 == 0 {
+                c.push_str("    ");
+            }
+            c.push_str(&format!("0x{byte:02x}, "));
+            if i % 12 == 11 {
+                c.push('\n');
+            }
+        }
+        if !bytecode.len().is_multiple_of(12) {
+            c.push('\n');
+        }
+        c.push_str("};\n\n");
+        c.push_str("int main(int argc, char **argv) {\n");
+        c.push_str("    (void)argc;\n    (void)argv;\n");
+        c.push_str("    return talk_runtime_run(TALK_PROGRAM, sizeof(TALK_PROGRAM));\n");
+        c.push_str("}\n");
+        std::fs::write(&self.launcher, c).map_err(|err| format!("failed to write launcher: {err}"))
+    }
+
+    fn clean(&self) -> Result<(), String> {
+        std::fs::remove_dir_all(&self.dir)
+            .map_err(|err| format!("failed to remove temp dir: {err}"))
+    }
+}
 
 #[cfg(feature = "cli")]
 fn read_stdin() -> String {

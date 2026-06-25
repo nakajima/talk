@@ -12,10 +12,17 @@
   ],
   "activationEvents": [
     "onLanguage:talktalk",
-    "workspaceContains:**/*.tlk"
+    "workspaceContains:**/*.tlk",
+    "onCommand:talktalk.restartLsp"
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "talktalk.restartLsp",
+        "title": "TalkTalk: Restart Language Server"
+      }
+    ],
     "languages": [
       {
         "id": "talktalk",

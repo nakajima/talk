@@ -1,12 +1,7 @@
-use crate::lambda_g::expr::CmpOp;
-use crate::name_resolution::symbol::{
-    AssociatedTypeId, BuiltinId, DeclaredLocalId, EffectId, EnumId, GlobalId, InitializerId,
-    InstanceMethodId, MethodRequirementId, ParamLocalId, PatternBindLocalId, PropertyId,
-    ProtocolId, StaticMethodId, StructId, Symbol, SynthesizedId, TypeAliasId, TypeParameterId,
-    VariantId,
-};
-use crate::vm::interp::Value;
-use crate::vm::{Chunk, Insn, IoOp, MemKind, Module};
+use crate::symbol::{LocalSymbolId, ModuleId, ModuleSymbolId, Symbol};
+use crate::CmpOp;
+use crate::interp::Value;
+use crate::{Chunk, Insn, IoOp, MemKind, Module};
 
 const MAGIC: &[u8; 7] = b"TALKBC\0";
 const FORMAT_VERSION: u32 = 1;
@@ -816,46 +811,25 @@ impl<'a> Decoder<'a> {
     fn symbol(&mut self) -> Result<Symbol, DecodeError> {
         let tag = self.u8()?;
         match tag {
-            0 => Ok(Symbol::Struct(StructId::new(self.module_id()?, self.u32()?))),
-            1 => Ok(Symbol::Enum(EnumId::new(self.module_id()?, self.u32()?))),
-            2 => Ok(Symbol::TypeAlias(TypeAliasId::new(self.module_id()?, self.u32()?))),
-            3 => Ok(Symbol::TypeParameter(TypeParameterId::new(
-                self.module_id()?,
-                self.u32()?,
-            ))),
-            4 => Ok(Symbol::Global(GlobalId::new(self.module_id()?, self.u32()?))),
-            5 => Ok(Symbol::DeclaredLocal(DeclaredLocalId(self.u32()?))),
-            6 => Ok(Symbol::PatternBindLocal(PatternBindLocalId(self.u32()?))),
-            7 => Ok(Symbol::ParamLocal(ParamLocalId(self.u32()?))),
-            8 => Ok(Symbol::Builtin(BuiltinId::new(self.module_id()?, self.u32()?))),
-            9 => Ok(Symbol::Property(PropertyId::new(self.module_id()?, self.u32()?))),
-            10 => Ok(Symbol::Synthesized(SynthesizedId::new(
-                self.module_id()?,
-                self.u32()?,
-            ))),
-            11 => Ok(Symbol::InstanceMethod(InstanceMethodId::new(
-                self.module_id()?,
-                self.u32()?,
-            ))),
-            12 => Ok(Symbol::Initializer(InitializerId::new(
-                self.module_id()?,
-                self.u32()?,
-            ))),
-            13 => Ok(Symbol::StaticMethod(StaticMethodId::new(
-                self.module_id()?,
-                self.u32()?,
-            ))),
-            14 => Ok(Symbol::Variant(VariantId::new(self.module_id()?, self.u32()?))),
-            15 => Ok(Symbol::Protocol(ProtocolId::new(self.module_id()?, self.u32()?))),
-            16 => Ok(Symbol::AssociatedType(AssociatedTypeId::new(
-                self.module_id()?,
-                self.u32()?,
-            ))),
-            17 => Ok(Symbol::MethodRequirement(MethodRequirementId::new(
-                self.module_id()?,
-                self.u32()?,
-            ))),
-            18 => Ok(Symbol::Effect(EffectId::new(self.module_id()?, self.u32()?))),
+            0 => Ok(Symbol::Struct(self.module_symbol()?)),
+            1 => Ok(Symbol::Enum(self.module_symbol()?)),
+            2 => Ok(Symbol::TypeAlias(self.module_symbol()?)),
+            3 => Ok(Symbol::TypeParameter(self.module_symbol()?)),
+            4 => Ok(Symbol::Global(self.module_symbol()?)),
+            5 => Ok(Symbol::DeclaredLocal(LocalSymbolId(self.u32()?))),
+            6 => Ok(Symbol::PatternBindLocal(LocalSymbolId(self.u32()?))),
+            7 => Ok(Symbol::ParamLocal(LocalSymbolId(self.u32()?))),
+            8 => Ok(Symbol::Builtin(self.module_symbol()?)),
+            9 => Ok(Symbol::Property(self.module_symbol()?)),
+            10 => Ok(Symbol::Synthesized(self.module_symbol()?)),
+            11 => Ok(Symbol::InstanceMethod(self.module_symbol()?)),
+            12 => Ok(Symbol::Initializer(self.module_symbol()?)),
+            13 => Ok(Symbol::StaticMethod(self.module_symbol()?)),
+            14 => Ok(Symbol::Variant(self.module_symbol()?)),
+            15 => Ok(Symbol::Protocol(self.module_symbol()?)),
+            16 => Ok(Symbol::AssociatedType(self.module_symbol()?)),
+            17 => Ok(Symbol::MethodRequirement(self.module_symbol()?)),
+            18 => Ok(Symbol::Effect(self.module_symbol()?)),
             19 => {
                 let _ = self.u32()?;
                 Ok(Symbol::Main)
@@ -868,8 +842,8 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    fn module_id(&mut self) -> Result<crate::compiling::module::ModuleId, DecodeError> {
-        Ok(crate::compiling::module::ModuleId(self.u16()?))
+    fn module_symbol(&mut self) -> Result<ModuleSymbolId, DecodeError> {
+        Ok(ModuleSymbolId::new(ModuleId(self.u16()?), self.u32()?))
     }
 
     fn strings(&mut self) -> Result<Vec<String>, DecodeError> {

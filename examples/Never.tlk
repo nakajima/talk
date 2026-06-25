@@ -1,3 +1,7 @@
-func nope() -> Never {
-	loop {}
+enum NotEver {}
+
+func nope() -> NotEver {
+	loop {
+		break
+	}
 }

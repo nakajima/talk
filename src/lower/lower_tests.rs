@@ -184,7 +184,7 @@ pub mod tests {
         assert!(break_ir.contains("loop_exit(())"), "{break_ir}");
 
         let continue_ir = lowered_ir(
-            "func f() -> Int {\n\tloop {\n\t\tlet s = \"a\" + \"b\"\n\t\tcontinue\n\t}\n\t0\n}\nf()",
+            "func f() -> Int {\n\tlet keep_going = true\n\tloop {\n\t\tlet s = \"a\" + \"b\"\n\t\tif keep_going {\n\t\t\tcontinue\n\t\t}\n\t\tbreak\n\t}\n\t0\n}\nf()",
         );
         assert!(
             continue_ir.contains("free(get_field(0, get_field(0, var let_s)))"),

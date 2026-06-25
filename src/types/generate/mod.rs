@@ -248,8 +248,35 @@ struct BindingGroupChecker<'s, 'a> {
 /// expression; Return/Break/Continue diverge, so they are `Never` at joins).
 enum StmtValue {
     Value(Ty),
-    Divergent,
+    Divergent { report_unreachable: bool },
     Unit,
+}
+
+impl StmtValue {
+    fn divergent() -> Self {
+        StmtValue::Divergent {
+            report_unreachable: false,
+        }
+    }
+
+    fn divergent_loop() -> Self {
+        StmtValue::Divergent {
+            report_unreachable: true,
+        }
+    }
+
+    fn is_divergent(&self) -> bool {
+        matches!(self, StmtValue::Divergent { .. })
+    }
+
+    fn reports_unreachable(&self) -> bool {
+        matches!(
+            self,
+            StmtValue::Divergent {
+                report_unreachable: true
+            }
+        )
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

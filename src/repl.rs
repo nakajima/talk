@@ -365,12 +365,13 @@ fn value_names(types: &crate::types::TypeOutput) -> crate::vm::interp::ValueName
             && (fields == ["base", "length", "capacity"]
                 || fields == ["storage", "length", "capacity"])
         {
-            names.string_struct = Some(*symbol);
+            names.string_struct = Some(crate::vm::runtime_symbol(*symbol));
         }
+        let runtime_symbol = crate::vm::runtime_symbol(*symbol);
         names
             .fields
-            .insert(*symbol, info.fields.keys().cloned().collect());
-        names.types.insert(*symbol, display);
+            .insert(runtime_symbol, info.fields.keys().cloned().collect());
+        names.types.insert(runtime_symbol, display);
     }
     for (symbol, info) in &types.catalog.enums {
         let display = types
@@ -378,10 +379,11 @@ fn value_names(types: &crate::types::TypeOutput) -> crate::vm::interp::ValueName
             .get(symbol)
             .cloned()
             .unwrap_or_else(|| symbol.to_string());
+        let runtime_symbol = crate::vm::runtime_symbol(*symbol);
         names
             .cases
-            .insert(*symbol, info.variants.keys().cloned().collect());
-        names.types.insert(*symbol, display);
+            .insert(runtime_symbol, info.variants.keys().cloned().collect());
+        names.types.insert(runtime_symbol, display);
     }
     names
 }

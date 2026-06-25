@@ -1476,7 +1476,7 @@ pub mod tests {
                     Insn::Alloc { dest: 1, count: 0 },
                     Insn::RecordNew {
                         dest: 3,
-                        symbol: Symbol::String,
+                        symbol: crate::vm::runtime_symbol(Symbol::String),
                         args_start: 0,
                         args_len: 3,
                     },
@@ -1494,7 +1494,7 @@ pub mod tests {
             entry: 0,
         };
         let names = ValueNames {
-            string_struct: Some(Symbol::String),
+            string_struct: Some(crate::vm::runtime_symbol(Symbol::String)),
             ..ValueNames::default()
         };
         let mut io = CaptureIO::default();
@@ -1514,7 +1514,7 @@ pub mod tests {
                     Insn::Alloc { dest: 1, count: 0 },
                     Insn::RecordNew {
                         dest: 3,
-                        symbol: Symbol::String,
+                        symbol: crate::vm::runtime_symbol(Symbol::String),
                         args_start: 0,
                         args_len: 3,
                     },
@@ -1531,7 +1531,7 @@ pub mod tests {
             entry: 0,
         };
         let names = ValueNames {
-            string_struct: Some(Symbol::String),
+            string_struct: Some(crate::vm::runtime_symbol(Symbol::String)),
             ..ValueNames::default()
         };
         let mut io = CaptureIO::default();

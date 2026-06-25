@@ -2236,6 +2236,40 @@ pub mod tests {
     }
 
     #[test]
+    fn conditionless_loop_without_break_is_never() {
+        let t = check("// no-core\nfunc nope() -> Never {\n\tloop {}\n}");
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn conditionless_loop_with_break_completes_as_unit() {
+        let t = check("// no-core\nfunc nope() -> Never {\n\tloop {\n\t\tbreak\n\t}\n}");
+        let errors = type_errors(&t);
+        assert!(
+            !errors.is_empty(),
+            "a loop with a break can complete normally, so it is not Never"
+        );
+    }
+
+    #[test]
+    fn nested_loop_break_does_not_exit_outer_loop() {
+        let t = check(
+            "// no-core\nfunc nope() -> Never {\n\tloop {\n\t\tloop {\n\t\t\tbreak\n\t\t}\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn code_after_divergent_loop_is_unreachable() {
+        let t = check("// no-core\nfunc nope() -> Int {\n\tloop {}\n\t123\n}");
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("unreachable")),
+            "expected an unreachable-code error, got {errors:?}"
+        );
+    }
+
+    #[test]
     fn continue_payload_in_a_handler_checks_clean() {
         let t = check(
             "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\tcontinue p\n}\n'ask(1)",

@@ -672,12 +672,40 @@ pub fn render_bytecode_from(
 ) -> Result<String, String> {
     let mut lowered = lower_for_display(name, source)?;
     let module = lowered.schedule()?;
-    Ok(module.render_styled(styles))
+    let vm_styles = crate::vm::Styles {
+        keyword: styles.keyword,
+        func: styles.func,
+        reset: styles.reset,
+    };
+    Ok(module.render_styled(&vm_styles))
 }
 
 /// Compile, schedule, and encode a VM module as Talk bytecode.
 pub fn compile_bytecode_from(name: &str, source: Source) -> Result<Vec<u8>, String> {
-    let mut lowered = lower_for_display(name, source)?;
+    compile_bytecode_sources(name, vec![source])
+}
+
+/// Compile sources, schedule, and encode a VM module as Talk bytecode.
+pub fn compile_bytecode_sources(name: &str, sources: Vec<Source>) -> Result<Vec<u8>, String> {
+    let driver = Driver::new(sources, DriverConfig::new(name));
+    let parsed = driver.parse().map_err(|err| format!("{err:?}"))?;
+    let resolved = parsed.resolve_names().map_err(|err| format!("{err:?}"))?;
+    let typed = resolved.type_check();
+    if typed.has_errors() {
+        return Err(typed
+            .diagnostics()
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    let mut lowered = typed.lower();
+    if !lowered.phase.diagnostics.is_empty() {
+        return Err(format!(
+            "not yet supported by the backend: {}",
+            lowered.phase.diagnostics.join("; ")
+        ));
+    }
     let module = lowered.schedule()?;
     module.encode_bytecode().map_err(|err| err.to_string())
 }

@@ -18,10 +18,10 @@
 //! "top-level function" recovery). Sharing one continuation between two
 //! chunks is a construction error and is rejected.
 
-use crate::lambda_g::expr::{Const, ExprId, ExprKind, Op, TyKind};
+use crate::lambda_g::expr::{CmpOp as IrCmpOp, Const, ExprId, ExprKind, Op, TyKind};
 use crate::lambda_g::program::{Label, Program};
 use crate::vm::interp::Value;
-use crate::vm::{Chunk, Insn, IoOp, Module};
+use crate::vm::{runtime_symbol, Chunk, CmpOp, Insn, IoOp, MemKind, Module};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub fn schedule(
@@ -669,7 +669,7 @@ impl<'a> ChunkBuilder<'a> {
                     dest,
                     a,
                     b,
-                    op: cmp,
+                    op: cmp_op(cmp),
                 });
                 self.memo.insert(e, dest);
                 Ok(dest)
@@ -698,7 +698,7 @@ impl<'a> ChunkBuilder<'a> {
                 let dest = self.fresh();
                 self.code.push(Insn::RecordNew {
                     dest,
-                    symbol,
+                    symbol: runtime_symbol(symbol),
                     args_start,
                     args_len,
                 });
@@ -717,7 +717,7 @@ impl<'a> ChunkBuilder<'a> {
                 let dest = self.fresh();
                 self.code.push(Insn::VariantNew {
                     dest,
-                    symbol,
+                    symbol: runtime_symbol(symbol),
                     tag,
                     args_start,
                     args_len,
@@ -754,7 +754,7 @@ impl<'a> ChunkBuilder<'a> {
                 let dest = self.fresh();
                 self.code.push(Insn::ExistentialPack {
                     dest,
-                    protocol,
+                    protocol: runtime_symbol(protocol),
                     args_start,
                     args_len,
                 });
@@ -819,7 +819,7 @@ impl<'a> ChunkBuilder<'a> {
                 Ok(dest)
             }
             Op::Load => {
-                let Some(kind) = crate::vm::MemKind::of(self.p.ty_kind(self.p.expr(e).ty)) else {
+                let Some(kind) = mem_kind_of(self.p.ty_kind(self.p.expr(e).ty)) else {
                     return self.eval_trap("vm: load of a type that cannot live in memory");
                 };
                 let ptr = self.eval(args[0])?;
@@ -829,7 +829,7 @@ impl<'a> ChunkBuilder<'a> {
             }
             Op::Store => {
                 let value_ty = self.p.expr_ty(args[1]);
-                let Some(kind) = crate::vm::MemKind::of(self.p.ty_kind(value_ty)) else {
+                let Some(kind) = mem_kind_of(self.p.ty_kind(value_ty)) else {
                     return self.eval_trap("vm: store of a type that cannot live in memory");
                 };
                 let ptr = self.eval(args[0])?;
@@ -930,5 +930,32 @@ impl<'a> ChunkBuilder<'a> {
         let trap = self.trap(message.to_string());
         self.code.push(trap);
         Ok(self.fresh())
+    }
+}
+
+fn cmp_op(op: IrCmpOp) -> CmpOp {
+    match op {
+        IrCmpOp::Eq => CmpOp::Eq,
+        IrCmpOp::Ne => CmpOp::Ne,
+        IrCmpOp::Lt => CmpOp::Lt,
+        IrCmpOp::Le => CmpOp::Le,
+        IrCmpOp::Gt => CmpOp::Gt,
+        IrCmpOp::Ge => CmpOp::Ge,
+    }
+}
+
+fn mem_kind_of(ty: &TyKind) -> Option<MemKind> {
+    match ty {
+        TyKind::Byte => Some(MemKind::Byte),
+        TyKind::I64 => Some(MemKind::I64),
+        TyKind::F64 => Some(MemKind::F64),
+        TyKind::Bool => Some(MemKind::Bool),
+        TyKind::Ptr => Some(MemKind::Ptr),
+        TyKind::Boxed(_)
+        | TyKind::Variant(_)
+        | TyKind::Tuple(_)
+        | TyKind::Existential(_)
+        | TyKind::Erased => Some(MemKind::Boxed),
+        TyKind::Void | TyKind::Bot | TyKind::Fn(..) | TyKind::Cell(_) => None,
     }
 }

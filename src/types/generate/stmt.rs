@@ -11,7 +11,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     Some(expr) => self.check_expr(expr, &expected, CtReason::Return, ctx),
                     None => self.emit_eq(expected, Ty::unit(), stmt.id, CtReason::Return),
                 }
-                StmtValue::Divergent
+                StmtValue::divergent()
             }
 
             StmtKind::If(condition, then_block, else_block) => {
@@ -22,9 +22,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     condition.id,
                     CtReason::Condition,
                 );
-                self.infer_block_value(then_block, ctx);
+                let then_ty = self.infer_block_value(then_block, ctx);
                 if let Some(else_block) = else_block {
-                    self.infer_block_value(else_block, ctx);
+                    let else_ty = self.infer_block_value(else_block, ctx);
+                    if then_ty.is_never() && else_ty.is_never() {
+                        return StmtValue::divergent();
+                    }
                 }
                 StmtValue::Unit
             }
@@ -46,10 +49,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     );
                 }
                 self.infer_block_value(body, ctx);
-                StmtValue::Unit
+                if condition.is_none() && !Self::block_breaks_current_loop(body) {
+                    StmtValue::divergent_loop()
+                } else {
+                    StmtValue::Unit
+                }
             }
 
-            StmtKind::Break => StmtValue::Divergent,
+            StmtKind::Break => StmtValue::divergent(),
             StmtKind::Continue(payload) => {
                 // A bare `continue` re-enters the enclosing loop; with a
                 // payload it resumes the enclosing handler's perform.
@@ -64,7 +71,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         ),
                     }
                 }
-                StmtValue::Divergent
+                StmtValue::divergent()
             }
 
             StmtKind::For { .. } => {
@@ -184,6 +191,115 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     .push((TypeError::InvalidAssignmentTarget, lhs.id));
                 ty
             }
+        }
+    }
+
+    fn block_breaks_current_loop(block: &Block) -> bool {
+        block.body.iter().any(Self::node_breaks_current_loop)
+    }
+
+    fn node_breaks_current_loop(node: &Node) -> bool {
+        match node {
+            Node::Decl(decl) => Self::decl_breaks_current_loop(decl),
+            Node::Stmt(stmt) => Self::stmt_breaks_current_loop(stmt),
+            Node::Expr(expr) => Self::expr_breaks_current_loop(expr),
+            Node::Block(block) => Self::block_breaks_current_loop(block),
+            Node::MatchArm(arm) => Self::block_breaks_current_loop(&arm.body),
+            Node::RecordField(field) => Self::expr_breaks_current_loop(&field.value),
+            Node::CallArg(arg) => Self::expr_breaks_current_loop(&arg.value),
+            Node::Func(_) => false,
+            _ => false,
+        }
+    }
+
+    fn decl_breaks_current_loop(decl: &Decl) -> bool {
+        match &decl.kind {
+            DeclKind::Let { rhs, .. } => rhs.as_ref().is_some_and(Self::expr_breaks_current_loop),
+            _ => false,
+        }
+    }
+
+    fn stmt_breaks_current_loop(stmt: &Stmt) -> bool {
+        match &stmt.kind {
+            StmtKind::Break => true,
+            StmtKind::Expr(expr)
+            | StmtKind::Return(Some(expr))
+            | StmtKind::Continue(Some(expr)) => Self::expr_breaks_current_loop(expr),
+            StmtKind::If(condition, then_block, else_block) => {
+                Self::expr_breaks_current_loop(condition)
+                    || Self::block_breaks_current_loop(then_block)
+                    || else_block
+                        .as_ref()
+                        .is_some_and(Self::block_breaks_current_loop)
+            }
+            StmtKind::Assignment(lhs, rhs) => {
+                Self::expr_breaks_current_loop(lhs) || Self::expr_breaks_current_loop(rhs)
+            }
+            StmtKind::Loop(..) | StmtKind::For { .. } => false,
+            StmtKind::Handling { body, .. } => Self::block_breaks_current_loop(body),
+            StmtKind::Return(None) | StmtKind::Continue(None) => false,
+        }
+    }
+
+    fn expr_breaks_current_loop(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
+                items.iter().any(Self::expr_breaks_current_loop)
+            }
+            ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
+                Self::expr_breaks_current_loop(inner)
+            }
+            ExprKind::Binary(lhs, _, rhs) => {
+                Self::expr_breaks_current_loop(lhs) || Self::expr_breaks_current_loop(rhs)
+            }
+            ExprKind::Block(block) => Self::block_breaks_current_loop(block),
+            ExprKind::Call {
+                callee,
+                args,
+                trailing_block: _,
+                ..
+            } => {
+                Self::expr_breaks_current_loop(callee)
+                    || args
+                        .iter()
+                        .any(|arg| Self::expr_breaks_current_loop(&arg.value))
+            }
+            ExprKind::Member(receiver, ..) => receiver
+                .as_ref()
+                .is_some_and(|receiver| Self::expr_breaks_current_loop(receiver)),
+            ExprKind::Func(_) => false,
+            ExprKind::If(condition, then_block, else_block) => {
+                Self::expr_breaks_current_loop(condition)
+                    || Self::block_breaks_current_loop(then_block)
+                    || Self::block_breaks_current_loop(else_block)
+            }
+            ExprKind::Match(scrutinee, arms) => {
+                Self::expr_breaks_current_loop(scrutinee)
+                    || arms
+                        .iter()
+                        .any(|arm| Self::block_breaks_current_loop(&arm.body))
+            }
+            ExprKind::RecordLiteral { fields, spread } => {
+                fields
+                    .iter()
+                    .any(|field| Self::expr_breaks_current_loop(&field.value))
+                    || spread
+                        .as_ref()
+                        .is_some_and(|spread| Self::expr_breaks_current_loop(spread))
+            }
+            ExprKind::CallEffect { args, .. } => args
+                .iter()
+                .any(|arg| Self::expr_breaks_current_loop(&arg.value)),
+            ExprKind::Incomplete(_)
+            | ExprKind::InlineIR(_)
+            | ExprKind::LiteralInt(_)
+            | ExprKind::LiteralFloat(_)
+            | ExprKind::LiteralTrue
+            | ExprKind::LiteralFalse
+            | ExprKind::LiteralString(_)
+            | ExprKind::Variable(_)
+            | ExprKind::Constructor(_)
+            | ExprKind::RowVariable(_) => false,
         }
     }
 }

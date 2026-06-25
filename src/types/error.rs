@@ -112,6 +112,7 @@ pub enum TypeError {
     /// Everything this arm matches is already matched by an earlier arm
     /// (reported as a warning, not an error).
     UnreachableMatchArm,
+    UnreachableCode,
     CannotInfer,
     Unsupported(String),
 }
@@ -279,6 +280,9 @@ impl Display for TypeError {
                     f,
                     "This arm never runs: the arms above it already match everything it could"
                 )
+            }
+            TypeError::UnreachableCode => {
+                write!(f, "This code is unreachable")
             }
             TypeError::CannotInfer => {
                 write!(f, "Cannot infer type; add an annotation")
