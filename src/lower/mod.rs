@@ -1135,7 +1135,9 @@ impl<'a> Lowering<'a> {
                     let ptr = this.p.var(array_k);
                     let record_ty = this.p.ty(TyKind::Boxed(array_symbol));
                     let n = this.p.int(count as i64);
-                    let storage = this.array_storage_value(array_symbol, ptr);
+                    let Some(storage) = this.array_storage_value(array_symbol, ptr) else {
+                        return this.dead_end("invalid_array_storage_wrapper");
+                    };
                     let record =
                         this.p
                             .primop(Op::RecordNew(array_symbol), &[storage, n, n], record_ty);
@@ -1252,7 +1254,9 @@ impl<'a> Lowering<'a> {
                 let base = self.p.constant(Const::StaticPtr(offset), ptr_ty);
                 let len = self.p.int(bytes.len() as i64);
                 let ty = self.p.ty(TyKind::Boxed(string_symbol));
-                let storage = self.string_storage_value(string_symbol, base);
+                let Some(storage) = self.string_storage_value(string_symbol, base) else {
+                    return Some(self.dead_end("invalid_string_storage_wrapper"));
+                };
                 Some(
                     self.p
                         .primop(Op::RecordNew(string_symbol), &[storage, len, len], ty),
@@ -1768,21 +1772,21 @@ impl<'a> Lowering<'a> {
     /// Array literals allocate raw bytes internally, but the public Array
     /// storage field may now be a managed storage wrapper. If the core
     /// Array still has the old RawPtr layout, leave the pointer untouched.
-    fn array_storage_value(&mut self, array_symbol: Symbol, ptr: ExprId) -> ExprId {
+    fn array_storage_value(&mut self, array_symbol: Symbol, ptr: ExprId) -> Option<ExprId> {
         let Some(field_ty) = self
             .units
             .iter()
             .find_map(|unit| unit.types.catalog.structs.get(&array_symbol))
             .and_then(|info| info.fields.get("storage").map(|(_, ty)| ty.clone()))
         else {
-            return ptr;
+            return Some(ptr);
         };
         self.storage_wrapper_value(&field_ty, ptr, "Array")
     }
 
     /// String literals also start from a raw pointer into static bytes, while
     /// the source-level String may store a managed byte storage wrapper.
-    fn string_storage_value(&mut self, string_symbol: Symbol, ptr: ExprId) -> ExprId {
+    fn string_storage_value(&mut self, string_symbol: Symbol, ptr: ExprId) -> Option<ExprId> {
         let Some(field_ty) = self
             .units
             .iter()
@@ -1794,42 +1798,61 @@ impl<'a> Lowering<'a> {
                     .map(|(_, ty)| ty.clone())
             })
         else {
-            return ptr;
+            return Some(ptr);
         };
         self.storage_wrapper_value(&field_ty, ptr, "String")
     }
 
-    fn storage_wrapper_value(&mut self, field_ty: &CheckTy, ptr: ExprId, owner: &str) -> ExprId {
+    fn storage_wrapper_value(
+        &mut self,
+        field_ty: &CheckTy,
+        ptr: ExprId,
+        owner: &str,
+    ) -> Option<ExprId> {
         let CheckTy::Nominal(storage_symbol, _) = field_ty else {
-            return ptr;
+            self.diagnostics.push(format!(
+                "lowering: {owner} storage field is not RawPtr or a RawPtr wrapper"
+            ));
+            return None;
         };
         if *storage_symbol == Symbol::RawPtr {
-            return ptr;
+            return Some(ptr);
         }
         let Some(storage_info) = self
             .units
             .iter()
             .find_map(|unit| unit.types.catalog.structs.get(storage_symbol))
         else {
-            return ptr;
+            self.diagnostics.push(format!(
+                "lowering: {owner} storage wrapper does not resolve to a struct"
+            ));
+            return None;
         };
+        if storage_info.fields.len() != 1 {
+            self.diagnostics.push(format!(
+                "lowering: {owner} storage wrapper does not expose a RawPtr field"
+            ));
+            return None;
+        }
         let Some((_, CheckTy::Nominal(head, _))) =
             storage_info.fields.values().next().map(|(_, ty)| ((), ty))
         else {
             self.diagnostics.push(format!(
                 "lowering: {owner} storage wrapper does not expose a RawPtr field"
             ));
-            return ptr;
+            return None;
         };
         if *head != Symbol::RawPtr {
             self.diagnostics.push(format!(
                 "lowering: {owner} storage wrapper does not expose a RawPtr field"
             ));
-            return ptr;
+            return None;
         }
         let storage_ty = self.map_ty(field_ty);
-        self.p
-            .primop(Op::RecordNew(*storage_symbol), &[ptr], storage_ty)
+        Some(
+            self.p
+                .primop(Op::RecordNew(*storage_symbol), &[ptr], storage_ty),
+        )
     }
 
     /// GetField for a member read: through member_resolutions when the

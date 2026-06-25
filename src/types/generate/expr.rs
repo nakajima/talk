@@ -22,7 +22,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 Ty::Borrow(..) => self.emit_eq(expected.clone(), found, expr.id, reason),
                 _ => self.emit_eq((*inner).clone(), found, expr.id, reason),
             }
-            self.artifacts.node_types.insert(expr.id, expected.clone());
             return;
         }
 

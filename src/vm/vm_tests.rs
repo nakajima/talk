@@ -1411,6 +1411,60 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_rejects_io_open_at_one_past_heap_allocation() {
+        let error = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Const { dest: 4, k: 1 },
+                Insn::Const { dest: 5, k: 1 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Add {
+                    dest: 2,
+                    a: 1,
+                    b: 0,
+                },
+                Insn::Io {
+                    dest: 3,
+                    op: crate::vm::IoOp::Open,
+                    a: 2,
+                    b: 4,
+                    c: 5,
+                },
+                Insn::Ret { src: 3 },
+            ],
+            vec![Value::I64(4), Value::I64(0)],
+        )
+        .expect_err("one-past heap pointer should fail");
+        assert!(
+            error.contains("out of bounds") || error.contains("invalid pointer"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn vm_rejects_io_open_at_zero_length_heap_allocation() {
+        let error = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Const { dest: 4, k: 0 },
+                Insn::Const { dest: 5, k: 0 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Io {
+                    dest: 2,
+                    op: crate::vm::IoOp::Open,
+                    a: 1,
+                    b: 4,
+                    c: 5,
+                },
+                Insn::Ret { src: 2 },
+            ],
+            vec![Value::I64(0)],
+        )
+        .expect_err("zero-length heap pointer should fail");
+        assert!(error.contains("invalid pointer"), "{error}");
+    }
+
+    #[test]
     fn bytecode_renders_readably() {
         // `talk ir` shows the scheduled bytecode; pin the format on a
         // hand-built module so it stays readable and stable.

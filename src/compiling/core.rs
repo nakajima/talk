@@ -131,9 +131,22 @@ mod tests {
             module.exports.get("Storage").copied(),
             Some(Symbol::Storage)
         );
+        assert_eq!(
+            module.exports.get("Borrowed").copied(),
+            Some(Symbol::Borrowed)
+        );
+        assert_eq!(module.exports.get("Owner").copied(), Some(Symbol::Owner));
 
         assert!(typed.types.catalog.structs.contains_key(&Symbol::String));
         assert!(typed.types.catalog.structs.contains_key(&Symbol::Array));
         assert!(typed.types.catalog.structs.contains_key(&Symbol::Storage));
+        assert!(
+            typed
+                .types
+                .catalog
+                .protocols
+                .contains_key(&Symbol::Borrowed)
+        );
+        assert!(typed.types.catalog.protocols.contains_key(&Symbol::Owner));
     }
 }

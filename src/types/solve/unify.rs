@@ -53,6 +53,10 @@ impl<'s> Solver<'s> {
                 worklist.push(Constraint::Eq((**inner).clone(), other.clone(), origin));
             }
 
+            (other, Ty::Borrow(_, inner)) if origin.reason == CtReason::Apply => {
+                worklist.push(Constraint::Eq(other.clone(), (**inner).clone(), origin));
+            }
+
             (Ty::Var(x), Ty::Var(y)) if self.store.find(x.0) == self.store.find(y.0) => {}
             (Ty::Var(x), Ty::Var(y)) => {
                 let x_root = self.store.find(x.0);

@@ -1888,6 +1888,25 @@ pub mod tests {
     }
 
     #[test]
+    fn auto_borrow_does_not_overwrite_argument_node_type() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &String) -> Int {\n\t0\n}\nlet s = String(length: 4)\nlet y = len(s)",
+        );
+        assert_clean(&t);
+        let borrowed_exprs: Vec<_> = t
+            .phase
+            .types
+            .node_types
+            .values()
+            .filter(|ty| ty.render_mono() == "&String")
+            .collect();
+        assert!(
+            borrowed_exprs.is_empty(),
+            "auto-borrow should not stamp an owned argument expression as &String: {borrowed_exprs:?}"
+        );
+    }
+
+    #[test]
     fn mutable_borrow_parameters_support_member_access() {
         let t = check(
             "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &mut String) -> Int {\n\ts.length\n}",

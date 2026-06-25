@@ -2,6 +2,7 @@ use super::*;
 use crate::compiling::module::ModuleId;
 use crate::name_resolution::symbol::{EffectId, StructId, TypeParameterId};
 use crate::types::constraint::CtReason;
+use crate::types::ty::BorrowKind;
 
 fn origin() -> CtOrigin {
     CtOrigin::new(NodeID::ANY, CtReason::Apply)
@@ -83,6 +84,16 @@ fn level_adjustment_propagates_outward() {
     )]);
     assert!(h.errors.is_empty(), "{:?}", h.errors);
     assert_eq!(h.store.level(inner.0), Level(0));
+}
+
+#[test]
+fn apply_auto_borrow_unifies_in_either_orientation() {
+    let mut h = Harness::new();
+    let int = Ty::Nominal(Symbol::Int, vec![]);
+    let borrowed_int = Ty::Borrow(BorrowKind::Shared, Box::new(int.clone()));
+    let residual = h.solve(vec![Constraint::Eq(int, borrowed_int, origin())]);
+    assert!(h.errors.is_empty(), "{:?}", h.errors);
+    assert!(residual.is_empty(), "{residual:?}");
 }
 
 #[test]

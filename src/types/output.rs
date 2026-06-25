@@ -7,6 +7,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
+use crate::node_kinds::expr::Expr;
 use crate::types::ty::{Scheme, Ty};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,6 +23,22 @@ pub struct ExistentialPack {
 pub enum MemberResolution {
     Direct(Symbol),
     ViaConformance { protocol: Symbol, witness: Symbol },
+}
+
+pub(crate) fn stored_field_symbol(types: &TypeOutput, expr: &Expr) -> Option<Symbol> {
+    let MemberResolution::Direct(property) = types.member_resolutions.get(&expr.id)? else {
+        return None;
+    };
+    let in_catalog = types.catalog.structs.values().any(|info| {
+        info.fields
+            .values()
+            .any(|(field_symbol, _)| field_symbol == property)
+    });
+    let has_field_scheme = types
+        .schemes
+        .get(property)
+        .is_some_and(|scheme| !matches!(scheme.ty, Ty::Func(..)));
+    (in_catalog || has_field_scheme).then_some(*property)
 }
 
 #[derive(Clone, Default, Debug)]

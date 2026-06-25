@@ -946,14 +946,16 @@ impl NameResolver {
         }
 
         let module_id = self.current_module_id;
-        let well_known_core_struct =
-            if at_module_scope && module_id == ModuleId::Core && matches!(kind, Symbol::Struct(..))
-            {
-                Symbol::well_known_core_struct(&name_str)
-            } else {
-                None
-            };
-        let symbol = if let Some(symbol) = well_known_core_struct {
+        let well_known_core_symbol = if at_module_scope && module_id == ModuleId::Core {
+            match kind {
+                Symbol::Struct(..) => Symbol::well_known_core_struct(&name_str),
+                Symbol::Protocol(..) => Symbol::well_known_core_protocol(&name_str),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let symbol = if let Some(symbol) = well_known_core_symbol {
             symbol
         } else {
             match kind {

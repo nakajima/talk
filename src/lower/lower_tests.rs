@@ -28,6 +28,28 @@ pub mod tests {
         lowered.eval_for_tests().expect("evaluation")
     }
 
+    fn lowered_ir(code: &'static str) -> String {
+        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("LowerTest"));
+        let typed = driver
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
+        let mut lowered = typed.lower();
+        assert!(
+            lowered.phase.diagnostics.is_empty(),
+            "lowering diagnostics: {:?}",
+            lowered.phase.diagnostics
+        );
+        lowered.phase.program.render()
+    }
+
     #[test]
     fn generic_effect_handlers_are_diagnosed() {
         // The checker accepts generic effects (instantiated per perform);
@@ -137,6 +159,27 @@ pub mod tests {
             ),
             EvalValue::I64(6)
         );
+    }
+
+    #[test]
+    fn break_and_continue_drop_owned_loop_locals() {
+        let break_ir = lowered_ir(
+            "func f() -> Int {\n\tloop {\n\t\tlet s = \"a\" + \"b\"\n\t\tbreak\n\t}\n\t0\n}\nf()",
+        );
+        assert!(
+            break_ir.contains("free(get_field(0, get_field(0, var let_s)))"),
+            "{break_ir}"
+        );
+        assert!(break_ir.contains("loop_exit(())"), "{break_ir}");
+
+        let continue_ir = lowered_ir(
+            "func f() -> Int {\n\tloop {\n\t\tlet s = \"a\" + \"b\"\n\t\tcontinue\n\t}\n\t0\n}\nf()",
+        );
+        assert!(
+            continue_ir.contains("free(get_field(0, get_field(0, var let_s)))"),
+            "{continue_ir}"
+        );
+        assert!(continue_ir.contains("loop_head(())"), "{continue_ir}");
     }
 
     #[test]

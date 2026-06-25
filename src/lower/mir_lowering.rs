@@ -709,7 +709,9 @@ impl<'a> Lowering<'a> {
                     .find(|(header_block, _, _, _)| header_block == target)
                 {
                     let void = self.p.void();
-                    return self.p.app(*header, void);
+                    let jump = self.p.app(*header, void);
+                    let drops = self.loop_jump_drops(ctx, *header);
+                    return self.lower_drop_bindings_then(ctx, &drops, jump);
                 }
                 if let Some((_, _, _, exit)) = loops
                     .iter()
@@ -717,7 +719,9 @@ impl<'a> Lowering<'a> {
                     .find(|(_, _, exit_block, _)| exit_block == target)
                 {
                     let void = self.p.void();
-                    return self.p.app(*exit, void);
+                    let jump = self.p.app(*exit, void);
+                    let drops = self.loop_jump_drops(ctx, *exit);
+                    return self.lower_drop_bindings_then(ctx, &drops, jump);
                 }
                 self.lower_mir_block(body, *target, ctx, k, loops)
             }
@@ -789,6 +793,18 @@ impl<'a> Lowering<'a> {
                 self.p.app(k, void)
             }
         }
+    }
+
+    fn loop_jump_drops(&self, ctx: &Ctx, target: ExprId) -> Vec<DropBinding> {
+        let Some(loop_binding) = ctx
+            .loops
+            .iter()
+            .rev()
+            .find(|loop_binding| loop_binding.header == target || loop_binding.exit == target)
+        else {
+            return vec![];
+        };
+        ctx.drop_stack[loop_binding.drop_depth..].to_vec()
     }
 
     fn lower_mir_continue(&mut self, ctx: &Ctx, k: ExprId) -> ExprId {

@@ -7,7 +7,6 @@ use crate::{
     ast::{AST, NameResolved},
     compiling::{driver::Source, module::ModuleId},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
-    label::Label,
     mir,
     name_resolution::{
         name_resolver::ResolvedNames,
@@ -27,6 +26,7 @@ use crate::{
     },
     types::{
         TypeOutput,
+        output::stored_field_symbol,
         ty::{BorrowKind, Row, Ty},
     },
 };
@@ -496,6 +496,75 @@ impl KeyPath {
 type BorrowEnv = BorrowInfoEnv;
 type MoveEnv = FxHashMap<KeyPath, NodeID>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MarkerAbility {
+    Borrowed,
+    Owner,
+}
+
+impl MarkerAbility {
+    fn protocol(self) -> Symbol {
+        match self {
+            MarkerAbility::Borrowed => Symbol::Borrowed,
+            MarkerAbility::Owner => Symbol::Owner,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct DropState {
+    initialized_all: FxHashSet<KeyPath>,
+    initialized_any: FxHashSet<KeyPath>,
+    moved_all: FxHashMap<KeyPath, NodeID>,
+    moved_any: FxHashMap<KeyPath, NodeID>,
+    root_tys: FxHashMap<Symbol, Ty>,
+}
+
+impl DropState {
+    fn merge_from(&mut self, other: &Self) -> bool {
+        let before = self.clone();
+        self.initialized_all
+            .retain(|key_path| other.initialized_all.contains(key_path));
+        self.initialized_any
+            .extend(other.initialized_any.iter().cloned());
+        self.moved_all
+            .retain(|key_path, _| other.moved_all.contains_key(key_path));
+        self.moved_any.extend(other.moved_any.clone());
+        self.root_tys.extend(other.root_tys.clone());
+        before != *self
+    }
+
+    fn note_move(&mut self, key_path: KeyPath, id: NodeID) {
+        self.moved_all.insert(key_path.clone(), id);
+        self.moved_any.insert(key_path, id);
+    }
+
+    fn initialize_key_path(&mut self, key_path: KeyPath) {
+        self.initialized_all.insert(key_path.clone());
+        self.initialized_any.insert(key_path.clone());
+        self.moved_all
+            .retain(|moved_path, _| !key_path.contains(moved_path));
+        self.moved_any
+            .retain(|moved_path, _| !key_path.contains(moved_path));
+    }
+
+    fn mark_uninitialized(&mut self, key_path: KeyPath, id: NodeID) {
+        self.initialized_all.remove(&key_path);
+        self.initialized_any.remove(&key_path);
+        self.note_move(key_path, id);
+    }
+
+    fn finish_storage(&mut self, key_path: &KeyPath) {
+        self.initialized_all.remove(key_path);
+        self.initialized_any.remove(key_path);
+        self.root_tys.remove(&key_path.root);
+        self.moved_all
+            .retain(|moved_path, _| !key_path.contains(moved_path));
+        self.moved_any
+            .retain(|moved_path, _| !key_path.contains(moved_path));
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BorrowInfo {
     origin: BorrowOrigin,
@@ -674,7 +743,7 @@ impl OwnershipChecker<'_> {
             .chain(self.types.catalog.enums.keys())
             .copied()
         {
-            if self.symbol_has_ability(symbol, "Borrowed") {
+            if self.symbol_has_ability(symbol, MarkerAbility::Borrowed) {
                 self.output.borrowed_types.insert(symbol);
             }
         }
@@ -693,7 +762,7 @@ impl OwnershipChecker<'_> {
             if self.is_borrowed_symbol(symbol) {
                 continue;
             }
-            if self.symbol_has_ability(symbol, "Owner")
+            if self.symbol_has_ability(symbol, MarkerAbility::Owner)
                 || self.nominal_contains_owned(symbol, &[], &mut FxHashSet::default())
             {
                 self.output.owned_types.insert(symbol);
@@ -1469,76 +1538,20 @@ impl OwnershipChecker<'_> {
     }
 
     fn elaborate_drops(&mut self, body_id: BodyId, body: &mut mir::Body<'_>) {
-        let mut initialized: FxHashSet<KeyPath> = FxHashSet::default();
-        let mut moved: FxHashMap<KeyPath, NodeID> = FxHashMap::default();
-        let mut root_tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
         let locals = body.locals.clone();
-        for block in &mut body.blocks {
+        let in_states = self.drop_entry_states(body, &locals);
+
+        for (block_index, block) in body.blocks.iter_mut().enumerate() {
+            let mut state = in_states
+                .get(block_index)
+                .and_then(Clone::clone)
+                .unwrap_or_default();
             for statement in &mut block.statements {
                 let point = OwnershipPoint {
                     body: body_id,
                     point: statement.point.0 as u32,
                 };
                 match &mut statement.kind {
-                    mir::Statement::StorageLive { .. } => {}
-                    mir::Statement::Bind { lhs, rhs, .. } => {
-                        if let Some(rhs) = rhs {
-                            self.note_drop_move(rhs, point, &mut moved);
-                            self.note_capture_drop_moves(rhs, point, &mut moved);
-                        }
-                        let binders = lhs.collect_binders();
-                        let rhs_ty =
-                            rhs.and_then(|rhs| self.types.node_types.get(&rhs.id).cloned());
-                        for (id, symbol) in binders.iter().copied() {
-                            if binders.len() == 1 {
-                                if let Some(ty) = rhs_ty.clone() {
-                                    root_tys.insert(symbol, ty);
-                                }
-                            } else if let Some(ty) = self.symbol_ty(symbol).cloned() {
-                                root_tys.insert(symbol, ty);
-                            }
-                            let key_path = KeyPath::root(symbol);
-                            if rhs.is_some() {
-                                initialized.insert(key_path.clone());
-                                moved.retain(|moved_path, _| !key_path.contains(moved_path));
-                            } else {
-                                initialized.remove(&key_path);
-                                moved.insert(key_path, id);
-                            }
-                        }
-                    }
-                    mir::Statement::Assign {
-                        lhs, rhs, target, ..
-                    } => {
-                        self.note_drop_move(rhs, point, &mut moved);
-                        self.note_capture_drop_moves(rhs, point, &mut moved);
-                        if let Some(target) = target
-                            .as_ref()
-                            .and_then(|target| Self::key_path_from_mir_locals(&locals, target))
-                            .or_else(|| self.key_path(lhs))
-                        {
-                            if target.fields.is_empty()
-                                && let Some(ty) = self.types.node_types.get(&lhs.id).cloned()
-                            {
-                                root_tys.insert(target.root, ty);
-                            }
-                            initialized.insert(target.clone());
-                            moved.retain(|moved_path, _| !target.contains(moved_path));
-                        }
-                    }
-                    mir::Statement::Call { callee, args, .. } => {
-                        self.note_capture_drop_moves(callee, point, &mut moved);
-                        self.note_call_drop_moves(callee, args, point, &mut moved);
-                    }
-                    mir::Statement::ConsumeValue { expr, .. } => {
-                        self.note_drop_move(expr, point, &mut moved);
-                        self.note_capture_drop_moves(expr, point, &mut moved);
-                    }
-                    mir::Statement::ReturnValue { expr, .. }
-                    | mir::Statement::ContinueValue { expr, .. } => {
-                        self.note_drop_move(expr, point, &mut moved);
-                        self.note_capture_drop_moves(expr, point, &mut moved);
-                    }
                     mir::Statement::DropCandidate {
                         target,
                         key_path,
@@ -1552,13 +1565,14 @@ impl OwnershipChecker<'_> {
                         else {
                             continue;
                         };
-                        let Some(ty) = self.key_path_ty_with_roots(&key_path, &root_tys) else {
+                        let Some(ty) = self.key_path_ty_with_roots(&key_path, &state.root_tys)
+                        else {
                             continue;
                         };
                         if !self.needs_drop_type(&ty) {
                             continue;
                         }
-                        let kind = classify_drop(&key_path, &initialized, &moved);
+                        let kind = classify_drop(&key_path, &state);
                         *elaboration = Some(mir_drop_elaboration(kind));
                         self.output.drop_plan.obligations.push(DropObligation {
                             point,
@@ -1568,30 +1582,138 @@ impl OwnershipChecker<'_> {
                             reason: map_drop_reason(*reason),
                         });
                     }
-                    mir::Statement::StorageDead { symbol, .. } => {
-                        let key_path = KeyPath::root(*symbol);
-                        initialized.remove(&key_path);
-                        root_tys.remove(symbol);
-                        moved.retain(|moved_path, _| !key_path.contains(moved_path));
-                    }
-                    mir::Statement::Read { .. }
-                    | mir::Statement::AssignmentRootUse { .. }
-                    | mir::Statement::Perform
-                    | mir::Statement::Function { .. }
-                    | mir::Statement::Handling { .. }
-                    | mir::Statement::DeclBody { .. }
-                    | mir::Statement::ScopeEnter { .. }
-                    | mir::Statement::ScopeExit { .. } => {}
+                    _ => self.transfer_drop_statement(
+                        &statement.kind,
+                        &locals,
+                        Some(point),
+                        &mut state,
+                    ),
                 }
             }
+        }
+    }
+
+    fn drop_entry_states(
+        &mut self,
+        body: &mir::Body<'_>,
+        locals: &[mir::LocalDecl],
+    ) -> Vec<Option<DropState>> {
+        let mut in_states: Vec<Option<DropState>> = vec![None; body.blocks.len()];
+        if body.blocks.is_empty() {
+            return in_states;
+        }
+        in_states[body.entry.0] = Some(DropState::default());
+
+        let mut worklist = VecDeque::new();
+        worklist.push_back(body.entry);
+
+        while let Some(block) = worklist.pop_front() {
+            let Some(mut state) = in_states[block.0].clone() else {
+                continue;
+            };
+            for statement in &body.blocks[block.0].statements {
+                self.transfer_drop_statement(&statement.kind, locals, None, &mut state);
+            }
+            for successor in terminator_successors(&body.blocks[block.0].terminator) {
+                let changed = match &mut in_states[successor.0] {
+                    Some(existing) => existing.merge_from(&state),
+                    slot @ None => {
+                        *slot = Some(state.clone());
+                        true
+                    }
+                };
+                if changed {
+                    worklist.push_back(successor);
+                }
+            }
+        }
+
+        in_states
+    }
+
+    fn transfer_drop_statement(
+        &mut self,
+        statement: &mir::Statement<'_>,
+        locals: &[mir::LocalDecl],
+        point: Option<OwnershipPoint>,
+        state: &mut DropState,
+    ) {
+        match statement {
+            mir::Statement::StorageLive { .. } => {}
+            mir::Statement::Bind { lhs, rhs, .. } => {
+                if let Some(rhs) = rhs {
+                    self.note_drop_move(rhs, point, state);
+                    self.note_capture_drop_moves(rhs, point, state);
+                }
+                let binders = lhs.collect_binders();
+                let rhs_ty = rhs.and_then(|rhs| self.types.node_types.get(&rhs.id).cloned());
+                for (id, symbol) in binders.iter().copied() {
+                    if binders.len() == 1 {
+                        if let Some(ty) = rhs_ty.clone() {
+                            state.root_tys.insert(symbol, ty);
+                        }
+                    } else if let Some(ty) = self.symbol_ty(symbol).cloned() {
+                        state.root_tys.insert(symbol, ty);
+                    }
+                    let key_path = KeyPath::root(symbol);
+                    if rhs.is_some() {
+                        state.initialize_key_path(key_path);
+                    } else {
+                        state.mark_uninitialized(key_path, id);
+                    }
+                }
+            }
+            mir::Statement::Assign {
+                lhs, rhs, target, ..
+            } => {
+                self.note_drop_move(rhs, point, state);
+                self.note_capture_drop_moves(rhs, point, state);
+                if let Some(target) = target
+                    .as_ref()
+                    .and_then(|target| Self::key_path_from_mir_locals(locals, target))
+                    .or_else(|| self.key_path(lhs))
+                {
+                    if target.fields.is_empty()
+                        && let Some(ty) = self.types.node_types.get(&lhs.id).cloned()
+                    {
+                        state.root_tys.insert(target.root, ty);
+                    }
+                    state.initialize_key_path(target);
+                }
+            }
+            mir::Statement::Call { callee, args, .. } => {
+                self.note_capture_drop_moves(callee, point, state);
+                self.note_call_drop_moves(callee, args, point, state);
+            }
+            mir::Statement::ConsumeValue { expr, .. } => {
+                self.note_drop_move(expr, point, state);
+                self.note_capture_drop_moves(expr, point, state);
+            }
+            mir::Statement::ReturnValue { expr, .. }
+            | mir::Statement::ContinueValue { expr, .. } => {
+                self.note_drop_move(expr, point, state);
+                self.note_capture_drop_moves(expr, point, state);
+            }
+            mir::Statement::StorageDead { symbol, .. } => {
+                state.finish_storage(&KeyPath::root(*symbol));
+            }
+            mir::Statement::Read { .. }
+            | mir::Statement::AssignmentRootUse { .. }
+            | mir::Statement::Perform
+            | mir::Statement::DropCandidate { .. }
+            | mir::Statement::Function { .. }
+            | mir::Statement::Handling { .. }
+            | mir::Statement::DeclBody { .. }
+            | mir::Statement::ScopeEnter { .. }
+            | mir::Statement::ScopeExit { .. } => {}
         }
     }
 
     fn note_drop_move(
         &mut self,
         expr: &Expr,
-        point: OwnershipPoint,
-        moved: &mut FxHashMap<KeyPath, NodeID>,
+        point: Option<OwnershipPoint>,
+        state: &mut DropState,
     ) {
         let Some(key_path) = self.key_path(expr) else {
             return;
@@ -1600,12 +1722,14 @@ impl OwnershipChecker<'_> {
             return;
         };
         if self.needs_drop_type(&ty) && key_path.is_tracked_storage_root() {
-            moved.insert(key_path.clone(), expr.id);
-            self.output.facts.moves.push(MoveFact {
-                point,
-                source: key_path,
-                ty,
-            });
+            state.note_move(key_path.clone(), expr.id);
+            if let Some(point) = point {
+                self.output.facts.moves.push(MoveFact {
+                    point,
+                    source: key_path,
+                    ty,
+                });
+            }
         }
     }
 
@@ -1613,8 +1737,8 @@ impl OwnershipChecker<'_> {
         &mut self,
         callee: &Expr,
         args: &[crate::node_kinds::call_arg::CallArg],
-        point: OwnershipPoint,
-        moved: &mut FxHashMap<KeyPath, NodeID>,
+        point: Option<OwnershipPoint>,
+        state: &mut DropState,
     ) {
         let borrowed_constructor = self.call_constructs_borrowed_value(callee);
         if let ExprKind::Member(Some(receiver), ..) = &callee.kind
@@ -1622,7 +1746,7 @@ impl OwnershipChecker<'_> {
         {
             match self.member_self_param(callee) {
                 Some(Ty::Borrow(..)) => {}
-                _ => self.note_drop_move(receiver, point, moved),
+                _ => self.note_drop_move(receiver, point, state),
             }
             let params = self
                 .member_value_params(callee)
@@ -1633,8 +1757,8 @@ impl OwnershipChecker<'_> {
                     Some(Ty::Borrow(..))
                 ) && !borrowed_constructor
                 {
-                    self.note_drop_move(&arg.value, point, moved);
-                    self.note_capture_drop_moves(&arg.value, point, moved);
+                    self.note_drop_move(&arg.value, point, state);
+                    self.note_capture_drop_moves(&arg.value, point, state);
                 }
             }
         } else {
@@ -1645,8 +1769,8 @@ impl OwnershipChecker<'_> {
                     Some(Ty::Borrow(..))
                 ) && !borrowed_constructor
                 {
-                    self.note_drop_move(&arg.value, point, moved);
-                    self.note_capture_drop_moves(&arg.value, point, moved);
+                    self.note_drop_move(&arg.value, point, state);
+                    self.note_capture_drop_moves(&arg.value, point, state);
                 }
             }
         }
@@ -1655,8 +1779,8 @@ impl OwnershipChecker<'_> {
     fn note_capture_drop_moves(
         &mut self,
         expr: &Expr,
-        point: OwnershipPoint,
-        moved: &mut FxHashMap<KeyPath, NodeID>,
+        point: Option<OwnershipPoint>,
+        state: &mut DropState,
     ) {
         match &expr.kind {
             ExprKind::Func(func) => {
@@ -1672,53 +1796,55 @@ impl OwnershipChecker<'_> {
                         continue;
                     };
                     if self.needs_drop_type(&ty) && key_path.is_tracked_storage_root() {
-                        moved.insert(key_path.clone(), expr.id);
-                        self.output.facts.moves.push(MoveFact {
-                            point,
-                            source: key_path,
-                            ty,
-                        });
+                        state.note_move(key_path.clone(), expr.id);
+                        if let Some(point) = point {
+                            self.output.facts.moves.push(MoveFact {
+                                point,
+                                source: key_path,
+                                ty,
+                            });
+                        }
                     }
                 }
             }
             ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
                 for item in items {
-                    self.note_capture_drop_moves(item, point, moved);
+                    self.note_capture_drop_moves(item, point, state);
                 }
             }
             ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
-                self.note_capture_drop_moves(inner, point, moved);
+                self.note_capture_drop_moves(inner, point, state);
             }
             ExprKind::Binary(lhs, _, rhs) => {
-                self.note_capture_drop_moves(lhs, point, moved);
-                self.note_capture_drop_moves(rhs, point, moved);
+                self.note_capture_drop_moves(lhs, point, state);
+                self.note_capture_drop_moves(rhs, point, state);
             }
             ExprKind::Block(block) => {
                 if let Some(expr) = block_tail_expr(block) {
-                    self.note_capture_drop_moves(expr, point, moved);
+                    self.note_capture_drop_moves(expr, point, state);
                 }
             }
             ExprKind::If(_, then_block, else_block) => {
                 if let Some(expr) = block_tail_expr(then_block) {
-                    self.note_capture_drop_moves(expr, point, moved);
+                    self.note_capture_drop_moves(expr, point, state);
                 }
                 if let Some(expr) = block_tail_expr(else_block) {
-                    self.note_capture_drop_moves(expr, point, moved);
+                    self.note_capture_drop_moves(expr, point, state);
                 }
             }
             ExprKind::Match(_, arms) => {
                 for arm in arms {
                     if let Some(expr) = block_tail_expr(&arm.body) {
-                        self.note_capture_drop_moves(expr, point, moved);
+                        self.note_capture_drop_moves(expr, point, state);
                     }
                 }
             }
             ExprKind::RecordLiteral { fields, spread } => {
                 if let Some(spread) = spread {
-                    self.note_capture_drop_moves(spread, point, moved);
+                    self.note_capture_drop_moves(spread, point, state);
                 }
                 for field in fields {
-                    self.note_capture_drop_moves(&field.value, point, moved);
+                    self.note_capture_drop_moves(&field.value, point, state);
                 }
             }
             ExprKind::Call { .. }
@@ -2576,22 +2702,7 @@ impl OwnershipChecker<'_> {
     }
 
     fn stored_field_symbol(&self, expr: &Expr) -> Option<Symbol> {
-        let crate::types::output::MemberResolution::Direct(property) =
-            self.types.member_resolutions.get(&expr.id)?
-        else {
-            return None;
-        };
-        let in_catalog = self.types.catalog.structs.values().any(|info| {
-            info.fields
-                .values()
-                .any(|(field_symbol, _)| field_symbol == property)
-        });
-        let has_field_scheme = self
-            .types
-            .schemes
-            .get(property)
-            .is_some_and(|scheme| !matches!(scheme.ty, Ty::Func(..)));
-        (in_catalog || has_field_scheme).then_some(*property)
+        stored_field_symbol(self.types, expr)
     }
 
     fn call_argument_types(&self, callee: &Expr) -> Option<Vec<Ty>> {
@@ -2696,14 +2807,8 @@ impl OwnershipChecker<'_> {
         if !self.call_returns_borrowed(callee) {
             return BorrowInfo::new(BorrowOrigin::Unknown, None);
         }
-        if let ExprKind::Member(Some(receiver), label, _) = &callee.kind {
-            if is_borrowing_member(label) {
-                return self.receiver_borrow_info(receiver, env);
-            }
-            let params = self
-                .member_value_params(callee)
-                .or_else(|| self.call_argument_types(callee));
-            return self.single_borrowed_input_info(args, params.as_deref(), env);
+        if let ExprKind::Member(Some(receiver), ..) = &callee.kind {
+            return self.receiver_borrow_info(receiver, env);
         }
         if matches!(callee.kind, ExprKind::Constructor(_)) {
             return self.single_constructor_borrow_source_info(args, env);
@@ -2970,7 +3075,7 @@ impl OwnershipChecker<'_> {
                     false
                 } else {
                     self.output.owned_types.contains(symbol)
-                        || self.symbol_has_ability(*symbol, "Owner")
+                        || self.symbol_has_ability(*symbol, MarkerAbility::Owner)
                         || self.nominal_contains_owned(*symbol, args, visiting)
                 }
             }
@@ -3115,10 +3220,11 @@ impl OwnershipChecker<'_> {
         })
     }
 
-    fn symbol_has_ability(&self, symbol: Symbol, ability: &str) -> bool {
-        let Some(protocol) = self.protocol_named(ability) else {
+    fn symbol_has_ability(&self, symbol: Symbol, ability: MarkerAbility) -> bool {
+        let protocol = ability.protocol();
+        if !self.types.catalog.protocols.contains_key(&protocol) {
             return false;
-        };
+        }
         self.types
             .catalog
             .conformances_by_head
@@ -3131,15 +3237,6 @@ impl OwnershipChecker<'_> {
                         .contains(&protocol)
                 })
             })
-    }
-
-    fn protocol_named(&self, name: &str) -> Option<Symbol> {
-        self.types
-            .catalog
-            .protocols
-            .keys()
-            .find(|symbol| self.symbol_name(**symbol).as_deref() == Some(name))
-            .copied()
     }
 
     fn symbol_name(&self, symbol: Symbol) -> Option<String> {
@@ -3186,10 +3283,6 @@ impl OwnershipChecker<'_> {
     }
 }
 
-fn is_borrowing_member(label: &Label) -> bool {
-    matches!(label.to_string().as_str(), "slice" | "as_substring")
-}
-
 fn is_local_or_param(symbol: Symbol) -> bool {
     matches!(
         symbol,
@@ -3208,7 +3301,7 @@ fn root_expr(expr: &Expr) -> Option<&Expr> {
 fn source_allows_unsafe(source: &Source) -> bool {
     source
         .read()
-        .is_ok_and(|text| text.lines().take(5).any(|line| line.trim() == "// unsafe"))
+        .is_ok_and(|text| text.lines().any(|line| line.trim() == "// unsafe"))
 }
 
 fn block_tail_expr(block: &Block) -> Option<&Expr> {
@@ -3656,21 +3749,32 @@ fn mir_drop_elaboration(kind: DropKind) -> mir::DropElaboration {
     }
 }
 
-fn classify_drop(
-    key_path: &KeyPath,
-    initialized: &FxHashSet<KeyPath>,
-    moved: &FxHashMap<KeyPath, NodeID>,
-) -> DropKind {
-    if moved.keys().any(|moved| moved == key_path) {
+fn classify_drop(key_path: &KeyPath, state: &DropState) -> DropKind {
+    if state.moved_all.keys().any(|moved| moved == key_path) {
         return DropKind::Dead;
     }
-    if moved.keys().any(|moved| key_path.contains(moved)) {
+    if state
+        .moved_any
+        .keys()
+        .any(|moved| key_path.contains(moved) && moved != key_path)
+    {
         return DropKind::Open;
     }
-    if initialized.iter().any(|live| live.contains(key_path)) {
+    if state
+        .initialized_all
+        .iter()
+        .any(|live| live.contains(key_path))
+        && !state.moved_any.keys().any(|moved| moved == key_path)
+    {
         DropKind::Static
-    } else {
+    } else if state
+        .initialized_any
+        .iter()
+        .any(|live| live.contains(key_path))
+    {
         DropKind::Conditional
+    } else {
+        DropKind::Dead
     }
 }
 
@@ -5016,6 +5120,23 @@ mod tests {
     }
 
     #[test]
+    fn string_is_droppable_and_not_copyable() {
+        let (output, names) = ownership_output("func noop() -> Int { 1 }");
+        let string = names
+            .iter()
+            .find_map(|(symbol, name)| (name == "String").then_some(*symbol))
+            .expect("String is in core");
+        assert!(
+            output.droppable_types.contains(&string),
+            "String must require drop so owned storage is freed"
+        );
+        assert!(
+            !output.copyable_types.contains(&string),
+            "String must not be copyable; copying would duplicate ownership of storage"
+        );
+    }
+
+    #[test]
     fn ownership_facts_record_storage_and_static_scope_drop() {
         let (output, names) = ownership_output(
             "
@@ -5072,6 +5193,67 @@ mod tests {
                 .iter()
                 .any(|obligation| obligation.kind == DropKind::Static),
             "expected a static drop obligation for s, got {s_obligations:?}"
+        );
+    }
+
+    #[test]
+    fn branch_move_makes_scope_drop_conditional() {
+        let (output, names) = ownership_output(
+            "
+            func maybe(flag: Bool) -> Int {
+                let s = \"hi\" + \"!\"
+                if flag {
+                    let t = s
+                    1
+                } else {
+                    2
+                }
+                0
+            }
+            ",
+        );
+        let s_obligations: Vec<_> = output
+            .drop_plan
+            .obligations
+            .iter()
+            .filter(|obligation| {
+                names
+                    .get(&obligation.key_path.root)
+                    .is_some_and(|name| name == "s")
+            })
+            .collect();
+        assert!(
+            s_obligations
+                .iter()
+                .any(|obligation| obligation.kind == DropKind::Conditional),
+            "expected a conditional drop obligation for s, got {s_obligations:?}"
+        );
+        assert!(
+            !s_obligations
+                .iter()
+                .any(|obligation| obligation.kind == DropKind::Dead),
+            "branch-local move must not make every s drop dead: {s_obligations:?}"
+        );
+    }
+
+    #[test]
+    fn user_protocol_named_owner_is_not_a_marker_ability() {
+        let (output, names) = ownership_output(
+            "// no-core
+            protocol Owner {}
+            struct Box {
+                let value: Int
+            }
+            extend Box: Owner {}
+            ",
+        );
+        assert!(
+            !output
+                .owned_types
+                .iter()
+                .any(|symbol| names.get(symbol).is_some_and(|name| name == "Box")),
+            "user protocol Owner must not mark Box as owned: {:?}",
+            output.owned_types
         );
     }
 }

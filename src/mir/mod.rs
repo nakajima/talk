@@ -21,7 +21,7 @@ use crate::{
     },
     types::{
         TypeOutput,
-        output::MemberResolution,
+        output::stored_field_symbol,
         ty::{BorrowKind, Ty},
     },
 };
@@ -1249,22 +1249,6 @@ impl<'ast, 'types> Builder<'ast, 'types> {
     fn is_terminated(&self, block: BlockId) -> bool {
         self.blocks[block.0].terminator != Terminator::Unset
     }
-}
-
-fn stored_field_symbol(types: &TypeOutput, expr: &Expr) -> Option<Symbol> {
-    let MemberResolution::Direct(property) = types.member_resolutions.get(&expr.id)? else {
-        return None;
-    };
-    let in_catalog = types.catalog.structs.values().any(|info| {
-        info.fields
-            .values()
-            .any(|(field_symbol, _)| field_symbol == property)
-    });
-    let has_field_scheme = types
-        .schemes
-        .get(property)
-        .is_some_and(|scheme| !matches!(scheme.ty, crate::types::ty::Ty::Func(..)));
-    (in_catalog || has_field_scheme).then_some(*property)
 }
 
 fn syntactic_root_symbol(expr: &Expr) -> Option<Symbol> {
