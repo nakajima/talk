@@ -53,6 +53,12 @@ pub enum EffTail {
     Param(Symbol),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum BorrowKind {
+    Shared,
+    Mutable,
+}
+
 /// A record row: sorted labeled fields plus an optional tail.
 /// `tail: None` means the row is closed (exactly these fields).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -129,6 +135,9 @@ pub enum Ty {
     /// A nominal type application: structs, enums, builtins.
     /// `Int` is `Nominal(Symbol::Int, [])`.
     Nominal(Symbol, Vec<Ty>),
+    /// A borrowed view of another type. Borrow checking owns the lifetime
+    /// facts; the type records only shared vs exclusive access.
+    Borrow(BorrowKind, Box<Ty>),
     /// A function type with its latent effect row.
     Func(Vec<Ty>, Box<Ty>, EffectRow),
     Tuple(Vec<Ty>),
@@ -234,6 +243,7 @@ impl Ty {
                     arg.try_visit(visitor)?;
                 }
             }
+            Ty::Borrow(_, inner) => inner.try_visit(visitor)?,
             Ty::Func(params, ret, _) => {
                 for param in params {
                     param.try_visit(visitor)?;
@@ -268,6 +278,9 @@ impl Ty {
                         .iter()
                         .zip(right_args)
                         .all(|(left, right)| left.try_zip(right, visitor))
+            }
+            (Ty::Borrow(left_kind, left_inner), Ty::Borrow(right_kind, right_inner)) => {
+                left_kind == right_kind && left_inner.try_zip(right_inner, visitor)
             }
             (Ty::Func(left_params, left_ret, _), Ty::Func(right_params, right_ret, _)) => {
                 left_params.len() == right_params.len()
@@ -343,6 +356,7 @@ pub(crate) trait TyFold {
                 self.fold_symbol(*symbol),
                 args.iter().map(|a| self.fold_ty(a)).collect(),
             ),
+            Ty::Borrow(kind, inner) => Ty::Borrow(*kind, Box::new(self.fold_ty(inner))),
             Ty::Func(params, ret, eff) => Ty::Func(
                 params.iter().map(|p| self.fold_ty(p)).collect(),
                 Box::new(self.fold_ty(ret)),
@@ -666,6 +680,9 @@ pub(crate) fn match_pattern(
                     .zip(right_args)
                     .all(|(left, right)| match_pattern(left, right, bindings))
         }
+        (Ty::Borrow(left_kind, left_inner), Ty::Borrow(right_kind, right_inner)) => {
+            left_kind == right_kind && match_pattern(left_inner, right_inner, bindings)
+        }
         (Ty::Tuple(left_items), Ty::Tuple(right_items)) => {
             left_items.len() == right_items.len()
                 && left_items
@@ -743,6 +760,7 @@ fn pattern_occurs(param: Symbol, ty: &Ty, bindings: &FxHashMap<Symbol, Ty>) -> b
         Ty::Nominal(_, args) | Ty::Tuple(args) => {
             args.iter().any(|ty| pattern_occurs(param, ty, bindings))
         }
+        Ty::Borrow(_, inner) => pattern_occurs(param, inner, bindings),
         Ty::Func(args, ret, _) => {
             args.iter().any(|ty| pattern_occurs(param, ty, bindings))
                 || pattern_occurs(param, ret, bindings)
@@ -869,6 +887,12 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
                 let args: Vec<String> = args.iter().map(|a| render_ty(a, param_names)).collect();
                 format!("{head}<{}>", args.join(", "))
             }
+        }
+        Ty::Borrow(BorrowKind::Shared, inner) => {
+            format!("&{}", render_ty(inner, param_names))
+        }
+        Ty::Borrow(BorrowKind::Mutable, inner) => {
+            format!("&mut {}", render_ty(inner, param_names))
         }
         Ty::Func(params, ret, eff) => {
             let params: Vec<String> = params.iter().map(|p| render_ty(p, param_names)).collect();

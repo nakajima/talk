@@ -1,3 +1,4 @@
+// unsafe
 // Chat echo server
 //
 // Listens on port 9900, accepts connections, echoes messages back.

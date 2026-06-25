@@ -189,6 +189,13 @@ impl Display for Value {
 impl TypeAnnotation {
     fn simple_display(&self) -> String {
         match &self.kind {
+            TypeAnnotationKind::Borrow { mutable, inner } => {
+                if *mutable {
+                    format!("&mut {}", inner.simple_display())
+                } else {
+                    format!("&{}", inner.simple_display())
+                }
+            }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 if generics.is_empty() {
                     name.name_str()

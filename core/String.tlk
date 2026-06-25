@@ -1,6 +1,7 @@
 // no-core
 import { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
 import { ByteStorage, _alloc, _copy, _ptr_add } from ./Memory.tlk
+import { Borrowed } from ./Ownership.tlk
 
 public struct String {
 	let storage: ByteStorage
@@ -12,6 +13,12 @@ public struct String {
 		self.length = length
 		self.capacity = capacity
 		self
+	}
+
+	func to_string() -> String {
+		let base: RawPtr = _alloc<Byte>(self.length)
+		_copy(self.storage.base, base, self.length)
+		String(base, self.length, self.length)
 	}
 }
 
@@ -28,12 +35,14 @@ public struct Substring {
 	}
 }
 
+extend Substring: Borrowed {}
+
 public protocol StringMethods {
 	func as_substring() -> Substring
 	func byte_at(index: Int) -> Byte
 	func slice(start: Int, length: Int) -> Substring
-	func find(needle: String) -> Int
-	func find_from(needle: String, start: Int) -> Int
+	func find(needle: &String) -> Int
+	func find_from(needle: &String, start: Int) -> Int
 }
 
 extend String: StringMethods {
@@ -49,11 +58,11 @@ extend String: StringMethods {
 		self.as_substring().slice(start, length)
 	}
 
-	func find(needle: String) -> Int {
+	func find(needle: &String) -> Int {
 		self.as_substring().find(needle)
 	}
 
-	func find_from(needle: String, start: Int) -> Int {
+	func find_from(needle: &String, start: Int) -> Int {
 		self.as_substring().find_from(needle, start)
 	}
 }
@@ -67,11 +76,11 @@ extend Substring {
 		Substring(self.storage, self.start + start, length)
 	}
 
-	func find(needle: String) -> Int {
+	func find(needle: &String) -> Int {
 		self.find_from(needle, 0)
 	}
 
-	func find_from(needle: String, start: Int) -> Int {
+	func find_from(needle: &String, start: Int) -> Int {
 		if start < 0 { return -1 }
 		if self.length < start { return -1 }
 		if needle.length == 0 { return start }
@@ -96,7 +105,7 @@ extend Substring {
 		String(base, self.length, self.length)
 	}
 
-	func equals_string(rhs: String) -> Bool {
+	func equals_string(rhs: &String) -> Bool {
 		if self.length != rhs.length { return false }
 
 		let i = 0
@@ -108,6 +117,12 @@ extend Substring {
 			i = i + 1
 		}
 		true
+	}
+}
+
+extend Substring: Add {
+	func add(rhs: String) -> String {
+		self.to_string() + rhs
 	}
 }
 

@@ -17,6 +17,7 @@ pub enum ParserError {
     ExpectedDecl(TokenKind),
     LetNotAllowed(BlockContext),
     InitNotAllowed(BlockContext),
+    ExplicitSelfParameterNotAllowed,
     ConformanceListNotAllowed {
         context: BlockContext,
         token: Option<Token>,
@@ -57,6 +58,12 @@ impl Display for ParserError {
             Self::ExpectedDecl(actual) => write!(f, "Expected declaration, got {actual:?}"),
             Self::LetNotAllowed(context) => write!(f, "Cannot use `let` in {context:?} body"),
             Self::InitNotAllowed(_context) => write!(f, "Cannot use `init` in this context"),
+            Self::ExplicitSelfParameterNotAllowed => {
+                write!(
+                    f,
+                    "Methods do not declare `self`; use `func`, `mut func`, or `consuming func`"
+                )
+            }
             Self::ConformanceListNotAllowed { context, .. } => write!(
                 f,
                 "Cannot declare conformances on {context:?}; use an `extend` block instead"

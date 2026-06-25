@@ -304,6 +304,13 @@ fn diagnostic_for_any(
             false,
             &diagnostic.severity,
         ),
+        AnyDiagnostic::Ownership(diagnostic) => (
+            diagnostic.id,
+            diagnostic.kind.to_string(),
+            None,
+            false,
+            &diagnostic.severity,
+        ),
     };
     let severity = match severity {
         crate::diagnostic::Severity::Error => DiagnosticSeverity::Error,

@@ -52,6 +52,13 @@ struct Frame {
 /// heap data, so this only bounds runaway recursion.
 const MAX_FRAMES: usize = 1 << 20;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AllocationRecord {
+    start: u32,
+    len: u32,
+    live: bool,
+}
+
 pub fn run(module: &Module, io: &mut dyn IO) -> Result<Value, String> {
     Ok(run_machine(module, io)?.0)
 }
@@ -81,6 +88,8 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
     let mut machine = Machine {
         slots: vec![],
         mem: module.statics.clone(),
+        static_len: module.statics.len() as u32,
+        allocations: vec![],
         boxed: vec![],
         io,
     };
@@ -318,6 +327,8 @@ fn escape_string(text: &str) -> String {
 struct Machine<'io> {
     slots: Vec<Value>,
     mem: Vec<u8>,
+    static_len: u32,
+    allocations: Vec<AllocationRecord>,
     /// Aggregates stored in raw memory live here; the memory cell holds an
     /// 8-byte index into this arena (Leroy, POPL 1992's mixed
     /// representation — scalars unboxed, aggregates behind a handle).
@@ -327,6 +338,7 @@ struct Machine<'io> {
 
 impl Machine<'_> {
     fn read_word(&self, addr: u32) -> Result<u64, String> {
+        self.check_access(addr, 8, "load")?;
         let start = addr as usize;
         let bytes = self
             .mem
@@ -338,6 +350,7 @@ impl Machine<'_> {
     }
 
     fn write_word(&mut self, addr: u32, word: u64) -> Result<(), String> {
+        self.check_access(addr, 8, "store")?;
         let start = addr as usize;
         let slot = self
             .mem
@@ -345,6 +358,69 @@ impl Machine<'_> {
             .ok_or("vm: store out of bounds")?;
         slot.copy_from_slice(&word.to_le_bytes());
         Ok(())
+    }
+
+    fn free(&mut self, ptr: u32) -> Result<(), String> {
+        if ptr < self.static_len {
+            return Ok(());
+        }
+        let Some(record) = self
+            .allocations
+            .iter_mut()
+            .find(|record| record.start == ptr)
+        else {
+            return Err("vm: free of invalid pointer".into());
+        };
+        if !record.live {
+            return Err("vm: double free".into());
+        }
+        record.live = false;
+        Ok(())
+    }
+
+    fn check_access(&self, addr: u32, len: usize, op: &str) -> Result<(), String> {
+        let start = addr as usize;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| format!("vm: {op} out of bounds"))?;
+        if end > self.mem.len() {
+            return Err(format!("vm: {op} out of bounds"));
+        }
+        if end <= self.static_len as usize {
+            return Ok(());
+        }
+        if self.allocations.iter().any(|record| {
+            let alloc_start = record.start as usize;
+            let alloc_end = alloc_start + record.len as usize;
+            record.live && start >= alloc_start && end <= alloc_end
+        }) {
+            return Ok(());
+        }
+        Err(format!("vm: {op} through invalid pointer"))
+    }
+
+    fn c_string_tail(&self, addr: u32) -> Result<&[u8], String> {
+        let start = addr as usize;
+        if start > self.mem.len() {
+            return Err("vm: io open out of bounds".into());
+        }
+        if addr < self.static_len {
+            return self
+                .mem
+                .get(start..self.static_len as usize)
+                .ok_or_else(|| "vm: io open out of bounds".to_string());
+        }
+        let Some(record) = self.allocations.iter().find(|record| {
+            let alloc_start = record.start as usize;
+            let alloc_end = alloc_start + record.len as usize;
+            record.live && start >= alloc_start && start <= alloc_end
+        }) else {
+            return Err("vm: io through invalid pointer".into());
+        };
+        let end = record.start as usize + record.len as usize;
+        self.mem
+            .get(start..end)
+            .ok_or_else(|| "vm: io open out of bounds".to_string())
     }
 }
 
@@ -383,6 +459,7 @@ fn run_io(
                 return Ok(count);
             }
             let (start, len) = (ptr(b)?, count as usize);
+            machine.check_access(start as u32, len, "io")?;
             let bytes = machine
                 .mem
                 .get(start..start + len)
@@ -395,6 +472,7 @@ fn run_io(
                 return Ok(count);
             }
             let (start, len) = (ptr(b)?, count as usize);
+            machine.check_access(start as u32, len, "io")?;
             let buf = machine
                 .mem
                 .get_mut(start..start + len)
@@ -403,10 +481,7 @@ fn run_io(
         }
         IoOp::Open => {
             let start = ptr(a)?;
-            let tail = machine
-                .mem
-                .get(start..)
-                .ok_or("vm: io open out of bounds")?;
+            let tail = machine.c_string_tail(start as u32)?;
             let len = tail
                 .iter()
                 .position(|&byte| byte == 0)
@@ -419,9 +494,11 @@ fn run_io(
         IoOp::Ctl => machine.io.ctl(int(a)?, int(b)?, int(c)?),
         IoOp::Poll => {
             let (start, count, timeout) = (ptr(a)?, int(b)? as usize, int(c)?);
+            let len = count * 8;
+            machine.check_access(start as u32, len, "io")?;
             let records = machine
                 .mem
-                .get(start..start + count * 8)
+                .get(start..start + len)
                 .ok_or("vm: io poll out of bounds")?;
             let mut fds: Vec<(i32, i16, i16)> = records
                 .chunks_exact(8)
@@ -436,6 +513,7 @@ fn run_io(
             let result = machine.io.poll(&mut fds, timeout);
             for (index, (_, _, revents)) in fds.iter().enumerate() {
                 let at = start + index * 8 + 6;
+                machine.check_access(at as u32, 2, "io")?;
                 let slot = machine
                     .mem
                     .get_mut(at..at + 2)
@@ -721,21 +799,35 @@ fn exec_local(
                 return Err("vm: alloc of a negative count".into());
             }
             let addr = machine.mem.len() as u32;
-            machine.mem.resize(machine.mem.len() + count as usize, 0);
+            let reserve = (count as usize).max(1);
+            machine.mem.resize(machine.mem.len() + reserve, 0);
+            machine.allocations.push(AllocationRecord {
+                start: addr,
+                len: count as u32,
+                live: true,
+            });
             frame.regs[dest as usize] = Value::Ptr(addr);
+        }
+        Insn::Free { dest, ptr } => {
+            let Value::Ptr(ptr) = frame.regs[ptr as usize] else {
+                return Err("vm: free of a non-pointer".into());
+            };
+            machine.free(ptr)?;
+            frame.regs[dest as usize] = Value::Void;
         }
         Insn::Load { dest, ptr, kind } => {
             let Value::Ptr(addr) = frame.regs[ptr as usize] else {
                 return Err("vm: load of a non-pointer".into());
             };
             frame.regs[dest as usize] = match kind {
-                MemKind::Byte => Value::Byte(
+                MemKind::Byte => Value::Byte({
+                    machine.check_access(addr, 1, "load")?;
                     machine
                         .mem
                         .get(addr as usize)
                         .copied()
-                        .ok_or("vm: load out of bounds")?,
-                ),
+                        .ok_or("vm: load out of bounds")?
+                }),
                 MemKind::I64 => Value::I64(machine.read_word(addr)? as i64),
                 MemKind::F64 => Value::F64(f64::from_bits(machine.read_word(addr)?)),
                 MemKind::Bool => Value::Bool(machine.read_word(addr)? != 0),
@@ -757,6 +849,7 @@ fn exec_local(
             let value = frame.regs[src as usize].clone();
             match (kind, value) {
                 (MemKind::Byte, Value::Byte(byte)) => {
+                    machine.check_access(addr, 1, "store")?;
                     let slot = machine
                         .mem
                         .get_mut(addr as usize)
@@ -784,10 +877,12 @@ fn exec_local(
             ) else {
                 return Err("vm: copy operands".into());
             };
-            let (from, to, len) = (*from as usize, *to as usize, *len as usize);
-            if from + len > machine.mem.len() || to + len > machine.mem.len() {
-                return Err("vm: copy out of bounds".into());
+            if *len < 0 {
+                return Err("vm: copy negative length".into());
             }
+            machine.check_access(*from, *len as usize, "copy")?;
+            machine.check_access(*to, *len as usize, "copy")?;
+            let (from, to, len) = (*from as usize, *to as usize, *len as usize);
             machine.mem.copy_within(from..from + len, to);
         }
         Insn::Io { dest, op, a, b, c } => {

@@ -31,6 +31,7 @@ pub(super) fn handle(string: &str) -> TokenKind {
         "in" => In,
         "continue" => Continue,
         "mut" => Mut,
+        "consuming" => Consuming,
         "for" => For,
         _ => Identifier,
     }

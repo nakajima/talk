@@ -9,6 +9,7 @@ use crate::compiling::{
     module::{Module, ModuleId},
 };
 use crate::name_resolution::name_resolver::ResolvedNames;
+use crate::ownership::OwnershipOutput;
 use crate::types::TypeOutput;
 
 /// Core's typed artifacts, retained for whole-program lowering: lazy
@@ -19,6 +20,7 @@ pub struct CoreTyped {
     pub asts: IndexMap<Source, AST<NameResolved>>,
     pub types: TypeOutput,
     pub resolved_names: ResolvedNames,
+    pub ownership: OwnershipOutput,
 }
 
 lazy_static! {
@@ -35,6 +37,7 @@ pub fn typed() -> Arc<CoreTyped> {
 
 /// The filenames of all core source files.
 pub const CORE_SOURCE_NAMES: &[&str] = &[
+    "Ownership.tlk",
     "Optional.tlk",
     "Operators.tlk",
     "Convert.tlk",
@@ -53,6 +56,7 @@ pub const CORE_SOURCE_NAMES: &[&str] = &[
 /// All core source strings, in a fixed order.
 pub fn core_sources() -> Vec<(&'static str, &'static str)> {
     vec![
+        ("Ownership.tlk", include_str!("../../core/Ownership.tlk")),
         ("Optional.tlk", include_str!("../../core/Optional.tlk")),
         ("Operators.tlk", include_str!("../../core/Operators.tlk")),
         ("Convert.tlk", include_str!("../../core/Convert.tlk")),
@@ -98,6 +102,7 @@ fn _compile() -> (Arc<Module>, Arc<CoreTyped>) {
         asts: typed.phase.asts.clone(),
         types: typed.phase.types.clone(),
         resolved_names: typed.phase.resolved_names.clone(),
+        ownership: typed.phase.ownership.clone(),
     };
     (Arc::new(typed.module("Core")), Arc::new(core_typed))
 }

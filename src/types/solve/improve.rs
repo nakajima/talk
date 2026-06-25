@@ -23,7 +23,8 @@ impl<'s> Solver<'s> {
                 remaining.push(constraint);
                 continue;
             };
-            let shallow = self.store.shallow(&receiver);
+            let (lookup_receiver, self_receiver) = self.member_receivers(&receiver);
+            let shallow = self.store.shallow(&lookup_receiver);
             let owned = match &shallow {
                 Ty::Var(v) => self.store.level(v.0) >= self.level,
                 _ => false,
@@ -57,7 +58,8 @@ impl<'s> Solver<'s> {
                         self.bind_requirement(
                             owner,
                             &requirement,
-                            &receiver,
+                            &lookup_receiver,
+                            &self_receiver,
                             &member,
                             origin,
                             queue,
@@ -98,7 +100,7 @@ impl<'s> Solver<'s> {
                         .map(|_| Ty::Var(self.store.fresh_ty(self.level, origin.node)))
                         .collect();
                     queue.push(Constraint::Eq(
-                        receiver.clone(),
+                        lookup_receiver,
                         Ty::Nominal(*symbol, args),
                         origin,
                     ));

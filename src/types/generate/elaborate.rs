@@ -216,6 +216,14 @@ impl<'e> Elaborator<'e> {
 
     fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
         match &annotation.kind {
+            TypeAnnotationKind::Borrow { mutable, inner } => {
+                let kind = if *mutable {
+                    BorrowKind::Mutable
+                } else {
+                    BorrowKind::Shared
+                };
+                Ty::Borrow(kind, Box::new(self.lower_annotation(inner)))
+            }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 if name.name_str() == "Self"
                     && generics.is_empty()

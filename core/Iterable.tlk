@@ -5,13 +5,13 @@ import { Add, Comparable } from ./Operators.tlk
 
 public protocol Iterator {
 	associated Element
-	func next() -> Element?
+	mut func next() -> Element?
 }
 
 public protocol Iterable {
 	associated Element
 	associated T: Iterator
-	func iter() -> T
+	consuming func iter() -> T
 }
 
 public struct ArrayIterator<Element> {
@@ -24,7 +24,7 @@ public struct ArrayIterator<Element> {
 	}
 
 	extend Self: Iterator<Element> {
-		func next() -> Element? {
+		mut func next() -> Element? {
 			if self.current < self.array.count {
 				let result = self.array.get(self.current)
 				self.current = self.current + 1
@@ -37,7 +37,7 @@ public struct ArrayIterator<Element> {
 }
 
 extend Array<Element>: Iterable {
-	func iter() -> ArrayIterator<Element> {
+	consuming func iter() -> ArrayIterator<Element> {
 		ArrayIterator<Element>(array: self)
 	}
 }

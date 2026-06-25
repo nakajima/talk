@@ -27,7 +27,7 @@ pub mod tests {
         node_kinds::{
             block::Block,
             call_arg::CallArg,
-            decl::{Decl, DeclKind},
+            decl::{Decl, DeclKind, ReceiverMode},
             expr::{Expr, ExprKind},
             func::{EffectSet, Func},
             func_signature::FuncSignature,
@@ -219,6 +219,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     effects: Default::default(),
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y"),],
@@ -263,6 +264,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "odd".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     params: vec![],
                     effects: Default::default(),
@@ -295,6 +297,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "even".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     params: vec![],
                     effects: Default::default(),
@@ -332,6 +335,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     effects: Default::default(),
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y")],
@@ -354,6 +358,7 @@ pub mod tests {
                                 ),
                                 name_span: Span::ANY,
                                 generics: vec![],
+                                captures: vec![],
                                 where_clause: None,
                                 effects: Default::default(),
                                 params: vec![param!(ParamLocalId(3), "x")],
@@ -405,6 +410,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "fizz".into()),
                     name_span: Span::ANY,
                     generics: Default::default(),
+                    captures: vec![],
                     where_clause: None,
                     params: Default::default(),
                     effects: Default::default(),
@@ -432,6 +438,7 @@ pub mod tests {
                                 ),
                                 name_span: Span::ANY,
                                 generics: vec![],
+                                captures: vec![],
                                 where_clause: None,
                                 effects: Default::default(),
                                 params: vec![param!(ParamLocalId(1), "x")],
@@ -574,6 +581,7 @@ pub mod tests {
                         generics: vec![],
                         conformances: vec![],
                     }],
+                    captures: vec![],
                     where_clause: None,
                     effects: Default::default(),
                     params: vec![param!(
@@ -933,13 +941,15 @@ pub mod tests {
                             name_span: Span::ANY,
                             effects: Default::default(),
                             generics: vec![],
+                            captures: vec![],
                             where_clause: None,
                             params: vec![],
                             body: any_block!(vec![]),
                             ret: None,
                             attributes: vec![]
                         }),
-                        is_static: true
+                        is_static: true,
+                        receiver_mode: ReceiverMode::None
                     }),
                 ])
             })
@@ -991,15 +1001,18 @@ pub mod tests {
                             ),
                             name_span: Span::ANY,
                             generics: vec![],
+                            captures: vec![],
                             where_clause: None,
                             effects: Default::default(),
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(1)),
                                 "self",
-                                annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
-                                    StructId::from(1).into(),
-                                    "Self".into()
-                                )))
+                                annotation!(TypeAnnotationKind::Borrow {
+                                    mutable: false,
+                                    inner: Box::new(annotation!(TypeAnnotationKind::SelfType(
+                                        Name::Resolved(StructId::from(1).into(), "Self".into())
+                                    )))
+                                })
                             )],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                                 callee: any_expr!(ExprKind::Member(
@@ -1021,7 +1034,8 @@ pub mod tests {
                             ret: None,
                             attributes: vec![]
                         }),
-                        is_static: false
+                        is_static: false,
+                        receiver_mode: ReceiverMode::None
                     }),
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
@@ -1033,14 +1047,17 @@ pub mod tests {
                             name_span: Span::ANY,
                             effects: Default::default(),
                             generics: vec![],
+                            captures: vec![],
                             where_clause: None,
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(2)),
                                 "self",
-                                annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
-                                    StructId::from(1).into(),
-                                    "Self".into()
-                                )))
+                                annotation!(TypeAnnotationKind::Borrow {
+                                    mutable: false,
+                                    inner: Box::new(annotation!(TypeAnnotationKind::SelfType(
+                                        Name::Resolved(StructId::from(1).into(), "Self".into())
+                                    )))
+                                })
                             )],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                                 callee: any_expr!(ExprKind::Member(
@@ -1059,7 +1076,8 @@ pub mod tests {
                             ret: None,
                             attributes: vec![]
                         }),
-                        is_static: false
+                        is_static: false,
+                        receiver_mode: ReceiverMode::None
                     })
                 ])
             })
@@ -1137,6 +1155,7 @@ pub mod tests {
                         ),
                         name_span: Span::ANY,
                         generics: vec![],
+                        captures: vec![],
                         where_clause: None,
                         effects: Default::default(),
                         params: vec![Parameter {
@@ -1146,16 +1165,23 @@ pub mod tests {
                                 "self".into()
                             ),
                             name_span: Span::ANY,
-                            type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
-                                Name::Resolved(Symbol::Struct(StructId::from(1)), "Self".into())
-                            ))),
+                            type_annotation: Some(annotation!(TypeAnnotationKind::Borrow {
+                                mutable: false,
+                                inner: Box::new(annotation!(TypeAnnotationKind::SelfType(
+                                    Name::Resolved(
+                                        Symbol::Struct(StructId::from(1)),
+                                        "Self".into()
+                                    )
+                                )))
+                            })),
                             span: Span::ANY,
                         }],
                         body: any_block!(vec![]),
                         ret: None,
                         attributes: vec![]
                     }),
-                    is_static: false
+                    is_static: false,
+                    receiver_mode: ReceiverMode::None
                 })])
             }),
         )
@@ -1289,8 +1315,8 @@ pub mod tests {
                 conformances: vec![],
                 generics: vec![],
                 where_clause: None,
-                body: any_body!(vec![any_decl!(DeclKind::MethodRequirement(
-                    FuncSignature {
+                body: any_body!(vec![any_decl!(DeclKind::MethodRequirement {
+                    signature: FuncSignature {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: Name::Resolved(
@@ -1302,16 +1328,20 @@ pub mod tests {
                             id: NodeID::ANY,
                             name: Name::Resolved(ParamLocalId::from(1u32).into(), "self".into()),
                             name_span: Span::ANY,
-                            type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
-                                Name::Resolved(ProtocolId::from(1).into(), "Self".into())
-                            ))),
+                            type_annotation: Some(annotation!(TypeAnnotationKind::Borrow {
+                                mutable: false,
+                                inner: Box::new(annotation!(TypeAnnotationKind::SelfType(
+                                    Name::Resolved(ProtocolId::from(1).into(), "Self".into())
+                                )))
+                            })),
                             span: Span::ANY
                         }],
                         generics: vec![],
                         where_clause: None,
                         ret: Some(Box::new(annotation!(TypeAnnotationKind::Tuple(vec![]))))
-                    }
-                ))])
+                    },
+                    receiver_mode: ReceiverMode::None
+                })])
             })
         )
     }
@@ -1351,34 +1381,43 @@ pub mod tests {
                         },
                         where_clause: None
                     }),
-                    any_decl!(DeclKind::MethodRequirement(FuncSignature {
-                        id: NodeID::ANY,
-                        span: Span::ANY,
-                        name: Name::Resolved(
-                            Symbol::MethodRequirement(MethodRequirementId::from(1)),
-                            "buzz".into()
-                        ),
-                        params: vec![Parameter {
+                    any_decl!(DeclKind::MethodRequirement {
+                        signature: FuncSignature {
                             id: NodeID::ANY,
-                            name: Name::Resolved(ParamLocalId::from(1u32).into(), "self".into()),
-                            name_span: Span::ANY,
-                            type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
-                                Name::Resolved(ProtocolId::from(1).into(), "Self".into())
-                            ))),
-                            span: Span::ANY
-                        }],
-                        effects: Default::default(),
-                        generics: vec![],
-                        where_clause: None,
-                        ret: Some(Box::new(annotation!(TypeAnnotationKind::Nominal {
+                            span: Span::ANY,
                             name: Name::Resolved(
-                                Symbol::AssociatedType(AssociatedTypeId::from(1)),
-                                "T".into()
+                                Symbol::MethodRequirement(MethodRequirementId::from(1)),
+                                "buzz".into()
                             ),
-                            name_span: Span::ANY,
-                            generics: vec![]
-                        })))
-                    })),
+                            params: vec![Parameter {
+                                id: NodeID::ANY,
+                                name: Name::Resolved(
+                                    ParamLocalId::from(1u32).into(),
+                                    "self".into()
+                                ),
+                                name_span: Span::ANY,
+                                type_annotation: Some(annotation!(TypeAnnotationKind::Borrow {
+                                    mutable: false,
+                                    inner: Box::new(annotation!(TypeAnnotationKind::SelfType(
+                                        Name::Resolved(ProtocolId::from(1).into(), "Self".into())
+                                    )))
+                                })),
+                                span: Span::ANY
+                            }],
+                            effects: Default::default(),
+                            generics: vec![],
+                            where_clause: None,
+                            ret: Some(Box::new(annotation!(TypeAnnotationKind::Nominal {
+                                name: Name::Resolved(
+                                    Symbol::AssociatedType(AssociatedTypeId::from(1)),
+                                    "T".into()
+                                ),
+                                name_span: Span::ANY,
+                                generics: vec![]
+                            })))
+                        },
+                        receiver_mode: ReceiverMode::None
+                    }),
                 ])
             })
         )
@@ -1628,6 +1667,7 @@ pub mod tests {
                         is_open: false
                     },
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     params: vec![],
                     body: any_block!(vec![]),

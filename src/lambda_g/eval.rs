@@ -38,6 +38,13 @@ pub enum EvalValue {
     Cell(usize),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AllocationRecord {
+    start: u32,
+    len: u32,
+    live: bool,
+}
+
 enum Step {
     Done(EvalValue),
     Continue(ExprId),
@@ -61,9 +68,10 @@ pub struct Evaluator {
     steps: u64,
     limit: u64,
     /// Program memory: statics at the base, bump-allocated heap above
-    /// (Leroy, POPL 1992 — scalars live unboxed in raw bytes; no free
-    /// here, allocation is append).
+    /// (Leroy, POPL 1992 — scalars live unboxed in raw bytes).
     mem: Vec<u8>,
+    static_len: u32,
+    allocations: Vec<AllocationRecord>,
     /// Mutable cell store (assignment-converted locals). Cells are machine
     /// state; the term language sees only `Const::Slot` handles.
     slots: Vec<EvalValue>,
@@ -91,6 +99,8 @@ impl Evaluator {
             steps: 0,
             limit: 50_000_000,
             mem: vec![],
+            static_len: 0,
+            allocations: vec![],
             slots: vec![],
             slot_tys: vec![],
             boxed: vec![],
@@ -111,6 +121,8 @@ impl Evaluator {
         let halt = p.func("halt", halt_ty_dom, bot);
         let _ = bot;
         self.mem = p.static_mem.clone();
+        self.static_len = self.mem.len() as u32;
+        self.allocations.clear();
         self.halt = Some(halt);
         let halt_ref = p.func_ref(halt);
         let main_ref = p.func_ref(main);
@@ -460,15 +472,28 @@ impl Evaluator {
                     _ => Err(EvalError::Unsupported("set_field on non-record".into())),
                 }
             }
-            // Raw memory: bump allocation over statics++heap (no free in
-            // the reference evaluator).
+            // Raw memory: bump allocation over statics++heap, tracked so
+            // free/use-after-free are observable.
             Op::Alloc => match self.eval_sub(p, args[0])? {
                 EvalValue::I64(count) if count >= 0 => {
                     let addr = self.mem.len() as u32;
-                    self.mem.resize(self.mem.len() + count as usize, 0);
+                    let reserve = (count as usize).max(1);
+                    self.mem.resize(self.mem.len() + reserve, 0);
+                    self.allocations.push(AllocationRecord {
+                        start: addr,
+                        len: count as u32,
+                        live: true,
+                    });
                     Ok(EvalValue::Ptr(addr))
                 }
                 _ => Err(EvalError::Unsupported("alloc count".into())),
+            },
+            Op::Free => match self.eval_sub(p, args[0])? {
+                EvalValue::Ptr(ptr) => {
+                    self.free(ptr)?;
+                    Ok(EvalValue::Void)
+                }
+                _ => Err(EvalError::Unsupported("free on non-pointer".into())),
             },
             // Width and representation come from the primop's λ_G type
             // (see TyKind::mem_size).
@@ -494,10 +519,12 @@ impl Evaluator {
                 else {
                     return Err(EvalError::Unsupported("copy operands".into()));
                 };
-                let (from, to, len) = (from as usize, to as usize, len as usize);
-                if from + len > self.mem.len() || to + len > self.mem.len() {
-                    return Err(EvalError::Unsupported("copy out of bounds".into()));
+                if len < 0 {
+                    return Err(EvalError::Unsupported("copy negative length".into()));
                 }
+                self.check_access(from, len as usize, "copy")?;
+                self.check_access(to, len as usize, "copy")?;
+                let (from, to, len) = (from as usize, to as usize, len as usize);
                 self.mem.copy_within(from..from + len, to);
                 Ok(EvalValue::Void)
             }
@@ -558,6 +585,7 @@ impl Evaluator {
                     return Ok(count);
                 }
                 let (start, len) = (ptr(1)?, count as usize);
+                self.check_access(start as u32, len, "io")?;
                 let bytes = self.mem.get(start..start + len).ok_or_else(oob)?;
                 self.io.write(fd, bytes)
             }
@@ -567,12 +595,13 @@ impl Evaluator {
                     return Ok(count);
                 }
                 let (start, len) = (ptr(1)?, count as usize);
+                self.check_access(start as u32, len, "io")?;
                 let buf = self.mem.get_mut(start..start + len).ok_or_else(oob)?;
                 self.io.read(fd, buf)
             }
             Op::IoOpen => {
                 let start = ptr(0)?;
-                let tail = self.mem.get(start..).ok_or_else(oob)?;
+                let tail = self.c_string_tail(start as u32)?;
                 let len = tail
                     .iter()
                     .position(|&byte| byte == 0)
@@ -585,7 +614,9 @@ impl Evaluator {
             Op::IoCtl => self.io.ctl(int(0)?, int(1)?, int(2)?),
             Op::IoPoll => {
                 let (start, count, timeout) = (ptr(0)?, int(1)? as usize, int(2)?);
-                let records = self.mem.get(start..start + count * 8).ok_or_else(oob)?;
+                let len = count * 8;
+                self.check_access(start as u32, len, "io")?;
+                let records = self.mem.get(start..start + len).ok_or_else(oob)?;
                 let mut fds: Vec<(i32, i16, i16)> = records
                     .chunks_exact(8)
                     .map(|r| {
@@ -599,6 +630,7 @@ impl Evaluator {
                 let result = self.io.poll(&mut fds, timeout);
                 for (index, (_, _, revents)) in fds.iter().enumerate() {
                     let at = start + index * 8 + 6;
+                    self.check_access(at as u32, 2, "io")?;
                     let slot = self.mem.get_mut(at..at + 2).ok_or_else(oob)?;
                     slot.copy_from_slice(&revents.to_le_bytes());
                 }
@@ -625,12 +657,14 @@ impl Evaluator {
         ty: crate::lambda_g::expr::TyId,
     ) -> Result<EvalValue, EvalError> {
         match p.ty_kind(ty) {
-            TyKind::Byte => self
-                .mem
-                .get(addr as usize)
-                .copied()
-                .map(EvalValue::Byte)
-                .ok_or_else(|| EvalError::Unsupported("load out of bounds".into())),
+            TyKind::Byte => {
+                self.check_access(addr, 1, "load")?;
+                self.mem
+                    .get(addr as usize)
+                    .copied()
+                    .map(EvalValue::Byte)
+                    .ok_or_else(|| EvalError::Unsupported("load out of bounds".into()))
+            }
             TyKind::I64 => Ok(EvalValue::I64(self.read_word(addr)? as i64)),
             TyKind::F64 => Ok(EvalValue::F64(f64::from_bits(self.read_word(addr)?))),
             TyKind::Bool => Ok(EvalValue::Bool(self.read_word(addr)? != 0)),
@@ -664,6 +698,7 @@ impl Evaluator {
                 let EvalValue::Byte(byte) = value else {
                     return Err(EvalError::Unsupported("store byte mismatch".into()));
                 };
+                self.check_access(addr, 1, "store")?;
                 let slot = self
                     .mem
                     .get_mut(addr as usize)
@@ -707,6 +742,7 @@ impl Evaluator {
                 return Err(EvalError::Unsupported(format!("store of type {other:?}")));
             }
         };
+        self.check_access(addr, 8, "store")?;
         let start = addr as usize;
         let slot = self
             .mem
@@ -717,6 +753,7 @@ impl Evaluator {
     }
 
     fn read_word(&self, addr: u32) -> Result<u64, EvalError> {
+        self.check_access(addr, 8, "load")?;
         let start = addr as usize;
         let bytes = self
             .mem
@@ -725,6 +762,71 @@ impl Evaluator {
         let mut buf = [0u8; 8];
         buf.copy_from_slice(bytes);
         Ok(u64::from_le_bytes(buf))
+    }
+
+    fn free(&mut self, ptr: u32) -> Result<(), EvalError> {
+        if ptr < self.static_len {
+            return Ok(());
+        }
+        let Some(record) = self
+            .allocations
+            .iter_mut()
+            .find(|record| record.start == ptr)
+        else {
+            return Err(EvalError::Unsupported("free of invalid pointer".into()));
+        };
+        if !record.live {
+            return Err(EvalError::Unsupported("double free".into()));
+        }
+        record.live = false;
+        Ok(())
+    }
+
+    fn check_access(&self, addr: u32, len: usize, op: &str) -> Result<(), EvalError> {
+        let start = addr as usize;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| EvalError::Unsupported(format!("{op} out of bounds")))?;
+        if end > self.mem.len() {
+            return Err(EvalError::Unsupported(format!("{op} out of bounds")));
+        }
+        if end <= self.static_len as usize {
+            return Ok(());
+        }
+        if self.allocations.iter().any(|record| {
+            let alloc_start = record.start as usize;
+            let alloc_end = alloc_start + record.len as usize;
+            record.live && start >= alloc_start && end <= alloc_end
+        }) {
+            return Ok(());
+        }
+        Err(EvalError::Unsupported(format!(
+            "{op} through invalid pointer"
+        )))
+    }
+
+    fn c_string_tail(&self, addr: u32) -> Result<&[u8], EvalError> {
+        let start = addr as usize;
+        if start > self.mem.len() {
+            return Err(EvalError::Unsupported("io access out of bounds".into()));
+        }
+        if addr < self.static_len {
+            return self
+                .mem
+                .get(start..self.static_len as usize)
+                .ok_or_else(|| EvalError::Unsupported("io access out of bounds".into()));
+        }
+        let Some(record) = self.allocations.iter().find(|record| {
+            let alloc_start = record.start as usize;
+            let alloc_end = alloc_start + record.len as usize;
+            record.live && start >= alloc_start && start <= alloc_end
+        }) else {
+            return Err(EvalError::Unsupported("io through invalid pointer".into()));
+        };
+        let end = record.start as usize + record.len as usize;
+        self.mem
+            .get(start..end)
+            .ok_or_else(|| EvalError::Unsupported("io access out of bounds".into()))
     }
 
     /// The unit argument for a thunk of type [] → R: an empty tuple.

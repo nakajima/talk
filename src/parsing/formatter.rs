@@ -12,9 +12,9 @@ use crate::{
         block::Block,
         body::Body,
         call_arg::CallArg,
-        decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, Visibility},
+        decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, ReceiverMode, Visibility},
         expr::{Expr, ExprKind},
-        func::Func,
+        func::{CaptureMode, CaptureSpec, Func},
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
         inline_ir_instruction::InlineIRInstruction,
@@ -578,7 +578,11 @@ impl<'a> Formatter<'a> {
                 type_annotation.as_ref(),
                 default_value.as_ref(),
             ),
-            DeclKind::Method { func, is_static } => self.format_method(func, *is_static),
+            DeclKind::Method {
+                func,
+                is_static,
+                receiver_mode,
+            } => self.format_method(func, *is_static, *receiver_mode),
             DeclKind::Associated {
                 generic,
                 where_clause,
@@ -607,7 +611,10 @@ impl<'a> Formatter<'a> {
                 ..
             } => self.format_enum_variant(name, generics, payloads, result.as_ref()),
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
-            DeclKind::MethodRequirement(sig) => self.format_func_signature(sig),
+            DeclKind::MethodRequirement {
+                signature,
+                receiver_mode,
+            } => self.format_method_signature(signature, *receiver_mode),
             DeclKind::TypeAlias(lhs, .., rhs) => self.format_type_alias(lhs, rhs),
         };
 
@@ -1420,6 +1427,13 @@ impl<'a> Formatter<'a> {
     fn format_type_annotation(&self, ty: &TypeAnnotation) -> Doc {
         match &ty.kind {
             TypeAnnotationKind::SelfType(..) => text("Self"),
+            TypeAnnotationKind::Borrow { mutable, inner } => {
+                if *mutable {
+                    concat(text("&mut "), self.format_type_annotation(inner))
+                } else {
+                    concat(text("&"), self.format_type_annotation(inner))
+                }
+            }
             TypeAnnotationKind::Record { fields } => self.format_record_type_annotation(fields),
             TypeAnnotationKind::Any {
                 protocol,
@@ -1550,6 +1564,22 @@ impl<'a> Formatter<'a> {
                 concat(
                     text("<"),
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
+                ),
+            );
+        }
+
+        if !func.captures.is_empty() {
+            let capture_docs: Vec<_> = func
+                .captures
+                .iter()
+                .map(|capture| self.format_capture_spec(capture))
+                .collect();
+
+            result = concat(
+                result,
+                concat(
+                    text("["),
+                    concat(join(capture_docs, concat(text(","), text(" "))), text("]")),
                 ),
             );
         }
@@ -1685,6 +1715,15 @@ impl<'a> Formatter<'a> {
         }
 
         result
+    }
+
+    fn format_capture_spec(&self, capture: &CaptureSpec) -> Doc {
+        match capture.mode {
+            CaptureMode::Copy => self.format_name(&capture.name),
+            CaptureMode::Move => concat_space(text("consuming"), self.format_name(&capture.name)),
+            CaptureMode::BorrowShared => concat(text("&"), self.format_name(&capture.name)),
+            CaptureMode::BorrowMut => concat_space(text("&mut"), self.format_name(&capture.name)),
+        }
     }
 
     fn format_let_decl(
@@ -1919,11 +1958,19 @@ impl<'a> Formatter<'a> {
         ))
     }
 
-    fn format_method(&self, func: &Func, is_static: bool) -> Doc {
+    fn format_method(&self, func: &Func, is_static: bool, receiver_mode: ReceiverMode) -> Doc {
         if is_static {
             concat_space(text("static"), self.format_func(func))
         } else {
-            self.format_func(func)
+            self.receiver_mode_prefix(receiver_mode, self.format_func(func))
+        }
+    }
+
+    fn receiver_mode_prefix(&self, receiver_mode: ReceiverMode, doc: Doc) -> Doc {
+        match receiver_mode {
+            ReceiverMode::None => doc,
+            ReceiverMode::Ref => concat_space(text("mut"), doc),
+            ReceiverMode::Consuming => concat_space(text("consuming"), doc),
         }
     }
 
@@ -1981,6 +2028,10 @@ impl<'a> Formatter<'a> {
         }
 
         result
+    }
+
+    fn format_method_signature(&self, sig: &FuncSignature, receiver_mode: ReceiverMode) -> Doc {
+        self.receiver_mode_prefix(receiver_mode, self.format_func_signature(sig))
     }
 
     fn format_where_clause(&self, where_clause: &WhereClause) -> Doc {

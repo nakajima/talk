@@ -34,13 +34,13 @@ public struct Response {
 extend Response: Into {
 	typealias Target=Response
 
-	func into() -> Response { self }
+	consuming func into() -> Response { self }
 }
 
 extend String: Into {
 	typealias Target=Response
 
-	func into() -> Response {
+	consuming func into() -> Response {
 		Response(200, self)
 	}
 }
@@ -77,40 +77,47 @@ public struct HttpServer {
 		self
 	}
 
-	public func get(path: String, handler: () -> String) -> () {
+	public mut func get(path: String, handler: () -> String) -> () {
 		let rc: Int = self.route_count
 
 		if rc == 0 {
 			self.route_path0 = path
 			self.route_handler0 = RouteHandler(invoke: handler)
 			self.route_count = self.route_count + 1
-		}
-		if rc == 1 {
-			self.route_path1 = path
-			self.route_handler1 = RouteHandler(invoke: handler)
-			self.route_count = self.route_count + 1
-		}
-		if rc == 2 {
-			self.route_path2 = path
-			self.route_handler2 = RouteHandler(invoke: handler)
-			self.route_count = self.route_count + 1
-		}
-		if rc == 3 {
-			self.route_path3 = path
-			self.route_handler3 = RouteHandler(invoke: handler)
-			self.route_count = self.route_count + 1
+			return ()
+		} else {
+			if rc == 1 {
+				self.route_path1 = path
+				self.route_handler1 = RouteHandler(invoke: handler)
+				self.route_count = self.route_count + 1
+				return ()
+			} else {
+				if rc == 2 {
+					self.route_path2 = path
+					self.route_handler2 = RouteHandler(invoke: handler)
+					self.route_count = self.route_count + 1
+					return ()
+				} else {
+					if rc == 3 {
+						self.route_path3 = path
+						self.route_handler3 = RouteHandler(invoke: handler)
+						self.route_count = self.route_count + 1
+						return ()
+					}
+				}
+			}
 		}
 		()
 	}
 
-	func extract_method(raw_request: String) -> Substring {
+	func extract_method(raw_request: &String) -> Substring {
 		let first_space: Int = raw_request.find(" ")
 		if first_space < 0 { return "".as_substring() }
 
 		raw_request.slice(0, first_space)
 	}
 
-	func extract_path(raw_request: String) -> Substring {
+	func extract_path(raw_request: &String) -> Substring {
 		let first_space: Int = raw_request.find(" ")
 		if first_space < 0 { return "".as_substring() }
 

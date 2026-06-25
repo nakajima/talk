@@ -1374,6 +1374,15 @@ impl NameResolver {
         let Ok(func_symbol) = func.name.symbol() else {
             unreachable!("did not resolve func");
         };
+
+        for capture in &mut func.captures {
+            let Some(resolved_name) = self.lookup(&capture.name, None, Some(capture.span)) else {
+                self.diagnostic(func.id, NameResolverError::Unresolved(capture.name.clone()));
+                continue;
+            };
+            capture.name = resolved_name;
+        }
+
         self.enter_scope(func.id, Some(vec![(func_symbol, func.id)]));
         self.current_func_symbols.push(func_symbol);
 

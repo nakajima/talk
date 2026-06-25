@@ -11,6 +11,7 @@
     "Other"
   ],
   "activationEvents": [
+    "onLanguage:talktalk",
     "workspaceContains:**/*.tlk"
   ],
   "main": "./out/extension.js",

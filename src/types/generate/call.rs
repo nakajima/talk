@@ -53,7 +53,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }
                 let ret = Ty::Var(self.store.fresh_ty(self.level, node));
                 let expected = Ty::Func(arg_tys, Box::new(ret.clone()), ctx.eff.clone());
-                self.emit_eq(expected, callee_ty, node, CtReason::Apply);
+                self.emit_eq(callee_ty, expected, node, CtReason::Apply);
                 ret
             }
             Ty::Error => Ty::Error,
@@ -82,14 +82,15 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     ) -> Ty {
         let receiver_ty = self.infer_expr(receiver, ctx);
         let member = Ty::Var(self.store.fresh_ty(self.level, callee.id));
+        self.artifacts.node_types.insert(callee.id, member.clone());
+        let result = self.finish_call(expr.id, member.clone(), args, trailing_block, ctx);
         self.wanteds.push(Constraint::HasMember {
             receiver: receiver_ty,
             label: label.clone(),
-            member: member.clone(),
+            member,
             origin: CtOrigin::new(callee.id, CtReason::Apply),
         });
-        self.artifacts.node_types.insert(callee.id, member.clone());
-        self.finish_call(expr.id, member, args, trailing_block, ctx)
+        result
     }
 
     /// `Person(args)`: pick an initializer by arity, equate its

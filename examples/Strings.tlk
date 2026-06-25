@@ -2,7 +2,7 @@ struct Person {
 	let firstName: String
 	let lastName: String
 
-	func greet() {
+	consuming func greet() {
 		// Strings can be concat'd
 		print("hi i'm " + self.firstName + " " + self.lastName)
 	}

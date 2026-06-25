@@ -39,6 +39,20 @@ impl<'s> Solver<'s> {
             // mistake doesn't cascade into follow-on diagnostics.
             (Ty::Error, _) | (_, Ty::Error) => {}
 
+            (Ty::Borrow(k1, inner1), Ty::Borrow(k2, inner2)) if k1 == k2 => {
+                worklist.push(Constraint::Eq(
+                    (**inner1).clone(),
+                    (**inner2).clone(),
+                    origin,
+                ));
+            }
+
+            (Ty::Borrow(..), Ty::Borrow(..)) => self.report_mismatch(&a, &b, origin),
+
+            (Ty::Borrow(_, inner), other) if origin.reason == CtReason::Apply => {
+                worklist.push(Constraint::Eq((**inner).clone(), other.clone(), origin));
+            }
+
             (Ty::Var(x), Ty::Var(y)) if self.store.find(x.0) == self.store.find(y.0) => {}
             (Ty::Var(x), Ty::Var(y)) => {
                 let x_root = self.store.find(x.0);
@@ -256,6 +270,7 @@ impl<'s> Solver<'s> {
             Ty::Nominal(_, args) => args
                 .iter()
                 .any(|a| self.occurs_and_adjust_ty(root, level, a)),
+            Ty::Borrow(_, inner) => self.occurs_and_adjust_ty(root, level, &inner),
             Ty::Func(params, ret, eff) => {
                 params
                     .iter()

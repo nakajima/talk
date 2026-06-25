@@ -1,4 +1,5 @@
 // no-core
+import { Owner } from ./Ownership.tlk
 
 public enum Allocation {
 	case allocate(Int)
@@ -43,6 +44,8 @@ public struct Storage<Element> {
 	}
 }
 
+extend Storage<Element>: Owner {}
+
 public func _storage<Element>(capacity: Int) 'alloc -> Storage<Element> {
 	Storage<Element>(base: _alloc<Element>(capacity))
 }
@@ -60,6 +63,8 @@ public struct ByteStorage {
 		_store<Byte>(ptr, value)
 	}
 }
+
+extend ByteStorage: Owner {}
 
 public func _byte_storage(capacity: Int) 'alloc -> ByteStorage {
 	ByteStorage(base: _alloc<Byte>(capacity))

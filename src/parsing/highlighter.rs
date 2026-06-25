@@ -184,6 +184,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Generated => (),
                 TokenKind::Init => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Mut => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Consuming => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Protocol => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::DotDot | TokenKind::DotDotDot => {
                     self.make(tok, Kind::OPERATOR, &mut tokens)
@@ -341,8 +342,8 @@ impl<'a> Higlighter<'a> {
                 DeclKind::FuncSignature(func_signature) => {
                     result.extend(self.tokens_from_expr(func_signature, ast));
                 }
-                DeclKind::MethodRequirement(func_signature) => {
-                    result.extend(self.tokens_from_expr(func_signature, ast));
+                DeclKind::MethodRequirement { signature, .. } => {
+                    result.extend(self.tokens_from_expr(signature, ast));
                 }
                 DeclKind::TypeAlias(.., lhs_span, rhs) => {
                     result.push(self.make_span(Kind::TYPE, *lhs_span));
@@ -375,6 +376,9 @@ impl<'a> Higlighter<'a> {
                 }
             }
             Node::TypeAnnotation(type_annotation) => match &type_annotation.kind {
+                TypeAnnotationKind::Borrow { inner, .. } => {
+                    result.extend(self.tokens_from_expr(inner.as_ref(), ast));
+                }
                 TypeAnnotationKind::Nominal {
                     name_span,
                     generics,

@@ -119,10 +119,7 @@ pub async fn start() {
                             definition_provider: Some(OneOf::Left(true)),
                             hover_provider: Some(HoverProviderCapability::Simple(true)),
                             rename_provider: Some(OneOf::Left(true)),
-                            completion_provider: Some(CompletionOptions {
-                                trigger_characters: Some(vec![".".to_string()]),
-                                ..Default::default()
-                            }),
+                            completion_provider: Some(CompletionOptions::default()),
                             document_formatting_provider: Some(OneOf::Left(true)),
                             code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                             semantic_tokens_provider: Some(
@@ -1311,6 +1308,13 @@ mod tests {
         let foo_in_b = code_b.rfind("foo").expect("foo");
         let byte_offset = foo_in_b as u32;
         let edit = super::rename_at(&module, &uri_b, byte_offset, "bar").expect("workspace edit");
+        let import_edit = super::rename_at(
+            &module,
+            &uri_b,
+            code_b.find("foo").expect("foo") as u32,
+            "bar",
+        )
+        .expect("workspace edit from import");
 
         let range_a = super::byte_span_to_range_utf16(
             code_a,
@@ -1318,13 +1322,26 @@ mod tests {
             (code_a.find("foo").expect("foo") + 3) as u32,
         )
         .expect("range a");
-        // The foo reference in B is at the last occurrence
-        let range_b =
+        let range_b_import = super::byte_span_to_range_utf16(
+            code_b,
+            code_b.find("foo").expect("foo") as u32,
+            (code_b.find("foo").expect("foo") + 3) as u32,
+        )
+        .expect("range b import");
+        let range_b_reference =
             super::byte_span_to_range_utf16(code_b, foo_in_b as u32, (foo_in_b + 3) as u32)
-                .expect("range b");
+                .expect("range b reference");
 
         assert_eq!(edit_ranges_for_uri(&edit, &uri_a), vec![range_a]);
-        assert_eq!(edit_ranges_for_uri(&edit, &uri_b), vec![range_b]);
+        assert_eq!(
+            edit_ranges_for_uri(&edit, &uri_b),
+            vec![range_b_import, range_b_reference]
+        );
+        assert_eq!(edit_ranges_for_uri(&import_edit, &uri_a), vec![range_a]);
+        assert_eq!(
+            edit_ranges_for_uri(&import_edit, &uri_b),
+            vec![range_b_import, range_b_reference]
+        );
     }
 
     #[test]

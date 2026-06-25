@@ -88,7 +88,7 @@ pub fn rename_at(
         let Some(ast) = module.asts.get(idx).and_then(|a| a.as_ref()) else {
             continue;
         };
-        let spans = rename_spans_in_ast(ast, symbol);
+        let spans = rename_spans_in_ast(module, ast, symbol);
 
         let mut edits: Vec<TextEdit> = spans
             .into_iter()
@@ -141,7 +141,8 @@ fn rename_symbol_at_offset(
             crate::node::Node::TypeAnnotation(ty) => {
                 goto_definition_symbol_from_type_annotation(&ty, byte_offset)
             }
-            crate::node::Node::Decl(decl) => goto_definition_symbol_from_decl(&decl, byte_offset),
+            crate::node::Node::Decl(decl) => goto_definition_symbol_from_decl(&decl, byte_offset)
+                .or_else(|| imported_symbol_at_offset(module, &ast.path, &decl, byte_offset)),
             crate::node::Node::Parameter(param) => {
                 if span_contains(param.name_span, byte_offset) {
                     param.name.symbol().ok()
@@ -231,6 +232,9 @@ fn goto_definition_symbol_from_type_annotation(
     use crate::node_kinds::type_annotation::TypeAnnotationKind;
 
     match &ty.kind {
+        TypeAnnotationKind::Borrow { inner, .. } => {
+            goto_definition_symbol_from_type_annotation(inner, byte_offset)
+        }
         TypeAnnotationKind::Nominal {
             name, name_span, ..
         } => {
@@ -296,6 +300,68 @@ fn goto_definition_symbol_from_decl(
     }
 }
 
+fn imported_symbol_at_offset(
+    module: &AnalysisWorkspace,
+    source_path: &str,
+    decl: &crate::node_kinds::decl::Decl,
+    byte_offset: u32,
+) -> Option<Symbol> {
+    use crate::node_kinds::decl::{DeclKind, ImportedSymbols};
+
+    let DeclKind::Import(import) = &decl.kind else {
+        return None;
+    };
+
+    let ImportedSymbols::Named(imported_symbols) = &import.symbols else {
+        return None;
+    };
+
+    let imported = imported_symbols
+        .iter()
+        .find(|imported| span_contains(imported.span, byte_offset))?;
+
+    symbol_exported_by_import(module, source_path, import, &imported.name)
+}
+
+fn symbol_exported_by_import(
+    module: &AnalysisWorkspace,
+    source_path: &str,
+    import: &crate::node_kinds::decl::Import,
+    name: &str,
+) -> Option<Symbol> {
+    let target_file_id = target_file_id_for_import(module, source_path, &import.path)?;
+    let target_scope_id = crate::node_id::NodeID(target_file_id, 0);
+    let target_scope = module.resolved_names.scopes.get(&target_scope_id)?;
+
+    target_scope
+        .types
+        .get(name)
+        .or_else(|| target_scope.values.get(name))
+        .copied()
+}
+
+fn target_file_id_for_import(
+    module: &AnalysisWorkspace,
+    source_path: &str,
+    import_path: &crate::node_kinds::decl::ImportPath,
+) -> Option<crate::node_id::FileID> {
+    use crate::node_kinds::decl::ImportPath;
+
+    let target_path = match import_path {
+        ImportPath::Relative(rel_path) => {
+            let source_path = std::path::Path::new(source_path);
+            let source_dir = source_path.parent()?;
+            let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
+            source_dir.join(clean_rel)
+        }
+        ImportPath::Package(_) => return None,
+    };
+
+    let target_uri = Url::from_file_path(target_path).ok()?;
+    let target_doc_id = document_id_for_uri(&target_uri);
+    module.document_to_file_id.get(&target_doc_id).copied()
+}
+
 fn identifier_span_at_offset(
     meta: &crate::node_meta::NodeMeta,
     byte_offset: u32,
@@ -307,10 +373,12 @@ fn identifier_span_at_offset(
 }
 
 fn rename_spans_in_ast(
+    module: &AnalysisWorkspace,
     ast: &crate::ast::AST<crate::ast::NameResolved>,
     symbol: Symbol,
 ) -> Vec<(u32, u32)> {
     let mut collector = RenameCollector {
+        module,
         ast,
         target: symbol,
         spans: FxHashSet::default(),
@@ -338,6 +406,7 @@ fn rename_spans_in_ast(
     TypeAnnotation(enter)
 )]
 struct RenameCollector<'a> {
+    module: &'a AnalysisWorkspace,
     ast: &'a crate::ast::AST<crate::ast::NameResolved>,
     target: Symbol,
     spans: FxHashSet<(u32, u32)>,
@@ -356,6 +425,7 @@ impl RenameCollector<'_> {
         use crate::node_kinds::decl::DeclKind;
 
         match &decl.kind {
+            DeclKind::Import(import) => self.enter_import_decl(import),
             DeclKind::Struct {
                 name, name_span, ..
             }
@@ -388,6 +458,22 @@ impl RenameCollector<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn enter_import_decl(&mut self, import: &crate::node_kinds::decl::Import) {
+        use crate::node_kinds::decl::ImportedSymbols;
+
+        let ImportedSymbols::Named(imported_symbols) = &import.symbols else {
+            return;
+        };
+
+        for imported in imported_symbols {
+            let symbol =
+                symbol_exported_by_import(self.module, &self.ast.path, import, &imported.name);
+            if symbol == Some(self.target) {
+                self.push_span(imported.span);
+            }
         }
     }
 

@@ -315,7 +315,7 @@ pub(super) fn decl_kind_name(kind: &DeclKind) -> &'static str {
         DeclKind::Associated { .. } => "associated type declarations",
         DeclKind::Func(_) => "function declarations",
         DeclKind::FuncSignature(_) => "function signatures",
-        DeclKind::MethodRequirement(_) => "method requirements",
+        DeclKind::MethodRequirement { .. } => "method requirements",
         DeclKind::TypeAlias(..) => "type aliases",
     }
 }

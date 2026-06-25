@@ -769,7 +769,8 @@ impl<'a> DeclDeclarer<'a> {
             &mut decl.kind,
             DeclKind::Method {
                 func: box Func { id, name, name_span, generics, .. },
-                is_static
+                is_static,
+                ..
             },
             {
                 *name = if *is_static {

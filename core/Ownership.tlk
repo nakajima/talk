@@ -1,0 +1,5 @@
+// no-core
+
+public protocol Borrowed {}
+
+public protocol Owner {}

@@ -73,7 +73,7 @@ use crate::types::error::TypeError;
 use crate::types::output::{ExistentialPack, MemberResolution, TypeOutput};
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
-    EffTail, EffectRow, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
+    BorrowKind, EffTail, EffectRow, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
 };
 use crate::types::variant::VariantInstantiation;
 
@@ -389,6 +389,10 @@ impl<'a> TypecheckSession<'a> {
             if matches!(ty, Ty::Error) {
                 continue;
             }
+            let ty = match ty {
+                Ty::Borrow(_, inner) => *inner,
+                other => other,
+            };
             let arms: Vec<&Pattern> = patterns.iter().collect();
             let report = crate::types::exhaustiveness::check_match(&self.catalog, &ty, &arms);
             if !report.missing.is_empty() {

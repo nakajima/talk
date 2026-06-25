@@ -2,8 +2,9 @@
 pub mod tests {
     use crate::compiling::driver::{Driver, DriverConfig, Source};
     use crate::lambda_g::eval::EvalValue;
-    use crate::vm::interp::Value;
-    use crate::vm::{Chunk, Insn, Module};
+    use crate::vm::interp::{Value, run};
+    use crate::vm::io::CaptureIO;
+    use crate::vm::{Chunk, Insn, MemKind, Module};
 
     /// The same program runs on the reference evaluator (a direct
     /// transcription of the paper's semantics — our trusted baseline) and
@@ -11,7 +12,11 @@ pub mod tests {
     /// safety net for the one novel composition in the backend — λ_G →
     /// nesting-tree schedule → bytecode (plan's flagged seam #2).
     fn run_on_both_engines(code: &'static str) -> Value {
-        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("VmTest"));
+        let code = unsafe_marked_if_raw(code);
+        let driver = Driver::new(
+            vec![Source::from(code.as_str())],
+            DriverConfig::new("VmTest"),
+        );
         let typed = driver
             .parse()
             .expect("parse")
@@ -82,7 +87,7 @@ pub mod tests {
     fn vm_runs_existential_member_dispatch() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nlet x: any Number = 41\nx.value()"
+                "// no-core\nprotocol Number {\n\tconsuming func value() -> Int\n}\nextend Int: Number {\n\tconsuming func value() -> Int { self }\n}\nlet x: any Number = 41\nx.value()"
             ),
             Value::I64(41)
         );
@@ -92,7 +97,7 @@ pub mod tests {
     fn vm_runs_existential_return_and_generic_bound_dispatch() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nfunc make() -> any Number { 9 }\nfunc render<T: Number>(x: T) -> Int { x.value() }\nrender(make())"
+                "// no-core\nprotocol Number {\n\tconsuming func value() -> Int\n}\nextend Int: Number {\n\tconsuming func value() -> Int { self }\n}\nfunc make() -> any Number { 9 }\nfunc render<T: Number>(x: T) -> Int { x.value() }\nrender(make())"
             ),
             Value::I64(9)
         );
@@ -102,7 +107,7 @@ pub mod tests {
     fn vm_runs_existentials_in_records_and_enums() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nstruct Box {\n\tlet item: any Number\n}\nenum MaybeNumber {\n\tcase some(any Number)\n}\nlet box = Box(item: 12)\nlet maybe = MaybeNumber.some(box.item)\nmatch maybe {\n\tMaybeNumber.some(value) -> value.value()\n}"
+                "// no-core\nprotocol Number {\n\tconsuming func value() -> Int\n}\nextend Int: Number {\n\tconsuming func value() -> Int { self }\n}\nstruct Box {\n\tlet item: any Number\n}\nenum MaybeNumber {\n\tcase some(any Number)\n}\nlet box = Box(item: 12)\nlet maybe = MaybeNumber.some(box.item)\nmatch maybe {\n\tMaybeNumber.some(value) -> value.value()\n}"
             ),
             Value::I64(12)
         );
@@ -112,7 +117,7 @@ pub mod tests {
     fn vm_runs_existentials_in_arrays() {
         assert_eq!(
             run_on_both_engines(
-                "protocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nlet values: Array<any Number> = [3, 4]\nvalues.get(1).value()"
+                "protocol Number {\n\tconsuming func value() -> Int\n}\nextend Int: Number {\n\tconsuming func value() -> Int { self }\n}\nlet values: Array<any Number> = [3, 4]\nvalues.get(1).value()"
             ),
             Value::I64(4)
         );
@@ -122,7 +127,7 @@ pub mod tests {
     fn vm_runs_gadt_hidden_payload_packed_as_existential() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Showable {\n\tfunc show() -> Int\n}\nextend Int: Showable {\n\tfunc show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n\tmatch box {\n\t\t.hidden(value) -> value\n\t}\n}\nerase(GBox.hidden(5)).show()"
+                "// no-core\nprotocol Showable {\n\tconsuming func show() -> Int\n}\nextend Int: Showable {\n\tconsuming func show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n\tmatch box {\n\t\t.hidden(value) -> value\n\t}\n}\nerase(GBox.hidden(5)).show()"
             ),
             Value::I64(5)
         );
@@ -132,7 +137,7 @@ pub mod tests {
     fn vm_runs_gadt_hidden_payload_direct_bound_call() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Showable {\n\tfunc show() -> Int\n}\nextend Int: Showable {\n\tfunc show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc render(box: GBox<Bool>) -> Int {\n\tmatch box {\n\t\t.hidden(value) -> value.show()\n\t}\n}\nrender(GBox.hidden(6))"
+                "// no-core\nprotocol Showable {\n\tconsuming func show() -> Int\n}\nextend Int: Showable {\n\tconsuming func show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc render(box: GBox<Bool>) -> Int {\n\tmatch box {\n\t\t.hidden(value) -> value.show()\n\t}\n}\nrender(GBox.hidden(6))"
             ),
             Value::I64(6)
         );
@@ -181,7 +186,11 @@ pub mod tests {
     /// Both engines, including captured stdout (the M3 surface: records,
     /// strings, io_write).
     fn run_on_both_engines_io(code: &'static str) -> (Value, String) {
-        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("VmTest"));
+        let code = unsafe_marked_if_raw(code);
+        let driver = Driver::new(
+            vec![Source::from(code.as_str())],
+            DriverConfig::new("VmTest"),
+        );
         let typed = driver
             .parse()
             .expect("parse")
@@ -220,6 +229,18 @@ pub mod tests {
         (vm_value, vm_out)
     }
 
+    fn unsafe_marked_if_raw(code: &str) -> String {
+        if code.contains("RawPtr")
+            || code.contains("_alloc")
+            || code.contains("_io_")
+            || code.contains("@_ir")
+        {
+            format!("// unsafe\n{code}")
+        } else {
+            code.to_string()
+        }
+    }
+
     #[test]
     fn vm_matches_evaluator_on_memberwise_struct() {
         let (value, _) = run_on_both_engines_io(
@@ -249,9 +270,17 @@ pub mod tests {
         // Value semantics + inout self (Racordon et al., JOT 2022): bump's
         // self mutation writes back into the caller's binding.
         let (value, _) = run_on_both_engines_io(
-            "struct Counter {\n\tlet n: Int\n\n\tfunc bump() {\n\t\tself.n = self.n + 1\n\t}\n}\nlet c = Counter(n: 1)\nc.bump()\nc.bump()\nc.n",
+            "struct Counter {\n\tlet n: Int\n\n\tmut func bump() {\n\t\tself.n = self.n + 1\n\t}\n}\nlet c = Counter(n: 1)\nc.bump()\nc.bump()\nc.n",
         );
         assert_eq!(value, Value::I64(3));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_mutating_nested_field_receiver_writeback() {
+        let (value, _) = run_on_both_engines_io(
+            "struct Counter {\n\tlet n: Int\n\n\tmut func bump() {\n\t\tself.n = self.n + 1\n\t}\n}\nstruct Inner {\n\tlet counter: Counter\n\tlet offset: Int\n}\nstruct Outer {\n\tlet inner: Inner\n}\nlet outer = Outer(inner: Inner(counter: Counter(n: 1), offset: 40))\nouter.inner.counter.bump()\nouter.inner.counter.n + outer.inner.offset",
+        );
+        assert_eq!(value, Value::I64(42));
     }
 
     #[test]
@@ -277,7 +306,7 @@ pub mod tests {
     fn vm_matches_evaluator_on_struct_example() {
         // examples/Strings.tlk in miniature: fields + concat + print.
         let (_, out) = run_on_both_engines_io(
-            "struct Person {\n\tlet firstName: String\n\tlet lastName: String\n\n\tfunc greet() {\n\t\tprint(\"hi i'm \" + self.firstName + \" \" + self.lastName)\n\t}\n}\nPerson(firstName: \"Pat\", lastName: \"N\").greet()",
+            "struct Person {\n\tlet firstName: String\n\tlet lastName: String\n\n\tconsuming func greet() {\n\t\tprint(\"hi i'm \" + self.firstName + \" \" + self.lastName)\n\t}\n}\nPerson(firstName: \"Pat\", lastName: \"N\").greet()",
         );
         assert_eq!(out, "hi i'm Pat N\n");
     }
@@ -911,7 +940,7 @@ pub mod tests {
         // The old test used a generic protocol (`Getter<T>`); the new
         // type system expresses this with an associated type.
         let (_, out) = run_on_both_engines_io(
-            "protocol Getter {\n\tassociated T\n\tfunc get() -> T\n}\nstruct Container<Element> {\n\tlet item: Element\n\n\textend Self: Getter {\n\t\tfunc get() -> Element {\n\t\t\tself.item\n\t\t}\n\t}\n}\nlet c = Container<Int>(item: 42)\nprint(c.get())",
+            "protocol Getter {\n\tassociated T\n\tconsuming func get() -> T\n}\nstruct Container<Element> {\n\tlet item: Element\n\n\textend Self: Getter {\n\t\tconsuming func get() -> Element {\n\t\t\tself.item\n\t\t}\n\t}\n}\nlet c = Container<Int>(item: 42)\nprint(c.get())",
         );
         assert_eq!(out, "42\n");
     }
@@ -1212,6 +1241,7 @@ pub mod tests {
         let code = format!(
             "let buf = _alloc<Byte>(1024)\nlet n = _io_read({read_fd}, buf, 1024)\n_io_write({write_fd}, buf, n)\nn"
         );
+        let code = unsafe_marked_if_raw(&code);
         let driver = Driver::new(
             vec![Source::from(code.as_str())],
             DriverConfig::new("SocketPairTest"),
@@ -1308,6 +1338,76 @@ pub mod tests {
             "protocol Aa {\n\tfunc m() -> Int\n}\nprotocol Bb {\n\tfunc m() -> Int\n}\nextend Int: Aa {\n\tfunc m() -> Int { 1 }\n}\nextend Int: Bb {\n\tfunc m() -> Int { 2 }\n}\nAa.m(5) + Bb.m(5)",
         );
         assert_eq!(value, Value::I64(3));
+    }
+
+    fn run_raw_module(code: Vec<Insn>, consts: Vec<Value>) -> Result<Value, String> {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code,
+                arity: 0,
+                n_regs: 6,
+            }],
+            consts,
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let mut io = CaptureIO::default();
+        run(&module, &mut io)
+    }
+
+    #[test]
+    fn vm_free_marks_allocation_dead() {
+        let value = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Free { dest: 2, ptr: 1 },
+                Insn::Ret { src: 2 },
+            ],
+            vec![Value::I64(8)],
+        )
+        .expect("valid free");
+        assert_eq!(value, Value::Void);
+    }
+
+    #[test]
+    fn vm_rejects_double_free() {
+        let error = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Free { dest: 2, ptr: 1 },
+                Insn::Free { dest: 3, ptr: 1 },
+                Insn::Ret { src: 3 },
+            ],
+            vec![Value::I64(8)],
+        )
+        .expect_err("double-free should fail");
+        assert!(error.contains("double free"), "{error}");
+    }
+
+    #[test]
+    fn vm_rejects_load_after_free() {
+        let error = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Free { dest: 2, ptr: 1 },
+                Insn::Load {
+                    dest: 3,
+                    ptr: 1,
+                    kind: MemKind::I64,
+                },
+                Insn::Ret { src: 3 },
+            ],
+            vec![Value::I64(8)],
+        )
+        .expect_err("use-after-free should fail");
+        assert!(error.contains("invalid pointer"), "{error}");
     }
 
     #[test]

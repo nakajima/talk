@@ -22,6 +22,11 @@ pub struct AnyAssocBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum TypeAnnotationKind {
     SelfType(#[drive(skip)] Name),
+    Borrow {
+        #[drive(skip)]
+        mutable: bool,
+        inner: Box<TypeAnnotation>,
+    },
     Func {
         params: Vec<TypeAnnotation>,
         returns: Box<TypeAnnotation>,

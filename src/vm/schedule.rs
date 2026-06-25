@@ -812,6 +812,12 @@ impl<'a> ChunkBuilder<'a> {
                 self.code.push(Insn::Alloc { dest, count });
                 Ok(dest)
             }
+            Op::Free => {
+                let ptr = self.eval(args[0])?;
+                let dest = self.fresh();
+                self.code.push(Insn::Free { dest, ptr });
+                Ok(dest)
+            }
             Op::Load => {
                 let Some(kind) = crate::vm::MemKind::of(self.p.ty_kind(self.p.expr(e).ty)) else {
                     return self.eval_trap("vm: load of a type that cannot live in memory");

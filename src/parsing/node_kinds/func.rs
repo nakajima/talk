@@ -11,6 +11,24 @@ use crate::{
     span::Span,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureMode {
+    Copy,
+    Move,
+    BorrowShared,
+    BorrowMut,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+pub struct CaptureSpec {
+    #[drive(skip)]
+    pub mode: CaptureMode,
+    #[drive(skip)]
+    pub name: Name,
+    #[drive(skip)]
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectSet {
     pub names: Vec<Name>,
@@ -39,6 +57,7 @@ pub struct Func {
     #[drive(skip)]
     pub effects: EffectSet,
     pub generics: Vec<GenericDecl>,
+    pub captures: Vec<CaptureSpec>,
     pub where_clause: Option<WhereClause>,
     pub params: Vec<Parameter>, /* params tuple */
     pub body: Block,

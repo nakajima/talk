@@ -13,6 +13,19 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// (Pierce & Turner; DK 2021's mode recipe), otherwise infer and emit an
     /// equality oriented expected-then-found for blame.
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Ty, reason: CtReason, ctx: &Ctx) {
+        if let Ty::Borrow(expected_kind, inner) = self.store.shallow(expected) {
+            let found = self.infer_expr(expr, ctx);
+            match self.store.shallow(&found) {
+                Ty::Borrow(found_kind, found_inner) if found_kind == expected_kind => {
+                    self.emit_eq((*inner).clone(), (*found_inner).clone(), expr.id, reason);
+                }
+                Ty::Borrow(..) => self.emit_eq(expected.clone(), found, expr.id, reason),
+                _ => self.emit_eq((*inner).clone(), found, expr.id, reason),
+            }
+            self.artifacts.node_types.insert(expr.id, expected.clone());
+            return;
+        }
+
         match &expr.kind {
             // Leading-dot variant construction (`.sleep(ms)`, `.none`)
             // resolves through the expected enum — checking mode is what
@@ -254,12 +267,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // equalities are givens, arm-local unification variables are
         // touchable, and outer variables stay untouchable.
         let scrutinee_ty = self.infer_expr(scrutinee, ctx);
+        let pattern_scrutinee_ty = match self.store.shallow(&scrutinee_ty) {
+            Ty::Borrow(_, inner) => *inner,
+            other => other,
+        };
         for arm in arms {
             let old_level = self.level;
             let arm_level = self.level.next();
             let start = self.wanteds.len();
             self.level = arm_level;
-            let refinement = self.check_pattern(&arm.pattern, &scrutinee_ty);
+            let refinement = self.check_pattern(&arm.pattern, &pattern_scrutinee_ty);
             let reason = if inferring_result && !refinement.is_empty() {
                 CtReason::GadtBranch
             } else {

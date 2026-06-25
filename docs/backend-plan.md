@@ -1,12 +1,14 @@
 # Talk Backend: λ_G IR (SSA without Dominance) → Bytecode VM
 
 *The approved backend plan, inlined into the repo for handoff. This is the
-point-in-time design document (June 2026); for current status, invariants,
-and the live roadmap see `HANDOFF.md`. Milestones M0–M3 are complete.*
+point-in-time design document (June 2026). For the current memory,
+ownership, and FFI roadmap see
+`docs/adr/0008-managed-storage-and-ffi.md`. Milestones M0–M3 are
+complete.*
 
 ## Context
 
-Frontend complete (parse → resolve → OutsideIn(X); all 27 examples + core check clean); nothing executes. The backend is rebuilt as: AST + TypeOutput → **λ_G**, the graph-based λ-calculus of Leißa & Griebler, *SSA without Dominance for Higher-Order Programs* (arXiv:2604.09961v2; **full text in repo at `ssa-paper.md` — the canonical spec for the IR core**) → IR-level transformations (inlining, closure conversion, effect wiring) → nesting-tree scheduling → **register bytecode VM** (user decision), with **mutable value semantics + inout self** (user decision). House rules: faithful implementations of published work, cited in code; deviations and unproven seams flagged; correctness over convenience; TDD.
+Frontend complete (parse → resolve → OutsideIn(X); all 27 examples + core check clean); nothing executes. The backend is rebuilt as: AST + TypeOutput → **λ_G**, the graph-based λ-calculus of Leißa & Griebler, *SSA without Dominance for Higher-Order Programs* (arXiv:2604.09961v2; **full text in repo at `ssa-paper.md` — the canonical spec for the IR core**) → IR-level transformations (inlining, closure conversion, effect wiring) → nesting-tree scheduling → **register bytecode VM** (user decision), with **mutable value semantics and source receiver modes** (user decision). House rules: faithful implementations of published work, cited in code; deviations and unproven seams flagged; correctness over convenience; TDD.
 
 Why λ_G over the previous register-IR draft (user direction, and on the merits):
 - Talk is higher-order; λ_G is the SSA-style IR *designed* for higher-order programs — functions float in a soup, φs are function variables, dominance is replaced by free-variable nesting (paper Thm. 1: nesting ⟹ dominance), and the metatheory is Lean-verified.
@@ -15,9 +17,9 @@ Why λ_G over the previous register-IR draft (user direction, and on the merits)
 
 ## Verified constraints (unchanged)
 
-- `@_ir` dialect: core uses 13 opcodes (`cmp add sub mul div trunc itof alloc load store gep copy io_write`); all other I/O is `'io(.variant(args))` performs. `_alloc(count)` allocates bytes while Array calls `_alloc<Element>(capacity)` — latent sizing bug, fixed when Array lands (make `_alloc` generic, `alloc Element`).
-- TypeOutput (node_types, instantiations, member_resolutions, catalog witnesses/derivable/EffectSig) + ResolvedNames (captures, mutated_symbols, effect_handlers) are the lowerer's complete input.
-- ArrayIterator.next() mutates self observably → inout-self write-back. No example needs resumable effects today. core.rs must cache typed artifacts (ASTs + TypeOutput + ResolvedNames) for whole-program lowering.
+- `@_ir` dialect: core uses 13 opcodes (`cmp add sub mul div trunc itof alloc load store gep copy io_write`); all other I/O is `'io(.variant(args))` performs. Core allocation is `public effect 'alloc(allocation: Allocation) -> Void`, and `_alloc<Element>(count)` lowers to `alloc Element`.
+- TypeOutput (node_types, instantiations, member_resolutions, catalog witnesses/derivable/EffectSig) + ResolvedNames (captures, mutated_symbols, effect_handlers) are the lowerer's complete input. `mutated_symbols` still informs assignment conversion and mutable capture handling, but mutating method write-back is keyed by receiver mode after implicit receiver insertion.
+- `ArrayIterator.next()` is `mut func next()`: it mutates `self` observably and uses the inout receiver calling convention. No example needs resumable effects today. core.rs must cache typed artifacts (ASTs + TypeOutput + ResolvedNames) for whole-program lowering.
 
 ---
 
@@ -38,7 +40,7 @@ Why λ_G over the previous register-IR draft (user direction, and on the merits)
 | Closure conversion (only for functions with *unknown* occurrences) | Flat closures: Cardelli LFP 1984; safe-for-space: Shao & Appel LFP 1994; assignment conversion for mutable captures: Kranz et al., ORBIT 1986; environments read off λ_G FV sets directly. |
 | Monomorphization at the AST→IR boundary (worklist), β-reduction for inlining after | MLton whole-program; rustc monomorphization collector; Jones, *Dictionary-free Overloading by Partial Evaluation* (PEPM 1994). The IR stays simply-typed (paper's λ_G + Talk ground types) — MimIR's dependent types not needed in v1. |
 | Pattern matching → decision trees → `switch` builtin | Maranget (ML 2008), first-column heuristic; or-patterns by row expansion; non-exhaustive → trap. |
-| Value semantics + inout self | Racordon et al., *Implementation Strategies for Mutable Value Semantics* (JOT 2022); CoW Rc records; mutating methods' ret continuations carry [result, Self] — the caller's continuation performs the write-back (places: register/field-chain/cell). |
+| Value semantics + receiver modes | Racordon et al., *Implementation Strategies for Mutable Value Semantics* (JOT 2022); CoW Rc records; source `mut func` methods use an internal mutable receiver and ret continuations carry [result, Self] — the caller's continuation performs the write-back through a `KeyPath`-shaped target. Source `func` uses a shared receiver; source `consuming func` uses an owned receiver. Ownership and borrow checking runs on a source-near CFG ownership MIR before λ_G so flow-sensitive ownership facts do not have to be reconstructed from CPS. This tracks Rust's MIR borrow-checking shape ([borrow check](https://rustc-dev-guide.rust-lang.org/borrow-check.html), [region inference](https://rustc-dev-guide.rust-lang.org/borrow-check/region-inference.html), [drop elaboration](https://rustc-dev-guide.rust-lang.org/mir/drop-elaboration.html)), uses origin/loan facts compatible in spirit with [Polonius](https://github.com/rust-lang/polonius), and follows the path/place model in [Oxide](https://arxiv.org/abs/1903.00982) and [Place Capability Graphs](https://arxiv.org/abs/2503.21691). |
 | Boxed/unboxed in raw memory | Leroy, *Unboxed Objects and Polymorphic Typing* (POPL 1992): scalars unboxed bytes; aggregates as 8-byte handles into a VM slot arena (CoW value semantics preserved on load). |
 | Effects | Handlers: Plotkin & Pretnar (LMCS 2013). Static routing makes the handler a *known function reference at the perform site* — evidence passing with compile-time-constant singleton evidence (Xie & Leijen, ICFP 2020/2021, degenerate case). Abort (`-> Never`): perform = apply handler, then apply the handling scope's end continuation (skipping intervening returns — sound because everything is CPS; semantics frozen by Effects.tlk's expected output). M9 resumable: the perform's own continuation is already a λ_G function — pass it to the handler; one-shot per Bruggeman, Waddell & Dybvig (PLDI 1996). No VM support needed in either milestone. |
 | Reference evaluator as executable spec | The paper's small-step semantics (§3.4) implemented directly (~200 lines) as a definitional interpreter (Reynolds 1972); every program runs on both it and the bytecode VM, and the results must agree. |
@@ -57,7 +59,7 @@ Program:  labels ℓ → Function { ty: [t,…] → u, body: Expr | Unset, uf: U
 Types t:  I64 | F64 | Bool | Byte | Ptr | Void | ⊥ | [t,…] (tuple) | t → u | Boxed(RecordId) | Variant(EnumId)
 Exprs e (immutable, hash-consed; LV/LF stored at construction):
           Const(c) | ℓ | var ℓ | App(e, e) | Tuple(e,…) | Extract(e, i) | PrimOp(op, [e,…], t)
-PrimOps:  the @_ir dialect in direct style (cmp/add/sub/mul/div/trunc/itof/alloc/load/store/copy/gep/io_write)
+PrimOps:  the @_ir dialect in direct style (cmp/add/sub/mul/div/trunc/itof/alloc/free/load/store/copy/gep/io_write)
           + records/get_field/set_field + variant/get_tag/get_payload + io_* + io_perform + cell_new/cell_get/cell_set
 Builtins: br_⊥(cond, then_k, else_k) ; switch_⊥(tag, [k_0…k_n], default_k)   (paper §2.2's br, plus tags)
 ```
@@ -69,11 +71,12 @@ Builtins: br_⊥(cond, then_k, else_k) ; switch_⊥(tag, [k_0…k_n], default_k)
 
 ## Pipeline
 
-1. **Lower (AST → λ_G, CPS):** every Talk function becomes a CPS λ_G function (extra `ret` continuation parameter; mutating methods: `ret` takes `[result, Self]`). `if`/`match` lower to `br`/`switch` over join continuations (Maranget trees emit the switch nests); loops are recursive continuations; locals are let-bound expressions (sharing via hash-consing); `@_ir` splices become PrimOps ($n → lowered bind exprs, %n → parameter extracts, type args θ-resolved). Mono worklist keyed (Symbol, concrete type args) from `instantiations` ∘ θ; `member_resolutions` resolve to witness/default/derived function labels; derived `show` and memberwise inits synthesized as λ_G functions. String literals → static_mem + String record. Unhandled `'io` performs → `io_perform` PrimOp (total dispatch); handled performs → apply the statically-known handler label (+ scope-end continuation for aborts).
-2. **IR passes:** β-inline trivial wrappers (single-PrimOp bodies — the operator witnesses; paper §3.4 machinery), assignment conversion (mutated ∩ captured → cells), closure conversion of functions with unknown occurrences (η-expansion first where a function has both known and unknown occurrences, §3.5.1); verifier (T-Prog + WF) after every pass.
-3. **Schedule (λ_G → bytecode):** nesting tree (+ sibling SCCs) per §4; each non-continuation function becomes a bytecode chunk; its nested well-known continuations become blocks; applications of ret-continuations become `Ret`, of sibling continuations become jumps, of functions become `Call` (Thorin-style reconstruction); λ_G variables/extracts get registers (naive per-chunk assignment v1); `br`/`switch` become terminators.
-4. **VM:** register frames, match dispatch, `Rc`/CoW values, byte heap + slot arena, `IO` trait (StdioIO/CaptureIO/wasm stub, ported from a41ff388 — CaptureIO's fd loopback is load-bearing).
-5. **Reference evaluator:** paper §3.4 semantics over λ_G directly — the trusted baseline the VM is compared against, and the executable spec for every lowering milestone before the scheduler exists.
+1. **Semantic MIR (typed AST → source-near CFG MIR):** after type checking and before λ_G, each source body is projected into one shared MIR under `src/mir`, not an ownership-private IR. Bodies carry owner symbols, locals, `KeyPath` projections, operands/rvalues, explicit points/scopes/storage live-dead/drop candidates, branch/switch/loop terminators, and cached source-order use counts. The ownership checker executes move, borrow, assignment, call, return, and explicit closure-capture events with a per-body worklist over CFG successors, so branch joins and loop backedges merge ownership state in MIR instead of relying on source-order traversal. It emits internal origin/loan/storage/move/assignment/drop facts, and drop elaboration writes checked static/dead/conditional/open annotations back onto MIR drop candidates. Needs-drop is type based, with borrowed nominals overriding owned fields; use-before-initialization is rejected; escaping closure values are summarized through locals, returns, by-value arguments, aggregates, and trailing blocks. Closure literals support explicit `copy`, `consuming`, `&`, and `&mut` capture modes; implicit ownership-sensitive captures are rejected; borrowed captures cannot escape; compiler-managed cells for mutated `Copy` locals remain allowed. Safe sources reject `RawPtr` and inline IR unless they opt into `// unsafe`. Remaining precision work is richer lifetime dataflow for more nonescaping borrow cases and executable dynamic drop flags for conditional/open obligations.
+2. **Lower (Semantic MIR + typed AST payloads → λ_G, CPS):** every Talk function becomes a CPS λ_G function (extra `ret` continuation parameter; `mut func` methods have an internal mutable `self` receiver and `ret` takes `[result, Self]`). The MIR lowering consumer in `src/lower/mir_lowering.rs` is the only body/control-flow driver: blocks, branches, switches, loops, source returns, block-tail values, handler scopes, abort-capable call splits, resumable perform splits, and outer-loop `break`/`continue` exits are represented in MIR and consumed from MIR. Typed AST nodes remain as payloads for expression lowering, call resolution, pattern-match compilation, source IDs, and type lookup. `if`/`match` lower to `br`/`switch` over join continuations (Maranget trees emit the switch nests); loops are recursive continuations; locals are let-bound expressions (sharing via hash-consing); deterministic local scope and MIR-static assignment-replacement drops lower to ordered λ_G `free` glue where a managed storage wrapper exposes a `RawPtr`. `@_ir` splices become PrimOps ($n → lowered bind exprs, %n → parameter extracts, type args θ-resolved). Mono worklist keyed (Symbol, concrete type args) from `instantiations` ∘ θ; `member_resolutions` resolve to witness/default/derived function labels; derived `show` and memberwise inits synthesized as λ_G functions. String literals → static_mem + String record. Unhandled `'io` performs → `io_perform` PrimOp (total dispatch); handled performs → apply the statically-known handler capability (+ scope-end continuation for aborts, resumption continuation for resumable handlers).
+3. **IR passes:** β-inline trivial wrappers (single-PrimOp bodies — the operator witnesses; paper §3.4 machinery), assignment conversion (mutated ∩ captured → cells), closure conversion of functions with unknown occurrences (η-expansion first where a function has both known and unknown occurrences, §3.5.1); verifier (T-Prog + WF) after every pass.
+4. **Schedule (λ_G → bytecode):** nesting tree (+ sibling SCCs) per §4; each non-continuation function becomes a bytecode chunk; its nested well-known continuations become blocks; applications of ret-continuations become `Ret`, of sibling continuations become jumps, of functions become `Call` (Thorin-style reconstruction); λ_G variables/extracts get registers (naive per-chunk assignment v1); `br`/`switch` become terminators.
+5. **VM:** register frames, match dispatch, `Rc`/CoW values, byte heap with allocation records, slot arena, `IO` trait (StdioIO/CaptureIO/wasm stub, ported from a41ff388 — CaptureIO's fd loopback is load-bearing).
+6. **Reference evaluator:** paper §3.4 semantics over λ_G directly — the trusted baseline the VM is compared against, and the executable spec for every lowering milestone before the scheduler exists.
 
 ## Module layout (~7k + tests)
 
@@ -89,10 +92,16 @@ src/lambda_g/            the calculus (paper core)
   check.rs               T-* rules + WF verifier                           ~250
   print.rs               paper-style text (`hi ↦ λ int → ⊥. …`) for show_ir ~250
   eval.rs                reference evaluator (E-App/E-β)                   ~250
-src/lower/               AST+TypeOutput → λ_G
-  mod.rs (worklist, θ), expr.rs, calls.rs, patterns.rs (Maranget),
-  splice.rs, closures.rs (assignment+closure conversion passes), derive.rs,
-  effects.rs, strings.rs                                                   ~2300
+src/lower/               Semantic MIR + typed AST payloads → λ_G
+  mod.rs                 worklist, θ, expressions, calls, effects, types    ~4150
+  statements.rs          block entry, assignment, drop helpers               ~650
+  mir_lowering.rs        Semantic MIR body/control flow → λ_G               ~800
+  patterns.rs            Maranget decision trees
+  derive.rs              derived Showable/memberwise functions
+src/mir/
+  mod.rs                 typed AST → source-near semantic CFG MIR           ~1100
+src/ownership/
+  mod.rs                 ownership, borrow, and drop elaboration over MIR   ~4500
 src/vm/
   schedule.rs            nesting-tree → chunks/blocks/registers            ~450
   bytecode.rs            encoding, jump patching, pools                    ~350

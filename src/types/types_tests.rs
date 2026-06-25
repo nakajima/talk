@@ -176,7 +176,7 @@ pub mod tests {
             ),
             (
                 "types::types_alloc",
-                "let x: RawPtr = __IR(\"$? = alloc int 1\"); x",
+                "// unsafe\nlet x: RawPtr = __IR(\"$? = alloc int 1\"); x",
                 true,
                 false,
             ),
@@ -579,7 +579,7 @@ pub mod tests {
             ),
             (
                 "types::types_generic_struct_method",
-                "\n        struct Wrapper<T> {\n            let wrapped: T\n\n            func getWrapped() {\n                self.wrapped\n            }\n        }\n\n        Wrapper(wrapped: 123).getWrapped()\n        Wrapper(wrapped: 1.23).getWrapped()\n        ",
+                "\n        struct Wrapper<T> {\n            let wrapped: T\n\n            consuming func getWrapped() {\n                self.wrapped\n            }\n        }\n\n        Wrapper(wrapped: 123).getWrapped()\n        Wrapper(wrapped: 1.23).getWrapped()\n        ",
                 true,
                 false,
             ),
@@ -693,13 +693,13 @@ pub mod tests {
             ),
             (
                 "types::generic_constructor_in_extension_block",
-                "\n          struct Wrapper<T> {\n              let value: T\n\n              init(value: T) {\n                  self.value = value\n              }\n          }\n\n          struct Box<T> {\n              let inner: T\n          }\n\n          extend Box<T> {\n              func wrap() -> Wrapper<T> {\n                  Wrapper<T>(value: self.inner)\n              }\n          }\n          ",
+                "\n          struct Wrapper<T> {\n              let value: T\n\n              init(value: T) {\n                  self.value = value\n              }\n          }\n\n          struct Box<T> {\n              let inner: T\n          }\n\n          extend Box<T> {\n              consuming func wrap() -> Wrapper<T> {\n                  Wrapper<T>(value: self.inner)\n              }\n          }\n          ",
                 true,
                 false,
             ),
             (
                 "types::generic_constructor_with_explicit_type_arg",
-                "\n          struct Container<Element> {\n              let item: Element\n\n              init(item: Element) {\n                  self.item = item\n              }\n          }\n\n          struct MyList<Element> {\n              let first: Element\n          }\n\n          extend MyList<Element> {\n              func boxFirst() -> Container<Element> {\n                  Container<Element>(item: self.first)\n              }\n          }\n          ",
+                "\n          struct Container<Element> {\n              let item: Element\n\n              init(item: Element) {\n                  self.item = item\n              }\n          }\n\n          struct MyList<Element> {\n              let first: Element\n          }\n\n          extend MyList<Element> {\n              consuming func boxFirst() -> Container<Element> {\n                  Container<Element>(item: self.first)\n              }\n          }\n          ",
                 true,
                 false,
             ),
@@ -735,7 +735,7 @@ pub mod tests {
             ),
             (
                 "types::add_protocol_prototype",
-                "\n        protocol Addy {\n            associated RHS\n            associated Ret\n            func addy(rhs: RHS) -> Ret\n        }\n\n        extend Int: Addy {\n            func addy(rhs: Int) -> Int {\n                self\n            }\n        }\n\n        1.addy(2)\n        ",
+                "\n        protocol Addy {\n            associated RHS\n            associated Ret\n            consuming func addy(rhs: RHS) -> Ret\n        }\n\n        extend Int: Addy {\n            consuming func addy(rhs: Int) -> Int {\n                self\n            }\n        }\n\n        1.addy(2)\n        ",
                 true,
                 false,
             ),
@@ -825,7 +825,7 @@ pub mod tests {
             ),
             (
                 "types::types_struct_call_regression",
-                "\n            struct Person {\n                let firstName: String\n                let lastName: String\n\n                func greet() {\n                    // Strings can be concat'd\n                    print(\"hi i'm \" + self.firstName + \" \" + self.lastName)\n                }\n            }\n\n            Person(firstName: \"Pat\", lastName: \"N\").greet()\n            ",
+                "\n            struct Person {\n                let firstName: String\n                let lastName: String\n\n                consuming func greet() {\n                    // Strings can be concat'd\n                    print(\"hi i'm \" + self.firstName + \" \" + self.lastName)\n                }\n            }\n\n            Person(firstName: \"Pat\", lastName: \"N\").greet()\n            ",
                 true,
                 true,
             ),
@@ -1179,7 +1179,7 @@ pub mod tests {
     #[test]
     fn expected_any_protocol_implicitly_packs_conforming_values() {
         let t = check(
-            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\nextend Int: Showable {\n  func show() -> Int { self }\n}\nlet value: any Showable = 1",
+            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nlet value: any Showable = 1",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "value"), "any Showable");
@@ -1207,7 +1207,7 @@ pub mod tests {
     #[test]
     fn object_safe_any_protocol_satisfies_generic_protocol_bounds() {
         let t = check(
-            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\nextend Int: Showable {\n  func show() -> Int { self }\n}\nfunc render<T: Showable>(value: T) -> Int { value.show() }\nlet value: any Showable = 1\nlet rendered = render(value)",
+            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nfunc render<T: Showable>(value: T) -> Int { value.show() }\nlet value: any Showable = 1\nlet rendered = render(value)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "rendered"), "Int");
@@ -1232,7 +1232,7 @@ pub mod tests {
     #[test]
     fn existential_self_conformance_satisfies_superprotocol_bounds() {
         let t = check(
-            "// no-core\nprotocol Readable {\n  func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> Int\n}\nextend Int: ReadWrite {\n  func read() -> Int { self }\n  func write(value: Int) -> Int { value }\n}\nfunc readIt<T: Readable>(value: T) -> Int { value.read() }\nlet value: any ReadWrite = 1\nlet result = readIt(value)",
+            "// no-core\nprotocol Readable {\n  consuming func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> Int\n}\nextend Int: ReadWrite {\n  consuming func read() -> Int { self }\n  func write(value: Int) -> Int { value }\n}\nfunc readIt<T: Readable>(value: T) -> Int { value.read() }\nlet value: any ReadWrite = 1\nlet result = readIt(value)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "result"), "Int");
@@ -1524,7 +1524,7 @@ pub mod tests {
             "// no-core\nstruct Counter {\n\tlet n: Int\n\tfunc get() { self.n }\n}\nlet c = Counter(n: 1)\nlet v = c.get()",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "get"), "(Counter) -> Int");
+        assert_eq!(ty_of(&t, "get"), "(&Counter) -> Int");
         assert_eq!(ty_of(&t, "v"), "Int");
     }
 
@@ -1874,6 +1874,62 @@ pub mod tests {
             errors.iter().any(|error| error.contains("not determined")),
             "expected ambiguous type parameter error, got {errors:?}"
         );
+    }
+
+    #[test]
+    fn borrow_parameters_auto_borrow_owned_arguments() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = len(s)\nlet z = s.length",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "len"), "(&String) -> Int");
+        assert_eq!(ty_of(&t, "y"), "Int");
+        assert_eq!(ty_of(&t, "z"), "Int");
+    }
+
+    #[test]
+    fn mutable_borrow_parameters_support_member_access() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &mut String) -> Int {\n\ts.length\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "len"), "(&mut String) -> Int");
+    }
+
+    #[test]
+    fn shared_borrows_do_not_satisfy_mutable_borrow_parameters() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc takes_mut(s: &mut String) -> Int {\n\ts.length\n}\nfunc bad(s: &String) -> Int {\n\ttakes_mut(s)\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("&mut String") && error.contains("&String")),
+            "expected shared/mutable borrow mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn shared_method_receiver_cannot_assign_self_field() {
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet n: Int\n\n\tfunc bump() -> () {\n\t\tself.n = 2\n\t\t()\n\t}\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Cannot assign through shared borrow 'self'")),
+            "expected shared receiver assignment error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn mut_method_receiver_can_assign_self_field() {
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet n: Int\n\n\tmut func bump() -> () {\n\t\tself.n = 2\n\t\t()\n\t}\n}",
+        );
+        assert_clean(&t);
     }
 
     // ----- Milestone 5: effects -----------------------------------------
@@ -2835,7 +2891,7 @@ pub mod tests {
     #[test]
     fn gadt_hidden_payload_can_be_returned_as_existential() {
         let typed = check(
-            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\nextend Int: Showable {\n  func show() -> Int { self }\n}\nenum GBox<T> {\n  case hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n  match box {\n    .hidden(value) -> value\n  }\n}",
+            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nenum GBox<T> {\n  case hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n  match box {\n    .hidden(value) -> value\n  }\n}",
         );
         assert_clean(&typed);
         assert_eq!(ty_of(&typed, "erase"), "(GBox<Bool>) -> any Showable");

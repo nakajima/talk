@@ -1,3 +1,4 @@
+// unsafe
 // Chat client
 //
 // Connects to a server on localhost:9900, sends a message, and prints the response.

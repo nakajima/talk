@@ -35,6 +35,10 @@ impl<'s> Solver<'s> {
         }
         let mut used_local_given = None;
         let rebuilt = match ty {
+            Ty::Borrow(kind, inner) => Ty::Borrow(
+                kind,
+                Box::new(self.rewrite_child(*inner, seen, &mut used_local_given)),
+            ),
             Ty::Nominal(symbol, args) => Ty::Nominal(
                 symbol,
                 args.into_iter()
@@ -146,7 +150,7 @@ impl<'s> Solver<'s> {
             Ty::Var(_) | Ty::Param(_) => 0,
             Ty::Proj(..) => 1,
             Ty::Func(..) | Ty::Record(_) | Ty::Tuple(_) => 2,
-            Ty::Nominal(..) | Ty::Any { .. } => 3,
+            Ty::Borrow(..) | Ty::Nominal(..) | Ty::Any { .. } => 3,
             Ty::Error => 4,
         }
     }

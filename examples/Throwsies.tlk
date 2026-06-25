@@ -1,0 +1,15 @@
+effect 'throw(ret: String) -> ()
+
+func this_is_fine() {
+	@handle 'throw { err in print(err) }
+	this_is_not_fine()
+	print("this should not print")
+}
+
+func this_is_not_fine() {
+	print("uh oh, something is going to happen")
+	'throw("oh no")
+	print("this shouldn't print either")
+}
+
+this_is_fine()

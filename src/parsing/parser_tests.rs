@@ -11,7 +11,7 @@ pub mod tests {
         node_kinds::{
             block::Block,
             call_arg::CallArg,
-            decl::{Decl, DeclKind, Visibility},
+            decl::{Decl, DeclKind, ReceiverMode, Visibility},
             expr::{Expr, ExprKind},
             func::{EffectSet, Func},
             func_signature::FuncSignature,
@@ -615,6 +615,7 @@ pub mod tests {
                     name: "foo".into(),
                     name_span: Span::ANY,
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     params: vec![],
                     body: Block {
@@ -654,6 +655,42 @@ pub mod tests {
                         generics: vec![]
                     }
                 }]
+            }
+        );
+    }
+
+    #[test]
+    fn parses_borrow_type_annotations() {
+        let parsed = parse("func c(a: &String, b: &mut Array<Int>) { a }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("didn't get func");
+        };
+
+        assert_eq!(params.len(), 2);
+        assert_eq!(
+            params[0].type_annotation.clone().unwrap().kind,
+            TypeAnnotationKind::Borrow {
+                mutable: false,
+                inner: Box::new(annotation!(TypeAnnotationKind::Nominal {
+                    name: "String".into(),
+                    name_span: Span::ANY,
+                    generics: vec![]
+                }))
+            }
+        );
+        assert_eq!(
+            params[1].type_annotation.clone().unwrap().kind,
+            TypeAnnotationKind::Borrow {
+                mutable: true,
+                inner: Box::new(annotation!(TypeAnnotationKind::Nominal {
+                    name: "Array".into(),
+                    name_span: Span::ANY,
+                    generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                        name: "Int".into(),
+                        name_span: Span::ANY,
+                        generics: vec![]
+                    })]
+                }))
             }
         );
     }
@@ -733,6 +770,7 @@ pub mod tests {
                 name: Name::Raw("greet".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                captures: vec![],
                 where_clause: None,
                 params: vec![Parameter {
                     id: NodeID::ANY,
@@ -776,6 +814,7 @@ pub mod tests {
                     generics: vec![],
                     conformances: vec![],
                 }],
+                captures: vec![],
                 where_clause: None,
                 params: vec![Parameter::new(
                     NodeID::ANY,
@@ -857,6 +896,7 @@ pub mod tests {
                 name: Name::Raw("hello".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                captures: vec![],
                 where_clause: None,
                 params: vec![],
                 body: Block {
@@ -878,6 +918,7 @@ pub mod tests {
                 name: Name::Raw("world".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                captures: vec![],
                 where_clause: None,
                 params: vec![],
                 body: Block {
@@ -904,6 +945,7 @@ pub mod tests {
                 name: Name::Raw("greet".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                captures: vec![],
                 where_clause: None,
                 params: vec![
                     Parameter {
@@ -944,6 +986,7 @@ pub mod tests {
                 name: Name::Raw("greet".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                captures: vec![],
                 where_clause: None,
                 params: vec![Parameter {
                     id: NodeID::ANY,
@@ -1326,6 +1369,7 @@ pub mod tests {
                 name: Name::Raw("fizz".to_string()),
                 name_span: Span::ANY,
                 generics: vec![],
+                captures: vec![],
                 where_clause: None,
                 params: vec![],
                 body: Block {
@@ -1958,6 +2002,7 @@ pub mod tests {
                 name: Name::Raw("greet".into()),
                 name_span: Span::ANY,
                 generics: vec![],
+                captures: vec![],
                 where_clause: None,
                 params: vec![Parameter {
                     id: NodeID::ANY,
@@ -2035,11 +2080,13 @@ pub mod tests {
                     any_decl!(enum_variant(Name::Raw("nope".into()), Span::ANY, vec![])),
                     any_decl!(DeclKind::Method {
                         is_static: false,
+                        receiver_mode: ReceiverMode::None,
                         func: Box::new(Func {
                             id: NodeID::ANY,
                             name: Name::Raw("fizz".into()),
                             name_span: Span::ANY,
                             generics: vec![],
+                            captures: vec![],
                             where_clause: None,
                             params: vec![],
                             effects: Default::default(),
@@ -2227,6 +2274,7 @@ pub mod tests {
                         name: "foo".into(),
                         name_span: Span::ANY,
                         generics: vec![],
+                        captures: vec![],
                         where_clause: None,
                         params: vec![],
                         effects: Default::default(),
@@ -2234,7 +2282,8 @@ pub mod tests {
                         ret: None,
                         attributes: vec![],
                     }),
-                    is_static: false
+                    is_static: false,
+                    receiver_mode: ReceiverMode::None
                 })])
             })
         );
@@ -2403,11 +2452,13 @@ pub mod tests {
                 where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     is_static: true,
+                    receiver_mode: ReceiverMode::None,
                     func: Func {
                         id: NodeID::ANY,
                         name: "getAge".into(),
                         name_span: Span::ANY,
                         generics: vec![],
+                        captures: vec![],
                         where_clause: None,
                         params: vec![],
                         effects: Default::default(),
@@ -2442,11 +2493,13 @@ pub mod tests {
                 where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     is_static: false,
+                    receiver_mode: ReceiverMode::None,
                     func: Func {
                         id: NodeID::ANY,
                         name: "getAge".into(),
                         name_span: Span::ANY,
                         generics: vec![],
+                        captures: vec![],
                         where_clause: None,
                         params: vec![],
                         effects: Default::default(),
@@ -2458,6 +2511,45 @@ pub mod tests {
                 })])
             })
         );
+    }
+
+    #[test]
+    fn parses_mut_instance_struct_methods() {
+        let parsed = parse(
+            "
+        struct Counter {
+            mut func bump() {
+                self.n = self.n + 1
+            }
+        }
+        ",
+        );
+
+        let DeclKind::Struct { body, .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected struct");
+        };
+        let DeclKind::Method { receiver_mode, .. } = &body.decls[0].kind else {
+            panic!("expected method");
+        };
+        assert_eq!(*receiver_mode, ReceiverMode::Ref);
+    }
+
+    #[test]
+    fn rejects_explicit_self_instance_methods() {
+        let lexer = Lexer::new(
+            "
+        struct Counter {
+            func bump(self: Self) {}
+        }
+        ",
+        );
+        let parser = Parser::new("-", FileID(0), lexer);
+        let result = parser.parse();
+
+        assert!(matches!(
+            result,
+            Err(ParserError::ExplicitSelfParameterNotAllowed)
+        ));
     }
 
     #[test]
@@ -2548,8 +2640,8 @@ pub mod tests {
                 generics: vec![],
                 where_clause: None,
                 conformances: vec![],
-                body: any_body!(vec![any_decl!(DeclKind::MethodRequirement(
-                    FuncSignature {
+                body: any_body!(vec![any_decl!(DeclKind::MethodRequirement {
+                    signature: FuncSignature {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: "me".into(),
@@ -2565,8 +2657,9 @@ pub mod tests {
                             })
                             .into()
                         )
-                    }
-                ))])
+                    },
+                    receiver_mode: ReceiverMode::None
+                })])
             })
         );
     }
@@ -3007,6 +3100,7 @@ pub mod tests {
                 name: "fizzes".into(),
                 name_span: Span::ANY,
                 generics: Default::default(),
+                captures: vec![],
                 where_clause: None,
                 params: vec![any!(Parameter, {
                     name: "x".into(),

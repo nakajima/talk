@@ -183,6 +183,11 @@ pub enum Insn {
         dest: u16,
         count: u16,
     },
+    /// dest ← (), and ptr's allocation becomes dead.
+    Free {
+        dest: u16,
+        ptr: u16,
+    },
     /// dest ← one `kind`-sized read at the address in ptr.
     Load {
         dest: u16,
@@ -426,6 +431,7 @@ impl Module {
                 index,
             } => format!("set_field r{dest} <- r{rec} with .{index} = r{src}"),
             Insn::Alloc { dest, count } => format!("alloc r{dest} <- r{count} bytes"),
+            Insn::Free { dest, ptr } => format!("free r{dest} <- r{ptr}"),
             Insn::Load { dest, ptr, kind } => {
                 format!(
                     "load_{} r{dest} <- [r{ptr}]",

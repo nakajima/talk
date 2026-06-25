@@ -33,6 +33,12 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
+        /// Dump the raw scheduled VM bytecode module for a file (or stdin),
+        /// including chunks and side pools.
+        Bytecode {
+            #[arg(value_hint = ValueHint::FilePath)]
+            filename: Option<String>,
+        },
         /// The type of the thing at a position (byte offset, or 1-based
         /// line and column).
         Hover {
@@ -111,6 +117,16 @@ async fn main() {
             let (module_name, source) = single_source_for(filename.as_deref());
             let styles = talk::lambda_g::print::Styles::auto();
             match talk::compiling::driver::render_bytecode_from(&module_name, source, &styles) {
+                Ok(listing) => println!("{listing}"),
+                Err(message) => {
+                    eprintln!("{message}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Bytecode { filename } => {
+            let (module_name, source) = single_source_for(filename.as_deref());
+            match talk::compiling::driver::render_raw_bytecode_from(&module_name, source) {
                 Ok(listing) => println!("{listing}"),
                 Err(message) => {
                     eprintln!("{message}");

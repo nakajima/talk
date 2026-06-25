@@ -302,7 +302,9 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     };
                     info.fields.insert(name.name_str(), (property, ty));
                 }
-                DeclKind::Method { func, is_static } => {
+                DeclKind::Method {
+                    func, is_static, ..
+                } => {
                     let Ok(method) = func.name.symbol() else {
                         continue;
                     };
@@ -436,6 +438,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 DeclKind::Method {
                     func,
                     is_static: false,
+                    ..
                 } => {
                     if let Ok(method) = func.name.symbol() {
                         info.methods.insert(func.name.name_str(), method);
@@ -555,7 +558,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         for member in &body.decls {
             match &member.kind {
                 DeclKind::Associated { .. } => {}
-                DeclKind::MethodRequirement(signature) | DeclKind::FuncSignature(signature) => {
+                DeclKind::MethodRequirement { signature, .. }
+                | DeclKind::FuncSignature(signature) => {
                     if let Some(requirement) = self.lower_requirement(signature, false) {
                         info.requirements
                             .insert(signature.name.name_str(), requirement);

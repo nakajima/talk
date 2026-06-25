@@ -29,6 +29,11 @@ pub enum TypeError {
     NotAFunction {
         found: String,
     },
+    InvalidAssignmentTarget,
+    AssignThroughSharedBorrow {
+        target: String,
+        ty: String,
+    },
     NotConforming {
         ty: String,
         protocol: String,
@@ -133,6 +138,18 @@ impl Display for TypeError {
             }
             TypeError::NotAFunction { found } => {
                 write!(f, "Cannot call non-function value of type {found}")
+            }
+            TypeError::InvalidAssignmentTarget => {
+                write!(
+                    f,
+                    "Assignment target must be a variable or stored member path"
+                )
+            }
+            TypeError::AssignThroughSharedBorrow { target, ty } => {
+                write!(
+                    f,
+                    "Cannot assign through shared borrow '{target}' of type {ty}; use `mut func` for a mutable receiver"
+                )
             }
             TypeError::NotConforming { ty, protocol } => {
                 write!(f, "{ty} does not conform to {protocol}")

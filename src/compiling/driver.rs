@@ -10,6 +10,7 @@ use crate::{
     node::Node,
     node_id::{FileID, NodeID},
     node_kinds::decl::{DeclKind, ImportPath},
+    ownership::OwnershipOutput,
     parser::Parser,
     parser_error::ParserError,
     types::TypeOutput,
@@ -60,6 +61,7 @@ pub struct Typed {
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
     pub types: TypeOutput,
+    pub ownership: OwnershipOutput,
     pub diagnostics: Vec<AnyDiagnostic>,
 }
 
@@ -415,6 +417,7 @@ fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
         AnyDiagnostic::Parsing(diagnostic) => diagnostic.severity == Severity::Error,
         AnyDiagnostic::NameResolution(diagnostic) => diagnostic.severity == Severity::Error,
         AnyDiagnostic::Types(diagnostic) => diagnostic.severity == Severity::Error,
+        AnyDiagnostic::Ownership(diagnostic) => diagnostic.severity == Severity::Error,
     })
 }
 
@@ -456,6 +459,12 @@ impl Driver<NameResolved> {
             self.config.module_id,
         );
         diagnostics.extend(type_diagnostics);
+        let (ownership, ownership_diagnostics) = if has_error_diagnostics(&diagnostics) {
+            (OwnershipOutput::default(), vec![])
+        } else {
+            crate::ownership::check_ownership(&asts, &types, &resolved_names, self.config.module_id)
+        };
+        diagnostics.extend(ownership_diagnostics);
 
         Driver {
             files: self.files,
@@ -465,6 +474,7 @@ impl Driver<NameResolved> {
                 symbols,
                 resolved_names,
                 types,
+                ownership,
                 diagnostics,
             },
         }
@@ -483,6 +493,7 @@ impl Driver<Typed> {
             symbols: _,
             resolved_names,
             types,
+            ownership,
             diagnostics,
         } = self.phase;
 
@@ -497,12 +508,14 @@ impl Driver<Typed> {
                 asts: &core.asts,
                 types: &core.types,
                 resolved: &core.resolved_names,
+                ownership: &core.ownership,
             });
         }
         units.push(LowerUnit {
             asts: &asts,
             types: &types,
             resolved: &resolved_names,
+            ownership: &ownership,
         });
         let entry = units.len() - 1;
         let lowered = lower_program(units, entry);
@@ -658,6 +671,13 @@ pub fn render_bytecode_from(
     Ok(module.render_styled(styles))
 }
 
+/// Compile and schedule, dumping the raw VM module (`talk bytecode <file>`).
+pub fn render_raw_bytecode_from(name: &str, source: Source) -> Result<String, String> {
+    let mut lowered = lower_for_display(name, source)?;
+    let module = lowered.schedule()?;
+    Ok(format!("{module:#?}"))
+}
+
 fn lower_for_display(name: &str, source: Source) -> Result<Driver<Lowered>, String> {
     let driver = Driver::new(vec![source], DriverConfig::new(name));
     let parsed = driver.parse().map_err(|err| format!("{err:?}"))?;
@@ -736,6 +756,19 @@ pub mod tests {
         .expect("bytecode");
         assert!(listing.contains("chunk 0: main"), "{listing}");
         assert!(listing.contains("ret r"), "{listing}");
+    }
+
+    #[test]
+    fn render_raw_bytecode_dumps_module() {
+        let dump = render_raw_bytecode_from(
+            "BytecodeTest",
+            Source::from("func double(x: Int) -> Int { x * 2 }\ndouble(21)"),
+        )
+        .expect("bytecode");
+        assert!(dump.contains("Module {"), "{dump}");
+        assert!(dump.contains("chunks:"), "{dump}");
+        assert!(dump.contains("code:"), "{dump}");
+        assert!(dump.contains("entry:"), "{dump}");
     }
 
     #[test]

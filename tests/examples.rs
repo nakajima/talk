@@ -98,8 +98,8 @@ fn for_loop() {
 
 #[test]
 fn show() {
-    // Float's 1.229999999999999 is the documented core epsilon-loop wart
-    // (HANDOFF §8); both engines agree.
+    // Float's 1.229999999999999 is the documented core epsilon-loop wart;
+    // both engines agree.
     expect_stdout("Show", &["Show.tlk"]);
 }
 
