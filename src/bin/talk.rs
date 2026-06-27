@@ -1,7 +1,6 @@
 use talk::compiling::driver::DriverConfig;
 
 #[cfg(feature = "cli")]
-#[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     use clap::{Args, CommandFactory, Parser, Subcommand, ValueHint};
@@ -17,7 +16,7 @@ async fn main() {
 
     #[derive(Subcommand, Debug)]
     enum Commands {
-        /// Dump a parse tree of the input.
+        /// Show a parse tree of the input.
         Parse {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
@@ -33,7 +32,7 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
-        /// Dump the raw scheduled VM bytecode module for a file (or stdin),
+        /// Show the raw scheduled VM bytecode module for a file (or stdin),
         /// including chunks and side pools.
         Bytecode {
             #[arg(value_hint = ValueHint::FilePath)]
@@ -60,20 +59,19 @@ async fn main() {
             #[arg(long)]
             width: Option<usize>,
         },
-        Debug {
-            #[arg(value_hint = ValueHint::FilePath)]
-            filename: Option<String>,
-        },
+        /// Syntax highlight the input as HTML
         Html {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
+        /// Type-check the input
         Check {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
             #[arg(long)]
             json: bool,
         },
+        /// Run the input
         Run {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
@@ -85,14 +83,16 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: String,
         },
+        /// Read-eval-print-loop
         Repl,
         /// Print a dense Talk language reference for LLMs.
         Llm,
-        // Run { filename: PathBuf },
+        /// Generate shell completions
         Completions {
             #[arg(value_enum)]
             shell: Shell,
         },
+        /// Language? Server. Protocol!
         Lsp(LspArgs),
     }
 
@@ -418,34 +418,6 @@ async fn main() {
             println!(
                 "{}",
                 formatter::format_string_with_width(&source, width.unwrap_or(80))
-            );
-        }
-        Commands::Debug { filename } => {
-            init();
-
-            use talk::{
-                compiling::driver::Driver,
-                formatter::{DebugHTMLFormatter, Formatter},
-            };
-
-            let (module_name, source) = single_source_for(filename.as_deref());
-            let driver = Driver::new(vec![source], DriverConfig::new(module_name));
-            let resolved = driver.parse().unwrap().resolve_names().unwrap();
-            let meta = resolved.phase.asts[0].meta.clone();
-
-            let formatter = Formatter::new_with_decorators(
-                &meta,
-                vec![
-                    Box::new(DebugHTMLFormatter {}),
-                    //Box::new(TypesDecorator {
-                    //    types_by_node: typed.phase.types.types_by_node,
-                    //}),
-                ],
-            );
-
-            println!(
-                "{}",
-                formatter.format(&resolved.phase.asts[0].roots.clone(), 80)
             );
         }
     }
