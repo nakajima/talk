@@ -551,7 +551,7 @@ impl<'a> Lowering<'a> {
             ExprKind::Member(Some(receiver), ..) => {
                 let base = self.ownership_key_path_from_assignment_lhs(ctx, receiver)?;
                 let field =
-                    crate::types::output::stored_field_symbol(self.units[ctx.unit].types, lhs)?;
+                    crate::types::output::stored_field_symbol(self.units[ctx.unit].types, lhs.id)?;
                 Some(base.child(field))
             }
             _ => None,

@@ -7,7 +7,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
-use crate::node_kinds::expr::Expr;
 use crate::types::ty::{Scheme, Ty};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,8 +24,8 @@ pub enum MemberResolution {
     ViaConformance { protocol: Symbol, witness: Symbol },
 }
 
-pub(crate) fn stored_field_symbol(types: &TypeOutput, expr: &Expr) -> Option<Symbol> {
-    let MemberResolution::Direct(property) = types.member_resolutions.get(&expr.id)? else {
+pub(crate) fn stored_field_symbol(types: &TypeOutput, node_id: NodeID) -> Option<Symbol> {
+    let MemberResolution::Direct(property) = types.member_resolutions.get(&node_id)? else {
         return None;
     };
     let in_catalog = types.catalog.structs.values().any(|info| {

@@ -58,6 +58,9 @@ pub struct Lowered {
 impl DriverPhase for Typed {}
 pub struct Typed {
     pub asts: IndexMap<Source, AST<crate::parsing::ast::NameResolved>>,
+    /// The program lowered to HIR (one entry per analyzed file). Built in
+    /// `type_check`; consumed by lowering (and the ownership re-point).
+    pub hir: IndexMap<Source, crate::hir::HirFile>,
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
     pub types: TypeOutput,
@@ -479,21 +482,38 @@ impl Driver<NameResolved> {
             self.config.module_id,
         );
         diagnostics.extend(type_diagnostics);
+        // The HIR (once, NodeID-preserving) for the error-free asts that ownership analyzes
+        // and lowering will consume. Stored in `Typed`; not yet consumed by ownership/lowering.
+        let mut hir: IndexMap<Source, crate::hir::HirFile> = IndexMap::default();
+        let build_hir_for = |hir: &mut IndexMap<Source, crate::hir::HirFile>,
+                             source: &Source,
+                             ast: &AST<crate::parsing::ast::NameResolved>| {
+            hir.insert(source.clone(), crate::hir::build::build_file(ast));
+        };
+
         let blocked_files = error_diagnostic_files(&diagnostics);
         let (ownership, ownership_diagnostics) = match blocked_files {
             None => (OwnershipOutput::default(), vec![]),
-            Some(blocked_files) if blocked_files.is_empty() => crate::ownership::check_ownership(
-                &asts,
-                &types,
-                &resolved_names,
-                self.config.module_id,
-            ),
+            Some(blocked_files) if blocked_files.is_empty() => {
+                for (source, ast) in &asts {
+                    build_hir_for(&mut hir, source, ast);
+                }
+                crate::ownership::check_ownership(
+                    &asts,
+                    &types,
+                    &resolved_names,
+                    self.config.module_id,
+                )
+            }
             Some(blocked_files) => {
                 let clean_asts: IndexMap<Source, AST<crate::parsing::ast::NameResolved>> = asts
                     .iter()
                     .filter(|(_, ast)| !blocked_files.contains(&ast.file_id))
                     .map(|(source, ast)| (source.clone(), ast.clone()))
                     .collect();
+                for (source, ast) in &clean_asts {
+                    build_hir_for(&mut hir, source, ast);
+                }
                 if clean_asts.is_empty() {
                     (OwnershipOutput::default(), vec![])
                 } else {
@@ -508,22 +528,12 @@ impl Driver<NameResolved> {
         };
         diagnostics.extend(ownership_diagnostics);
 
-        // Stage 1 HIR totality check: build (but don't consume) the HIR for every
-        // fully error-free program. Surfaces any AST construct `build_hir` fails to
-        // lower, across the whole test suite. Skipped for programs with errors
-        // (which may carry LSP-only `Incomplete` exprs) and free in release builds.
-        #[cfg(debug_assertions)]
-        if !has_error_diagnostics(&diagnostics) {
-            for ast in asts.values() {
-                let _ = crate::hir::build::lower_roots(&ast.roots);
-            }
-        }
-
         Driver {
             files: self.files,
             config: self.config,
             phase: Typed {
                 asts,
+                hir,
                 symbols,
                 resolved_names,
                 types,
@@ -543,6 +553,7 @@ impl Driver<Typed> {
 
         let Typed {
             asts,
+            hir: _,
             symbols: _,
             resolved_names,
             types,

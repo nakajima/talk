@@ -9,9 +9,18 @@
 use crate::hir;
 use crate::node::Node;
 use crate::node_kinds::{decl, expr, pattern, stmt};
+use crate::parsing::ast::{AST, NameResolved};
 
 pub fn lower_roots(roots: &[Node]) -> Vec<hir::Node> {
     roots.iter().map(lower_node).collect()
+}
+
+/// Lower one name-resolved source file to a `HirFile` (NodeID-preserving).
+pub fn build_file(ast: &AST<NameResolved>) -> hir::HirFile {
+    hir::HirFile {
+        file_id: ast.file_id,
+        roots: lower_roots(&ast.roots),
+    }
 }
 
 fn lower_node(node: &Node) -> hir::Node {

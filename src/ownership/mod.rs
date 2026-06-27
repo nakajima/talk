@@ -3075,7 +3075,7 @@ impl OwnershipChecker<'_> {
     }
 
     fn stored_field_symbol(&self, expr: &Expr) -> Option<Symbol> {
-        stored_field_symbol(self.types, expr)
+        stored_field_symbol(self.types, expr.id)
     }
 
     fn call_argument_types(&self, callee: &Expr) -> Option<Vec<Ty>> {

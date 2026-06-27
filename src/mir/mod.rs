@@ -480,7 +480,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 Some(KeyPath::root(self.local_for_symbol(symbol)))
             }
             ExprKind::Member(Some(receiver), ..) => {
-                let field = stored_field_symbol(self.types, expr)?;
+                let field = stored_field_symbol(self.types, expr.id)?;
                 Some(
                     self.key_path_for_expr(receiver)?
                         .project(KeyPathComponent::Field(field)),
@@ -530,7 +530,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 })
             }
             ExprKind::Member(Some(receiver), ..) => {
-                let field = stored_field_symbol(self.types, expr)?;
+                let field = stored_field_symbol(self.types, expr.id)?;
                 let base = self.operand_for_expr(receiver)?;
                 Some(Rvalue::FieldRead { base, field })
             }
@@ -906,7 +906,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 current
             }
             ExprKind::Member(Some(receiver), ..) => {
-                if stored_field_symbol(self.types, expr).is_some() {
+                if stored_field_symbol(self.types, expr.id).is_some() {
                     self.push_statement(current, Statement::Read { expr });
                     current
                 } else {
@@ -973,7 +973,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         match &expr.kind {
             ExprKind::Variable(_) => {}
             ExprKind::Member(Some(receiver), ..)
-                if stored_field_symbol(self.types, expr).is_some() =>
+                if stored_field_symbol(self.types, expr.id).is_some() =>
             {
                 self.lower_assignment_root(receiver, current);
             }

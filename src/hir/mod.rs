@@ -41,6 +41,14 @@ use crate::{
 };
 use crate::label::Label;
 
+/// One source file lowered to HIR: the analogue of `AST<NameResolved>` for the
+/// downstream phases. Carries the same `file_id` and the lowered roots.
+#[derive(Clone, Debug)]
+pub struct HirFile {
+    pub file_id: crate::node_id::FileID,
+    pub roots: Vec<Node>,
+}
+
 /// The umbrella node type for a block body (`Vec<Node>`), mirroring the AST's
 /// heterogeneous `Node` but only the variants a block body actually holds.
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
