@@ -17,12 +17,12 @@ async fn main() {
 
     #[derive(Subcommand, Debug)]
     enum Commands {
+        /// Dump a parse tree of the input.
         Parse {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
-        /// Show what a file compiles to in the intermediate form
-        /// produced by lowering (the λ_G program).
+        /// Show the λ_G program produced by lowering ().
         Lower {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
@@ -39,8 +39,8 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
-        /// The type of the thing at a position (byte offset, or 1-based
-        /// line and column).
+        /// The Type at a position (byte offset, or 1-based
+        /// line/column).
         Hover {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
@@ -53,6 +53,7 @@ async fn main() {
             #[arg(long, value_name = "ID")]
             node_id: Option<String>,
         },
+        /// Formats the input to stdout
         Format {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
@@ -129,7 +130,8 @@ async fn main() {
 
             let (module_name, source) = single_source_for(filename.as_deref());
             let driver = Driver::new(vec![source], DriverConfig::new(module_name));
-            let _ = driver.parse().unwrap();
+            let parsed = driver.parse().unwrap();
+            println!("{:#?}", parsed.phase.asts);
         }
         Commands::Lower { filename } => {
             let (module_name, source) = single_source_for(filename.as_deref());

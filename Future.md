@@ -24,8 +24,20 @@
 
 - Subscriptable protocol for allowing thing[idx]
 
+# ggez
+
+- `talk new` for initializing new projects
+- a package manager???
+- semantic tokens should indicate ownership better
+
 # Random
 
 - Clean up diagnostics stuff. Maybe a DiagnosticSet object that tracks sevs separately so we don't need to do filtering all the time?
 
+# Lower
+
+- Let's stop doing MIR twice
+
 # else
+
+- We should rewrite Talk of the Town in talktalk itself

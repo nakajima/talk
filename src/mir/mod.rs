@@ -244,7 +244,6 @@ pub(crate) enum Statement<'a> {
     DropCandidate {
         target: DropTarget<'a>,
         key_path: Option<KeyPath>,
-        elaboration: Option<DropElaboration>,
         reason: DropReason,
     },
     Call {
@@ -294,14 +293,14 @@ pub(crate) enum DropTarget<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DropReason {
+pub enum DropReason {
     ScopeExit,
     AssignmentReplace,
     EarlyExit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DropElaboration {
+pub enum DropElaboration {
     /// initialized and not moved. Lowering may emit the drop/free unconditionally.
     Static,
     /// already moved/uninitialized. Lowering must not drop it.
@@ -813,7 +812,6 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                     Statement::DropCandidate {
                         target: DropTarget::Expr(lhs),
                         key_path: target_key_path.clone(),
-                        elaboration: None,
                         reason: DropReason::AssignmentReplace,
                     },
                 );
@@ -1216,7 +1214,6 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 Statement::DropCandidate {
                     target: DropTarget::Symbol { id, symbol },
                     key_path,
-                    elaboration: None,
                     reason: DropReason::ScopeExit,
                 },
             );
@@ -1240,7 +1237,6 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 Statement::DropCandidate {
                     target: DropTarget::Symbol { id, symbol },
                     key_path,
-                    elaboration: None,
                     reason: DropReason::EarlyExit,
                 },
             );
@@ -1365,18 +1361,12 @@ fn render_statement(statement: &Statement<'_>) -> String {
             None => "assign <unresolved>".into(),
         },
         Statement::DropCandidate {
-            key_path,
-            elaboration,
-            reason,
-            ..
+            key_path, reason, ..
         } => match key_path {
-            Some(target) => format!(
-                "drop_candidate {} {:?} {:?}",
-                render_key_path(target),
-                reason,
-                elaboration
-            ),
-            None => format!("drop_candidate <unresolved> {:?} {:?}", reason, elaboration),
+            Some(target) => {
+                format!("drop_candidate {} {:?}", render_key_path(target), reason)
+            }
+            None => format!("drop_candidate <unresolved> {:?}", reason),
         },
         Statement::Call { .. } => "call".into(),
         Statement::Perform => "perform".into(),
@@ -1625,7 +1615,7 @@ mod tests {
         assert!(rendered.contains("locals:\n"), "{rendered}");
         assert!(rendered.contains("  %0 local "), "{rendered}");
         assert!(
-            rendered.contains("drop_candidate %0 ScopeExit None"),
+            rendered.contains("drop_candidate %0 ScopeExit"),
             "{rendered}"
         );
     }

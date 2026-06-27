@@ -183,7 +183,7 @@ pub struct CandidateDropFact {
     pub node: Option<NodeID>,
     pub target: KeyPath,
     pub ty: Option<Ty>,
-    pub reason: DropReason,
+    pub reason: mir::DropReason,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -197,24 +197,10 @@ pub struct DropObligation {
     pub node: Option<NodeID>,
     pub key_path: KeyPath,
     pub ty: Ty,
-    pub kind: DropKind,
-    pub reason: DropReason,
+    pub kind: mir::DropElaboration,
+    pub reason: mir::DropReason,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DropKind {
-    Static,
-    Dead,
-    Conditional,
-    Open,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DropReason {
-    ScopeExit,
-    AssignmentReplace,
-    EarlyExit,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum OwnershipError {
@@ -1678,7 +1664,7 @@ impl OwnershipChecker<'_> {
                         node,
                         ty: self.key_path_ty(&target),
                         target,
-                        reason: map_drop_reason(*reason),
+                        reason: *reason,
                     });
                 }
             }
@@ -1716,7 +1702,6 @@ impl OwnershipChecker<'_> {
                     mir::Statement::DropCandidate {
                         target,
                         key_path,
-                        elaboration,
                         reason,
                     } => {
                         let Some(key_path) = key_path
@@ -1734,14 +1719,13 @@ impl OwnershipChecker<'_> {
                             continue;
                         }
                         let kind = classify_drop(&key_path, &state);
-                        *elaboration = Some(mir_drop_elaboration(kind));
                         self.output.drop_plan.obligations.push(DropObligation {
                             point,
                             node: drop_target_node(target).or(statement_node),
                             key_path,
                             ty,
                             kind,
-                            reason: map_drop_reason(*reason),
+                            reason: *reason,
                         });
                     }
                     _ => self.transfer_drop_statement(
@@ -4242,33 +4226,16 @@ fn collect_expr_root_uses(expr: &Expr, out: &mut FxHashSet<Symbol>) {
     walk_expr(expr, &mut visitor);
 }
 
-fn map_drop_reason(reason: mir::DropReason) -> DropReason {
-    match reason {
-        mir::DropReason::ScopeExit => DropReason::ScopeExit,
-        mir::DropReason::AssignmentReplace => DropReason::AssignmentReplace,
-        mir::DropReason::EarlyExit => DropReason::EarlyExit,
-    }
-}
-
-fn mir_drop_elaboration(kind: DropKind) -> mir::DropElaboration {
-    match kind {
-        DropKind::Static => mir::DropElaboration::Static,
-        DropKind::Dead => mir::DropElaboration::Dead,
-        DropKind::Conditional => mir::DropElaboration::Conditional,
-        DropKind::Open => mir::DropElaboration::Open,
-    }
-}
-
-fn classify_drop(key_path: &KeyPath, state: &DropState) -> DropKind {
+fn classify_drop(key_path: &KeyPath, state: &DropState) -> mir::DropElaboration {
     if state.moved_all.keys().any(|moved| moved == key_path) {
-        return DropKind::Dead;
+        return mir::DropElaboration::Dead;
     }
     if state
         .moved_any
         .keys()
         .any(|moved| key_path.contains(moved) && moved != key_path)
     {
-        return DropKind::Open;
+        return mir::DropElaboration::Open;
     }
     if state
         .initialized_all
@@ -4276,15 +4243,15 @@ fn classify_drop(key_path: &KeyPath, state: &DropState) -> DropKind {
         .any(|live| live.contains(key_path))
         && !state.moved_any.keys().any(|moved| moved == key_path)
     {
-        DropKind::Static
+        mir::DropElaboration::Static
     } else if state
         .initialized_any
         .iter()
         .any(|live| live.contains(key_path))
     {
-        DropKind::Conditional
+        mir::DropElaboration::Conditional
     } else {
-        DropKind::Dead
+        mir::DropElaboration::Dead
     }
 }
 
@@ -4293,8 +4260,9 @@ mod tests {
     use crate::{
         compiling::driver::{Driver, DriverConfig, Source},
         diagnostic::AnyDiagnostic,
+        mir::{DropElaboration, DropReason},
         name_resolution::symbol::Symbol,
-        ownership::{BodyKind, DropKind, DropReason, OwnershipOutput, PointKind},
+        ownership::{BodyKind, OwnershipOutput, PointKind},
     };
     use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -5090,7 +5058,7 @@ mod tests {
         assert!(
             s_obligations
                 .iter()
-                .any(|obligation| obligation.kind == DropKind::Dead),
+                .any(|obligation| obligation.kind == DropElaboration::Dead),
             "expected the moved aggregate source s to have a dead scope drop, got {s_obligations:?}"
         );
     }
@@ -6191,7 +6159,7 @@ mod tests {
         assert!(
             s_obligations
                 .iter()
-                .any(|obligation| obligation.kind == DropKind::Static),
+                .any(|obligation| obligation.kind == DropElaboration::Static),
             "expected a static drop obligation for s, got {s_obligations:?}"
         );
     }
@@ -6314,13 +6282,13 @@ mod tests {
         assert!(
             s_obligations
                 .iter()
-                .any(|obligation| obligation.kind == DropKind::Conditional),
+                .any(|obligation| obligation.kind == DropElaboration::Conditional),
             "expected a conditional drop obligation for s, got {s_obligations:?}"
         );
         assert!(
             !s_obligations
                 .iter()
-                .any(|obligation| obligation.kind == DropKind::Dead),
+                .any(|obligation| obligation.kind == DropElaboration::Dead),
             "branch-local move must not make every s drop dead: {s_obligations:?}"
         );
     }

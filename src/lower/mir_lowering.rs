@@ -1,6 +1,6 @@
 use super::*;
 use crate::mir;
-use crate::ownership::{BodyKind, DropKind};
+use crate::ownership::BodyKind;
 
 #[derive(Clone, Copy)]
 enum MirRestBinding {
@@ -345,7 +345,10 @@ impl<'a> Lowering<'a> {
             if obligation.key_path.root != symbol {
                 continue;
             }
-            if !matches!(obligation.kind, DropKind::Conditional | DropKind::Open) {
+            if !matches!(
+                obligation.kind,
+                mir::DropElaboration::Conditional | mir::DropElaboration::Open
+            ) {
                 continue;
             }
             needs_root_flag = true;
@@ -412,7 +415,6 @@ impl<'a> Lowering<'a> {
                             ..
                         },
                     key_path,
-                    elaboration,
                 } => {
                     let Some(drop) = ctx
                         .drop_stack
@@ -426,9 +428,8 @@ impl<'a> Lowering<'a> {
                         .as_ref()
                         .and_then(|key_path| Self::ownership_key_path_from_mir(body, key_path))
                         .unwrap_or_else(|| drop.key_path.clone());
-                    let elaboration = elaboration.or_else(|| {
-                        self.drop_elaboration_at(ctx, body, statement.point, *reason, &key_path)
-                    });
+                    let elaboration =
+                        self.drop_elaboration_at(ctx, body, statement.point, *reason, Some(&key_path));
                     drops.push(PendingDrop {
                         symbol: drop.symbol,
                         key_path,
@@ -444,19 +445,18 @@ impl<'a> Lowering<'a> {
         drops
     }
 
+    /// The drop elaboration the ownership pass recorded for the candidate at `point`
+    /// (matching `reason`, and `key_path` when given). The single point of contact with
+    /// the ownership drop plan: `following_drop_candidates`, `storage_dead_drop_elaboration`,
+    /// and `assignment_drop_elaboration` all resolve through here.
     fn drop_elaboration_at(
         &self,
         ctx: &Ctx,
         body: &mir::Body<'_>,
         point: mir::StatementId,
         reason: mir::DropReason,
-        key_path: &OwnershipKeyPath,
+        key_path: Option<&OwnershipKeyPath>,
     ) -> Option<mir::DropElaboration> {
-        let reason = match reason {
-            mir::DropReason::ScopeExit => crate::ownership::DropReason::ScopeExit,
-            mir::DropReason::AssignmentReplace => crate::ownership::DropReason::AssignmentReplace,
-            mir::DropReason::EarlyExit => crate::ownership::DropReason::EarlyExit,
-        };
         self.units[ctx.unit]
             .ownership
             .drop_plan
@@ -466,9 +466,9 @@ impl<'a> Lowering<'a> {
                 obligation.point.point == point.0 as u32
                     && self.ownership_point_matches_body(ctx, body, obligation.point)
                     && obligation.reason == reason
-                    && obligation.key_path == *key_path
+                    && key_path.is_none_or(|key_path| obligation.key_path == *key_path)
             })
-            .map(|obligation| Self::drop_elaboration_of(obligation.kind))
+            .map(|obligation| obligation.kind)
     }
 
     fn lower_candidate_drop_then(&mut self, ctx: &Ctx, drop: &PendingDrop, next: ExprId) -> ExprId {
@@ -492,15 +492,6 @@ impl<'a> Lowering<'a> {
     fn push_unique_drop_flag_key(keys: &mut Vec<OwnershipKeyPath>, key: OwnershipKeyPath) {
         if !keys.iter().any(|existing| existing == &key) {
             keys.push(key);
-        }
-    }
-
-    fn drop_elaboration_of(kind: DropKind) -> mir::DropElaboration {
-        match kind {
-            DropKind::Static => mir::DropElaboration::Static,
-            DropKind::Dead => mir::DropElaboration::Dead,
-            DropKind::Conditional => mir::DropElaboration::Conditional,
-            DropKind::Open => mir::DropElaboration::Open,
         }
     }
 
@@ -581,17 +572,13 @@ impl<'a> Lowering<'a> {
         else {
             return None;
         };
-        self.units[ctx.unit]
-            .ownership
-            .drop_plan
-            .obligations
-            .iter()
-            .find(|obligation| {
-                obligation.point.point == previous.point.0 as u32
-                    && self.ownership_point_matches_body(ctx, cursor.body, obligation.point)
-                    && obligation.reason == crate::ownership::DropReason::AssignmentReplace
-            })
-            .map(|obligation| Self::drop_elaboration_of(obligation.kind))
+        self.drop_elaboration_at(
+            ctx,
+            cursor.body,
+            previous.point,
+            mir::DropReason::AssignmentReplace,
+            None,
+        )
     }
 
     fn lower_mir_storage_dead(
@@ -659,7 +646,6 @@ impl<'a> Lowering<'a> {
                     ..
                 },
             key_path,
-            elaboration,
         } = &previous.kind
         else {
             return None;
@@ -671,8 +657,7 @@ impl<'a> Lowering<'a> {
             .as_ref()
             .and_then(|key_path| Self::ownership_key_path_from_mir(body, key_path))
             .unwrap_or_else(|| OwnershipKeyPath::root(symbol));
-        elaboration
-            .or_else(|| self.drop_elaboration_at(ctx, body, previous.point, *reason, &key_path))
+        self.drop_elaboration_at(ctx, body, previous.point, *reason, Some(&key_path))
     }
 
     fn moved_key_paths_at_statement(

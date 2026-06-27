@@ -7,7 +7,8 @@ use rustc_hash::FxHashSet;
 use crate::analysis::{DocumentId, TextRange, workspace::Workspace};
 use crate::name_resolution::symbol::{Symbol, set_symbol_names};
 use crate::node_id::NodeID;
-use crate::ownership::{DropKind, DropObligation, KeyPath, LoanFact, MoveFact, OwnershipOutput};
+use crate::mir::DropElaboration;
+use crate::ownership::{DropObligation, KeyPath, LoanFact, MoveFact, OwnershipOutput};
 use crate::types::ty::{BorrowKind, Ty};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,10 +77,10 @@ pub fn ownership_inlay_hints(
             continue;
         };
         let label = match obligation.kind {
-            DropKind::Static => " drop",
-            DropKind::Dead => " drop(dead)",
-            DropKind::Conditional => " drop?",
-            DropKind::Open => " drop(open)",
+            DropElaboration::Static => " drop",
+            DropElaboration::Dead => " drop(dead)",
+            DropElaboration::Conditional => " drop?",
+            DropElaboration::Open => " drop(open)",
         };
         hints.push(OwnershipInlayHint {
             position,

@@ -1,10 +1,14 @@
 # How the λ_G intermediate representation works
 
-This directory is the compiler's middle language. The lowerer
-(`src/lower`) translates type-checked Talk into it; the bytecode VM
-(`src/vm`) runs what comes out. For the exact textual syntax printed by
-`talk lower`, and how it differs from `@_ir` source splices and
-`talk ir` bytecode listings, see `../../docs/ir-and-lambda-g-format.md`.
+This directory is the compiler's middle language. Type-checked Talk is
+first turned into MIR (`src/mir`) — a small control-flow graph of
+blocks and statements that the ownership checker analyzes — and the
+lowerer (`src/lower`) translates that MIR into the λ_G IR described
+here; the scheduler (`src/vm`) then lowers λ_G to register bytecode,
+which the runtime VM (`talk-runtime`) executes. For the exact textual
+syntax printed by `talk lower`, and how it differs from `@_ir` source
+splices and `talk ir` bytecode listings, see
+`../../docs/ir-and-lambda-g-format.md`.
 The whole design is one bet: **if the only thing in the language is
 small functions calling each other, then every compiler problem becomes
 a question about functions** — and those questions have simple answers.
@@ -53,11 +57,12 @@ different "where to go next" than usual.
 - `nest.rs` — the nesting tree. Although functions live in a flat
   soup, you can recover a sensible "who belongs inside whom" structure
   by looking at variable use: if `inner` mentions `outer`'s parameter,
-  `inner` must sit inside `outer`. The tree built from that fact is
-  what the VM scheduler walks to lay out code, and it plays the role
-  the classical control-flow-graph dominance analysis plays in other
-  compilers — except it never goes stale, because it's derived from
-  the code itself.
+  `inner` must sit inside `outer`. This relation plays the role the
+  classical control-flow-graph dominance analysis plays in other
+  compilers (nesting implies dominance) — except it never goes stale,
+  because it's derived from the code itself. The verifier (`check.rs`)
+  enforces that it stays acyclic, and the printer (`print.rs`) uses it
+  to nest each helper under the function that owns it.
 - `subst.rs` — copy a function while replacing some of its variables.
   Inlining, specializing a generic, and unrolling a loop are all this
   one operation. The free-variable cache makes it cheap: anything that
