@@ -188,39 +188,6 @@ impl FormatterDecorator for DefaultDecorator {
     }
 }
 
-pub struct DebugHTMLFormatter {}
-impl FormatterDecorator for DebugHTMLFormatter {
-    fn wrap_expr(&self, expr: &Expr, doc: Doc) -> Doc {
-        concat(
-            concat(
-                annotate(format!("<span class=\"expr\" id=\"node-{}\">", expr.id)),
-                doc,
-            ),
-            annotate("</span>"),
-        )
-    }
-
-    fn wrap_decl(&self, decl: &Decl, doc: Doc) -> Doc {
-        concat(
-            concat(
-                annotate(format!("<span class=\"decl\" id=\"node-{}\">", decl.id)),
-                doc,
-            ),
-            annotate("</span>"),
-        )
-    }
-
-    fn wrap_stmt(&self, stmt: &Stmt, doc: Doc) -> Doc {
-        concat(
-            concat(
-                annotate(format!("<span class=\"stmt\" id=\"node-{}\">", stmt.id)),
-                doc,
-            ),
-            annotate("</span>"),
-        )
-    }
-}
-
 pub struct Formatter<'a> {
     // Track expression metadata for source location info
     meta_storage: &'a NodeMetaStorage,
