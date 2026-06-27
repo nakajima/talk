@@ -508,6 +508,17 @@ impl Driver<NameResolved> {
         };
         diagnostics.extend(ownership_diagnostics);
 
+        // Stage 1 HIR totality check: build (but don't consume) the HIR for every
+        // fully error-free program. Surfaces any AST construct `build_hir` fails to
+        // lower, across the whole test suite. Skipped for programs with errors
+        // (which may carry LSP-only `Incomplete` exprs) and free in release builds.
+        #[cfg(debug_assertions)]
+        if !has_error_diagnostics(&diagnostics) {
+            for ast in asts.values() {
+                let _ = crate::hir::build::lower_roots(&ast.roots);
+            }
+        }
+
         Driver {
             files: self.files,
             config: self.config,
