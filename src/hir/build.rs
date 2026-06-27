@@ -28,7 +28,7 @@ fn lower_node(node: &Node) -> hir::Node {
         Node::Decl(decl) => hir::Node::Decl(lower_decl(decl)),
         Node::Stmt(stmt) => hir::Node::Stmt(lower_stmt(stmt)),
         Node::Expr(expr) => hir::Node::Expr(lower_expr(expr)),
-        other => panic!("unexpected node in HIR lowering position: {other:?}"),
+        other => unreachable!("unexpected node in HIR lowering position: {other:?}"),
     }
 }
 
@@ -103,9 +103,9 @@ fn lower_expr_kind(k: &expr::ExprKind) -> hir::ExprKind {
         },
         A::RowVariable(name) => hir::ExprKind::RowVariable(name.clone()),
         A::Unary(..) | A::Binary(..) => {
-            panic!("Unary/Binary should be desugared by LowerOperators before HIR")
+            unreachable!("Unary/Binary should be desugared by LowerOperators before HIR")
         }
-        A::Incomplete(_) => panic!("Incomplete expressions cannot be lowered to HIR"),
+        A::Incomplete(_) => unreachable!("Incomplete expressions cannot be lowered to HIR"),
     }
 }
 
@@ -178,7 +178,7 @@ fn lower_pattern_kind(k: &pattern::PatternKind) -> hir::PatternKind {
                 .iter()
                 .map(|n| match n {
                     Node::Pattern(p) => lower_pattern(p),
-                    other => panic!("struct pattern field is not a pattern: {other:?}"),
+                    other => unreachable!("struct pattern field is not a pattern: {other:?}"),
                 })
                 .collect(),
             field_names: field_names.clone(),
@@ -243,7 +243,7 @@ fn lower_stmt_kind(k: &stmt::StmtKind) -> hir::StmtKind {
             effect_name: effect_name.clone(),
             body: lower_block(body),
         },
-        A::For { .. } => panic!("For should be desugared by LowerForLoops before HIR"),
+        A::For { .. } => unreachable!("For should be desugared by LowerForLoops before HIR"),
     }
 }
 

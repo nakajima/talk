@@ -18,6 +18,7 @@ use crate::types::TypeOutput;
 /// model rather than polymorphic IR in modules.
 pub struct CoreTyped {
     pub asts: IndexMap<Source, AST<NameResolved>>,
+    pub hir: IndexMap<Source, crate::hir::HirFile>,
     pub types: TypeOutput,
     pub resolved_names: ResolvedNames,
     pub ownership: OwnershipOutput,
@@ -100,6 +101,7 @@ fn _compile() -> (Arc<Module>, Arc<CoreTyped>) {
 
     let core_typed = CoreTyped {
         asts: typed.phase.asts.clone(),
+        hir: typed.phase.hir.clone(),
         types: typed.phase.types.clone(),
         resolved_names: typed.phase.resolved_names.clone(),
         ownership: typed.phase.ownership.clone(),

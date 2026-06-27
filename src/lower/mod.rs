@@ -28,7 +28,6 @@ mod statements;
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ast::{AST, NameResolved};
 use crate::compiling::driver::Source;
 use crate::lambda_g::expr::Const;
 use crate::lambda_g::expr::{CmpOp, ExprId, Op, TyId, TyKind};
@@ -36,15 +35,12 @@ use crate::lambda_g::program::{Label, Program};
 use crate::mir;
 use crate::name_resolution::name_resolver::ResolvedNames;
 use crate::name_resolution::symbol::Symbol;
-use crate::node::Node;
+use crate::hir::{
+    self, Block, Decl, DeclKind, Expr, ExprKind, HirFile, InlineIRInstruction, MatchArm, Node,
+    PatternKind, Stmt, StmtKind,
+};
 use crate::node_kinds::{
-    block::Block,
-    decl::{Decl, DeclKind},
-    expr::{Expr, ExprKind},
-    inline_ir_instruction::{InlineIRInstruction, InlineIRInstructionKind, Value as IrValue},
-    match_arm::MatchArm,
-    pattern::PatternKind,
-    stmt::{Stmt, StmtKind},
+    inline_ir_instruction::{InlineIRInstructionKind, Value as IrValue},
     type_annotation::{TypeAnnotation, TypeAnnotationKind},
 };
 use crate::ownership::{KeyPath as OwnershipKeyPath, OwnershipOutput};
@@ -54,7 +50,7 @@ use crate::types::ty::Ty as CheckTy;
 use crate::types::ty::TyFold;
 
 pub struct LowerUnit<'a> {
-    pub asts: &'a IndexMap<Source, AST<NameResolved>>,
+    pub asts: &'a IndexMap<Source, HirFile>,
     pub types: &'a TypeOutput,
     pub resolved: &'a ResolvedNames,
     pub ownership: &'a OwnershipOutput,
@@ -590,8 +586,6 @@ impl<'a> Lowering<'a> {
                 _ => {}
             },
             Node::Expr(expr) => self.diagnose_unsupported_handlers_in_expr(unit, expr),
-            Node::Block(block) => self.diagnose_unsupported_handlers_in_block(unit, block),
-            _ => {}
         }
     }
 
@@ -640,10 +634,6 @@ impl<'a> Lowering<'a> {
                 }
                 self.diagnose_unsupported_handlers_in_block(unit, body);
             }
-            StmtKind::For { iterable, body, .. } => {
-                self.diagnose_unsupported_handlers_in_expr(unit, iterable);
-                self.diagnose_unsupported_handlers_in_block(unit, body);
-            }
             StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue(None) => {}
         }
     }
@@ -667,12 +657,8 @@ impl<'a> Lowering<'a> {
                     self.diagnose_unsupported_handlers_in_expr(unit, item);
                 }
             }
-            ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
+            ExprKind::As(inner, _) => {
                 self.diagnose_unsupported_handlers_in_expr(unit, inner);
-            }
-            ExprKind::Binary(lhs, _, rhs) => {
-                self.diagnose_unsupported_handlers_in_expr(unit, lhs);
-                self.diagnose_unsupported_handlers_in_expr(unit, rhs);
             }
             ExprKind::Call {
                 callee,
@@ -1168,7 +1154,7 @@ impl<'a> Lowering<'a> {
             }
             // Field read on an impure receiver: bind the receiver through
             // a continuation, then GetField.
-            ExprKind::Member(Some(receiver), label, _) => {
+            ExprKind::Member(Some(receiver), label) => {
                 let receiver_ty = self.expr_lambda_ty(receiver, ctx);
                 let bot = self.p.ty_bot();
                 let cont = self.p.func("recv", receiver_ty, bot);
@@ -1368,7 +1354,7 @@ impl<'a> Lowering<'a> {
             // Field read on a pure receiver: GetField (records are pure
             // values). A member that resolves to a payload-less enum case
             // (`.none`, `Optional.none`) is a variant value instead.
-            ExprKind::Member(receiver, _, _) => {
+            ExprKind::Member(receiver, _) => {
                 if let Some(value) = self.try_variant_value(expr, ctx) {
                     return Some(value);
                 }
@@ -1976,7 +1962,7 @@ impl<'a> Lowering<'a> {
         let head = Self::borrow_erased_ty(self.checker_ty(receiver, ctx));
         if let CheckTy::Record(row) = &head
             && row.tail.is_none()
-            && let ExprKind::Member(_, label, _) = &expr.kind
+            && let ExprKind::Member(_, label) = &expr.kind
             && let Some(index) = row
                 .fields
                 .iter()
@@ -1999,7 +1985,7 @@ impl<'a> Lowering<'a> {
             );
         }
 
-        let ExprKind::Member(_, label, _) = &expr.kind else {
+        let ExprKind::Member(_, label) = &expr.kind else {
             return None;
         };
         let TyKind::Boxed(record_symbol) = *self.p.ty_kind(self.p.expr_ty(receiver_value)) else {
@@ -2026,7 +2012,7 @@ impl<'a> Lowering<'a> {
     /// through a record field (`self.route_handler0.invoke()`), as
     /// opposed to a method call? Field callees dispatch indirectly.
     fn is_field_value_callee(&mut self, callee: &Expr, ctx: &Ctx) -> bool {
-        let ExprKind::Member(Some(receiver), label, _) = &callee.kind else {
+        let ExprKind::Member(Some(receiver), label) = &callee.kind else {
             return false;
         };
         let head = Self::borrow_erased_ty(self.checker_ty(receiver, ctx));
@@ -2276,7 +2262,7 @@ impl<'a> Lowering<'a> {
     fn record_field_order(
         &mut self,
         expr: &Expr,
-        fields: &[crate::node_kinds::record_field::RecordField],
+        fields: &[hir::RecordField],
         ctx: &Ctx,
     ) -> Option<Vec<usize>> {
         let CheckTy::Record(row) = self.checker_ty(expr, ctx) else {
@@ -2314,7 +2300,7 @@ impl<'a> Lowering<'a> {
     fn lower_func_value(
         &mut self,
         expr: &Expr,
-        func: &crate::node_kinds::func::Func,
+        func: &hir::Func,
         ctx: &Ctx,
     ) -> Option<ExprId> {
         let CheckTy::Func(param_check_tys, ret_check, _) = self.checker_ty(expr, ctx) else {
@@ -2461,7 +2447,7 @@ impl<'a> Lowering<'a> {
     fn lower_value_call(
         &mut self,
         callee: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
@@ -2492,7 +2478,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         expr: &Expr,
         callee: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
@@ -2587,7 +2573,7 @@ impl<'a> Lowering<'a> {
     fn lower_requirement_call(
         &mut self,
         receiver: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
@@ -2633,12 +2619,12 @@ impl<'a> Lowering<'a> {
     fn try_lower_existential_member_call(
         &mut self,
         callee: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
     ) -> Option<ExprId> {
-        let ExprKind::Member(Some(receiver), label, _) = &callee.kind else {
+        let ExprKind::Member(Some(receiver), label) = &callee.kind else {
             return None;
         };
         let CheckTy::Any { protocol, assoc } = self.checker_ty(receiver, ctx) else {
@@ -2677,12 +2663,12 @@ impl<'a> Lowering<'a> {
     fn try_lower_local_evidence_member_call(
         &mut self,
         callee: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
     ) -> Option<ExprId> {
-        let ExprKind::Member(Some(receiver), label, _) = &callee.kind else {
+        let ExprKind::Member(Some(receiver), label) = &callee.kind else {
             return None;
         };
         let CheckTy::Param(param) = self.checker_ty(receiver, ctx) else {
@@ -2815,7 +2801,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         expr: &Expr,
         callee: &'e Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         ctx: &Ctx,
     ) -> Option<(Label, Symbol, Prefix<'e>)> {
         match &callee.kind {
@@ -2853,7 +2839,7 @@ impl<'a> Lowering<'a> {
             }
             // Protocol-static (operators) or instance member calls: resolve
             // through member_resolutions + the conformance table.
-            ExprKind::Member(receiver, label, _) => {
+            ExprKind::Member(receiver, label) => {
                 let resolution = self.units[ctx.unit]
                     .types
                     .member_resolutions
@@ -3074,7 +3060,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         expr: &Expr,
         effect_name: &crate::name::Name,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         ctx: &Ctx,
         k: ExprId,
     ) -> ExprId {
@@ -3196,7 +3182,7 @@ impl<'a> Lowering<'a> {
     fn lower_routed_perform(
         &mut self,
         handler_sym: Symbol,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         ctx: &Ctx,
         k: ExprId,
     ) -> ExprId {

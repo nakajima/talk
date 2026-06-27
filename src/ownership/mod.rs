@@ -4,24 +4,18 @@ use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
-    ast::{AST, NameResolved},
     compiling::{driver::Source, module::ModuleId},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
+    hir::{self, Block, Body, Decl, DeclKind, Expr, ExprKind, HirFile, Node, StmtKind},
     mir,
     name_resolution::{
         name_resolver::ResolvedNames,
         symbol::{Symbol, set_symbol_names},
     },
-    node::Node,
     node_id::{FileID, NodeID},
     node_kinds::{
-        block::Block,
-        body::Body,
-        decl::{Decl, DeclKind},
-        expr::{Expr, ExprKind},
         func::{CaptureMode, CaptureSpec},
         parameter::Parameter,
-        stmt::StmtKind,
         type_annotation::TypeAnnotationKind,
     },
     types::{
@@ -384,7 +378,7 @@ impl Display for OwnershipError {
 }
 
 pub fn check_ownership(
-    asts: &IndexMap<Source, AST<NameResolved>>,
+    asts: &IndexMap<Source, HirFile>,
     types: &TypeOutput,
     resolved: &ResolvedNames,
     _module_id: ModuleId,
@@ -896,7 +890,7 @@ impl OwnershipChecker<'_> {
         }
     }
 
-    fn check_top_level_globals(&mut self, asts: &IndexMap<Source, AST<NameResolved>>) {
+    fn check_top_level_globals(&mut self, asts: &IndexMap<Source, HirFile>) {
         for ast in asts.values() {
             for node in &ast.roots {
                 let Node::Decl(decl) = node else { continue };
@@ -922,7 +916,7 @@ impl OwnershipChecker<'_> {
         }
     }
 
-    fn check_raw_pointer_surface(&mut self, asts: &IndexMap<Source, AST<NameResolved>>) {
+    fn check_raw_pointer_surface(&mut self, asts: &IndexMap<Source, HirFile>) {
         if self.module_id == ModuleId::Core {
             return;
         }
@@ -965,7 +959,7 @@ impl OwnershipChecker<'_> {
         }
     }
 
-    fn check_moves(&mut self, asts: &IndexMap<Source, AST<NameResolved>>) {
+    fn check_moves(&mut self, asts: &IndexMap<Source, HirFile>) {
         for ast in asts.values() {
             self.check_decl_moves_in_slice(ast.file_id, &ast.roots);
         }
@@ -1333,23 +1327,9 @@ impl OwnershipChecker<'_> {
                     );
                 }
             }
-            ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
+            ExprKind::As(inner, _) => {
                 self.collect_closure_values_capture_summary(
                     inner,
-                    state,
-                    include_stored_closures,
-                    summary,
-                );
-            }
-            ExprKind::Binary(lhs, _, rhs) => {
-                self.collect_closure_values_capture_summary(
-                    lhs,
-                    state,
-                    include_stored_closures,
-                    summary,
-                );
-                self.collect_closure_values_capture_summary(
-                    rhs,
                     state,
                     include_stored_closures,
                     summary,
@@ -1417,7 +1397,6 @@ impl OwnershipChecker<'_> {
             | ExprKind::CallEffect { .. }
             | ExprKind::Member(..)
             | ExprKind::InlineIR(_)
-            | ExprKind::Incomplete(_)
             | ExprKind::LiteralInt(_)
             | ExprKind::LiteralFloat(_)
             | ExprKind::LiteralTrue
@@ -1923,7 +1902,7 @@ impl OwnershipChecker<'_> {
     fn note_call_drop_moves(
         &mut self,
         callee: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         point: Option<OwnershipPoint>,
         state: &mut DropState,
     ) {
@@ -1995,12 +1974,8 @@ impl OwnershipChecker<'_> {
                     self.note_capture_drop_moves(item, point, state);
                 }
             }
-            ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
+            ExprKind::As(inner, _) => {
                 self.note_capture_drop_moves(inner, point, state);
-            }
-            ExprKind::Binary(lhs, _, rhs) => {
-                self.note_capture_drop_moves(lhs, point, state);
-                self.note_capture_drop_moves(rhs, point, state);
             }
             ExprKind::Block(block) => {
                 if let Some(expr) = block_tail_expr(block) {
@@ -2034,7 +2009,6 @@ impl OwnershipChecker<'_> {
             | ExprKind::CallEffect { .. }
             | ExprKind::Member(..)
             | ExprKind::InlineIR(_)
-            | ExprKind::Incomplete(_)
             | ExprKind::LiteralInt(_)
             | ExprKind::LiteralFloat(_)
             | ExprKind::LiteralTrue
@@ -2238,7 +2212,7 @@ impl OwnershipChecker<'_> {
     fn check_binding(
         &mut self,
         point: OwnershipPoint,
-        lhs: &crate::node_kinds::pattern::Pattern,
+        lhs: &hir::Pattern,
         type_annotation: Option<&crate::node_kinds::type_annotation::TypeAnnotation>,
         rhs: Option<&Expr>,
         state: &mut MoveState,
@@ -2342,7 +2316,7 @@ impl OwnershipChecker<'_> {
     fn check_call(
         &mut self,
         callee: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         trailing_block: Option<&Block>,
         trailing_body: Option<&mir::Body<'_>>,
         context: StatementContext<'_>,
@@ -2425,7 +2399,7 @@ impl OwnershipChecker<'_> {
 
     fn check_argument_accesses(
         &mut self,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         params: Option<&Vec<Ty>>,
         borrowed_constructor: bool,
         point: OwnershipPoint,
@@ -2574,7 +2548,7 @@ impl OwnershipChecker<'_> {
                     self.collect_consumed_value_exprs(item, out);
                 }
             }
-            ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
+            ExprKind::As(inner, _) => {
                 self.collect_consumed_value_exprs(inner, out);
             }
             ExprKind::RecordLiteral { fields, spread } => {
@@ -2591,7 +2565,6 @@ impl OwnershipChecker<'_> {
             | ExprKind::Call { .. }
             | ExprKind::CallEffect { .. }
             | ExprKind::InlineIR(_)
-            | ExprKind::Incomplete(_)
             | ExprKind::LiteralInt(_)
             | ExprKind::LiteralFloat(_)
             | ExprKind::LiteralTrue
@@ -2602,8 +2575,7 @@ impl OwnershipChecker<'_> {
             | ExprKind::RowVariable(_)
             | ExprKind::Member(None, ..)
             | ExprKind::Variable(_)
-            | ExprKind::Member(Some(_), ..)
-            | ExprKind::Binary(..) => {}
+            | ExprKind::Member(Some(_), ..) => {}
         }
     }
 
@@ -3108,7 +3080,7 @@ impl OwnershipChecker<'_> {
                 .get(witness)
                 .and_then(|scheme| func_params(&scheme.ty))
                 .or_else(|| {
-                    let ExprKind::Member(_, label, _) = &callee.kind else {
+                    let ExprKind::Member(_, label) = &callee.kind else {
                         return None;
                     };
                     self.types
@@ -3173,7 +3145,7 @@ impl OwnershipChecker<'_> {
     fn call_borrow_info(
         &self,
         callee: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         env: &BorrowEnv,
     ) -> BorrowInfo {
         if !self.call_returns_borrowed(callee) {
@@ -3233,7 +3205,7 @@ impl OwnershipChecker<'_> {
 
     fn single_borrowed_input_info(
         &self,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         params: Option<&[Ty]>,
         env: &BorrowEnv,
     ) -> BorrowInfo {
@@ -3250,7 +3222,7 @@ impl OwnershipChecker<'_> {
 
     fn single_constructor_borrow_source_info(
         &self,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         env: &BorrowEnv,
     ) -> BorrowInfo {
         self.single_selected_argument_borrow_info(
@@ -3262,7 +3234,7 @@ impl OwnershipChecker<'_> {
 
     fn single_selected_argument_borrow_info<'expr>(
         &self,
-        args: impl IntoIterator<Item = &'expr crate::node_kinds::call_arg::CallArg>,
+        args: impl IntoIterator<Item = &'expr hir::CallArg>,
         env: &BorrowEnv,
     ) -> BorrowInfo {
         let mut result: Option<BorrowInfo> = None;
@@ -3635,7 +3607,7 @@ impl OwnershipChecker<'_> {
     fn render_expr_path(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Variable(name) => name.symbol().ok().map(|symbol| self.render_symbol(symbol)),
-            ExprKind::Member(Some(receiver), label, _) => {
+            ExprKind::Member(Some(receiver), label) => {
                 Some(format!("{}.{}", self.render_expr_path(receiver)?, label))
             }
             _ => None,
@@ -3742,13 +3714,6 @@ fn walk_node(node: &Node, visitor: &mut impl SourceVisitor) {
         Node::Decl(decl) => walk_decl(decl, visitor),
         Node::Stmt(stmt) => walk_stmt(&stmt.kind, visitor),
         Node::Expr(expr) => walk_expr(expr, visitor),
-        Node::Block(block) => walk_block(block, visitor),
-        Node::MatchArm(arm) => {
-            walk_pattern_binders(&arm.pattern, visitor);
-            walk_block(&arm.body, visitor);
-        }
-        Node::Func(func) => walk_block(&func.body, visitor),
-        _ => {}
     }
 }
 
@@ -3816,15 +3781,6 @@ fn walk_stmt(stmt: &StmtKind, visitor: &mut impl SourceVisitor) {
             }
             walk_block(body, visitor);
         }
-        StmtKind::For {
-            pattern,
-            iterable,
-            body,
-        } => {
-            walk_pattern_binders(pattern, visitor);
-            walk_expr(iterable, visitor);
-            walk_block(body, visitor);
-        }
         StmtKind::Handling { body, .. } => walk_block(body, visitor),
         StmtKind::Return(None) | StmtKind::Continue(None) | StmtKind::Break => {}
     }
@@ -3843,11 +3799,7 @@ fn walk_expr(expr: &Expr, visitor: &mut impl SourceVisitor) {
                 walk_expr(item, visitor);
             }
         }
-        ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => walk_expr(inner, visitor),
-        ExprKind::Binary(lhs, _, rhs) => {
-            walk_expr(lhs, visitor);
-            walk_expr(rhs, visitor);
-        }
+        ExprKind::As(inner, _) => walk_expr(inner, visitor),
         ExprKind::Block(block) => walk_block(block, visitor),
         ExprKind::Call {
             callee,
@@ -3897,8 +3849,7 @@ fn walk_expr(expr: &Expr, visitor: &mut impl SourceVisitor) {
                 walk_expr(&field.value, visitor);
             }
         }
-        ExprKind::Incomplete(_)
-        | ExprKind::LiteralInt(_)
+        ExprKind::LiteralInt(_)
         | ExprKind::LiteralFloat(_)
         | ExprKind::LiteralTrue
         | ExprKind::LiteralFalse
@@ -3910,7 +3861,7 @@ fn walk_expr(expr: &Expr, visitor: &mut impl SourceVisitor) {
 }
 
 fn walk_pattern_binders(
-    pattern: &crate::node_kinds::pattern::Pattern,
+    pattern: &hir::Pattern,
     visitor: &mut impl SourceVisitor,
 ) {
     for (_, symbol) in pattern.collect_binders() {

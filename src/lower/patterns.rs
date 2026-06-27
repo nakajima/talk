@@ -29,10 +29,7 @@ use rustc_hash::FxHashMap;
 use crate::lambda_g::expr::{CmpOp, ExprId, Op};
 use crate::lambda_g::program::Label;
 use crate::name_resolution::symbol::Symbol;
-use crate::node_kinds::{
-    match_arm::MatchArm,
-    pattern::{Pattern, PatternKind, RecordFieldPatternKind},
-};
+use crate::hir::{MatchArm, Pattern, PatternKind, RecordFieldPatternKind};
 use crate::types::ty::Ty as CheckTy;
 
 use super::{Binding, Ctx, EvidenceBinding, Lowering};

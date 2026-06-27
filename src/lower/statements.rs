@@ -38,7 +38,7 @@ impl<'a> Lowering<'a> {
                     .push("lowering: assignment to a non-cell binding".into());
                 None
             }
-            ExprKind::Member(Some(receiver), label, _) => {
+            ExprKind::Member(Some(receiver), label) => {
                 let (cell, mut path) = self.assignment_target(receiver, ctx)?;
                 let head = Self::borrow_erased_ty(self.checker_ty(receiver, ctx));
                 let index = match &head {

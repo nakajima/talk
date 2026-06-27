@@ -202,7 +202,7 @@ impl<'a> Lowering<'a> {
 
     fn lower_mir_bind(
         &mut self,
-        lhs: &crate::node_kinds::pattern::Pattern,
+        lhs: &hir::Pattern,
         rhs: Option<&Expr>,
         cursor: MirCursor,
         ctx: &Ctx,

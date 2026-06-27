@@ -499,7 +499,7 @@ impl Driver<NameResolved> {
                     build_hir_for(&mut hir, source, ast);
                 }
                 crate::ownership::check_ownership(
-                    &asts,
+                    &hir,
                     &types,
                     &resolved_names,
                     self.config.module_id,
@@ -518,7 +518,7 @@ impl Driver<NameResolved> {
                     (OwnershipOutput::default(), vec![])
                 } else {
                     crate::ownership::check_ownership(
-                        &clean_asts,
+                        &hir,
                         &types,
                         &resolved_names,
                         self.config.module_id,
@@ -552,8 +552,8 @@ impl Driver<Typed> {
         use crate::lower::{LowerUnit, lower_program};
 
         let Typed {
-            asts,
-            hir: _,
+            asts: _,
+            hir,
             symbols: _,
             resolved_names,
             types,
@@ -569,14 +569,14 @@ impl Driver<Typed> {
         let mut units = vec![];
         if let Some(core) = core.as_ref() {
             units.push(LowerUnit {
-                asts: &core.asts,
+                asts: &core.hir,
                 types: &core.types,
                 resolved: &core.resolved_names,
                 ownership: &core.ownership,
             });
         }
         units.push(LowerUnit {
-            asts: &asts,
+            asts: &hir,
             types: &types,
             resolved: &resolved_names,
             ownership: &ownership,

@@ -1,22 +1,14 @@
 use rustc_hash::FxHashMap;
 
 use crate::{
+    hir::{
+        Block, CallArg, Decl, DeclKind, Expr, ExprKind, MatchArm, Node, Pattern, PatternKind, Stmt,
+        StmtKind,
+    },
     name::Name,
     name_resolution::symbol::Symbol,
-    node::Node,
     node_id::NodeID,
-    node_kinds::{
-        block::Block,
-        body,
-        call_arg::CallArg,
-        decl::{Decl, DeclKind},
-        expr::{Expr, ExprKind},
-        func::CaptureSpec,
-        match_arm::MatchArm,
-        pattern::{Pattern, PatternKind},
-        stmt::{Stmt, StmtKind},
-        type_annotation::TypeAnnotation,
-    },
+    node_kinds::{func::CaptureSpec, parameter::Parameter, type_annotation::TypeAnnotation},
     types::{
         TypeOutput,
         output::stored_field_symbol,
@@ -266,7 +258,7 @@ pub(crate) enum Statement<'a> {
         owner: Option<Symbol>,
         captures_parent: bool,
         captures: &'a [CaptureSpec],
-        params: &'a [crate::node_kinds::parameter::Parameter],
+        params: &'a [Parameter],
         body: &'a Block,
     },
     Handling {
@@ -275,7 +267,7 @@ pub(crate) enum Statement<'a> {
         body: &'a Block,
     },
     DeclBody {
-        body: &'a body::Body,
+        body: &'a crate::hir::Body,
     },
 }
 
@@ -613,10 +605,6 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 }
                 current
             }
-            Node::Block(block) => self.lower_child_scope(current, |builder, current| {
-                builder.lower_nodes(&block.body, current, true)
-            }),
-            _ => current,
         }
     }
 
@@ -834,10 +822,6 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 !consume_expr_value,
             ),
             StmtKind::Loop(condition, body) => self.lower_loop(condition.as_ref(), body, current),
-            StmtKind::For { iterable, body, .. } => {
-                let current = self.lower_expr(iterable, current);
-                self.lower_loop(None, body, current)
-            }
             StmtKind::Handling {
                 effect_name, body, ..
             } => {
@@ -863,11 +847,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
             ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
                 self.lower_exprs(items, current)
             }
-            ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => self.lower_expr(inner, current),
-            ExprKind::Binary(lhs, _, rhs) => {
-                let current = self.lower_expr(lhs, current);
-                self.lower_expr(rhs, current)
-            }
+            ExprKind::As(inner, _) => self.lower_expr(inner, current),
             ExprKind::Block(block) => self.lower_child_scope(current, |builder, current| {
                 builder.lower_nodes(&block.body, current, true)
             }),
@@ -943,7 +923,6 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 current
             }
             ExprKind::InlineIR(_)
-            | ExprKind::Incomplete(_)
             | ExprKind::LiteralInt(_)
             | ExprKind::LiteralFloat(_)
             | ExprKind::LiteralTrue
@@ -1416,7 +1395,6 @@ mod tests {
     use super::*;
     use crate::{
         compiling::driver::{Driver, DriverConfig, Source},
-        node_kinds::{decl::DeclKind, expr::ExprKind},
         types::TypeOutput,
     };
 
@@ -1436,7 +1414,7 @@ mod tests {
             resolved.diagnostics()
         );
         for ast in resolved.phase.asts.values() {
-            for node in &ast.roots {
+            for node in &crate::hir::build::lower_roots(&ast.roots) {
                 let Node::Decl(decl) = node else { continue };
                 let types = TypeOutput::default();
                 let DeclKind::Func(func) = &decl.kind else {
