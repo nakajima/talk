@@ -542,9 +542,7 @@ impl<'a> Parser<'a> {
     }
 
     fn reject_explicit_self_param(&self, func: Func, is_static: bool) -> Result<Func, ParserError> {
-        if !is_static && first_param_is_self(&func.params) {
-            return Err(ParserError::ExplicitSelfParameterNotAllowed);
-        }
+        self.reject_explicit_self_params(&func.params, is_static)?;
         Ok(func)
     }
 
@@ -553,10 +551,19 @@ impl<'a> Parser<'a> {
         sig: FuncSignature,
         is_static: bool,
     ) -> Result<FuncSignature, ParserError> {
-        if !is_static && first_param_is_self(&sig.params) {
+        self.reject_explicit_self_params(&sig.params, is_static)?;
+        Ok(sig)
+    }
+
+    fn reject_explicit_self_params(
+        &self,
+        params: &[Parameter],
+        is_static: bool,
+    ) -> Result<(), ParserError> {
+        if !is_static && first_param_is_self(params) {
             return Err(ParserError::ExplicitSelfParameterNotAllowed);
         }
-        Ok(sig)
+        Ok(())
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]

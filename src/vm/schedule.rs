@@ -21,7 +21,7 @@
 use crate::lambda_g::expr::{CmpOp as IrCmpOp, Const, ExprId, ExprKind, Op, TyKind};
 use crate::lambda_g::program::{Label, Program};
 use crate::vm::interp::Value;
-use crate::vm::{runtime_symbol, Chunk, CmpOp, Insn, IoOp, MemKind, Module};
+use crate::vm::{Chunk, CmpOp, Insn, IoOp, MemKind, Module, runtime_symbol};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub fn schedule(

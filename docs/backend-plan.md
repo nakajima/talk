@@ -51,6 +51,7 @@ Why λ_G over the previous register-IR draft (user direction, and on the merits)
 2. **Scheduling to bytecode** — §4.1 targets OCaml (lexical scoping); we target bytecode functions/blocks. The mapping (nesting tree children of a CPS function = its blocks; sibling SCCs = loops; ret-continuation recognition = call/return reconstruction per Thorin CGO 2015) is a composition of published pieces; the encoder is checked against the reference evaluator on every test program.
 3. **Abort-resume point** (rest-of-scope handler regions) and **Array shallow-copy** (struct-over-RawPtr) — same flags as before; pinned by frozen expected output.
 4. **Handles in raw bytes** — slot-arena indices stored in the linear heap (Leroy boxing composed with a byte heap; nearest practice JNI handle tables).
+5. **Debug heap access checks** — allocation metadata is append-only, and the interpreter's use-after-free guard does a predecessor lookup on every heap load/store. This keeps diagnostics simple but is not an optimizing allocator strategy; revisit if heap access profiles make it hot.
 
 ## The IR, concretely
 

@@ -587,7 +587,9 @@ impl Strip {
     fn run(output: &std::path::Path) -> Result<(), String> {
         match std::process::Command::new("strip").arg(output).status() {
             Ok(status) if status.success() => Ok(()),
-            Ok(status) => Err(format!("strip failed with status {status}; pass --no-strip to keep the unstripped executable")),
+            Ok(status) => Err(format!(
+                "strip failed with status {status}; pass --no-strip to keep the unstripped executable"
+            )),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(err) => Err(format!("failed to run strip: {err}")),
         }

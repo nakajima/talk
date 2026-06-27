@@ -135,7 +135,7 @@ struct HandlerCap {
     resume_pair_ty: Option<TyId>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct EvidenceBinding {
     protocol: Symbol,
     table: ExprId,
@@ -145,13 +145,13 @@ pub(super) struct EvidenceBinding {
 /// (assignment conversion — Kranz et al., ORBIT, 1986; the alternative,
 /// rebuilding SSA form for mutables via Braun et al. CC 2013, is the
 /// documented upgrade path once an optimizing schedule wants it).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Binding {
     Value(ExprId),
     Cell(ExprId),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct DropBinding {
     symbol: Symbol,
     key_path: OwnershipKeyPath,
@@ -159,7 +159,7 @@ struct DropBinding {
     dynamic_flags: Vec<OwnershipKeyPath>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct LoopBinding {
     header: ExprId,
     exit: ExprId,
@@ -234,6 +234,101 @@ struct Ctx {
     /// Symbols that must live in cells in this body (assigned-to, or
     /// receivers of mutating-method calls).
     cellable: FxHashSet<Symbol>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct MirCtxKey {
+    unit: usize,
+    owner: Option<Symbol>,
+    theta: ThetaKey,
+    env: Vec<(Symbol, Binding)>,
+    local_evidence: Vec<((Symbol, Symbol), EvidenceBinding)>,
+    ret_k: ExprId,
+    tail_k: ExprId,
+    raw_ret_k: ExprId,
+    normal_k: Option<ExprId>,
+    abort_ok: bool,
+    resume_k: Option<ExprId>,
+    top_level: bool,
+    local_handlers: Vec<Symbol>,
+    params: Vec<ExprId>,
+    loops: Vec<LoopBinding>,
+    drop_stack: Vec<DropBinding>,
+    drop_flags: Vec<(OwnershipKeyPath, ExprId)>,
+    initializing_self: Option<Symbol>,
+    cellable: Vec<Symbol>,
+}
+
+/// An active loop in the MIR→λ_G lowering: the header/exit MIR blocks paired
+/// with the λ_G continuations a back-edge or break jumps to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct MirLoop {
+    header_block: mir::BlockId,
+    header: ExprId,
+    exit_block: mir::BlockId,
+    exit: ExprId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct MirBlockKey {
+    block: mir::BlockId,
+    k: ExprId,
+    ctx: MirCtxKey,
+    loops: Vec<MirLoop>,
+}
+
+#[derive(Default)]
+struct MirBlockCache {
+    blocks: FxHashMap<MirBlockKey, ExprId>,
+}
+
+impl Ctx {
+    fn mir_key(&self) -> MirCtxKey {
+        let mut env: Vec<_> = self
+            .env
+            .iter()
+            .map(|(symbol, binding)| (*symbol, *binding))
+            .collect();
+        env.sort_by_key(|(symbol, _)| *symbol);
+        let mut local_evidence: Vec<_> = self
+            .local_evidence
+            .iter()
+            .map(|(key, evidence)| (*key, *evidence))
+            .collect();
+        local_evidence.sort_by_key(|((ty, protocol), _)| (*ty, *protocol));
+        let mut local_handlers: Vec<_> = self.local_handlers.iter().copied().collect();
+        local_handlers.sort();
+        let mut drop_flags: Vec<_> = self
+            .drop_flags
+            .iter()
+            .map(|(key_path, flag)| (key_path.clone(), *flag))
+            .collect();
+        drop_flags.sort_by_key(|(key_path, _)| format!("{key_path:?}"));
+        let mut cellable: Vec<_> = self.cellable.iter().copied().collect();
+        cellable.sort();
+
+        MirCtxKey {
+            unit: self.unit,
+            owner: self.owner,
+            theta: theta_key(&self.theta),
+            env,
+            local_evidence,
+            ret_k: self.ret_k,
+            tail_k: self.tail_k,
+            raw_ret_k: self.raw_ret_k,
+            normal_k: self.normal_k,
+            abort_ok: self.abort_ok,
+            resume_k: self.resume_k,
+            top_level: self.top_level,
+            local_handlers,
+            params: self.params.clone(),
+            loops: self.loops.clone(),
+            drop_stack: self.drop_stack.clone(),
+            drop_flags,
+            initializing_self: self.initializing_self,
+            cellable,
+        }
+    }
 }
 
 pub struct LoweredProgram {

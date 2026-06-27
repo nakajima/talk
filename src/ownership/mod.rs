@@ -17,7 +17,7 @@ use crate::{
     node_kinds::{
         block::Block,
         body::Body,
-        decl::DeclKind,
+        decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::{CaptureMode, CaptureSpec},
         parameter::Parameter,
@@ -103,6 +103,7 @@ pub enum BodyKind {
 pub struct PointFact {
     pub point: OwnershipPoint,
     pub kind: PointKind,
+    pub node: Option<NodeID>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,6 +137,7 @@ pub struct ScopeFact {
 #[derive(Clone, Debug)]
 pub struct StorageFact {
     pub point: OwnershipPoint,
+    pub node: Option<NodeID>,
     pub key_path: KeyPath,
     pub ty: Option<Ty>,
 }
@@ -143,6 +145,7 @@ pub struct StorageFact {
 #[derive(Clone, Debug)]
 pub struct MoveFact {
     pub point: OwnershipPoint,
+    pub node: Option<NodeID>,
     pub source: KeyPath,
     pub ty: Ty,
 }
@@ -152,6 +155,7 @@ pub struct LoanFact {
     pub id: LoanId,
     pub origin: OriginId,
     pub point: OwnershipPoint,
+    pub node: Option<NodeID>,
     pub borrower: KeyPath,
     pub owner: Option<KeyPath>,
     pub kind: BorrowKind,
@@ -160,6 +164,7 @@ pub struct LoanFact {
 #[derive(Clone, Debug)]
 pub struct InvalidationFact {
     pub point: Option<OwnershipPoint>,
+    pub node: Option<NodeID>,
     pub loan: Option<LoanId>,
     pub owner: KeyPath,
 }
@@ -167,6 +172,7 @@ pub struct InvalidationFact {
 #[derive(Clone, Debug)]
 pub struct AssignmentFact {
     pub point: OwnershipPoint,
+    pub node: Option<NodeID>,
     pub target: KeyPath,
     pub ty: Option<Ty>,
 }
@@ -174,6 +180,7 @@ pub struct AssignmentFact {
 #[derive(Clone, Debug)]
 pub struct CandidateDropFact {
     pub point: OwnershipPoint,
+    pub node: Option<NodeID>,
     pub target: KeyPath,
     pub ty: Option<Ty>,
     pub reason: DropReason,
@@ -187,6 +194,7 @@ pub struct DropPlan {
 #[derive(Clone, Debug)]
 pub struct DropObligation {
     pub point: OwnershipPoint,
+    pub node: Option<NodeID>,
     pub key_path: KeyPath,
     pub ty: Ty,
     pub kind: DropKind,
@@ -403,6 +411,12 @@ pub fn check_ownership(
         diagnostics: vec![],
         reported: FxHashSet::default(),
         output: OwnershipOutput::default(),
+        recorded_mir_bodies: FxHashMap::default(),
+        elaborated_mir_bodies: FxHashSet::default(),
+        checked_independent_bodies: FxHashSet::default(),
+        recorded_move_facts: FxHashSet::default(),
+        recorded_borrow_facts: FxHashMap::default(),
+        nested_body_memos: vec![],
     };
     checker.discover_borrowed_types();
     checker.discover_owned_types();
@@ -422,6 +436,45 @@ struct OwnershipChecker<'a> {
     diagnostics: Vec<AnyDiagnostic>,
     reported: FxHashSet<(NodeID, OwnershipError)>,
     output: OwnershipOutput,
+    recorded_mir_bodies: FxHashMap<BodyCacheKey, BodyId>,
+    elaborated_mir_bodies: FxHashSet<BodyCacheKey>,
+    checked_independent_bodies: FxHashSet<BodyCacheKey>,
+    recorded_move_facts: FxHashSet<MoveFactKey>,
+    recorded_borrow_facts: FxHashMap<BorrowFactKey, LoanId>,
+    nested_body_memos: Vec<NestedBodyMemo>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum BodyCacheKey {
+    TopLevel(FileID),
+    Decl(NodeID),
+    Function { body: NodeID, owner: Option<Symbol> },
+    Nested(NodeID),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct MoveFactKey {
+    point: OwnershipPoint,
+    node: Option<NodeID>,
+    source: KeyPath,
+    ty: Ty,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct BorrowFactKey {
+    point: OwnershipPoint,
+    node: Option<NodeID>,
+    borrower: KeyPath,
+    owner: Option<KeyPath>,
+    kind: BorrowKind,
+}
+
+#[derive(Clone, Debug)]
+struct NestedBodyMemo {
+    key: BodyCacheKey,
+    live_at_exit: FxHashSet<Symbol>,
+    input: MoveState,
+    output: MoveState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -691,11 +744,14 @@ impl MoveState {
     }
 
     fn add_loan(&mut self, borrower: KeyPath, owner: KeyPath, kind: BorrowKind) {
-        self.active_loans.push(ActiveLoan {
+        let loan = ActiveLoan {
             borrower,
             owner,
             kind,
-        });
+        };
+        if !self.active_loans.contains(&loan) {
+            self.active_loans.push(loan);
+        }
     }
 
     fn finish_storage(&mut self, key_path: &KeyPath) {
@@ -925,14 +981,15 @@ impl OwnershipChecker<'_> {
 
     fn check_moves(&mut self, asts: &IndexMap<Source, AST<NameResolved>>) {
         for ast in asts.values() {
-            self.check_decl_moves_in_slice(&ast.roots);
+            self.check_decl_moves_in_slice(ast.file_id, &ast.roots);
         }
     }
 
-    fn check_decl_moves_in_slice(&mut self, nodes: &[Node]) {
+    fn check_decl_moves_in_slice(&mut self, file_id: FileID, nodes: &[Node]) {
         let mut body = mir::build_nodes(self.types, nodes);
-        let body_id = self.record_mir_body(&body, BodyKind::TopLevel);
-        self.elaborate_drops(body_id, &mut body);
+        let key = BodyCacheKey::TopLevel(file_id);
+        let body_id = self.record_mir_body_once(key, &body, BodyKind::TopLevel);
+        self.elaborate_drops_once(key, body_id, &mut body);
         let mut state = MoveState::default();
         self.check_mir_body(body_id, &body, &mut state);
     }
@@ -940,8 +997,12 @@ impl OwnershipChecker<'_> {
     fn check_body_moves(&mut self, body: &Body) {
         for decl in &body.decls {
             let mut body = mir::build_decls(self.types, std::slice::from_ref(decl));
-            let body_id = self.record_mir_body(&body, BodyKind::DeclBody);
-            self.elaborate_drops(body_id, &mut body);
+            let key = BodyCacheKey::Decl(decl.id);
+            let body_id = self.record_mir_body_once(key, &body, BodyKind::DeclBody);
+            self.elaborate_drops_once(key, body_id, &mut body);
+            if !self.checked_independent_bodies.insert(key) {
+                continue;
+            }
             let mut state = MoveState::default();
             self.check_mir_body(body_id, &body, &mut state);
         }
@@ -956,10 +1017,17 @@ impl OwnershipChecker<'_> {
         parent_state: Option<&MoveState>,
     ) {
         let mut body = mir::build_function(self.types, owner, source_body);
-        let body_id = self.record_mir_body(&body, BodyKind::Function);
-        self.elaborate_drops(body_id, &mut body);
+        let key = BodyCacheKey::Function {
+            body: source_body.id,
+            owner,
+        };
+        let body_id = self.record_mir_body_once(key, &body, BodyKind::Function);
+        self.elaborate_drops_once(key, body_id, &mut body);
         if parent_state.is_some() {
             self.check_closure_captures(captures, params, source_body, &body, parent_state);
+        }
+        if !self.checked_independent_bodies.insert(key) {
+            return;
         }
         let mut state = MoveState::default();
         self.seed_shared_borrow_params(params, &mut state);
@@ -1070,6 +1138,26 @@ impl OwnershipChecker<'_> {
             }
             _ => self.contains_borrowed_type(ty) || self.needs_drop_type(ty),
         }
+    }
+
+    fn closure_summary_is_copyable(&self, summary: &ClosureCaptureSummary) -> bool {
+        summary.captures.iter().all(|capture| match capture.mode {
+            Some(CaptureMode::Copy) => {
+                self.is_copy_type(&capture.ty) && !self.contains_borrowed_type(&capture.ty)
+            }
+            Some(CaptureMode::Move | CaptureMode::BorrowShared | CaptureMode::BorrowMut) => false,
+            None => {
+                !self.is_borrowed_type(&capture.ty)
+                    && !self.capture_is_ownership_sensitive(&capture.ty)
+            }
+        })
+    }
+
+    fn key_path_stores_noncopy_closure(&self, key_path: &KeyPath, state: &MoveState) -> bool {
+        state
+            .closure_captures
+            .get(key_path)
+            .is_some_and(|summary| !self.closure_summary_is_copyable(summary))
     }
 
     fn capture_is_escape_sensitive(&self, capture: &ClosureCapture) -> bool {
@@ -1415,17 +1503,61 @@ impl OwnershipChecker<'_> {
         let Some(borrower) = borrower else {
             return;
         };
+        self.record_borrow_fact(
+            point,
+            Some(capture.id),
+            borrower.clone(),
+            Some(owner.clone()),
+            kind,
+        );
+        state.add_loan(borrower.clone(), owner, kind);
+    }
+
+    fn record_borrow_fact(
+        &mut self,
+        point: OwnershipPoint,
+        node: Option<NodeID>,
+        borrower: KeyPath,
+        owner: Option<KeyPath>,
+        kind: BorrowKind,
+    ) -> LoanId {
+        let key = BorrowFactKey {
+            point,
+            node,
+            borrower: borrower.clone(),
+            owner: owner.clone(),
+            kind,
+        };
+        if let Some(loan_id) = self.recorded_borrow_facts.get(&key) {
+            return *loan_id;
+        }
         let loan_id = LoanId(self.output.facts.borrows.len() as u32);
-        let origin_id = OriginId(self.output.facts.borrows.len() as u32);
+        let origin_id = OriginId(loan_id.0);
         self.output.facts.borrows.push(LoanFact {
             id: loan_id,
             origin: origin_id,
             point,
-            borrower: borrower.clone(),
-            owner: Some(owner.clone()),
+            node,
+            borrower,
+            owner,
             kind,
         });
-        state.add_loan(borrower.clone(), owner, kind);
+        self.recorded_borrow_facts.insert(key, loan_id);
+        loan_id
+    }
+
+    fn record_mir_body_once(
+        &mut self,
+        key: BodyCacheKey,
+        body: &mir::Body<'_>,
+        kind: BodyKind,
+    ) -> BodyId {
+        if let Some(body_id) = self.recorded_mir_bodies.get(&key) {
+            return *body_id;
+        }
+        let body_id = self.record_mir_body(body, kind);
+        self.recorded_mir_bodies.insert(key, body_id);
+        body_id
     }
 
     fn record_mir_body(&mut self, body: &mir::Body<'_>, kind: BodyKind) -> BodyId {
@@ -1451,6 +1583,7 @@ impl OwnershipChecker<'_> {
                 self.output.facts.points.push(PointFact {
                     point,
                     kind: point_kind(&statement.kind),
+                    node: source_node_for_mir_statement(&statement.kind),
                 });
                 self.record_statement_fact(body, point, &statement.kind);
             }
@@ -1500,6 +1633,7 @@ impl OwnershipChecker<'_> {
             mir::Statement::StorageLive { symbol, .. } => {
                 self.output.facts.storage_live.push(StorageFact {
                     point,
+                    node: source_node_for_mir_statement(statement),
                     key_path: KeyPath::root(*symbol),
                     ty: self.symbol_ty(*symbol).cloned(),
                 });
@@ -1507,6 +1641,7 @@ impl OwnershipChecker<'_> {
             mir::Statement::StorageDead { symbol, .. } => {
                 self.output.facts.storage_dead.push(StorageFact {
                     point,
+                    node: source_node_for_mir_statement(statement),
                     key_path: KeyPath::root(*symbol),
                     ty: self.symbol_ty(*symbol).cloned(),
                 });
@@ -1519,6 +1654,7 @@ impl OwnershipChecker<'_> {
                 {
                     self.output.facts.assignments.push(AssignmentFact {
                         point,
+                        node: source_node_for_mir_statement(statement),
                         ty: self.key_path_ty(&target),
                         target,
                     });
@@ -1530,6 +1666,8 @@ impl OwnershipChecker<'_> {
                 reason,
                 ..
             } => {
+                let node =
+                    drop_target_node(target).or_else(|| source_node_for_mir_statement(statement));
                 if let Some(target) = key_path
                     .as_ref()
                     .and_then(|target| Self::key_path_from_mir(body, target))
@@ -1537,6 +1675,7 @@ impl OwnershipChecker<'_> {
                 {
                     self.output.facts.candidate_drops.push(CandidateDropFact {
                         point,
+                        node,
                         ty: self.key_path_ty(&target),
                         target,
                         reason: map_drop_reason(*reason),
@@ -1544,6 +1683,17 @@ impl OwnershipChecker<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn elaborate_drops_once(
+        &mut self,
+        key: BodyCacheKey,
+        body_id: BodyId,
+        body: &mut mir::Body<'_>,
+    ) {
+        if self.elaborated_mir_bodies.insert(key) {
+            self.elaborate_drops(body_id, body);
         }
     }
 
@@ -1561,6 +1711,7 @@ impl OwnershipChecker<'_> {
                     body: body_id,
                     point: statement.point.0 as u32,
                 };
+                let statement_node = source_node_for_mir_statement(&statement.kind);
                 match &mut statement.kind {
                     mir::Statement::DropCandidate {
                         target,
@@ -1586,6 +1737,7 @@ impl OwnershipChecker<'_> {
                         *elaboration = Some(mir_drop_elaboration(kind));
                         self.output.drop_plan.obligations.push(DropObligation {
                             point,
+                            node: drop_target_node(target).or(statement_node),
                             key_path,
                             ty,
                             kind,
@@ -1725,21 +1877,62 @@ impl OwnershipChecker<'_> {
         point: Option<OwnershipPoint>,
         state: &mut DropState,
     ) {
-        let Some(key_path) = self.key_path(expr) else {
+        let mut consumed = Vec::new();
+        self.collect_consumed_value_exprs(expr, &mut consumed);
+        for expr in consumed {
+            let Some(key_path) = self.key_path(expr) else {
+                continue;
+            };
+            let ty = self
+                .types
+                .node_types
+                .get(&expr.id)
+                .cloned()
+                .or_else(|| self.key_path_ty(&key_path));
+            self.note_drop_key_path_move(expr.id, &key_path, ty, point, state);
+        }
+    }
+
+    fn note_drop_key_path_move(
+        &mut self,
+        id: NodeID,
+        key_path: &KeyPath,
+        ty: Option<Ty>,
+        point: Option<OwnershipPoint>,
+        state: &mut DropState,
+    ) {
+        let Some(ty) = ty else {
             return;
         };
-        let Some(ty) = self.types.node_types.get(&expr.id).cloned() else {
+        if !self.needs_drop_type(&ty) || !key_path.is_tracked_storage_root() {
             return;
+        }
+        state.note_move(key_path.clone(), id);
+        if let Some(point) = point {
+            self.record_move_fact(point, Some(id), key_path.clone(), ty);
+        }
+    }
+
+    fn record_move_fact(
+        &mut self,
+        point: OwnershipPoint,
+        node: Option<NodeID>,
+        source: KeyPath,
+        ty: Ty,
+    ) {
+        let key = MoveFactKey {
+            point,
+            node,
+            source: source.clone(),
+            ty: ty.clone(),
         };
-        if self.needs_drop_type(&ty) && key_path.is_tracked_storage_root() {
-            state.note_move(key_path.clone(), expr.id);
-            if let Some(point) = point {
-                self.output.facts.moves.push(MoveFact {
-                    point,
-                    source: key_path,
-                    ty,
-                });
-            }
+        if self.recorded_move_facts.insert(key) {
+            self.output.facts.moves.push(MoveFact {
+                point,
+                node,
+                source,
+                ty,
+            });
         }
     }
 
@@ -1808,11 +2001,7 @@ impl OwnershipChecker<'_> {
                     if self.needs_drop_type(&ty) && key_path.is_tracked_storage_root() {
                         state.note_move(key_path.clone(), expr.id);
                         if let Some(point) = point {
-                            self.output.facts.moves.push(MoveFact {
-                                point,
-                                source: key_path,
-                                ty,
-                            });
+                            self.record_move_fact(point, Some(expr.id), key_path, ty);
                         }
                     }
                 }
@@ -2025,7 +2214,12 @@ impl OwnershipChecker<'_> {
             }
             mir::Statement::Handling { body, .. } => {
                 let handler_body = mir::build_block(self.types, body);
-                self.check_nested_mir_body(&handler_body, state, context.live_after);
+                self.check_nested_mir_body(
+                    BodyCacheKey::Nested(body.id),
+                    &handler_body,
+                    state,
+                    context.live_after,
+                );
             }
             mir::Statement::DeclBody { body } => self.check_body_moves(body),
         }
@@ -2033,12 +2227,27 @@ impl OwnershipChecker<'_> {
 
     fn check_nested_mir_body(
         &mut self,
+        key: BodyCacheKey,
         body: &mir::Body<'_>,
         state: &mut MoveState,
         live_at_exit: &FxHashSet<Symbol>,
     ) {
-        let body_id = self.record_mir_body(body, BodyKind::Nested);
+        if let Some(memo) = self.nested_body_memos.iter().find(|memo| {
+            memo.key == key && memo.live_at_exit == *live_at_exit && memo.input == *state
+        }) {
+            state.merge_from(&memo.output);
+            return;
+        }
+
+        let input = state.clone();
+        let body_id = self.record_mir_body_once(key, body, BodyKind::Nested);
         let body_state = self.check_mir_body_exit_state(body_id, body, state, live_at_exit);
+        self.nested_body_memos.push(NestedBodyMemo {
+            key,
+            live_at_exit: live_at_exit.clone(),
+            input,
+            output: body_state.clone(),
+        });
         state.merge_from(&body_state);
     }
 
@@ -2092,7 +2301,7 @@ impl OwnershipChecker<'_> {
         if borrow_info.is_none()
             && let Some(rhs) = rhs
         {
-            self.mark_simple_move_source(rhs, state);
+            self.consume_expr_value(rhs, state);
         }
     }
 
@@ -2142,7 +2351,7 @@ impl OwnershipChecker<'_> {
             self.install_borrow(key_path, info, rhs.id, point, state);
         }
         if !rhs_is_borrow {
-            self.mark_simple_move_source(rhs, state);
+            self.consume_expr_value(rhs, state);
         }
     }
 
@@ -2188,7 +2397,7 @@ impl OwnershipChecker<'_> {
                         );
                     }
                 }
-                _ => self.mark_simple_move_source(receiver, state),
+                _ => self.consume_expr_value(receiver, state),
             }
             let params = self
                 .member_value_params(callee)
@@ -2220,8 +2429,13 @@ impl OwnershipChecker<'_> {
             );
             self.check_escaping_closure_summary(&summary);
         }
-        if let Some(body) = trailing_body {
-            self.check_nested_mir_body(body, state, context.live_after);
+        if let (Some(source_block), Some(body)) = (trailing_block, trailing_body) {
+            self.check_nested_mir_body(
+                BodyCacheKey::Nested(source_block.id),
+                body,
+                state,
+                context.live_after,
+            );
         }
     }
 
@@ -2255,7 +2469,7 @@ impl OwnershipChecker<'_> {
                     let closure_captures = self.closure_literal_capture_summary(&arg.value, state);
                     self.apply_closure_capture_effects(&closure_captures, None, point, state);
                     if !borrowed_constructor {
-                        self.mark_simple_move_source(&arg.value, state);
+                        self.consume_expr_value(&arg.value, state);
                     }
                 }
             }
@@ -2272,17 +2486,17 @@ impl OwnershipChecker<'_> {
         self.check_escaping_closure_values(expr, state);
         let closure_captures = self.closure_literal_capture_summary(expr, state);
         self.apply_closure_capture_effects(&closure_captures, None, point, state);
-        self.mark_simple_move_source(expr, state);
+        self.consume_expr_value(expr, state);
     }
 
     fn check_assignment_root_use(&mut self, id: NodeID, symbol: Symbol, state: &mut MoveState) {
         let key_path = KeyPath::root(symbol);
-        if let Some((moved, _)) = self.moved_key_path_for_use(&key_path, id, false, state) {
+        if let Some((moved, moved_id)) = self.moved_key_path_for_use(&key_path, id, false, state) {
             self.error(
                 id,
                 OwnershipError::UseAfterMove {
                     name: self.render_key_path(moved),
-                    ty: "owned value".to_string(),
+                    ty: self.move_error_type(moved, moved_id, Some(id)),
                 },
             );
         } else if let Some((borrow, owner)) = self.invalid_borrow_for_use(&key_path, state) {
@@ -2310,7 +2524,7 @@ impl OwnershipChecker<'_> {
             return;
         }
         if !self.expr_is_borrowed(expr) {
-            self.mark_simple_move_source(expr, state);
+            self.consume_expr_value(expr, state);
             return;
         }
         let info = self.borrow_info(expr, &state.borrows);
@@ -2345,10 +2559,67 @@ impl OwnershipChecker<'_> {
         let Some(key_path) = self.key_path(expr) else {
             return;
         };
-        if self.expr_is_owned(expr) && key_path.is_tracked_storage_root() {
+        let moves_storage =
+            self.expr_is_owned(expr) || self.key_path_stores_noncopy_closure(&key_path, state);
+        if moves_storage && key_path.is_tracked_storage_root() {
+            self.report_use_after_move_or_invalidated(expr.id, &key_path, true, state);
             self.check_move_while_borrowed(expr.id, &key_path, state);
             state.moved.insert(key_path.clone(), expr.id);
             state.invalidate_borrows_of(&key_path);
+            state.closure_captures.remove(&key_path);
+        }
+    }
+
+    fn consume_expr_value(&mut self, expr: &Expr, state: &mut MoveState) {
+        let mut consumed = Vec::new();
+        self.collect_consumed_value_exprs(expr, &mut consumed);
+        for expr in consumed {
+            self.mark_simple_move_source(expr, state);
+        }
+    }
+
+    fn collect_consumed_value_exprs<'a>(&self, expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+        if self.key_path(expr).is_some() {
+            out.push(expr);
+            return;
+        }
+
+        match &expr.kind {
+            ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
+                for item in items {
+                    self.collect_consumed_value_exprs(item, out);
+                }
+            }
+            ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
+                self.collect_consumed_value_exprs(inner, out);
+            }
+            ExprKind::RecordLiteral { fields, spread } => {
+                if let Some(spread) = spread {
+                    self.collect_consumed_value_exprs(spread, out);
+                }
+                for field in fields {
+                    self.collect_consumed_value_exprs(&field.value, out);
+                }
+            }
+            ExprKind::Block(_)
+            | ExprKind::If(..)
+            | ExprKind::Match(..)
+            | ExprKind::Call { .. }
+            | ExprKind::CallEffect { .. }
+            | ExprKind::InlineIR(_)
+            | ExprKind::Incomplete(_)
+            | ExprKind::LiteralInt(_)
+            | ExprKind::LiteralFloat(_)
+            | ExprKind::LiteralTrue
+            | ExprKind::LiteralFalse
+            | ExprKind::LiteralString(_)
+            | ExprKind::Constructor(_)
+            | ExprKind::Func(_)
+            | ExprKind::RowVariable(_)
+            | ExprKind::Member(None, ..)
+            | ExprKind::Variable(_)
+            | ExprKind::Member(Some(_), ..)
+            | ExprKind::Binary(..) => {}
         }
     }
 
@@ -2363,17 +2634,35 @@ impl OwnershipChecker<'_> {
         use_is_owned: bool,
         state: &mut MoveState,
     ) {
-        if let Some((moved, _)) = self.moved_key_path_for_use(key_path, id, use_is_owned, state) {
+        self.report_use_after_move_or_invalidated(id, key_path, use_is_owned, state);
+        // Using an owned value is a move/consume (its conflict with a live loan is reported by
+        // `check_move_while_borrowed`), not the taking of a shared borrow. Only a non-owned use
+        // — reading through a borrow or a copy — needs a shared loan of the owner.
+        if !use_is_owned {
+            let owner = self.loan_owner_for_key_path(key_path, state);
+            self.check_borrow_conflicts(id, &owner, BorrowKind::Shared, Some(key_path), state);
+        }
+    }
+
+    /// Reports use-after-move and use-after-invalidated-borrow for a path. Unlike
+    /// `check_key_path_use_for_id`, this does not raise a shared-borrow conflict, so it is
+    /// safe to use on the move path (where `check_move_while_borrowed` covers the borrow side
+    /// and a move must not be described as taking a shared borrow).
+    fn report_use_after_move_or_invalidated(
+        &mut self,
+        id: NodeID,
+        key_path: &KeyPath,
+        use_is_owned: bool,
+        state: &MoveState,
+    ) {
+        if let Some((moved, moved_id)) =
+            self.moved_key_path_for_use(key_path, id, use_is_owned, state)
+        {
             self.error(
                 id,
                 OwnershipError::UseAfterMove {
                     name: self.render_key_path(moved),
-                    ty: self
-                        .types
-                        .node_types
-                        .get(&id)
-                        .map(Ty::render_mono)
-                        .unwrap_or_else(|| "owned value".to_string()),
+                    ty: self.move_error_type(moved, moved_id, Some(id)),
                 },
             );
         } else if let Some((borrow, owner)) = self.invalid_borrow_for_use(key_path, state) {
@@ -2391,8 +2680,19 @@ impl OwnershipChecker<'_> {
                 },
             );
         }
-        let owner = self.loan_owner_for_key_path(key_path, state);
-        self.check_borrow_conflicts(id, &owner, BorrowKind::Shared, Some(key_path), state);
+    }
+
+    fn move_error_type(
+        &self,
+        moved: &KeyPath,
+        moved_id: NodeID,
+        fallback_id: Option<NodeID>,
+    ) -> String {
+        self.key_path_ty(moved)
+            .or_else(|| self.types.node_types.get(&moved_id).cloned())
+            .or_else(|| fallback_id.and_then(|id| self.types.node_types.get(&id).cloned()))
+            .map(|ty| ty.render_mono())
+            .unwrap_or_else(|| "owned value".to_string())
     }
 
     fn moved_key_path_for_use<'a>(
@@ -2634,16 +2934,13 @@ impl OwnershipChecker<'_> {
         point: OwnershipPoint,
         state: &mut MoveState,
     ) {
-        let loan_id = LoanId(self.output.facts.borrows.len() as u32);
-        let origin_id = OriginId(self.output.facts.borrows.len() as u32);
-        self.output.facts.borrows.push(LoanFact {
-            id: loan_id,
-            origin: origin_id,
+        self.record_borrow_fact(
             point,
-            borrower: borrower.clone(),
-            owner: info.owner.clone(),
-            kind: info.kind,
-        });
+            Some(id),
+            borrower.clone(),
+            info.owner.clone(),
+            info.kind,
+        );
         if let Some(owner) = &info.owner {
             self.check_borrow_conflicts(id, owner, info.kind, None, state);
             state.add_loan(borrower.clone(), owner.clone(), info.kind);
@@ -2959,19 +3256,12 @@ impl OwnershipChecker<'_> {
         let Some(params) = params else {
             return BorrowInfo::new(BorrowOrigin::Unknown, None);
         };
-        let mut result: Option<BorrowInfo> = None;
-        for (arg, param) in args.iter().zip(params) {
-            if !self.is_borrowed_type(param) {
-                continue;
-            }
-            let info =
-                self.borrow_info_with_default_owner(self.borrow_info(&arg.value, env), &arg.value);
-            if result.is_some() {
-                return BorrowInfo::new(BorrowOrigin::Unknown, None);
-            }
-            result = Some(info);
-        }
-        result.unwrap_or_else(|| BorrowInfo::new(BorrowOrigin::Unknown, None))
+        self.single_selected_argument_borrow_info(
+            args.iter()
+                .zip(params)
+                .filter_map(|(arg, param)| self.is_borrowed_type(param).then_some(arg)),
+            env,
+        )
     }
 
     fn single_constructor_borrow_source_info(
@@ -2979,11 +3269,20 @@ impl OwnershipChecker<'_> {
         args: &[crate::node_kinds::call_arg::CallArg],
         env: &BorrowEnv,
     ) -> BorrowInfo {
+        self.single_selected_argument_borrow_info(
+            args.iter()
+                .filter(|arg| self.expr_is_borrowed(&arg.value) || self.expr_is_owned(&arg.value)),
+            env,
+        )
+    }
+
+    fn single_selected_argument_borrow_info<'expr>(
+        &self,
+        args: impl IntoIterator<Item = &'expr crate::node_kinds::call_arg::CallArg>,
+        env: &BorrowEnv,
+    ) -> BorrowInfo {
         let mut result: Option<BorrowInfo> = None;
         for arg in args {
-            if !self.expr_is_borrowed(&arg.value) && !self.expr_is_owned(&arg.value) {
-                continue;
-            }
             let info =
                 self.borrow_info_with_default_owner(self.borrow_info(&arg.value, env), &arg.value);
             if result.is_some() {
@@ -3407,151 +3706,211 @@ fn node_tail_expr(node: &Node) -> Option<&Expr> {
     }
 }
 
-fn collect_block_binders(block: &Block, out: &mut FxHashSet<Symbol>) {
-    for arg in &block.args {
-        if let Ok(symbol) = arg.name.symbol() {
-            out.insert(symbol);
-        }
-    }
-    for node in &block.body {
-        collect_node_binders(node, out);
+trait SourceVisitor {
+    fn inline_ir(&mut self, _id: NodeID) {}
+    fn variable(&mut self, _symbol: Symbol) {}
+    fn binder(&mut self, _symbol: Symbol) {}
+    fn capture(&mut self, _symbol: Symbol) {}
+}
+
+struct InlineIrCollector<'a> {
+    out: &'a mut FxHashSet<NodeID>,
+}
+
+impl SourceVisitor for InlineIrCollector<'_> {
+    fn inline_ir(&mut self, id: NodeID) {
+        self.out.insert(id);
     }
 }
 
-fn collect_inline_ir_exprs(nodes: &[Node], out: &mut FxHashSet<NodeID>) {
+struct BinderCollector<'a> {
+    out: &'a mut FxHashSet<Symbol>,
+}
+
+impl SourceVisitor for BinderCollector<'_> {
+    fn binder(&mut self, symbol: Symbol) {
+        self.out.insert(symbol);
+    }
+}
+
+struct RootUseCollector<'a> {
+    out: &'a mut FxHashSet<Symbol>,
+}
+
+impl SourceVisitor for RootUseCollector<'_> {
+    fn variable(&mut self, symbol: Symbol) {
+        self.out.insert(symbol);
+    }
+
+    fn capture(&mut self, symbol: Symbol) {
+        self.out.insert(symbol);
+    }
+}
+
+fn walk_nodes(nodes: &[Node], visitor: &mut impl SourceVisitor) {
     for node in nodes {
-        collect_inline_ir_node(node, out);
+        walk_node(node, visitor);
     }
 }
 
-fn collect_inline_ir_node(node: &Node, out: &mut FxHashSet<NodeID>) {
+fn walk_node(node: &Node, visitor: &mut impl SourceVisitor) {
     match node {
-        Node::Decl(decl) => match &decl.kind {
-            DeclKind::Let { rhs, .. } => {
-                if let Some(rhs) = rhs {
-                    collect_inline_ir_expr(rhs, out);
-                }
-            }
-            DeclKind::Func(func) => {
-                collect_inline_ir_block(&func.body, out);
-            }
-            DeclKind::Method { func, .. } => collect_inline_ir_block(&func.body, out),
-            DeclKind::Init { body, .. } => collect_inline_ir_block(body, out),
-            DeclKind::Struct { body, .. }
-            | DeclKind::Enum { body, .. }
-            | DeclKind::Protocol { body, .. }
-            | DeclKind::Extend { body, .. } => {
-                for decl in &body.decls {
-                    collect_inline_ir_node(&Node::Decl(decl.clone()), out);
-                }
-            }
-            DeclKind::Import(_)
-            | DeclKind::Effect { .. }
-            | DeclKind::Property { .. }
-            | DeclKind::Associated { .. }
-            | DeclKind::EnumVariant { .. }
-            | DeclKind::FuncSignature(_)
-            | DeclKind::MethodRequirement { .. }
-            | DeclKind::TypeAlias(..) => {}
-        },
-        Node::Stmt(stmt) => collect_inline_ir_stmt(&stmt.kind, out),
-        Node::Expr(expr) => collect_inline_ir_expr(expr, out),
-        Node::Block(block) => collect_inline_ir_block(block, out),
-        Node::MatchArm(arm) => collect_inline_ir_block(&arm.body, out),
-        Node::Func(func) => collect_inline_ir_block(&func.body, out),
+        Node::Decl(decl) => walk_decl(decl, visitor),
+        Node::Stmt(stmt) => walk_stmt(&stmt.kind, visitor),
+        Node::Expr(expr) => walk_expr(expr, visitor),
+        Node::Block(block) => walk_block(block, visitor),
+        Node::MatchArm(arm) => {
+            walk_pattern_binders(&arm.pattern, visitor);
+            walk_block(&arm.body, visitor);
+        }
+        Node::Func(func) => walk_block(&func.body, visitor),
         _ => {}
     }
 }
 
-fn collect_inline_ir_block(block: &Block, out: &mut FxHashSet<NodeID>) {
-    collect_inline_ir_exprs(&block.body, out);
+fn walk_decl(decl: &Decl, visitor: &mut impl SourceVisitor) {
+    match &decl.kind {
+        DeclKind::Let { lhs, rhs, .. } => {
+            walk_pattern_binders(lhs, visitor);
+            if let Some(rhs) = rhs {
+                walk_expr(rhs, visitor);
+            }
+        }
+        DeclKind::Func(func) => walk_block(&func.body, visitor),
+        DeclKind::Method { func, .. } => walk_block(&func.body, visitor),
+        DeclKind::Init { params, body, .. } => {
+            for param in params {
+                walk_parameter_binder(param, visitor);
+            }
+            walk_block(body, visitor);
+        }
+        DeclKind::Struct { body, .. }
+        | DeclKind::Enum { body, .. }
+        | DeclKind::Protocol { body, .. }
+        | DeclKind::Extend { body, .. } => {
+            for decl in &body.decls {
+                walk_decl(decl, visitor);
+            }
+        }
+        DeclKind::Import(_)
+        | DeclKind::Effect { .. }
+        | DeclKind::Property { .. }
+        | DeclKind::Associated { .. }
+        | DeclKind::EnumVariant { .. }
+        | DeclKind::FuncSignature(_)
+        | DeclKind::MethodRequirement { .. }
+        | DeclKind::TypeAlias(..) => {}
+    }
 }
 
-fn collect_inline_ir_stmt(stmt: &StmtKind, out: &mut FxHashSet<NodeID>) {
+fn walk_block(block: &Block, visitor: &mut impl SourceVisitor) {
+    for arg in &block.args {
+        walk_parameter_binder(arg, visitor);
+    }
+    walk_nodes(&block.body, visitor);
+}
+
+fn walk_stmt(stmt: &StmtKind, visitor: &mut impl SourceVisitor) {
     match stmt {
         StmtKind::Expr(expr) | StmtKind::Return(Some(expr)) | StmtKind::Continue(Some(expr)) => {
-            collect_inline_ir_expr(expr, out);
+            walk_expr(expr, visitor);
         }
         StmtKind::If(condition, then_block, else_block) => {
-            collect_inline_ir_expr(condition, out);
-            collect_inline_ir_block(then_block, out);
+            walk_expr(condition, visitor);
+            walk_block(then_block, visitor);
             if let Some(else_block) = else_block {
-                collect_inline_ir_block(else_block, out);
+                walk_block(else_block, visitor);
             }
         }
         StmtKind::Assignment(lhs, rhs) => {
-            collect_inline_ir_expr(lhs, out);
-            collect_inline_ir_expr(rhs, out);
+            walk_expr(lhs, visitor);
+            walk_expr(rhs, visitor);
         }
         StmtKind::Loop(condition, body) => {
             if let Some(condition) = condition {
-                collect_inline_ir_expr(condition, out);
+                walk_expr(condition, visitor);
             }
-            collect_inline_ir_block(body, out);
+            walk_block(body, visitor);
         }
-        StmtKind::For { iterable, body, .. } => {
-            collect_inline_ir_expr(iterable, out);
-            collect_inline_ir_block(body, out);
+        StmtKind::For {
+            pattern,
+            iterable,
+            body,
+        } => {
+            walk_pattern_binders(pattern, visitor);
+            walk_expr(iterable, visitor);
+            walk_block(body, visitor);
         }
-        StmtKind::Handling { body, .. } => collect_inline_ir_block(body, out),
+        StmtKind::Handling { body, .. } => walk_block(body, visitor),
         StmtKind::Return(None) | StmtKind::Continue(None) | StmtKind::Break => {}
     }
 }
 
-fn collect_inline_ir_expr(expr: &Expr, out: &mut FxHashSet<NodeID>) {
+fn walk_expr(expr: &Expr, visitor: &mut impl SourceVisitor) {
     match &expr.kind {
-        ExprKind::InlineIR(_) => {
-            out.insert(expr.id);
+        ExprKind::InlineIR(_) => visitor.inline_ir(expr.id),
+        ExprKind::Variable(name) => {
+            if let Ok(symbol) = name.symbol() {
+                visitor.variable(symbol);
+            }
         }
         ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
             for item in items {
-                collect_inline_ir_expr(item, out);
+                walk_expr(item, visitor);
             }
         }
-        ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => collect_inline_ir_expr(inner, out),
+        ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => walk_expr(inner, visitor),
         ExprKind::Binary(lhs, _, rhs) => {
-            collect_inline_ir_expr(lhs, out);
-            collect_inline_ir_expr(rhs, out);
+            walk_expr(lhs, visitor);
+            walk_expr(rhs, visitor);
         }
-        ExprKind::Block(block) => collect_inline_ir_block(block, out),
+        ExprKind::Block(block) => walk_block(block, visitor),
         ExprKind::Call {
             callee,
             args,
             trailing_block,
             ..
         } => {
-            collect_inline_ir_expr(callee, out);
+            walk_expr(callee, visitor);
             for arg in args {
-                collect_inline_ir_expr(&arg.value, out);
+                walk_expr(&arg.value, visitor);
             }
             if let Some(block) = trailing_block {
-                collect_inline_ir_block(block, out);
+                walk_block(block, visitor);
             }
         }
         ExprKind::CallEffect { args, .. } => {
             for arg in args {
-                collect_inline_ir_expr(&arg.value, out);
+                walk_expr(&arg.value, visitor);
             }
         }
-        ExprKind::Member(Some(receiver), ..) => collect_inline_ir_expr(receiver, out),
-        ExprKind::Func(func) => collect_inline_ir_block(&func.body, out),
+        ExprKind::Member(Some(receiver), ..) => walk_expr(receiver, visitor),
+        ExprKind::Func(func) => {
+            for capture in &func.captures {
+                if let Ok(symbol) = capture.name.symbol() {
+                    visitor.capture(symbol);
+                }
+            }
+            walk_block(&func.body, visitor);
+        }
         ExprKind::If(condition, then_block, else_block) => {
-            collect_inline_ir_expr(condition, out);
-            collect_inline_ir_block(then_block, out);
-            collect_inline_ir_block(else_block, out);
+            walk_expr(condition, visitor);
+            walk_block(then_block, visitor);
+            walk_block(else_block, visitor);
         }
         ExprKind::Match(scrutinee, arms) => {
-            collect_inline_ir_expr(scrutinee, out);
+            walk_expr(scrutinee, visitor);
             for arm in arms {
-                collect_inline_ir_block(&arm.body, out);
+                walk_pattern_binders(&arm.pattern, visitor);
+                walk_block(&arm.body, visitor);
             }
         }
         ExprKind::RecordLiteral { fields, spread } => {
             if let Some(spread) = spread {
-                collect_inline_ir_expr(spread, out);
+                walk_expr(spread, visitor);
             }
             for field in fields {
-                collect_inline_ir_expr(&field.value, out);
+                walk_expr(&field.value, visitor);
             }
         }
         ExprKind::Incomplete(_)
@@ -3560,175 +3919,35 @@ fn collect_inline_ir_expr(expr: &Expr, out: &mut FxHashSet<NodeID>) {
         | ExprKind::LiteralTrue
         | ExprKind::LiteralFalse
         | ExprKind::LiteralString(_)
-        | ExprKind::Variable(_)
         | ExprKind::Constructor(_)
         | ExprKind::RowVariable(_)
         | ExprKind::Member(None, ..) => {}
     }
 }
 
-fn collect_node_binders(node: &Node, out: &mut FxHashSet<Symbol>) {
-    match node {
-        Node::Decl(decl) => match &decl.kind {
-            DeclKind::Let { lhs, rhs, .. } => {
-                for (_, symbol) in lhs.collect_binders() {
-                    out.insert(symbol);
-                }
-                if let Some(rhs) = rhs {
-                    collect_expr_binders(rhs, out);
-                }
-            }
-            DeclKind::Func(func) => {
-                collect_block_binders(&func.body, out);
-            }
-            DeclKind::Method { func, .. } => {
-                collect_block_binders(&func.body, out);
-            }
-            DeclKind::Init { params, body, .. } => {
-                for param in params {
-                    if let Ok(symbol) = param.name.symbol() {
-                        out.insert(symbol);
-                    }
-                }
-                collect_block_binders(body, out);
-            }
-            DeclKind::Struct { body, .. }
-            | DeclKind::Enum { body, .. }
-            | DeclKind::Protocol { body, .. }
-            | DeclKind::Extend { body, .. } => {
-                for decl in &body.decls {
-                    collect_node_binders(&Node::Decl(decl.clone()), out);
-                }
-            }
-            DeclKind::Import(_)
-            | DeclKind::Effect { .. }
-            | DeclKind::Property { .. }
-            | DeclKind::Associated { .. }
-            | DeclKind::EnumVariant { .. }
-            | DeclKind::FuncSignature(_)
-            | DeclKind::MethodRequirement { .. }
-            | DeclKind::TypeAlias(..) => {}
-        },
-        Node::Stmt(stmt) => collect_stmt_binders(&stmt.kind, out),
-        Node::Expr(expr) => collect_expr_binders(expr, out),
-        Node::Block(block) => collect_block_binders(block, out),
-        Node::MatchArm(arm) => {
-            for (_, symbol) in arm.pattern.collect_binders() {
-                out.insert(symbol);
-            }
-            collect_block_binders(&arm.body, out);
-        }
-        Node::Func(func) => collect_block_binders(&func.body, out),
-        _ => {}
+fn walk_pattern_binders(
+    pattern: &crate::node_kinds::pattern::Pattern,
+    visitor: &mut impl SourceVisitor,
+) {
+    for (_, symbol) in pattern.collect_binders() {
+        visitor.binder(symbol);
     }
 }
 
-fn collect_stmt_binders(stmt: &StmtKind, out: &mut FxHashSet<Symbol>) {
-    match stmt {
-        StmtKind::Expr(expr) | StmtKind::Return(Some(expr)) | StmtKind::Continue(Some(expr)) => {
-            collect_expr_binders(expr, out);
-        }
-        StmtKind::If(condition, then_block, else_block) => {
-            collect_expr_binders(condition, out);
-            collect_block_binders(then_block, out);
-            if let Some(else_block) = else_block {
-                collect_block_binders(else_block, out);
-            }
-        }
-        StmtKind::Assignment(lhs, rhs) => {
-            collect_expr_binders(lhs, out);
-            collect_expr_binders(rhs, out);
-        }
-        StmtKind::Loop(condition, body) => {
-            if let Some(condition) = condition {
-                collect_expr_binders(condition, out);
-            }
-            collect_block_binders(body, out);
-        }
-        StmtKind::For {
-            pattern,
-            iterable,
-            body,
-        } => {
-            for (_, symbol) in pattern.collect_binders() {
-                out.insert(symbol);
-            }
-            collect_expr_binders(iterable, out);
-            collect_block_binders(body, out);
-        }
-        StmtKind::Handling { body, .. } => collect_block_binders(body, out),
-        StmtKind::Return(None) | StmtKind::Continue(None) | StmtKind::Break => {}
+fn walk_parameter_binder(param: &Parameter, visitor: &mut impl SourceVisitor) {
+    if let Ok(symbol) = param.name.symbol() {
+        visitor.binder(symbol);
     }
 }
 
-fn collect_expr_binders(expr: &Expr, out: &mut FxHashSet<Symbol>) {
-    match &expr.kind {
-        ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
-            for item in items {
-                collect_expr_binders(item, out);
-            }
-        }
-        ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => collect_expr_binders(inner, out),
-        ExprKind::Binary(lhs, _, rhs) => {
-            collect_expr_binders(lhs, out);
-            collect_expr_binders(rhs, out);
-        }
-        ExprKind::Block(block) => collect_block_binders(block, out),
-        ExprKind::Call {
-            callee,
-            args,
-            trailing_block,
-            ..
-        } => {
-            collect_expr_binders(callee, out);
-            for arg in args {
-                collect_expr_binders(&arg.value, out);
-            }
-            if let Some(block) = trailing_block {
-                collect_block_binders(block, out);
-            }
-        }
-        ExprKind::CallEffect { args, .. } => {
-            for arg in args {
-                collect_expr_binders(&arg.value, out);
-            }
-        }
-        ExprKind::Member(Some(receiver), ..) => collect_expr_binders(receiver, out),
-        ExprKind::Func(func) => collect_block_binders(&func.body, out),
-        ExprKind::If(condition, then_block, else_block) => {
-            collect_expr_binders(condition, out);
-            collect_block_binders(then_block, out);
-            collect_block_binders(else_block, out);
-        }
-        ExprKind::Match(scrutinee, arms) => {
-            collect_expr_binders(scrutinee, out);
-            for arm in arms {
-                for (_, symbol) in arm.pattern.collect_binders() {
-                    out.insert(symbol);
-                }
-                collect_block_binders(&arm.body, out);
-            }
-        }
-        ExprKind::RecordLiteral { fields, spread } => {
-            if let Some(spread) = spread {
-                collect_expr_binders(spread, out);
-            }
-            for field in fields {
-                collect_expr_binders(&field.value, out);
-            }
-        }
-        ExprKind::InlineIR(_)
-        | ExprKind::Incomplete(_)
-        | ExprKind::LiteralInt(_)
-        | ExprKind::LiteralFloat(_)
-        | ExprKind::LiteralTrue
-        | ExprKind::LiteralFalse
-        | ExprKind::LiteralString(_)
-        | ExprKind::Variable(_)
-        | ExprKind::Constructor(_)
-        | ExprKind::RowVariable(_)
-        | ExprKind::Member(None, ..) => {}
-    }
+fn collect_block_binders(block: &Block, out: &mut FxHashSet<Symbol>) {
+    let mut visitor = BinderCollector { out };
+    walk_block(block, &mut visitor);
+}
+
+fn collect_inline_ir_exprs(nodes: &[Node], out: &mut FxHashSet<NodeID>) {
+    let mut visitor = InlineIrCollector { out };
+    walk_nodes(nodes, &mut visitor);
 }
 
 fn borrow_kind_name(kind: BorrowKind) -> &'static str {
@@ -3770,6 +3989,42 @@ fn func_params(ty: &Ty) -> Option<Vec<Ty>> {
         return None;
     };
     Some(params.clone())
+}
+
+fn source_node_for_mir_statement(statement: &mir::Statement<'_>) -> Option<NodeID> {
+    match statement {
+        mir::Statement::ScopeEnter { .. } | mir::Statement::ScopeExit { .. } => None,
+        mir::Statement::StorageLive { id, .. }
+        | mir::Statement::StorageDead { id, .. }
+        | mir::Statement::AssignmentRootUse { id, .. } => Some(*id),
+        mir::Statement::Read { expr }
+        | mir::Statement::ConsumeValue { expr, .. }
+        | mir::Statement::ReturnValue { expr, .. }
+        | mir::Statement::ContinueValue { expr, .. } => Some(expr.id),
+        mir::Statement::Bind {
+            lhs,
+            type_annotation,
+            rhs,
+            ..
+        } => rhs
+            .map(|expr| expr.id)
+            .or_else(|| type_annotation.map(|annotation| annotation.id))
+            .or(Some(lhs.id)),
+        mir::Statement::Assign { lhs, .. } => Some(lhs.id),
+        mir::Statement::DropCandidate { target, .. } => drop_target_node(target),
+        mir::Statement::Call { callee, .. } => Some(callee.id),
+        mir::Statement::Perform => None,
+        mir::Statement::Function { body, .. } => Some(body.id),
+        mir::Statement::Handling { stmt, .. } => Some(stmt.id),
+        mir::Statement::DeclBody { body } => Some(body.id),
+    }
+}
+
+fn drop_target_node(target: &mir::DropTarget<'_>) -> Option<NodeID> {
+    match target {
+        mir::DropTarget::Symbol { id, .. } => Some(*id),
+        mir::DropTarget::Expr(expr) => Some(expr.id),
+    }
 }
 
 fn point_kind(statement: &mir::Statement<'_>) -> PointKind {
@@ -3978,157 +4233,13 @@ fn assignment_root_def(lhs: &Expr, target: Option<&mir::KeyPath>) -> Option<Symb
 }
 
 fn collect_block_root_uses(block: &Block, out: &mut FxHashSet<Symbol>) {
-    for node in &block.body {
-        collect_node_root_uses(node, out);
-    }
-}
-
-fn collect_node_root_uses(node: &Node, out: &mut FxHashSet<Symbol>) {
-    match node {
-        Node::Decl(decl) => match &decl.kind {
-            DeclKind::Let { rhs, .. } => {
-                if let Some(rhs) = rhs {
-                    collect_expr_root_uses(rhs, out);
-                }
-            }
-            DeclKind::Func(func) => {
-                collect_block_root_uses(&func.body, out);
-            }
-            DeclKind::Method { func, .. } => collect_block_root_uses(&func.body, out),
-            DeclKind::Init { body, .. } => collect_block_root_uses(body, out),
-            DeclKind::Struct { body, .. }
-            | DeclKind::Enum { body, .. }
-            | DeclKind::Protocol { body, .. }
-            | DeclKind::Extend { body, .. } => {
-                for decl in &body.decls {
-                    collect_node_root_uses(&Node::Decl(decl.clone()), out);
-                }
-            }
-            DeclKind::Import(_)
-            | DeclKind::Effect { .. }
-            | DeclKind::Property { .. }
-            | DeclKind::Associated { .. }
-            | DeclKind::EnumVariant { .. }
-            | DeclKind::FuncSignature(_)
-            | DeclKind::MethodRequirement { .. }
-            | DeclKind::TypeAlias(..) => {}
-        },
-        Node::Stmt(stmt) => collect_stmt_root_uses(&stmt.kind, out),
-        Node::Expr(expr) => collect_expr_root_uses(expr, out),
-        Node::Block(block) => collect_block_root_uses(block, out),
-        Node::MatchArm(arm) => collect_block_root_uses(&arm.body, out),
-        Node::Func(func) => collect_block_root_uses(&func.body, out),
-        _ => {}
-    }
-}
-
-fn collect_stmt_root_uses(stmt: &StmtKind, out: &mut FxHashSet<Symbol>) {
-    match stmt {
-        StmtKind::Expr(expr) | StmtKind::Return(Some(expr)) | StmtKind::Continue(Some(expr)) => {
-            collect_expr_root_uses(expr, out);
-        }
-        StmtKind::If(condition, then_block, else_block) => {
-            collect_expr_root_uses(condition, out);
-            collect_block_root_uses(then_block, out);
-            if let Some(else_block) = else_block {
-                collect_block_root_uses(else_block, out);
-            }
-        }
-        StmtKind::Assignment(lhs, rhs) => {
-            collect_expr_root_uses(lhs, out);
-            collect_expr_root_uses(rhs, out);
-        }
-        StmtKind::Loop(condition, body) => {
-            if let Some(condition) = condition {
-                collect_expr_root_uses(condition, out);
-            }
-            collect_block_root_uses(body, out);
-        }
-        StmtKind::For { iterable, body, .. } => {
-            collect_expr_root_uses(iterable, out);
-            collect_block_root_uses(body, out);
-        }
-        StmtKind::Handling { body, .. } => collect_block_root_uses(body, out),
-        StmtKind::Return(None) | StmtKind::Continue(None) | StmtKind::Break => {}
-    }
+    let mut visitor = RootUseCollector { out };
+    walk_block(block, &mut visitor);
 }
 
 fn collect_expr_root_uses(expr: &Expr, out: &mut FxHashSet<Symbol>) {
-    match &expr.kind {
-        ExprKind::Variable(name) => {
-            if let Ok(symbol) = name.symbol() {
-                out.insert(symbol);
-            }
-        }
-        ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
-            for item in items {
-                collect_expr_root_uses(item, out);
-            }
-        }
-        ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => collect_expr_root_uses(inner, out),
-        ExprKind::Binary(lhs, _, rhs) => {
-            collect_expr_root_uses(lhs, out);
-            collect_expr_root_uses(rhs, out);
-        }
-        ExprKind::Block(block) => collect_block_root_uses(block, out),
-        ExprKind::Call {
-            callee,
-            args,
-            trailing_block,
-            ..
-        } => {
-            collect_expr_root_uses(callee, out);
-            for arg in args {
-                collect_expr_root_uses(&arg.value, out);
-            }
-            if let Some(block) = trailing_block {
-                collect_block_root_uses(block, out);
-            }
-        }
-        ExprKind::CallEffect { args, .. } => {
-            for arg in args {
-                collect_expr_root_uses(&arg.value, out);
-            }
-        }
-        ExprKind::Member(Some(receiver), ..) => collect_expr_root_uses(receiver, out),
-        ExprKind::Func(func) => {
-            for capture in &func.captures {
-                if let Ok(symbol) = capture.name.symbol() {
-                    out.insert(symbol);
-                }
-            }
-            collect_block_root_uses(&func.body, out);
-        }
-        ExprKind::If(condition, then_block, else_block) => {
-            collect_expr_root_uses(condition, out);
-            collect_block_root_uses(then_block, out);
-            collect_block_root_uses(else_block, out);
-        }
-        ExprKind::Match(scrutinee, arms) => {
-            collect_expr_root_uses(scrutinee, out);
-            for arm in arms {
-                collect_block_root_uses(&arm.body, out);
-            }
-        }
-        ExprKind::RecordLiteral { fields, spread } => {
-            if let Some(spread) = spread {
-                collect_expr_root_uses(spread, out);
-            }
-            for field in fields {
-                collect_expr_root_uses(&field.value, out);
-            }
-        }
-        ExprKind::InlineIR(_)
-        | ExprKind::Incomplete(_)
-        | ExprKind::LiteralInt(_)
-        | ExprKind::LiteralFloat(_)
-        | ExprKind::LiteralTrue
-        | ExprKind::LiteralFalse
-        | ExprKind::LiteralString(_)
-        | ExprKind::Constructor(_)
-        | ExprKind::RowVariable(_)
-        | ExprKind::Member(None, ..) => {}
-    }
+    let mut visitor = RootUseCollector { out };
+    walk_expr(expr, &mut visitor);
 }
 
 fn map_drop_reason(reason: mir::DropReason) -> DropReason {
@@ -4185,7 +4296,7 @@ mod tests {
         name_resolution::symbol::Symbol,
         ownership::{BodyKind, DropKind, DropReason, OwnershipOutput, PointKind},
     };
-    use rustc_hash::FxHashMap;
+    use rustc_hash::{FxHashMap, FxHashSet};
 
     fn ownership_errors(source: &str) -> Vec<String> {
         diagnostics(source)
@@ -4790,6 +4901,32 @@ mod tests {
     }
 
     #[test]
+    fn move_while_mutably_borrowed_does_not_report_spurious_shared_borrow() {
+        let errors = ownership_errors(
+            "
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                let borrow: &mut String = s
+                let moved = s
+                borrow.length
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Cannot move 's' while it is borrowed as 'borrow'")),
+            "{errors:?}"
+        );
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.contains("Cannot take shared borrow")),
+            "moving a value should not be reported as taking a shared borrow: {errors:?}"
+        );
+    }
+
+    #[test]
     fn borrowed_call_argument_does_not_move_owned_value() {
         let errors = ownership_errors(
             "
@@ -4828,6 +4965,187 @@ mod tests {
                 .any(|error| error.contains("Use of moved value 's'")),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn tuple_literal_moves_owned_element() {
+        let errors = ownership_errors(
+            "
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                let pair = (s, 1)
+                s.length
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Use of moved value 's'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn array_literal_moves_owned_element() {
+        let errors = ownership_errors(
+            "
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                let array = [s]
+                s.length
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Use of moved value 's'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn record_literal_moves_owned_field_value() {
+        let errors = ownership_errors(
+            "
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                let record = { value: s }
+                s.length
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Use of moved value 's'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_owned_call_operand_is_rejected() {
+        let errors = ownership_errors(
+            "
+            func take(a: String, b: String) -> Int {
+                a.length + b.length
+            }
+
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                take(s, s)
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Use of moved value 's'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_owned_tuple_operand_is_rejected() {
+        let errors = ownership_errors(
+            "
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                let pair = (s, s)
+                0
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Use of moved value 's'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn aggregate_move_makes_source_scope_drop_dead() {
+        let (output, names) = ownership_output(
+            "
+            func make() -> Int {
+                let s = \"hello\" + \" world\"
+                let pair = (s, 1)
+                0
+            }
+            ",
+        );
+        let s_obligations: Vec<_> = output
+            .drop_plan
+            .obligations
+            .iter()
+            .filter(|obligation| {
+                names
+                    .get(&obligation.key_path.root)
+                    .is_some_and(|name| name == "s")
+                    && obligation.reason == DropReason::ScopeExit
+            })
+            .collect();
+        assert!(
+            s_obligations
+                .iter()
+                .any(|obligation| obligation.kind == DropKind::Dead),
+            "expected the moved aggregate source s to have a dead scope drop, got {s_obligations:?}"
+        );
+    }
+
+    #[test]
+    fn match_arm_move_then_use_is_rejected() {
+        let errors = ownership_errors(
+            "
+            enum E {
+                case a
+                case b
+            }
+
+            func bad(e: E) -> Int {
+                let s = \"hello\" + \" world\"
+                match e {
+                    .a -> {
+                        let moved = s
+                        s.length
+                    },
+                    .b -> 0
+                }
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Use of moved value 's'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn match_arm_move_does_not_poison_sibling_arm() {
+        let errors = ownership_errors(
+            "
+            enum E {
+                case a
+                case b
+            }
+
+            func ok(e: E) -> Int {
+                let s = \"hello\" + \" world\"
+                match e {
+                    .a -> {
+                        let moved = s
+                        1
+                    },
+                    .b -> s.length
+                }
+            }
+            ",
+        );
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]
@@ -5531,6 +5849,40 @@ mod tests {
     }
 
     #[test]
+    fn owning_closure_value_copy_moves_source() {
+        let errors = ownership_errors(
+            "
+            func bad() -> Int {
+                let s = \"hello\" + \" world\"
+                let f = func [consuming s]() -> Int { s.length }
+                let g = f
+                f() + g()
+            }
+            ",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Use of moved value 'f'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn capture_free_function_values_remain_copyable() {
+        let errors = ownership_errors(
+            "
+            func ok() -> Int {
+                let f = func() -> Int { 1 }
+                let g = f
+                f() + g()
+            }
+            ",
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
     fn explicit_copy_capture_requires_copy_type() {
         let errors = ownership_errors(
             "
@@ -5869,6 +6221,68 @@ mod tests {
             "expected trailing block MIR to be recorded as a nested body: {:?}",
             output.facts.bodies
         );
+    }
+
+    #[test]
+    fn ownership_facts_do_not_duplicate_nested_bodies_in_loop_fixpoint() {
+        let (output, _) = ownership_output(
+            "
+            func run(block: () -> Int) -> Int {
+                block()
+            }
+
+            func make() -> Int {
+                let i = 0
+                loop i < 2 {
+                    let n = run() { 1 }
+                    i = i + 1
+                }
+                0
+            }
+            ",
+        );
+        let nested_count = output
+            .facts
+            .bodies
+            .iter()
+            .filter(|body| body.kind == BodyKind::Nested)
+            .count();
+        assert_eq!(
+            nested_count, 1,
+            "expected one recorded nested body, got {:?}",
+            output.facts.bodies
+        );
+    }
+
+    #[test]
+    fn ownership_facts_do_not_duplicate_loop_borrow_facts() {
+        let (output, _) = ownership_output(
+            "
+            func make() -> Int {
+                let s = \"hello\" + \" world\"
+                let i = 0
+                loop i < 2 {
+                    let borrow: &String = s
+                    let n = borrow.length
+                    i = i + 1
+                }
+                s.length
+            }
+            ",
+        );
+        let mut seen = FxHashSet::default();
+        for loan in &output.facts.borrows {
+            assert!(
+                seen.insert((
+                    loan.point,
+                    loan.node,
+                    loan.borrower.clone(),
+                    loan.owner.clone(),
+                    loan.kind,
+                )),
+                "duplicate borrow fact: {loan:?}"
+            );
+        }
     }
 
     #[test]

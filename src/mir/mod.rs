@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -64,12 +62,14 @@ pub(crate) struct Scope {
 pub(crate) struct Local(pub(crate) usize);
 
 impl Local {
+    #[allow(dead_code)]
     #[cfg(test)]
     pub(crate) fn index(self) -> usize {
         self.0
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum LocalKind {
     Param,
@@ -86,6 +86,7 @@ pub(crate) struct LocalDecl {
     pub(crate) kind: LocalKind,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum KeyPathComponent {
     Field(Symbol),
@@ -122,6 +123,7 @@ impl KeyPath {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ValueUse {
     Copy(KeyPath),
@@ -131,6 +133,7 @@ pub(crate) enum ValueUse {
     Function(Symbol),
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AggregateKind {
     Tuple,
@@ -142,6 +145,7 @@ pub(crate) enum AggregateKind {
     },
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Rvalue {
     Use(ValueUse),
@@ -172,40 +176,6 @@ pub(crate) enum Rvalue {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Callee {
-    Direct(Symbol),
-    Value(ValueUse),
-    Unresolved(NodeID),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Receiver {
-    Shared {
-        value: ValueUse,
-    },
-    Mut {
-        key_path: KeyPath,
-        value: ValueUse,
-        writeback: KeyPath,
-    },
-    Consuming {
-        value: ValueUse,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum EffectRoute {
-    Unhandled,
-    HandledAbort {
-        handler: Symbol,
-    },
-    HandledResume {
-        handler: Symbol,
-        resume_from: BlockId,
-    },
-}
-
 #[derive(Debug)]
 pub(crate) struct Body<'a> {
     pub(crate) owner: Option<Symbol>,
@@ -213,6 +183,7 @@ pub(crate) struct Body<'a> {
     pub(crate) blocks: Vec<BasicBlock<'a>>,
     pub(crate) scopes: Vec<Scope>,
     pub(crate) locals: Vec<LocalDecl>,
+    #[allow(dead_code)]
     pub(crate) return_local: Option<Local>,
     use_counts: FxHashMap<Symbol, usize>,
 }
@@ -432,10 +403,6 @@ pub(crate) fn build_nodes<'a>(types: &TypeOutput, nodes: &'a [Node]) -> Body<'a>
 
 #[cfg(test)]
 pub(crate) fn use_counts(body: &Body<'_>) -> FxHashMap<Symbol, usize> {
-    body.use_counts.clone()
-}
-
-pub(crate) fn use_counts_ref(body: &Body<'_>) -> FxHashMap<Symbol, usize> {
     body.use_counts.clone()
 }
 
@@ -966,13 +933,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 let current = self.lower_block_tail_exprs(then_block, current);
                 self.lower_block_tail_exprs(else_block, current)
             }
-            ExprKind::Match(scrutinee, arms) => {
-                let mut current = self.lower_expr(scrutinee, current);
-                for arm in arms {
-                    current = self.lower_block_tail_exprs(&arm.body, current);
-                }
-                current
-            }
+            ExprKind::Match(scrutinee, arms) => self.lower_match(scrutinee, arms, current),
             ExprKind::RecordLiteral { fields, spread } => {
                 let mut current = current;
                 if let Some(spread) = spread {
@@ -1125,6 +1086,46 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         self.terminate_if_open(body_exit, Terminator::Jump(header_id));
 
         exit_id
+    }
+
+    fn lower_match(
+        &mut self,
+        scrutinee: &'ast Expr,
+        arms: &'ast [MatchArm],
+        current: BlockId,
+    ) -> BlockId {
+        let current = self.lower_expr(scrutinee, current);
+        let join_id = self.new_block();
+        let arm_blocks: Vec<_> = arms.iter().map(|_| self.new_block()).collect();
+        self.terminate_if_open(
+            current,
+            Terminator::Switch {
+                scrutinee,
+                match_arms: Some(arms),
+                arms: arm_blocks.clone(),
+                default: None,
+            },
+        );
+
+        for (arm, arm_id) in arms.iter().zip(arm_blocks) {
+            let arm_exit = self.lower_child_scope(arm_id, |builder, arm_id| {
+                builder.lower_pattern_binders(&arm.pattern, arm_id);
+                builder.lower_nodes(&arm.body.body, arm_id, true)
+            });
+            self.terminate_if_open(arm_exit, Terminator::Jump(join_id));
+        }
+
+        join_id
+    }
+
+    fn lower_pattern_binders(&mut self, pattern: &'ast Pattern, current: BlockId) {
+        for (id, symbol) in pattern.collect_binders() {
+            self.declare_symbol_local(symbol, LocalKind::UserLocal);
+            self.push_statement(current, Statement::StorageLive { id, symbol });
+            if let Some(scope) = self.scope_stack.last_mut() {
+                scope.locals.push((id, symbol));
+            }
+        }
     }
 
     fn push_statement(&mut self, block: BlockId, statement: Statement<'ast>) {
@@ -1511,6 +1512,34 @@ mod tests {
                     body.blocks
                         .iter()
                         .any(|block| matches!(block.terminator, Terminator::Jump(_))),
+                    "{body:#?}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn builds_match_switch_and_arm_blocks() {
+        with_first_func_mir(
+            "
+            enum E {
+                case a
+                case b
+            }
+
+            func f(e) {
+                match e {
+                    .a -> 1,
+                    .b -> 2
+                }
+            }
+            ",
+            |body| {
+                assert!(
+                    body.blocks.iter().any(|block| matches!(
+                        block.terminator,
+                        Terminator::Switch { ref arms, .. } if arms.len() == 2
+                    )),
                     "{body:#?}"
                 );
             },

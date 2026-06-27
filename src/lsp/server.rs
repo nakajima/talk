@@ -3,9 +3,10 @@ struct TickEvent;
 use async_lsp::LanguageClient;
 use async_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionProviderCapability,
-    CodeActionResponse, CompletionOptions, Diagnostic, DiagnosticSeverity, Position, Range,
-    SemanticTokens, SemanticTokensResult, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
+    CodeActionResponse, CompletionOptions, Diagnostic, DiagnosticSeverity, InlayHint,
+    InlayHintKind, InlayHintLabel, InlayHintOptions, InlayHintServerCapabilities, InlayHintTooltip,
+    Position, Range, SemanticTokens, SemanticTokensResult, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
 };
 use async_lsp::{
     ClientSocket,
@@ -119,7 +120,13 @@ pub async fn start() {
                             definition_provider: Some(OneOf::Left(true)),
                             hover_provider: Some(HoverProviderCapability::Simple(true)),
                             rename_provider: Some(OneOf::Left(true)),
-                            completion_provider: Some(CompletionOptions::default()),
+                            completion_provider: Some(completion_options()),
+                            inlay_hint_provider: Some(OneOf::Right(
+                                InlayHintServerCapabilities::Options(InlayHintOptions {
+                                    resolve_provider: Some(false),
+                                    ..Default::default()
+                                }),
+                            )),
                             document_formatting_provider: Some(OneOf::Left(true)),
                             code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                             semantic_tokens_provider: Some(
@@ -295,6 +302,25 @@ pub async fn start() {
                         return Ok(None);
                     };
                     Ok(hover_at_lsp(&workspace, &uri, byte_offset))
+                }
+            })
+            .request::<request::InlayHintRequest, _>(|st, params| {
+                let uri = params.text_document.uri.clone();
+                let byte_range = st.documents.get(&uri).and_then(|document| {
+                    Some(crate::analysis::TextRange::new(
+                        document.byte_offset(params.range.start)? as u32,
+                        document.byte_offset(params.range.end)? as u32,
+                    ))
+                });
+                let workspace = workspace_analysis(st, &uri);
+
+                async move {
+                    let (Some(byte_range), Some(workspace)) = (byte_range, workspace) else {
+                        return Ok(Some(vec![]));
+                    };
+                    Ok(Some(ownership_inlay_hints_lsp(
+                        &workspace, &uri, byte_range,
+                    )))
                 }
             })
             .request::<request::GotoDefinition, _>(|st, params| {
@@ -770,6 +796,49 @@ pub(crate) fn hover_at_lsp(
     })
 }
 
+fn completion_options() -> CompletionOptions {
+    CompletionOptions {
+        trigger_characters: Some(vec![".".to_string()]),
+        ..Default::default()
+    }
+}
+
+pub(crate) fn ownership_inlay_hints_lsp(
+    workspace: &AnalysisWorkspace,
+    uri: &Url,
+    byte_range: crate::analysis::TextRange,
+) -> Vec<InlayHint> {
+    let document_id = document_id_for_uri(uri);
+    let Some(text) = workspace.text_for(&document_id) else {
+        return vec![];
+    };
+    crate::analysis::ownership_inlay_hints(workspace, &document_id, byte_range)
+        .into_iter()
+        .filter_map(|hint| {
+            let position = byte_offset_to_utf16_position(text, hint.position)?;
+            let kind = match hint.kind {
+                crate::analysis::ownership::OwnershipInlayHintKind::Move
+                | crate::analysis::ownership::OwnershipInlayHintKind::Drop => {
+                    Some(InlayHintKind::TYPE)
+                }
+                crate::analysis::ownership::OwnershipInlayHintKind::Borrow => {
+                    Some(InlayHintKind::PARAMETER)
+                }
+            };
+            Some(InlayHint {
+                position,
+                label: InlayHintLabel::String(hint.label),
+                kind,
+                text_edits: None,
+                tooltip: Some(InlayHintTooltip::String(hint.tooltip)),
+                padding_left: Some(true),
+                padding_right: Some(false),
+                data: None,
+            })
+        })
+        .collect()
+}
+
 fn document_path_for_uri(uri: &Url) -> String {
     uri.to_file_path()
         .map(|p| p.display().to_string())
@@ -1077,6 +1146,7 @@ mod tests {
     use crate::lsp::document::Document;
     use async_lsp::ClientSocket;
     use async_lsp::lsp_types::HoverContents;
+    use async_lsp::lsp_types::InlayHintLabel;
     use async_lsp::lsp_types::Range;
     use async_lsp::lsp_types::Url;
     use async_lsp::lsp_types::WorkspaceEdit;
@@ -1106,6 +1176,14 @@ mod tests {
             .collect();
         ranges.sort_by_key(|r| (r.start.line, r.start.character, r.end.line, r.end.character));
         ranges
+    }
+
+    #[test]
+    fn completion_options_trigger_on_dot() {
+        assert_eq!(
+            super::completion_options().trigger_characters,
+            Some(vec![".".to_string()])
+        );
     }
 
     #[test]
@@ -1225,6 +1303,35 @@ mod tests {
             panic!("unexpected hover: {hover:?}");
         };
         assert!(markup.value.contains("Int"), "{markup:?}");
+    }
+
+    #[test]
+    fn inlay_hints_show_ownership_events() {
+        let code = "func f() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet b: &String = s\n\tlet t = s\n\t0\n}\nf()";
+        let uri = Url::from_file_path(std::env::temp_dir().join("ownership_inlay_hints.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let hints = super::ownership_inlay_hints_lsp(
+            &module,
+            &uri,
+            crate::analysis::TextRange::new(0, code.len() as u32),
+        );
+        let labels: Vec<_> = hints
+            .iter()
+            .filter_map(|hint| match &hint.label {
+                InlayHintLabel::String(label) => Some(label.as_str()),
+                InlayHintLabel::LabelParts(_) => None,
+            })
+            .collect();
+        assert!(labels.iter().any(|label| label.contains("&")), "{hints:?}");
+        assert!(
+            labels.iter().any(|label| label.contains("move")),
+            "{hints:?}"
+        );
+        assert!(
+            labels.iter().any(|label| label.contains("drop")),
+            "{hints:?}"
+        );
     }
 
     #[test]
@@ -1389,6 +1496,41 @@ mod tests {
         let rewritten_b = apply_edits(code_b, &edit, &uri_b);
         assert!(rewritten_b.contains("import { Vec3: Pt }"), "{rewritten_b}");
         assert!(rewritten_b.contains("let p = Pt()"), "{rewritten_b}");
+    }
+
+    #[test]
+    fn rename_imported_symbol_with_mixed_alias_keeps_unaliased_uses() {
+        let uri_a = Url::from_file_path(std::env::temp_dir().join("rename_mixed_alias_a.tlk"))
+            .expect("file uri");
+        let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_mixed_alias_b.tlk"))
+            .expect("file uri");
+        let code_a = "public struct Point {}\n";
+        let code_b = "import { Point: Pt, Point } from ./rename_mixed_alias_a.tlk\nlet a = Point()\nlet b = Pt()\n";
+
+        let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
+        let unaliased_use = code_b.rfind("Point").expect("unaliased use");
+        let edit = super::rename_at(&module, &uri_b, unaliased_use as u32, "Vec3")
+            .expect("workspace edit");
+
+        let point_offsets: Vec<_> = code_b.match_indices("Point").map(|(idx, _)| idx).collect();
+        assert_eq!(point_offsets.len(), 3, "source: {code_b}");
+        let expected_b: Vec<_> = point_offsets
+            .iter()
+            .map(|start| {
+                super::byte_span_to_range_utf16(code_b, *start as u32, (*start + 5) as u32)
+                    .expect("range")
+            })
+            .collect();
+
+        assert_eq!(edit_ranges_for_uri(&edit, &uri_b), expected_b);
+
+        let rewritten_b = apply_edits(code_b, &edit, &uri_b);
+        assert!(
+            rewritten_b.contains("import { Vec3: Pt, Vec3 }"),
+            "{rewritten_b}"
+        );
+        assert!(rewritten_b.contains("let a = Vec3()"), "{rewritten_b}");
+        assert!(rewritten_b.contains("let b = Pt()"), "{rewritten_b}");
     }
 
     #[test]

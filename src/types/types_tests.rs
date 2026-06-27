@@ -1907,12 +1907,114 @@ pub mod tests {
     }
 
     #[test]
+    fn borrowed_return_does_not_satisfy_owned_argument() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(s: String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = take(id(s))",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("String") && error.contains("&String")),
+            "expected owned/borrowed mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn nested_borrow_does_not_satisfy_owned_argument() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nstruct Box<T> {\n\tlet value: T\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(b: Box<String>) -> Int {\n\tb.value.length\n}\nlet s = String(length: 4)\nlet b = Box(value: id(s))\nlet y = take(b)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("String") && error.contains("&String")),
+            "expected nested owned/borrowed mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn function_return_borrow_does_not_satisfy_owned_function_argument() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nlet s = String(length: 4)\nlet f: () -> &String = func() { s }\nfunc take(f: () -> String) -> String {\n\tf()\n}\nlet y = take(f)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("String") && error.contains("&String")),
+            "expected function return owned/borrowed mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn function_with_mutable_param_does_not_satisfy_shared_param_argument() {
+        // `take` will invoke f with only a shared borrow, but `needs_mut` requires &mut.
+        // Function parameters are contravariant, so this substitution is unsound.
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc needs_mut(s: &mut String) -> Int {\n\ts.length\n}\nfunc take(f: (&String) -> Int) -> Int {\n\t0\n}\nlet y = take(needs_mut)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("&String")),
+            "expected contravariant param mismatch (&mut required, & supplied), got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn function_with_owned_param_does_not_satisfy_shared_param_argument() {
+        // `take` passes a borrow, but `needs_owned` consumes an owned value.
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc needs_owned(s: String) -> Int {\n\ts.length\n}\nfunc take(f: (&String) -> Int) -> Int {\n\t0\n}\nlet y = take(needs_owned)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("&String")),
+            "expected contravariant param mismatch (owned required, & supplied), got {errors:?}"
+        );
+    }
+
+    #[test]
     fn mutable_borrow_parameters_support_member_access() {
         let t = check(
             "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &mut String) -> Int {\n\ts.length\n}",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "len"), "(&mut String) -> Int");
+    }
+
+    #[test]
+    fn mutable_borrow_return_downgrades_to_shared_return() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc as_shared(s: &mut String) -> &String {\n\ts\n}\nlet f: (&mut String) -> &String = func(s: &mut String) -> &mut String {\n\ts\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "as_shared"), "(&mut String) -> &String");
+        assert_eq!(ty_of(&t, "f"), "(&mut String) -> &String");
+    }
+
+    #[test]
+    fn mutable_borrow_parameter_does_not_satisfy_shared_function_parameter() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nlet f: (&String) -> Int = func(s: &mut String) -> Int {\n\ts.length\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("&String") && error.contains("&mut String")),
+            "expected shared/mutable function parameter mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn borrowed_enum_expectation_preserves_leading_dot_inference() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet x: &Opt<Int> = .some(1)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "&Opt<Int>");
     }
 
     #[test]

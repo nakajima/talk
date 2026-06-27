@@ -14,14 +14,28 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// equality oriented expected-then-found for blame.
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Ty, reason: CtReason, ctx: &Ctx) {
         if let Ty::Borrow(expected_kind, inner) = self.store.shallow(expected) {
-            let found = self.infer_expr(expr, ctx);
-            match self.store.shallow(&found) {
-                Ty::Borrow(found_kind, found_inner) if found_kind == expected_kind => {
-                    self.emit_eq((*inner).clone(), (*found_inner).clone(), expr.id, reason);
+            match &expr.kind {
+                ExprKind::Member(None, ..) => {
+                    self.check_expr(expr, &inner, reason, ctx);
+                    return;
                 }
-                Ty::Borrow(..) => self.emit_eq(expected.clone(), found, expr.id, reason),
-                _ => self.emit_eq((*inner).clone(), found, expr.id, reason),
+                ExprKind::Call { callee, .. }
+                    if matches!(callee.kind, ExprKind::Member(None, ..)) =>
+                {
+                    self.check_expr(expr, &inner, reason, ctx);
+                    return;
+                }
+                _ => {}
             }
+            let found = self.infer_expr(expr, ctx);
+            self.emit_immediate_borrow_check(
+                expr.id,
+                expected_kind,
+                (*inner).clone(),
+                expected.clone(),
+                found,
+                reason,
+            );
             return;
         }
 
@@ -153,6 +167,69 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
     }
 
+    pub(super) fn emit_immediate_argument_eq(
+        &mut self,
+        expected: &Ty,
+        found: Ty,
+        node: crate::node_id::NodeID,
+        reason: CtReason,
+    ) {
+        if let Ty::Borrow(expected_kind, inner) = self.store.shallow(expected) {
+            self.emit_immediate_borrow_check(
+                node,
+                expected_kind,
+                (*inner).clone(),
+                expected.clone(),
+                found,
+                reason,
+            );
+            return;
+        }
+        self.emit_eq(expected.clone(), found, node, reason);
+    }
+
+    fn emit_immediate_borrow_check(
+        &mut self,
+        node: crate::node_id::NodeID,
+        expected_kind: BorrowKind,
+        expected_inner: Ty,
+        expected: Ty,
+        found: Ty,
+        reason: CtReason,
+    ) {
+        match self.store.shallow(&found) {
+            Ty::Borrow(found_kind, found_inner) if found_kind == expected_kind => {
+                self.emit_eq(expected_inner, (*found_inner).clone(), node, reason);
+            }
+            Ty::Borrow(BorrowKind::Mutable, found_inner) if expected_kind == BorrowKind::Shared => {
+                self.emit_eq(expected_inner, (*found_inner).clone(), node, reason);
+            }
+            Ty::Borrow(..) => self.emit_eq(expected, found, node, reason),
+            _ => self.emit_eq(expected_inner, found, node, reason),
+        }
+    }
+
+    pub(super) fn emit_borrow_downgrade_or_eq(
+        &mut self,
+        expected: Ty,
+        found: Ty,
+        node: crate::node_id::NodeID,
+        reason: CtReason,
+    ) {
+        match (self.store.shallow(&expected), self.store.shallow(&found)) {
+            (
+                Ty::Borrow(BorrowKind::Shared, expected_inner),
+                Ty::Borrow(BorrowKind::Mutable, found_inner),
+            ) => self.emit_eq(
+                (*expected_inner).clone(),
+                (*found_inner).clone(),
+                node,
+                reason,
+            ),
+            _ => self.emit_eq(expected, found, node, reason),
+        }
+    }
+
     pub(super) fn check_inferred_against_expected(
         &mut self,
         node: NodeID,
@@ -166,7 +243,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         if self.try_implicit_existential_pack(node, expected, &found, reason) {
             return;
         }
-        self.emit_eq(expected.clone(), found, node, reason);
+        // Reaching here, `expected` is not a borrow (immediate auto-borrow is handled by the
+        // `Ty::Borrow` branch of `check_expr`). Checking a value against a non-borrow type is
+        // not an application of that value, so drop `Apply`: a function value must satisfy a
+        // function-typed slot invariantly rather than coercing its contravariant parameters.
+        self.emit_eq(expected.clone(), found, node, reason.nested());
     }
 
     pub(super) fn try_implicit_existential_pack(

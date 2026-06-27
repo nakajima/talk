@@ -168,7 +168,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     ));
                     return Ty::Error;
                 }
-                self.emit_eq(params[0].clone(), self_ty.clone(), expr.id, CtReason::Apply);
+                self.emit_immediate_argument_eq(
+                    &params[0],
+                    self_ty.clone(),
+                    expr.id,
+                    CtReason::Apply,
+                );
                 for (arg, param) in args.iter().zip(&params[1..]) {
                     self.check_expr(&arg.value, param, CtReason::Apply, ctx);
                 }

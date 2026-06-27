@@ -2,14 +2,18 @@
 //! interpreter live in `talk-runtime`; this crate keeps the scheduler that
 //! lowers lambda-G into those runtime structures.
 
-pub use talk_runtime::{Chunk, CmpOp, Insn, IoOp, MemKind, Module, Styles, bytecode, interp, io, symbol};
+pub use talk_runtime::{
+    Chunk, CmpOp, Insn, IoOp, MemKind, Module, Styles, bytecode, interp, io, symbol,
+};
 
 pub mod schedule;
 
 #[cfg(test)]
 pub mod vm_tests;
 
-pub fn runtime_symbol(symbol: crate::name_resolution::symbol::Symbol) -> talk_runtime::symbol::Symbol {
+pub fn runtime_symbol(
+    symbol: crate::name_resolution::symbol::Symbol,
+) -> talk_runtime::symbol::Symbol {
     use crate::name_resolution::symbol::Symbol;
     use talk_runtime::symbol::{LocalSymbolId, ModuleId, ModuleSymbolId, Symbol as RtSymbol};
 

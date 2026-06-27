@@ -5,10 +5,10 @@
 //! plain `match` over the decoded instruction (Ertl & Gregg, JILP 2003).
 
 use crate::CmpOp;
-use crate::symbol::Symbol;
 use crate::io::IO;
+use crate::memory::{Allocations, MemoryError};
+use crate::symbol::Symbol;
 use crate::{Chunk, Insn, MemKind, Module};
-use std::collections::BTreeMap;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,13 +53,6 @@ struct Frame {
 /// heap data, so this only bounds runaway recursion.
 const MAX_FRAMES: usize = 1 << 20;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct AllocationRecord {
-    start: u32,
-    len: usize,
-    live: bool,
-}
-
 pub fn run(module: &Module, io: &mut dyn IO) -> Result<Value, String> {
     Ok(run_machine(module, io)?.0)
 }
@@ -90,8 +83,7 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
         slots: vec![],
         mem: module.statics.clone(),
         static_len: module.statics.len() as u32,
-        allocations: vec![],
-        allocation_index: BTreeMap::new(),
+        allocations: Allocations::default(),
         boxed: vec![],
         io,
     };
@@ -120,16 +112,14 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                     return Err("vm: call stack overflow".into());
                 }
                 let target = chunk(module, callee)?;
+                check_call_shape(target, args_len)?;
+                let args = arg_values(module, &frames[frame_index], args_start, args_len)?;
                 let mut regs = vec![Value::Void; target.n_regs as usize];
-                let start = args_start as usize;
-                let end = start + args_len as usize;
-                let arg_regs = module
-                    .arg_pool
-                    .get(start..end)
-                    .ok_or("vm: bad argument pool range")?;
-                let caller = &frames[frame_index];
-                for (i, &src) in arg_regs.iter().enumerate() {
-                    regs[i] = caller.regs[src as usize].clone();
+                for (i, value) in args.into_iter().enumerate() {
+                    let Some(slot) = regs.get_mut(i) else {
+                        return Err("vm: call argument count exceeds callee frame".into());
+                    };
+                    *slot = value;
                 }
                 frames.push(Frame {
                     chunk: callee,
@@ -148,21 +138,22 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                 if frames.len() >= MAX_FRAMES {
                     return Err("vm: call stack overflow".into());
                 }
-                let Value::Closure(target, env) = frames[frame_index].regs[callee as usize].clone()
+                let Some(callee_value) = frames[frame_index].regs.get(callee as usize).cloned()
                 else {
+                    return Err("vm: callee register out of range".into());
+                };
+                let Value::Closure(target, env) = callee_value else {
                     return Err("vm: indirect call of a non-closure".into());
                 };
                 let target_chunk = chunk(module, target)?;
+                check_call_shape(target_chunk, args_len)?;
+                let args = arg_values(module, &frames[frame_index], args_start, args_len)?;
                 let mut regs = vec![Value::Void; target_chunk.n_regs as usize];
-                let start = args_start as usize;
-                let end = start + args_len as usize;
-                let arg_regs = module
-                    .arg_pool
-                    .get(start..end)
-                    .ok_or("vm: bad argument pool range")?;
-                let caller = &frames[frame_index];
-                for (i, &src) in arg_regs.iter().enumerate() {
-                    regs[i] = caller.regs[src as usize].clone();
+                for (i, value) in args.into_iter().enumerate() {
+                    let Some(slot) = regs.get_mut(i) else {
+                        return Err("vm: call argument count exceeds callee frame".into());
+                    };
+                    *slot = value;
                 }
                 frames.push(Frame {
                     chunk: target,
@@ -332,8 +323,7 @@ struct Machine<'io> {
     slots: Vec<Value>,
     mem: Vec<u8>,
     static_len: u32,
-    allocations: Vec<AllocationRecord>,
-    allocation_index: BTreeMap<u32, usize>,
+    allocations: Allocations,
     /// Aggregates stored in raw memory live here; the memory cell holds an
     /// 8-byte index into this arena (Leroy, POPL 1992's mixed
     /// representation — scalars unboxed, aggregates behind a handle).
@@ -366,63 +356,23 @@ impl Machine<'_> {
     }
 
     fn free(&mut self, ptr: u32) -> Result<(), String> {
-        if ptr < self.static_len {
-            return Ok(());
-        }
-        let Some(&index) = self.allocation_index.get(&ptr) else {
-            return Err("vm: free of invalid pointer".into());
-        };
-        let record = &mut self.allocations[index];
-        if !record.live {
-            return Err("vm: double free".into());
-        }
-        record.live = false;
-        Ok(())
+        self.allocations
+            .free(self.static_len, ptr)
+            .map_err(vm_memory_error)
     }
 
     fn check_access(&self, addr: u32, len: usize, op: &str) -> Result<(), String> {
-        let start = addr as usize;
-        let end = start
-            .checked_add(len)
-            .ok_or_else(|| format!("vm: {op} out of bounds"))?;
-        if end > self.mem.len() {
-            return Err(format!("vm: {op} out of bounds"));
-        }
-        if end <= self.static_len as usize {
-            return Ok(());
-        }
-        if self
-            .allocation_record_containing(addr)
-            .is_some_and(|record| {
-                let alloc_start = record.start as usize;
-                let alloc_end = alloc_start + record.len;
-                record.live && start >= alloc_start && end <= alloc_end
-            })
-        {
-            return Ok(());
-        }
-        Err(format!("vm: {op} through invalid pointer"))
+        self.allocations
+            .check_access(self.mem.len(), self.static_len, addr, len, op)
+            .map_err(vm_memory_error)
     }
 
     fn c_string_tail(&self, addr: u32) -> Result<&[u8], String> {
         let start = addr as usize;
-        if start >= self.mem.len() {
-            return Err("vm: io open out of bounds".into());
-        }
-        if addr < self.static_len {
-            return self
-                .mem
-                .get(start..self.static_len as usize)
-                .ok_or_else(|| "vm: io open out of bounds".to_string());
-        }
-        let Some(record) = self.allocation_record_containing(addr).filter(|record| {
-            let alloc_start = record.start as usize;
-            let alloc_end = alloc_start + record.len;
-            record.live && start >= alloc_start && start < alloc_end
-        }) else {
-            return Err("vm: io through invalid pointer".into());
-        };
-        let end = record.start as usize + record.len;
+        let end = self
+            .allocations
+            .accessible_tail_end(self.mem.len(), self.static_len, addr, "io")
+            .map_err(vm_io_memory_error)?;
         self.mem
             .get(start..end)
             .ok_or_else(|| "vm: io open out of bounds".to_string())
@@ -440,10 +390,27 @@ impl Machine<'_> {
             .get(start..end)
             .ok_or_else(|| "vm: display out of bounds".to_string())
     }
+}
 
-    fn allocation_record_containing(&self, addr: u32) -> Option<&AllocationRecord> {
-        let (_, index) = self.allocation_index.range(..=addr).next_back()?;
-        self.allocations.get(*index)
+fn vm_memory_error(error: MemoryError) -> String {
+    match error {
+        MemoryError::AddressOutOfRange => "vm: memory address out of range".to_string(),
+        MemoryError::AllocationTooLarge => "vm: alloc count out of range".to_string(),
+        MemoryError::InvalidFree => "vm: free of invalid pointer".to_string(),
+        MemoryError::DoubleFree => "vm: double free".to_string(),
+        MemoryError::OutOfBounds { op } => format!("vm: {op} out of bounds"),
+        MemoryError::InvalidPointer { op } => format!("vm: {op} through invalid pointer"),
+    }
+}
+
+fn vm_io_memory_error(error: MemoryError) -> String {
+    match error {
+        MemoryError::InvalidPointer { .. } | MemoryError::InvalidFree | MemoryError::DoubleFree => {
+            "vm: io through invalid pointer".to_string()
+        }
+        MemoryError::AddressOutOfRange
+        | MemoryError::AllocationTooLarge
+        | MemoryError::OutOfBounds { .. } => "vm: io open out of bounds".to_string(),
     }
 }
 
@@ -650,16 +617,7 @@ fn exec_local(
             args_start,
             args_len,
         } => {
-            let start = args_start as usize;
-            let end = start + args_len as usize;
-            let arg_regs = module
-                .arg_pool
-                .get(start..end)
-                .ok_or("vm: bad argument pool range")?;
-            let fields: Vec<Value> = arg_regs
-                .iter()
-                .map(|&src| frame.regs[src as usize].clone())
-                .collect();
+            let fields = arg_values(module, frame, args_start, args_len)?;
             frame.regs[dest as usize] = Value::Record(symbol, Rc::new(fields));
         }
         Insn::GetField { dest, rec, index } => {
@@ -679,16 +637,7 @@ fn exec_local(
             args_start,
             args_len,
         } => {
-            let start = args_start as usize;
-            let end = start + args_len as usize;
-            let arg_regs = module
-                .arg_pool
-                .get(start..end)
-                .ok_or("vm: bad argument pool range")?;
-            let payloads: Vec<Value> = arg_regs
-                .iter()
-                .map(|&src| frame.regs[src as usize].clone())
-                .collect();
+            let payloads = arg_values(module, frame, args_start, args_len)?;
             frame.regs[dest as usize] = Value::Variant(symbol, tag, Rc::new(payloads));
         }
         Insn::GetTag { dest, src } => {
@@ -713,22 +662,13 @@ fn exec_local(
             args_start,
             args_len,
         } => {
-            let start = args_start as usize;
-            let end = start + args_len as usize;
-            let arg_regs = module
-                .arg_pool
-                .get(start..end)
-                .ok_or("vm: bad argument pool range")?;
-            let Some((&payload_reg, witness_regs)) = arg_regs.split_first() else {
+            let mut values = arg_values(module, frame, args_start, args_len)?;
+            if values.is_empty() {
                 return Err("vm: existential_pack without a payload".into());
-            };
-            let payload = frame.regs[payload_reg as usize].clone();
-            let witnesses: Vec<Value> = witness_regs
-                .iter()
-                .map(|&src| frame.regs[src as usize].clone())
-                .collect();
+            }
+            let payload = values.remove(0);
             frame.regs[dest as usize] =
-                Value::Existential(protocol, Rc::new(payload), Rc::new(witnesses));
+                Value::Existential(protocol, Rc::new(payload), Rc::new(values));
         }
         Insn::ExistentialWitness { dest, src, index } => {
             let Value::Existential(_, _, witnesses) = &frame.regs[src as usize] else {
@@ -752,16 +692,7 @@ fn exec_local(
             args_start,
             args_len,
         } => {
-            let start = args_start as usize;
-            let end = start + args_len as usize;
-            let arg_regs = module
-                .arg_pool
-                .get(start..end)
-                .ok_or("vm: bad argument pool range")?;
-            let env: Vec<Value> = arg_regs
-                .iter()
-                .map(|&src| frame.regs[src as usize].clone())
-                .collect();
+            let env = arg_values(module, frame, args_start, args_len)?;
             frame.regs[dest as usize] = Value::Closure(chunk, Rc::new(env));
         }
         Insn::EnvGet { dest, index } => {
@@ -777,16 +708,7 @@ fn exec_local(
             args_start,
             args_len,
         } => {
-            let start = args_start as usize;
-            let end = start + args_len as usize;
-            let arg_regs = module
-                .arg_pool
-                .get(start..end)
-                .ok_or("vm: bad argument pool range")?;
-            let items: Vec<Value> = arg_regs
-                .iter()
-                .map(|&src| frame.regs[src as usize].clone())
-                .collect();
+            let items = arg_values(module, frame, args_start, args_len)?;
             frame.regs[dest as usize] = Value::Tuple(Rc::new(items));
         }
         Insn::Extract { dest, src, index } => {
@@ -827,23 +749,11 @@ fn exec_local(
             if count < 0 {
                 return Err("vm: alloc of a negative count".into());
             }
-            let addr =
-                u32::try_from(machine.mem.len()).map_err(|_| "vm: memory address out of range")?;
             let count = usize::try_from(count).map_err(|_| "vm: alloc count out of range")?;
-            let reserve = count.max(1);
-            let new_len = machine
-                .mem
-                .len()
-                .checked_add(reserve)
-                .ok_or("vm: alloc count out of range")?;
-            machine.mem.resize(new_len, 0);
-            let index = machine.allocations.len();
-            machine.allocations.push(AllocationRecord {
-                start: addr,
-                len: count,
-                live: true,
-            });
-            machine.allocation_index.insert(addr, index);
+            let addr = machine
+                .allocations
+                .allocate(&mut machine.mem, count)
+                .map_err(vm_memory_error)?;
             frame.regs[dest as usize] = Value::Ptr(addr);
         }
         Insn::Free { dest, ptr } => {
@@ -973,6 +883,45 @@ fn chunk(module: &Module, index: u32) -> Result<&Chunk, String> {
         .chunks
         .get(index as usize)
         .ok_or_else(|| format!("vm: bad chunk index {index}"))
+}
+
+fn check_call_shape(target: &Chunk, args_len: u16) -> Result<(), String> {
+    if args_len != target.arity {
+        return Err(format!(
+            "vm: call to {} expected {} arguments, got {}",
+            target.name, target.arity, args_len
+        ));
+    }
+    if args_len > target.n_regs {
+        return Err("vm: call argument count exceeds callee frame".into());
+    }
+    Ok(())
+}
+
+fn arg_values(
+    module: &Module,
+    frame: &Frame,
+    args_start: u32,
+    args_len: u16,
+) -> Result<Vec<Value>, String> {
+    let start = usize::try_from(args_start).map_err(|_| "vm: bad argument pool range")?;
+    let end = start
+        .checked_add(usize::from(args_len))
+        .ok_or("vm: bad argument pool range")?;
+    let arg_regs = module
+        .arg_pool
+        .get(start..end)
+        .ok_or("vm: bad argument pool range")?;
+    arg_regs
+        .iter()
+        .map(|&src| {
+            frame
+                .regs
+                .get(src as usize)
+                .cloned()
+                .ok_or_else(|| format!("vm: argument register r{src} out of range"))
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

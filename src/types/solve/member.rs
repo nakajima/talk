@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::ty::BorrowKind;
 
 impl<'s> Solver<'s> {
     /// One step on a HasMember predicate against a known head.
@@ -315,11 +316,12 @@ impl<'s> Solver<'s> {
                     if let Ty::Func(params, ret, eff) = signature
                         && !params.is_empty()
                     {
-                        queue.push(Constraint::Eq(
+                        self.push_immediate_argument_eq(
+                            queue,
                             params[0].clone(),
                             self_receiver.clone(),
                             origin,
-                        ));
+                        );
                         queue.push(Constraint::Eq(
                             Ty::Func(params[1..].to_vec(), ret, eff),
                             member,
@@ -384,7 +386,7 @@ impl<'s> Solver<'s> {
             signature.substitute(substitution, &Default::default(), &Default::default());
         match self.store.shallow(&signature) {
             Ty::Func(params, ret, eff) if !params.is_empty() => {
-                queue.push(Constraint::Eq(params[0].clone(), receiver, origin));
+                self.push_immediate_argument_eq(queue, params[0].clone(), receiver, origin);
                 queue.push(Constraint::Eq(
                     Ty::Func(params[1..].to_vec(), ret, eff),
                     member,
@@ -492,11 +494,12 @@ impl<'s> Solver<'s> {
         if let Ty::Func(params, ret, eff) = signature
             && !params.is_empty()
         {
-            local_wanteds.push(Constraint::Eq(
+            self.push_immediate_argument_eq(
+                &mut local_wanteds,
                 params[0].clone(),
                 self_receiver.clone(),
                 origin,
-            ));
+            );
             local_wanteds.push(Constraint::Eq(
                 Ty::Func(params[1..].to_vec(), ret, eff),
                 member.clone(),
@@ -530,6 +533,38 @@ impl<'s> Solver<'s> {
             origin.node,
             MemberResolution::ViaConformance { protocol, witness },
         );
+    }
+
+    fn push_immediate_argument_eq(
+        &mut self,
+        queue: &mut Vec<Constraint>,
+        expected: Ty,
+        found: Ty,
+        origin: CtOrigin,
+    ) {
+        match self.store.shallow(&expected) {
+            Ty::Borrow(expected_kind, expected_inner) => match self.store.shallow(&found) {
+                Ty::Borrow(found_kind, found_inner) if found_kind == expected_kind => {
+                    queue.push(Constraint::Eq(
+                        (*expected_inner).clone(),
+                        (*found_inner).clone(),
+                        origin,
+                    ));
+                }
+                Ty::Borrow(BorrowKind::Mutable, found_inner)
+                    if expected_kind == BorrowKind::Shared =>
+                {
+                    queue.push(Constraint::Eq(
+                        (*expected_inner).clone(),
+                        (*found_inner).clone(),
+                        origin,
+                    ));
+                }
+                Ty::Borrow(..) => queue.push(Constraint::Eq(expected, found, origin)),
+                _ => queue.push(Constraint::Eq((*expected_inner).clone(), found, origin)),
+            },
+            _ => queue.push(Constraint::Eq(expected, found, origin)),
+        }
     }
 
     /// Solver-side symbol lookup: in-flight monomorphic signature, or a

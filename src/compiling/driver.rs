@@ -421,6 +421,26 @@ fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
     })
 }
 
+fn error_diagnostic_files(diagnostics: &[AnyDiagnostic]) -> Option<FxHashSet<FileID>> {
+    let mut files = FxHashSet::default();
+    for diag in diagnostics {
+        let (id, severity) = match diag {
+            AnyDiagnostic::Parsing(diagnostic) => (diagnostic.id, &diagnostic.severity),
+            AnyDiagnostic::NameResolution(diagnostic) => (diagnostic.id, &diagnostic.severity),
+            AnyDiagnostic::Types(diagnostic) => (diagnostic.id, &diagnostic.severity),
+            AnyDiagnostic::Ownership(diagnostic) => (diagnostic.id, &diagnostic.severity),
+        };
+        if *severity != Severity::Error {
+            continue;
+        }
+        if id.0 == FileID::SYNTHESIZED {
+            return None;
+        }
+        files.insert(id.0);
+    }
+    Some(files)
+}
+
 impl Driver<NameResolved> {
     pub fn has_errors(&self) -> bool {
         has_error_diagnostics(&self.phase.diagnostics)
@@ -459,10 +479,32 @@ impl Driver<NameResolved> {
             self.config.module_id,
         );
         diagnostics.extend(type_diagnostics);
-        let (ownership, ownership_diagnostics) = if has_error_diagnostics(&diagnostics) {
-            (OwnershipOutput::default(), vec![])
-        } else {
-            crate::ownership::check_ownership(&asts, &types, &resolved_names, self.config.module_id)
+        let blocked_files = error_diagnostic_files(&diagnostics);
+        let (ownership, ownership_diagnostics) = match blocked_files {
+            None => (OwnershipOutput::default(), vec![]),
+            Some(blocked_files) if blocked_files.is_empty() => crate::ownership::check_ownership(
+                &asts,
+                &types,
+                &resolved_names,
+                self.config.module_id,
+            ),
+            Some(blocked_files) => {
+                let clean_asts: IndexMap<Source, AST<crate::parsing::ast::NameResolved>> = asts
+                    .iter()
+                    .filter(|(_, ast)| !blocked_files.contains(&ast.file_id))
+                    .map(|(source, ast)| (source.clone(), ast.clone()))
+                    .collect();
+                if clean_asts.is_empty() {
+                    (OwnershipOutput::default(), vec![])
+                } else {
+                    crate::ownership::check_ownership(
+                        &clean_asts,
+                        &types,
+                        &resolved_names,
+                        self.config.module_id,
+                    )
+                }
+            }
         };
         diagnostics.extend(ownership_diagnostics);
 
@@ -628,10 +670,6 @@ impl Driver<Lowered> {
             String::from_utf8_lossy(&io.out).into_owned(),
             display,
         ))
-    }
-
-    pub fn schedule_module(&mut self) -> Result<crate::vm::Module, String> {
-        self.schedule()
     }
 
     fn schedule(&mut self) -> Result<crate::vm::Module, String> {

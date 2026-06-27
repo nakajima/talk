@@ -110,6 +110,38 @@ pub mod tests {
     }
 
     #[test]
+    fn sequential_statement_ifs_share_their_tail() {
+        let ir = lowered_ir(
+            "func f(a: Bool, b: Bool, c: Bool, d: Bool) -> Int {\n\tif a { } else { }\n\tif b { } else { }\n\tif c { } else { }\n\tif d { } else { }\n\t123\n}\nf(true, false, true, false)",
+        );
+        let tail_copies = ir.matches("var f.k(123)").count();
+        assert!(
+            tail_copies <= 2,
+            "expected the shared tail to be lowered once or twice, got {tail_copies} copies:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn branch_local_owned_values_drop_before_shared_tail() {
+        let ir = lowered_ir(
+            "func f(a: Bool, b: Bool) -> Int {\n\tif a {\n\t\tlet s = \"a\" + \"b\"\n\t} else {\n\t\tlet t = \"c\" + \"d\"\n\t}\n\tif b { } else { }\n\t123\n}\nf(true, false)",
+        );
+        assert!(
+            ir.contains("free(get_field(0, get_field(0, var let_s)))"),
+            "{ir}"
+        );
+        assert!(
+            ir.contains("free(get_field(0, get_field(0, var let_t)))"),
+            "{ir}"
+        );
+        let tail_copies = ir.matches("var f.k(123)").count();
+        assert_eq!(
+            tail_copies, 1,
+            "expected branch-local cleanup to join before the shared tail:\n{ir}"
+        );
+    }
+
+    #[test]
     fn locals_and_blocks() {
         assert_eq!(run("let a = 4\nlet b = a + 1\nb * 2"), EvalValue::I64(10));
     }
@@ -191,6 +223,17 @@ pub mod tests {
             "{continue_ir}"
         );
         assert!(continue_ir.contains("loop_head(())"), "{continue_ir}");
+    }
+
+    #[test]
+    fn tail_value_runs_following_scope_drops() {
+        let ir = lowered_ir("func f() -> Int {\n\tlet s = \"a\" + \"b\"\n\t123\n}\nf()");
+        assert!(
+            ir.contains("free(get_field(0, get_field(0, var let_s)))"),
+            "{ir}"
+        );
+        assert!(ir.contains("drop_scope(123)"), "{ir}");
+        assert!(ir.contains("var f.k(var drop_scope)"), "{ir}");
     }
 
     #[test]

@@ -87,12 +87,18 @@ fn level_adjustment_propagates_outward() {
 }
 
 #[test]
-fn apply_auto_borrow_unifies_in_either_orientation() {
+fn apply_reason_does_not_strip_borrows_in_general_unification() {
     let mut h = Harness::new();
     let int = Ty::Nominal(Symbol::Int, vec![]);
     let borrowed_int = Ty::Borrow(BorrowKind::Shared, Box::new(int.clone()));
     let residual = h.solve(vec![Constraint::Eq(int, borrowed_int, origin())]);
-    assert!(h.errors.is_empty(), "{:?}", h.errors);
+    assert!(
+        h.errors
+            .iter()
+            .any(|(error, _)| matches!(error, TypeError::Mismatch { .. })),
+        "{:?}",
+        h.errors
+    );
     assert!(residual.is_empty(), "{residual:?}");
 }
 

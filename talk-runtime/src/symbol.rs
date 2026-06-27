@@ -9,7 +9,10 @@ pub struct ModuleSymbolId {
 
 impl ModuleSymbolId {
     pub fn new(module_id: ModuleId, local_id: u32) -> Self {
-        Self { module_id, local_id }
+        Self {
+            module_id,
+            local_id,
+        }
     }
 }
 

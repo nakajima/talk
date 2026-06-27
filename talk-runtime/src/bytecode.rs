@@ -1,6 +1,6 @@
-use crate::symbol::{LocalSymbolId, ModuleId, ModuleSymbolId, Symbol};
 use crate::CmpOp;
 use crate::interp::Value;
+use crate::symbol::{LocalSymbolId, ModuleId, ModuleSymbolId, Symbol};
 use crate::{Chunk, Insn, IoOp, MemKind, Module};
 
 const MAGIC: &[u8; 7] = b"TALKBC\0";
@@ -19,7 +19,9 @@ impl std::fmt::Display for EncodeError {
             Self::UnsupportedConstant(kind) => {
                 write!(f, "unsupported bytecode constant: {kind}")
             }
-            Self::TooManyItems(section) => write!(f, "too many items in bytecode section: {section}"),
+            Self::TooManyItems(section) => {
+                write!(f, "too many items in bytecode section: {section}")
+            }
             Self::StringTooLong => write!(f, "string is too long to encode in bytecode"),
         }
     }
@@ -737,7 +739,9 @@ impl<'a> Decoder<'a> {
                 args_start: self.u32()?,
                 args_len: self.u16()?,
             }),
-            33 => Ok(Insn::Jump { target: self.u32()? }),
+            33 => Ok(Insn::Jump {
+                target: self.u32()?,
+            }),
             34 => Ok(Insn::Branch {
                 cond: self.u16()?,
                 then_target: self.u32()?,
@@ -953,6 +957,9 @@ impl Module {
 
 impl Chunk {
     fn validate(&self, module: &Module) -> Result<(), DecodeError> {
+        if self.arity > self.n_regs {
+            return Err(DecodeError::InvalidIndex("chunk arity"));
+        }
         for insn in &self.code {
             insn.validate(module, self.n_regs)?;
         }
@@ -980,7 +987,9 @@ impl Insn {
             | Insn::CellNew { dest, init: src }
             | Insn::Alloc { dest, count: src }
             | Insn::Free { dest, ptr: src }
-            | Insn::EnvGet { dest, index: src } => Register::new(n_regs).check_many(&[dest, src])?,
+            | Insn::EnvGet { dest, index: src } => {
+                Register::new(n_regs).check_many(&[dest, src])?
+            }
             Insn::Add { dest, a, b }
             | Insn::Sub { dest, a, b }
             | Insn::Mul { dest, a, b }
@@ -1005,7 +1014,7 @@ impl Insn {
                 ..
             } => {
                 Register::new(n_regs).check(dest)?;
-                module.check_arg_range(args_start, args_len)?;
+                module.check_arg_registers(args_start, args_len, n_regs)?;
             }
             Insn::VariantNew {
                 dest,
@@ -1014,13 +1023,17 @@ impl Insn {
                 ..
             } => {
                 Register::new(n_regs).check(dest)?;
-                module.check_arg_range(args_start, args_len)?;
+                module.check_arg_registers(args_start, args_len, n_regs)?;
             }
-            Insn::GetField { dest, rec, index: _ } => Register::new(n_regs).check_many(&[dest, rec])?,
+            Insn::GetField {
+                dest,
+                rec,
+                index: _,
+            } => Register::new(n_regs).check_many(&[dest, rec])?,
             Insn::GetTag { dest, src } => Register::new(n_regs).check_many(&[dest, src])?,
-            Insn::SetField {
-                dest, rec, src, ..
-            } => Register::new(n_regs).check_many(&[dest, rec, src])?,
+            Insn::SetField { dest, rec, src, .. } => {
+                Register::new(n_regs).check_many(&[dest, rec, src])?
+            }
             Insn::Load { dest, ptr, .. } => Register::new(n_regs).check_many(&[dest, ptr])?,
             Insn::Store { ptr, src, .. } => Register::new(n_regs).check_many(&[ptr, src])?,
             Insn::Copy { from, to, len } => Register::new(n_regs).check_many(&[from, to, len])?,
@@ -1039,7 +1052,10 @@ impl Insn {
             } => {
                 Register::new(n_regs).check(dest)?;
                 module.check_chunk(chunk)?;
-                module.check_arg_range(args_start, args_len)?;
+                module.check_arg_registers(args_start, args_len, n_regs)?;
+                if matches!(*self, Insn::Call { .. }) {
+                    module.check_call_arity(chunk, args_len)?;
+                }
             }
             Insn::CallIndirect {
                 dest,
@@ -1048,7 +1064,7 @@ impl Insn {
                 args_len,
             } => {
                 Register::new(n_regs).check_many(&[dest, callee])?;
-                module.check_arg_range(args_start, args_len)?;
+                module.check_arg_registers(args_start, args_len, n_regs)?;
             }
             Insn::Jump { target } => Self::check_target(target)?,
             Insn::Branch {
@@ -1092,13 +1108,27 @@ impl Module {
         Ok(())
     }
 
-    fn check_arg_range(&self, start: u32, len: u16) -> Result<(), DecodeError> {
+    fn arg_registers(&self, start: u32, len: u16) -> Result<&[u16], DecodeError> {
         let start = usize::try_from(start).map_err(|_| DecodeError::IntegerOverflow)?;
         let end = start
             .checked_add(usize::from(len))
             .ok_or(DecodeError::IntegerOverflow)?;
-        if end > self.arg_pool.len() {
-            return Err(DecodeError::InvalidIndex("argument pool"));
+        self.arg_pool
+            .get(start..end)
+            .ok_or(DecodeError::InvalidIndex("argument pool"))
+    }
+
+    fn check_arg_registers(&self, start: u32, len: u16, n_regs: u16) -> Result<(), DecodeError> {
+        Register::new(n_regs).check_many(self.arg_registers(start, len)?)
+    }
+
+    fn check_call_arity(&self, chunk: u32, args_len: u16) -> Result<(), DecodeError> {
+        let target = &self.chunks[chunk as usize];
+        if args_len != target.arity {
+            return Err(DecodeError::InvalidIndex("call argument count"));
+        }
+        if args_len > target.n_regs {
+            return Err(DecodeError::InvalidIndex("call frame"));
         }
         Ok(())
     }
@@ -1148,10 +1178,7 @@ mod tests {
         let module = Module {
             chunks: vec![Chunk {
                 name: "main".into(),
-                code: vec![
-                    Insn::Const { dest: 0, k: 0 },
-                    Insn::Ret { src: 0 },
-                ],
+                code: vec![Insn::Const { dest: 0, k: 0 }, Insn::Ret { src: 0 }],
                 arity: 0,
                 n_regs: 1,
             }],
@@ -1166,6 +1193,106 @@ mod tests {
         let encoded = module.encode_bytecode().unwrap();
         let decoded = Module::decode_bytecode(&encoded).unwrap();
         assert_eq!(decoded.render(), module.render());
+    }
+
+    #[test]
+    fn round_trips_module_with_pools_and_compound_opcodes() {
+        let struct_symbol = Symbol::Struct(ModuleSymbolId::new(ModuleId(0), 1));
+        let enum_symbol = Symbol::Enum(ModuleSymbolId::new(ModuleId(0), 2));
+        let protocol_symbol = Symbol::Protocol(ModuleSymbolId::new(ModuleId(0), 3));
+        let module = Module {
+            chunks: vec![
+                Chunk {
+                    name: "main".into(),
+                    code: vec![
+                        Insn::Const { dest: 0, k: 0 },
+                        Insn::Const { dest: 1, k: 1 },
+                        Insn::Const { dest: 2, k: 2 },
+                        Insn::RecordNew {
+                            dest: 3,
+                            symbol: struct_symbol,
+                            args_start: 0,
+                            args_len: 2,
+                        },
+                        Insn::VariantNew {
+                            dest: 4,
+                            symbol: enum_symbol,
+                            tag: 7,
+                            args_start: 1,
+                            args_len: 2,
+                        },
+                        Insn::ExistentialPack {
+                            dest: 5,
+                            protocol: protocol_symbol,
+                            args_start: 2,
+                            args_len: 2,
+                        },
+                        Insn::TupleNew {
+                            dest: 6,
+                            args_start: 0,
+                            args_len: 3,
+                        },
+                        Insn::Io {
+                            dest: 7,
+                            op: IoOp::Poll,
+                            a: 0,
+                            b: 1,
+                            c: 2,
+                        },
+                        Insn::MakeClosure {
+                            dest: 8,
+                            chunk: 1,
+                            args_start: 0,
+                            args_len: 2,
+                        },
+                        Insn::CallIndirect {
+                            dest: 9,
+                            callee: 8,
+                            args_start: 2,
+                            args_len: 1,
+                        },
+                        Insn::Call {
+                            dest: 10,
+                            chunk: 1,
+                            args_start: 2,
+                            args_len: 1,
+                        },
+                        Insn::Switch {
+                            tag: 0,
+                            targets_start: 0,
+                            targets_len: 3,
+                        },
+                        Insn::Trap { message: 0 },
+                        Insn::Ret { src: 10 },
+                    ],
+                    arity: 0,
+                    n_regs: 11,
+                },
+                Chunk {
+                    name: "callee".into(),
+                    code: vec![Insn::EnvGet { dest: 1, index: 0 }, Insn::Ret { src: 0 }],
+                    arity: 1,
+                    n_regs: 2,
+                },
+            ],
+            consts: vec![
+                Value::I64(42),
+                Value::Bool(true),
+                Value::Ptr(8),
+                Value::Byte(3),
+                Value::Void,
+            ],
+            arg_pool: vec![0, 1, 2, 0],
+            switch_pool: vec![11, 12, 13],
+            traps: vec!["round-trip trap".into()],
+            statics: vec![1, 2, 3, 4],
+            entry: 0,
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        let decoded = Module::decode_bytecode(&encoded).unwrap();
+        assert_eq!(decoded.render(), module.render());
+        assert_eq!(decoded.statics, module.statics);
     }
 
     #[test]
@@ -1194,5 +1321,141 @@ mod tests {
         let encoded = module.encode_bytecode().unwrap();
         let err = Module::decode_bytecode(&encoded).unwrap_err();
         assert_eq!(err, DecodeError::InvalidIndex("constant"));
+    }
+
+    #[test]
+    fn rejects_arg_pool_register_out_of_range() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::TupleNew {
+                        dest: 0,
+                        args_start: 0,
+                        args_len: 1,
+                    },
+                    Insn::Ret { src: 0 },
+                ],
+                arity: 0,
+                n_regs: 1,
+            }],
+            consts: vec![],
+            arg_pool: vec![1],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        let err = Module::decode_bytecode(&encoded).unwrap_err();
+        assert_eq!(err, DecodeError::InvalidIndex("register"));
+    }
+
+    #[test]
+    fn rejects_direct_call_argument_count_mismatch() {
+        let module = Module {
+            chunks: vec![
+                Chunk {
+                    name: "main".into(),
+                    code: vec![
+                        Insn::Call {
+                            dest: 0,
+                            chunk: 1,
+                            args_start: 0,
+                            args_len: 2,
+                        },
+                        Insn::Ret { src: 0 },
+                    ],
+                    arity: 0,
+                    n_regs: 1,
+                },
+                Chunk {
+                    name: "callee".into(),
+                    code: vec![Insn::Ret { src: 0 }],
+                    arity: 1,
+                    n_regs: 1,
+                },
+            ],
+            consts: vec![],
+            arg_pool: vec![0, 0],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        let err = Module::decode_bytecode(&encoded).unwrap_err();
+        assert_eq!(err, DecodeError::InvalidIndex("call argument count"));
+    }
+
+    #[test]
+    fn rejects_chunk_arity_larger_than_register_file() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![],
+                arity: 1,
+                n_regs: 0,
+            }],
+            consts: vec![],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        let err = Module::decode_bytecode(&encoded).unwrap_err();
+        assert_eq!(err, DecodeError::InvalidIndex("chunk arity"));
+    }
+
+    #[test]
+    fn indirect_call_argument_mismatch_returns_vm_error() {
+        let module = Module {
+            chunks: vec![
+                Chunk {
+                    name: "main".into(),
+                    code: vec![
+                        Insn::MakeClosure {
+                            dest: 0,
+                            chunk: 1,
+                            args_start: 0,
+                            args_len: 0,
+                        },
+                        Insn::Const { dest: 1, k: 0 },
+                        Insn::CallIndirect {
+                            dest: 2,
+                            callee: 0,
+                            args_start: 0,
+                            args_len: 2,
+                        },
+                        Insn::Ret { src: 2 },
+                    ],
+                    arity: 0,
+                    n_regs: 3,
+                },
+                Chunk {
+                    name: "callee".into(),
+                    code: vec![Insn::Ret { src: 0 }],
+                    arity: 1,
+                    n_regs: 1,
+                },
+            ],
+            consts: vec![Value::I64(7)],
+            arg_pool: vec![1, 1],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        let decoded = Module::decode_bytecode(&encoded).unwrap();
+        let mut io = crate::io::StdioIO;
+        let err = crate::interp::run(&decoded, &mut io).unwrap_err();
+        assert!(err.contains("expected 1 arguments, got 2"));
     }
 }

@@ -13,7 +13,7 @@ pub mod tests {
             call_arg::CallArg,
             decl::{Decl, DeclKind, ReceiverMode, Visibility},
             expr::{Expr, ExprKind},
-            func::{EffectSet, Func},
+            func::{CaptureMode, EffectSet, Func},
             func_signature::FuncSignature,
             generic_decl::GenericDecl,
             incomplete_expr::IncompleteExpr,
@@ -3159,6 +3159,39 @@ pub mod tests {
             parser.parse(),
             Err(ParserError::UnexpectedToken { .. })
         ));
+    }
+
+    #[test]
+    fn parses_capture_specs_with_all_modes() {
+        let parsed = parse(
+            "let f = func [a, copy b, consuming c, &d, &mut e]() {
+                1
+            }",
+        );
+        let DeclKind::Let {
+            rhs: Some(expr), ..
+        } = &parsed.roots[0].as_decl().kind
+        else {
+            panic!("expected let binding");
+        };
+        let ExprKind::Func(func) = &expr.kind else {
+            panic!("expected function literal");
+        };
+        let captures: Vec<_> = func
+            .captures
+            .iter()
+            .map(|capture| (capture.name.name_str(), capture.mode))
+            .collect();
+        assert_eq!(
+            captures,
+            vec![
+                ("a".to_string(), CaptureMode::Copy),
+                ("b".to_string(), CaptureMode::Copy),
+                ("c".to_string(), CaptureMode::Move),
+                ("d".to_string(), CaptureMode::BorrowShared),
+                ("e".to_string(), CaptureMode::BorrowMut),
+            ]
+        );
     }
 
     #[test]

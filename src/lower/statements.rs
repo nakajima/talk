@@ -191,29 +191,6 @@ impl<'a> Lowering<'a> {
         })
     }
 
-    pub(super) fn wrap_cont_with_drop_bindings(
-        &mut self,
-        ctx: &Ctx,
-        k: ExprId,
-        drops: &[DropBinding],
-    ) -> ExprId {
-        if drops.is_empty() {
-            return k;
-        }
-        let TyKind::Fn(value_ty, _) = *self.p.ty_kind(self.p.expr_ty(k)) else {
-            self.diagnostics
-                .push("lowering: drop continuation target is not a function".into());
-            return k;
-        };
-        let bot = self.p.ty_bot();
-        let wrapper = self.p.func("drop_scope", value_ty, bot);
-        let value = self.p.var(wrapper);
-        let tail = self.p.app(k, value);
-        let body = self.lower_drop_bindings_then(ctx, drops, tail);
-        self.p.set_body(wrapper, body);
-        self.p.func_ref(wrapper)
-    }
-
     pub(super) fn lower_drop_bindings_then(
         &mut self,
         ctx: &Ctx,

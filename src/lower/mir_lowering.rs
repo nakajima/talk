@@ -9,118 +9,173 @@ enum MirRestBinding {
     Deliver,
 }
 
+struct PendingDrop {
+    symbol: Symbol,
+    key_path: OwnershipKeyPath,
+    ty: CheckTy,
+    has_dynamic_flags: bool,
+    elaboration: Option<mir::DropElaboration>,
+}
+
+/// The position of a MIR→λ_G walk: the statement currently under the cursor
+/// (`body.blocks[block].statements[index]`) plus the loops in scope. Threaded by
+/// value through the statement lowerers so they share one positional argument
+/// instead of `(body, block, index, statements, loops)`. The mutable block cache
+/// and the per-continuation `ctx`/`k` stay as separate arguments.
+#[derive(Clone, Copy)]
+struct MirCursor<'b, 'ast> {
+    body: &'b mir::Body<'ast>,
+    block: mir::BlockId,
+    index: usize,
+    loops: &'b [MirLoop],
+}
+
+impl<'b, 'ast> MirCursor<'b, 'ast> {
+    fn statements(self) -> &'b [mir::LocatedStatement<'ast>] {
+        &self.body.blocks[self.block.0].statements
+    }
+
+    fn statement(self) -> &'b mir::LocatedStatement<'ast> {
+        &self.statements()[self.index]
+    }
+
+    /// The next statement in the same block.
+    fn advance(self) -> Self {
+        MirCursor {
+            index: self.index + 1,
+            ..self
+        }
+    }
+
+    /// The start of another block, keeping the same loops in scope.
+    fn at_block(self, block: mir::BlockId) -> Self {
+        MirCursor {
+            block,
+            index: 0,
+            ..self
+        }
+    }
+
+    fn with_loops(self, loops: &'b [MirLoop]) -> Self {
+        MirCursor { loops, ..self }
+    }
+}
+
 impl<'a> Lowering<'a> {
     pub(super) fn lower_mir_body(&mut self, body: &mir::Body<'_>, ctx: &Ctx, k: ExprId) -> ExprId {
-        self.lower_mir_block(body, body.entry, ctx, k, &[])
+        let mut cache = MirBlockCache::default();
+        let cursor = MirCursor {
+            body,
+            block: body.entry,
+            index: 0,
+            loops: &[],
+        };
+        self.lower_mir_statements(cursor, ctx, k, &mut cache)
     }
 
     fn lower_mir_block(
         &mut self,
-        body: &mir::Body<'_>,
-        block: mir::BlockId,
+        cursor: MirCursor,
         ctx: &Ctx,
         k: ExprId,
-        loops: &[(mir::BlockId, ExprId, mir::BlockId, ExprId)],
+        cache: &mut MirBlockCache,
     ) -> ExprId {
-        let basic_block = &body.blocks[block.0];
-        self.lower_mir_statements(body, block, 0, &basic_block.statements, ctx, k, loops)
+        let key = MirBlockKey {
+            block: cursor.block,
+            k,
+            ctx: ctx.mir_key(),
+            loops: cursor.loops.to_vec(),
+        };
+        if let Some(&entry) = cache.blocks.get(&key) {
+            let void = self.p.void();
+            return self.p.app(entry, void);
+        }
+
+        let void_ty = self.p.ty_void();
+        let bot = self.p.ty_bot();
+        let label = self.p.func("mir_bb", void_ty, bot);
+        let entry = self.p.func_ref(label);
+        cache.blocks.insert(key, entry);
+        let body_expr = self.lower_mir_statements(cursor, ctx, k, cache);
+        self.p.set_body(label, body_expr);
+        let void = self.p.void();
+        self.p.app(entry, void)
     }
 
     fn lower_mir_statements(
         &mut self,
-        body: &mir::Body<'_>,
-        block: mir::BlockId,
-        index: usize,
-        statements: &[mir::LocatedStatement<'_>],
+        cursor: MirCursor,
         ctx: &Ctx,
         k: ExprId,
-        loops: &[(mir::BlockId, ExprId, mir::BlockId, ExprId)],
+        cache: &mut MirBlockCache,
     ) -> ExprId {
-        let Some(statement) = statements.get(index) else {
-            return self.lower_mir_terminator(body, block, ctx, k, loops);
+        let Some(statement) = cursor.statements().get(cursor.index) else {
+            return self.lower_mir_terminator(cursor, ctx, k, cache);
         };
-        let rest = |this: &mut Self, ctx: &Ctx, k: ExprId| {
-            this.lower_mir_statements(body, block, index + 1, statements, ctx, k, loops)
+        let mut rest = |this: &mut Self, ctx: &Ctx, k: ExprId| {
+            this.lower_mir_statements(cursor.advance(), ctx, k, cache)
         };
         match &statement.kind {
             mir::Statement::ScopeEnter { .. }
             | mir::Statement::ScopeExit { .. }
             | mir::Statement::StorageLive { .. }
-            | mir::Statement::StorageDead { .. }
             | mir::Statement::Read { .. }
             | mir::Statement::AssignmentRootUse { .. }
             | mir::Statement::Perform
             | mir::Statement::DropCandidate { .. } => rest(self, ctx, k),
+            mir::Statement::StorageDead { symbol, .. } => {
+                self.lower_mir_storage_dead(*symbol, cursor, ctx, k, cache)
+            }
             mir::Statement::Call { .. } | mir::Statement::Function { .. } => {
                 let rest_body = rest(self, ctx, k);
-                self.clear_moved_drop_flags_then(ctx, body, statement, rest_body)
+                self.clear_moved_drop_flags_then(ctx, cursor.body, statement, rest_body)
             }
             mir::Statement::Handling {
                 stmt,
                 effect_name,
                 body: handler_body,
-            } => self.lower_mir_handling(
-                stmt,
-                effect_name,
-                handler_body,
-                body,
-                block,
-                index,
-                statements,
-                ctx,
-                k,
-                loops,
-            ),
+            } => self.lower_mir_handling(stmt, effect_name, handler_body, cursor, ctx, k, cache),
             mir::Statement::DeclBody { .. } => rest(self, ctx, k),
             mir::Statement::Bind { lhs, rhs, .. } => {
-                self.lower_mir_bind(lhs, *rhs, body, block, index, statements, ctx, k, loops)
+                self.lower_mir_bind(lhs, *rhs, cursor, ctx, k, cache)
             }
             mir::Statement::Assign {
                 lhs, rhs, target, ..
-            } => {
-                let drop_elaboration =
-                    self.assignment_drop_elaboration(ctx, body, statements, index);
-                self.lower_mir_assignment(
-                    lhs,
-                    rhs,
-                    target.as_ref(),
-                    drop_elaboration,
-                    body,
-                    block,
-                    index,
-                    statements,
-                    ctx,
-                    k,
-                    loops,
-                )
-            }
+            } => self.lower_mir_assignment(lhs, rhs, target.as_ref(), cursor, ctx, k, cache),
             mir::Statement::ConsumeValue { expr, .. } => {
-                self.lower_mir_discard(expr, body, block, index, statements, ctx, k, loops)
+                self.lower_mir_discard(expr, cursor, ctx, k, cache)
             }
             mir::Statement::ReturnValue {
                 expr, destination, ..
             } => {
                 let target = match destination {
-                    mir::ValueDestination::Continuation => k,
-                    mir::ValueDestination::Return => {
-                        self.wrap_cont_with_drop_bindings(ctx, ctx.ret_k, &ctx.drop_stack)
+                    mir::ValueDestination::Continuation => {
+                        self.wrap_cont_with_following_drops(ctx, cursor, k)
                     }
+                    mir::ValueDestination::Return => {
+                        self.wrap_cont_with_following_drops(ctx, cursor, ctx.ret_k)
+                    }
+                };
+                let mut tail_ctx;
+                let value_ctx = if target != ctx.tail_k {
+                    tail_ctx = ctx.clone();
+                    tail_ctx.tail_k = target;
+                    &tail_ctx
+                } else {
+                    ctx
                 };
                 if let Some(done) = self.try_mir_effect_split(
                     expr,
                     MirRestBinding::Deliver,
-                    body,
-                    block,
-                    index,
-                    statements,
-                    ctx,
+                    cursor,
+                    value_ctx,
                     target,
-                    loops,
+                    cache,
                 ) {
                     return done;
                 }
-                let target = self.wrap_moved_value_cont(ctx, body, statement, target);
-                self.lower_expr(expr, ctx, target)
+                let target = self.wrap_moved_value_cont(value_ctx, cursor.body, statement, target);
+                self.lower_expr(expr, value_ctx, target)
             }
             mir::Statement::ContinueValue { expr, .. } if ctx.resume_k.is_some() => {
                 let Some(resume_k) = ctx.resume_k else {
@@ -134,13 +189,13 @@ impl<'a> Lowering<'a> {
                 let resume_body = self.p.app(resume_k, pair);
                 let resume_body = self.lower_drop_bindings_then(ctx, &ctx.drop_stack, resume_body);
                 let resume_body =
-                    self.clear_moved_drop_flags_then(ctx, body, statement, resume_body);
+                    self.clear_moved_drop_flags_then(ctx, cursor.body, statement, resume_body);
                 self.p.set_body(send, resume_body);
                 let send_ref = self.p.func_ref(send);
                 self.lower_expr(expr, ctx, send_ref)
             }
             mir::Statement::ContinueValue { expr, .. } => {
-                self.lower_mir_discard(expr, body, block, index, statements, ctx, k, loops)
+                self.lower_mir_discard(expr, cursor, ctx, k, cache)
             }
         }
     }
@@ -149,25 +204,22 @@ impl<'a> Lowering<'a> {
         &mut self,
         lhs: &crate::node_kinds::pattern::Pattern,
         rhs: Option<&Expr>,
-        body: &mir::Body<'_>,
-        block: mir::BlockId,
-        index: usize,
-        statements: &[mir::LocatedStatement<'_>],
+        cursor: MirCursor,
         ctx: &Ctx,
         k: ExprId,
-        loops: &[(mir::BlockId, ExprId, mir::BlockId, ExprId)],
+        cache: &mut MirBlockCache,
     ) -> ExprId {
         let Some(rhs) = rhs else {
-            return self.lower_mir_statements(body, block, index + 1, statements, ctx, k, loops);
+            return self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         };
         let PatternKind::Bind(name) = &lhs.kind else {
             let value_ty = self.expr_lambda_ty(rhs, ctx);
             let bot = self.p.ty_bot();
             let bind = self.p.func("let_destructure", value_ty, bot);
             let bound = self.p.var(bind);
-            let check_ty = self.checker_ty(rhs, ctx);
+            let binding_ty = self.checker_ty(rhs, ctx);
             let mut binds: Vec<(Symbol, ExprId)> = vec![];
-            patterns::collect_irrefutable_binds(self, lhs, bound, &check_ty, &mut binds);
+            patterns::collect_irrefutable_binds(self, lhs, bound, &binding_ty, &mut binds);
             let mut inner = ctx.clone();
             let mut celled: Vec<(Symbol, ExprId)> = vec![];
             let mut drop_bindings: Vec<DropBinding> = vec![];
@@ -178,7 +230,8 @@ impl<'a> Lowering<'a> {
                     inner.env.insert(symbol, Binding::Value(value));
                 }
                 if let Some(ty) = self.symbol_check_ty(symbol, &ctx.theta)
-                    && let Some(drop) = self.drop_binding_for_mir_symbol(ctx, body, symbol, ty)
+                    && let Some(drop) =
+                        self.drop_binding_for_mir_symbol(ctx, cursor.body, symbol, ty)
                 {
                     drop_bindings.push(drop);
                 }
@@ -186,18 +239,13 @@ impl<'a> Lowering<'a> {
             let rest_body = self.with_cells(&celled, &mut inner, |this, inner| {
                 this.with_drop_flags(&drop_bindings, inner, |this, inner| {
                     inner.drop_stack.extend(drop_bindings.clone());
-                    let scope_k = this.wrap_cont_with_drop_bindings(inner, k, &drop_bindings);
-                    inner.tail_k = scope_k;
-                    let rest_body = this.lower_mir_statements(
-                        body,
-                        block,
-                        index + 1,
-                        statements,
+                    let rest_body = this.lower_mir_statements(cursor.advance(), inner, k, cache);
+                    this.clear_moved_drop_flags_then(
                         inner,
-                        scope_k,
-                        loops,
-                    );
-                    this.clear_moved_drop_flags_then(inner, body, &statements[index], rest_body)
+                        cursor.body,
+                        cursor.statement(),
+                        rest_body,
+                    )
                 })
             });
             self.p.set_body(bind, rest_body);
@@ -205,20 +253,17 @@ impl<'a> Lowering<'a> {
             return self.lower_expr(rhs, ctx, bind_ref);
         };
         let Ok(symbol) = name.symbol() else {
-            return self.lower_mir_statements(body, block, index + 1, statements, ctx, k, loops);
+            return self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         };
 
         let mutated = ctx.cellable.contains(&symbol);
         if let Some(done) = self.try_mir_effect_split(
             rhs,
             MirRestBinding::Bind(symbol, mutated),
-            body,
-            block,
-            index,
-            statements,
+            cursor,
             ctx,
             k,
-            loops,
+            cache,
         ) {
             return done;
         }
@@ -228,28 +273,23 @@ impl<'a> Lowering<'a> {
             .p
             .func(&format!("let_{}", name.name_str()), value_ty, bot);
         let bound = self.p.var(bind);
-        let mut inner = ctx.clone();
         let binding_ty = self
             .symbol_check_ty(symbol, &ctx.theta)
             .unwrap_or_else(|| self.checker_ty(rhs, ctx));
-        let drop_binding = self.drop_binding_for_mir_symbol(ctx, body, symbol, binding_ty);
+        let drop_binding = self.drop_binding_for_mir_symbol(ctx, cursor.body, symbol, binding_ty);
+        let mut inner = ctx.clone();
         let rest_body = if mutated {
             self.with_cells(&[(symbol, bound)], &mut inner, |this, inner| {
                 let drops = drop_binding.clone().into_iter().collect::<Vec<_>>();
                 this.with_drop_flags(&drops, inner, |this, inner| {
                     inner.drop_stack.extend(drops.clone());
-                    let scope_k = this.wrap_cont_with_drop_bindings(inner, k, &drops);
-                    inner.tail_k = scope_k;
-                    let rest_body = this.lower_mir_statements(
-                        body,
-                        block,
-                        index + 1,
-                        statements,
+                    let rest_body = this.lower_mir_statements(cursor.advance(), inner, k, cache);
+                    this.clear_moved_drop_flags_then(
                         inner,
-                        scope_k,
-                        loops,
-                    );
-                    this.clear_moved_drop_flags_then(inner, body, &statements[index], rest_body)
+                        cursor.body,
+                        cursor.statement(),
+                        rest_body,
+                    )
                 })
             })
         } else {
@@ -257,18 +297,8 @@ impl<'a> Lowering<'a> {
             let drops = drop_binding.into_iter().collect::<Vec<_>>();
             self.with_drop_flags(&drops, &mut inner, |this, inner| {
                 inner.drop_stack.extend(drops.clone());
-                let scope_k = this.wrap_cont_with_drop_bindings(inner, k, &drops);
-                inner.tail_k = scope_k;
-                let rest_body = this.lower_mir_statements(
-                    body,
-                    block,
-                    index + 1,
-                    statements,
-                    inner,
-                    scope_k,
-                    loops,
-                );
-                this.clear_moved_drop_flags_then(inner, body, &statements[index], rest_body)
+                let rest_body = this.lower_mir_statements(cursor.advance(), inner, k, cache);
+                this.clear_moved_drop_flags_then(inner, cursor.body, cursor.statement(), rest_body)
             })
         };
         self.p.set_body(bind, rest_body);
@@ -343,9 +373,134 @@ impl<'a> Lowering<'a> {
         keys
     }
 
+    fn wrap_cont_with_following_drops(
+        &mut self,
+        ctx: &Ctx,
+        cursor: MirCursor,
+        k: ExprId,
+    ) -> ExprId {
+        let drops = self.following_drop_candidates(ctx, cursor);
+        if drops.is_empty() {
+            return k;
+        }
+        let TyKind::Fn(value_ty, _) = *self.p.ty_kind(self.p.expr_ty(k)) else {
+            self.diagnostics
+                .push("lowering: drop continuation target is not a function".into());
+            return k;
+        };
+        let bot = self.p.ty_bot();
+        let wrapper = self.p.func("drop_scope", value_ty, bot);
+        let value = self.p.var(wrapper);
+        let mut tail = self.p.app(k, value);
+        for drop in drops.iter().rev() {
+            tail = self.lower_candidate_drop_then(ctx, drop, tail);
+        }
+        self.p.set_body(wrapper, tail);
+        self.p.func_ref(wrapper)
+    }
+
+    fn following_drop_candidates(&self, ctx: &Ctx, cursor: MirCursor) -> Vec<PendingDrop> {
+        let body = cursor.body;
+        let mut drops = Vec::new();
+        for statement in cursor.statements().iter().skip(cursor.index + 1) {
+            match &statement.kind {
+                mir::Statement::DropCandidate {
+                    reason: reason @ (mir::DropReason::ScopeExit | mir::DropReason::EarlyExit),
+                    target:
+                        mir::DropTarget::Symbol {
+                            symbol: target_symbol,
+                            ..
+                        },
+                    key_path,
+                    elaboration,
+                } => {
+                    let Some(drop) = ctx
+                        .drop_stack
+                        .iter()
+                        .rev()
+                        .find(|drop| drop.symbol == *target_symbol)
+                    else {
+                        continue;
+                    };
+                    let key_path = key_path
+                        .as_ref()
+                        .and_then(|key_path| Self::ownership_key_path_from_mir(body, key_path))
+                        .unwrap_or_else(|| drop.key_path.clone());
+                    let elaboration = elaboration.or_else(|| {
+                        self.drop_elaboration_at(ctx, body, statement.point, *reason, &key_path)
+                    });
+                    drops.push(PendingDrop {
+                        symbol: drop.symbol,
+                        key_path,
+                        ty: drop.ty.clone(),
+                        has_dynamic_flags: !drop.dynamic_flags.is_empty(),
+                        elaboration,
+                    });
+                }
+                mir::Statement::StorageDead { .. } | mir::Statement::ScopeExit { .. } => {}
+                _ => break,
+            }
+        }
+        drops
+    }
+
+    fn drop_elaboration_at(
+        &self,
+        ctx: &Ctx,
+        body: &mir::Body<'_>,
+        point: mir::StatementId,
+        reason: mir::DropReason,
+        key_path: &OwnershipKeyPath,
+    ) -> Option<mir::DropElaboration> {
+        let reason = match reason {
+            mir::DropReason::ScopeExit => crate::ownership::DropReason::ScopeExit,
+            mir::DropReason::AssignmentReplace => crate::ownership::DropReason::AssignmentReplace,
+            mir::DropReason::EarlyExit => crate::ownership::DropReason::EarlyExit,
+        };
+        self.units[ctx.unit]
+            .ownership
+            .drop_plan
+            .obligations
+            .iter()
+            .find(|obligation| {
+                obligation.point.point == point.0 as u32
+                    && self.ownership_point_matches_body(ctx, body, obligation.point)
+                    && obligation.reason == reason
+                    && obligation.key_path == *key_path
+            })
+            .map(|obligation| Self::drop_elaboration_of(obligation.kind))
+    }
+
+    fn lower_candidate_drop_then(&mut self, ctx: &Ctx, drop: &PendingDrop, next: ExprId) -> ExprId {
+        let Some(value) = self.binding_value(ctx, drop.symbol) else {
+            return next;
+        };
+        match drop.elaboration {
+            Some(mir::DropElaboration::Dead) => next,
+            Some(mir::DropElaboration::Conditional | mir::DropElaboration::Open) => {
+                self.lower_dynamic_assignment_drop_then(ctx, &drop.key_path, value, &drop.ty, next)
+            }
+            Some(mir::DropElaboration::Static) | None if drop.has_dynamic_flags => {
+                self.lower_dynamic_assignment_drop_then(ctx, &drop.key_path, value, &drop.ty, next)
+            }
+            Some(mir::DropElaboration::Static) | None => {
+                self.lower_drop_value_then(ctx, value, &drop.ty, next)
+            }
+        }
+    }
+
     fn push_unique_drop_flag_key(keys: &mut Vec<OwnershipKeyPath>, key: OwnershipKeyPath) {
         if !keys.iter().any(|existing| existing == &key) {
             keys.push(key);
+        }
+    }
+
+    fn drop_elaboration_of(kind: DropKind) -> mir::DropElaboration {
+        match kind {
+            DropKind::Static => mir::DropElaboration::Static,
+            DropKind::Dead => mir::DropElaboration::Dead,
+            DropKind::Conditional => mir::DropElaboration::Conditional,
+            DropKind::Open => mir::DropElaboration::Open,
         }
     }
 
@@ -415,12 +570,10 @@ impl<'a> Lowering<'a> {
     fn assignment_drop_elaboration(
         &self,
         ctx: &Ctx,
-        body: &mir::Body<'_>,
-        statements: &[mir::LocatedStatement<'_>],
-        assignment_index: usize,
+        cursor: MirCursor,
     ) -> Option<mir::DropElaboration> {
-        let previous = assignment_index.checked_sub(1)?;
-        let previous = statements.get(previous)?;
+        let previous = cursor.index.checked_sub(1)?;
+        let previous = cursor.statements().get(previous)?;
         let mir::Statement::DropCandidate {
             reason: mir::DropReason::AssignmentReplace,
             ..
@@ -435,15 +588,91 @@ impl<'a> Lowering<'a> {
             .iter()
             .find(|obligation| {
                 obligation.point.point == previous.point.0 as u32
-                    && self.ownership_point_matches_body(ctx, body, obligation.point)
+                    && self.ownership_point_matches_body(ctx, cursor.body, obligation.point)
                     && obligation.reason == crate::ownership::DropReason::AssignmentReplace
             })
-            .map(|obligation| match obligation.kind {
-                DropKind::Static => mir::DropElaboration::Static,
-                DropKind::Dead => mir::DropElaboration::Dead,
-                DropKind::Conditional => mir::DropElaboration::Conditional,
-                DropKind::Open => mir::DropElaboration::Open,
-            })
+            .map(|obligation| Self::drop_elaboration_of(obligation.kind))
+    }
+
+    fn lower_mir_storage_dead(
+        &mut self,
+        symbol: Symbol,
+        cursor: MirCursor,
+        ctx: &Ctx,
+        k: ExprId,
+        cache: &mut MirBlockCache,
+    ) -> ExprId {
+        let mut after = ctx.clone();
+        after.env.remove(&symbol);
+        after.drop_stack.retain(|drop| drop.symbol != symbol);
+        after
+            .drop_flags
+            .retain(|key_path, _| key_path.root != symbol);
+        if after.initializing_self == Some(symbol) {
+            after.initializing_self = None;
+        }
+
+        let rest_body = self.lower_mir_statements(cursor.advance(), &after, k, cache);
+        let Some(drop) = ctx
+            .drop_stack
+            .iter()
+            .rev()
+            .find(|drop| drop.symbol == symbol)
+            .cloned()
+        else {
+            return rest_body;
+        };
+        let Some(value) = self.binding_value(ctx, symbol) else {
+            return rest_body;
+        };
+
+        match self.storage_dead_drop_elaboration(ctx, cursor, symbol) {
+            Some(mir::DropElaboration::Dead) => rest_body,
+            Some(mir::DropElaboration::Conditional | mir::DropElaboration::Open) => self
+                .lower_dynamic_assignment_drop_then(
+                    ctx,
+                    &drop.key_path,
+                    value,
+                    &drop.ty,
+                    rest_body,
+                ),
+            Some(mir::DropElaboration::Static) | None => {
+                self.lower_drop_value_then(ctx, value, &drop.ty, rest_body)
+            }
+        }
+    }
+
+    fn storage_dead_drop_elaboration(
+        &self,
+        ctx: &Ctx,
+        cursor: MirCursor,
+        symbol: Symbol,
+    ) -> Option<mir::DropElaboration> {
+        let body = cursor.body;
+        let previous = cursor.index.checked_sub(1)?;
+        let previous = cursor.statements().get(previous)?;
+        let mir::Statement::DropCandidate {
+            reason: reason @ (mir::DropReason::ScopeExit | mir::DropReason::EarlyExit),
+            target:
+                mir::DropTarget::Symbol {
+                    symbol: target_symbol,
+                    ..
+                },
+            key_path,
+            elaboration,
+        } = &previous.kind
+        else {
+            return None;
+        };
+        if *target_symbol != symbol {
+            return None;
+        }
+        let key_path = key_path
+            .as_ref()
+            .and_then(|key_path| Self::ownership_key_path_from_mir(body, key_path))
+            .unwrap_or_else(|| OwnershipKeyPath::root(symbol));
+        elaboration
+            .or_else(|| self.drop_elaboration_at(ctx, body, previous.point, *reason, &key_path))
     }
 
     fn moved_key_paths_at_statement(
@@ -507,33 +736,32 @@ impl<'a> Lowering<'a> {
         self.p.func_ref(cont)
     }
 
+    // lhs/rhs/target are the distinct pieces of the assignment; cursor/ctx/k/cache are the
+    // walk state every statement lowerer threads.
+    #[allow(clippy::too_many_arguments)]
     fn lower_mir_assignment(
         &mut self,
         lhs: &Expr,
         rhs: &Expr,
         target: Option<&mir::KeyPath>,
-        drop_elaboration: Option<mir::DropElaboration>,
-        body: &mir::Body<'_>,
-        block: mir::BlockId,
-        index: usize,
-        statements: &[mir::LocatedStatement<'_>],
+        cursor: MirCursor,
         ctx: &Ctx,
         k: ExprId,
-        loops: &[(mir::BlockId, ExprId, mir::BlockId, ExprId)],
+        cache: &mut MirBlockCache,
     ) -> ExprId {
+        let drop_elaboration = self.assignment_drop_elaboration(ctx, cursor);
         let lowered_target = self.assignment_target(lhs, ctx);
         let Some((cell, path)) = lowered_target else {
-            return self.lower_mir_statements(body, block, index + 1, statements, ctx, k, loops);
+            return self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         };
         let void_ty = self.p.ty_void();
         let bot = self.p.ty_bot();
         let after = self.p.func("after_set", void_ty, bot);
-        let after_body =
-            self.lower_mir_statements(body, block, index + 1, statements, ctx, k, loops);
+        let after_body = self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         self.p.set_body(after, after_body);
         let after_ref = self.p.func_ref(after);
         let target_key_path = target
-            .and_then(|target| Self::ownership_key_path_from_mir(body, target))
+            .and_then(|target| Self::ownership_key_path_from_mir(cursor.body, target))
             .or_else(|| self.ownership_key_path_from_assignment_lhs(ctx, lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
@@ -555,7 +783,7 @@ impl<'a> Lowering<'a> {
             };
             let after_set = self.sequence_void_effect(cell_set, after_set);
             let after_set =
-                self.clear_moved_drop_flags_then(ctx, body, &statements[index], after_set);
+                self.clear_moved_drop_flags_then(ctx, cursor.body, cursor.statement(), after_set);
             let lhs_check_ty = self.checker_ty(lhs, ctx);
             if matches!(drop_elaboration, Some(mir::DropElaboration::Static))
                 && self.needs_drop_type(ctx.unit, &lhs_check_ty)
@@ -592,25 +820,14 @@ impl<'a> Lowering<'a> {
     fn lower_mir_discard(
         &mut self,
         expr: &Expr,
-        body: &mir::Body<'_>,
-        block: mir::BlockId,
-        index: usize,
-        statements: &[mir::LocatedStatement<'_>],
+        cursor: MirCursor,
         ctx: &Ctx,
         k: ExprId,
-        loops: &[(mir::BlockId, ExprId, mir::BlockId, ExprId)],
+        cache: &mut MirBlockCache,
     ) -> ExprId {
-        if let Some(done) = self.try_mir_effect_split(
-            expr,
-            MirRestBinding::Discard,
-            body,
-            block,
-            index,
-            statements,
-            ctx,
-            k,
-            loops,
-        ) {
+        if let Some(done) =
+            self.try_mir_effect_split(expr, MirRestBinding::Discard, cursor, ctx, k, cache)
+        {
             return done;
         }
         let (value_ty, pure_value) = match self.try_pure(expr, ctx) {
@@ -619,9 +836,9 @@ impl<'a> Lowering<'a> {
         };
         let bot = self.p.ty_bot();
         let drop_k = self.p.func("drop", value_ty, bot);
+        let rest_body = self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         let rest_body =
-            self.lower_mir_statements(body, block, index + 1, statements, ctx, k, loops);
-        let rest_body = self.clear_moved_drop_flags_then(ctx, body, &statements[index], rest_body);
+            self.clear_moved_drop_flags_then(ctx, cursor.body, cursor.statement(), rest_body);
         self.p.set_body(drop_k, rest_body);
         let drop_ref = self.p.func_ref(drop_k);
         match pure_value {
@@ -630,18 +847,18 @@ impl<'a> Lowering<'a> {
         }
     }
 
+    // stmt/effect_name/handler_block are the distinct pieces of the @handle; cursor/ctx/k/cache
+    // are the walk state every statement lowerer threads.
+    #[allow(clippy::too_many_arguments)]
     fn lower_mir_handling(
         &mut self,
         stmt: &Stmt,
         effect_name: &crate::name::Name,
         handler_block: &Block,
-        body: &mir::Body<'_>,
-        block: mir::BlockId,
-        index: usize,
-        statements: &[mir::LocatedStatement<'_>],
+        cursor: MirCursor,
         ctx: &Ctx,
         k: ExprId,
-        loops: &[(mir::BlockId, ExprId, mir::BlockId, ExprId)],
+        cache: &mut MirBlockCache,
     ) -> ExprId {
         if k != ctx.tail_k {
             self.diagnostics
@@ -755,20 +972,17 @@ impl<'a> Lowering<'a> {
 
         let mut scope_ctx = ctx.clone();
         scope_ctx.local_handlers.insert(handler_sym);
-        self.lower_mir_statements(body, block, index + 1, statements, &scope_ctx, k, loops)
+        self.lower_mir_statements(cursor.advance(), &scope_ctx, k, cache)
     }
 
     fn try_mir_effect_split(
         &mut self,
         expr: &Expr,
         binding: MirRestBinding,
-        body: &mir::Body<'_>,
-        block: mir::BlockId,
-        index: usize,
-        statements: &[mir::LocatedStatement<'_>],
+        cursor: MirCursor,
         ctx: &Ctx,
         k: ExprId,
-        loops: &[(mir::BlockId, ExprId, mir::BlockId, ExprId)],
+        cache: &mut MirBlockCache,
     ) -> Option<ExprId> {
         if let ExprKind::CallEffect { args, .. } = &expr.kind
             && let Some(&handler_sym) = self.units[ctx.unit].resolved.effect_handlers.get(&expr.id)
@@ -783,18 +997,8 @@ impl<'a> Lowering<'a> {
                 );
                 return Some(self.dead_end("resumable_perform_off_spine"));
             }
-            let resume_ref = self.rest_mir_closure(
-                "after_perform",
-                pair_ty,
-                binding,
-                body,
-                block,
-                index,
-                statements,
-                ctx,
-                k,
-                loops,
-            );
+            let resume_ref =
+                self.rest_mir_closure("after_perform", pair_ty, binding, cursor, ctx, cache);
             let slot = ctx.raw_ret_k;
             let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
             return Some(
@@ -872,18 +1076,8 @@ impl<'a> Lowering<'a> {
             );
         }
 
-        let rest_ref = self.rest_mir_closure(
-            "after_abortable",
-            pair_ty,
-            binding,
-            body,
-            block,
-            index,
-            statements,
-            ctx,
-            k,
-            loops,
-        );
+        let rest_ref =
+            self.rest_mir_closure("after_abortable", pair_ty, binding, cursor, ctx, cache);
         let slot = ctx.raw_ret_k;
         let func_ref = self.p.func_ref(label);
         let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
@@ -902,13 +1096,9 @@ impl<'a> Lowering<'a> {
         name: &str,
         pair_ty: TyId,
         binding: MirRestBinding,
-        body: &mir::Body<'_>,
-        block: mir::BlockId,
-        index: usize,
-        statements: &[mir::LocatedStatement<'_>],
+        cursor: MirCursor,
         ctx: &Ctx,
-        k: ExprId,
-        loops: &[(mir::BlockId, ExprId, mir::BlockId, ExprId)],
+        cache: &mut MirBlockCache,
     ) -> ExprId {
         let bot = self.p.ty_bot();
         let rest_k = self.p.func(name, pair_ty, bot);
@@ -922,28 +1112,22 @@ impl<'a> Lowering<'a> {
             MirRestBinding::Bind(symbol, mutated) => {
                 let drop_binding = self
                     .symbol_check_ty(symbol, &ctx.theta)
-                    .and_then(|ty| self.drop_binding_for_mir_symbol(ctx, body, symbol, ty));
+                    .and_then(|ty| self.drop_binding_for_mir_symbol(ctx, cursor.body, symbol, ty));
                 if mutated {
                     self.with_cells(&[(symbol, value)], &mut inner, |this, inner| {
                         let drops = drop_binding.clone().into_iter().collect::<Vec<_>>();
                         this.with_drop_flags(&drops, inner, |this, inner| {
                             inner.drop_stack.extend(drops.clone());
-                            let bound_k = inner.ret_k;
-                            let scope_k = this.wrap_cont_with_drop_bindings(inner, bound_k, &drops);
-                            inner.tail_k = scope_k;
                             let rest_body = this.lower_mir_statements(
-                                body,
-                                block,
-                                index + 1,
-                                statements,
+                                cursor.advance(),
                                 inner,
-                                scope_k,
-                                loops,
+                                inner.ret_k,
+                                cache,
                             );
                             this.clear_moved_drop_flags_then(
                                 inner,
-                                body,
-                                &statements[index],
+                                cursor.body,
+                                cursor.statement(),
                                 rest_body,
                             )
                         })
@@ -953,52 +1137,38 @@ impl<'a> Lowering<'a> {
                     let drops = drop_binding.into_iter().collect::<Vec<_>>();
                     self.with_drop_flags(&drops, &mut inner, |this, inner| {
                         inner.drop_stack.extend(drops.clone());
-                        let scope_k = this.wrap_cont_with_drop_bindings(inner, inner_k, &drops);
-                        inner.tail_k = scope_k;
-                        let rest_body = this.lower_mir_statements(
-                            body,
-                            block,
-                            index + 1,
-                            statements,
+                        let rest_body =
+                            this.lower_mir_statements(cursor.advance(), inner, inner_k, cache);
+                        this.clear_moved_drop_flags_then(
                             inner,
-                            scope_k,
-                            loops,
-                        );
-                        this.clear_moved_drop_flags_then(inner, body, &statements[index], rest_body)
+                            cursor.body,
+                            cursor.statement(),
+                            rest_body,
+                        )
                     })
                 }
             }
             MirRestBinding::Discard => {
-                let rest_body = self.lower_mir_statements(
-                    body,
-                    block,
-                    index + 1,
-                    statements,
-                    &inner,
-                    inner_k,
-                    loops,
-                );
-                self.clear_moved_drop_flags_then(&inner, body, &statements[index], rest_body)
+                let rest_body = self.lower_mir_statements(cursor.advance(), &inner, inner_k, cache);
+                self.clear_moved_drop_flags_then(&inner, cursor.body, cursor.statement(), rest_body)
             }
             MirRestBinding::Deliver => {
                 let deliver = self.p.app(inner_k, value);
-                self.clear_moved_drop_flags_then(&inner, body, &statements[index], deliver)
+                self.clear_moved_drop_flags_then(&inner, cursor.body, cursor.statement(), deliver)
             }
         };
-        let _ = k;
         self.p.set_body(rest_k, body_expr);
         self.p.func_ref(rest_k)
     }
 
     fn lower_mir_terminator(
         &mut self,
-        body: &mir::Body<'_>,
-        block: mir::BlockId,
+        cursor: MirCursor,
         ctx: &Ctx,
         k: ExprId,
-        loops: &[(mir::BlockId, ExprId, mir::BlockId, ExprId)],
+        cache: &mut MirBlockCache,
     ) -> ExprId {
-        match &body.blocks[block.0].terminator {
+        match &cursor.body.blocks[cursor.block.0].terminator {
             mir::Terminator::Unset | mir::Terminator::Return => {
                 let void = self.p.void();
                 self.p.app(k, void)
@@ -1011,42 +1181,51 @@ impl<'a> Lowering<'a> {
             mir::Terminator::Break => self.lower_mir_break(ctx, k),
             mir::Terminator::Continue => self.lower_mir_continue(ctx, k),
             mir::Terminator::Jump(target) => {
-                if let Some((_, header, _, _)) = loops
+                if let Some(loop_) = cursor
+                    .loops
                     .iter()
                     .rev()
-                    .find(|(header_block, _, _, _)| header_block == target)
+                    .find(|loop_| loop_.header_block == *target)
                 {
                     let void = self.p.void();
-                    let jump = self.p.app(*header, void);
-                    let drops = self.loop_jump_drops(ctx, *header);
+                    let jump = self.p.app(loop_.header, void);
+                    let drops = self.loop_jump_drops(ctx, loop_.header);
                     return self.lower_drop_bindings_then(ctx, &drops, jump);
                 }
-                if let Some((_, _, _, exit)) = loops
+                if let Some(loop_) = cursor
+                    .loops
                     .iter()
                     .rev()
-                    .find(|(_, _, exit_block, _)| exit_block == target)
+                    .find(|loop_| loop_.exit_block == *target)
                 {
                     let void = self.p.void();
-                    let jump = self.p.app(*exit, void);
-                    let drops = self.loop_jump_drops(ctx, *exit);
+                    let jump = self.p.app(loop_.exit, void);
+                    let drops = self.loop_jump_drops(ctx, loop_.exit);
                     return self.lower_drop_bindings_then(ctx, &drops, jump);
                 }
-                self.lower_mir_block(body, *target, ctx, k, loops)
+                self.lower_mir_block(cursor.at_block(*target), ctx, k, cache)
             }
             mir::Terminator::Branch {
                 condition,
                 then_block,
                 else_block,
             } => {
-                let then_body = self.lower_mir_block(body, *then_block, ctx, k, loops);
-                let else_body = self.lower_mir_block(body, *else_block, ctx, k, loops);
+                let then_body = self.lower_mir_block(cursor.at_block(*then_block), ctx, k, cache);
+                let else_body = self.lower_mir_block(cursor.at_block(*else_block), ctx, k, cache);
                 self.branch(condition, then_body, else_body, ctx)
             }
             mir::Terminator::Switch {
                 scrutinee,
                 match_arms: Some(arms),
-                ..
-            } => self.lower_match(scrutinee, arms, ctx, k),
+                arms: arm_blocks,
+                default,
+            } => {
+                if let Some(join) = Self::switch_join_target(cursor.body, arm_blocks, *default) {
+                    self.lower_mir_block(cursor.at_block(join), ctx, k, cache)
+                } else {
+                    self.lower_match(scrutinee, arms, ctx, k)
+                }
+            }
             mir::Terminator::Switch { .. } => self.dead_end("mir_switch_without_patterns"),
             mir::Terminator::Loop {
                 condition,
@@ -1059,9 +1238,14 @@ impl<'a> Lowering<'a> {
                 let exit = self.p.func("loop_exit", void_ty, bot);
                 let header_ref = self.p.func_ref(header);
                 let exit_ref = self.p.func_ref(exit);
-                let mut next_loops = loops.to_vec();
-                next_loops.push((block, header_ref, *exit_block, exit_ref));
-                let exit_body = self.lower_mir_block(body, *exit_block, ctx, k, loops);
+                let mut next_loops = cursor.loops.to_vec();
+                next_loops.push(MirLoop {
+                    header_block: cursor.block,
+                    header: header_ref,
+                    exit_block: *exit_block,
+                    exit: exit_ref,
+                });
+                let exit_body = self.lower_mir_block(cursor.at_block(*exit_block), ctx, k, cache);
                 self.p.set_body(exit, exit_body);
 
                 let mut loop_ctx = ctx.clone();
@@ -1070,8 +1254,12 @@ impl<'a> Lowering<'a> {
                     exit: exit_ref,
                     drop_depth: ctx.drop_stack.len(),
                 });
-                let body_expr =
-                    self.lower_mir_block(body, *body_block, &loop_ctx, header_ref, &next_loops);
+                let body_expr = self.lower_mir_block(
+                    cursor.at_block(*body_block).with_loops(&next_loops),
+                    &loop_ctx,
+                    header_ref,
+                    cache,
+                );
                 let header_body = match condition {
                     Some(condition) => {
                         let void = self.p.void();
@@ -1085,6 +1273,25 @@ impl<'a> Lowering<'a> {
                 self.p.app(header_ref, void)
             }
         }
+    }
+
+    fn switch_join_target(
+        body: &mir::Body<'_>,
+        arms: &[mir::BlockId],
+        default: Option<mir::BlockId>,
+    ) -> Option<mir::BlockId> {
+        let mut join = None;
+        for block in arms.iter().copied().chain(default) {
+            let mir::Terminator::Jump(target) = body.blocks[block.0].terminator else {
+                return None;
+            };
+            match join {
+                Some(existing) if existing != target => return None,
+                Some(_) => {}
+                None => join = Some(target),
+            }
+        }
+        join
     }
 
     fn lower_mir_break(&mut self, ctx: &Ctx, k: ExprId) -> ExprId {

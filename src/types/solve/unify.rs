@@ -48,25 +48,7 @@ impl<'s> Solver<'s> {
                 ));
             }
 
-            (Ty::Borrow(BorrowKind::Shared, inner1), Ty::Borrow(BorrowKind::Mutable, inner2))
-                if origin.reason == CtReason::Apply =>
-            {
-                worklist.push(Constraint::Eq(
-                    (**inner1).clone(),
-                    (**inner2).clone(),
-                    origin,
-                ));
-            }
-
             (Ty::Borrow(..), Ty::Borrow(..)) => self.report_mismatch(&a, &b, origin),
-
-            (Ty::Borrow(_, inner), other) if origin.reason == CtReason::Apply => {
-                worklist.push(Constraint::Eq((**inner).clone(), other.clone(), origin));
-            }
-
-            (other, Ty::Borrow(_, inner)) if origin.reason == CtReason::Apply => {
-                worklist.push(Constraint::Eq(other.clone(), (**inner).clone(), origin));
-            }
 
             (Ty::Var(x), Ty::Var(y)) if self.store.find(x.0) == self.store.find(y.0) => {}
             (Ty::Var(x), Ty::Var(y)) => {
@@ -119,8 +101,9 @@ impl<'s> Solver<'s> {
             (Ty::Nominal(s1, args1), Ty::Nominal(s2, args2))
                 if s1 == s2 && args1.len() == args2.len() =>
             {
+                let nested = origin.nested();
                 for (a1, a2) in args1.iter().zip(args2) {
-                    worklist.push(Constraint::Eq(a1.clone(), a2.clone(), origin));
+                    worklist.push(Constraint::Eq(a1.clone(), a2.clone(), nested));
                 }
             }
 
@@ -140,8 +123,9 @@ impl<'s> Solver<'s> {
                     .zip(a2)
                     .all(|((left, _), (right, _))| left == right) =>
             {
+                let nested = origin.nested();
                 for ((_, left), (_, right)) in a1.iter().zip(a2) {
-                    worklist.push(Constraint::Eq(left.clone(), right.clone(), origin));
+                    worklist.push(Constraint::Eq(left.clone(), right.clone(), nested));
                 }
             }
 
@@ -156,21 +140,33 @@ impl<'s> Solver<'s> {
                     ));
                     return true;
                 }
+                // `Apply` auto-borrows the supplied argument to its parameter, but only at
+                // the immediate application. `nested` drops `Apply`, so parameters of a
+                // *nested* function type (which are contravariant) unify invariantly rather
+                // than letting a function needing `&mut`/owned satisfy one invoked with `&`.
+                let nested = origin.nested();
                 for (a1, a2) in p1.iter().zip(p2) {
-                    worklist.push(Constraint::Eq(a1.clone(), a2.clone(), origin));
+                    if origin.reason == CtReason::Apply {
+                        self.push_apply_param_eq(a1, a2, nested, worklist);
+                    } else {
+                        worklist.push(Constraint::Eq(a1.clone(), a2.clone(), nested));
+                    }
                 }
-                worklist.push(Constraint::Eq((**r1).clone(), (**r2).clone(), origin));
-                worklist.push(Constraint::EffEq(e1.clone(), e2.clone(), origin));
+                // Returns are covariant, so a found `&mut` return may downgrade to an
+                // expected `&` return.
+                self.push_borrow_downgrade_eq(r1, r2, nested, worklist);
+                worklist.push(Constraint::EffEq(e1.clone(), e2.clone(), nested));
             }
 
             (Ty::Tuple(i1), Ty::Tuple(i2)) if i1.len() == i2.len() => {
+                let nested = origin.nested();
                 for (a1, a2) in i1.iter().zip(i2) {
-                    worklist.push(Constraint::Eq(a1.clone(), a2.clone(), origin));
+                    worklist.push(Constraint::Eq(a1.clone(), a2.clone(), nested));
                 }
             }
 
             (Ty::Record(r1), Ty::Record(r2)) => {
-                if !self.unify_rows(r1, r2, origin, worklist) {
+                if !self.unify_rows(r1, r2, origin.nested(), worklist) {
                     return false;
                 }
             }
@@ -180,6 +176,71 @@ impl<'s> Solver<'s> {
             _ => self.report_mismatch(&a, &b, origin),
         }
         true
+    }
+
+    /// Auto-borrow an immediate call argument to its parameter: an owned value
+    /// satisfies a `&`/`&mut` parameter, and a `&mut` value satisfies a `&`
+    /// parameter. Only called for `Apply` origins at the application boundary;
+    /// the emitted sub-constraints use the (demoted) `origin` so nested
+    /// function types do not coerce.
+    fn push_apply_param_eq(
+        &mut self,
+        expected: &Ty,
+        found: &Ty,
+        origin: CtOrigin,
+        worklist: &mut Vec<Constraint>,
+    ) {
+        match self.store.shallow(expected) {
+            Ty::Borrow(expected_kind, expected_inner) => match self.store.shallow(found) {
+                Ty::Borrow(found_kind, found_inner) if found_kind == expected_kind => {
+                    worklist.push(Constraint::Eq(
+                        (*expected_inner).clone(),
+                        (*found_inner).clone(),
+                        origin,
+                    ));
+                }
+                Ty::Borrow(BorrowKind::Mutable, found_inner)
+                    if expected_kind == BorrowKind::Shared =>
+                {
+                    worklist.push(Constraint::Eq(
+                        (*expected_inner).clone(),
+                        (*found_inner).clone(),
+                        origin,
+                    ));
+                }
+                Ty::Borrow(..) => {
+                    worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin));
+                }
+                _ => {
+                    worklist.push(Constraint::Eq(
+                        (*expected_inner).clone(),
+                        found.clone(),
+                        origin,
+                    ));
+                }
+            },
+            _ => worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin)),
+        }
+    }
+
+    fn push_borrow_downgrade_eq(
+        &mut self,
+        expected: &Ty,
+        found: &Ty,
+        origin: CtOrigin,
+        worklist: &mut Vec<Constraint>,
+    ) {
+        match (self.store.shallow(expected), self.store.shallow(found)) {
+            (
+                Ty::Borrow(BorrowKind::Shared, expected_inner),
+                Ty::Borrow(BorrowKind::Mutable, found_inner),
+            ) => worklist.push(Constraint::Eq(
+                (*expected_inner).clone(),
+                (*found_inner).clone(),
+                origin,
+            )),
+            _ => worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin)),
+        }
     }
 
     pub(super) fn report_mismatch(&mut self, expected_ty: &Ty, found_ty: &Ty, origin: CtOrigin) {

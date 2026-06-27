@@ -134,7 +134,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let ret = match &func.ret {
             Some(annotation) => {
                 let annotated = self.lower_annotation(annotation);
-                self.emit_eq(
+                self.emit_borrow_downgrade_or_eq(
                     expected_ret.clone(),
                     annotated.clone(),
                     func.id,

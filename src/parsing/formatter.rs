@@ -1576,7 +1576,7 @@ impl<'a> Formatter<'a> {
                 .map(|capture| self.format_capture_spec(capture))
                 .collect();
 
-            result = concat(
+            result = concat_space(
                 result,
                 concat(
                     text("["),
@@ -2497,6 +2497,14 @@ mod formatter_tests {
         assert_eq!(
             format_code("func foo<T, U>() {}", 80),
             "func foo<T, U>() {}"
+        );
+    }
+
+    #[test]
+    fn test_capture_spec_formatting() {
+        assert_eq!(
+            format_code("let f = func [copy a, consuming b, &c, &mut d]() {}", 80),
+            "let f = func [a, consuming b, &c, &mut d]() {}"
         );
     }
 

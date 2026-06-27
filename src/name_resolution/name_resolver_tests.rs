@@ -29,7 +29,7 @@ pub mod tests {
             call_arg::CallArg,
             decl::{Decl, DeclKind, ReceiverMode},
             expr::{Expr, ExprKind},
-            func::{EffectSet, Func},
+            func::{CaptureMode, EffectSet, Func},
             func_signature::FuncSignature,
             generic_decl::GenericDecl,
             match_arm::MatchArm,
@@ -480,6 +480,68 @@ pub mod tests {
             Some(&expected),
             "{:?}",
             resolved.1.captures
+        );
+    }
+
+    #[test]
+    fn resolves_explicit_capture_specs() {
+        let resolved = resolve(
+            "
+        func outer() {
+            let a = 1
+            let b = 2
+            let c = 3
+            let d = 4
+            let e = 5
+            let f = func [a, copy b, consuming c, &d, &mut e]() {
+                a
+            }
+        }
+        ",
+        );
+
+        let DeclKind::Let {
+            rhs: Some(outer_expr),
+            ..
+        } = &resolved.0.roots[0].as_decl().kind
+        else {
+            panic!("expected outer function declaration");
+        };
+        let ExprKind::Func(outer) = &outer_expr.kind else {
+            panic!("expected outer function literal");
+        };
+        let DeclKind::Let {
+            rhs: Some(inner_expr),
+            ..
+        } = &outer.body.body[5].as_decl().kind
+        else {
+            panic!("expected nested function binding");
+        };
+        let ExprKind::Func(inner) = &inner_expr.kind else {
+            panic!("expected nested function literal");
+        };
+
+        let captures: Vec<_> = inner
+            .captures
+            .iter()
+            .map(|capture| {
+                assert!(
+                    capture.name.symbol().is_ok(),
+                    "capture should be resolved: {:?}",
+                    capture
+                );
+                (capture.name.name_str(), capture.mode)
+            })
+            .collect();
+        assert_eq!(
+            captures,
+            vec![
+                ("a".to_string(), CaptureMode::Copy),
+                ("b".to_string(), CaptureMode::Copy),
+                ("c".to_string(), CaptureMode::Move),
+                ("d".to_string(), CaptureMode::BorrowShared),
+                ("e".to_string(), CaptureMode::BorrowMut),
+            ]
         );
     }
 

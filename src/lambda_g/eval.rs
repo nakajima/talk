@@ -16,7 +16,7 @@ use crate::lambda_g::expr::{CmpOp, Const, ExprId, ExprKind, Op, TyKind};
 use crate::lambda_g::program::{Label, Program};
 use crate::name_resolution::symbol::Symbol;
 use crate::vm::io::IO;
-use std::collections::BTreeMap;
+use talk_runtime::memory::{Allocations, MemoryError};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalValue {
@@ -37,13 +37,6 @@ pub enum EvalValue {
     Existential(Symbol, Box<EvalValue>, Vec<EvalValue>),
     /// Index into the evaluator's slot store (a mutable cell).
     Cell(usize),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct AllocationRecord {
-    start: u32,
-    len: usize,
-    live: bool,
 }
 
 enum Step {
@@ -72,8 +65,7 @@ pub struct Evaluator {
     /// (Leroy, POPL 1992 — scalars live unboxed in raw bytes).
     mem: Vec<u8>,
     static_len: u32,
-    allocations: Vec<AllocationRecord>,
-    allocation_index: BTreeMap<u32, usize>,
+    allocations: Allocations,
     /// Mutable cell store (assignment-converted locals). Cells are machine
     /// state; the term language sees only `Const::Slot` handles.
     slots: Vec<EvalValue>,
@@ -102,8 +94,7 @@ impl Evaluator {
             limit: 50_000_000,
             mem: vec![],
             static_len: 0,
-            allocations: vec![],
-            allocation_index: BTreeMap::new(),
+            allocations: Allocations::default(),
             slots: vec![],
             slot_tys: vec![],
             boxed: vec![],
@@ -126,7 +117,6 @@ impl Evaluator {
         self.mem = p.static_mem.clone();
         self.static_len = self.mem.len() as u32;
         self.allocations.clear();
-        self.allocation_index.clear();
         self.halt = Some(halt);
         let halt_ref = p.func_ref(halt);
         let main_ref = p.func_ref(main);
@@ -480,24 +470,12 @@ impl Evaluator {
             // free/use-after-free are observable.
             Op::Alloc => match self.eval_sub(p, args[0])? {
                 EvalValue::I64(count) if count >= 0 => {
-                    let addr = u32::try_from(self.mem.len()).map_err(|_| {
-                        EvalError::Unsupported("memory address out of range".into())
-                    })?;
                     let count = usize::try_from(count)
                         .map_err(|_| EvalError::Unsupported("alloc count out of range".into()))?;
-                    let reserve = count.max(1);
-                    let new_len =
-                        self.mem.len().checked_add(reserve).ok_or_else(|| {
-                            EvalError::Unsupported("alloc count out of range".into())
-                        })?;
-                    self.mem.resize(new_len, 0);
-                    let index = self.allocations.len();
-                    self.allocations.push(AllocationRecord {
-                        start: addr,
-                        len: count,
-                        live: true,
-                    });
-                    self.allocation_index.insert(addr, index);
+                    let addr = self
+                        .allocations
+                        .allocate(&mut self.mem, count)
+                        .map_err(eval_memory_error)?;
                     Ok(EvalValue::Ptr(addr))
                 }
                 _ => Err(EvalError::Unsupported("alloc count".into())),
@@ -786,73 +764,26 @@ impl Evaluator {
     }
 
     fn free(&mut self, ptr: u32) -> Result<(), EvalError> {
-        if ptr < self.static_len {
-            return Ok(());
-        }
-        let Some(&index) = self.allocation_index.get(&ptr) else {
-            return Err(EvalError::Unsupported("free of invalid pointer".into()));
-        };
-        let record = &mut self.allocations[index];
-        if !record.live {
-            return Err(EvalError::Unsupported("double free".into()));
-        }
-        record.live = false;
-        Ok(())
+        self.allocations
+            .free(self.static_len, ptr)
+            .map_err(eval_memory_error)
     }
 
     fn check_access(&self, addr: u32, len: usize, op: &str) -> Result<(), EvalError> {
-        let start = addr as usize;
-        let end = start
-            .checked_add(len)
-            .ok_or_else(|| EvalError::Unsupported(format!("{op} out of bounds")))?;
-        if end > self.mem.len() {
-            return Err(EvalError::Unsupported(format!("{op} out of bounds")));
-        }
-        if end <= self.static_len as usize {
-            return Ok(());
-        }
-        if self
-            .allocation_record_containing(addr)
-            .is_some_and(|record| {
-                let alloc_start = record.start as usize;
-                let alloc_end = alloc_start + record.len;
-                record.live && start >= alloc_start && end <= alloc_end
-            })
-        {
-            return Ok(());
-        }
-        Err(EvalError::Unsupported(format!(
-            "{op} through invalid pointer"
-        )))
+        self.allocations
+            .check_access(self.mem.len(), self.static_len, addr, len, op)
+            .map_err(eval_memory_error)
     }
 
     fn c_string_tail(&self, addr: u32) -> Result<&[u8], EvalError> {
         let start = addr as usize;
-        if start >= self.mem.len() {
-            return Err(EvalError::Unsupported("io access out of bounds".into()));
-        }
-        if addr < self.static_len {
-            return self
-                .mem
-                .get(start..self.static_len as usize)
-                .ok_or_else(|| EvalError::Unsupported("io access out of bounds".into()));
-        }
-        let Some(record) = self.allocation_record_containing(addr).filter(|record| {
-            let alloc_start = record.start as usize;
-            let alloc_end = alloc_start + record.len;
-            record.live && start >= alloc_start && start < alloc_end
-        }) else {
-            return Err(EvalError::Unsupported("io through invalid pointer".into()));
-        };
-        let end = record.start as usize + record.len;
+        let end = self
+            .allocations
+            .accessible_tail_end(self.mem.len(), self.static_len, addr, "io")
+            .map_err(eval_io_memory_error)?;
         self.mem
             .get(start..end)
             .ok_or_else(|| EvalError::Unsupported("io access out of bounds".into()))
-    }
-
-    fn allocation_record_containing(&self, addr: u32) -> Option<&AllocationRecord> {
-        let (_, index) = self.allocation_index.range(..=addr).next_back()?;
-        self.allocations.get(*index)
     }
 
     /// The unit argument for a thunk of type [] → R: an empty tuple.
@@ -924,6 +855,28 @@ impl Evaluator {
     }
 }
 
+fn eval_memory_error(error: MemoryError) -> EvalError {
+    EvalError::Unsupported(match error {
+        MemoryError::AddressOutOfRange => "memory address out of range".to_string(),
+        MemoryError::AllocationTooLarge => "alloc count out of range".to_string(),
+        MemoryError::InvalidFree => "free of invalid pointer".to_string(),
+        MemoryError::DoubleFree => "double free".to_string(),
+        MemoryError::OutOfBounds { op } => format!("{op} out of bounds"),
+        MemoryError::InvalidPointer { op } => format!("{op} through invalid pointer"),
+    })
+}
+
+fn eval_io_memory_error(error: MemoryError) -> EvalError {
+    EvalError::Unsupported(match error {
+        MemoryError::InvalidPointer { .. } | MemoryError::InvalidFree | MemoryError::DoubleFree => {
+            "io through invalid pointer".to_string()
+        }
+        MemoryError::AddressOutOfRange
+        | MemoryError::AllocationTooLarge
+        | MemoryError::OutOfBounds { .. } => "io access out of bounds".to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -931,13 +884,9 @@ mod tests {
     #[test]
     fn c_string_tail_rejects_one_past_heap_allocation() {
         let mut eval = Evaluator::new();
-        eval.mem = vec![0; 4];
-        eval.allocations.push(AllocationRecord {
-            start: 0,
-            len: 4,
-            live: true,
-        });
-        eval.allocation_index.insert(0, 0);
+        eval.allocations
+            .allocate(&mut eval.mem, 4)
+            .expect("allocation");
 
         assert!(
             matches!(eval.c_string_tail(4), Err(EvalError::Unsupported(_))),
@@ -948,13 +897,9 @@ mod tests {
     #[test]
     fn c_string_tail_rejects_zero_length_heap_allocation() {
         let mut eval = Evaluator::new();
-        eval.mem = vec![0];
-        eval.allocations.push(AllocationRecord {
-            start: 0,
-            len: 0,
-            live: true,
-        });
-        eval.allocation_index.insert(0, 0);
+        eval.allocations
+            .allocate(&mut eval.mem, 0)
+            .expect("allocation");
 
         assert!(
             matches!(eval.c_string_tail(0), Err(EvalError::Unsupported(_))),
