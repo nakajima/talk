@@ -485,11 +485,12 @@ impl Driver<NameResolved> {
         // The HIR (once, NodeID-preserving) for the error-free asts that ownership analyzes
         // and lowering will consume. Stored in `Typed`; not yet consumed by ownership/lowering.
         let mut hir: IndexMap<Source, crate::hir::HirFile> = IndexMap::default();
-        let build_hir_for = |hir: &mut IndexMap<Source, crate::hir::HirFile>,
-                             source: &Source,
-                             ast: &AST<crate::parsing::ast::NameResolved>| {
-            hir.insert(source.clone(), crate::hir::build::build_file(ast));
-        };
+        let build_hir_for =
+            |hir: &mut IndexMap<Source, crate::hir::HirFile>,
+             source: &Source,
+             ast: &AST<crate::parsing::ast::NameResolved>| {
+                hir.insert(source.clone(), crate::hir::build::build_file(ast, &types));
+            };
 
         let blocked_files = error_diagnostic_files(&diagnostics);
         let (ownership, ownership_diagnostics) = match blocked_files {

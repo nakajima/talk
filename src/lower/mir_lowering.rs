@@ -428,8 +428,13 @@ impl<'a> Lowering<'a> {
                         .as_ref()
                         .and_then(|key_path| Self::ownership_key_path_from_mir(body, key_path))
                         .unwrap_or_else(|| drop.key_path.clone());
-                    let elaboration =
-                        self.drop_elaboration_at(ctx, body, statement.point, *reason, Some(&key_path));
+                    let elaboration = self.drop_elaboration_at(
+                        ctx,
+                        body,
+                        statement.point,
+                        *reason,
+                        Some(&key_path),
+                    );
                     drops.push(PendingDrop {
                         symbol: drop.symbol,
                         key_path,
@@ -550,8 +555,10 @@ impl<'a> Lowering<'a> {
             ExprKind::Variable(name) => name.symbol().ok().map(OwnershipKeyPath::root),
             ExprKind::Member(Some(receiver), ..) => {
                 let base = self.ownership_key_path_from_assignment_lhs(ctx, receiver)?;
-                let field =
-                    crate::types::output::stored_field_symbol(self.units[ctx.unit].types, lhs.id)?;
+                let field = crate::types::output::stored_field_symbol(
+                    self.units[ctx.unit].types,
+                    lhs.member_resolution.as_ref(),
+                )?;
                 Some(base.child(field))
             }
             _ => None,

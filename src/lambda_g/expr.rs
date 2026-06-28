@@ -146,6 +146,14 @@ pub enum Op {
     IoConnect,
     IoAccept,
     IoSleep,
+    IoCwdLen,
+    IoCwdCopy,
+    IoGetenvLen,
+    IoGetenvCopy,
+    IoArgc,
+    IoArgLen,
+    IoArgCopy,
+    IoExit,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

@@ -863,7 +863,15 @@ impl<'a> ChunkBuilder<'a> {
             | Op::IoBind
             | Op::IoListen
             | Op::IoConnect
-            | Op::IoAccept => {
+            | Op::IoAccept
+            | Op::IoCwdLen
+            | Op::IoCwdCopy
+            | Op::IoGetenvLen
+            | Op::IoGetenvCopy
+            | Op::IoArgc
+            | Op::IoArgLen
+            | Op::IoArgCopy
+            | Op::IoExit => {
                 let io_op = match op {
                     Op::IoRead => IoOp::Read,
                     Op::IoWrite => IoOp::Write,
@@ -876,7 +884,15 @@ impl<'a> ChunkBuilder<'a> {
                     Op::IoBind => IoOp::Bind,
                     Op::IoListen => IoOp::Listen,
                     Op::IoConnect => IoOp::Connect,
-                    _ => IoOp::Accept,
+                    Op::IoAccept => IoOp::Accept,
+                    Op::IoCwdLen => IoOp::CwdLen,
+                    Op::IoCwdCopy => IoOp::CwdCopy,
+                    Op::IoGetenvLen => IoOp::GetenvLen,
+                    Op::IoGetenvCopy => IoOp::GetenvCopy,
+                    Op::IoArgc => IoOp::Argc,
+                    Op::IoArgLen => IoOp::ArgLen,
+                    Op::IoArgCopy => IoOp::ArgCopy,
+                    _ => IoOp::Exit,
                 };
                 let mut operands = [0u16; 3];
                 for (slot, &arg) in operands.iter_mut().zip(args.iter()) {

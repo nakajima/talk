@@ -407,6 +407,14 @@ impl Encoder {
             IoOp::Listen => 9,
             IoOp::Connect => 10,
             IoOp::Accept => 11,
+            IoOp::CwdLen => 12,
+            IoOp::CwdCopy => 13,
+            IoOp::GetenvLen => 14,
+            IoOp::GetenvCopy => 15,
+            IoOp::Argc => 16,
+            IoOp::ArgLen => 17,
+            IoOp::ArgCopy => 18,
+            IoOp::Exit => 19,
         });
     }
 
@@ -808,6 +816,14 @@ impl<'a> Decoder<'a> {
             9 => Ok(IoOp::Listen),
             10 => Ok(IoOp::Connect),
             11 => Ok(IoOp::Accept),
+            12 => Ok(IoOp::CwdLen),
+            13 => Ok(IoOp::CwdCopy),
+            14 => Ok(IoOp::GetenvLen),
+            15 => Ok(IoOp::GetenvCopy),
+            16 => Ok(IoOp::Argc),
+            17 => Ok(IoOp::ArgLen),
+            18 => Ok(IoOp::ArgCopy),
+            19 => Ok(IoOp::Exit),
             _ => Err(DecodeError::InvalidTag("io operation", tag)),
         }
     }

@@ -22,6 +22,7 @@ mod hir_tests;
 
 use derive_visitor::{Drive, DriveMut};
 
+use crate::label::Label;
 use crate::{
     name::Name,
     name_resolution::symbol::Symbol,
@@ -33,13 +34,11 @@ use crate::{
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
         inline_ir_instruction::InlineIRInstructionKind,
-        parameter::Parameter,
         type_annotation::TypeAnnotation,
         where_clause::WhereClause,
     },
     parsing::span::Span,
 };
-use crate::label::Label;
 
 /// One source file lowered to HIR: the analogue of `AST<NameResolved>` for the
 /// downstream phases. Carries the same `file_id` and the lowered roots.
@@ -67,6 +66,24 @@ pub struct Expr {
     pub kind: ExprKind,
     #[drive(skip)]
     pub span: Span,
+    /// This expression's type, baked on by the HirLowerer (read once from the
+    /// checker's tables). Every checked expression has one — `Ty::Error` at
+    /// worst — so downstream stages read it here instead of a NodeID-keyed table.
+    #[drive(skip)]
+    pub ty: crate::types::ty::Ty,
+    /// How a member access / construction resolved (the checker's
+    /// `member_resolutions`), baked on by the HirLowerer; `None` where the node
+    /// is not a resolved member.
+    #[drive(skip)]
+    pub member_resolution: Option<crate::types::output::MemberResolution>,
+    /// This call/constructor's per-call-site type instantiation (the checker's
+    /// `instantiations`), baked on by the HirLowerer; read for θ at the call site.
+    #[drive(skip)]
+    pub instantiation: Option<Vec<(Symbol, crate::types::ty::Ty)>>,
+    /// The existential pack the checker recorded at this node (the checker's
+    /// `existential_packs`), baked on by the HirLowerer; raw (un-substituted).
+    #[drive(skip)]
+    pub existential_pack: Option<crate::types::output::ExistentialPack>,
 }
 
 impl std::fmt::Debug for Expr {
@@ -261,6 +278,26 @@ impl Pattern {
         }
         result
     }
+}
+
+// ----- Parameters ---------------------------------------------------------
+
+/// A function/closure parameter with its checker-assigned type baked on
+/// (`None` when the checker recorded no type for this binder). The HIR carries
+/// the type here so downstream stages never look it up by `NodeID`.
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+pub struct Parameter {
+    #[drive(skip)]
+    pub id: NodeID,
+    #[drive(skip)]
+    pub name: Name,
+    #[drive(skip)]
+    pub name_span: Span,
+    pub type_annotation: Option<TypeAnnotation>,
+    #[drive(skip)]
+    pub span: Span,
+    #[drive(skip)]
+    pub ty: Option<crate::types::ty::Ty>,
 }
 
 // ----- Blocks and statements ----------------------------------------------

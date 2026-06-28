@@ -44,7 +44,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             // resolves through the expected enum — checking mode is what
             // makes the head known (bidirectional payoff).
             ExprKind::Member(None, label, _) => {
-                if self.check_leading_dot(expr, label, None, expected, ctx) {
+                if self.check_leading_dot(expr, label, None, expected, ctx, None) {
                     return;
                 }
                 let ty = self.infer_expr(expr, ctx);
@@ -54,7 +54,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 if matches!(callee.kind, ExprKind::Member(None, _, _)) =>
             {
                 if let ExprKind::Member(None, label, _) = &callee.kind
-                    && self.check_leading_dot(expr, label, Some(args), expected, ctx)
+                    && self.check_leading_dot(
+                        expr,
+                        label,
+                        Some(args),
+                        expected,
+                        ctx,
+                        Some(callee.id),
+                    )
                 {
                     return;
                 }
@@ -388,6 +395,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         args: Option<&[CallArg]>,
         expected: &Ty,
         ctx: &Ctx,
+        // When the leading dot is the callee of a call (`.write(fd, buf)`), the id
+        // of that callee node, so it gets the variant's constructor type (the call
+        // checker resolves it structurally and never types it otherwise).
+        callee_id: Option<NodeID>,
     ) -> bool {
         let Ty::Nominal(symbol, enum_args) = self.store.shallow(expected) else {
             return false;
@@ -411,6 +422,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .insert(expr.id, MemberResolution::Direct(variant.symbol));
         let substitution = param_subst(&info.params, &enum_args);
         let instantiation = self.instantiate_variant(&variant, substitution, expr.id);
+        if let Some(callee_id) = callee_id {
+            self.artifacts.node_types.insert(
+                callee_id,
+                Ty::Func(
+                    instantiation.argument_types.clone(),
+                    Box::new(instantiation.result_type.clone()),
+                    EffectRow::pure(),
+                ),
+            );
+        }
         self.record_variant_instantiation(expr.id, &instantiation);
         self.emit_variant_predicates(&instantiation, expr.id);
         self.emit_eq(
@@ -553,6 +574,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     let Ok(symbol) = name.symbol() else {
                         return Ty::Error;
                     };
+                    // The receiver is a bare type name, resolved structurally rather
+                    // than as a value — but it's still an expression node, so record a
+                    // type for it (it has no value type, like a type name used as a
+                    // value, so `Ty::Error`). Keeps `node_types` total over expressions.
+                    self.artifacts.node_types.insert(receiver.id, Ty::Error);
                     return match self.resolve_type_member(symbol, label, expr.id, ctx) {
                         Some(ty) => ty,
                         None => {
@@ -681,10 +707,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }
                 instantiate(&sig.ret)
             }
-            ExprKind::InlineIR(_) => {
-                // Inline IR is trusted: it takes whatever type its context
-                // demands (a fresh variable solved by the surrounding
-                // annotation or return type).
+            ExprKind::InlineIR(instruction) => {
+                // The instruction itself is trusted: it takes whatever type its
+                // context demands (a fresh variable solved by the surrounding
+                // annotation or return type). Its operands, however, are ordinary
+                // value expressions and must be typed.
+                for operand in &instruction.binds {
+                    self.infer_expr(operand, ctx);
+                }
                 Ty::Var(self.store.fresh_ty(self.level, expr.id))
             }
             ExprKind::Unary(..) | ExprKind::Binary(..) => {

@@ -52,6 +52,7 @@ pub const CORE_SOURCE_NAMES: &[&str] = &[
     "File.tlk",
     "Showable.tlk",
     "Http.tlk",
+    "OS.tlk",
 ];
 
 /// All core source strings, in a fixed order.
@@ -71,6 +72,7 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
         ("File.tlk", include_str!("../../core/File.tlk")),
         ("Showable.tlk", include_str!("../../core/Showable.tlk")),
         ("Http.tlk", include_str!("../../core/Http.tlk")),
+        ("OS.tlk", include_str!("../../core/OS.tlk")),
     ]
 }
 

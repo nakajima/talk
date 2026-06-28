@@ -2,13 +2,13 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     hir::{
-        Block, CallArg, Decl, DeclKind, Expr, ExprKind, MatchArm, Node, Pattern, PatternKind, Stmt,
-        StmtKind,
+        Block, CallArg, Decl, DeclKind, Expr, ExprKind, MatchArm, Node, Parameter, Pattern,
+        PatternKind, Stmt, StmtKind,
     },
     name::Name,
     name_resolution::symbol::Symbol,
     node_id::NodeID,
-    node_kinds::{func::CaptureSpec, parameter::Parameter, type_annotation::TypeAnnotation},
+    node_kinds::{func::CaptureSpec, type_annotation::TypeAnnotation},
     types::{
         TypeOutput,
         output::stored_field_symbol,
@@ -218,6 +218,7 @@ pub(crate) enum Statement<'a> {
     },
     AssignmentRootUse {
         id: NodeID,
+        ty: &'a Ty,
         symbol: Symbol,
     },
     Bind {
@@ -472,7 +473,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 Some(KeyPath::root(self.local_for_symbol(symbol)))
             }
             ExprKind::Member(Some(receiver), ..) => {
-                let field = stored_field_symbol(self.types, expr.id)?;
+                let field = stored_field_symbol(self.types, expr.member_resolution.as_ref())?;
                 Some(
                     self.key_path_for_expr(receiver)?
                         .project(KeyPathComponent::Field(field)),
@@ -522,7 +523,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 })
             }
             ExprKind::Member(Some(receiver), ..) => {
-                let field = stored_field_symbol(self.types, expr.id)?;
+                let field = stored_field_symbol(self.types, expr.member_resolution.as_ref())?;
                 let base = self.operand_for_expr(receiver)?;
                 Some(Rvalue::FieldRead { base, field })
             }
@@ -886,7 +887,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 current
             }
             ExprKind::Member(Some(receiver), ..) => {
-                if stored_field_symbol(self.types, expr.id).is_some() {
+                if stored_field_symbol(self.types, expr.member_resolution.as_ref()).is_some() {
                     self.push_statement(current, Statement::Read { expr });
                     current
                 } else {
@@ -952,7 +953,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         match &expr.kind {
             ExprKind::Variable(_) => {}
             ExprKind::Member(Some(receiver), ..)
-                if stored_field_symbol(self.types, expr.id).is_some() =>
+                if stored_field_symbol(self.types, expr.member_resolution.as_ref()).is_some() =>
             {
                 self.lower_assignment_root(receiver, current);
             }
@@ -970,6 +971,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                         current,
                         Statement::AssignmentRootUse {
                             id: expr.id,
+                            ty: &expr.ty,
                             symbol,
                         },
                     );
@@ -1414,9 +1416,12 @@ mod tests {
             resolved.diagnostics()
         );
         for ast in resolved.phase.asts.values() {
-            for node in &crate::hir::build::lower_roots(&ast.roots) {
+            // The MIR builder is tested for structure, not types, so it needn't be
+            // type-checked: give every expression a placeholder type and lower to HIR.
+            let types = placeholder_types(&ast.roots);
+            let hir = crate::hir::build::build_file(ast, &types);
+            for node in &hir.roots {
                 let Node::Decl(decl) = node else { continue };
-                let types = TypeOutput::default();
                 let DeclKind::Func(func) = &decl.kind else {
                     if let DeclKind::Let {
                         rhs: Some(expr), ..
@@ -1433,6 +1438,33 @@ mod tests {
             }
         }
         panic!("expected a function declaration");
+    }
+
+    /// A `TypeOutput` giving every AST expression a placeholder type — enough for
+    /// the (strict) HIR lowerer to run without type-checking, so MIR-builder tests
+    /// can exercise structure on programs that need not be type-correct.
+    fn placeholder_types(roots: &[crate::node::Node]) -> TypeOutput {
+        use derive_visitor::{Drive, Visitor};
+        #[derive(Default)]
+        struct Collect {
+            types: TypeOutput,
+        }
+        impl Visitor for Collect {
+            fn visit(&mut self, item: &dyn std::any::Any, event: derive_visitor::Event) {
+                if matches!(event, derive_visitor::Event::Enter)
+                    && let Some(expr) = item.downcast_ref::<crate::node_kinds::expr::Expr>()
+                {
+                    self.types
+                        .node_types
+                        .insert(expr.id, crate::types::ty::Ty::Error);
+                }
+            }
+        }
+        let mut collect = Collect::default();
+        for root in roots {
+            root.drive(&mut collect);
+        }
+        collect.types
     }
 
     fn symbol_named(names: &FxHashMap<Symbol, String>, name: &str) -> Symbol {

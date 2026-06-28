@@ -430,6 +430,9 @@ impl<'a> Formatter<'a> {
             ExprKind::If(cond, then_block, else_block) => {
                 self.format_if(cond, then_block, else_block)
             }
+            ExprKind::Match(target, arms) if Self::is_if_let_match(arms) => {
+                self.format_if_let_match(target, arms)
+            }
             ExprKind::Match(target, arms) => self.format_match(target, arms),
             ExprKind::RecordLiteral { fields, spread } => {
                 self.format_record_literal(fields, spread)
@@ -1733,6 +1736,34 @@ impl<'a> Formatter<'a> {
         result
     }
 
+    fn is_if_let_match(arms: &[MatchArm]) -> bool {
+        arms.len() == 2
+            && arms
+                .iter()
+                .all(|arm| arm.span == crate::span::Span::SYNTHESIZED)
+            && matches!(arms[1].pattern.kind, PatternKind::Wildcard)
+    }
+
+    fn format_if_let_match(&self, target: &Expr, arms: &[MatchArm]) -> Doc {
+        let condition = concat_space(
+            concat_space(text("let"), self.format_pattern(&arms[0].pattern)),
+            concat_space(text("="), self.format_expr(target)),
+        );
+        let mut result = concat_space(
+            text("if"),
+            concat_space(condition, self.format_block_multiline(&arms[0].body)),
+        );
+
+        if !arms[1].body.body.is_empty() || arms[1].body.span != crate::span::Span::SYNTHESIZED {
+            result = concat_space(
+                result,
+                concat_space(text("else"), self.format_block_multiline(&arms[1].body)),
+            );
+        }
+
+        result
+    }
+
     fn format_enum_decl(
         &self,
         name: &Name,
@@ -2069,20 +2100,35 @@ impl<'a> Formatter<'a> {
         text(name.name_str())
     }
 
+    fn expr_contains_control_flow(expr: &Expr) -> bool {
+        matches!(
+            &expr.kind,
+            ExprKind::Func { .. } | ExprKind::If(..) | ExprKind::Match(..)
+        )
+    }
+
+    fn stmt_contains_control_flow(stmt: &Stmt) -> bool {
+        match &stmt.kind {
+            StmtKind::Expr(expr) => Self::expr_contains_control_flow(expr),
+            StmtKind::If(..) | StmtKind::Loop(..) | StmtKind::Continue(..) | StmtKind::Break => {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn decl_contains_control_flow(decl: &Decl) -> bool {
+        matches!(
+            &decl.kind,
+            DeclKind::Func(_) | DeclKind::Init { .. } | DeclKind::Method { .. }
+        )
+    }
+
     fn contains_control_flow(node: &Node) -> bool {
         match node {
-            Node::Decl(decl) => matches!(
-                &decl.kind,
-                DeclKind::Func(_) | DeclKind::Init { .. } | DeclKind::Method { .. }
-            ),
-            Node::Expr(expr) => matches!(
-                &expr.kind,
-                ExprKind::Func { .. } | ExprKind::If(..) | ExprKind::Match(..)
-            ),
-            Node::Stmt(stmt) => matches!(
-                &stmt.kind,
-                StmtKind::If(..) | StmtKind::Loop(..) | StmtKind::Continue(..) | StmtKind::Break
-            ),
+            Node::Decl(decl) => Self::decl_contains_control_flow(decl),
+            Node::Expr(expr) => Self::expr_contains_control_flow(expr),
+            Node::Stmt(stmt) => Self::stmt_contains_control_flow(stmt),
             Node::Block(block) => block.body.iter().any(Self::contains_control_flow),
             _ => false,
         }
@@ -2554,6 +2600,21 @@ mod formatter_tests {
             format_code("if true { 123 } else { 456 }", 80),
             "if true { 123 } else {\n\t456\n}"
         );
+        assert_eq!(
+            format_code("if let .some(cwd) = optionalthing { cwd }", 80),
+            "if let .some(cwd) = optionalthing {\n\tcwd\n}"
+        );
+        assert_eq!(
+            format_code(
+                "if let .some(cwd) = optionalthing { cwd } else { \"\" }",
+                80
+            ),
+            "if let .some(cwd) = optionalthing {\n\tcwd\n} else {\n\t\"\"\n}"
+        );
+        assert_eq!(
+            format_code("if let .pattern(x) = foo { } else { }", 80),
+            "if let .pattern(x) = foo {\n} else {\n}"
+        );
 
         // Nested
         assert_eq!(
@@ -2769,6 +2830,10 @@ mod formatter_tests {
 
         let input = "@handle 'fizz { x in\nx\nx\n}";
         let expected = "@handle 'fizz { x in\n\tx\n\tx\n}";
+        assert_eq!(format_code(input, 80), expected);
+
+        let input = "@handle 'os { request in match request { .cwd -> \"\", .args -> [] } }";
+        let expected = "@handle 'os { request in\n\tmatch request {\n\t\t.cwd -> \"\",\n\t\t.args -> []\n\t}\n}";
         assert_eq!(format_code(input, 80), expected);
     }
 

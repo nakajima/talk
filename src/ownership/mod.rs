@@ -6,7 +6,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::{
     compiling::{driver::Source, module::ModuleId},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
-    hir::{self, Block, Body, Decl, DeclKind, Expr, ExprKind, HirFile, Node, StmtKind},
+    hir::{self, Block, Body, Decl, DeclKind, Expr, ExprKind, HirFile, Node, Parameter, StmtKind},
     mir,
     name_resolution::{
         name_resolver::ResolvedNames,
@@ -15,7 +15,6 @@ use crate::{
     node_id::{FileID, NodeID},
     node_kinds::{
         func::{CaptureMode, CaptureSpec},
-        parameter::Parameter,
         type_annotation::TypeAnnotationKind,
     },
     types::{
@@ -194,7 +193,6 @@ pub struct DropObligation {
     pub kind: mir::DropElaboration,
     pub reason: mir::DropReason,
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum OwnershipError {
@@ -528,7 +526,7 @@ impl KeyPath {
 }
 
 type BorrowEnv = BorrowInfoEnv;
-type MoveEnv = FxHashMap<KeyPath, NodeID>;
+type MoveEnv = FxHashMap<KeyPath, (NodeID, Ty)>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MarkerAbility {
@@ -945,14 +943,17 @@ impl OwnershipChecker<'_> {
             );
         }
 
-        let raw_nodes: Vec<_> = self
-            .types
-            .node_types
-            .iter()
-            .filter_map(|(id, ty)| {
-                (safe_files.contains(&id.0) && self.type_mentions_raw_ptr(ty))
-                    .then_some((*id, ty.render_mono()))
-            })
+        let mut typed_exprs = vec![];
+        for ast in asts
+            .values()
+            .filter(|ast| safe_files.contains(&ast.file_id))
+        {
+            walk_nodes(&ast.roots, &mut TypedExprCollector { out: &mut typed_exprs });
+        }
+        let raw_nodes: Vec<_> = typed_exprs
+            .into_iter()
+            .filter(|(_, ty)| self.type_mentions_raw_ptr(ty))
+            .map(|(id, ty)| (id, ty.render_mono()))
             .collect();
         for (id, ty) in raw_nodes {
             self.error(id, OwnershipError::UnsafeRawPointerUsage { ty });
@@ -1255,14 +1256,10 @@ impl OwnershipChecker<'_> {
                         let Ok(symbol) = name.symbol() else {
                             continue;
                         };
-                        if let Some(ty) = self.types.node_types.get(&root.id).cloned() {
-                            captures.entry(symbol).or_insert((root.id, ty));
-                        }
+                        captures.entry(symbol).or_insert((root.id, root.ty.clone()));
                     }
-                    mir::Statement::AssignmentRootUse { id, symbol } => {
-                        if let Some(ty) = self.types.node_types.get(id).cloned() {
-                            captures.entry(*symbol).or_insert((*id, ty));
-                        }
+                    mir::Statement::AssignmentRootUse { id, ty, symbol } => {
+                        captures.entry(*symbol).or_insert((*id, (*ty).clone()));
                     }
                     _ => {}
                 }
@@ -1441,15 +1438,17 @@ impl OwnershipChecker<'_> {
 
     fn check_capture_read(&mut self, capture: &ClosureCapture, state: &mut MoveState) {
         let key_path = KeyPath::root(capture.symbol);
-        self.check_key_path_use_for_id(capture.id, &key_path, false, state);
+        self.check_key_path_use_for_id(capture.id, &capture.ty, &key_path, false, state);
     }
 
     fn apply_capture_move(&mut self, capture: &ClosureCapture, state: &mut MoveState) {
         let key_path = KeyPath::root(capture.symbol);
-        self.check_key_path_use_for_id(capture.id, &key_path, true, state);
+        self.check_key_path_use_for_id(capture.id, &capture.ty, &key_path, true, state);
         self.check_move_out_of_borrowed_key_path(capture.id, &key_path, state);
         self.check_move_while_borrowed(capture.id, &key_path, state);
-        state.moved.insert(key_path.clone(), capture.id);
+        state
+            .moved
+            .insert(key_path.clone(), (capture.id, capture.ty.clone()));
         state.invalidate_borrows_of(&key_path);
     }
 
@@ -1462,7 +1461,7 @@ impl OwnershipChecker<'_> {
         state: &mut MoveState,
     ) {
         let source = KeyPath::root(capture.symbol);
-        self.check_key_path_use_for_id(capture.id, &source, false, state);
+        self.check_key_path_use_for_id(capture.id, &capture.ty, &source, false, state);
         let owner = self.loan_owner_for_key_path(&source, state);
         self.check_borrow_conflicts(capture.id, &owner, kind, Some(&source), state);
         let Some(borrower) = borrower else {
@@ -1771,7 +1770,7 @@ impl OwnershipChecker<'_> {
                     self.note_capture_drop_moves(rhs, point, state);
                 }
                 let binders = lhs.collect_binders();
-                let rhs_ty = rhs.and_then(|rhs| self.types.node_types.get(&rhs.id).cloned());
+                let rhs_ty = rhs.map(|rhs| rhs.ty.clone());
                 for (id, symbol) in binders.iter().copied() {
                     if binders.len() == 1 {
                         if let Some(ty) = rhs_ty.clone() {
@@ -1798,10 +1797,8 @@ impl OwnershipChecker<'_> {
                     .and_then(|target| Self::key_path_from_mir_locals(locals, target))
                     .or_else(|| self.key_path(lhs))
                 {
-                    if target.fields.is_empty()
-                        && let Some(ty) = self.types.node_types.get(&lhs.id).cloned()
-                    {
-                        state.root_tys.insert(target.root, ty);
+                    if target.fields.is_empty() {
+                        state.root_tys.insert(target.root, lhs.ty.clone());
                     }
                     state.initialize_key_path(target);
                 }
@@ -1846,12 +1843,7 @@ impl OwnershipChecker<'_> {
             let Some(key_path) = self.key_path(expr) else {
                 continue;
             };
-            let ty = self
-                .types
-                .node_types
-                .get(&expr.id)
-                .cloned()
-                .or_else(|| self.key_path_ty(&key_path));
+            let ty = Some(expr.ty.clone());
             self.note_drop_key_path_move(expr.id, &key_path, ty, point, state);
         }
     }
@@ -2117,7 +2109,7 @@ impl OwnershipChecker<'_> {
             mir::Statement::ConsumeValue { expr, .. } => {
                 self.check_consumed_expr(context.point, expr, state)
             }
-            mir::Statement::AssignmentRootUse { id, symbol } => {
+            mir::Statement::AssignmentRootUse { id, symbol, .. } => {
                 self.check_assignment_root_use(*id, *symbol, state)
             }
             mir::Statement::Bind {
@@ -2229,7 +2221,8 @@ impl OwnershipChecker<'_> {
             if rhs.is_some() {
                 state.initialize_key_path(&key_path);
             } else {
-                state.moved.insert(key_path.clone(), *id);
+                let ty = self.symbol_ty(*symbol).cloned().unwrap_or(Ty::Error);
+                state.moved.insert(key_path.clone(), (*id, ty));
             }
             if let Some(summary) = &closure_captures {
                 if binders.len() == 1
@@ -2449,12 +2442,12 @@ impl OwnershipChecker<'_> {
 
     fn check_assignment_root_use(&mut self, id: NodeID, symbol: Symbol, state: &mut MoveState) {
         let key_path = KeyPath::root(symbol);
-        if let Some((moved, moved_id)) = self.moved_key_path_for_use(&key_path, id, false, state) {
+        if let Some((moved, moved_ty)) = self.moved_key_path_for_use(&key_path, false, state) {
             self.error(
                 id,
                 OwnershipError::UseAfterMove {
                     name: self.render_key_path(moved),
-                    ty: self.move_error_type(moved, moved_id, Some(id)),
+                    ty: self.move_error_type(moved, moved_ty),
                 },
             );
         } else if let Some((borrow, owner)) = self.invalid_borrow_for_use(&key_path, state) {
@@ -2520,9 +2513,11 @@ impl OwnershipChecker<'_> {
         let moves_storage =
             self.expr_is_owned(expr) || self.key_path_stores_noncopy_closure(&key_path, state);
         if moves_storage && key_path.is_tracked_storage_root() {
-            self.report_use_after_move_or_invalidated(expr.id, &key_path, true, state);
+            self.report_use_after_move_or_invalidated(expr.id, &expr.ty, &key_path, true, state);
             self.check_move_while_borrowed(expr.id, &key_path, state);
-            state.moved.insert(key_path.clone(), expr.id);
+            state
+                .moved
+                .insert(key_path.clone(), (expr.id, expr.ty.clone()));
             state.invalidate_borrows_of(&key_path);
             state.closure_captures.remove(&key_path);
         }
@@ -2580,17 +2575,24 @@ impl OwnershipChecker<'_> {
     }
 
     fn check_key_path_use(&mut self, expr: &Expr, key_path: &KeyPath, state: &mut MoveState) {
-        self.check_key_path_use_for_id(expr.id, key_path, self.expr_is_owned(expr), state);
+        self.check_key_path_use_for_id(
+            expr.id,
+            &expr.ty,
+            key_path,
+            self.expr_is_owned(expr),
+            state,
+        );
     }
 
     fn check_key_path_use_for_id(
         &mut self,
         id: NodeID,
+        use_ty: &Ty,
         key_path: &KeyPath,
         use_is_owned: bool,
         state: &mut MoveState,
     ) {
-        self.report_use_after_move_or_invalidated(id, key_path, use_is_owned, state);
+        self.report_use_after_move_or_invalidated(id, use_ty, key_path, use_is_owned, state);
         // Using an owned value is a move/consume (its conflict with a live loan is reported by
         // `check_move_while_borrowed`), not the taking of a shared borrow. Only a non-owned use
         // — reading through a borrow or a copy — needs a shared loan of the owner.
@@ -2607,18 +2609,19 @@ impl OwnershipChecker<'_> {
     fn report_use_after_move_or_invalidated(
         &mut self,
         id: NodeID,
+        use_ty: &Ty,
         key_path: &KeyPath,
         use_is_owned: bool,
         state: &MoveState,
     ) {
-        if let Some((moved, moved_id)) =
-            self.moved_key_path_for_use(key_path, id, use_is_owned, state)
+        if let Some((moved, moved_ty)) =
+            self.moved_key_path_for_use(key_path, use_is_owned, state)
         {
             self.error(
                 id,
                 OwnershipError::UseAfterMove {
                     name: self.render_key_path(moved),
-                    ty: self.move_error_type(moved, moved_id, Some(id)),
+                    ty: self.move_error_type(moved, moved_ty),
                 },
             );
         } else if let Some((borrow, owner)) = self.invalid_borrow_for_use(key_path, state) {
@@ -2627,40 +2630,30 @@ impl OwnershipChecker<'_> {
                 OwnershipError::UseAfterInvalidatedBorrow {
                     name: self.render_key_path(borrow),
                     owner: self.render_key_path(owner),
-                    ty: self
-                        .types
-                        .node_types
-                        .get(&id)
-                        .map(Ty::render_mono)
-                        .unwrap_or_else(|| "borrowed value".to_string()),
+                    ty: use_ty.render_mono(),
                 },
             );
         }
     }
 
-    fn move_error_type(
-        &self,
-        moved: &KeyPath,
-        moved_id: NodeID,
-        fallback_id: Option<NodeID>,
-    ) -> String {
+    /// The type to name in a use-after-move diagnostic: the moved path's structural
+    /// type when it resolves, else the type recorded at the move site.
+    fn move_error_type(&self, moved: &KeyPath, moved_ty: &Ty) -> String {
         self.key_path_ty(moved)
-            .or_else(|| self.types.node_types.get(&moved_id).cloned())
-            .or_else(|| fallback_id.and_then(|id| self.types.node_types.get(&id).cloned()))
-            .map(|ty| ty.render_mono())
-            .unwrap_or_else(|| "owned value".to_string())
+            .as_ref()
+            .unwrap_or(moved_ty)
+            .render_mono()
     }
 
     fn moved_key_path_for_use<'a>(
         &self,
         key_path: &KeyPath,
-        _id: NodeID,
         use_is_owned: bool,
         state: &'a MoveState,
-    ) -> Option<(&'a KeyPath, NodeID)> {
-        state.moved.iter().find_map(|(moved, node)| {
+    ) -> Option<(&'a KeyPath, &'a Ty)> {
+        state.moved.iter().find_map(|(moved, (_, ty))| {
             (moved.contains(key_path) || key_path.contains(moved) && use_is_owned)
-                .then_some((moved, *node))
+                .then_some((moved, ty))
         })
     }
 
@@ -2769,17 +2762,12 @@ impl OwnershipChecker<'_> {
                 ty.clone(),
             ));
         }
-        if let Some(Ty::Borrow(BorrowKind::Shared, _)) = self.types.node_types.get(&receiver.id) {
+        if let Ty::Borrow(BorrowKind::Shared, _) = &receiver.ty {
             let name = self
                 .key_path(receiver)
                 .map(|key_path| self.render_key_path(&key_path))
                 .unwrap_or_else(|| "borrowed value".to_string());
-            let ty = self
-                .types
-                .node_types
-                .get(&receiver.id)
-                .map(Ty::render_mono)
-                .unwrap_or_else(|| "shared borrow".to_string());
+            let ty = receiver.ty.render_mono();
             return Some((name, ty));
         }
         self.shared_borrow_assignment_receiver(receiver, state)
@@ -2804,7 +2792,7 @@ impl OwnershipChecker<'_> {
                 },
             ));
         }
-        if let Some(ty) = self.types.node_types.get(&param.id)
+        if let Some(ty) = param.ty.as_ref()
             && self.is_borrowed_type(ty)
         {
             return Some((BorrowKind::Shared, ty.render_mono()));
@@ -2860,23 +2848,19 @@ impl OwnershipChecker<'_> {
     }
 
     fn expr_borrow_kind(&self, expr: &Expr) -> Option<BorrowKind> {
-        match self.types.node_types.get(&expr.id) {
-            Some(Ty::Borrow(kind, _)) => Some(*kind),
-            Some(ty) if self.is_borrowed_type(ty) => Some(BorrowKind::Shared),
+        match &expr.ty {
+            Ty::Borrow(kind, _) => Some(*kind),
+            ty if self.is_borrowed_type(ty) => Some(BorrowKind::Shared),
             _ => None,
         }
     }
 
     fn borrowed_value_ty(&self, expr: &Expr) -> String {
-        self.types
-            .node_types
-            .get(&expr.id)
-            .map(Ty::render_mono)
-            .unwrap_or_else(|| "borrowed value".to_string())
+        expr.ty.render_mono()
     }
 
     fn allows_unknown_local_borrow(&self, expr: &Expr) -> bool {
-        let Some(Ty::Borrow(_, inner)) = self.types.node_types.get(&expr.id) else {
+        let Ty::Borrow(_, inner) = &expr.ty else {
             return false;
         };
         self.is_copy_type(inner)
@@ -2981,12 +2965,7 @@ impl OwnershipChecker<'_> {
         let name = self
             .render_expr_path(expr)
             .unwrap_or_else(|| "owned field".to_string());
-        let ty = self
-            .types
-            .node_types
-            .get(&expr.id)
-            .map(Ty::render_mono)
-            .unwrap_or_else(|| "owned value".to_string());
+        let ty = expr.ty.render_mono();
         self.error(
             id,
             OwnershipError::MoveOutOfBorrowedValue {
@@ -3047,11 +3026,11 @@ impl OwnershipChecker<'_> {
     }
 
     fn stored_field_symbol(&self, expr: &Expr) -> Option<Symbol> {
-        stored_field_symbol(self.types, expr.id)
+        stored_field_symbol(self.types, expr.member_resolution.as_ref())
     }
 
     fn call_argument_types(&self, callee: &Expr) -> Option<Vec<Ty>> {
-        let Ty::Func(params, _, _) = self.types.node_types.get(&callee.id)? else {
+        let Ty::Func(params, _, _) = &callee.ty else {
             return None;
         };
         Some(params.clone())
@@ -3067,7 +3046,7 @@ impl OwnershipChecker<'_> {
     }
 
     fn member_callable_params(&self, callee: &Expr) -> Option<Vec<Ty>> {
-        let resolution = self.types.member_resolutions.get(&callee.id)?;
+        let resolution = callee.member_resolution.as_ref()?;
         match resolution {
             crate::types::output::MemberResolution::Direct(symbol) => self
                 .types
@@ -3092,24 +3071,15 @@ impl OwnershipChecker<'_> {
     }
 
     fn expr_is_owned(&self, expr: &Expr) -> bool {
-        self.types
-            .node_types
-            .get(&expr.id)
-            .is_some_and(|ty| self.needs_drop_type(ty))
+        self.needs_drop_type(&expr.ty)
     }
 
     fn expr_is_copy(&self, expr: &Expr) -> bool {
-        self.types
-            .node_types
-            .get(&expr.id)
-            .is_some_and(|ty| self.is_copy_type(ty))
+        self.is_copy_type(&expr.ty)
     }
 
     fn expr_is_borrowed(&self, expr: &Expr) -> bool {
-        self.types
-            .node_types
-            .get(&expr.id)
-            .is_some_and(|ty| self.is_borrowed_type(ty))
+        self.is_borrowed_type(&expr.ty)
     }
 
     fn check_untracked_borrowed_aggregate(&mut self, expr: &Expr) {
@@ -3120,11 +3090,8 @@ impl OwnershipChecker<'_> {
     }
 
     fn expr_contains_untracked_borrowed_aggregate(&self, expr: &Expr) -> bool {
-        self.types.node_types.get(&expr.id).is_some_and(|ty| {
-            !matches!(ty, Ty::Func(..))
-                && self.contains_borrowed_type(ty)
-                && !self.is_borrowed_type(ty)
-        })
+        let ty = &expr.ty;
+        !matches!(ty, Ty::Func(..)) && self.contains_borrowed_type(ty) && !self.is_borrowed_type(ty)
     }
 
     fn borrow_info(&self, expr: &Expr, env: &BorrowEnv) -> BorrowInfo {
@@ -3162,7 +3129,7 @@ impl OwnershipChecker<'_> {
     }
 
     fn call_returns_borrowed(&self, callee: &Expr) -> bool {
-        let Some(Ty::Func(_, ret, _)) = self.types.node_types.get(&callee.id) else {
+        let Ty::Func(_, ret, _) = &callee.ty else {
             return false;
         };
         self.is_borrowed_type(ret)
@@ -3260,11 +3227,7 @@ impl OwnershipChecker<'_> {
             _ => BorrowOrigin::Unknown,
         };
         if origin.can_have_owner()
-            && self
-                .types
-                .node_types
-                .get(&expr.id)
-                .is_some_and(|ty| self.is_borrowed_type(ty) || self.is_owned_type(ty))
+            && (self.is_borrowed_type(&expr.ty) || self.is_owned_type(&expr.ty))
         {
             BorrowInfo::new(origin, Some(key_path.clone()))
         } else {
@@ -3281,12 +3244,7 @@ impl OwnershipChecker<'_> {
             Symbol::ParamLocal(_) => BorrowInfo::new(self.param_origin(symbol, expr), None),
             Symbol::Global(_) => BorrowInfo::new(BorrowOrigin::Static, None),
             Symbol::DeclaredLocal(_) | Symbol::PatternBindLocal(_) => {
-                if self
-                    .types
-                    .node_types
-                    .get(&expr.id)
-                    .is_some_and(|ty| self.is_borrowed_type(ty) || self.is_owned_type(ty))
-                {
+                if self.is_borrowed_type(&expr.ty) || self.is_owned_type(&expr.ty) {
                     BorrowInfo::new(BorrowOrigin::Local, Some(key_path))
                 } else {
                     BorrowInfo::new(BorrowOrigin::Unknown, None)
@@ -3297,9 +3255,9 @@ impl OwnershipChecker<'_> {
     }
 
     fn param_origin(&self, symbol: Symbol, expr: &Expr) -> BorrowOrigin {
-        let root_ty = root_expr(expr).and_then(|root| self.types.node_types.get(&root.id));
+        let root_ty = root_expr(expr).map(|root| &root.ty);
         let symbol_ty = self.symbol_ty(symbol);
-        let expr_ty = self.types.node_types.get(&expr.id);
+        let expr_ty = Some(&expr.ty);
         if root_ty
             .into_iter()
             .chain(symbol_ty)
@@ -3663,6 +3621,7 @@ fn node_tail_expr(node: &Node) -> Option<&Expr> {
 }
 
 trait SourceVisitor {
+    fn expr(&mut self, _expr: &Expr) {}
     fn inline_ir(&mut self, _id: NodeID) {}
     fn variable(&mut self, _symbol: Symbol) {}
     fn binder(&mut self, _symbol: Symbol) {}
@@ -3686,6 +3645,16 @@ struct BinderCollector<'a> {
 impl SourceVisitor for BinderCollector<'_> {
     fn binder(&mut self, symbol: Symbol) {
         self.out.insert(symbol);
+    }
+}
+
+struct TypedExprCollector<'a> {
+    out: &'a mut Vec<(NodeID, Ty)>,
+}
+
+impl SourceVisitor for TypedExprCollector<'_> {
+    fn expr(&mut self, expr: &Expr) {
+        self.out.push((expr.id, expr.ty.clone()));
     }
 }
 
@@ -3787,6 +3756,7 @@ fn walk_stmt(stmt: &StmtKind, visitor: &mut impl SourceVisitor) {
 }
 
 fn walk_expr(expr: &Expr, visitor: &mut impl SourceVisitor) {
+    visitor.expr(expr);
     match &expr.kind {
         ExprKind::InlineIR(_) => visitor.inline_ir(expr.id),
         ExprKind::Variable(name) => {
@@ -3860,10 +3830,7 @@ fn walk_expr(expr: &Expr, visitor: &mut impl SourceVisitor) {
     }
 }
 
-fn walk_pattern_binders(
-    pattern: &hir::Pattern,
-    visitor: &mut impl SourceVisitor,
-) {
+fn walk_pattern_binders(pattern: &hir::Pattern, visitor: &mut impl SourceVisitor) {
     for (_, symbol) in pattern.collect_binders() {
         visitor.binder(symbol);
     }

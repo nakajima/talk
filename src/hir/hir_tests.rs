@@ -3,19 +3,31 @@ use crate::hir;
 use crate::node::Node;
 use crate::node_id::NodeID;
 
-/// Resolve `source` and lower every file's roots to HIR, returning the per-file
-/// (ast roots, hir nodes) pairs.
+/// Type-check `source` and pair each file's AST roots with the HIR the
+/// type-checker lowered them to (`Typed.hir`).
 fn lower(source: &str) -> Vec<(Vec<Node>, Vec<hir::Node>)> {
-    let resolved = Driver::new_bare(vec![Source::from(source)], DriverConfig::new("HirTest"))
+    let typed = Driver::new_bare(vec![Source::from(source)], DriverConfig::new("HirTest"))
         .parse()
         .expect("parse")
         .resolve_names()
-        .expect("resolve");
-    resolved
+        .expect("resolve")
+        .type_check();
+    assert!(
+        !typed.has_errors(),
+        "unexpected type errors: {:?}",
+        typed.diagnostics()
+    );
+    typed
         .phase
         .asts
-        .values()
-        .map(|ast| (ast.roots.clone(), hir::build::lower_roots(&ast.roots)))
+        .iter()
+        .filter_map(|(source, ast)| {
+            typed
+                .phase
+                .hir
+                .get(source)
+                .map(|file| (ast.roots.clone(), file.roots.clone()))
+        })
         .collect()
 }
 
@@ -173,7 +185,7 @@ fn lowers_a_construct_diverse_program_without_panicking() {
 
 #[test]
 fn preserves_node_ids_one_to_one() {
-    let source = "func f(x: Int) -> Int {\n\tlet y = x + 1\n\ty\n}\nf(x: 2)";
+    let source = "func f(x: Int) -> Int {\n\tlet y = x\n\ty\n}\nf(x: 2)";
     for (ast_roots, hir_nodes) in lower(source) {
         let mut ast_ids = ast_expr_ids(&ast_roots);
         let mut hir_ids = hir_expr_ids(&hir_nodes);

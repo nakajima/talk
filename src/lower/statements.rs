@@ -48,11 +48,7 @@ impl<'a> Lowering<'a> {
                         .position(|(name, _)| name.to_string() == label.to_string())
                         .map(|i| i as u32),
                     _ => {
-                        let resolution = self.units[ctx.unit]
-                            .types
-                            .member_resolutions
-                            .get(&lhs.id)
-                            .cloned();
+                        let resolution = lhs.member_resolution.clone();
                         match resolution {
                             Some(crate::types::output::MemberResolution::Direct(property)) => {
                                 self.field_index(&head, property)

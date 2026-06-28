@@ -235,6 +235,14 @@ pub enum IoOp {
     Listen,
     Connect,
     Accept,
+    CwdLen,
+    CwdCopy,
+    GetenvLen,
+    GetenvCopy,
+    Argc,
+    ArgLen,
+    ArgCopy,
+    Exit,
 }
 
 #[derive(Debug)]

@@ -5,9 +5,9 @@
 use rustc_hash::FxHashSet;
 
 use crate::analysis::{DocumentId, TextRange, workspace::Workspace};
+use crate::mir::DropElaboration;
 use crate::name_resolution::symbol::{Symbol, set_symbol_names};
 use crate::node_id::NodeID;
-use crate::mir::DropElaboration;
 use crate::ownership::{DropObligation, KeyPath, LoanFact, MoveFact, OwnershipOutput};
 use crate::types::ty::{BorrowKind, Ty};
 

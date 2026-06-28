@@ -24,8 +24,11 @@ pub enum MemberResolution {
     ViaConformance { protocol: Symbol, witness: Symbol },
 }
 
-pub(crate) fn stored_field_symbol(types: &TypeOutput, node_id: NodeID) -> Option<Symbol> {
-    let MemberResolution::Direct(property) = types.member_resolutions.get(&node_id)? else {
+pub(crate) fn stored_field_symbol(
+    types: &TypeOutput,
+    resolution: Option<&MemberResolution>,
+) -> Option<Symbol> {
+    let MemberResolution::Direct(property) = resolution? else {
         return None;
     };
     let in_catalog = types.catalog.structs.values().any(|info| {

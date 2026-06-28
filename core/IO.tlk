@@ -17,6 +17,14 @@ public enum IORequest {
 	case listen(Int, Int)
 	case connect(Int, Int, Int)
 	case accept(Int)
+	case cwd_len
+	case cwd_copy(RawPtr)
+	case getenv_len(RawPtr, Int)
+	case getenv_copy(RawPtr, Int, RawPtr)
+	case argc
+	case arg_len(Int)
+	case arg_copy(Int, RawPtr)
+	case exit(Int)
 }
 
 public effect 'io(request: IORequest) -> Int
@@ -93,6 +101,39 @@ public func _io_write(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
 
 public func _io_close(fd: Int) 'io -> Int {
 	'io(.close(fd))
+}
+
+public func _io_cwd_len() 'io -> Int {
+	'io(.cwd_len)
+}
+
+public func _io_cwd_copy(buf: RawPtr) 'io -> Int {
+	'io(.cwd_copy(buf))
+}
+
+public func _io_getenv_len(name: RawPtr, name_len: Int) 'io -> Int {
+	'io(.getenv_len(name, name_len))
+}
+
+public func _io_getenv_copy(name: RawPtr, name_len: Int, buf: RawPtr) 'io -> Int {
+	'io(.getenv_copy(name, name_len, buf))
+}
+
+public func _io_argc() 'io -> Int {
+	'io(.argc)
+}
+
+public func _io_arg_len(index: Int) 'io -> Int {
+	'io(.arg_len(index))
+}
+
+public func _io_arg_copy(index: Int, buf: RawPtr) 'io -> Int {
+	'io(.arg_copy(index, buf))
+}
+
+public func _io_exit(code: Int) 'io -> Never {
+	'io(.exit(code))
+	loop {}
 }
 
 public func _io_ctl(fd: Int, op: Int, arg: Int) 'io -> Int {

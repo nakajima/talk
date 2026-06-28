@@ -55,9 +55,34 @@ pub trait IO {
 
     /// Accept a connection: the new fd or negative errno.
     fn accept(&mut self, fd: i64) -> i64;
+
+    /// Current working directory byte length, or negative errno.
+    fn cwd_len(&mut self) -> i64;
+
+    /// Copy the current working directory into `buf`.
+    fn cwd_copy(&mut self, buf: &mut [u8]) -> i64;
+
+    /// Environment variable value byte length, or negative errno.
+    fn getenv_len(&mut self, name: &[u8]) -> i64;
+
+    /// Copy an environment variable value into `buf`.
+    fn getenv_copy(&mut self, name: &[u8], buf: &mut [u8]) -> i64;
+
+    /// Process argument count.
+    fn argc(&mut self) -> i64;
+
+    /// Process argument byte length, or negative errno.
+    fn arg_len(&mut self, index: i64) -> i64;
+
+    /// Copy one process argument into `buf`.
+    fn arg_copy(&mut self, index: i64, buf: &mut [u8]) -> i64;
+
+    /// Terminate the process with `code`; test IO returns the code.
+    fn exit(&mut self, code: i64) -> i64;
 }
 
 const EIO: i64 = -5;
+const ENOENT: i64 = -2;
 const EBADF: i64 = -9;
 const EINVAL: i64 = -22;
 #[cfg(not(unix))]
@@ -285,6 +310,92 @@ impl IO for StdioIO {
             EPERM
         }
     }
+
+    fn cwd_len(&mut self) -> i64 {
+        match std::env::current_dir() {
+            Ok(path) => path.to_string_lossy().len() as i64,
+            Err(_) => EIO,
+        }
+    }
+
+    fn cwd_copy(&mut self, buf: &mut [u8]) -> i64 {
+        match std::env::current_dir() {
+            Ok(path) => {
+                let bytes = path.to_string_lossy();
+                let bytes = bytes.as_bytes();
+                if buf.len() < bytes.len() {
+                    return EINVAL;
+                }
+                buf[..bytes.len()].copy_from_slice(bytes);
+                bytes.len() as i64
+            }
+            Err(_) => EIO,
+        }
+    }
+
+    fn getenv_len(&mut self, name: &[u8]) -> i64 {
+        let Ok(name) = std::str::from_utf8(name) else {
+            return EINVAL;
+        };
+        match std::env::var_os(name) {
+            Some(value) => value.to_string_lossy().len() as i64,
+            None => ENOENT,
+        }
+    }
+
+    fn getenv_copy(&mut self, name: &[u8], buf: &mut [u8]) -> i64 {
+        let Ok(name) = std::str::from_utf8(name) else {
+            return EINVAL;
+        };
+        match std::env::var_os(name) {
+            Some(value) => {
+                let bytes = value.to_string_lossy();
+                let bytes = bytes.as_bytes();
+                if buf.len() < bytes.len() {
+                    return EINVAL;
+                }
+                buf[..bytes.len()].copy_from_slice(bytes);
+                bytes.len() as i64
+            }
+            None => ENOENT,
+        }
+    }
+
+    fn argc(&mut self) -> i64 {
+        std::env::args_os().count() as i64
+    }
+
+    fn arg_len(&mut self, index: i64) -> i64 {
+        if index < 0 {
+            return EINVAL;
+        }
+        match std::env::args_os().nth(index as usize) {
+            Some(arg) => arg.to_string_lossy().len() as i64,
+            None => ENOENT,
+        }
+    }
+
+    fn arg_copy(&mut self, index: i64, buf: &mut [u8]) -> i64 {
+        if index < 0 {
+            return EINVAL;
+        }
+        match std::env::args_os().nth(index as usize) {
+            Some(arg) => {
+                let bytes = arg.to_string_lossy();
+                let bytes = bytes.as_bytes();
+                if buf.len() < bytes.len() {
+                    return EINVAL;
+                }
+                buf[..bytes.len()].copy_from_slice(bytes);
+                bytes.len() as i64
+            }
+            None => ENOENT,
+        }
+    }
+
+    fn exit(&mut self, code: i64) -> i64 {
+        std::process::exit(code as i32)
+    }
 }
 
 #[cfg(unix)]
@@ -410,5 +521,41 @@ impl IO for CaptureIO {
             return EBADF;
         }
         self.fresh_fd()
+    }
+
+    fn cwd_len(&mut self) -> i64 {
+        1
+    }
+
+    fn cwd_copy(&mut self, buf: &mut [u8]) -> i64 {
+        if buf.is_empty() {
+            return EINVAL;
+        }
+        buf[0] = b'.';
+        1
+    }
+
+    fn getenv_len(&mut self, _name: &[u8]) -> i64 {
+        ENOENT
+    }
+
+    fn getenv_copy(&mut self, _name: &[u8], _buf: &mut [u8]) -> i64 {
+        ENOENT
+    }
+
+    fn argc(&mut self) -> i64 {
+        0
+    }
+
+    fn arg_len(&mut self, _index: i64) -> i64 {
+        ENOENT
+    }
+
+    fn arg_copy(&mut self, _index: i64, _buf: &mut [u8]) -> i64 {
+        ENOENT
+    }
+
+    fn exit(&mut self, code: i64) -> i64 {
+        code
     }
 }

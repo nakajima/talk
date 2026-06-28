@@ -534,7 +534,15 @@ impl Evaluator {
             | Op::IoBind
             | Op::IoListen
             | Op::IoConnect
-            | Op::IoAccept => {
+            | Op::IoAccept
+            | Op::IoCwdLen
+            | Op::IoCwdCopy
+            | Op::IoGetenvLen
+            | Op::IoGetenvCopy
+            | Op::IoArgc
+            | Op::IoArgLen
+            | Op::IoArgCopy
+            | Op::IoExit => {
                 let mut operands = [EvalValue::Void, EvalValue::Void, EvalValue::Void];
                 for (slot, &arg) in operands.iter_mut().zip(args.iter()) {
                     *slot = self.eval_sub(p, arg)?;
@@ -640,6 +648,67 @@ impl Evaluator {
             Op::IoListen => self.io.listen(int(0)?, int(1)?),
             Op::IoConnect => self.io.connect(int(0)?, int(1)?, int(2)?),
             Op::IoAccept => self.io.accept(int(0)?),
+            Op::IoCwdLen => self.io.cwd_len(),
+            Op::IoCwdCopy => {
+                let len = self.io.cwd_len();
+                if len < 0 {
+                    return Ok(len);
+                }
+                let start = ptr(0)?;
+                self.check_access(start as u32, len as usize, "io")?;
+                let buf = self
+                    .mem
+                    .get_mut(start..start + len as usize)
+                    .ok_or_else(oob)?;
+                self.io.cwd_copy(buf)
+            }
+            Op::IoGetenvLen => {
+                let (start, len) = (ptr(0)?, int(1)?);
+                if len < 0 {
+                    return Ok(len);
+                }
+                self.check_access(start as u32, len as usize, "io")?;
+                let name = self.mem.get(start..start + len as usize).ok_or_else(oob)?;
+                self.io.getenv_len(name)
+            }
+            Op::IoGetenvCopy => {
+                let (name_start, name_len, dest) = (ptr(0)?, int(1)?, ptr(2)?);
+                if name_len < 0 {
+                    return Ok(name_len);
+                }
+                self.check_access(name_start as u32, name_len as usize, "io")?;
+                let name = self
+                    .mem
+                    .get(name_start..name_start + name_len as usize)
+                    .ok_or_else(oob)?
+                    .to_vec();
+                let len = self.io.getenv_len(&name);
+                if len < 0 {
+                    return Ok(len);
+                }
+                self.check_access(dest as u32, len as usize, "io")?;
+                let buf = self
+                    .mem
+                    .get_mut(dest..dest + len as usize)
+                    .ok_or_else(oob)?;
+                self.io.getenv_copy(&name, buf)
+            }
+            Op::IoArgc => self.io.argc(),
+            Op::IoArgLen => self.io.arg_len(int(0)?),
+            Op::IoArgCopy => {
+                let (index, dest) = (int(0)?, ptr(1)?);
+                let len = self.io.arg_len(index);
+                if len < 0 {
+                    return Ok(len);
+                }
+                self.check_access(dest as u32, len as usize, "io")?;
+                let buf = self
+                    .mem
+                    .get_mut(dest..dest + len as usize)
+                    .ok_or_else(oob)?;
+                self.io.arg_copy(index, buf)
+            }
+            Op::IoExit => self.io.exit(int(0)?),
             other => {
                 return Err(EvalError::Unsupported(format!("not an io op: {other:?}")));
             }

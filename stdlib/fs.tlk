@@ -1,0 +1,15 @@
+public struct Dir {
+	let path: Path
+
+	func entries<T: Iterator<Path>>() -> T {
+		ArrayIterator([])
+	}
+}
+
+extend Dir: Showable {
+	func show() -> String {
+		let str = ""
+		loop self.path.components { str = str + "/" + component }
+		str.to_string()
+	}
+}

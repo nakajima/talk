@@ -29,16 +29,16 @@ use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::compiling::driver::Source;
+use crate::hir::{
+    self, Block, Decl, DeclKind, Expr, ExprKind, HirFile, InlineIRInstruction, MatchArm, Node,
+    PatternKind, Stmt, StmtKind,
+};
 use crate::lambda_g::expr::Const;
 use crate::lambda_g::expr::{CmpOp, ExprId, Op, TyId, TyKind};
 use crate::lambda_g::program::{Label, Program};
 use crate::mir;
 use crate::name_resolution::name_resolver::ResolvedNames;
 use crate::name_resolution::symbol::Symbol;
-use crate::hir::{
-    self, Block, Decl, DeclKind, Expr, ExprKind, HirFile, InlineIRInstruction, MatchArm, Node,
-    PatternKind, Stmt, StmtKind,
-};
 use crate::node_kinds::{
     inline_ir_instruction::{InlineIRInstructionKind, Value as IrValue},
     type_annotation::{TypeAnnotation, TypeAnnotationKind},
@@ -71,7 +71,7 @@ fn theta_key(theta: &Theta) -> ThetaKey {
 
 struct FuncSource<'a> {
     unit: usize,
-    params: &'a [crate::node_kinds::parameter::Parameter],
+    params: &'a [crate::hir::Parameter],
     body: &'a Block,
 }
 
@@ -160,6 +160,15 @@ struct LoopBinding {
     header: ExprId,
     exit: ExprId,
     drop_depth: usize,
+}
+
+/// A variant constructor's call site, carried from `variant_target` into
+/// evidence-table generation: the node (for diagnostics) and its per-call-site
+/// instantiation (the θ source, baked on the HIR node by the lowerer).
+#[derive(Clone)]
+struct VariantSite {
+    node: crate::node_id::NodeID,
+    instantiation: Option<Vec<(Symbol, CheckTy)>>,
 }
 
 /// What a resolved call prepends before its source arguments: nothing, a
@@ -458,7 +467,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         unit: usize,
         symbol: Symbol,
-        params: &'a [crate::node_kinds::parameter::Parameter],
+        params: &'a [crate::hir::Parameter],
         body: &'a Block,
         is_init: bool,
     ) {
@@ -473,7 +482,7 @@ impl<'a> Lowering<'a> {
             .insert(symbol, FuncSource { unit, params, body });
     }
 
-    fn is_mutable_self_param(param: &crate::node_kinds::parameter::Parameter) -> bool {
+    fn is_mutable_self_param(param: &crate::hir::Parameter) -> bool {
         param.name.name_str() == "self"
             && matches!(
                 param
@@ -1006,8 +1015,6 @@ impl<'a> Lowering<'a> {
         #[derive(Visitor)]
         #[visitor(Expr(enter))]
         struct ReceiverScan<'s> {
-            resolutions:
-                &'s FxHashMap<crate::node_id::NodeID, crate::types::output::MemberResolution>,
             mutating: &'s FxHashSet<Symbol>,
             found: FxHashSet<Symbol>,
         }
@@ -1022,7 +1029,7 @@ impl<'a> Lowering<'a> {
                 let Some(symbol) = receiver_root_symbol(receiver) else {
                     return;
                 };
-                let target = match self.resolutions.get(&callee.id) {
+                let target = match &callee.member_resolution {
                     Some(crate::types::output::MemberResolution::Direct(s)) => *s,
                     Some(crate::types::output::MemberResolution::ViaConformance {
                         witness,
@@ -1037,7 +1044,6 @@ impl<'a> Lowering<'a> {
         }
 
         let mut scan = ReceiverScan {
-            resolutions: &self.units[unit].types.member_resolutions,
             mutating: &self.mutating,
             found: FxHashSet::default(),
         };
@@ -1078,7 +1084,7 @@ impl<'a> Lowering<'a> {
 
     /// Lower `expr`, delivering its value to continuation `k : Fn(T, ⊥)`.
     fn lower_expr(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
-        if let Some(pack) = self.existential_pack_at(expr.id, ctx) {
+        if let Some(pack) = self.existential_pack_at(expr.existential_pack.as_ref(), ctx) {
             if let CheckTy::Any { protocol, .. } = &pack.payload
                 && *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol)
             {
@@ -1118,13 +1124,13 @@ impl<'a> Lowering<'a> {
             } => {
                 // Variant construction with impure payloads: chain the
                 // arguments, then build the value (no function is called).
-                if let Some((enum_symbol, tag, variant_symbol, node)) =
-                    self.variant_target(expr, callee, ctx)
+                if let Some((enum_symbol, tag, variant_symbol, site)) =
+                    self.variant_target(expr, callee)
                 {
                     let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
                     return self.lower_args(&arg_exprs, ctx, vec![], &mut |this, values| {
                         let value = this.variant_new_for_expr(
-                            node,
+                            site.clone(),
                             enum_symbol,
                             tag,
                             variant_symbol,
@@ -1309,7 +1315,7 @@ impl<'a> Lowering<'a> {
     /// variables, field reads on pure receivers, and @_ir splices over
     /// pure operands.
     fn try_pure(&mut self, expr: &Expr, ctx: &Ctx) -> Option<ExprId> {
-        if let Some(pack) = self.existential_pack_at(expr.id, ctx) {
+        if let Some(pack) = self.existential_pack_at(expr.existential_pack.as_ref(), ctx) {
             if let CheckTy::Any { protocol, .. } = &pack.payload
                 && *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol)
             {
@@ -1365,14 +1371,13 @@ impl<'a> Lowering<'a> {
             // Variant construction over pure payloads (`.some(1)`,
             // `Maybe.definitely(x)`): pure, exactly like RecordNew.
             ExprKind::Call { callee, args, .. } => {
-                let (enum_symbol, tag, variant_symbol, node) =
-                    self.variant_target(expr, callee, ctx)?;
+                let (enum_symbol, tag, variant_symbol, site) = self.variant_target(expr, callee)?;
                 let mut payloads = Vec::with_capacity(args.len());
                 for arg in args {
                     payloads.push(self.try_pure(&arg.value, ctx)?);
                 }
                 Some(self.variant_new_for_expr(
-                    node,
+                    site,
                     enum_symbol,
                     tag,
                     variant_symbol,
@@ -1425,7 +1430,7 @@ impl<'a> Lowering<'a> {
                         );
                         return None;
                     }
-                    let theta = self.instantiation_at(expr.id, ctx);
+                    let theta = self.instantiation_at(expr.instantiation.as_ref(), ctx);
                     let label = self.demand(symbol, theta);
                     return Some(self.p.func_ref(label));
                 }
@@ -1479,10 +1484,10 @@ impl<'a> Lowering<'a> {
 
     fn existential_pack_at(
         &self,
-        node: crate::node_id::NodeID,
+        pack: Option<&crate::types::output::ExistentialPack>,
         ctx: &Ctx,
     ) -> Option<crate::types::output::ExistentialPack> {
-        let pack = self.units[ctx.unit].types.existential_packs.get(&node)?;
+        let pack = pack?;
         let existential =
             pack.existential
                 .substitute(&ctx.theta, &Default::default(), &Default::default());
@@ -1970,11 +1975,7 @@ impl<'a> Lowering<'a> {
         {
             return Some(self.p.extract(receiver_value, index as u32));
         }
-        let resolution = self.units[ctx.unit]
-            .types
-            .member_resolutions
-            .get(&expr.id)
-            .cloned();
+        let resolution = expr.member_resolution.clone();
         if let Some(crate::types::output::MemberResolution::Direct(property)) = resolution {
             let index = self.field_index(&head, property)?;
             let field_check_ty = self.checker_ty(expr, ctx);
@@ -2016,12 +2017,7 @@ impl<'a> Lowering<'a> {
             return false;
         };
         let head = Self::borrow_erased_ty(self.checker_ty(receiver, ctx));
-        match self.units[ctx.unit]
-            .types
-            .member_resolutions
-            .get(&callee.id)
-            .cloned()
-        {
+        match callee.member_resolution.clone() {
             Some(crate::types::output::MemberResolution::Direct(property)) => {
                 self.field_index(&head, property).is_some()
             }
@@ -2102,25 +2098,29 @@ impl<'a> Lowering<'a> {
         &self,
         expr: &Expr,
         callee: &Expr,
-        ctx: &Ctx,
-    ) -> Option<(Symbol, u16, Symbol, crate::node_id::NodeID)> {
-        let resolutions = &self.units[ctx.unit].types.member_resolutions;
-        let (node, symbol) =
-            [callee.id, expr.id]
-                .iter()
-                .find_map(|node| match resolutions.get(node) {
-                    Some(crate::types::output::MemberResolution::Direct(s)) => Some((*node, *s)),
+    ) -> Option<(Symbol, u16, Symbol, VariantSite)> {
+        let (site, symbol) =
+            [callee, expr]
+                .into_iter()
+                .find_map(|e| match &e.member_resolution {
+                    Some(crate::types::output::MemberResolution::Direct(s)) => Some((
+                        VariantSite {
+                            node: e.id,
+                            instantiation: e.instantiation.clone(),
+                        },
+                        *s,
+                    )),
                     _ => None,
                 })?;
         let (enum_symbol, tag) = self.variant_of(symbol)?;
-        Some((enum_symbol, tag, symbol, node))
+        Some((enum_symbol, tag, symbol, site))
     }
 
     /// Construct a variant value: source payloads followed by hidden runtime
     /// evidence for GADT-local constructor bounds.
     fn variant_new_for_expr(
         &mut self,
-        node: crate::node_id::NodeID,
+        site: VariantSite,
         enum_symbol: Symbol,
         tag: u16,
         variant_symbol: Symbol,
@@ -2128,20 +2128,20 @@ impl<'a> Lowering<'a> {
         ctx: &Ctx,
     ) -> ExprId {
         let mut runtime_payloads = payloads.to_vec();
-        runtime_payloads.extend(self.variant_evidence_tables(node, variant_symbol, ctx));
+        runtime_payloads.extend(self.variant_evidence_tables(site, variant_symbol, ctx));
         self.variant_new(enum_symbol, tag, &runtime_payloads)
     }
 
     fn variant_evidence_tables(
         &mut self,
-        node: crate::node_id::NodeID,
+        site: VariantSite,
         variant_symbol: Symbol,
         ctx: &Ctx,
     ) -> Vec<ExprId> {
         let Some(variant) = self.variant_by_symbol(variant_symbol) else {
             return vec![];
         };
-        let theta = self.instantiation_at(node, ctx);
+        let theta = self.instantiation_at(site.instantiation.as_ref(), ctx);
         let mut tables = vec![];
         for predicate in &variant.constructor_scheme.predicates {
             let crate::types::ty::Predicate::Conforms { ty, protocol } = predicate else {
@@ -2151,7 +2151,7 @@ impl<'a> Lowering<'a> {
                 continue;
             };
             let concrete = theta.get(param).cloned().unwrap_or(CheckTy::Param(*param));
-            match self.evidence_table_for_ty(*protocol, &concrete, ctx, node) {
+            match self.evidence_table_for_ty(*protocol, &concrete, ctx, site.node) {
                 Some(table) => tables.push(table),
                 None => {
                     self.diagnostics.push(format!(
@@ -2232,10 +2232,7 @@ impl<'a> Lowering<'a> {
     /// A bare member that *is* a payload-less variant (`.none`,
     /// `Optional.none`): a pure value.
     fn try_variant_value(&mut self, expr: &Expr, ctx: &Ctx) -> Option<ExprId> {
-        let resolution = self.units[ctx.unit]
-            .types
-            .member_resolutions
-            .get(&expr.id)?;
+        let resolution = expr.member_resolution.as_ref()?;
         let crate::types::output::MemberResolution::Direct(symbol) = resolution else {
             return None;
         };
@@ -2253,7 +2250,17 @@ impl<'a> Lowering<'a> {
         if has_payloads {
             return None;
         }
-        Some(self.variant_new_for_expr(expr.id, enum_symbol, tag, *symbol, &[], ctx))
+        Some(self.variant_new_for_expr(
+            VariantSite {
+                node: expr.id,
+                instantiation: expr.instantiation.clone(),
+            },
+            enum_symbol,
+            tag,
+            *symbol,
+            &[],
+            ctx,
+        ))
     }
 
     /// For a record literal: row position → source field index, from the
@@ -2297,12 +2304,7 @@ impl<'a> Lowering<'a> {
     /// environment — free variables ARE the captures (paper §2.2's
     /// higher-order setting; the reference evaluator runs them by
     /// dependency-aware substitution, the scheduler closure-converts).
-    fn lower_func_value(
-        &mut self,
-        expr: &Expr,
-        func: &hir::Func,
-        ctx: &Ctx,
-    ) -> Option<ExprId> {
+    fn lower_func_value(&mut self, expr: &Expr, func: &hir::Func, ctx: &Ctx) -> Option<ExprId> {
         let CheckTy::Func(param_check_tys, ret_check, _) = self.checker_ty(expr, ctx) else {
             self.diagnostics
                 .push("lowering: function literal without a function type".into());
@@ -2674,11 +2676,7 @@ impl<'a> Lowering<'a> {
         let CheckTy::Param(param) = self.checker_ty(receiver, ctx) else {
             return None;
         };
-        let resolution = self.units[ctx.unit]
-            .types
-            .member_resolutions
-            .get(&callee.id)
-            .cloned();
+        let resolution = callee.member_resolution.clone();
         let protocol = match resolution {
             Some(crate::types::output::MemberResolution::ViaConformance { protocol, .. }) => {
                 protocol
@@ -2812,7 +2810,7 @@ impl<'a> Lowering<'a> {
                         .push("lowering: calling local function values not yet supported".into());
                     return None;
                 }
-                let theta = self.call_theta(symbol, callee.id, ctx);
+                let theta = self.call_theta(symbol, callee.instantiation.as_ref(), ctx);
                 Some((self.demand(symbol, theta), symbol, Prefix::None))
             }
             // `Person(args…)`: construction is a call to the (explicit or
@@ -2820,11 +2818,7 @@ impl<'a> Lowering<'a> {
             // self; the init body fills the fields and returns self.
             ExprKind::Constructor(name) => {
                 let struct_symbol = name.symbol().ok()?;
-                let resolution = self.units[ctx.unit]
-                    .types
-                    .member_resolutions
-                    .get(&callee.id)
-                    .cloned();
+                let resolution = callee.member_resolution.clone();
                 let Some(crate::types::output::MemberResolution::Direct(init)) = resolution else {
                     self.diagnostics.push(format!(
                         "lowering: unresolved initializer for {struct_symbol}"
@@ -2832,7 +2826,7 @@ impl<'a> Lowering<'a> {
                     return None;
                 };
                 let blank = self.blank_record(struct_symbol)?;
-                let mut theta = self.call_theta(init, expr.id, ctx);
+                let mut theta = self.call_theta(init, expr.instantiation.as_ref(), ctx);
                 let constructed = self.checker_ty(expr, ctx);
                 self.owner_theta(init, &constructed, &mut theta);
                 Some((self.demand(init, theta), init, Prefix::Value(blank)))
@@ -2840,11 +2834,7 @@ impl<'a> Lowering<'a> {
             // Protocol-static (operators) or instance member calls: resolve
             // through member_resolutions + the conformance table.
             ExprKind::Member(receiver, label) => {
-                let resolution = self.units[ctx.unit]
-                    .types
-                    .member_resolutions
-                    .get(&callee.id)
-                    .cloned();
+                let resolution = callee.member_resolution.clone();
                 let receiver_expr: Option<&'e Expr> = match receiver {
                     Some(r) if !matches!(r.kind, ExprKind::Constructor(_)) => Some(r.as_ref()),
                     _ => None,
@@ -2869,7 +2859,7 @@ impl<'a> Lowering<'a> {
                         Some((target, target_symbol, prefix))
                     }
                     Some(crate::types::output::MemberResolution::Direct(member)) => {
-                        let mut theta = self.call_theta(member, callee.id, ctx);
+                        let mut theta = self.call_theta(member, callee.instantiation.as_ref(), ctx);
                         if let Some(head) = &head_ty {
                             self.owner_theta(member, head, &mut theta);
                         }
@@ -2899,7 +2889,8 @@ impl<'a> Lowering<'a> {
                                 .copied();
                             if let Some(member) = method {
                                 let head = head_ty.clone()?;
-                                let mut theta = self.call_theta(member, callee.id, ctx);
+                                let mut theta =
+                                    self.call_theta(member, callee.instantiation.as_ref(), ctx);
                                 self.owner_theta(member, &head, &mut theta);
                                 return Some((self.demand(member, theta), member, prefix));
                             }
@@ -3079,20 +3070,36 @@ impl<'a> Lowering<'a> {
             return self.dead_end("undeclared_effect");
         };
 
-        // The request expression: a leading-dot variant construction.
+        // The request expression: a statically-known IORequest variant.
+        // Payload-bearing variants parse as calls (`.read(...)`), while
+        // payload-less variants parse as member values (`.cwd_len`).
         let operation = args.first().and_then(|request| match &request.value.kind {
             ExprKind::Call {
                 callee,
                 args: payloads,
                 ..
             } => {
-                let (enum_symbol, tag, _, _) = self.variant_target(&request.value, callee, ctx)?;
+                let (enum_symbol, tag, _, _) = self.variant_target(&request.value, callee)?;
                 let name = self
                     .enum_info(enum_symbol)?
                     .variants
                     .get_index(tag as usize)
                     .map(|(name, _)| name.clone())?;
-                Some((name, payloads.as_slice()))
+                let payloads = payloads.iter().map(|arg| &arg.value).collect();
+                Some((name, payloads))
+            }
+            ExprKind::Member(_, _) => {
+                let symbol = match request.value.member_resolution {
+                    Some(crate::types::output::MemberResolution::Direct(symbol)) => symbol,
+                    _ => return None,
+                };
+                let (enum_symbol, tag) = self.variant_of(symbol)?;
+                let name = self
+                    .enum_info(enum_symbol)?
+                    .variants
+                    .get_index(tag as usize)
+                    .map(|(name, _)| name.clone())?;
+                Some((name, vec![]))
             }
             _ => None,
         });
@@ -3117,6 +3124,14 @@ impl<'a> Lowering<'a> {
             "listen" => Op::IoListen,
             "connect" => Op::IoConnect,
             "accept" => Op::IoAccept,
+            "cwd_len" => Op::IoCwdLen,
+            "cwd_copy" => Op::IoCwdCopy,
+            "getenv_len" => Op::IoGetenvLen,
+            "getenv_copy" => Op::IoGetenvCopy,
+            "argc" => Op::IoArgc,
+            "arg_len" => Op::IoArgLen,
+            "arg_copy" => Op::IoArgCopy,
+            "exit" => Op::IoExit,
             other => {
                 self.diagnostics
                     .push(format!("lowering: unknown io operation '{other}'"));
@@ -3124,8 +3139,7 @@ impl<'a> Lowering<'a> {
             }
         };
         let _ = expr;
-        let payload_exprs: Vec<&Expr> = payloads.iter().map(|a| &a.value).collect();
-        self.lower_args(&payload_exprs, ctx, vec![], &mut |this, values| {
+        self.lower_args(&payloads, ctx, vec![], &mut |this, values| {
             let result = this.p.primop(op, &values, ret_ty);
             this.p.app(k, result)
         })
@@ -3395,12 +3409,7 @@ impl<'a> Lowering<'a> {
 
     /// The checker type of an expression node, θ-substituted.
     fn checker_ty(&self, expr: &Expr, ctx: &Ctx) -> CheckTy {
-        let raw = self.units[ctx.unit]
-            .types
-            .node_types
-            .get(&expr.id)
-            .cloned()
-            .unwrap_or(CheckTy::Error);
+        let raw = expr.ty.clone();
         let substituted = raw.substitute(&ctx.theta, &Default::default(), &Default::default());
         self.normalize_check_ty(substituted, ctx.unit)
     }
@@ -3472,8 +3481,13 @@ impl<'a> Lowering<'a> {
     /// instantiation (monomorphic recursion typed against the group's
     /// skeleton — THIH §11.6.3) inherit the enclosing specialization's
     /// binding.
-    fn call_theta(&self, symbol: Symbol, node: crate::node_id::NodeID, ctx: &Ctx) -> Theta {
-        let mut theta = self.instantiation_at(node, ctx);
+    fn call_theta(
+        &self,
+        symbol: Symbol,
+        instantiation: Option<&Vec<(Symbol, CheckTy)>>,
+        ctx: &Ctx,
+    ) -> Theta {
+        let mut theta = self.instantiation_at(instantiation, ctx);
         if let Some(scheme) = self.units.iter().find_map(|u| u.types.schemes.get(&symbol)) {
             for param in &scheme.params {
                 if !theta.contains_key(&param.symbol)
@@ -3488,9 +3502,9 @@ impl<'a> Lowering<'a> {
 
     /// The per-call-site instantiation, composed with the enclosing θ
     /// (`instantiations ∘ θ` — the worklist's edge label).
-    fn instantiation_at(&self, node: crate::node_id::NodeID, ctx: &Ctx) -> Theta {
+    fn instantiation_at(&self, instantiation: Option<&Vec<(Symbol, CheckTy)>>, ctx: &Ctx) -> Theta {
         let mut theta = Theta::default();
-        if let Some(pairs) = self.units[ctx.unit].types.instantiations.get(&node) {
+        if let Some(pairs) = instantiation {
             for (symbol, ty) in pairs {
                 let ty = ty.substitute(&ctx.theta, &Default::default(), &Default::default());
                 theta.insert(*symbol, ty);
@@ -3611,7 +3625,7 @@ impl<'a> Lowering<'a> {
         // nothing; scanning past it to an earlier expression mistypes
         // main's return).
         let result_check_ty = self
-            .top_level_value_ty(unit, nodes.last())
+            .top_level_value_ty(nodes.last())
             .unwrap_or(CheckTy::Nominal(Symbol::Void, vec![]));
         let result_ty = self.map_ty(&result_check_ty);
 
@@ -3667,12 +3681,12 @@ impl<'a> Lowering<'a> {
     /// The checker type of a top-level block's final value: the last
     /// node's expression type (or the branch type of a block-final
     /// if/else); None for statements that yield nothing.
-    fn top_level_value_ty(&self, unit: usize, last: Option<&Node>) -> Option<CheckTy> {
+    fn top_level_value_ty(&self, last: Option<&Node>) -> Option<CheckTy> {
         match last? {
             Node::Stmt(Stmt {
                 kind: StmtKind::Expr(expr),
                 ..
-            }) => self.units[unit].types.node_types.get(&expr.id).cloned(),
+            }) => Some(expr.ty.clone()),
             Node::Stmt(Stmt {
                 kind: StmtKind::If(_, then_block, Some(_)),
                 ..
@@ -3681,7 +3695,7 @@ impl<'a> Lowering<'a> {
                     kind: StmtKind::Expr(e),
                     ..
                 })
-                | Node::Expr(e) => self.units[unit].types.node_types.get(&e.id).cloned(),
+                | Node::Expr(e) => Some(e.ty.clone()),
                 _ => None,
             }),
             _ => None,
@@ -3764,7 +3778,7 @@ impl<'a> Lowering<'a> {
         let call_main_ref = self.p.func_ref(call_main);
 
         let setup_value_ty = self
-            .top_level_value_ty(unit, nodes.last())
+            .top_level_value_ty(nodes.last())
             .map(|ty| self.map_ty(&ty))
             .unwrap_or(void_ty);
         let k = self.discarding_cont(setup_value_ty, call_main_ref);

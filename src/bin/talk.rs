@@ -26,14 +26,13 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
-        /// Show the VM bytecode for a file (or stdin): chunks,
+        /// Show the VM bytecode for the input: chunks,
         /// registers, instructions.
         Ir {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
-        /// Show the raw scheduled VM bytecode module for a file (or stdin),
-        /// including chunks and side pools.
+        /// Show the raw scheduled VM bytecode module for the input
         Bytecode {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,

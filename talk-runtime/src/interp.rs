@@ -523,6 +523,70 @@ fn run_io(
         IoOp::Listen => machine.io.listen(int(a)?, int(b)?),
         IoOp::Connect => machine.io.connect(int(a)?, int(b)?, int(c)?),
         IoOp::Accept => machine.io.accept(int(a)?),
+        IoOp::CwdLen => machine.io.cwd_len(),
+        IoOp::CwdCopy => {
+            let len = machine.io.cwd_len();
+            if len < 0 {
+                return Ok(len);
+            }
+            let start = ptr(a)?;
+            machine.check_access(start as u32, len as usize, "io")?;
+            let buf = machine
+                .mem
+                .get_mut(start..start + len as usize)
+                .ok_or("vm: io cwd out of bounds")?;
+            machine.io.cwd_copy(buf)
+        }
+        IoOp::GetenvLen => {
+            let (start, len) = (ptr(a)?, int(b)?);
+            if len < 0 {
+                return Ok(len);
+            }
+            machine.check_access(start as u32, len as usize, "io")?;
+            let name = machine
+                .mem
+                .get(start..start + len as usize)
+                .ok_or("vm: io getenv name out of bounds")?;
+            machine.io.getenv_len(name)
+        }
+        IoOp::GetenvCopy => {
+            let (name_start, name_len, dest) = (ptr(a)?, int(b)?, ptr(c)?);
+            if name_len < 0 {
+                return Ok(name_len);
+            }
+            machine.check_access(name_start as u32, name_len as usize, "io")?;
+            let name = machine
+                .mem
+                .get(name_start..name_start + name_len as usize)
+                .ok_or("vm: io getenv name out of bounds")?
+                .to_vec();
+            let len = machine.io.getenv_len(&name);
+            if len < 0 {
+                return Ok(len);
+            }
+            machine.check_access(dest as u32, len as usize, "io")?;
+            let buf = machine
+                .mem
+                .get_mut(dest..dest + len as usize)
+                .ok_or("vm: io getenv out of bounds")?;
+            machine.io.getenv_copy(&name, buf)
+        }
+        IoOp::Argc => machine.io.argc(),
+        IoOp::ArgLen => machine.io.arg_len(int(a)?),
+        IoOp::ArgCopy => {
+            let (index, dest) = (int(a)?, ptr(b)?);
+            let len = machine.io.arg_len(index);
+            if len < 0 {
+                return Ok(len);
+            }
+            machine.check_access(dest as u32, len as usize, "io")?;
+            let buf = machine
+                .mem
+                .get_mut(dest..dest + len as usize)
+                .ok_or("vm: io arg out of bounds")?;
+            machine.io.arg_copy(index, buf)
+        }
+        IoOp::Exit => machine.io.exit(int(a)?),
     })
 }
 

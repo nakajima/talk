@@ -212,6 +212,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 if let Some(block) = trailing_block {
                     arg_tys.push(self.infer_closure_block(block, ctx));
                 }
+                // Record the constructor node's function type, as the `Ty::Func` arm
+                // does, so every expression has a type.
+                self.artifacts.node_types.insert(
+                    callee.id,
+                    Ty::Func(
+                        arg_tys[1..].to_vec(),
+                        Box::new(self_ty.clone()),
+                        EffectRow::pure(),
+                    ),
+                );
                 let expected = Ty::Func(arg_tys, Box::new(self_ty.clone()), ctx.eff.clone());
                 self.emit_eq(signature, expected, expr.id, CtReason::Apply);
                 self_ty
