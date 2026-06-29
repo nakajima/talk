@@ -168,11 +168,11 @@ pub(crate) enum Rvalue {
     },
 }
 
-#[derive(Debug)]
-pub(crate) struct Body<'a> {
+#[derive(Clone, Debug)]
+pub(crate) struct Body {
     pub(crate) owner: Option<Symbol>,
     pub(crate) entry: BlockId,
-    pub(crate) blocks: Vec<BasicBlock<'a>>,
+    pub(crate) blocks: Vec<BasicBlock>,
     pub(crate) scopes: Vec<Scope>,
     pub(crate) locals: Vec<LocalDecl>,
     #[allow(dead_code)]
@@ -180,21 +180,46 @@ pub(crate) struct Body<'a> {
     use_counts: FxHashMap<Symbol, usize>,
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct BasicBlock<'a> {
-    pub(crate) statements: Vec<LocatedStatement<'a>>,
-    pub(crate) terminator: Terminator<'a>,
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BasicBlock {
+    pub(crate) statements: Vec<LocatedStatement>,
+    pub(crate) terminator: Terminator,
 }
 
-#[derive(Debug)]
-pub(crate) struct LocatedStatement<'a> {
+#[derive(Clone, Debug)]
+pub(crate) struct LocatedStatement {
     pub(crate) point: StatementId,
-    pub(crate) kind: Statement<'a>,
+    pub(crate) kind: Statement,
+    /// Drop/move results projected onto this statement by `ownership::elaborate_body_drops`,
+    /// so lowering reads drop/move handling off the statement it is walking rather than
+    /// looking it up in a side `OwnershipOutput` table keyed by program point.
+    pub(crate) ownership: StatementOwnership,
+}
+
+/// Drop/move results the borrow checker records for a single MIR statement.
+/// Empty until the ownership pass elaborates drops over the body.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct StatementOwnership {
+    /// For a `DropCandidate`: how lowering must elaborate the drop at this point
+    /// (static / dead / conditional / open), plus the resolved key path it applies to.
+    pub(crate) drop: Option<DropElaborationResult>,
+    /// Key paths moved at this statement, so lowering can clear their drop flags.
+    pub(crate) moves: Vec<crate::ownership::KeyPath>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DropElaborationResult {
+    pub(crate) key_path: crate::ownership::KeyPath,
+    pub(crate) kind: DropElaboration,
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
-pub(crate) enum Statement<'a> {
+// Statements own the cloned HIR nodes they reference (the MIR is built once and reused), so
+// kinds carrying an `Expr`/`Pattern` are inherently larger than the marker kinds. Boxing every
+// node field would only add indirection to a build-once IR.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug)]
+pub(crate) enum Statement {
     ScopeEnter {
         scope: ScopeId,
     },
@@ -210,65 +235,65 @@ pub(crate) enum Statement<'a> {
         symbol: Symbol,
     },
     Read {
-        expr: &'a Expr,
+        expr: Expr,
     },
     ConsumeValue {
-        expr: &'a Expr,
+        expr: Expr,
         value: Option<ValueUse>,
     },
     AssignmentRootUse {
         id: NodeID,
-        ty: &'a Ty,
+        ty: Ty,
         symbol: Symbol,
     },
     Bind {
-        lhs: &'a Pattern,
-        type_annotation: Option<&'a TypeAnnotation>,
-        rhs: Option<&'a Expr>,
+        lhs: Pattern,
+        type_annotation: Option<TypeAnnotation>,
+        rhs: Option<Expr>,
         bindings: Vec<Local>,
         value: Option<Rvalue>,
     },
     Assign {
-        lhs: &'a Expr,
-        rhs: &'a Expr,
+        lhs: Expr,
+        rhs: Expr,
         target: Option<KeyPath>,
         value: Option<Rvalue>,
     },
     DropCandidate {
-        target: DropTarget<'a>,
+        target: DropTarget,
         key_path: Option<KeyPath>,
         reason: DropReason,
     },
     Call {
-        callee: &'a Expr,
-        args: &'a [CallArg],
-        trailing_block: Option<&'a Block>,
-        trailing_body: Option<Box<Body<'a>>>,
+        callee: Expr,
+        args: Vec<CallArg>,
+        trailing_block: Option<Block>,
+        trailing_body: Option<Box<Body>>,
     },
     Perform,
     ReturnValue {
-        expr: &'a Expr,
+        expr: Expr,
         value: Option<ValueUse>,
         destination: ValueDestination,
     },
     ContinueValue {
-        expr: &'a Expr,
+        expr: Expr,
         value: Option<ValueUse>,
     },
     Function {
         owner: Option<Symbol>,
         captures_parent: bool,
-        captures: &'a [CaptureSpec],
-        params: &'a [Parameter],
-        body: &'a Block,
+        captures: Vec<CaptureSpec>,
+        params: Vec<Parameter>,
+        body: Box<Block>,
     },
     Handling {
-        stmt: &'a Stmt,
-        effect_name: &'a Name,
-        body: &'a Block,
+        stmt: Stmt,
+        effect_name: Name,
+        body: Box<Block>,
     },
     DeclBody {
-        body: &'a crate::hir::Body,
+        body: crate::hir::Body,
     },
 }
 
@@ -279,10 +304,12 @@ pub(crate) enum ValueDestination {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum DropTarget<'a> {
+// Owns a cloned HIR `Expr` for the same reason as `Statement` (build-once MIR).
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug)]
+pub(crate) enum DropTarget {
     Symbol { id: NodeID, symbol: Symbol },
-    Expr(&'a Expr),
+    Expr(Expr),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -305,7 +332,7 @@ pub enum DropElaboration {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) enum Terminator<'a> {
+pub(crate) enum Terminator {
     #[default]
     Unset,
     Return,
@@ -314,18 +341,18 @@ pub(crate) enum Terminator<'a> {
     Break,
     Continue,
     Branch {
-        condition: &'a Expr,
+        condition: Expr,
         then_block: BlockId,
         else_block: BlockId,
     },
     Switch {
-        scrutinee: &'a Expr,
-        match_arms: Option<&'a [MatchArm]>,
+        scrutinee: Expr,
+        match_arms: Option<Vec<MatchArm>>,
         arms: Vec<BlockId>,
         default: Option<BlockId>,
     },
     Loop {
-        condition: Option<&'a Expr>,
+        condition: Option<Expr>,
         body_block: BlockId,
         exit_block: BlockId,
     },
@@ -337,10 +364,10 @@ struct LoopTargets {
     break_target: BlockId,
 }
 
-struct Builder<'ast, 'types> {
+struct Builder<'types> {
     types: &'types TypeOutput,
     owner: Option<Symbol>,
-    blocks: Vec<BasicBlock<'ast>>,
+    blocks: Vec<BasicBlock>,
     scopes: Vec<Scope>,
     locals: Vec<LocalDecl>,
     local_by_symbol: FxHashMap<Symbol, Local>,
@@ -357,15 +384,15 @@ struct ScopeFrame {
     locals: Vec<(NodeID, Symbol)>,
 }
 
-pub(crate) fn build_block<'a>(types: &TypeOutput, block: &'a Block) -> Body<'a> {
+pub(crate) fn build_block(types: &TypeOutput, block: &Block) -> Body {
     build_function(types, None, block)
 }
 
-pub(crate) fn build_function<'a>(
+pub(crate) fn build_function(
     types: &TypeOutput,
     owner: Option<Symbol>,
-    block: &'a Block,
-) -> Body<'a> {
+    block: &Block,
+) -> Body {
     let mut builder = Builder::new(types, owner);
     let entry = builder.new_block();
     let exit = builder.lower_root_scope(entry, |builder, entry| {
@@ -375,7 +402,7 @@ pub(crate) fn build_function<'a>(
     builder.finish(entry)
 }
 
-pub(crate) fn build_decls<'a>(types: &TypeOutput, decls: &'a [Decl]) -> Body<'a> {
+pub(crate) fn build_decls(types: &TypeOutput, decls: &[Decl]) -> Body {
     let mut builder = Builder::new(types, None);
     let entry = builder.new_block();
     let exit = builder.lower_root_scope(entry, |builder, entry| builder.lower_decls(decls, entry));
@@ -383,7 +410,7 @@ pub(crate) fn build_decls<'a>(types: &TypeOutput, decls: &'a [Decl]) -> Body<'a>
     builder.finish(entry)
 }
 
-pub(crate) fn build_nodes<'a>(types: &TypeOutput, nodes: &'a [Node]) -> Body<'a> {
+pub(crate) fn build_nodes(types: &TypeOutput, nodes: &[Node]) -> Body {
     let mut builder = Builder::new(types, None);
     let entry = builder.new_block();
     let exit = builder.lower_root_scope(entry, |builder, entry| {
@@ -394,11 +421,11 @@ pub(crate) fn build_nodes<'a>(types: &TypeOutput, nodes: &'a [Node]) -> Body<'a>
 }
 
 #[cfg(test)]
-pub(crate) fn use_counts(body: &Body<'_>) -> FxHashMap<Symbol, usize> {
+pub(crate) fn use_counts(body: &Body) -> FxHashMap<Symbol, usize> {
     body.use_counts.clone()
 }
 
-impl<'ast, 'types> Builder<'ast, 'types> {
+impl<'types> Builder<'types> {
     fn new(types: &'types TypeOutput, owner: Option<Symbol>) -> Self {
         Self {
             types,
@@ -415,15 +442,15 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         }
     }
 
-    fn merge_use_counts(&mut self, body: &Body<'_>) {
+    fn merge_use_counts(&mut self, body: &Body) {
         for (symbol, count) in &body.use_counts {
             *self.use_counts.entry(*symbol).or_insert(0) += count;
         }
     }
 }
 
-impl<'ast, 'types> Builder<'ast, 'types> {
-    fn finish(self, entry: BlockId) -> Body<'ast> {
+impl Builder<'_> {
+    fn finish(self, entry: BlockId) -> Body {
         Body {
             owner: self.owner,
             entry,
@@ -545,7 +572,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         id
     }
 
-    fn lower_decls(&mut self, decls: &'ast [Decl], mut current: BlockId) -> BlockId {
+    fn lower_decls(&mut self, decls: &[Decl], mut current: BlockId) -> BlockId {
         for decl in decls {
             if self.is_terminated(current) {
                 current = self.new_block();
@@ -557,7 +584,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
 
     fn lower_nodes(
         &mut self,
-        nodes: &'ast [Node],
+        nodes: &[Node],
         mut current: BlockId,
         mark_tail_exprs: bool,
     ) -> BlockId {
@@ -575,7 +602,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 self.push_statement(
                     current,
                     Statement::ReturnValue {
-                        expr,
+                        expr: expr.clone(),
                         value,
                         destination: ValueDestination::Continuation,
                     },
@@ -587,7 +614,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
 
     fn lower_node(
         &mut self,
-        node: &'ast Node,
+        node: &Node,
         current: BlockId,
         consume_expr_value: bool,
     ) -> BlockId {
@@ -602,14 +629,20 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 let current = self.lower_expr(expr, current);
                 if consume_expr_value {
                     let value = self.operand_for_expr(expr);
-                    self.push_statement(current, Statement::ConsumeValue { expr, value });
+                    self.push_statement(
+                        current,
+                        Statement::ConsumeValue {
+                            expr: expr.clone(),
+                            value,
+                        },
+                    );
                 }
                 current
             }
         }
     }
 
-    fn lower_decl(&mut self, decl: &'ast Decl, current: BlockId) -> BlockId {
+    fn lower_decl(&mut self, decl: &Decl, current: BlockId) -> BlockId {
         match &decl.kind {
             DeclKind::Let {
                 lhs,
@@ -630,9 +663,9 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                             Statement::Function {
                                 owner: function_owner,
                                 captures_parent: false,
-                                captures: &func.captures,
-                                params: &func.params,
-                                body: &func.body,
+                                captures: func.captures.clone(),
+                                params: func.params.clone(),
+                                body: Box::new(func.body.clone()),
                             },
                         );
                         current
@@ -653,9 +686,9 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 self.push_statement(
                     current,
                     Statement::Bind {
-                        lhs,
-                        type_annotation: type_annotation.as_ref(),
-                        rhs: rhs.as_ref(),
+                        lhs: lhs.clone(),
+                        type_annotation: type_annotation.clone(),
+                        rhs: rhs.clone(),
                         bindings,
                         value,
                     },
@@ -669,9 +702,9 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                     Statement::Function {
                         owner,
                         captures_parent: true,
-                        captures: &func.captures,
-                        params: &func.params,
-                        body: &func.body,
+                        captures: func.captures.clone(),
+                        params: func.params.clone(),
+                        body: Box::new(func.body.clone()),
                     },
                 );
                 current
@@ -683,9 +716,9 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                     Statement::Function {
                         owner,
                         captures_parent: true,
-                        captures: &func.captures,
-                        params: &func.params,
-                        body: &func.body,
+                        captures: func.captures.clone(),
+                        params: func.params.clone(),
+                        body: Box::new(func.body.clone()),
                     },
                 );
                 current
@@ -700,9 +733,9 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                     Statement::Function {
                         owner,
                         captures_parent: true,
-                        captures: &[],
-                        params,
-                        body,
+                        captures: vec![],
+                        params: params.clone(),
+                        body: Box::new(body.clone()),
                     },
                 );
                 current
@@ -711,7 +744,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
             | DeclKind::Enum { body, .. }
             | DeclKind::Protocol { body, .. }
             | DeclKind::Extend { body, .. } => {
-                self.push_statement(current, Statement::DeclBody { body });
+                self.push_statement(current, Statement::DeclBody { body: body.clone() });
                 current
             }
             DeclKind::Import(_)
@@ -727,7 +760,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
 
     fn lower_stmt(
         &mut self,
-        stmt: &'ast Stmt,
+        stmt: &Stmt,
         current: BlockId,
         consume_expr_value: bool,
     ) -> BlockId {
@@ -735,7 +768,13 @@ impl<'ast, 'types> Builder<'ast, 'types> {
             StmtKind::Expr(expr) => {
                 let current = self.lower_expr(expr, current);
                 let value = self.operand_for_expr(expr);
-                self.push_statement(current, Statement::ConsumeValue { expr, value });
+                self.push_statement(
+                    current,
+                    Statement::ConsumeValue {
+                        expr: expr.clone(),
+                        value,
+                    },
+                );
                 current
             }
             StmtKind::Return(Some(expr)) => {
@@ -744,7 +783,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 self.push_statement(
                     current,
                     Statement::ReturnValue {
-                        expr,
+                        expr: expr.clone(),
                         value,
                         destination: ValueDestination::Return,
                     },
@@ -761,7 +800,13 @@ impl<'ast, 'types> Builder<'ast, 'types> {
             StmtKind::Continue(Some(expr)) => {
                 let current = self.lower_expr(expr, current);
                 let value = self.operand_for_expr(expr);
-                self.push_statement(current, Statement::ContinueValue { expr, value });
+                self.push_statement(
+                    current,
+                    Statement::ContinueValue {
+                        expr: expr.clone(),
+                        value,
+                    },
+                );
                 self.emit_early_exit_drops(current);
                 let terminator = self
                     .loop_stack
@@ -799,7 +844,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 self.push_statement(
                     current,
                     Statement::DropCandidate {
-                        target: DropTarget::Expr(lhs),
+                        target: DropTarget::Expr((**lhs).clone()),
                         key_path: target_key_path.clone(),
                         reason: DropReason::AssignmentReplace,
                     },
@@ -807,8 +852,8 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 self.push_statement(
                     current,
                     Statement::Assign {
-                        lhs,
-                        rhs,
+                        lhs: (**lhs).clone(),
+                        rhs: (**rhs).clone(),
                         target: target_key_path,
                         value,
                     },
@@ -829,9 +874,9 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 self.push_statement(
                     current,
                     Statement::Handling {
-                        stmt,
-                        effect_name,
-                        body,
+                        stmt: stmt.clone(),
+                        effect_name: effect_name.clone(),
+                        body: Box::new(body.clone()),
                     },
                 );
                 current
@@ -839,10 +884,10 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         }
     }
 
-    fn lower_expr(&mut self, expr: &'ast Expr, current: BlockId) -> BlockId {
+    fn lower_expr(&mut self, expr: &Expr, current: BlockId) -> BlockId {
         match &expr.kind {
             ExprKind::Variable(_) => {
-                self.push_statement(current, Statement::Read { expr });
+                self.push_statement(current, Statement::Read { expr: expr.clone() });
                 current
             }
             ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
@@ -870,9 +915,9 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                 self.push_statement(
                     current,
                     Statement::Call {
-                        callee,
-                        args,
-                        trailing_block: trailing_block.as_ref(),
+                        callee: (**callee).clone(),
+                        args: args.clone(),
+                        trailing_block: trailing_block.clone(),
                         trailing_body,
                     },
                 );
@@ -888,7 +933,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
             }
             ExprKind::Member(Some(receiver), ..) => {
                 if stored_field_symbol(self.types, expr.member_resolution.as_ref()).is_some() {
-                    self.push_statement(current, Statement::Read { expr });
+                    self.push_statement(current, Statement::Read { expr: expr.clone() });
                     current
                 } else {
                     self.lower_expr(receiver, current)
@@ -900,9 +945,9 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                     Statement::Function {
                         owner: None,
                         captures_parent: false,
-                        captures: &func.captures,
-                        params: &func.params,
-                        body: &func.body,
+                        captures: func.captures.clone(),
+                        params: func.params.clone(),
+                        body: Box::new(func.body.clone()),
                     },
                 );
                 current
@@ -935,21 +980,21 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         }
     }
 
-    fn lower_exprs(&mut self, exprs: &'ast [Expr], mut current: BlockId) -> BlockId {
+    fn lower_exprs(&mut self, exprs: &[Expr], mut current: BlockId) -> BlockId {
         for expr in exprs {
             current = self.lower_expr(expr, current);
         }
         current
     }
 
-    fn lower_block_tail_exprs(&mut self, block: &'ast Block, current: BlockId) -> BlockId {
+    fn lower_block_tail_exprs(&mut self, block: &Block, current: BlockId) -> BlockId {
         match block.body.last().and_then(tail_expr) {
             Some(expr) => self.lower_expr(expr, current),
             None => current,
         }
     }
 
-    fn lower_assignment_lhs(&mut self, expr: &'ast Expr, current: BlockId) {
+    fn lower_assignment_lhs(&mut self, expr: &Expr, current: BlockId) {
         match &expr.kind {
             ExprKind::Variable(_) => {}
             ExprKind::Member(Some(receiver), ..)
@@ -963,7 +1008,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         }
     }
 
-    fn lower_assignment_root(&mut self, expr: &'ast Expr, current: BlockId) {
+    fn lower_assignment_root(&mut self, expr: &Expr, current: BlockId) {
         match &expr.kind {
             ExprKind::Variable(name) => {
                 if let Ok(symbol) = name.symbol() {
@@ -971,7 +1016,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
                         current,
                         Statement::AssignmentRootUse {
                             id: expr.id,
-                            ty: &expr.ty,
+                            ty: expr.ty.clone(),
                             symbol,
                         },
                     );
@@ -986,9 +1031,9 @@ impl<'ast, 'types> Builder<'ast, 'types> {
 
     fn lower_if(
         &mut self,
-        condition: &'ast Expr,
-        then_block: &'ast Block,
-        else_block: Option<&'ast Block>,
+        condition: &Expr,
+        then_block: &Block,
+        else_block: Option<&Block>,
         current: BlockId,
         mark_tail_exprs: bool,
     ) -> BlockId {
@@ -999,7 +1044,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         self.terminate_if_open(
             current,
             Terminator::Branch {
-                condition,
+                condition: condition.clone(),
                 then_block: then_id,
                 else_block: else_id,
             },
@@ -1024,8 +1069,8 @@ impl<'ast, 'types> Builder<'ast, 'types> {
 
     fn lower_loop(
         &mut self,
-        condition: Option<&'ast Expr>,
-        body: &'ast Block,
+        condition: Option<&Expr>,
+        body: &Block,
         current: BlockId,
     ) -> BlockId {
         let header_id = self.new_block();
@@ -1038,7 +1083,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
             self.terminate_if_open(
                 condition_exit,
                 Terminator::Loop {
-                    condition: Some(condition),
+                    condition: Some(condition.clone()),
                     body_block: body_id,
                     exit_block: exit_id,
                 },
@@ -1069,8 +1114,8 @@ impl<'ast, 'types> Builder<'ast, 'types> {
 
     fn lower_match(
         &mut self,
-        scrutinee: &'ast Expr,
-        arms: &'ast [MatchArm],
+        scrutinee: &Expr,
+        arms: &[MatchArm],
         current: BlockId,
     ) -> BlockId {
         let current = self.lower_expr(scrutinee, current);
@@ -1079,8 +1124,8 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         self.terminate_if_open(
             current,
             Terminator::Switch {
-                scrutinee,
-                match_arms: Some(arms),
+                scrutinee: scrutinee.clone(),
+                match_arms: Some(arms.to_vec()),
                 arms: arm_blocks.clone(),
                 default: None,
             },
@@ -1097,7 +1142,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         join_id
     }
 
-    fn lower_pattern_binders(&mut self, pattern: &'ast Pattern, current: BlockId) {
+    fn lower_pattern_binders(&mut self, pattern: &Pattern, current: BlockId) {
         for (id, symbol) in pattern.collect_binders() {
             self.declare_symbol_local(symbol, LocalKind::UserLocal);
             self.push_statement(current, Statement::StorageLive { id, symbol });
@@ -1107,7 +1152,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         }
     }
 
-    fn push_statement(&mut self, block: BlockId, statement: Statement<'ast>) {
+    fn push_statement(&mut self, block: BlockId, statement: Statement) {
         match &statement {
             Statement::Read { expr } => {
                 if let Some(symbol) = syntactic_root_symbol(expr) {
@@ -1138,6 +1183,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         self.blocks[block.0].statements.push(LocatedStatement {
             point,
             kind: statement,
+            ownership: StatementOwnership::default(),
         });
     }
 
@@ -1224,7 +1270,7 @@ impl<'ast, 'types> Builder<'ast, 'types> {
         }
     }
 
-    fn terminate_if_open(&mut self, block: BlockId, terminator: Terminator<'ast>) {
+    fn terminate_if_open(&mut self, block: BlockId, terminator: Terminator) {
         if matches!(self.blocks[block.0].terminator, Terminator::Unset) {
             self.blocks[block.0].terminator = terminator;
         }
@@ -1264,7 +1310,7 @@ fn node_is_value_control(node: &Node) -> bool {
     )
 }
 
-impl Body<'_> {
+impl Body {
     #[cfg(test)]
     pub(crate) fn render(&self) -> String {
         let mut out = String::new();
@@ -1327,7 +1373,7 @@ fn render_key_path(key_path: &KeyPath) -> String {
 }
 
 #[cfg(test)]
-fn render_statement(statement: &Statement<'_>) -> String {
+fn render_statement(statement: &Statement) -> String {
     match statement {
         Statement::ScopeEnter { scope } => format!("scope_enter s{}", scope.0),
         Statement::ScopeExit { scope } => format!("scope_exit s{}", scope.0),
@@ -1360,7 +1406,7 @@ fn render_statement(statement: &Statement<'_>) -> String {
 }
 
 #[cfg(test)]
-fn render_terminator(terminator: &Terminator<'_>) -> String {
+fn render_terminator(terminator: &Terminator) -> String {
     match terminator {
         Terminator::Unset => "unset".into(),
         Terminator::Return => "return".into(),
@@ -1400,7 +1446,7 @@ mod tests {
         types::TypeOutput,
     };
 
-    fn with_first_func_mir<R>(source: &str, f: impl FnOnce(&Body<'_>) -> R) -> R {
+    fn with_first_func_mir<R>(source: &str, f: impl FnOnce(&Body) -> R) -> R {
         let source = format!("// no-core\n{source}");
         let resolved = Driver::new_bare(
             vec![Source::from(source.as_str())],

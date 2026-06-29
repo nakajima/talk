@@ -36,3 +36,10 @@ loop {
 }
 print("Sum of [10, 20, 30, 40, 50]:")
 print(sum)
+
+print("Using for over an iterator variable:")
+let for_iter_numbers = [1, 2, 3]
+let for_iter = for_iter_numbers.iter()
+for x in for_iter {
+	print(x)
+}

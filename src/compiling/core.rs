@@ -3,7 +3,6 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use lazy_static::lazy_static;
 
-use crate::ast::{AST, NameResolved};
 use crate::compiling::{
     driver::{CompilationMode, Driver, DriverConfig, Source},
     module::{Module, ModuleId},
@@ -17,7 +16,6 @@ use crate::types::TypeOutput;
 /// @_ir splices) at user-program lower time — the MLton whole-program
 /// model rather than polymorphic IR in modules.
 pub struct CoreTyped {
-    pub asts: IndexMap<Source, AST<NameResolved>>,
     pub hir: IndexMap<Source, crate::hir::HirFile>,
     pub types: TypeOutput,
     pub resolved_names: ResolvedNames,
@@ -102,7 +100,6 @@ fn _compile() -> (Arc<Module>, Arc<CoreTyped>) {
     );
 
     let core_typed = CoreTyped {
-        asts: typed.phase.asts.clone(),
         hir: typed.phase.hir.clone(),
         types: typed.phase.types.clone(),
         resolved_names: typed.phase.resolved_names.clone(),

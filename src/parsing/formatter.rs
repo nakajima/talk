@@ -665,7 +665,9 @@ impl<'a> Formatter<'a> {
                     self.format_pattern(pattern),
                     concat_space(
                         text("in"),
-                        concat_space(self.format_expr(iterable), self.format_block(body)),
+                        // A `for` body always formats multi-line; collapsing it to
+                        // `for x in xs { ... }` hurts readability of the loop.
+                        concat_space(self.format_expr(iterable), self.format_block_multiline(body)),
                     ),
                 ),
             ),
@@ -2814,6 +2816,15 @@ mod formatter_tests {
         assert_eq!(
             format_code("func outer() { func inner() {} }", 80),
             "func outer() {\n\tfunc inner() {}\n}"
+        );
+    }
+
+    #[test]
+    fn test_for_loop_is_always_multiline() {
+        // A `for` body never collapses to one line, even when it would fit.
+        assert_eq!(
+            format_code("for x in xs { print(x) }", 80),
+            "for x in xs {\n\tprint(x)\n}"
         );
     }
 

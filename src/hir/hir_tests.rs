@@ -6,21 +6,21 @@ use crate::node_id::NodeID;
 /// Type-check `source` and pair each file's AST roots with the HIR the
 /// type-checker lowered them to (`Typed.hir`).
 fn lower(source: &str) -> Vec<(Vec<Node>, Vec<hir::Node>)> {
-    let typed = Driver::new_bare(vec![Source::from(source)], DriverConfig::new("HirTest"))
+    let resolved = Driver::new_bare(vec![Source::from(source)], DriverConfig::new("HirTest"))
         .parse()
         .expect("parse")
         .resolve_names()
-        .expect("resolve")
-        .type_check();
+        .expect("resolve");
+    // `type_check` consumes the AST into the HIR, so capture the AST roots here
+    // to pair them against the lowered HIR roots.
+    let asts = resolved.phase.asts.clone();
+    let typed = resolved.type_check();
     assert!(
         !typed.has_errors(),
         "unexpected type errors: {:?}",
         typed.diagnostics()
     );
-    typed
-        .phase
-        .asts
-        .iter()
+    asts.iter()
         .filter_map(|(source, ast)| {
             typed
                 .phase

@@ -3674,7 +3674,9 @@ impl<'a> Lowering<'a> {
 
     /// Like lower_nodes, but the final expression's value goes to ret_k.
     fn lower_main_nodes(&mut self, nodes: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
-        let body = mir::build_nodes(self.units[ctx.unit].types, nodes);
+        let mut body = mir::build_nodes(self.units[ctx.unit].types, nodes);
+        let unit = &self.units[ctx.unit];
+        crate::ownership::elaborate_body_drops(unit.types, unit.resolved, unit.ownership, &mut body);
         self.lower_mir_body(&body, ctx, k)
     }
 

@@ -8,7 +8,23 @@ impl<'a> Lowering<'a> {
     /// expression). A block's value is its final expression; divergent
     /// statements (return) ignore `k`.
     pub(super) fn lower_block(&mut self, block: &Block, ctx: &Ctx, k: ExprId) -> ExprId {
-        let body = mir::build_function(self.units[ctx.unit].types, ctx.owner, block);
+        let unit = &self.units[ctx.unit];
+        // The ownership pass already built and elaborated this body; reuse it (the MIR is built
+        // and its drops elaborated exactly once). Fall back to building it only if it was not
+        // persisted (e.g. a synthetic body the ownership walk never saw).
+        let body = match unit.ownership.function_body(block.id, ctx.owner) {
+            Some(body) => body.clone(),
+            None => {
+                let mut body = mir::build_function(unit.types, ctx.owner, block);
+                crate::ownership::elaborate_body_drops(
+                    unit.types,
+                    unit.resolved,
+                    unit.ownership,
+                    &mut body,
+                );
+                body
+            }
+        };
         self.lower_mir_body(&body, ctx, k)
     }
 
@@ -170,13 +186,17 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    pub(super) fn symbol_has_move_fact(&self, unit: usize, symbol: Symbol) -> bool {
-        self.units[unit]
-            .ownership
-            .facts
-            .moves
+    pub(super) fn symbol_has_move_fact(&self, body: &mir::Body, symbol: Symbol) -> bool {
+        body.blocks
             .iter()
-            .any(|fact| fact.source.root == symbol)
+            .flat_map(|block| &block.statements)
+            .any(|statement| {
+                statement
+                    .ownership
+                    .moves
+                    .iter()
+                    .any(|source| source.root == symbol)
+            })
     }
 
     pub(super) fn symbol_check_ty(&self, symbol: Symbol, theta: &Theta) -> Option<CheckTy> {

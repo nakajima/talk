@@ -81,11 +81,17 @@ impl Workspace {
         };
         let parsed = driver.parse().ok()?;
         let resolved = parsed.resolve_names().ok()?;
+        // The editor keeps the source-faithful surface AST (type annotations,
+        // imports, identifier spans the HIR strips). Capture it here, before
+        // `type_check` consumes the AST into the compile pipeline's HIR.
+        let asts_by_source = resolved.phase.asts.clone();
         let typed = resolved.type_check();
         let Driver { phase, .. } = typed;
-        let asts_by_source = phase.asts;
         let resolved_names = phase.resolved_names;
         let types = phase.types;
+        // The ownership pass already elaborated the drop/move facts (`drop_plan` + `facts.moves`)
+        // the inlay hints and hover read — the same single elaboration lowering reuses. The editor
+        // just consumes them; no second ownership walk.
         let ownership = phase.ownership;
         let diagnostics_any = phase.diagnostics;
 

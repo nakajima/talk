@@ -57,9 +57,11 @@ pub struct Lowered {
 
 impl DriverPhase for Typed {}
 pub struct Typed {
-    pub asts: IndexMap<Source, AST<crate::parsing::ast::NameResolved>>,
     /// The program lowered to HIR (one entry per analyzed file). Built in
-    /// `type_check`; consumed by lowering (and the ownership re-point).
+    /// `type_check` by consuming the surface AST, which the compile pipeline
+    /// does not retain past this point — the HIR is the sole program tree from
+    /// here on (ownership checks it, lowering builds the MIR from it). The LSP,
+    /// which needs source-faithful nodes the HIR strips, keeps its own AST.
     pub hir: IndexMap<Source, crate::hir::HirFile>,
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
@@ -482,40 +484,22 @@ impl Driver<NameResolved> {
             self.config.module_id,
         );
         diagnostics.extend(type_diagnostics);
-        // The HIR (once, NodeID-preserving) for the error-free asts that ownership analyzes
-        // and lowering will consume. Stored in `Typed`; not yet consumed by ownership/lowering.
+        // Consume the surface AST into the HIR (once, NodeID-preserving) for the
+        // error-free files: ownership checks it and lowering builds its MIR from
+        // it. Files with errors are dropped rather than lowered. The surface AST
+        // is not retained past here in the compile pipeline.
         let mut hir: IndexMap<Source, crate::hir::HirFile> = IndexMap::default();
-        let build_hir_for =
-            |hir: &mut IndexMap<Source, crate::hir::HirFile>,
-             source: &Source,
-             ast: &AST<crate::parsing::ast::NameResolved>| {
-                hir.insert(source.clone(), crate::hir::build::build_file(ast, &types));
-            };
-
-        let blocked_files = error_diagnostic_files(&diagnostics);
-        let (ownership, ownership_diagnostics) = match blocked_files {
+        let (ownership, ownership_diagnostics) = match error_diagnostic_files(&diagnostics) {
             None => (OwnershipOutput::default(), vec![]),
-            Some(blocked_files) if blocked_files.is_empty() => {
-                for (source, ast) in &asts {
-                    build_hir_for(&mut hir, source, ast);
-                }
-                crate::ownership::check_ownership(
-                    &hir,
-                    &types,
-                    &resolved_names,
-                    self.config.module_id,
-                )
-            }
             Some(blocked_files) => {
-                let clean_asts: IndexMap<Source, AST<crate::parsing::ast::NameResolved>> = asts
-                    .iter()
-                    .filter(|(_, ast)| !blocked_files.contains(&ast.file_id))
-                    .map(|(source, ast)| (source.clone(), ast.clone()))
-                    .collect();
-                for (source, ast) in &clean_asts {
-                    build_hir_for(&mut hir, source, ast);
+                for (source, ast) in asts {
+                    if blocked_files.contains(&ast.file_id) {
+                        continue;
+                    }
+                    let file = crate::hir::build::build_file(&ast, &types);
+                    hir.insert(source, file);
                 }
-                if clean_asts.is_empty() {
+                if hir.is_empty() {
                     (OwnershipOutput::default(), vec![])
                 } else {
                     crate::ownership::check_ownership(
@@ -533,7 +517,6 @@ impl Driver<NameResolved> {
             files: self.files,
             config: self.config,
             phase: Typed {
-                asts,
                 hir,
                 symbols,
                 resolved_names,
@@ -553,7 +536,6 @@ impl Driver<Typed> {
         use crate::lower::{LowerUnit, lower_program};
 
         let Typed {
-            asts: _,
             hir,
             symbols: _,
             resolved_names,

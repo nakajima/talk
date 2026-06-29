@@ -1,6 +1,5 @@
 use super::*;
 use crate::mir;
-use crate::ownership::BodyKind;
 
 #[derive(Clone, Copy)]
 enum MirRestBinding {
@@ -23,19 +22,19 @@ struct PendingDrop {
 /// instead of `(body, block, index, statements, loops)`. The mutable block cache
 /// and the per-continuation `ctx`/`k` stay as separate arguments.
 #[derive(Clone, Copy)]
-struct MirCursor<'b, 'ast> {
-    body: &'b mir::Body<'ast>,
+struct MirCursor<'b> {
+    body: &'b mir::Body,
     block: mir::BlockId,
     index: usize,
     loops: &'b [MirLoop],
 }
 
-impl<'b, 'ast> MirCursor<'b, 'ast> {
-    fn statements(self) -> &'b [mir::LocatedStatement<'ast>] {
+impl<'b> MirCursor<'b> {
+    fn statements(self) -> &'b [mir::LocatedStatement] {
         &self.body.blocks[self.block.0].statements
     }
 
-    fn statement(self) -> &'b mir::LocatedStatement<'ast> {
+    fn statement(self) -> &'b mir::LocatedStatement {
         &self.statements()[self.index]
     }
 
@@ -62,7 +61,7 @@ impl<'b, 'ast> MirCursor<'b, 'ast> {
 }
 
 impl<'a> Lowering<'a> {
-    pub(super) fn lower_mir_body(&mut self, body: &mir::Body<'_>, ctx: &Ctx, k: ExprId) -> ExprId {
+    pub(super) fn lower_mir_body(&mut self, body: &mir::Body, ctx: &Ctx, k: ExprId) -> ExprId {
         let mut cache = MirBlockCache::default();
         let cursor = MirCursor {
             body,
@@ -128,7 +127,7 @@ impl<'a> Lowering<'a> {
             }
             mir::Statement::Call { .. } | mir::Statement::Function { .. } => {
                 let rest_body = rest(self, ctx, k);
-                self.clear_moved_drop_flags_then(ctx, cursor.body, statement, rest_body)
+                self.clear_moved_drop_flags_then(ctx, statement, rest_body)
             }
             mir::Statement::Handling {
                 stmt,
@@ -137,7 +136,7 @@ impl<'a> Lowering<'a> {
             } => self.lower_mir_handling(stmt, effect_name, handler_body, cursor, ctx, k, cache),
             mir::Statement::DeclBody { .. } => rest(self, ctx, k),
             mir::Statement::Bind { lhs, rhs, .. } => {
-                self.lower_mir_bind(lhs, *rhs, cursor, ctx, k, cache)
+                self.lower_mir_bind(lhs, rhs.as_ref(), cursor, ctx, k, cache)
             }
             mir::Statement::Assign {
                 lhs, rhs, target, ..
@@ -174,7 +173,7 @@ impl<'a> Lowering<'a> {
                 ) {
                     return done;
                 }
-                let target = self.wrap_moved_value_cont(value_ctx, cursor.body, statement, target);
+                let target = self.wrap_moved_value_cont(value_ctx, statement, target);
                 self.lower_expr(expr, value_ctx, target)
             }
             mir::Statement::ContinueValue { expr, .. } if ctx.resume_k.is_some() => {
@@ -189,7 +188,7 @@ impl<'a> Lowering<'a> {
                 let resume_body = self.p.app(resume_k, pair);
                 let resume_body = self.lower_drop_bindings_then(ctx, &ctx.drop_stack, resume_body);
                 let resume_body =
-                    self.clear_moved_drop_flags_then(ctx, cursor.body, statement, resume_body);
+                    self.clear_moved_drop_flags_then(ctx, statement, resume_body);
                 self.p.set_body(send, resume_body);
                 let send_ref = self.p.func_ref(send);
                 self.lower_expr(expr, ctx, send_ref)
@@ -240,12 +239,7 @@ impl<'a> Lowering<'a> {
                 this.with_drop_flags(&drop_bindings, inner, |this, inner| {
                     inner.drop_stack.extend(drop_bindings.clone());
                     let rest_body = this.lower_mir_statements(cursor.advance(), inner, k, cache);
-                    this.clear_moved_drop_flags_then(
-                        inner,
-                        cursor.body,
-                        cursor.statement(),
-                        rest_body,
-                    )
+                    this.clear_moved_drop_flags_then(inner, cursor.statement(), rest_body)
                 })
             });
             self.p.set_body(bind, rest_body);
@@ -284,12 +278,7 @@ impl<'a> Lowering<'a> {
                 this.with_drop_flags(&drops, inner, |this, inner| {
                     inner.drop_stack.extend(drops.clone());
                     let rest_body = this.lower_mir_statements(cursor.advance(), inner, k, cache);
-                    this.clear_moved_drop_flags_then(
-                        inner,
-                        cursor.body,
-                        cursor.statement(),
-                        rest_body,
-                    )
+                    this.clear_moved_drop_flags_then(inner, cursor.statement(), rest_body)
                 })
             })
         } else {
@@ -298,7 +287,7 @@ impl<'a> Lowering<'a> {
             self.with_drop_flags(&drops, &mut inner, |this, inner| {
                 inner.drop_stack.extend(drops.clone());
                 let rest_body = this.lower_mir_statements(cursor.advance(), inner, k, cache);
-                this.clear_moved_drop_flags_then(inner, cursor.body, cursor.statement(), rest_body)
+                this.clear_moved_drop_flags_then(inner, cursor.statement(), rest_body)
             })
         };
         self.p.set_body(bind, rest_body);
@@ -309,15 +298,15 @@ impl<'a> Lowering<'a> {
     fn drop_binding_for_mir_symbol(
         &self,
         ctx: &Ctx,
-        body: &mir::Body<'_>,
+        body: &mir::Body,
         symbol: Symbol,
         ty: CheckTy,
     ) -> Option<DropBinding> {
         if !self.needs_drop_type(ctx.unit, &ty) {
             return None;
         }
-        let dynamic_flags = self.drop_flag_keys_for_symbol(ctx, body, symbol);
-        if dynamic_flags.is_empty() && self.symbol_has_move_fact(ctx.unit, symbol) {
+        let dynamic_flags = self.drop_flag_keys_for_symbol(body, symbol);
+        if dynamic_flags.is_empty() && self.symbol_has_move_fact(body, symbol) {
             return None;
         }
         Some(DropBinding {
@@ -330,43 +319,34 @@ impl<'a> Lowering<'a> {
 
     fn drop_flag_keys_for_symbol(
         &self,
-        ctx: &Ctx,
-        body: &mir::Body<'_>,
+        body: &mir::Body,
         symbol: Symbol,
     ) -> Vec<OwnershipKeyPath> {
         let mut keys = Vec::new();
         let root = OwnershipKeyPath::root(symbol);
         let mut needs_root_flag = false;
 
-        for obligation in &self.units[ctx.unit].ownership.drop_plan.obligations {
-            if !self.ownership_point_matches_body(ctx, body, obligation.point) {
-                continue;
+        for statement in body.blocks.iter().flat_map(|block| &block.statements) {
+            if let Some(drop) = &statement.ownership.drop
+                && drop.key_path.root == symbol
+                && matches!(
+                    drop.kind,
+                    mir::DropElaboration::Conditional | mir::DropElaboration::Open
+                )
+            {
+                needs_root_flag = true;
+                if !drop.key_path.fields.is_empty() {
+                    Self::push_unique_drop_flag_key(&mut keys, drop.key_path.clone());
+                }
             }
-            if obligation.key_path.root != symbol {
-                continue;
-            }
-            if !matches!(
-                obligation.kind,
-                mir::DropElaboration::Conditional | mir::DropElaboration::Open
-            ) {
-                continue;
-            }
-            needs_root_flag = true;
-            if !obligation.key_path.fields.is_empty() {
-                Self::push_unique_drop_flag_key(&mut keys, obligation.key_path.clone());
-            }
-        }
-
-        for fact in &self.units[ctx.unit].ownership.facts.moves {
-            if !self.ownership_point_matches_body(ctx, body, fact.point) {
-                continue;
-            }
-            if fact.source.root != symbol {
-                continue;
-            }
-            needs_root_flag = true;
-            if !fact.source.fields.is_empty() {
-                Self::push_unique_drop_flag_key(&mut keys, fact.source.clone());
+            for source in &statement.ownership.moves {
+                if source.root != symbol {
+                    continue;
+                }
+                needs_root_flag = true;
+                if !source.fields.is_empty() {
+                    Self::push_unique_drop_flag_key(&mut keys, source.clone());
+                }
             }
         }
 
@@ -408,7 +388,7 @@ impl<'a> Lowering<'a> {
         for statement in cursor.statements().iter().skip(cursor.index + 1) {
             match &statement.kind {
                 mir::Statement::DropCandidate {
-                    reason: reason @ (mir::DropReason::ScopeExit | mir::DropReason::EarlyExit),
+                    reason: mir::DropReason::ScopeExit | mir::DropReason::EarlyExit,
                     target:
                         mir::DropTarget::Symbol {
                             symbol: target_symbol,
@@ -428,13 +408,7 @@ impl<'a> Lowering<'a> {
                         .as_ref()
                         .and_then(|key_path| Self::ownership_key_path_from_mir(body, key_path))
                         .unwrap_or_else(|| drop.key_path.clone());
-                    let elaboration = self.drop_elaboration_at(
-                        ctx,
-                        body,
-                        statement.point,
-                        *reason,
-                        Some(&key_path),
-                    );
+                    let elaboration = self.drop_elaboration_at(statement, Some(&key_path));
                     drops.push(PendingDrop {
                         symbol: drop.symbol,
                         key_path,
@@ -450,30 +424,19 @@ impl<'a> Lowering<'a> {
         drops
     }
 
-    /// The drop elaboration the ownership pass recorded for the candidate at `point`
-    /// (matching `reason`, and `key_path` when given). The single point of contact with
-    /// the ownership drop plan: `following_drop_candidates`, `storage_dead_drop_elaboration`,
-    /// and `assignment_drop_elaboration` all resolve through here.
+    /// The drop elaboration the ownership pass annotated onto this `DropCandidate`
+    /// statement (matching `key_path` when given). Lowering reads it straight off the
+    /// statement; `following_drop_candidates`, `storage_dead_drop_elaboration`, and
+    /// `assignment_drop_elaboration` all resolve through here.
     fn drop_elaboration_at(
         &self,
-        ctx: &Ctx,
-        body: &mir::Body<'_>,
-        point: mir::StatementId,
-        reason: mir::DropReason,
+        statement: &mir::LocatedStatement,
         key_path: Option<&OwnershipKeyPath>,
     ) -> Option<mir::DropElaboration> {
-        self.units[ctx.unit]
-            .ownership
-            .drop_plan
-            .obligations
-            .iter()
-            .find(|obligation| {
-                obligation.point.point == point.0 as u32
-                    && self.ownership_point_matches_body(ctx, body, obligation.point)
-                    && obligation.reason == reason
-                    && key_path.is_none_or(|key_path| obligation.key_path == *key_path)
-            })
-            .map(|obligation| obligation.kind)
+        let drop = statement.ownership.drop.as_ref()?;
+        key_path
+            .is_none_or(|key_path| drop.key_path == *key_path)
+            .then_some(drop.kind)
     }
 
     fn lower_candidate_drop_then(&mut self, ctx: &Ctx, drop: &PendingDrop, next: ExprId) -> ExprId {
@@ -500,34 +463,8 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    fn ownership_point_matches_body(
-        &self,
-        ctx: &Ctx,
-        body: &mir::Body<'_>,
-        point: crate::ownership::OwnershipPoint,
-    ) -> bool {
-        let Some(fact_body) = self.units[ctx.unit]
-            .ownership
-            .facts
-            .bodies
-            .get(point.body.0 as usize)
-        else {
-            return false;
-        };
-        if fact_body.owner != body.owner {
-            return false;
-        }
-        if body.owner.is_some() {
-            return true;
-        }
-        matches!(
-            (&fact_body.kind, ctx.top_level),
-            (BodyKind::TopLevel, true) | (BodyKind::Function, false)
-        )
-    }
-
     fn ownership_key_path_from_mir(
-        body: &mir::Body<'_>,
+        body: &mir::Body,
         key_path: &mir::KeyPath,
     ) -> Option<OwnershipKeyPath> {
         let root = body.locals.get(key_path.root.0)?.symbol;
@@ -567,7 +504,6 @@ impl<'a> Lowering<'a> {
 
     fn assignment_drop_elaboration(
         &self,
-        ctx: &Ctx,
         cursor: MirCursor,
     ) -> Option<mir::DropElaboration> {
         let previous = cursor.index.checked_sub(1)?;
@@ -579,13 +515,7 @@ impl<'a> Lowering<'a> {
         else {
             return None;
         };
-        self.drop_elaboration_at(
-            ctx,
-            cursor.body,
-            previous.point,
-            mir::DropReason::AssignmentReplace,
-            None,
-        )
+        self.drop_elaboration_at(previous, None)
     }
 
     fn lower_mir_storage_dead(
@@ -620,7 +550,7 @@ impl<'a> Lowering<'a> {
             return rest_body;
         };
 
-        match self.storage_dead_drop_elaboration(ctx, cursor, symbol) {
+        match self.storage_dead_drop_elaboration(cursor, symbol) {
             Some(mir::DropElaboration::Dead) => rest_body,
             Some(mir::DropElaboration::Conditional | mir::DropElaboration::Open) => self
                 .lower_dynamic_assignment_drop_then(
@@ -638,7 +568,6 @@ impl<'a> Lowering<'a> {
 
     fn storage_dead_drop_elaboration(
         &self,
-        ctx: &Ctx,
         cursor: MirCursor,
         symbol: Symbol,
     ) -> Option<mir::DropElaboration> {
@@ -646,7 +575,7 @@ impl<'a> Lowering<'a> {
         let previous = cursor.index.checked_sub(1)?;
         let previous = cursor.statements().get(previous)?;
         let mir::Statement::DropCandidate {
-            reason: reason @ (mir::DropReason::ScopeExit | mir::DropReason::EarlyExit),
+            reason: mir::DropReason::ScopeExit | mir::DropReason::EarlyExit,
             target:
                 mir::DropTarget::Symbol {
                     symbol: target_symbol,
@@ -664,24 +593,16 @@ impl<'a> Lowering<'a> {
             .as_ref()
             .and_then(|key_path| Self::ownership_key_path_from_mir(body, key_path))
             .unwrap_or_else(|| OwnershipKeyPath::root(symbol));
-        self.drop_elaboration_at(ctx, body, previous.point, *reason, Some(&key_path))
+        self.drop_elaboration_at(previous, Some(&key_path))
     }
 
     fn moved_key_paths_at_statement(
         &self,
-        ctx: &Ctx,
-        body: &mir::Body<'_>,
-        statement: &mir::LocatedStatement<'_>,
+        statement: &mir::LocatedStatement,
     ) -> Vec<OwnershipKeyPath> {
         let mut moved = Vec::new();
-        for fact in &self.units[ctx.unit].ownership.facts.moves {
-            if fact.point.point != statement.point.0 as u32 {
-                continue;
-            }
-            if !self.ownership_point_matches_body(ctx, body, fact.point) {
-                continue;
-            }
-            Self::push_unique_drop_flag_key(&mut moved, fact.source.clone());
+        for source in &statement.ownership.moves {
+            Self::push_unique_drop_flag_key(&mut moved, source.clone());
         }
         moved
     }
@@ -689,11 +610,10 @@ impl<'a> Lowering<'a> {
     fn clear_moved_drop_flags_then(
         &mut self,
         ctx: &Ctx,
-        body: &mir::Body<'_>,
-        statement: &mir::LocatedStatement<'_>,
+        statement: &mir::LocatedStatement,
         next: ExprId,
     ) -> ExprId {
-        let moved = self.moved_key_paths_at_statement(ctx, body, statement);
+        let moved = self.moved_key_paths_at_statement(statement);
         let mut result = next;
         for key_path in moved.iter().rev() {
             result = self.set_drop_flags_under_then(ctx, key_path, false, result);
@@ -704,14 +624,10 @@ impl<'a> Lowering<'a> {
     fn wrap_moved_value_cont(
         &mut self,
         ctx: &Ctx,
-        body: &mir::Body<'_>,
-        statement: &mir::LocatedStatement<'_>,
+        statement: &mir::LocatedStatement,
         target: ExprId,
     ) -> ExprId {
-        if self
-            .moved_key_paths_at_statement(ctx, body, statement)
-            .is_empty()
-        {
+        if self.moved_key_paths_at_statement(statement).is_empty() {
             return target;
         }
         let TyKind::Fn(value_ty, _) = *self.p.ty_kind(self.p.expr_ty(target)) else {
@@ -723,7 +639,7 @@ impl<'a> Lowering<'a> {
         let cont = self.p.func("after_move", value_ty, bot);
         let value = self.p.var(cont);
         let deliver = self.p.app(target, value);
-        let body_expr = self.clear_moved_drop_flags_then(ctx, body, statement, deliver);
+        let body_expr = self.clear_moved_drop_flags_then(ctx, statement, deliver);
         self.p.set_body(cont, body_expr);
         self.p.func_ref(cont)
     }
@@ -741,7 +657,7 @@ impl<'a> Lowering<'a> {
         k: ExprId,
         cache: &mut MirBlockCache,
     ) -> ExprId {
-        let drop_elaboration = self.assignment_drop_elaboration(ctx, cursor);
+        let drop_elaboration = self.assignment_drop_elaboration(cursor);
         let lowered_target = self.assignment_target(lhs, ctx);
         let Some((cell, path)) = lowered_target else {
             return self.lower_mir_statements(cursor.advance(), ctx, k, cache);
@@ -775,7 +691,7 @@ impl<'a> Lowering<'a> {
             };
             let after_set = self.sequence_void_effect(cell_set, after_set);
             let after_set =
-                self.clear_moved_drop_flags_then(ctx, cursor.body, cursor.statement(), after_set);
+                self.clear_moved_drop_flags_then(ctx, cursor.statement(), after_set);
             let lhs_check_ty = self.checker_ty(lhs, ctx);
             if matches!(drop_elaboration, Some(mir::DropElaboration::Static))
                 && self.needs_drop_type(ctx.unit, &lhs_check_ty)
@@ -830,7 +746,7 @@ impl<'a> Lowering<'a> {
         let drop_k = self.p.func("drop", value_ty, bot);
         let rest_body = self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         let rest_body =
-            self.clear_moved_drop_flags_then(ctx, cursor.body, cursor.statement(), rest_body);
+            self.clear_moved_drop_flags_then(ctx, cursor.statement(), rest_body);
         self.p.set_body(drop_k, rest_body);
         let drop_ref = self.p.func_ref(drop_k);
         match pure_value {
@@ -1116,12 +1032,7 @@ impl<'a> Lowering<'a> {
                                 inner.ret_k,
                                 cache,
                             );
-                            this.clear_moved_drop_flags_then(
-                                inner,
-                                cursor.body,
-                                cursor.statement(),
-                                rest_body,
-                            )
+                            this.clear_moved_drop_flags_then(inner, cursor.statement(), rest_body)
                         })
                     })
                 } else {
@@ -1131,22 +1042,17 @@ impl<'a> Lowering<'a> {
                         inner.drop_stack.extend(drops.clone());
                         let rest_body =
                             this.lower_mir_statements(cursor.advance(), inner, inner_k, cache);
-                        this.clear_moved_drop_flags_then(
-                            inner,
-                            cursor.body,
-                            cursor.statement(),
-                            rest_body,
-                        )
+                        this.clear_moved_drop_flags_then(inner, cursor.statement(), rest_body)
                     })
                 }
             }
             MirRestBinding::Discard => {
                 let rest_body = self.lower_mir_statements(cursor.advance(), &inner, inner_k, cache);
-                self.clear_moved_drop_flags_then(&inner, cursor.body, cursor.statement(), rest_body)
+                self.clear_moved_drop_flags_then(&inner, cursor.statement(), rest_body)
             }
             MirRestBinding::Deliver => {
                 let deliver = self.p.app(inner_k, value);
-                self.clear_moved_drop_flags_then(&inner, cursor.body, cursor.statement(), deliver)
+                self.clear_moved_drop_flags_then(&inner, cursor.statement(), deliver)
             }
         };
         self.p.set_body(rest_k, body_expr);
@@ -1268,7 +1174,7 @@ impl<'a> Lowering<'a> {
     }
 
     fn switch_join_target(
-        body: &mir::Body<'_>,
+        body: &mir::Body,
         arms: &[mir::BlockId],
         default: Option<mir::BlockId>,
     ) -> Option<mir::BlockId> {

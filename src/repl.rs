@@ -190,14 +190,14 @@ impl ReplSession {
 
         let last_expr_ty = typed
             .phase
-            .asts
+            .hir
             .values()
-            .flat_map(|ast| ast.roots.iter())
+            .flat_map(|hir| hir.roots.iter())
             .filter_map(|root| match root {
-                crate::node::Node::Stmt(crate::node_kinds::stmt::Stmt {
-                    kind: crate::node_kinds::stmt::StmtKind::Expr(expr),
+                crate::hir::Node::Stmt(crate::hir::Stmt {
+                    kind: crate::hir::StmtKind::Expr(expr),
                     ..
-                }) => typed.phase.types.node_types.get(&expr.id),
+                }) => Some(&expr.ty),
                 _ => None,
             })
             .next_back();
