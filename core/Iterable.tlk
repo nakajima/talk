@@ -6,21 +6,12 @@ use { Add, Comparable } from ./Operators.tlk
 public protocol Iterator {
 	associated Element
 	mut func next() -> Element?
-
-	func map<U>(fn: (Element) -> U) -> Map<Self.Element, U> {
-		Map(inner: self, fn: fn)
-	}
 }
 
 public protocol Iterable {
 	associated Element
 	associated T: Iterator
 	func iter() -> T
-}
-
-public struct Map<T, U> where T: Iterator {
-	let inner: T
-	let map: (T.Element) -> U
 }
 
 public struct ArrayIterator<Element> {
