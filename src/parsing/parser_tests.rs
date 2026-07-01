@@ -4007,10 +4007,17 @@ pub mod tests {
     // }
 
     #[test]
+    fn rejects_old_import_syntax() {
+        let lexer = Lexer::new("import { greet } from ./utils.tlk");
+        let parser = Parser::new("test", FileID(0), lexer);
+        assert!(parser.parse().is_err());
+    }
+
+    #[test]
     fn parses_named_import() {
         use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
 
-        let parsed = parse("import { greet, Point } from ./utils.tlk");
+        let parsed = parse("use { greet, Point } from ./utils.tlk");
 
         let decl = parsed.roots[0].as_decl();
         let DeclKind::Import(import) = &decl.kind else {
@@ -4036,7 +4043,7 @@ pub mod tests {
     fn parses_import_all() {
         use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
 
-        let parsed = parse("import _ from ./utils.tlk");
+        let parsed = parse("use _ from ./utils.tlk");
 
         let decl = parsed.roots[0].as_decl();
         let DeclKind::Import(import) = &decl.kind else {
@@ -4054,7 +4061,7 @@ pub mod tests {
     fn parses_package_import() {
         use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
 
-        let parsed = parse("import { HashMap } from collections");
+        let parsed = parse("use { HashMap } from collections");
 
         let decl = parsed.roots[0].as_decl();
         let DeclKind::Import(import) = &decl.kind else {

@@ -3250,7 +3250,9 @@ mod with_core {
             preserve_comments: false,
         };
         let driver_b = Driver::new(
-            vec![Source::from("let v = make(3).x\nlet bad: Int = make(3)")],
+            vec![Source::from(
+                "use { make } from A\nlet v = make(3).x\nlet bad: Int = make(3)",
+            )],
             config,
         );
         let typed = driver_b
@@ -3305,7 +3307,12 @@ mod with_core {
             parse_mode: crate::compiling::driver::ParseMode::Strict,
             preserve_comments: false,
         };
-        let driver_b = Driver::new(vec![Source::from("let id: UserId = make()")], config);
+        let driver_b = Driver::new(
+            vec![Source::from(
+                "use { UserId, make } from A\nlet id: UserId = make()",
+            )],
+            config,
+        );
         let typed = driver_b
             .parse()
             .unwrap()

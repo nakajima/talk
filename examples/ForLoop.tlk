@@ -24,22 +24,18 @@ loop {
 	i = i + 1
 }
 
-// Sum via indexing
-let sum = 0
+// Borrowed element access via indexing
 let j = 0
 loop {
 	if j >= arr.count {
 		break
 	}
-	sum = sum + arr.get(j)
+	print(arr.get(j))
 	j = j + 1
 }
-print("Sum of [10, 20, 30, 40, 50]:")
-print(sum)
 
-print("Using for over an iterator variable:")
+print("Using for over an array:")
 let for_iter_numbers = [1, 2, 3]
-let for_iter = for_iter_numbers.iter()
-for x in for_iter {
+for x in for_iter_numbers {
 	print(x)
 }

@@ -447,7 +447,7 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
 
 ## Lexical and module basics
 
-Comments are `//` line comments. Identifiers are ordinary words; type names are conventionally upper camel case. Semicolons are not used. Blocks are `{ ... }`. Top-level declarations may be prefixed with `public` to export them. Imports are explicit: `import { Foo, bar } from ./path.tlk`, `import { Foo: LocalFoo } from ./path.tlk`, `import _ from ./path.tlk`, or package-style `import { Foo } from package`.
+Comments are `//` line comments. Identifiers are ordinary words; type names are conventionally upper camel case. Semicolons are not used. Blocks are `{ ... }`. Top-level declarations may be prefixed with `public` to export them. Imports are explicit: `use { Foo, bar } from ./path.tlk`, `use { Foo: LocalFoo } from ./path.tlk`, `use _ from ./path.tlk`, or package-style `use { Foo } from package`.
 
 ## Declarations
 

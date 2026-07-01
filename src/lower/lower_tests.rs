@@ -62,6 +62,12 @@ pub mod tests {
     }
 
     #[test]
+    fn imported_stdlib_memberwise_init_has_a_body() {
+        let ir = lowered_ir("fs::Directory(path: Path([]))");
+        assert!(ir.contains("func init("), "{ir}");
+    }
+
+    #[test]
     fn generic_effect_handlers_are_diagnosed() {
         // The checker accepts generic effects (instantiated per perform);
         // the backend needs per-instantiation capabilities and rejects
@@ -205,6 +211,14 @@ pub mod tests {
     }
 
     #[test]
+    fn for_loop_continues_to_following_expression() {
+        assert_eq!(
+            run("func f() -> Int {\n\tfor x in [1] { }\n\t2\n}\nf()"),
+            EvalValue::I64(2)
+        );
+    }
+
+    #[test]
     fn break_and_continue_drop_owned_loop_locals() {
         let break_ir = lowered_ir(
             "func f() -> Int {\n\tloop {\n\t\tlet s = \"a\" + \"b\"\n\t\tbreak\n\t}\n\t0\n}\nf()",
@@ -265,6 +279,22 @@ pub mod tests {
         assert!(has_drop_flag_set(&ir, false), "{ir}");
         assert!(has_drop_flag_set(&ir, true), "{ir}");
         assert!(has_drop_flag_branch(&ir), "{ir}");
+    }
+
+    #[test]
+    fn borrowed_derived_show_lowers() {
+        let ir = lowered_ir(
+            "struct Box {\n\tlet value: Int\n}\nfunc main() {\n\tfor item in [Box(value: 1)] {\n\t\tprint(item)\n\t}\n}",
+        );
+        assert!(ir.contains("show_Box"), "{ir}");
+    }
+
+    #[test]
+    fn stdlib_fs_directory_runner_lowers() {
+        let ir = lowered_ir(
+            "func main() {\n\tlet directory = fs::Directory(path: Path([\".\"]))\n\tprint(directory)\n\tfor entry in directory.entries() {\n\t\tprint(entry)\n\t}\n}",
+        );
+        assert!(ir.contains("show_DirectoryEntry"), "{ir}");
     }
 
     #[test]

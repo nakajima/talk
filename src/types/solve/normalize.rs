@@ -9,7 +9,11 @@ pub fn normalize_ty(store: &mut VarStore, catalog: &TypeCatalog, ty: &Ty) -> Ty 
     match store.shallow(ty) {
         Ty::Proj(base, protocol, assoc) => {
             let base = normalize_ty(store, catalog, &base);
-            if let Ty::Nominal(symbol, args) = &base
+            let projection_base = match &base {
+                Ty::Borrow(_, inner) => normalize_ty(store, catalog, inner),
+                other => other.clone(),
+            };
+            if let Ty::Nominal(symbol, args) = &projection_base
                 && let Some(reduced) = reduce_projection(catalog, *symbol, args, protocol, assoc)
             {
                 return normalize_ty(store, catalog, &reduced);

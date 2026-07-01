@@ -10,9 +10,12 @@ Using manual indexing:
 30
 40
 50
-Sum of [10, 20, 30, 40, 50]:
-150
-Using for over an iterator variable:
+10
+20
+30
+40
+50
+Using for over an array:
 1
 2
 3

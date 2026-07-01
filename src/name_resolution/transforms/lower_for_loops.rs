@@ -200,13 +200,7 @@ impl LowerForLoops {
             },
         };
 
-        let unit_expr = Expr {
-            id: self.next_id(),
-            span: Span::SYNTHESIZED,
-            kind: ExprKind::Tuple(vec![]),
-        };
-
-        // Build outer block: { let __for_iter_<id> = ...; loop { ... }; () }
+        // Build outer block: { let __for_iter_<id> = ...; loop { ... } }
         let outer_block = Expr {
             id: self.next_id(),
             span: stmt.span,
@@ -214,11 +208,7 @@ impl LowerForLoops {
                 id: self.next_id(),
                 span: stmt.span,
                 args: vec![],
-                body: vec![
-                    Node::Decl(let_decl),
-                    Node::Stmt(loop_stmt),
-                    Node::Expr(unit_expr),
-                ],
+                body: vec![Node::Decl(let_decl), Node::Stmt(loop_stmt)],
             }),
         };
 

@@ -2629,8 +2629,14 @@ impl<'a> Lowering<'a> {
         let ExprKind::Member(Some(receiver), label) = &callee.kind else {
             return None;
         };
-        let CheckTy::Any { protocol, assoc } = self.checker_ty(receiver, ctx) else {
-            return None;
+        let receiver_ty = self.checker_ty(receiver, ctx);
+        let (protocol, assoc) = match receiver_ty {
+            CheckTy::Any { protocol, assoc } => (protocol, assoc),
+            CheckTy::Borrow(_, inner) => match *inner {
+                CheckTy::Any { protocol, assoc } => (protocol, assoc),
+                _ => return None,
+            },
+            _ => return None,
         };
         let label_str = label.to_string();
         let (owner, requirement) = self.units[ctx.unit]
@@ -2973,7 +2979,12 @@ impl<'a> Lowering<'a> {
         label: String,
         head: &CheckTy,
     ) -> Option<(Label, Symbol)> {
-        let CheckTy::Nominal(head_symbol, head_args) = head else {
+        let head_for_witness = match head {
+            CheckTy::Nominal(..) => head,
+            CheckTy::Borrow(_, inner) => inner,
+            _ => head,
+        };
+        let CheckTy::Nominal(head_symbol, head_args) = head_for_witness else {
             self.diagnostics.push(format!(
                 "lowering: protocol dispatch on non-nominal head {head:?} (not yet supported)"
             ));
@@ -2998,7 +3009,7 @@ impl<'a> Lowering<'a> {
             // conformance's associated bindings (substituted through the
             // row's params for conditional rows).
             let mut theta = Theta::default();
-            theta.insert(protocol, head.clone());
+            theta.insert(protocol, head_for_witness.clone());
             for (assoc, ty) in &conformance.assoc {
                 let bound = ty.substitute(&row_theta, &Default::default(), &Default::default());
                 theta.insert(*assoc, bound);
@@ -3017,7 +3028,8 @@ impl<'a> Lowering<'a> {
             .any(|u| u.types.catalog.derivable.contains(&protocol));
         if derivable
             && label == "show"
-            && let Some(synth) = self.demand_derived_show(protocol, requirement_or_witness, head)
+            && let Some(synth) =
+                self.demand_derived_show(protocol, requirement_or_witness, head_for_witness)
         {
             return Some((synth, requirement_or_witness));
         }
@@ -3131,6 +3143,10 @@ impl<'a> Lowering<'a> {
             "argc" => Op::IoArgc,
             "arg_len" => Op::IoArgLen,
             "arg_copy" => Op::IoArgCopy,
+            "dir_count" => Op::IoDirCount,
+            "dir_entry_kind" => Op::IoDirEntryKind,
+            "dir_entry_len" => Op::IoDirEntryLen,
+            "dir_entry_copy" => Op::IoDirEntryCopy,
             "exit" => Op::IoExit,
             other => {
                 self.diagnostics
@@ -3676,7 +3692,12 @@ impl<'a> Lowering<'a> {
     fn lower_main_nodes(&mut self, nodes: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
         let mut body = mir::build_nodes(self.units[ctx.unit].types, nodes);
         let unit = &self.units[ctx.unit];
-        crate::ownership::elaborate_body_drops(unit.types, unit.resolved, unit.ownership, &mut body);
+        crate::ownership::elaborate_body_drops(
+            unit.types,
+            unit.resolved,
+            unit.ownership,
+            &mut body,
+        );
         self.lower_mir_body(&body, ctx, k)
     }
 

@@ -5,6 +5,7 @@ pub enum TokenKind {
     LineComment,
 
     Import,
+    Use,
     Public,
 
     // Effects
@@ -43,6 +44,7 @@ pub enum TokenKind {
     Semicolon,
     Arrow,
     Colon,
+    DoubleColon,
     Newline,
     Dot,
     Plus,
@@ -136,6 +138,7 @@ impl TokenKind {
             TokenKind::QuestionMark => "?",
             TokenKind::Arrow => "->",
             TokenKind::Colon => ":",
+            TokenKind::DoubleColon => "::",
             TokenKind::Newline => "\n",
             TokenKind::Dot => ".",
             TokenKind::Plus => "+",
@@ -187,6 +190,7 @@ impl TokenKind {
             TokenKind::StringLiteral => "\"<string>\"",
             TokenKind::Extend => "extend",
             TokenKind::Import => "import",
+            TokenKind::Use => "use",
             TokenKind::Public => "public",
             TokenKind::Static => "static",
             TokenKind::At => "@",

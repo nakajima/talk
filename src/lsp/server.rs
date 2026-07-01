@@ -1005,7 +1005,7 @@ fn compute_code_actions(
                 };
 
                 // Create the import statement
-                let import_stmt = format!("import {{ {} }} from {}\n", name, relative_path);
+                let import_stmt = format!("use {{ {} }} from {}\n", name, relative_path);
 
                 // Find where to insert (at the start of the file, after any existing imports)
                 let insert_position = Position::new(0, 0);
@@ -1407,7 +1407,7 @@ mod tests {
         let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_across_files_b.tlk"))
             .expect("file uri");
         let code_a = "public let foo = 1\n";
-        let code_b = "import { foo } from ./rename_across_files_a.tlk\nfoo\n";
+        let code_b = "use { foo } from ./rename_across_files_a.tlk\nfoo\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
 
@@ -1458,7 +1458,7 @@ mod tests {
         let uri_b =
             Url::from_file_path(std::env::temp_dir().join("rename_alias_b.tlk")).expect("file uri");
         let code_a = "public struct Point {}\n";
-        let code_b = "import { Point: Pt } from ./rename_alias_a.tlk\nlet p = Pt()\n";
+        let code_b = "use { Point: Pt } from ./rename_alias_a.tlk\nlet p = Pt()\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
         let alias_use = code_b.rfind("Pt").expect("alias use");
@@ -1494,7 +1494,7 @@ mod tests {
         );
 
         let rewritten_b = apply_edits(code_b, &edit, &uri_b);
-        assert!(rewritten_b.contains("import { Vec3: Pt }"), "{rewritten_b}");
+        assert!(rewritten_b.contains("use { Vec3: Pt }"), "{rewritten_b}");
         assert!(rewritten_b.contains("let p = Pt()"), "{rewritten_b}");
     }
 
@@ -1505,7 +1505,7 @@ mod tests {
         let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_mixed_alias_b.tlk"))
             .expect("file uri");
         let code_a = "public struct Point {}\n";
-        let code_b = "import { Point: Pt, Point } from ./rename_mixed_alias_a.tlk\nlet a = Point()\nlet b = Pt()\n";
+        let code_b = "use { Point: Pt, Point } from ./rename_mixed_alias_a.tlk\nlet a = Point()\nlet b = Pt()\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
         let unaliased_use = code_b.rfind("Point").expect("unaliased use");
@@ -1526,7 +1526,7 @@ mod tests {
 
         let rewritten_b = apply_edits(code_b, &edit, &uri_b);
         assert!(
-            rewritten_b.contains("import { Vec3: Pt, Vec3 }"),
+            rewritten_b.contains("use { Vec3: Pt, Vec3 }"),
             "{rewritten_b}"
         );
         assert!(rewritten_b.contains("let a = Vec3()"), "{rewritten_b}");
@@ -1548,7 +1548,7 @@ mod tests {
 
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
-        let code_a = "import { foo } from ./b.tlk\nfoo\n";
+        let code_a = "use { foo } from ./b.tlk\nfoo\n";
         let code_b = "public let foo = 1\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
@@ -1625,7 +1625,7 @@ mod tests {
         let uri_b = Url::from_file_path(std::env::temp_dir().join("extend_before_struct_b.tlk"))
             .expect("file uri");
 
-        let code_a = r#"import { Person } from ./extend_before_struct_b.tlk
+        let code_a = r#"use { Person } from ./extend_before_struct_b.tlk
 extend Person {
   func foo() {}
 }
@@ -1717,7 +1717,7 @@ extend Person {
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
         let code_a = "public let foo = 1\n";
-        let code_b = "import { foo } from ./a.tlk\nfoo\n";
+        let code_b = "use { foo } from ./a.tlk\nfoo\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
 
@@ -1726,7 +1726,7 @@ extend Person {
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
 
-        // Click on "foo" in "import { foo }" - should navigate to definition in a.tlk
+        // Click on "foo" in "use { foo }" - should navigate to definition in a.tlk
         let import_foo_offset = code_b.find("{ foo }").expect("import foo") + 2;
         let target = super::goto_definition(&module, None, &uri_b, import_foo_offset as u32)
             .expect("target");
@@ -1752,7 +1752,7 @@ extend Person {
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
         let code_a = "public let foo = 1\n";
-        let code_b = "import { foo } from ./a.tlk\nfoo\n";
+        let code_b = "use { foo } from ./a.tlk\nfoo\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
 
@@ -1861,7 +1861,7 @@ extend Person {
     #[test]
     fn goto_definition_on_cross_file_function_call() {
         let code_a = "public func helper() -> Int { 1 }\n";
-        let code_b = "import { helper } from ./goto_cross_a.tlk\nhelper()\n";
+        let code_b = "use { helper } from ./goto_cross_a.tlk\nhelper()\n";
         let uri_a =
             Url::from_file_path(std::env::temp_dir().join("goto_cross_a.tlk")).expect("file uri");
         let uri_b =

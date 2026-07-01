@@ -214,7 +214,7 @@ impl<'a> Parser<'a> {
                 | Extend
                 | Typealias
                 | Effect
-                | Import
+                | Use
                 | Public
         ) {
             self.decl(BlockContext::None, false)
@@ -259,7 +259,7 @@ impl<'a> Parser<'a> {
                 self.method_decl_with_mode(context, is_static, ReceiverMode::Consuming)?
                     .into()
             }
-            Import => self.import_decl()?.into(),
+            Use => self.import_decl()?.into(),
             Effect => self.effect()?.into(),
             Typealias => self.typealias()?.into(),
             Protocol => self
@@ -337,7 +337,7 @@ impl<'a> Parser<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn import_decl(&mut self) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
-        self.consume(TokenKind::Import)?;
+        self.consume(TokenKind::Use)?;
 
         // Parse imported symbols: either { a, b } or _
         let symbols = if self.did_match(TokenKind::Underscore)? {
@@ -396,34 +396,7 @@ impl<'a> Parser<'a> {
         // Parse import path
         let path_start = self.current.as_ref().map(|t| t.start).unwrap_or(0);
 
-        let path = if matches!(self.current.as_ref().map(|t| &t.kind), Some(TokenKind::Dot)) {
-            // Relative path: ./foo.tlk or ../foo.tlk
-            let mut path_str = String::new();
-
-            while let Some(ref current) = self.current.clone() {
-                match &current.kind {
-                    TokenKind::Dot => {
-                        path_str.push('.');
-                        self.advance();
-                    }
-                    TokenKind::Slash => {
-                        path_str.push('/');
-                        self.advance();
-                    }
-                    TokenKind::Identifier => {
-                        path_str.push_str(self.lexeme(current));
-                        self.advance();
-                    }
-                    _ => break,
-                }
-            }
-
-            ImportPath::Relative(path_str)
-        } else {
-            // Package name: collections
-            let (pkg_name, _) = self.identifier()?;
-            ImportPath::Package(pkg_name)
-        };
+        let path = self.module_path()?;
 
         let path_end = self.current.as_ref().map(|t| t.start).unwrap_or(path_start);
         let path_span = Span {
@@ -442,6 +415,60 @@ impl<'a> Parser<'a> {
                 path_span,
             }),
         })
+    }
+
+    fn module_path(&mut self) -> Result<ImportPath, ParserError> {
+        if matches!(
+            self.current.as_ref().map(|t| &t.kind),
+            Some(TokenKind::Dot | TokenKind::DotDot)
+        ) {
+            return Ok(ImportPath::Relative(self.relative_module_path_string()?));
+        }
+
+        let (mut pkg_name, _) = self.identifier()?;
+        while self.did_match_double_colon()? {
+            let (segment, _) = self.identifier()?;
+            pkg_name.push_str("::");
+            pkg_name.push_str(&segment);
+        }
+        Ok(ImportPath::Package(pkg_name))
+    }
+
+    fn relative_module_path_string(&mut self) -> Result<String, ParserError> {
+        let mut path_str = String::new();
+
+        while let Some(current) = self.current.clone() {
+            match current.kind {
+                TokenKind::Dot => {
+                    path_str.push('.');
+                    self.advance();
+                }
+                TokenKind::DotDot => {
+                    path_str.push_str("..");
+                    self.advance();
+                }
+                TokenKind::Slash => {
+                    path_str.push('/');
+                    self.advance();
+                }
+                TokenKind::Identifier => {
+                    path_str.push_str(self.lexeme(&current));
+                    self.advance();
+                }
+                _ => break,
+            }
+        }
+
+        Ok(path_str)
+    }
+
+    fn did_match_double_colon(&mut self) -> Result<bool, ParserError> {
+        self.did_match(TokenKind::DoubleColon)
+    }
+
+    fn consume_double_colon(&mut self) -> Result<(), ParserError> {
+        self.consume(TokenKind::DoubleColon)?;
+        Ok(())
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -1823,9 +1850,55 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub(crate) fn relative_parent_path_prefix(
+        &mut self,
+        can_assign: bool,
+    ) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::DotDot)?;
+        let mut name = String::from("..");
+        name.push_str(&self.relative_module_path_string()?);
+        self.consume_double_colon()?;
+        let (symbol_name, _) = self.identifier()?;
+        name.push_str("::");
+        name.push_str(&symbol_name);
+        while self.did_match_double_colon()? {
+            let (segment, _) = self.identifier()?;
+            name.push_str("::");
+            name.push_str(&segment);
+        }
+        let variable = self.add_expr(ExprKind::Variable(Name::Raw(name)), tok)?;
+        self.skip_newlines();
+        if let Some(call_expr) = self.check_call(&variable, can_assign)? {
+            return Ok(call_expr.into());
+        }
+        Ok(variable.into())
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Dot)?;
+
+        if self.peek_is(TokenKind::Slash) {
+            let mut name = String::from(".");
+            name.push_str(&self.relative_module_path_string()?);
+            self.consume_double_colon()?;
+            let (symbol_name, _) = self.identifier()?;
+            name.push_str("::");
+            name.push_str(&symbol_name);
+            while self.did_match_double_colon()? {
+                let (segment, _) = self.identifier()?;
+                name.push_str("::");
+                name.push_str(&segment);
+            }
+            let variable = self.add_expr(ExprKind::Variable(Name::Raw(name)), tok)?;
+            self.skip_newlines();
+            if let Some(call_expr) = self.check_call(&variable, can_assign)? {
+                return Ok(call_expr.into());
+            }
+            return Ok(variable.into());
+        }
 
         let (name, name_span) = match self.current.clone() {
             Some(cur) if cur.kind == TokenKind::Identifier => match self.identifier() {
@@ -2033,7 +2106,12 @@ impl<'a> Parser<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn variable(&mut self, can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
-        let (name, _span) = self.identifier()?;
+        let (mut name, _span) = self.identifier()?;
+        while self.did_match_double_colon()? {
+            let (segment, _) = self.identifier()?;
+            name.push_str("::");
+            name.push_str(&segment);
+        }
         let variable = self.add_expr(ExprKind::Variable(Name::Raw(name.to_string())), tok)?;
 
         self.skip_newlines();
@@ -2467,7 +2545,30 @@ impl<'a> Parser<'a> {
         }
 
         // It's a nominal.
-        let (name, name_span) = self.identifier()?;
+        let (name, name_span) = if matches!(
+            self.current.as_ref().map(|t| &t.kind),
+            Some(TokenKind::Dot | TokenKind::DotDot)
+        ) {
+            let mut name = self.relative_module_path_string()?;
+            self.consume_double_colon()?;
+            let (symbol_name, symbol_span) = self.identifier()?;
+            name.push_str("::");
+            name.push_str(&symbol_name);
+            while self.did_match_double_colon()? {
+                let (segment, _) = self.identifier()?;
+                name.push_str("::");
+                name.push_str(&segment);
+            }
+            (name, symbol_span)
+        } else {
+            let (mut name, name_span) = self.identifier()?;
+            while self.did_match_double_colon()? {
+                let (segment, _) = self.identifier()?;
+                name.push_str("::");
+                name.push_str(&segment);
+            }
+            (name, name_span)
+        };
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
             while !self.did_match(TokenKind::Greater)? {
@@ -3021,7 +3122,7 @@ impl<'a> Parser<'a> {
     pub(super) fn identifier(&mut self) -> Result<(String, Span), ParserError> {
         self.skip_semicolons_and_newlines();
         if let Some(current) = self.current.clone()
-            && current.kind == TokenKind::Identifier
+            && matches!(current.kind, TokenKind::Identifier | TokenKind::Use)
         {
             let name = self.lexeme(&current).to_string();
             self.push_identifier(current.clone());

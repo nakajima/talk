@@ -1,5 +1,5 @@
 // no-core
-import { Owner } from ./Ownership.tlk
+use { Owner } from ./Ownership.tlk
 
 public enum Allocation {
 	case allocate(Int)
@@ -33,7 +33,7 @@ public func _ptr_add(ptr: RawPtr, offset: Int) 'alloc -> RawPtr {
 public struct Storage<Element> {
 	let base: RawPtr
 
-	func get(index: Int) -> Element {
+	func get(index: Int) -> &Element {
 		let ptr: RawPtr = @_ir(self.base, index) { %? = gep Element $0 $1 }
 		_load<Element>(ptr)
 	}

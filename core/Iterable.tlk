@@ -1,30 +1,39 @@
 // no-core
-import { Optional } from ./Optional.tlk
-import { Array } from ./Array.tlk
-import { Add, Comparable } from ./Operators.tlk
+use { Optional } from ./Optional.tlk
+use { Array } from ./Array.tlk
+use { Add, Comparable } from ./Operators.tlk
 
 public protocol Iterator {
 	associated Element
 	mut func next() -> Element?
+
+	func map<U>(fn: (Element) -> U) -> Map<Self.Element, U> {
+		Map(inner: self, fn: fn)
+	}
 }
 
 public protocol Iterable {
 	associated Element
 	associated T: Iterator
-	consuming func iter() -> T
+	func iter() -> T
+}
+
+public struct Map<T, U> where T: Iterator {
+	let inner: T
+	let map: (T.Element) -> U
 }
 
 public struct ArrayIterator<Element> {
-	let array: Array<Element>
+	let array: &Array<Element>
 	let current: Int
 
-	init(array: Array<Element>) {
+	init(array: &Array<Element>) {
 		self.array = array
 		self.current = 0
 	}
 
-	extend Self: Iterator<Element> {
-		mut func next() -> Element? {
+	extend Self: Iterator<&Element> {
+		mut func next() -> Optional<&Element> {
 			if self.current < self.array.count {
 				let result = self.array.get(self.current)
 				self.current = self.current + 1
@@ -37,7 +46,7 @@ public struct ArrayIterator<Element> {
 }
 
 extend Array<Element>: Iterable {
-	consuming func iter() -> ArrayIterator<Element> {
+	func iter() -> ArrayIterator<Element> {
 		ArrayIterator<Element>(array: self)
 	}
 }

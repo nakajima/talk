@@ -1,6 +1,6 @@
 // no-core
-import { String } from ./String.tlk
-import { Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable } from ./Operators.tlk
+use { String } from ./String.tlk
+use { Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable } from ./Operators.tlk
 
 public protocol Showable {
 	func show() -> String

@@ -1,10 +1,10 @@
 // no-core
 
-import { Array } from ./Array.tlk
-import { open_path, _io_read, _io_write, _io_close, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, S_IRUSR, S_IWUSR, EAGAIN, POLLIN, POLLOUT } from ./IO.tlk
-import { _alloc } from ./Memory.tlk
-import { Add, Comparable } from ./Operators.tlk
-import { String } from ./String.tlk
+use { Array } from ./Array.tlk
+use { open_path, _io_read, _io_write, _io_close, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, S_IRUSR, S_IWUSR, EAGAIN, POLLIN, POLLOUT } from ./IO.tlk
+use { _alloc } from ./Memory.tlk
+use { Add, Comparable } from ./Operators.tlk
+use { String } from ./String.tlk
 
 public struct Path {
 	let components: Array<String>

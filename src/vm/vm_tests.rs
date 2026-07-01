@@ -116,12 +116,10 @@ pub mod tests {
 
     #[test]
     fn vm_runs_existentials_in_arrays() {
-        assert_eq!(
-            run_on_both_engines(
-                "protocol Number {\n\tconsuming func value() -> Int\n}\nextend Int: Number {\n\tconsuming func value() -> Int { self }\n}\nlet values: Array<any Number> = [3, 4]\nvalues.get(1).value()"
-            ),
-            Value::I64(4)
+        let (_, out) = run_on_both_engines_io(
+            "protocol Number {\n\tfunc report() -> ()\n}\nextend Int: Number {\n\tfunc report() -> () { print(self) }\n}\nlet values: Array<any Number> = [3, 4]\nvalues.get(1).report()",
         );
+        assert_eq!(out, "4\n");
     }
 
     #[test]
@@ -423,8 +421,9 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_float_array_round_trip() {
-        let (value, _) = run_on_both_engines_io("let a = [1.5, 2.5]\na.get(0) + a.get(1)");
-        assert_eq!(value, Value::F64(4.0));
+        let (_, out) =
+            run_on_both_engines_io("let a = [1.5, 2.5]\nprint(a.get(0))\nprint(a.get(1))");
+        assert_eq!(out, "1.5\n2.5\n");
     }
 
     #[test]
@@ -467,10 +466,10 @@ pub mod tests {
     fn vm_matches_evaluator_on_array_iterator_next() {
         // ArrayIterator.next() is a mutating witness: inout self writes
         // back into the iterator's cell between calls.
-        let (value, _) = run_on_both_engines_io(
-            "let numbers = [7, 8]\nlet it = numbers.iter()\nlet r1: Optional<Int> = it.next()\nlet r2: Optional<Int> = it.next()\nlet r3: Optional<Int> = it.next()\nlet a = match r1 {\n\t.some(v) -> v,\n\t.none -> 0 - 1\n}\nlet b = match r2 {\n\t.some(v) -> v,\n\t.none -> 0 - 1\n}\nlet c = match r3 {\n\t.some(v) -> v,\n\t.none -> 0 - 1\n}\na * 100 + b * 10 + c",
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet numbers = [7, 8]\n\tlet it = numbers.iter()\n\tlet r1: Optional<&Int> = it.next()\n\tmatch r1 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\tlet r2: Optional<&Int> = it.next()\n\tmatch r2 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\tlet r3: Optional<&Int> = it.next()\n\tmatch r3 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\t0\n}",
         );
-        assert_eq!(value, Value::I64(7 * 100 + 8 * 10 - 1));
+        assert_eq!(out, "7\n8\n-1\n");
     }
 
     #[test]
@@ -1097,9 +1096,9 @@ pub mod tests {
     }
 
     #[test]
-    fn vm_matches_evaluator_on_match_on_an_unannotated_next() {
+    fn vm_matches_evaluator_on_match_on_a_borrowed_next() {
         let (_, out) = run_on_both_engines_io(
-            "let a = [42]\nlet i = a.iter()\nlet opt = i.next()\nmatch opt {\n\t.some(x) -> print(x),\n\t.none -> print(0)\n}",
+            "func main() {\n\tlet a = [42]\n\tlet i = a.iter()\n\tlet opt: Optional<&Int> = i.next()\n\tmatch opt {\n\t\t.some(x) -> print(x),\n\t\t.none -> print(0)\n\t}\n}",
         );
         assert_eq!(out, "42\n");
     }

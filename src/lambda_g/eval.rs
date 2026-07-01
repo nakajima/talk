@@ -542,6 +542,10 @@ impl Evaluator {
             | Op::IoArgc
             | Op::IoArgLen
             | Op::IoArgCopy
+            | Op::IoDirCount
+            | Op::IoDirEntryKind
+            | Op::IoDirEntryLen
+            | Op::IoDirEntryCopy
             | Op::IoExit => {
                 let mut operands = [EvalValue::Void, EvalValue::Void, EvalValue::Void];
                 for (slot, &arg) in operands.iter_mut().zip(args.iter()) {
@@ -707,6 +711,57 @@ impl Evaluator {
                     .get_mut(dest..dest + len as usize)
                     .ok_or_else(oob)?;
                 self.io.arg_copy(index, buf)
+            }
+            Op::IoDirCount => {
+                let start = ptr(0)?;
+                let tail = self.c_string_tail(start as u32)?;
+                let len = tail
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(tail.len());
+                let path = tail[..len].to_vec();
+                self.io.dir_count(&path)
+            }
+            Op::IoDirEntryKind => {
+                let start = ptr(0)?;
+                let tail = self.c_string_tail(start as u32)?;
+                let len = tail
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(tail.len());
+                let path = tail[..len].to_vec();
+                self.io.dir_entry_kind(&path, int(1)?)
+            }
+            Op::IoDirEntryLen => {
+                let start = ptr(0)?;
+                let tail = self.c_string_tail(start as u32)?;
+                let len = tail
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(tail.len());
+                let path = tail[..len].to_vec();
+                self.io.dir_entry_len(&path, int(1)?)
+            }
+            Op::IoDirEntryCopy => {
+                let start = ptr(0)?;
+                let tail = self.c_string_tail(start as u32)?;
+                let len = tail
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(tail.len());
+                let path = tail[..len].to_vec();
+                let index = int(1)?;
+                let entry_len = self.io.dir_entry_len(&path, index);
+                if entry_len < 0 {
+                    return Ok(entry_len);
+                }
+                let dest = ptr(2)?;
+                self.check_access(dest as u32, entry_len as usize, "io")?;
+                let buf = self
+                    .mem
+                    .get_mut(dest..dest + entry_len as usize)
+                    .ok_or_else(oob)?;
+                self.io.dir_entry_copy(&path, index, buf)
             }
             Op::IoExit => self.io.exit(int(0)?),
             other => {

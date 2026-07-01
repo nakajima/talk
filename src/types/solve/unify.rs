@@ -50,6 +50,14 @@ impl<'s> Solver<'s> {
 
             (Ty::Borrow(..), Ty::Borrow(..)) => self.report_mismatch(&a, &b, origin),
 
+            (Ty::Borrow(_, inner), other) if origin.reason == CtReason::Apply => {
+                worklist.push(Constraint::Eq(
+                    (**inner).clone(),
+                    other.clone(),
+                    origin.nested(),
+                ));
+            }
+
             (Ty::Var(x), Ty::Var(y)) if self.store.find(x.0) == self.store.find(y.0) => {}
             (Ty::Var(x), Ty::Var(y)) => {
                 let x_root = self.store.find(x.0);

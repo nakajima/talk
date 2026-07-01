@@ -242,6 +242,10 @@ pub enum IoOp {
     Argc,
     ArgLen,
     ArgCopy,
+    DirCount,
+    DirEntryKind,
+    DirEntryLen,
+    DirEntryCopy,
     Exit,
 }
 

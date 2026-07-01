@@ -3,13 +3,18 @@ use crate::{
     compiling::module::{Module, ModuleEnvironment, ModuleId, ModuleTypes, StableModuleId},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     lexer::Lexer,
+    name::Name,
     name_resolution::{
         name_resolver::{NameResolver, ResolvedNames},
         symbol::{Symbol, Symbols},
     },
     node::Node,
     node_id::{FileID, NodeID},
-    node_kinds::decl::{DeclKind, ImportPath},
+    node_kinds::{
+        decl::{DeclKind, ImportPath},
+        expr::ExprKind,
+        type_annotation::TypeAnnotationKind,
+    },
     ownership::OwnershipOutput,
     parser::Parser,
     parser_error::ParserError,
@@ -233,8 +238,10 @@ pub struct Driver<Phase: DriverPhase = Initial> {
     pub phase: Phase,
 }
 
-/// Extract all import paths from a parsed AST
+/// Extract all module paths from imports and qualified references in a parsed AST.
 fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
+    use derive_visitor::Drive;
+
     let mut paths = Vec::new();
     for root in &ast.roots {
         if let Node::Decl(decl) = root
@@ -243,7 +250,47 @@ fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
             paths.push(import.path.clone());
         }
     }
+
+    let mut expr_collector =
+        derive_visitor::visitor_enter_fn(|expr: &crate::node_kinds::expr::Expr| {
+            if let ExprKind::Variable(Name::Raw(raw)) = &expr.kind
+                && let Some(path) = qualified_relative_module_path(raw)
+            {
+                paths.push(ImportPath::Relative(path));
+            }
+        });
+    for root in &ast.roots {
+        root.drive(&mut expr_collector);
+    }
+    drop(expr_collector);
+
+    let mut type_collector = derive_visitor::visitor_enter_fn(
+        |ty: &crate::node_kinds::type_annotation::TypeAnnotation| {
+            if let TypeAnnotationKind::Nominal {
+                name: Name::Raw(raw),
+                ..
+            } = &ty.kind
+                && let Some(path) = qualified_relative_module_path(raw)
+            {
+                paths.push(ImportPath::Relative(path));
+            }
+        },
+    );
+    for root in &ast.roots {
+        root.drive(&mut type_collector);
+    }
+    drop(type_collector);
+
     paths
+}
+
+fn qualified_relative_module_path(raw: &str) -> Option<String> {
+    let (module_path, _) = raw.rsplit_once("::")?;
+    if module_path.starts_with("./") || module_path.starts_with("../") {
+        Some(module_path.to_string())
+    } else {
+        None
+    }
 }
 
 /// Resolve an import path relative to a source file path.
@@ -258,7 +305,10 @@ fn resolve_import_path(source_path: &str, import_path: &ImportPath) -> Option<(P
 
             // Strip leading "./" from relative path before joining (to match name resolver)
             let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
-            let resolved = parent.join(clean_rel);
+            let mut resolved = parent.join(clean_rel);
+            if resolved.extension().is_none() {
+                resolved.set_extension("tlk");
+            }
 
             // Canonicalize for cycle detection (normalizes .. and symlinks)
             let canonical = resolved.canonicalize().ok()?;
@@ -278,6 +328,9 @@ impl Driver {
         #[allow(clippy::unwrap_used)]
         let mut modules = Rc::into_inner(config.modules).unwrap();
         modules.import_core(super::core::compile());
+        for module in super::stdlib::modules() {
+            modules.import((*module).clone());
+        }
         config.modules = Rc::new(modules);
 
         Self {
@@ -529,7 +582,7 @@ impl Driver<NameResolved> {
 }
 
 impl Driver<Typed> {
-    /// Lower to λ_G (whole-program, with core's typed artifacts — see
+    /// Lower to λ_G (whole-program, with core and stdlib typed artifacts — see
     /// src/lower). Infallible; unsupported constructs surface as lowering
     /// diagnostics.
     pub fn lower(self) -> Driver<Lowered> {
@@ -549,6 +602,7 @@ impl Driver<Typed> {
         } else {
             Some(crate::compiling::core::typed())
         };
+        let stdlib = crate::compiling::stdlib::typed_modules(self.config.modules.as_ref());
         let mut units = vec![];
         if let Some(core) = core.as_ref() {
             units.push(LowerUnit {
@@ -556,6 +610,14 @@ impl Driver<Typed> {
                 types: &core.types,
                 resolved: &core.resolved_names,
                 ownership: &core.ownership,
+            });
+        }
+        for module in &stdlib {
+            units.push(LowerUnit {
+                asts: &module.hir,
+                types: &module.types,
+                resolved: &module.resolved_names,
+                ownership: &module.ownership,
             });
         }
         units.push(LowerUnit {
@@ -963,7 +1025,10 @@ pub mod tests {
             preserve_comments: false,
         };
 
-        let driver_b = Driver::new(vec![Source::from("Hello(x: 123).x")], config);
+        let driver_b = Driver::new(
+            vec![Source::from("use { Hello } from A\nHello(x: 123).x")],
+            config,
+        );
 
         let resolved_b = driver_b.parse().unwrap().resolve_names().unwrap();
         assert!(
@@ -971,6 +1036,48 @@ pub mod tests {
             "{:?}",
             resolved_b.phase.diagnostics
         );
+    }
+
+    #[test]
+    fn imports_stdlib_modules_by_package_name() {
+        let driver = Driver::new(
+            vec![Source::from(
+                "use { Directory, File, DirectoryEntry } from fs\nlet dir: Directory\nlet file: File\nlet entry: DirectoryEntry\n",
+            )],
+            DriverConfig::new("TestDriver"),
+        );
+
+        let checked = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        assert!(!checked.has_errors(), "{:?}", checked.diagnostics());
+    }
+
+    #[test]
+    fn auto_discovers_qualified_relative_paths() {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let importer_path = current_dir.join("dev/fixtures/qualified_importer.tlk");
+        let exportee_path = current_dir.join("dev/fixtures/qualified_exportee.tlk");
+
+        std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
+        std::fs::write(&importer_path, "./qualified_exportee::exported\n").unwrap();
+
+        let driver = Driver::new(
+            vec![Source::from(importer_path.clone())],
+            DriverConfig::new("TestDriver"),
+        );
+        let resolved = driver.parse().unwrap().resolve_names().unwrap();
+        assert!(
+            !resolved.has_errors(),
+            "no diagnostics: {:?}",
+            resolved.phase.diagnostics
+        );
+
+        let _ = std::fs::remove_file(&importer_path);
+        let _ = std::fs::remove_file(&exportee_path);
     }
 
     #[test]
@@ -983,7 +1090,7 @@ pub mod tests {
         std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
         std::fs::write(
             &importer_path,
-            "import { exported } from ./exportee.tlk\nexported\n",
+            "use { exported } from ./exportee.tlk\nexported\n",
         )
         .unwrap();
 

@@ -871,6 +871,10 @@ impl<'a> ChunkBuilder<'a> {
             | Op::IoArgc
             | Op::IoArgLen
             | Op::IoArgCopy
+            | Op::IoDirCount
+            | Op::IoDirEntryKind
+            | Op::IoDirEntryLen
+            | Op::IoDirEntryCopy
             | Op::IoExit => {
                 let io_op = match op {
                     Op::IoRead => IoOp::Read,
@@ -892,6 +896,10 @@ impl<'a> ChunkBuilder<'a> {
                     Op::IoArgc => IoOp::Argc,
                     Op::IoArgLen => IoOp::ArgLen,
                     Op::IoArgCopy => IoOp::ArgCopy,
+                    Op::IoDirCount => IoOp::DirCount,
+                    Op::IoDirEntryKind => IoOp::DirEntryKind,
+                    Op::IoDirEntryLen => IoOp::DirEntryLen,
+                    Op::IoDirEntryCopy => IoOp::DirEntryCopy,
                     _ => IoOp::Exit,
                 };
                 let mut operands = [0u16; 3];

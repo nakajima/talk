@@ -414,7 +414,11 @@ impl Encoder {
             IoOp::Argc => 16,
             IoOp::ArgLen => 17,
             IoOp::ArgCopy => 18,
-            IoOp::Exit => 19,
+            IoOp::DirCount => 19,
+            IoOp::DirEntryKind => 20,
+            IoOp::DirEntryLen => 21,
+            IoOp::DirEntryCopy => 22,
+            IoOp::Exit => 23,
         });
     }
 
@@ -823,7 +827,11 @@ impl<'a> Decoder<'a> {
             16 => Ok(IoOp::Argc),
             17 => Ok(IoOp::ArgLen),
             18 => Ok(IoOp::ArgCopy),
-            19 => Ok(IoOp::Exit),
+            19 => Ok(IoOp::DirCount),
+            20 => Ok(IoOp::DirEntryKind),
+            21 => Ok(IoOp::DirEntryLen),
+            22 => Ok(IoOp::DirEntryCopy),
+            23 => Ok(IoOp::Exit),
             _ => Err(DecodeError::InvalidTag("io operation", tag)),
         }
     }

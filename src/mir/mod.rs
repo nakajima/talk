@@ -388,11 +388,7 @@ pub(crate) fn build_block(types: &TypeOutput, block: &Block) -> Body {
     build_function(types, None, block)
 }
 
-pub(crate) fn build_function(
-    types: &TypeOutput,
-    owner: Option<Symbol>,
-    block: &Block,
-) -> Body {
+pub(crate) fn build_function(types: &TypeOutput, owner: Option<Symbol>, block: &Block) -> Body {
     let mut builder = Builder::new(types, owner);
     let entry = builder.new_block();
     let exit = builder.lower_root_scope(entry, |builder, entry| {
@@ -612,14 +608,16 @@ impl Builder<'_> {
         current
     }
 
-    fn lower_node(
-        &mut self,
-        node: &Node,
-        current: BlockId,
-        consume_expr_value: bool,
-    ) -> BlockId {
+    fn lower_node(&mut self, node: &Node, current: BlockId, consume_expr_value: bool) -> BlockId {
         match node {
             Node::Decl(decl) => self.lower_decl(decl, current),
+            Node::Stmt(Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::Block(_),
+                    ..
+                }),
+                ..
+            }) if !consume_expr_value => current,
             Node::Stmt(Stmt {
                 kind: StmtKind::Expr(expr),
                 ..
@@ -758,13 +756,14 @@ impl Builder<'_> {
         }
     }
 
-    fn lower_stmt(
-        &mut self,
-        stmt: &Stmt,
-        current: BlockId,
-        consume_expr_value: bool,
-    ) -> BlockId {
+    fn lower_stmt(&mut self, stmt: &Stmt, current: BlockId, consume_expr_value: bool) -> BlockId {
         match &stmt.kind {
+            StmtKind::Expr(Expr {
+                kind: ExprKind::Block(block),
+                ..
+            }) => self.lower_child_scope(current, |builder, current| {
+                builder.lower_nodes(&block.body, current, false)
+            }),
             StmtKind::Expr(expr) => {
                 let current = self.lower_expr(expr, current);
                 let value = self.operand_for_expr(expr);
@@ -1067,12 +1066,7 @@ impl Builder<'_> {
         join_id
     }
 
-    fn lower_loop(
-        &mut self,
-        condition: Option<&Expr>,
-        body: &Block,
-        current: BlockId,
-    ) -> BlockId {
+    fn lower_loop(&mut self, condition: Option<&Expr>, body: &Block, current: BlockId) -> BlockId {
         let header_id = self.new_block();
         let body_id = self.new_block();
         let exit_id = self.new_block();
@@ -1112,12 +1106,7 @@ impl Builder<'_> {
         exit_id
     }
 
-    fn lower_match(
-        &mut self,
-        scrutinee: &Expr,
-        arms: &[MatchArm],
-        current: BlockId,
-    ) -> BlockId {
+    fn lower_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], current: BlockId) -> BlockId {
         let current = self.lower_expr(scrutinee, current);
         let join_id = self.new_block();
         let arm_blocks: Vec<_> = arms.iter().map(|_| self.new_block()).collect();

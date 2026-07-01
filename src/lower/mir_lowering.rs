@@ -187,8 +187,7 @@ impl<'a> Lowering<'a> {
                 let pair = self.p.tuple(&[value, ctx.raw_ret_k]);
                 let resume_body = self.p.app(resume_k, pair);
                 let resume_body = self.lower_drop_bindings_then(ctx, &ctx.drop_stack, resume_body);
-                let resume_body =
-                    self.clear_moved_drop_flags_then(ctx, statement, resume_body);
+                let resume_body = self.clear_moved_drop_flags_then(ctx, statement, resume_body);
                 self.p.set_body(send, resume_body);
                 let send_ref = self.p.func_ref(send);
                 self.lower_expr(expr, ctx, send_ref)
@@ -317,11 +316,7 @@ impl<'a> Lowering<'a> {
         })
     }
 
-    fn drop_flag_keys_for_symbol(
-        &self,
-        body: &mir::Body,
-        symbol: Symbol,
-    ) -> Vec<OwnershipKeyPath> {
+    fn drop_flag_keys_for_symbol(&self, body: &mir::Body, symbol: Symbol) -> Vec<OwnershipKeyPath> {
         let mut keys = Vec::new();
         let root = OwnershipKeyPath::root(symbol);
         let mut needs_root_flag = false;
@@ -502,10 +497,7 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    fn assignment_drop_elaboration(
-        &self,
-        cursor: MirCursor,
-    ) -> Option<mir::DropElaboration> {
+    fn assignment_drop_elaboration(&self, cursor: MirCursor) -> Option<mir::DropElaboration> {
         let previous = cursor.index.checked_sub(1)?;
         let previous = cursor.statements().get(previous)?;
         let mir::Statement::DropCandidate {
@@ -690,8 +682,7 @@ impl<'a> Lowering<'a> {
                 after_set
             };
             let after_set = self.sequence_void_effect(cell_set, after_set);
-            let after_set =
-                self.clear_moved_drop_flags_then(ctx, cursor.statement(), after_set);
+            let after_set = self.clear_moved_drop_flags_then(ctx, cursor.statement(), after_set);
             let lhs_check_ty = self.checker_ty(lhs, ctx);
             if matches!(drop_elaboration, Some(mir::DropElaboration::Static))
                 && self.needs_drop_type(ctx.unit, &lhs_check_ty)
@@ -745,8 +736,7 @@ impl<'a> Lowering<'a> {
         let bot = self.p.ty_bot();
         let drop_k = self.p.func("drop", value_ty, bot);
         let rest_body = self.lower_mir_statements(cursor.advance(), ctx, k, cache);
-        let rest_body =
-            self.clear_moved_drop_flags_then(ctx, cursor.statement(), rest_body);
+        let rest_body = self.clear_moved_drop_flags_then(ctx, cursor.statement(), rest_body);
         self.p.set_body(drop_k, rest_body);
         let drop_ref = self.p.func_ref(drop_k);
         match pure_value {

@@ -667,7 +667,10 @@ impl<'a> Formatter<'a> {
                         text("in"),
                         // A `for` body always formats multi-line; collapsing it to
                         // `for x in xs { ... }` hurts readability of the loop.
-                        concat_space(self.format_expr(iterable), self.format_block_multiline(body)),
+                        concat_space(
+                            self.format_expr(iterable),
+                            self.format_block_multiline(body),
+                        ),
                     ),
                 ),
             ),
@@ -1247,7 +1250,7 @@ impl<'a> Formatter<'a> {
             ImportPath::Package(p) => text(p),
         };
 
-        join(vec![text("import"), symbols, text("from"), path], text(" "))
+        join(vec![text("use"), symbols, text("from"), path], text(" "))
     }
 
     fn format_struct(
@@ -1464,7 +1467,11 @@ impl<'a> Formatter<'a> {
             TypeAnnotationKind::Nominal { name, generics, .. }
                 if name.name_str() == "Optional" && generics.len() == 1 =>
             {
-                concat(self.format_type_annotation(&generics[0]), text("?"))
+                if matches!(generics[0].kind, TypeAnnotationKind::Borrow { .. }) {
+                    self.format_nominal_type_annotation(name.name_str(), generics)
+                } else {
+                    concat(self.format_type_annotation(&generics[0]), text("?"))
+                }
             }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 self.format_nominal_type_annotation(name.name_str(), generics)

@@ -153,6 +153,10 @@ pub enum Op {
     IoArgc,
     IoArgLen,
     IoArgCopy,
+    IoDirCount,
+    IoDirEntryKind,
+    IoDirEntryLen,
+    IoDirEntryCopy,
     IoExit,
 }
 

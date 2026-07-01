@@ -98,6 +98,11 @@ impl ModuleEnvironment {
         self.get_module(*module_id)
     }
 
+    /// Get the local module ID assigned to an imported module name.
+    pub fn get_module_id_by_name(&self, name: &str) -> Option<ModuleId> {
+        self.modules_by_name.get(name).copied()
+    }
+
     pub fn imported_symbol_names(&self) -> FxHashMap<Symbol, String> {
         self.modules
             .values()

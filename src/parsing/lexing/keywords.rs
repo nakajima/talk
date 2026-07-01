@@ -22,6 +22,7 @@ pub(super) fn handle(string: &str) -> TokenKind {
         "init" => Init,
         "protocol" => Protocol,
         "import" => Import,
+        "use" => Use,
         "public" => Public,
         "static" => Static,
         "associated" => Associated,

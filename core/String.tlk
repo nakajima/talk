@@ -1,7 +1,7 @@
 // no-core
-import { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
-import { ByteStorage, _alloc, _copy, _ptr_add } from ./Memory.tlk
-import { Borrowed } from ./Ownership.tlk
+use { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
+use { ByteStorage, _alloc, _copy, _ptr_add } from ./Memory.tlk
+use { Borrowed } from ./Ownership.tlk
 
 public struct String {
 	let storage: ByteStorage

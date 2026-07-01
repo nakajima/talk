@@ -54,7 +54,6 @@ pub enum NameResolverError {
     ModuleNotFound(String),
     SymbolNotFoundInModule(String),
     SymbolNotPublic(String),
-    PackageImportsNotSupported,
     DuplicateExport(String),
 }
 
@@ -78,9 +77,6 @@ impl Display for NameResolverError {
             }
             Self::SymbolNotPublic(name) => {
                 write!(f, "Symbol '{name}' is not public")
-            }
-            Self::PackageImportsNotSupported => {
-                write!(f, "Package imports are not yet supported")
             }
             Self::DuplicateExport(name) => {
                 write!(f, "Duplicate export: '{name}'")
@@ -200,6 +196,8 @@ pub struct NameResolver {
 
     pub(super) current_module_id: crate::compiling::module::ModuleId,
     pub(super) modules: Rc<ModuleEnvironment>,
+    path_to_file_id: FxHashMap<String, FileID>,
+    file_path_by_id: FxHashMap<FileID, String>,
 
     current_func_symbols: Vec<Symbol>,
 
@@ -228,6 +226,8 @@ impl NameResolver {
             current_level: Level::default(),
             nominal_stack: Default::default(),
             modules,
+            path_to_file_id: Default::default(),
+            file_path_by_id: Default::default(),
         };
 
         resolver.init_root_scope();
@@ -349,10 +349,18 @@ impl NameResolver {
 
         // Process imports (before full declaration phase so extends can see imported types)
         {
-            // Build a map from file paths to FileIDs
-            let path_to_file_id: FxHashMap<String, FileID> = asts
+            // Build a map from normalized module path keys to FileIDs.
+            self.file_path_by_id = asts
                 .iter()
-                .map(|ast| (ast.path.clone(), ast.file_id))
+                .map(|ast| (ast.file_id, ast.path.clone()))
+                .collect();
+            self.path_to_file_id = asts
+                .iter()
+                .flat_map(|ast| {
+                    module_path_keys(&ast.path)
+                        .into_iter()
+                        .map(move |key| (key, ast.file_id))
+                })
                 .collect();
 
             // Build a map of private let binding names per file (for better error messages)
@@ -405,61 +413,89 @@ impl NameResolver {
                 let source_scope_id = NodeID(file_id, 0);
 
                 for (import, decl_id) in imports {
-                    // Resolve the import path to a target file path
-                    let target_path = match &import.path {
+                    let mut imported_module = false;
+                    let mut imported_file_id = None;
+
+                    let target_symbols: Vec<(String, Symbol, bool)> = match &import.path {
+                        ImportPath::Package(pkg_name) => {
+                            let Some(module) = self.modules.get_module_by_name(pkg_name) else {
+                                self.diagnostic(
+                                    decl_id,
+                                    NameResolverError::ModuleNotFound(pkg_name.clone()),
+                                );
+                                continue;
+                            };
+                            imported_module = true;
+                            module
+                                .exports
+                                .iter()
+                                .map(|(name, &symbol)| {
+                                    (name.clone(), symbol, is_type_symbol(&symbol))
+                                })
+                                .collect()
+                        }
                         ImportPath::Relative(rel_path) => {
                             // Resolve relative to the source file's directory
                             let source_dir =
                                 Path::new(&source_path).parent().unwrap_or(Path::new("."));
                             // Strip leading "./" from relative path before joining
                             let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
-                            let resolved = source_dir.join(clean_rel);
-                            resolved.to_string_lossy().to_string()
-                        }
-                        ImportPath::Package(_pkg_name) => {
-                            // Package imports not yet implemented
-                            self.diagnostic(decl_id, NameResolverError::PackageImportsNotSupported);
-                            continue;
-                        }
-                    };
+                            let mut resolved = source_dir.join(clean_rel);
+                            if resolved.extension().is_none() {
+                                resolved.set_extension("tlk");
+                            }
+                            let target_path = resolved.to_string_lossy().to_string();
+                            let Some(target_key) =
+                                module_path_keys(&target_path).into_iter().next()
+                            else {
+                                self.diagnostic(
+                                    decl_id,
+                                    NameResolverError::ModuleNotFound(target_path.clone()),
+                                );
+                                continue;
+                            };
 
-                    // Look up the target FileID
-                    let Some(&target_file_id) = path_to_file_id.get(&target_path) else {
-                        self.diagnostic(
-                            decl_id,
-                            NameResolverError::ModuleNotFound(target_path.clone()),
-                        );
-                        continue;
-                    };
+                            // Look up the target FileID
+                            let Some(&target_file_id) = self.path_to_file_id.get(&target_key)
+                            else {
+                                self.diagnostic(
+                                    decl_id,
+                                    NameResolverError::ModuleNotFound(target_path.clone()),
+                                );
+                                continue;
+                            };
+                            imported_file_id = Some(target_file_id);
 
-                    let target_scope_id = NodeID(target_file_id, 0);
+                            let target_scope_id = NodeID(target_file_id, 0);
 
-                    // Get symbols from the target scope. If the target is a core file
-                    // and we have the pre-compiled Core module, use its exports instead
-                    // to avoid type identity conflicts from re-compiling core sources.
-                    let core_module = is_core_source_path(&target_path)
-                        .then(|| self.modules.get_module_by_name("Core"))
-                        .flatten();
-                    let use_core = core_module.is_some();
-                    let target_symbols: Vec<(String, Symbol, bool)> = if let Some(core) =
-                        core_module
-                    {
-                        core.exports
-                            .iter()
-                            .map(|(name, &symbol)| (name.clone(), symbol, is_type_symbol(&symbol)))
-                            .collect()
-                    } else {
-                        let Some(target_scope) = self.scopes.get(&target_scope_id) else {
-                            continue;
-                        };
-                        let mut symbols = Vec::new();
-                        for (name, &symbol) in &target_scope.values {
-                            symbols.push((name.clone(), symbol, false));
+                            // Get symbols from the target scope. If the target is a core file
+                            // and we have the pre-compiled Core module, use its exports instead
+                            // to avoid type identity conflicts from re-compiling core sources.
+                            let core_module = is_core_source_path(&target_path)
+                                .then(|| self.modules.get_module_by_name("Core"))
+                                .flatten();
+                            if let Some(core) = core_module {
+                                imported_module = true;
+                                core.exports
+                                    .iter()
+                                    .map(|(name, &symbol)| {
+                                        (name.clone(), symbol, is_type_symbol(&symbol))
+                                    })
+                                    .collect()
+                            } else {
+                                let Some(target_scope) = self.scopes.get(&target_scope_id) else {
+                                    continue;
+                                };
+                                let mut symbols = Vec::new();
+                                for (name, &symbol) in &target_scope.values {
+                                    symbols.push((name.clone(), symbol, false));
+                                }
+                                for (name, &symbol) in &target_scope.types {
+                                    symbols.push((name.clone(), symbol, true));
+                                }
+                                symbols
+                            }
                         }
-                        for (name, &symbol) in &target_scope.types {
-                            symbols.push((name.clone(), symbol, true));
-                        }
-                        symbols
                     };
 
                     // Import the requested symbols
@@ -475,7 +511,8 @@ impl NameResolver {
                                 if matches!(symbol, Symbol::Builtin(..)) {
                                     continue;
                                 }
-                                if !use_core && !self.phase.public_symbols.contains(&symbol) {
+                                if !imported_module && !self.phase.public_symbols.contains(&symbol)
+                                {
                                     continue;
                                 }
                                 if is_type {
@@ -498,7 +535,8 @@ impl NameResolver {
                                     Some((_, symbol, is_type)) => {
                                         // Check if the symbol is public
                                         // (core exports are public by definition)
-                                        if !use_core && !self.phase.public_symbols.contains(symbol)
+                                        if !imported_module
+                                            && !self.phase.public_symbols.contains(symbol)
                                         {
                                             self.diagnostic(
                                                 decl_id,
@@ -521,8 +559,10 @@ impl NameResolver {
                                     }
                                     None => {
                                         // Check if the symbol is a private let binding
-                                        let is_private = private_let_names
-                                            .get(&target_file_id)
+                                        let is_private = imported_file_id
+                                            .and_then(|target_file_id| {
+                                                private_let_names.get(&target_file_id)
+                                            })
                                             .map(|names| names.contains(name_to_find))
                                             .unwrap_or(false);
                                         if is_private {
@@ -627,6 +667,12 @@ impl NameResolver {
     }
 
     fn lookup_in_scope(&mut self, name: &Name, scope_id: NodeID) -> Option<Symbol> {
+        if let Name::Raw(raw) = name
+            && raw.contains("::")
+        {
+            return self.lookup_qualified(raw, scope_id);
+        }
+
         let scope = self
             .scopes
             .get(&scope_id)
@@ -688,21 +734,94 @@ impl NameResolver {
             return Some(resolved);
         }
 
-        let matching_imported_names = self.modules.lookup_name(&name.name_str());
-        match matching_imported_names.len() {
-            0 => {}
-            1 => {
-                return Some(matching_imported_names[0]);
+        None
+    }
+
+    fn lookup_qualified(&mut self, raw: &str, scope_id: NodeID) -> Option<Symbol> {
+        let (module_path, symbol_name) = raw.rsplit_once("::")?;
+        let target_symbols = if module_path.starts_with("./") || module_path.starts_with("../") {
+            let source_file = scope_id.0;
+            let source_path = self.file_path_by_id.get(&source_file)?.clone();
+            let source_dir = Path::new(&source_path).parent().unwrap_or(Path::new("."));
+            let clean_rel = module_path.strip_prefix("./").unwrap_or(module_path);
+            let mut resolved = source_dir.join(clean_rel);
+            if resolved.extension().is_none() {
+                resolved.set_extension("tlk");
             }
-            _ => {
+            let target_path = resolved.to_string_lossy().to_string();
+            let Some(target_key) = module_path_keys(&target_path).into_iter().next() else {
+                self.diagnostic(scope_id, NameResolverError::ModuleNotFound(target_path));
+                return None;
+            };
+            let Some(&target_file_id) = self.path_to_file_id.get(&target_key) else {
+                self.diagnostic(scope_id, NameResolverError::ModuleNotFound(target_path));
+                return None;
+            };
+            let target_scope_id = NodeID(target_file_id, 0);
+            if let Some(core) = is_core_source_path(&target_path)
+                .then(|| self.modules.get_module_by_name("Core"))
+                .flatten()
+            {
+                core.exports
+                    .iter()
+                    .map(|(name, &symbol)| (name.clone(), symbol, true))
+                    .collect_vec()
+            } else {
+                let Some(target_scope) = self.scopes.get(&target_scope_id) else {
+                    return None;
+                };
+                let mut symbols = Vec::new();
+                for (name, &symbol) in &target_scope.values {
+                    symbols.push((
+                        name.clone(),
+                        symbol,
+                        self.phase.public_symbols.contains(&symbol),
+                    ));
+                }
+                for (name, &symbol) in &target_scope.types {
+                    symbols.push((
+                        name.clone(),
+                        symbol,
+                        self.phase.public_symbols.contains(&symbol),
+                    ));
+                }
+                symbols
+            }
+        } else {
+            let Some(module) = self.modules.get_module_by_name(module_path) else {
                 self.diagnostic(
                     scope_id,
-                    NameResolverError::AmbiguousName(name.clone(), matching_imported_names),
+                    NameResolverError::ModuleNotFound(module_path.to_string()),
                 );
-            }
-        }
+                return None;
+            };
+            module
+                .exports
+                .iter()
+                .map(|(name, &symbol)| (name.clone(), symbol, true))
+                .collect_vec()
+        };
 
-        None
+        let found = target_symbols
+            .iter()
+            .find(|(name, _, _)| name == symbol_name);
+        if let Some((_, _, is_public)) = found
+            && !*is_public
+        {
+            self.diagnostic(
+                scope_id,
+                NameResolverError::SymbolNotPublic(symbol_name.to_string()),
+            );
+            return None;
+        }
+        let found = found.map(|(_, symbol, _)| *symbol);
+        if found.is_none() {
+            self.diagnostic(
+                scope_id,
+                NameResolverError::SymbolNotFoundInModule(symbol_name.to_string()),
+            );
+        }
+        found
     }
 
     fn lookup_handler_in_scope(&mut self, effect: Symbol, scope_id: NodeID) -> Option<Symbol> {
@@ -1503,6 +1622,22 @@ impl NameResolver {
             self.current_level = self.current_level.prev();
         })
     }
+}
+
+fn module_path_keys(path: &str) -> Vec<String> {
+    let mut keys = vec![path.to_string()];
+    let path_buf = Path::new(path);
+    if let Ok(canonical) = path_buf.canonicalize() {
+        keys.push(canonical.to_string_lossy().to_string());
+    }
+    if path_buf.extension().and_then(|ext| ext.to_str()) == Some("tlk") {
+        if let Some(stemless) = path.strip_suffix(".tlk") {
+            keys.push(stemless.to_string());
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    keys
 }
 
 /// Returns true if the symbol represents a type (as opposed to a value)

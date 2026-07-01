@@ -586,6 +586,57 @@ fn run_io(
                 .ok_or("vm: io arg out of bounds")?;
             machine.io.arg_copy(index, buf)
         }
+        IoOp::DirCount => {
+            let start = ptr(a)?;
+            let tail = machine.c_string_tail(start as u32)?;
+            let len = tail
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(tail.len());
+            let path = tail[..len].to_vec();
+            machine.io.dir_count(&path)
+        }
+        IoOp::DirEntryKind => {
+            let start = ptr(a)?;
+            let tail = machine.c_string_tail(start as u32)?;
+            let len = tail
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(tail.len());
+            let path = tail[..len].to_vec();
+            machine.io.dir_entry_kind(&path, int(b)?)
+        }
+        IoOp::DirEntryLen => {
+            let start = ptr(a)?;
+            let tail = machine.c_string_tail(start as u32)?;
+            let len = tail
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(tail.len());
+            let path = tail[..len].to_vec();
+            machine.io.dir_entry_len(&path, int(b)?)
+        }
+        IoOp::DirEntryCopy => {
+            let start = ptr(a)?;
+            let tail = machine.c_string_tail(start as u32)?;
+            let len = tail
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(tail.len());
+            let path = tail[..len].to_vec();
+            let index = int(b)?;
+            let entry_len = machine.io.dir_entry_len(&path, index);
+            if entry_len < 0 {
+                return Ok(entry_len);
+            }
+            let dest = ptr(c)?;
+            machine.check_access(dest as u32, entry_len as usize, "io")?;
+            let buf = machine
+                .mem
+                .get_mut(dest..dest + entry_len as usize)
+                .ok_or("vm: io dir entry out of bounds")?;
+            machine.io.dir_entry_copy(&path, index, buf)
+        }
         IoOp::Exit => machine.io.exit(int(a)?),
     })
 }

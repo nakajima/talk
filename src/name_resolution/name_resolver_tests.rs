@@ -1809,7 +1809,7 @@ pub mod tests {
     fn resolves_named_import() {
         let (asts, resolved) = resolve_multi(&[
             ("./utils.tlk", "public let helper = 42"),
-            ("./main.tlk", "import { helper } from ./utils.tlk\nhelper"),
+            ("./main.tlk", "use { helper } from ./utils.tlk\nhelper"),
         ]);
 
         // Check that the main file resolved 'helper' to the symbol from utils
@@ -1844,7 +1844,7 @@ pub mod tests {
     fn resolves_import_all() {
         let (asts, resolved) = resolve_multi(&[
             ("./lib.tlk", "public let a = 1\npublic let b = 2"),
-            ("./main.tlk", "import _ from ./lib.tlk\na\nb"),
+            ("./main.tlk", "use _ from ./lib.tlk\na\nb"),
         ]);
 
         assert!(
@@ -1862,7 +1862,7 @@ pub mod tests {
     fn import_nonexistent_symbol_errors() {
         let (_, resolved) = resolve_multi(&[
             ("./lib.tlk", "let existing = 1"),
-            ("./main.tlk", "import { nonexistent } from ./lib.tlk"),
+            ("./main.tlk", "use { nonexistent } from ./lib.tlk"),
         ]);
 
         assert!(
@@ -1873,7 +1873,7 @@ pub mod tests {
 
     #[test]
     fn import_nonexistent_module_errors() {
-        let (_, resolved) = resolve_multi(&[("./main.tlk", "import { a } from ./missing.tlk")]);
+        let (_, resolved) = resolve_multi(&[("./main.tlk", "use { a } from ./missing.tlk")]);
 
         assert!(
             !resolved.diagnostics.is_empty(),
@@ -1885,7 +1885,7 @@ pub mod tests {
     fn import_private_symbol_errors() {
         let (_, resolved) = resolve_multi(&[
             ("./lib.tlk", "let private_val = 42"),
-            ("./main.tlk", "import { private_val } from ./lib.tlk"),
+            ("./main.tlk", "use { private_val } from ./lib.tlk"),
         ]);
 
         assert!(

@@ -88,6 +88,7 @@ pub struct OwnershipFacts {
     pub storage_live: Vec<StorageFact>,
     pub storage_dead: Vec<StorageFact>,
     pub moves: Vec<MoveFact>,
+    pub origins: Vec<OriginFact>,
     pub borrows: Vec<LoanFact>,
     pub invalidations: Vec<InvalidationFact>,
     pub assignments: Vec<AssignmentFact>,
@@ -158,6 +159,15 @@ pub struct MoveFact {
     pub node: Option<NodeID>,
     pub source: KeyPath,
     pub ty: Ty,
+}
+
+#[derive(Clone, Debug)]
+pub struct OriginFact {
+    pub id: OriginId,
+    pub point: OwnershipPoint,
+    pub node: Option<NodeID>,
+    pub borrower: KeyPath,
+    pub ty: Option<Ty>,
 }
 
 #[derive(Clone, Debug)]
@@ -431,8 +441,6 @@ fn run_ownership<'a>(
     checker.discover_borrowed_types();
     checker.discover_owned_types();
     checker.discover_copy_drop_abilities();
-    checker.check_struct_fields();
-    checker.check_enum_payloads();
     checker.check_top_level_globals(asts);
     checker.check_raw_pointer_surface(asts);
     checker.check_moves(asts);
@@ -718,10 +726,104 @@ impl BorrowInfo {
     }
 }
 
+/// One loan carried by a borrowed value. Aggregates such as `Optional<&T>`
+/// and records can carry more than one loan, so provenance is tracked as a
+/// set instead of being collapsed into one owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProvenanceLoan {
+    origin: BorrowOrigin,
+    owner: Option<KeyPath>,
+    kind: BorrowKind,
+}
+
+impl ProvenanceLoan {
+    fn from_info(info: &BorrowInfo) -> Self {
+        Self {
+            origin: info.origin,
+            owner: info.owner.clone(),
+            kind: info.kind,
+        }
+    }
+
+    fn unknown(kind: BorrowKind) -> Self {
+        Self {
+            origin: BorrowOrigin::Unknown,
+            owner: None,
+            kind,
+        }
+    }
+}
+
+/// Provenance attached to a value whose type contains borrows. This mirrors
+/// the origin-to-loan relation used by region/loan based checkers: origins are
+/// facts, and each origin may contain one or more loans with independent owners.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct BorrowProvenance {
+    loans: Vec<ProvenanceLoan>,
+}
+
+impl BorrowProvenance {
+    fn direct(info: BorrowInfo) -> Self {
+        Self {
+            loans: vec![ProvenanceLoan::from_info(&info)],
+        }
+    }
+
+    fn unknown(kind: BorrowKind) -> Self {
+        Self {
+            loans: vec![ProvenanceLoan::unknown(kind)],
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.loans.is_empty()
+    }
+
+    fn push(&mut self, loan: ProvenanceLoan) {
+        if !self.loans.contains(&loan) {
+            self.loans.push(loan);
+        }
+    }
+
+    fn extend(&mut self, other: BorrowProvenance) {
+        for loan in other.loans {
+            self.push(loan);
+        }
+    }
+
+    fn with_kind(mut self, kind: BorrowKind) -> Self {
+        for loan in &mut self.loans {
+            loan.kind = kind;
+        }
+        self
+    }
+
+    fn first_info(&self) -> Option<BorrowInfo> {
+        self.loans.first().map(|loan| BorrowInfo {
+            origin: loan.origin,
+            owner: loan.owner.clone(),
+            kind: loan.kind,
+        })
+    }
+
+    fn has_unknown(&self) -> bool {
+        self.loans
+            .iter()
+            .any(|loan| loan.origin == BorrowOrigin::Unknown)
+    }
+
+    fn has_function_owned(&self) -> bool {
+        self.loans
+            .iter()
+            .any(|loan| loan.origin.is_function_owned())
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct MoveState {
     moved: MoveEnv,
     borrows: BorrowInfoEnv,
+    provenances: FxHashMap<KeyPath, BorrowProvenance>,
     invalid_borrows: FxHashMap<KeyPath, KeyPath>,
     borrowed_roots: FxHashMap<Symbol, String>,
     shared_borrow_roots: FxHashMap<Symbol, String>,
@@ -740,6 +842,7 @@ struct BorrowLiveness {
 struct StatementContext<'a> {
     point: OwnershipPoint,
     live_after: &'a FxHashSet<Symbol>,
+    return_ty: Option<&'a Ty>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -788,11 +891,22 @@ impl MoveState {
                 self.invalid_borrows.insert(borrow.clone(), owner.clone());
             }
         }
+        for (borrow, provenance) in &self.provenances {
+            if provenance.loans.iter().any(|loan| {
+                loan.owner
+                    .as_ref()
+                    .is_some_and(|borrowed_owner| borrowed_owner.overlaps(owner))
+            }) {
+                self.invalid_borrows.insert(borrow.clone(), owner.clone());
+            }
+        }
     }
 
     fn restore_key_path(&mut self, key_path: &KeyPath) {
         self.moved.retain(|moved, _| !key_path.contains(moved));
         self.borrows.retain(|borrow, _| !key_path.contains(borrow));
+        self.provenances
+            .retain(|borrow, _| !key_path.contains(borrow));
         self.invalid_borrows
             .retain(|borrow, _| !key_path.contains(borrow));
         if key_path.fields.is_empty() {
@@ -807,6 +921,8 @@ impl MoveState {
 
     fn initialize_key_path(&mut self, key_path: &KeyPath) {
         self.moved.retain(|moved, _| !key_path.contains(moved));
+        self.provenances
+            .retain(|borrow, _| !key_path.contains(borrow));
         self.invalid_borrows
             .retain(|borrow, _| !key_path.contains(borrow));
         if key_path.fields.is_empty() {
@@ -839,6 +955,7 @@ impl MoveState {
         let before = self.clone();
         self.moved.extend(other.moved.clone());
         self.borrows.extend(other.borrows.clone());
+        self.provenances.extend(other.provenances.clone());
         self.invalid_borrows.extend(other.invalid_borrows.clone());
         self.borrowed_roots.extend(other.borrowed_roots.clone());
         self.shared_borrow_roots
@@ -861,6 +978,8 @@ impl MoveState {
         self.active_loans
             .retain(|loan| live_roots.contains(&loan.borrower.root));
         self.borrows
+            .retain(|borrow, _| live_roots.contains(&borrow.root));
+        self.provenances
             .retain(|borrow, _| live_roots.contains(&borrow.root));
         self.invalid_borrows
             .retain(|borrow, _| live_roots.contains(&borrow.root));
@@ -924,62 +1043,6 @@ impl OwnershipChecker<'_> {
             }
             if self.is_copy_type(&ty) {
                 self.output.copyable_types.insert(symbol);
-            }
-        }
-    }
-
-    fn check_struct_fields(&mut self) {
-        for (owner, info) in &self.types.catalog.structs {
-            if self.is_borrowed_symbol(*owner) {
-                continue;
-            }
-            let owner_name = self.render_symbol(*owner);
-            for (field, (property, ty)) in &info.fields {
-                if self.contains_borrowed_type(ty) {
-                    let id = self
-                        .resolved
-                        .symbols_to_node
-                        .get(property)
-                        .copied()
-                        .unwrap_or(NodeID(FileID(0), 0));
-                    self.error(
-                        id,
-                        OwnershipError::BorrowedField {
-                            owner: owner_name.clone(),
-                            field: field.clone(),
-                            ty: ty.render_mono(),
-                        },
-                    );
-                }
-            }
-        }
-    }
-
-    fn check_enum_payloads(&mut self) {
-        for (owner, info) in &self.types.catalog.enums {
-            if self.is_borrowed_symbol(*owner) {
-                continue;
-            }
-            let owner_name = self.render_symbol(*owner);
-            for (variant_name, variant) in &info.variants {
-                for ty in variant.argument_types() {
-                    if self.contains_borrowed_type(ty) {
-                        let id = self
-                            .resolved
-                            .symbols_to_node
-                            .get(&variant.symbol)
-                            .copied()
-                            .unwrap_or(NodeID(FileID(0), 0));
-                        self.error(
-                            id,
-                            OwnershipError::BorrowedEnumPayload {
-                                owner: owner_name.clone(),
-                                variant: variant_name.clone(),
-                                ty: ty.render_mono(),
-                            },
-                        );
-                    }
-                }
             }
         }
     }
@@ -1573,18 +1636,42 @@ impl OwnershipChecker<'_> {
         let Some(borrower) = borrower else {
             return;
         };
-        self.record_borrow_fact(
-            point,
-            Some(capture.id),
-            borrower.clone(),
-            Some(owner.clone()),
+        let provenance = BorrowProvenance::direct(BorrowInfo::with_kind(
+            self.origin_for_storage_borrow(&source, &capture.ty),
+            Some(owner),
             kind,
+        ));
+        self.install_provenance(
+            borrower.clone(),
+            provenance,
+            Some(capture.id),
+            point,
+            Some(capture.ty.clone()),
+            state,
         );
-        state.add_loan(borrower.clone(), owner, kind);
+    }
+
+    fn record_origin_fact(
+        &mut self,
+        point: OwnershipPoint,
+        node: Option<NodeID>,
+        borrower: KeyPath,
+        ty: Option<Ty>,
+    ) -> OriginId {
+        let origin = OriginId(self.output.facts.origins.len() as u32);
+        self.output.facts.origins.push(OriginFact {
+            id: origin,
+            point,
+            node,
+            borrower,
+            ty,
+        });
+        origin
     }
 
     fn record_borrow_fact(
         &mut self,
+        origin: OriginId,
         point: OwnershipPoint,
         node: Option<NodeID>,
         borrower: KeyPath,
@@ -1602,10 +1689,9 @@ impl OwnershipChecker<'_> {
             return *loan_id;
         }
         let loan_id = LoanId(self.output.facts.borrows.len() as u32);
-        let origin_id = OriginId(loan_id.0);
         self.output.facts.borrows.push(LoanFact {
             id: loan_id,
-            origin: origin_id,
+            origin,
             point,
             node,
             borrower,
@@ -2172,6 +2258,7 @@ impl OwnershipChecker<'_> {
             return state.clone();
         }
         let liveness = borrow_liveness(body, live_at_exit);
+        let return_ty = self.body_return_ty(body.owner);
 
         let mut in_states: Vec<Option<MoveState>> = vec![None; body.blocks.len()];
         in_states[body.entry.0] = Some(state.clone());
@@ -2184,18 +2271,25 @@ impl OwnershipChecker<'_> {
             let Some(mut block_state) = in_states[block.0].clone() else {
                 continue;
             };
-            self.check_mir_block(body_id, body, block, &liveness, &mut block_state);
+            self.check_mir_block(
+                body_id,
+                body,
+                block,
+                &liveness,
+                return_ty.as_ref(),
+                &mut block_state,
+            );
 
-            let successors = terminator_successors(&body.blocks[block.0].terminator);
+            let successors = self.successor_states(body_id, body, block, &block_state);
             if successors.is_empty() {
                 exit_state.merge_from(&block_state);
             }
 
-            for successor in successors {
+            for (successor, successor_state) in successors {
                 let changed = match &mut in_states[successor.0] {
-                    Some(existing) => existing.merge_from(&block_state),
+                    Some(existing) => existing.merge_from(&successor_state),
                     slot @ None => {
-                        *slot = Some(block_state.clone());
+                        *slot = Some(successor_state);
                         true
                     }
                 };
@@ -2214,6 +2308,7 @@ impl OwnershipChecker<'_> {
         body: &mir::Body,
         block: mir::BlockId,
         liveness: &BorrowLiveness,
+        return_ty: Option<&Ty>,
         state: &mut MoveState,
     ) {
         let basic_block = &body.blocks[block.0];
@@ -2230,10 +2325,93 @@ impl OwnershipChecker<'_> {
             let context = StatementContext {
                 point,
                 live_after: &live_after,
+                return_ty,
             };
             self.check_mir_statement(context, &statement.kind, state);
             state.prune_dead_loans(&live_after);
         }
+    }
+
+    fn successor_states(
+        &mut self,
+        body_id: BodyId,
+        body: &mir::Body,
+        block: mir::BlockId,
+        state: &MoveState,
+    ) -> Vec<(mir::BlockId, MoveState)> {
+        match &body.blocks[block.0].terminator {
+            mir::Terminator::Switch {
+                scrutinee,
+                match_arms: Some(match_arms),
+                arms,
+                default,
+            } => {
+                let mut successors = vec![];
+                for (arm, successor) in match_arms.iter().zip(arms) {
+                    let mut arm_state = state.clone();
+                    let point = body.blocks[successor.0]
+                        .statements
+                        .first()
+                        .map(|statement| OwnershipPoint {
+                            body: body_id,
+                            point: statement.point.0 as u32,
+                        });
+                    self.apply_pattern_provenance(scrutinee, &arm.pattern, point, &mut arm_state);
+                    successors.push((*successor, arm_state));
+                }
+                if let Some(successor) = default {
+                    successors.push((*successor, state.clone()));
+                }
+                successors
+            }
+            terminator => terminator_successors(terminator)
+                .into_iter()
+                .map(|successor| (successor, state.clone()))
+                .collect(),
+        }
+    }
+
+    fn apply_pattern_provenance(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &hir::Pattern,
+        point: Option<OwnershipPoint>,
+        state: &mut MoveState,
+    ) {
+        let provenance = self.expr_provenance(scrutinee, state);
+        if provenance.is_empty() {
+            return;
+        }
+        for (id, symbol) in pattern.collect_binders() {
+            let Some(ty) = self.symbol_ty(symbol).cloned() else {
+                continue;
+            };
+            if !self.value_type_contains_borrow(&ty) {
+                continue;
+            }
+            let key_path = KeyPath::root(symbol);
+            let point = point.unwrap_or(OwnershipPoint {
+                body: BodyId(0),
+                point: 0,
+            });
+            self.validate_local_provenance(id, &ty, &provenance);
+            self.install_provenance(
+                key_path,
+                provenance.clone(),
+                Some(id),
+                point,
+                Some(ty),
+                state,
+            );
+        }
+    }
+
+    fn body_return_ty(&self, owner: Option<Symbol>) -> Option<Ty> {
+        let owner = owner?;
+        let Ty::Func(_, ret, _) = &self.types.schemes.get(&owner)?.ty else {
+            return None;
+        };
+        Some((**ret).clone())
     }
 
     fn check_mir_statement(
@@ -2287,7 +2465,7 @@ impl OwnershipChecker<'_> {
             ),
             mir::Statement::Perform => {}
             mir::Statement::ReturnValue { expr, .. } => {
-                self.check_return_value(context.point, expr, state)
+                self.check_return_value(context.point, expr, context.return_ty, state)
             }
             mir::Statement::ContinueValue { expr, .. } => {
                 self.check_consumed_expr(context.point, expr, state)
@@ -2360,13 +2538,12 @@ impl OwnershipChecker<'_> {
         rhs: Option<&Expr>,
         state: &mut MoveState,
     ) {
-        if let Some(rhs) = rhs {
-            self.check_untracked_borrowed_aggregate(rhs);
-        }
-        let borrow_info = rhs.and_then(|rhs| self.binding_borrow_info(type_annotation, rhs, state));
+        let direct_borrow_info =
+            rhs.and_then(|rhs| self.binding_borrow_info(type_annotation, rhs, state));
         let closure_captures = rhs.map(|rhs| self.closure_values_capture_summary(rhs, state));
         let literal_captures = rhs.map(|rhs| self.closure_literal_capture_summary(rhs, state));
         let binders = lhs.collect_binders();
+        let mut installed_borrowed_value = false;
         for (id, symbol) in &binders {
             let key_path = KeyPath::root(*symbol);
             if rhs.is_some() {
@@ -2396,13 +2573,32 @@ impl OwnershipChecker<'_> {
             } else {
                 state.closure_captures.remove(&key_path);
             }
-            if let (Some(info), Some(rhs)) = (&borrow_info, rhs) {
-                self.install_borrow(key_path, info.clone(), rhs.id, point, state);
+            if let Some(rhs) = rhs {
+                if let Some(info) = &direct_borrow_info {
+                    self.install_borrow(key_path, info.clone(), rhs.id, point, state);
+                    installed_borrowed_value = true;
+                    continue;
+                }
+                let ty = self
+                    .symbol_ty(*symbol)
+                    .cloned()
+                    .unwrap_or_else(|| rhs.ty.clone());
+                if self.value_type_contains_borrow(&ty) {
+                    let provenance = self.provenance_for_expected_ty(&ty, rhs, state);
+                    self.validate_local_provenance(rhs.id, &ty, &provenance);
+                    self.install_provenance(
+                        key_path,
+                        provenance,
+                        Some(rhs.id),
+                        point,
+                        Some(ty),
+                        state,
+                    );
+                    installed_borrowed_value = true;
+                }
             }
         }
-        if borrow_info.is_none()
-            && let Some(rhs) = rhs
-        {
+        if !installed_borrowed_value && let Some(rhs) = rhs {
             self.consume_expr_value(rhs, state);
         }
     }
@@ -2414,8 +2610,6 @@ impl OwnershipChecker<'_> {
         rhs: &Expr,
         state: &mut MoveState,
     ) {
-        self.check_untracked_borrowed_aggregate(rhs);
-        let rhs_borrow = self.binding_borrow_info(None, rhs, state);
         let closure_captures = self.closure_values_capture_summary(rhs, state);
         let literal_captures = self.closure_literal_capture_summary(rhs, state);
         if let Some((name, ty)) = self.shared_borrow_assignment_receiver(lhs, state) {
@@ -2448,11 +2642,18 @@ impl OwnershipChecker<'_> {
                 .closure_captures
                 .insert(key_path.clone(), closure_captures);
         }
-        let rhs_is_borrow = rhs_borrow.is_some();
-        if let Some(info) = rhs_borrow {
-            self.install_borrow(key_path, info, rhs.id, point, state);
-        }
-        if !rhs_is_borrow {
+        if self.value_type_contains_borrow(&lhs.ty) {
+            let provenance = self.provenance_for_expected_ty(&lhs.ty, rhs, state);
+            self.validate_local_provenance(rhs.id, &lhs.ty, &provenance);
+            self.install_provenance(
+                key_path,
+                provenance,
+                Some(rhs.id),
+                point,
+                Some(lhs.ty.clone()),
+                state,
+            );
+        } else {
             self.consume_expr_value(rhs, state);
         }
     }
@@ -2613,38 +2814,73 @@ impl OwnershipChecker<'_> {
         }
     }
 
-    fn check_return_value(&mut self, point: OwnershipPoint, expr: &Expr, state: &mut MoveState) {
+    fn check_return_value(
+        &mut self,
+        point: OwnershipPoint,
+        expr: &Expr,
+        expected: Option<&Ty>,
+        state: &mut MoveState,
+    ) {
         self.check_escaping_closure_values(expr, state);
         let closure_captures = self.closure_literal_capture_summary(expr, state);
         self.apply_closure_capture_effects(&closure_captures, None, point, state);
         if !self.expr_is_copy(expr) {
             self.check_move_out_of_borrowed_value(expr.id, expr, state);
         }
-        if self.expr_contains_untracked_borrowed_aggregate(expr) {
-            let ty = self.borrowed_value_ty(expr);
-            self.error(expr.id, OwnershipError::UnknownBorrowProvenance { ty });
+        if let Some(expected) = expected
+            && self.value_type_contains_borrow(expected)
+        {
+            let provenance = self.provenance_for_expected_ty(expected, expr, state);
+            if !(self.module_id == ModuleId::Core
+                && provenance.has_unknown()
+                && self.expr_mentions_raw_pointer(expr))
+            {
+                self.validate_return_provenance(expr.id, expected, &provenance);
+            }
             return;
         }
-        if !self.expr_is_borrowed(expr) {
-            self.consume_expr_value(expr, state);
+        if self.value_type_contains_borrow(&expr.ty) {
+            let provenance = self.expr_provenance(expr, state);
+            if !(self.module_id == ModuleId::Core
+                && provenance.has_unknown()
+                && self.expr_mentions_raw_pointer(expr))
+            {
+                self.validate_return_provenance(expr.id, &expr.ty, &provenance);
+            }
             return;
         }
-        let info = self.borrow_info(expr, &state.borrows);
-        if info.origin == BorrowOrigin::Unknown {
-            let ty = self.borrowed_value_ty(expr);
-            self.error(expr.id, OwnershipError::UnknownBorrowProvenance { ty });
-        } else if info.origin.is_function_owned() {
-            let ty = self.borrowed_value_ty(expr);
-            self.error(expr.id, OwnershipError::ReturningLocalBorrow { ty });
-        }
+        self.consume_expr_value(expr, state);
     }
 
     fn seed_shared_borrow_params(&self, params: &[Parameter], state: &mut MoveState) {
         for param in params {
-            let Some((kind, ty)) = self.param_borrow_ty(param) else {
+            let Ok(symbol) = param.name.symbol() else {
                 continue;
             };
-            let Ok(symbol) = param.name.symbol() else {
+            if let Some(ty) = param.ty.as_ref()
+                && self.value_type_contains_borrow(ty)
+            {
+                let key_path = KeyPath::root(symbol);
+                let provenance = match ty {
+                    Ty::Borrow(kind, _) => BorrowProvenance::direct(BorrowInfo::with_kind(
+                        BorrowOrigin::BorrowedParam,
+                        None,
+                        *kind,
+                    )),
+                    _ => {
+                        BorrowProvenance::direct(BorrowInfo::new(BorrowOrigin::BorrowedParam, None))
+                    }
+                };
+                state
+                    .provenances
+                    .insert(key_path.clone(), provenance.clone());
+                if self.is_borrowed_type(ty)
+                    && let Some(info) = provenance.first_info()
+                {
+                    state.borrows.insert(key_path, info);
+                }
+            }
+            let Some((kind, ty)) = self.param_borrow_ty(param) else {
                 continue;
             };
             state.borrowed_roots.insert(symbol, ty.clone());
@@ -3024,26 +3260,62 @@ impl OwnershipChecker<'_> {
         point: OwnershipPoint,
         state: &mut MoveState,
     ) {
-        self.record_borrow_fact(
-            point,
-            Some(id),
+        self.install_provenance(
             borrower.clone(),
-            info.owner.clone(),
-            info.kind,
+            BorrowProvenance::direct(info.clone()),
+            Some(id),
+            point,
+            self.key_path_ty(&borrower),
+            state,
         );
-        if let Some(owner) = &info.owner {
-            self.check_borrow_conflicts(id, owner, info.kind, None, state);
-            state.add_loan(borrower.clone(), owner.clone(), info.kind);
+        state.borrows.insert(borrower, info);
+    }
+
+    fn install_provenance(
+        &mut self,
+        borrower: KeyPath,
+        provenance: BorrowProvenance,
+        node: Option<NodeID>,
+        point: OwnershipPoint,
+        ty: Option<Ty>,
+        state: &mut MoveState,
+    ) {
+        if provenance.is_empty() {
+            return;
         }
-        if info.kind == BorrowKind::Shared {
-            state
-                .shared_borrow_roots
-                .insert(borrower.root, borrow_kind_name(info.kind).to_string());
+        let origin = self.record_origin_fact(point, node, borrower.clone(), ty.clone());
+        for loan in &provenance.loans {
+            if let Some(owner) = &loan.owner {
+                if let Some(id) = node {
+                    self.check_borrow_conflicts(id, owner, loan.kind, None, state);
+                }
+                state.add_loan(borrower.clone(), owner.clone(), loan.kind);
+            }
+            self.record_borrow_fact(
+                origin,
+                point,
+                node,
+                borrower.clone(),
+                loan.owner.clone(),
+                loan.kind,
+            );
         }
-        state
-            .borrowed_roots
-            .insert(borrower.root, borrow_kind_name(info.kind).to_string());
-        state.borrows.insert(borrower.clone(), info);
+        if let Some(ty) = &ty
+            && self.is_borrowed_type(ty)
+        {
+            if let Some(info) = provenance.first_info() {
+                if info.kind == BorrowKind::Shared {
+                    state
+                        .shared_borrow_roots
+                        .insert(borrower.root, borrow_kind_name(info.kind).to_string());
+                }
+                state
+                    .borrowed_roots
+                    .insert(borrower.root, borrow_kind_name(info.kind).to_string());
+                state.borrows.insert(borrower.clone(), info);
+            }
+        }
+        state.provenances.insert(borrower.clone(), provenance);
         state.invalid_borrows.remove(&borrower);
     }
 
@@ -3232,16 +3504,315 @@ impl OwnershipChecker<'_> {
         self.is_borrowed_type(&expr.ty)
     }
 
-    fn check_untracked_borrowed_aggregate(&mut self, expr: &Expr) {
-        if self.expr_contains_untracked_borrowed_aggregate(expr) {
-            let ty = self.borrowed_value_ty(expr);
-            self.error(expr.id, OwnershipError::UnknownBorrowProvenance { ty });
+    fn value_type_contains_borrow(&self, ty: &Ty) -> bool {
+        !matches!(ty, Ty::Func(..)) && self.contains_borrowed_type(ty)
+    }
+
+    fn provenance_for_expected_ty(
+        &self,
+        expected: &Ty,
+        expr: &Expr,
+        state: &MoveState,
+    ) -> BorrowProvenance {
+        if !self.value_type_contains_borrow(expected) {
+            return BorrowProvenance::default();
+        }
+        match expected {
+            Ty::Borrow(kind, _) => self.direct_borrow_provenance(expr, *kind, state),
+            _ => self.expr_provenance(expr, state),
         }
     }
 
-    fn expr_contains_untracked_borrowed_aggregate(&self, expr: &Expr) -> bool {
-        let ty = &expr.ty;
-        !matches!(ty, Ty::Func(..)) && self.contains_borrowed_type(ty) && !self.is_borrowed_type(ty)
+    fn expr_provenance(&self, expr: &Expr, state: &MoveState) -> BorrowProvenance {
+        if !self.value_type_contains_borrow(&expr.ty) {
+            return BorrowProvenance::default();
+        }
+        if let Some(key_path) = self.key_path(expr) {
+            if let Some(provenance) = state.provenances.get(&key_path).cloned() {
+                return provenance;
+            }
+            if let Some(root_provenance) = state.provenances.get(&KeyPath::root(key_path.root)) {
+                if !self.is_borrowed_type(&expr.ty) {
+                    return root_provenance.clone();
+                }
+            }
+            if self.is_borrowed_type(&expr.ty) {
+                return BorrowProvenance::direct(self.key_path_borrow_info(
+                    &key_path,
+                    expr,
+                    &state.borrows,
+                ));
+            }
+            return self.abstract_nested_provenance(&key_path, &expr.ty);
+        }
+        match &expr.kind {
+            ExprKind::LiteralString(_) if self.is_borrowed_type(&expr.ty) => {
+                BorrowProvenance::direct(BorrowInfo::new(BorrowOrigin::Static, None))
+            }
+            ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
+                let mut provenance = BorrowProvenance::default();
+                for item in items {
+                    provenance.extend(self.expr_provenance(item, state));
+                }
+                provenance
+            }
+            ExprKind::RecordLiteral { fields, spread } => {
+                let mut provenance = BorrowProvenance::default();
+                if let Some(spread) = spread {
+                    provenance.extend(self.expr_provenance(spread, state));
+                }
+                for field in fields {
+                    provenance.extend(self.expr_provenance(&field.value, state));
+                }
+                provenance
+            }
+            ExprKind::Call { callee, args, .. } => self.call_provenance(callee, args, state),
+            ExprKind::As(inner, _) => self.expr_provenance(inner, state),
+            ExprKind::Block(block) => block_tail_expr(block)
+                .map(|tail| self.expr_provenance(tail, state))
+                .unwrap_or_default(),
+            ExprKind::If(_, then_block, else_block) => {
+                let mut provenance = BorrowProvenance::default();
+                if let Some(tail) = block_tail_expr(then_block) {
+                    provenance.extend(self.expr_provenance(tail, state));
+                }
+                if let Some(tail) = block_tail_expr(else_block) {
+                    provenance.extend(self.expr_provenance(tail, state));
+                }
+                provenance
+            }
+            ExprKind::Member(Some(receiver), ..)
+                if matches!(receiver.kind, ExprKind::Constructor(_)) =>
+            {
+                BorrowProvenance::default()
+            }
+            ExprKind::Member(None, ..) | ExprKind::Constructor(_) => BorrowProvenance::default(),
+            ExprKind::Match(_, _) => BorrowProvenance::unknown(BorrowKind::Shared),
+            _ => BorrowProvenance::unknown(BorrowKind::Shared),
+        }
+    }
+
+    fn direct_borrow_provenance(
+        &self,
+        expr: &Expr,
+        kind: BorrowKind,
+        state: &MoveState,
+    ) -> BorrowProvenance {
+        if self.is_borrowed_type(&expr.ty) {
+            let existing = self.expr_provenance(expr, state);
+            if !existing.is_empty() {
+                return existing.with_kind(kind);
+            }
+        }
+        if let Some(key_path) = self.key_path(expr) {
+            let owner = self.loan_owner_for_key_path(&key_path, state);
+            return BorrowProvenance::direct(BorrowInfo::with_kind(
+                self.origin_for_storage_borrow(&key_path, &expr.ty),
+                Some(owner),
+                kind,
+            ));
+        }
+        if matches!(expr.kind, ExprKind::LiteralString(_)) {
+            return BorrowProvenance::direct(BorrowInfo::with_kind(
+                BorrowOrigin::Static,
+                None,
+                kind,
+            ));
+        }
+        BorrowProvenance::unknown(kind)
+    }
+
+    fn call_provenance(
+        &self,
+        callee: &Expr,
+        args: &[hir::CallArg],
+        state: &MoveState,
+    ) -> BorrowProvenance {
+        let Some(ret) = self.call_return_type(callee) else {
+            return BorrowProvenance::default();
+        };
+        if !self.value_type_contains_borrow(&ret) {
+            return BorrowProvenance::default();
+        }
+        let params = self.call_argument_types(callee);
+        if self.callee_is_type_constructor(callee) {
+            return self.constructor_provenance(args, params.as_deref(), state);
+        }
+        if let ExprKind::Member(Some(receiver), ..) = &callee.kind {
+            let mut provenance = BorrowProvenance::default();
+            if let Some(self_param) = self.member_self_param(callee) {
+                provenance.extend(self.expr_provenance_for_param(receiver, &self_param, state));
+            }
+            let value_params = self.member_value_params(callee).or(params);
+            provenance.extend(self.input_provenance(args, value_params.as_deref(), state));
+            if provenance.is_empty() {
+                return BorrowProvenance::unknown(BorrowKind::Shared);
+            }
+            return provenance;
+        }
+        let provenance = self.input_provenance(args, params.as_deref(), state);
+        if provenance.is_empty() {
+            BorrowProvenance::unknown(BorrowKind::Shared)
+        } else {
+            provenance
+        }
+    }
+
+    fn constructor_provenance(
+        &self,
+        args: &[hir::CallArg],
+        params: Option<&[Ty]>,
+        state: &MoveState,
+    ) -> BorrowProvenance {
+        let Some(params) = params else {
+            let mut provenance = BorrowProvenance::default();
+            for arg in args {
+                provenance.extend(self.expr_provenance(&arg.value, state));
+            }
+            return provenance;
+        };
+        let mut provenance = BorrowProvenance::default();
+        for (arg, param) in args.iter().zip(params) {
+            provenance.extend(self.argument_provenance_for_param(arg, param, state));
+        }
+        provenance
+    }
+
+    fn input_provenance(
+        &self,
+        args: &[hir::CallArg],
+        params: Option<&[Ty]>,
+        state: &MoveState,
+    ) -> BorrowProvenance {
+        let Some(params) = params else {
+            return BorrowProvenance::unknown(BorrowKind::Shared);
+        };
+        let mut provenance = BorrowProvenance::default();
+        for (arg, param) in args.iter().zip(params) {
+            provenance.extend(self.argument_provenance_for_param(arg, param, state));
+        }
+        provenance
+    }
+
+    fn argument_provenance_for_param(
+        &self,
+        arg: &hir::CallArg,
+        param: &Ty,
+        state: &MoveState,
+    ) -> BorrowProvenance {
+        self.expr_provenance_for_param(&arg.value, param, state)
+    }
+
+    fn expr_provenance_for_param(
+        &self,
+        expr: &Expr,
+        param: &Ty,
+        state: &MoveState,
+    ) -> BorrowProvenance {
+        match param {
+            Ty::Borrow(kind, _) => self.direct_borrow_provenance(expr, *kind, state),
+            _ if self.value_type_contains_borrow(param) => {
+                self.provenance_for_expected_ty(param, expr, state)
+            }
+            _ => BorrowProvenance::default(),
+        }
+    }
+
+    fn call_return_type(&self, callee: &Expr) -> Option<Ty> {
+        let Ty::Func(_, ret, _) = &callee.ty else {
+            return None;
+        };
+        Some((**ret).clone())
+    }
+
+    fn callee_is_type_constructor(&self, callee: &Expr) -> bool {
+        matches!(
+            callee.kind,
+            ExprKind::Constructor(_) | ExprKind::Member(None, ..)
+        ) || matches!(
+            &callee.kind,
+            ExprKind::Member(Some(receiver), ..) if matches!(receiver.kind, ExprKind::Constructor(_))
+        )
+    }
+
+    fn abstract_nested_provenance(&self, key_path: &KeyPath, ty: &Ty) -> BorrowProvenance {
+        if !self.value_type_contains_borrow(ty) {
+            return BorrowProvenance::default();
+        }
+        BorrowProvenance::direct(BorrowInfo::new(
+            self.origin_for_nested_borrow(key_path),
+            None,
+        ))
+    }
+
+    fn origin_for_nested_borrow(&self, key_path: &KeyPath) -> BorrowOrigin {
+        match key_path.root {
+            Symbol::ParamLocal(_) => BorrowOrigin::BorrowedParam,
+            Symbol::Global(_) => BorrowOrigin::Static,
+            Symbol::DeclaredLocal(_) | Symbol::PatternBindLocal(_) => BorrowOrigin::Unknown,
+            _ => BorrowOrigin::Unknown,
+        }
+    }
+
+    fn origin_for_storage_borrow(&self, key_path: &KeyPath, expr_ty: &Ty) -> BorrowOrigin {
+        match key_path.root {
+            Symbol::ParamLocal(_) => {
+                if self
+                    .symbol_ty(key_path.root)
+                    .is_some_and(|ty| self.is_borrowed_type(ty))
+                    || self.is_borrowed_type(expr_ty)
+                {
+                    BorrowOrigin::BorrowedParam
+                } else {
+                    BorrowOrigin::OwnedParam
+                }
+            }
+            Symbol::Global(_) => BorrowOrigin::Static,
+            Symbol::DeclaredLocal(_) | Symbol::PatternBindLocal(_) => BorrowOrigin::Local,
+            _ => BorrowOrigin::Unknown,
+        }
+    }
+
+    fn validate_local_provenance(&mut self, id: NodeID, ty: &Ty, provenance: &BorrowProvenance) {
+        if provenance.is_empty() {
+            return;
+        }
+        if provenance.has_unknown() && !self.allows_unknown_local_borrow_ty(ty) {
+            self.error(
+                id,
+                OwnershipError::UnknownBorrowProvenance {
+                    ty: ty.render_mono(),
+                },
+            );
+        }
+    }
+
+    fn validate_return_provenance(&mut self, id: NodeID, ty: &Ty, provenance: &BorrowProvenance) {
+        if provenance.is_empty() {
+            return;
+        }
+        if provenance.has_unknown() {
+            self.error(
+                id,
+                OwnershipError::UnknownBorrowProvenance {
+                    ty: ty.render_mono(),
+                },
+            );
+        } else if provenance.has_function_owned() {
+            self.error(
+                id,
+                OwnershipError::ReturningLocalBorrow {
+                    ty: ty.render_mono(),
+                },
+            );
+        }
+    }
+
+    fn allows_unknown_local_borrow_ty(&self, ty: &Ty) -> bool {
+        let Ty::Borrow(_, inner) = ty else {
+            return false;
+        };
+        self.is_copy_type(inner)
     }
 
     fn borrow_info(&self, expr: &Expr, env: &BorrowEnv) -> BorrowInfo {
@@ -3282,11 +3853,11 @@ impl OwnershipChecker<'_> {
         let Ty::Func(_, ret, _) = &callee.ty else {
             return false;
         };
-        self.is_borrowed_type(ret)
+        self.value_type_contains_borrow(ret)
     }
 
     fn call_constructs_borrowed_value(&self, callee: &Expr) -> bool {
-        matches!(callee.kind, ExprKind::Constructor(_)) && self.call_returns_borrowed(callee)
+        self.callee_is_type_constructor(callee) && self.call_returns_borrowed(callee)
     }
 
     fn receiver_borrow_info(&self, receiver: &Expr, env: &BorrowEnv) -> BorrowInfo {
@@ -3440,6 +4011,74 @@ impl OwnershipChecker<'_> {
                 .any(|(_, assoc_ty)| self.contains_borrowed_type(assoc_ty)),
             Ty::Proj(base, ..) => self.contains_borrowed_type(base),
             Ty::Var(_) | Ty::Param(_) | Ty::Error => false,
+        }
+    }
+
+    fn expr_mentions_raw_pointer(&self, expr: &Expr) -> bool {
+        if self.type_mentions_raw_ptr(&expr.ty) {
+            return true;
+        }
+        match &expr.kind {
+            ExprKind::InlineIR(instruction) => instruction
+                .binds
+                .iter()
+                .any(|operand| self.expr_mentions_raw_pointer(operand)),
+            ExprKind::As(inner, _) => self.expr_mentions_raw_pointer(inner),
+            ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => items
+                .iter()
+                .any(|item| self.expr_mentions_raw_pointer(item)),
+            ExprKind::Block(block) => {
+                block_tail_expr(block).is_some_and(|tail| self.expr_mentions_raw_pointer(tail))
+            }
+            ExprKind::Call {
+                callee,
+                args,
+                trailing_block,
+                ..
+            } => {
+                self.expr_mentions_raw_pointer(callee)
+                    || args
+                        .iter()
+                        .any(|arg| self.expr_mentions_raw_pointer(&arg.value))
+                    || trailing_block
+                        .as_ref()
+                        .and_then(block_tail_expr)
+                        .is_some_and(|tail| self.expr_mentions_raw_pointer(tail))
+            }
+            ExprKind::CallEffect { args, .. } => args
+                .iter()
+                .any(|arg| self.expr_mentions_raw_pointer(&arg.value)),
+            ExprKind::Member(Some(receiver), ..) => self.expr_mentions_raw_pointer(receiver),
+            ExprKind::If(_, then_block, else_block) => {
+                block_tail_expr(then_block).is_some_and(|tail| self.expr_mentions_raw_pointer(tail))
+                    || block_tail_expr(else_block)
+                        .is_some_and(|tail| self.expr_mentions_raw_pointer(tail))
+            }
+            ExprKind::Match(scrutinee, arms) => {
+                self.expr_mentions_raw_pointer(scrutinee)
+                    || arms.iter().any(|arm| {
+                        block_tail_expr(&arm.body)
+                            .is_some_and(|tail| self.expr_mentions_raw_pointer(tail))
+                    })
+            }
+            ExprKind::RecordLiteral { fields, spread } => {
+                spread
+                    .as_ref()
+                    .is_some_and(|spread| self.expr_mentions_raw_pointer(spread))
+                    || fields
+                        .iter()
+                        .any(|field| self.expr_mentions_raw_pointer(&field.value))
+            }
+            ExprKind::Func(_)
+            | ExprKind::LiteralInt(_)
+            | ExprKind::LiteralFloat(_)
+            | ExprKind::LiteralTrue
+            | ExprKind::LiteralFalse
+            | ExprKind::LiteralString(_)
+            | ExprKind::Variable(_)
+            | ExprKind::Constructor(_)
+            | ExprKind::RowVariable(_)
+            | ExprKind::Member(None, ..) => false,
         }
     }
 
@@ -4443,37 +5082,27 @@ mod tests {
     }
 
     #[test]
-    fn rejects_borrowed_field_in_owned_struct() {
+    fn allows_borrowed_field_in_struct_type() {
         let errors = ownership_errors(
             "
-            struct Bad {
+            struct View {
                 let path: Substring
             }
             ",
         );
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("cannot be stored in owned struct Bad.path")),
-            "{errors:?}"
-        );
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]
-    fn rejects_borrowed_payload_in_owned_enum() {
+    fn allows_borrowed_payload_in_enum_type() {
         let errors = ownership_errors(
             "
-            enum Bad {
+            enum View {
                 case path(Substring)
             }
             ",
         );
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("cannot be stored in owned enum Bad.path")),
-            "{errors:?}"
-        );
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]
@@ -4680,18 +5309,19 @@ mod tests {
         assert!(
             errors
                 .iter()
-                .any(|error| error.contains("borrow provenance is unknown")),
+                .any(|error| error.contains("owned by this function")),
             "{errors:?}"
         );
     }
 
     #[test]
-    fn rejects_binding_record_containing_local_borrow() {
+    fn record_containing_borrow_tracks_owner_invalidation() {
         let errors = ownership_errors(
             "
             func bad() -> Int {
                 let s = \"hello\" + \" world\"
                 let record = { sub: s.slice(0, 1) }
+                let moved = s
                 record.sub.length
             }
             ",
@@ -4699,13 +5329,13 @@ mod tests {
         assert!(
             errors
                 .iter()
-                .any(|error| error.contains("borrow provenance is unknown")),
+                .any(|error| error.contains("Cannot move 's' while it is borrowed as 'record'")),
             "{errors:?}"
         );
     }
 
     #[test]
-    fn rejects_binding_owned_generic_container_containing_borrow() {
+    fn generic_container_containing_borrow_tracks_owner_invalidation() {
         let errors = ownership_errors(
             "
             enum Maybe<T> {
@@ -4716,14 +5346,18 @@ mod tests {
             func bad() -> Int {
                 let s = \"hello\" + \" world\"
                 let maybe = Maybe.some(s.slice(0, 1))
-                0
+                let moved = s
+                match maybe {
+                    .some(sub) -> sub.length,
+                    .none -> 0
+                }
             }
             ",
         );
         assert!(
             errors
                 .iter()
-                .any(|error| error.contains("borrow provenance is unknown")),
+                .any(|error| error.contains("Use of borrowed value 'maybe'")),
             "{errors:?}"
         );
     }
@@ -4746,7 +5380,7 @@ mod tests {
         assert!(
             errors
                 .iter()
-                .any(|error| error.contains("borrow provenance is unknown")),
+                .any(|error| error.contains("owned by this function")),
             "{errors:?}"
         );
     }

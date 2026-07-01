@@ -1,8 +1,8 @@
 // no-core
-import { _alloc, _copy } from ./Memory.tlk
-import { Add, Comparable, Equatable } from ./Operators.tlk
-import { String } from ./String.tlk
-import { Showable } from ./Showable.tlk
+use { _alloc, _copy } from ./Memory.tlk
+use { Add, Comparable, Equatable } from ./Operators.tlk
+use { String } from ./String.tlk
+use { Showable } from ./Showable.tlk
 
 public enum IORequest {
 	case read(Int, RawPtr, Int)
@@ -24,6 +24,10 @@ public enum IORequest {
 	case argc
 	case arg_len(Int)
 	case arg_copy(Int, RawPtr)
+	case dir_count(RawPtr)
+	case dir_entry_kind(RawPtr, Int)
+	case dir_entry_len(RawPtr, Int)
+	case dir_entry_copy(RawPtr, Int, RawPtr)
 	case exit(Int)
 }
 
@@ -131,6 +135,22 @@ public func _io_arg_copy(index: Int, buf: RawPtr) 'io -> Int {
 	'io(.arg_copy(index, buf))
 }
 
+public func _io_dir_count(path: RawPtr) 'io -> Int {
+	'io(.dir_count(path))
+}
+
+public func _io_dir_entry_kind(path: RawPtr, index: Int) 'io -> Int {
+	'io(.dir_entry_kind(path, index))
+}
+
+public func _io_dir_entry_len(path: RawPtr, index: Int) 'io -> Int {
+	'io(.dir_entry_len(path, index))
+}
+
+public func _io_dir_entry_copy(path: RawPtr, index: Int, buf: RawPtr) 'io -> Int {
+	'io(.dir_entry_copy(path, index, buf))
+}
+
 public func _io_exit(code: Int) 'io -> Never {
 	'io(.exit(code))
 	loop {}
@@ -163,6 +183,6 @@ func _print_line(s: String) -> () {
 	()
 }
 
-public func print<T: Showable>(value: T) -> () {
+public func print<T: Showable>(value: &T) -> () {
 	_print_line(value.show())
 }
