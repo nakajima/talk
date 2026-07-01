@@ -942,7 +942,7 @@ impl<'a> DeclDeclarer<'a> {
                     .expect("didn't get type members");
 
                 if type_members.initializers.is_empty() {
-                    self.synthesize_init(body, &type_members, *type_id);
+                    self.synthesize_init(body, &type_members, *type_id, decl.id.0);
                 }
 
                 self.end_scope();
@@ -1097,8 +1097,14 @@ impl<'a> DeclDeclarer<'a> {
         }
     }
 
-    fn synthesize_init(&mut self, body: &mut Body, type_members: &TypeMembers, type_id: StructId) {
-        let init_id = NodeID(FileID::SYNTHESIZED, self.node_ids.next_id());
+    fn synthesize_init(
+        &mut self,
+        body: &mut Body,
+        type_members: &TypeMembers,
+        type_id: StructId,
+        file_id: FileID,
+    ) {
+        let init_id = NodeID(file_id, self.node_ids.next_id());
         tracing::debug!("synthesizing init for type {type_id:?} as: {init_id:?}");
 
         let init_name = self.resolver.declare(
@@ -1114,16 +1120,16 @@ impl<'a> DeclDeclarer<'a> {
         let self_param_name = self.resolver.declare(
             &Name::Raw("self".into()),
             some!(ParamLocal),
-            NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+            NodeID(file_id, self.node_ids.next_id()),
             Span::SYNTHESIZED,
         );
         let mut params: Vec<Parameter> = vec![Parameter {
-            id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+            id: NodeID(file_id, self.node_ids.next_id()),
             span: Span::SYNTHESIZED,
             name: self_param_name.clone(),
             name_span: Span::SYNTHESIZED,
             type_annotation: Some(TypeAnnotation {
-                id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                id: NodeID(file_id, self.node_ids.next_id()),
                 span: Span::SYNTHESIZED,
                 kind: TypeAnnotationKind::SelfType(Name::SelfType(type_id.into())),
             }),
@@ -1148,11 +1154,11 @@ impl<'a> DeclDeclarer<'a> {
             let name = self.resolver.declare(
                 &Name::Raw(name.name_str()),
                 some!(ParamLocal),
-                NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                NodeID(file_id, self.node_ids.next_id()),
                 Span::SYNTHESIZED,
             );
             params.push(Parameter {
-                id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                id: NodeID(file_id, self.node_ids.next_id()),
                 name: name.clone(),
                 name_span: Span::SYNTHESIZED,
                 type_annotation: type_annotation.clone(),
@@ -1160,15 +1166,15 @@ impl<'a> DeclDeclarer<'a> {
             });
 
             let assignment = Node::Stmt(Stmt {
-                id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                id: NodeID(file_id, self.node_ids.next_id()),
                 span: Span::SYNTHESIZED,
                 kind: StmtKind::Assignment(
                     Expr {
-                        id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                        id: NodeID(file_id, self.node_ids.next_id()),
                         kind: ExprKind::Member(
                             Some(
                                 Expr {
-                                    id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                                    id: NodeID(file_id, self.node_ids.next_id()),
                                     span: Span::SYNTHESIZED,
                                     kind: ExprKind::Variable(self_param_name.clone()),
                                 }
@@ -1181,7 +1187,7 @@ impl<'a> DeclDeclarer<'a> {
                     }
                     .into(),
                     Expr {
-                        id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                        id: NodeID(file_id, self.node_ids.next_id()),
                         kind: ExprKind::Variable(name),
                         span: Span::SYNTHESIZED,
                     }
@@ -1193,10 +1199,10 @@ impl<'a> DeclDeclarer<'a> {
         }
 
         assignments.push(Node::Stmt(Stmt {
-            id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+            id: NodeID(file_id, self.node_ids.next_id()),
             span: Span::SYNTHESIZED,
             kind: StmtKind::Expr(Expr {
-                id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                id: NodeID(file_id, self.node_ids.next_id()),
                 span: Span::SYNTHESIZED,
                 kind: ExprKind::Variable(self_param_name),
             }),
@@ -1210,7 +1216,7 @@ impl<'a> DeclDeclarer<'a> {
                 name: init_name,
                 params,
                 body: Block {
-                    id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                    id: NodeID(file_id, self.node_ids.next_id()),
                     span: Span::SYNTHESIZED,
                     args: vec![],
                     body: assignments,

@@ -5,8 +5,9 @@ use async_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionProviderCapability,
     CodeActionResponse, CompletionOptions, Diagnostic, DiagnosticSeverity, InlayHint,
     InlayHintKind, InlayHintLabel, InlayHintOptions, InlayHintServerCapabilities, InlayHintTooltip,
-    Position, Range, SemanticTokens, SemanticTokensResult, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
+    MessageType, Position, Range, SemanticTokens, SemanticTokensResult, ShowMessageParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions, TextEdit,
 };
 use async_lsp::{
     ClientSocket,
@@ -27,7 +28,9 @@ use async_lsp::{
 };
 use ignore::WalkBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::any::Any;
 use std::fs::File;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::{ops::ControlFlow, path::PathBuf, time::Duration};
 use tokio::spawn;
@@ -76,6 +79,74 @@ struct ServerState {
     workspaces: FxHashMap<PathBuf, Arc<AnalysisWorkspace>>,
     core: Option<Arc<AnalysisWorkspace>>,
     workspace_roots: Vec<PathBuf>,
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic payload".to_string()
+}
+
+fn report_lsp_internal_error(
+    state: &mut ServerState,
+    uri: Option<&Url>,
+    context: &str,
+    payload: &(dyn Any + Send),
+) {
+    let detail = panic_payload_message(payload);
+    let message = format!(
+        "Talk LSP internal error while {context}: {detail}. The server recovered; results may be incomplete until the next edit."
+    );
+    tracing::error!("{message}");
+
+    let _ = state.client.show_message(ShowMessageParams {
+        typ: MessageType::ERROR,
+        message: message.clone(),
+    });
+
+    let Some(uri) = uri else {
+        return;
+    };
+
+    let range = state
+        .documents
+        .get(uri)
+        .and_then(|document| document.range_of_byte_span(0, 0))
+        .unwrap_or_else(|| Range::new(Position::new(0, 0), Position::new(0, 0)));
+    let version = state.documents.get(uri).map(|document| document.version);
+
+    let diagnostic = Diagnostic {
+        range,
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("talk-lsp".to_string()),
+        message,
+        ..Diagnostic::default()
+    };
+    let _ = state.client.publish_diagnostics(PublishDiagnosticsParams {
+        uri: uri.clone(),
+        diagnostics: vec![diagnostic],
+        version,
+    });
+}
+
+fn recover_lsp<T>(
+    state: &mut ServerState,
+    uri: Option<&Url>,
+    context: &str,
+    fallback: T,
+    f: impl FnOnce() -> T,
+) -> T {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(value) => value,
+        Err(payload) => {
+            report_lsp_internal_error(state, uri, context, payload.as_ref());
+            fallback
+        }
+    }
 }
 
 pub async fn start() {
@@ -186,12 +257,25 @@ pub async fn start() {
 
                 tracing::info!("did change {uri}");
 
+                let mut panic_payload = None;
                 if let Some(document) = state.documents.get_mut(&uri) {
-                    document.apply_changes(&params.content_changes);
+                    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                        document.apply_changes(&params.content_changes);
+                    })) {
+                        panic_payload = Some(payload);
+                    }
                     document.version = version;
                     document.last_edited_tick = state.counter;
-                    state.dirty_documents.insert(uri);
+                    state.dirty_documents.insert(uri.clone());
                     state.workspaces.clear();
+                }
+                if let Some(payload) = panic_payload {
+                    report_lsp_internal_error(
+                        state,
+                        Some(&uri),
+                        "applying document changes",
+                        payload.as_ref(),
+                    );
                 }
 
                 std::ops::ControlFlow::Continue(())
@@ -220,26 +304,32 @@ pub async fn start() {
             })
             .request::<request::Formatting, _>(|st, params| {
                 let uri = params.text_document.uri;
-                let result = if let Some(result) = st.documents.get(&uri) {
-                    let formatted = crate::formatter::format_string(&result.text);
-                    let newline_count = result.text.matches('\n').count();
-                    let ends_with_newline = result.text.ends_with('\n');
-                    let last_line = newline_count as u32;
-                    let last_char = if ends_with_newline {
-                        0
-                    } else {
-                        result
-                            .text
-                            .rsplit('\n')
-                            .next()
-                            .map(|s| s.len())
-                            .unwrap_or(result.text.len()) as u32
-                    };
+                let text = st.documents.get(&uri).map(|document| document.text.clone());
+                let result = if let Some(text) = text {
+                    let formatted =
+                        recover_lsp(st, Some(&uri), "formatting document", None, || {
+                            Some(crate::formatter::format_string(&text))
+                        });
+                    if let Some(formatted) = formatted {
+                        let newline_count = text.matches('\n').count();
+                        let ends_with_newline = text.ends_with('\n');
+                        let last_line = newline_count as u32;
+                        let last_char = if ends_with_newline {
+                            0
+                        } else {
+                            text.rsplit('\n')
+                                .next()
+                                .map(|s| s.len())
+                                .unwrap_or(text.len()) as u32
+                        };
 
-                    Ok(Some(vec![TextEdit::new(
-                        Range::new(Position::new(0, 0), Position::new(last_line, last_char)),
-                        formatted,
-                    )]))
+                        Ok(Some(vec![TextEdit::new(
+                            Range::new(Position::new(0, 0), Position::new(last_line, last_char)),
+                            formatted,
+                        )]))
+                    } else {
+                        Ok(None)
+                    }
                 } else {
                     Ok(None)
                 };
@@ -272,18 +362,16 @@ pub async fn start() {
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
 
                 let workspace = workspace_analysis(st, &uri);
+                let result = match (byte_offset, workspace) {
+                    (Some(byte_offset), Some(workspace)) => {
+                        recover_lsp(st, Some(&uri), "renaming symbol", None, || {
+                            rename_at(&workspace, &uri, byte_offset, &new_name)
+                        })
+                    }
+                    _ => None,
+                };
 
-                async move {
-                    let Some(byte_offset) = byte_offset else {
-                        return Ok(None);
-                    };
-
-                    let Some(workspace) = workspace else {
-                        return Ok(None);
-                    };
-
-                    Ok(rename_at(&workspace, &uri, byte_offset, &new_name))
-                }
+                async move { Ok(result) }
             })
             .request::<request::HoverRequest, _>(|st, params| {
                 let uri = params
@@ -297,12 +385,15 @@ pub async fn start() {
                     .get(&uri)
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
                 let workspace = workspace_analysis(st, &uri);
-                async move {
-                    let (Some(byte_offset), Some(workspace)) = (byte_offset, workspace) else {
-                        return Ok(None);
-                    };
-                    Ok(hover_at_lsp(&workspace, &uri, byte_offset))
-                }
+                let result = match (byte_offset, workspace) {
+                    (Some(byte_offset), Some(workspace)) => {
+                        recover_lsp(st, Some(&uri), "computing hover", None, || {
+                            hover_at_lsp(&workspace, &uri, byte_offset)
+                        })
+                    }
+                    _ => None,
+                };
+                async move { Ok(result) }
             })
             .request::<request::InlayHintRequest, _>(|st, params| {
                 let uri = params.text_document.uri.clone();
@@ -313,15 +404,16 @@ pub async fn start() {
                     ))
                 });
                 let workspace = workspace_analysis(st, &uri);
+                let result = match (byte_range, workspace) {
+                    (Some(byte_range), Some(workspace)) => {
+                        recover_lsp(st, Some(&uri), "computing inlay hints", Vec::new(), || {
+                            ownership_inlay_hints_lsp(&workspace, &uri, byte_range)
+                        })
+                    }
+                    _ => Vec::new(),
+                };
 
-                async move {
-                    let (Some(byte_range), Some(workspace)) = (byte_range, workspace) else {
-                        return Ok(Some(vec![]));
-                    };
-                    Ok(Some(ownership_inlay_hints_lsp(
-                        &workspace, &uri, byte_range,
-                    )))
-                }
+                async move { Ok(Some(result)) }
             })
             .request::<request::GotoDefinition, _>(|st, params| {
                 let uri = params
@@ -337,25 +429,18 @@ pub async fn start() {
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
 
                 let workspace = workspace_analysis(st, &uri);
-                let core = core_analysis(st);
+                let core = core_analysis(st, &uri);
+                let result = match (byte_offset, workspace) {
+                    (Some(byte_offset), Some(workspace)) => {
+                        recover_lsp(st, Some(&uri), "resolving definition", None, || {
+                            goto_definition(&workspace, core.as_deref(), &uri, byte_offset)
+                                .map(GotoDefinitionResponse::Scalar)
+                        })
+                    }
+                    _ => None,
+                };
 
-                async move {
-                    let Some(byte_offset) = byte_offset else {
-                        return Ok(None);
-                    };
-
-                    let Some(workspace) = workspace else {
-                        return Ok(None);
-                    };
-
-                    let Some(target) =
-                        goto_definition(&workspace, core.as_deref(), &uri, byte_offset)
-                    else {
-                        return Ok(None);
-                    };
-
-                    Ok(Some(GotoDefinitionResponse::Scalar(target)))
-                }
+                async move { Ok(result) }
             })
             .request::<request::Completion, _>(|st, params| {
                 let uri = params.text_document_position.text_document.uri.clone();
@@ -366,25 +451,28 @@ pub async fn start() {
                     .get(&uri)
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
                 let workspace = workspace_analysis(st, &uri);
+                let result = match (byte_offset, workspace) {
+                    (Some(byte_offset), Some(workspace)) => recover_lsp(
+                        st,
+                        Some(&uri),
+                        "computing completions",
+                        Some(CompletionResponse::Array(vec![])),
+                        || {
+                            let document_id = document_id_for_uri(&uri);
+                            let items = analysis_completion::complete_in_workspace(
+                                &workspace,
+                                &document_id,
+                                byte_offset,
+                            );
+                            let items = completion::to_lsp_items(items);
+                            Some(CompletionResponse::Array(items))
+                        },
+                    ),
+                    (Some(_), None) => Some(CompletionResponse::Array(vec![])),
+                    _ => None,
+                };
 
-                async move {
-                    let Some(byte_offset) = byte_offset else {
-                        return Ok(None);
-                    };
-
-                    let Some(workspace) = workspace else {
-                        return Ok(Some(CompletionResponse::Array(vec![])));
-                    };
-
-                    let document_id = document_id_for_uri(&uri);
-                    let items = analysis_completion::complete_in_workspace(
-                        &workspace,
-                        &document_id,
-                        byte_offset,
-                    );
-                    let items = completion::to_lsp_items(items);
-                    Ok(Some(CompletionResponse::Array(items)))
-                }
+                async move { Ok(result) }
             })
             .notification::<notification::Initialized>(|_, _| ControlFlow::Continue(()))
             .notification::<notification::DidChangeConfiguration>(|_, _| ControlFlow::Continue(()))
@@ -392,20 +480,27 @@ pub async fn start() {
                 let uri = params.text_document.uri.clone();
                 let range = params.range;
                 let workspace = workspace_analysis(state, &uri);
+                let actions = if let Some(workspace) = workspace {
+                    recover_lsp(
+                        state,
+                        Some(&uri),
+                        "computing code actions",
+                        Vec::new(),
+                        || {
+                            let document_id = document_id_for_uri(&uri);
+                            compute_code_actions(&workspace, &document_id, &uri, range)
+                        },
+                    )
+                } else {
+                    Vec::new()
+                };
+                let result = if actions.is_empty() {
+                    None
+                } else {
+                    Some(actions)
+                };
 
-                async move {
-                    let Some(workspace) = workspace else {
-                        return Ok(None);
-                    };
-
-                    let document_id = document_id_for_uri(&uri);
-                    let actions = compute_code_actions(&workspace, &document_id, &uri, range);
-                    if actions.is_empty() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(actions))
-                    }
-                }
+                async move { Ok(result) }
             })
             .notification::<notification::DidSaveTextDocument>(|_, _| ControlFlow::Continue(()))
             .notification::<notification::DidChangeWatchedFiles>(|state, params| {
@@ -466,13 +561,28 @@ pub async fn start() {
                             .or_insert_with(|| document_url.clone());
                     }
 
+                    let semantic_tokens = if let Some(text) = state
+                        .documents
+                        .get(&document_url)
+                        .map(|document| document.text.clone())
+                    {
+                        recover_lsp(
+                            state,
+                            Some(&document_url),
+                            "collecting semantic tokens",
+                            None,
+                            || {
+                                Some(SemanticTokensResult::Tokens(SemanticTokens {
+                                    result_id: None,
+                                    data: collect(text),
+                                }))
+                            },
+                        )
+                    } else {
+                        None
+                    };
                     if let Some(document) = state.documents.get_mut(&document_url) {
-                        document.semantic_tokens =
-                            Some(SemanticTokensResult::Tokens(SemanticTokens {
-                                result_id: None,
-                                data: collect(document.text.clone()),
-                            }));
-
+                        document.semantic_tokens = semantic_tokens;
                         needs_refresh = true;
                     }
                     state.dirty_documents.remove(&document_url);
@@ -505,31 +615,27 @@ pub async fn start() {
             .layer(ClientProcessMonitorLayer::new(client))
             .service(router)
     });
-    // Open (or create) a file for logs
-    #[allow(clippy::expect_used)]
-    let file = File::options()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open("server.log")
-        .expect("Could not create LSP server log");
-
-    tracing_subscriber::fmt()
-        .with_max_level(Level::WARN)
-        .with_ansi(false)
-        .with_writer(file)
-        .with_target(false)
-        .with_file(false)
-        .with_line_number(false)
-        .init();
+    init_tracing();
 
     // Prefer truly asynchronous piped stdin/stdout without blocking tasks.
     #[cfg(unix)]
-    #[allow(clippy::unwrap_used)]
-    let (stdin, stdout) = (
-        async_lsp::stdio::PipeStdin::lock_tokio().unwrap(),
-        async_lsp::stdio::PipeStdout::lock_tokio().unwrap(),
-    );
+    let (stdin, stdout) = {
+        let stdin = match async_lsp::stdio::PipeStdin::lock_tokio() {
+            Ok(stdin) => stdin,
+            Err(err) => {
+                eprintln!("Talk LSP could not lock stdin: {err}");
+                return;
+            }
+        };
+        let stdout = match async_lsp::stdio::PipeStdout::lock_tokio() {
+            Ok(stdout) => stdout,
+            Err(err) => {
+                eprintln!("Talk LSP could not lock stdout: {err}");
+                return;
+            }
+        };
+        (stdin, stdout)
+    };
     // Fallback to spawn blocking read/write otherwise.
     #[cfg(not(unix))]
     let (stdin, stdout) = (
@@ -537,8 +643,46 @@ pub async fn start() {
         tokio_util::compat::TokioAsyncWriteCompatExt::compat_write(tokio::io::stdout()),
     );
 
-    #[allow(clippy::unwrap_used)]
-    server.run_buffered(stdin, stdout).await.unwrap();
+    if let Err(err) = server.run_buffered(stdin, stdout).await {
+        eprintln!("Talk LSP server stopped with error: {err}");
+    }
+}
+
+fn init_tracing() {
+    let log_file = File::options()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("server.log");
+
+    match log_file {
+        Ok(file) => {
+            if let Err(err) = tracing_subscriber::fmt()
+                .with_max_level(Level::WARN)
+                .with_ansi(false)
+                .with_writer(file)
+                .with_target(false)
+                .with_file(false)
+                .with_line_number(false)
+                .try_init()
+            {
+                eprintln!("Talk LSP could not initialize file logging: {err}");
+            }
+        }
+        Err(err) => {
+            eprintln!("Talk LSP could not create server.log: {err}");
+            if let Err(err) = tracing_subscriber::fmt()
+                .with_max_level(Level::WARN)
+                .with_ansi(false)
+                .with_target(false)
+                .with_file(false)
+                .with_line_number(false)
+                .try_init()
+            {
+                eprintln!("Talk LSP could not initialize stderr logging: {err}");
+            }
+        }
+    }
 }
 
 fn is_tlk_uri(uri: &Url) -> bool {
@@ -717,7 +861,9 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
         return None;
     }
 
-    let analysis = AnalysisWorkspace::new(docs)?;
+    let analysis = recover_lsp(state, Some(focus_uri), "analyzing workspace", None, || {
+        AnalysisWorkspace::new(docs)
+    })?;
     let analysis = Arc::new(analysis);
     state.workspaces.insert(root, analysis.clone());
     Some(analysis)
@@ -747,12 +893,14 @@ fn publish_workspace_diagnostics(state: &mut ServerState, workspace: &AnalysisWo
     }
 }
 
-fn core_analysis(state: &mut ServerState) -> Option<Arc<AnalysisWorkspace>> {
+fn core_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<AnalysisWorkspace>> {
     if let Some(core) = state.core.as_ref() {
         return Some(core.clone());
     }
 
-    let core = AnalysisWorkspace::core()?;
+    let core = recover_lsp(state, Some(focus_uri), "analyzing core", None, || {
+        AnalysisWorkspace::core()
+    })?;
     let core = Arc::new(core);
     state.core = Some(core.clone());
     Some(core)

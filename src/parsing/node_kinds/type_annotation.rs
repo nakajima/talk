@@ -57,7 +57,6 @@ pub enum TypeAnnotationKind {
 }
 
 impl TypeAnnotation {
-    #[allow(clippy::unwrap_used)]
     pub fn symbol(&self) -> Result<Symbol, NameResolverError> {
         match &self.kind {
             TypeAnnotationKind::Nominal { name, .. } | TypeAnnotationKind::SelfType(name) => {

@@ -21,7 +21,7 @@ compiler runs (see `src/compiling`), packaged for editors by
 - `hover.rs` — type-at-cursor: find the smallest node at the offset,
   prefer a named binder's full signature (schemes), fall back to the
   node's inferred type.
-- `completion.rs` — scope-based completions from the resolved names.
+- `completion.rs` — scope-based completions from resolved names, and dot member completions from the checker's type output/catalog.
 - `ownership.rs` — editor-facing ownership facts (move/borrow/drop)
   from the post-type-check ownership pass, rendered as hover detail
   lines and inlay hints, with no protocol types.

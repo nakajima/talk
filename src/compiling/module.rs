@@ -68,7 +68,7 @@ impl std::fmt::Debug for ModuleId {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ModuleEnvironment {
     modules_by_name: FxHashMap<String, ModuleId>,
     modules_by_local: FxHashMap<ModuleId, StableModuleId>,

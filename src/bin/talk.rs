@@ -129,8 +129,13 @@ async fn main() {
 
             let (module_name, source) = single_source_for(filename.as_deref());
             let driver = Driver::new(vec![source], DriverConfig::new(module_name));
-            let parsed = driver.parse().unwrap();
-            println!("{:#?}", parsed.phase.asts);
+            match driver.parse() {
+                Ok(parsed) => println!("{:#?}", parsed.phase.asts),
+                Err(err) => {
+                    eprintln!("failed to parse: {err:?}");
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Lower { filename } => {
             let (module_name, source) = single_source_for(filename.as_deref());
@@ -354,9 +359,13 @@ async fn main() {
             let mut docs = Vec::with_capacity(sources.len());
             for source in sources {
                 let path = source.path().to_string();
-                let text = source
-                    .read()
-                    .unwrap_or_else(|err| panic!("failed to read {path}: {err:?}"));
+                let text = match source.read() {
+                    Ok(text) => text,
+                    Err(err) => {
+                        eprintln!("failed to read {path}: {err:?}");
+                        std::process::exit(1);
+                    }
+                };
                 docs.push(DocumentInput {
                     id: path.clone(),
                     path,
@@ -666,9 +675,10 @@ fn read_stdin() -> String {
     use std::io::Read;
 
     let mut buffer = String::new();
-    std::io::stdin()
-        .read_to_string(&mut buffer)
-        .unwrap_or_else(|err| panic!("failed to read stdin: {err}"));
+    if let Err(err) = std::io::stdin().read_to_string(&mut buffer) {
+        eprintln!("failed to read stdin: {err}");
+        std::process::exit(1);
+    }
     buffer
 }
 
@@ -716,17 +726,21 @@ fn sources_for_filenames(filenames: &[String]) -> Vec<talk::compiling::driver::S
 #[cfg(feature = "cli")]
 fn input_text(filename: Option<&str>) -> String {
     match filename {
-        Some(name) if name != "-" => std::fs::read_to_string(name)
-            .unwrap_or_else(|err| panic!("failed to read {name}: {err}")),
+        Some(name) if name != "-" => match std::fs::read_to_string(name) {
+            Ok(text) => text,
+            Err(err) => {
+                eprintln!("failed to read {name}: {err}");
+                std::process::exit(1);
+            }
+        },
         _ => read_stdin(),
     }
 }
 
 #[cfg(not(feature = "cli"))]
 fn main() {
-    use core::panic;
-
-    panic!("Compiled without 'cli' feature.")
+    eprintln!("talk was compiled without the 'cli' feature");
+    std::process::exit(1);
 }
 
 pub fn init() {

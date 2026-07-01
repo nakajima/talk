@@ -22,6 +22,7 @@ use crate::{
 };
 use indexmap::IndexMap;
 use rustc_hash::FxHashSet;
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::{hash::Hash, hash::Hasher};
 use std::{io, path::PathBuf, rc::Rc};
@@ -209,12 +210,11 @@ impl Source {
         }
     }
 
-    pub fn path(&self) -> &str {
-        #[allow(clippy::unwrap_used)]
+    pub fn path(&self) -> Cow<'_, str> {
         match &self.kind {
-            SourceKind::File(path) => path.to_str().unwrap(),
-            SourceKind::String(..) => ":memory:",
-            SourceKind::InMemory { path, .. } => path.to_str().unwrap(),
+            SourceKind::File(path) => path.to_string_lossy(),
+            SourceKind::String(..) => Cow::Borrowed(":memory:"),
+            SourceKind::InMemory { path, .. } => path.to_string_lossy(),
         }
     }
 
@@ -325,13 +325,13 @@ fn resolve_import_path(source_path: &str, import_path: &ImportPath) -> Option<(P
 
 impl Driver {
     pub fn new(files: Vec<Source>, mut config: DriverConfig) -> Self {
-        #[allow(clippy::unwrap_used)]
-        let mut modules = Rc::into_inner(config.modules).unwrap();
-        modules.import_core(super::core::compile());
-        for module in super::stdlib::modules() {
-            modules.import((*module).clone());
+        {
+            let modules = Rc::make_mut(&mut config.modules);
+            modules.import_core(super::core::compile());
+            for module in super::stdlib::modules() {
+                modules.import((*module).clone());
+            }
         }
-        config.modules = Rc::new(modules);
 
         Self {
             files,
@@ -400,7 +400,7 @@ impl Driver {
                     let source_path = file.path();
                     for import_path in extract_import_paths(&parsed) {
                         if let Some((canonical, resolved)) =
-                            resolve_import_path(source_path, &import_path)
+                            resolve_import_path(source_path.as_ref(), &import_path)
                             && !processed_paths.contains(&canonical)
                         {
                             processed_paths.insert(canonical);

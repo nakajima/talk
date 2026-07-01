@@ -1179,7 +1179,7 @@ impl OwnershipChecker<'_> {
             return;
         }
         let mut state = MoveState::default();
-        self.seed_shared_borrow_params(params, &mut state);
+        self.seed_shared_borrow_params(owner, params, &mut state);
         self.check_mir_body(body_id, &body, &mut state);
         self.persist_body(key, body);
     }
@@ -2852,11 +2852,19 @@ impl OwnershipChecker<'_> {
         self.consume_expr_value(expr, state);
     }
 
-    fn seed_shared_borrow_params(&self, params: &[Parameter], state: &mut MoveState) {
+    fn seed_shared_borrow_params(
+        &self,
+        owner: Option<Symbol>,
+        params: &[Parameter],
+        state: &mut MoveState,
+    ) {
         for param in params {
             let Ok(symbol) = param.name.symbol() else {
                 continue;
             };
+            if self.is_initializer_self(owner, param) {
+                continue;
+            }
             if let Some(ty) = param.ty.as_ref()
                 && self.value_type_contains_borrow(ty)
             {
@@ -2888,6 +2896,11 @@ impl OwnershipChecker<'_> {
                 state.shared_borrow_roots.insert(symbol, ty);
             }
         }
+    }
+
+    fn is_initializer_self(&self, owner: Option<Symbol>, param: &Parameter) -> bool {
+        matches!(owner, Some(Symbol::Initializer(_) | Symbol::Synthesized(_)))
+            && param.name.name_str() == "self"
     }
 
     fn mark_simple_move_source(&mut self, expr: &Expr, state: &mut MoveState) {
@@ -3304,7 +3317,7 @@ impl OwnershipChecker<'_> {
             && self.is_borrowed_type(ty)
         {
             if let Some(info) = provenance.first_info() {
-                if info.kind == BorrowKind::Shared {
+                if borrower.fields.is_empty() && info.kind == BorrowKind::Shared {
                     state
                         .shared_borrow_roots
                         .insert(borrower.root, borrow_kind_name(info.kind).to_string());

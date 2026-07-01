@@ -2307,9 +2307,11 @@ impl<'a> Formatter<'a> {
         let mut width = remaining_width;
         let mut queue = vec![doc];
 
-        while width >= 0 && !queue.is_empty() {
-            #[allow(clippy::unwrap_used)]
-            match queue.pop().unwrap() {
+        while width >= 0 {
+            let Some(doc) = queue.pop() else {
+                break;
+            };
+            match doc {
                 Doc::Empty => continue,
                 Doc::Annotation(_) => continue,
                 Doc::Text(s) | Doc::Comment(s) => width -= s.len() as isize,
@@ -2366,7 +2368,6 @@ fn format_with_comments<Phase: ASTPhase>(
     formatter.format(&ast.roots, width)
 }
 
-#[allow(clippy::unwrap_used)]
 pub fn format_string(string: &str) -> String {
     let lexer = Lexer::preserving_comments(string);
     match Parser::new("", FileID(0), lexer).parse_with_comments() {
@@ -2382,7 +2383,6 @@ pub fn format_string(string: &str) -> String {
     }
 }
 
-#[allow(clippy::unwrap_used)]
 pub fn format_string_with_width(string: &str, width: usize) -> String {
     let lexer = Lexer::preserving_comments(string);
     match Parser::new("", FileID(0), lexer).parse_with_comments() {
@@ -2398,7 +2398,6 @@ pub fn format_string_with_width(string: &str, width: usize) -> String {
     }
 }
 
-#[allow(clippy::unwrap_used)]
 pub fn format_node(node: &Node, meta: &NodeMetaStorage) -> String {
     let formatter = Formatter::new(meta);
     formatter.format(std::slice::from_ref(node), 80)

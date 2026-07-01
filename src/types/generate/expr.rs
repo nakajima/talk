@@ -727,6 +727,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.unsupported(expr.id, "row variables in expressions");
                 Ty::Error
             }
+            ExprKind::Incomplete(crate::node_kinds::incomplete_expr::IncompleteExpr::Member(
+                Some(receiver),
+            )) => {
+                self.infer_expr(receiver, ctx);
+                Ty::Error
+            }
             ExprKind::Incomplete(_) => Ty::Error,
         }
     }
