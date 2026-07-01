@@ -6,7 +6,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::{
     compiling::{driver::Source, module::ModuleId},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
-    hir::{self, Block, Body, Decl, DeclKind, Expr, ExprKind, HirFile, Node, Parameter, StmtKind},
+    hir::{
+        self, Block, Body, Decl, DeclKind, Expr, ExprKind, Func, HirFile, Node, Parameter,
+        StmtKind,
+    },
     mir,
     name_resolution::{
         name_resolver::ResolvedNames,
@@ -437,12 +440,14 @@ fn run_ownership<'a>(
         recorded_move_facts: FxHashSet::default(),
         recorded_borrow_facts: FxHashMap::default(),
         nested_body_memos: vec![],
+        return_param_reach: FxHashMap::default(),
     };
     checker.discover_borrowed_types();
     checker.discover_owned_types();
     checker.discover_copy_drop_abilities();
     checker.check_top_level_globals(asts);
     checker.check_raw_pointer_surface(asts);
+    checker.compute_return_reach(asts);
     checker.check_moves(asts);
     checker
 }
@@ -481,6 +486,7 @@ pub(crate) fn elaborate_body_drops(
         recorded_move_facts: FxHashSet::default(),
         recorded_borrow_facts: FxHashMap::default(),
         nested_body_memos: vec![],
+        return_param_reach: FxHashMap::default(),
     };
     // A fresh checker has one body, so every obligation/move is keyed to `BodyId(0)` and
     // matched onto its statement purely by point index.
@@ -524,6 +530,16 @@ struct OwnershipChecker<'a> {
     recorded_move_facts: FxHashSet<MoveFactKey>,
     recorded_borrow_facts: FxHashMap<BorrowFactKey, LoanId>,
     nested_body_memos: Vec<NestedBodyMemo>,
+    /// Interprocedural return-reachability: for each free function, the parameter
+    /// index(es) its returned borrow reaches, computed from the body. Lets a call
+    /// site restrict a returned borrow's provenance to the argument(s) the callee
+    /// actually returns, rather than the sound-but-conservative union of every
+    /// borrowed argument. Computing provenance from the body rather than
+    /// inferring it as a lifetime follows Brandon, Driscoll, Dai, Ragan-Kelley,
+    /// Milano & Aiken, "Fully-Automatic Type Inference for Borrows with
+    /// Lifetimes", OOPSLA 2026 (doi:10.1145/3798221): borrow-with-lifetime
+    /// typings have no principal form, so a dedicated analysis must assign them.
+    return_param_reach: FxHashMap<Symbol, Vec<usize>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2538,8 +2554,6 @@ impl OwnershipChecker<'_> {
         rhs: Option<&Expr>,
         state: &mut MoveState,
     ) {
-        let direct_borrow_info =
-            rhs.and_then(|rhs| self.binding_borrow_info(type_annotation, rhs, state));
         let closure_captures = rhs.map(|rhs| self.closure_values_capture_summary(rhs, state));
         let literal_captures = rhs.map(|rhs| self.closure_literal_capture_summary(rhs, state));
         let binders = lhs.collect_binders();
@@ -2574,15 +2588,7 @@ impl OwnershipChecker<'_> {
                 state.closure_captures.remove(&key_path);
             }
             if let Some(rhs) = rhs {
-                if let Some(info) = &direct_borrow_info {
-                    self.install_borrow(key_path, info.clone(), rhs.id, point, state);
-                    installed_borrowed_value = true;
-                    continue;
-                }
-                let ty = self
-                    .symbol_ty(*symbol)
-                    .cloned()
-                    .unwrap_or_else(|| rhs.ty.clone());
+                let ty = self.binding_expected_ty(type_annotation, *symbol, rhs);
                 if self.value_type_contains_borrow(&ty) {
                     let provenance = self.provenance_for_expected_ty(&ty, rhs, state);
                     self.validate_local_provenance(rhs.id, &ty, &provenance);
@@ -3214,25 +3220,21 @@ impl OwnershipChecker<'_> {
         }
     }
 
-    fn binding_borrow_info(
-        &mut self,
+    /// The type a binding should be checked against: a borrow annotation
+    /// (`let x: &mut T = ...`) makes it a borrow of the rhs's value; otherwise
+    /// the binder's inferred type.
+    fn binding_expected_ty(
+        &self,
         annotation: Option<&crate::node_kinds::type_annotation::TypeAnnotation>,
+        symbol: Symbol,
         rhs: &Expr,
-        state: &MoveState,
-    ) -> Option<BorrowInfo> {
-        let kind = self
-            .annotation_borrow_kind(annotation)
-            .or_else(|| self.expr_borrow_kind(rhs))?;
-        let mut info = self.borrow_info(rhs, &state.borrows);
-        if info.origin == BorrowOrigin::Unknown && !self.allows_unknown_local_borrow(rhs) {
-            let ty = self.borrowed_value_ty(rhs);
-            self.error(rhs.id, OwnershipError::UnknownBorrowProvenance { ty });
+    ) -> Ty {
+        if let Some(kind) = self.annotation_borrow_kind(annotation) {
+            return Ty::Borrow(kind, Box::new(rhs.ty.clone()));
         }
-        if info.owner.is_none() {
-            info.owner = self.key_path(rhs);
-        }
-        info.kind = kind;
-        Some(info)
+        self.symbol_ty(symbol)
+            .cloned()
+            .unwrap_or_else(|| rhs.ty.clone())
     }
 
     fn annotation_borrow_kind(
@@ -3244,44 +3246,6 @@ impl OwnershipChecker<'_> {
             Some(TypeAnnotationKind::Borrow { mutable: false, .. }) => Some(BorrowKind::Shared),
             _ => None,
         }
-    }
-
-    fn expr_borrow_kind(&self, expr: &Expr) -> Option<BorrowKind> {
-        match &expr.ty {
-            Ty::Borrow(kind, _) => Some(*kind),
-            ty if self.is_borrowed_type(ty) => Some(BorrowKind::Shared),
-            _ => None,
-        }
-    }
-
-    fn borrowed_value_ty(&self, expr: &Expr) -> String {
-        expr.ty.render_mono()
-    }
-
-    fn allows_unknown_local_borrow(&self, expr: &Expr) -> bool {
-        let Ty::Borrow(_, inner) = &expr.ty else {
-            return false;
-        };
-        self.is_copy_type(inner)
-    }
-
-    fn install_borrow(
-        &mut self,
-        borrower: KeyPath,
-        info: BorrowInfo,
-        id: NodeID,
-        point: OwnershipPoint,
-        state: &mut MoveState,
-    ) {
-        self.install_provenance(
-            borrower.clone(),
-            BorrowProvenance::direct(info.clone()),
-            Some(id),
-            point,
-            self.key_path_ty(&borrower),
-            state,
-        );
-        state.borrows.insert(borrower, info);
     }
 
     fn install_provenance(
@@ -3513,10 +3477,6 @@ impl OwnershipChecker<'_> {
         self.is_copy_type(&expr.ty)
     }
 
-    fn expr_is_borrowed(&self, expr: &Expr) -> bool {
-        self.is_borrowed_type(&expr.ty)
-    }
-
     fn value_type_contains_borrow(&self, ty: &Ty) -> bool {
         !matches!(ty, Ty::Func(..)) && self.contains_borrowed_type(ty)
     }
@@ -3663,7 +3623,12 @@ impl OwnershipChecker<'_> {
             }
             return provenance;
         }
-        let provenance = self.input_provenance(args, params.as_deref(), state);
+        let provenance = match self.callee_return_reach(callee) {
+            Some(reached) => {
+                self.reached_input_provenance(args, params.as_deref(), &reached, state)
+            }
+            None => self.input_provenance(args, params.as_deref(), state),
+        };
         if provenance.is_empty() {
             BorrowProvenance::unknown(BorrowKind::Shared)
         } else {
@@ -3705,6 +3670,83 @@ impl OwnershipChecker<'_> {
             provenance.extend(self.argument_provenance_for_param(arg, param, state));
         }
         provenance
+    }
+
+    /// The provenance of a call's result restricted to the parameter indices its
+    /// callee actually returns (the interprocedural summary), rather than the
+    /// union of every borrowed argument.
+    fn reached_input_provenance(
+        &self,
+        args: &[hir::CallArg],
+        params: Option<&[Ty]>,
+        reached: &[usize],
+        state: &MoveState,
+    ) -> BorrowProvenance {
+        let Some(params) = params else {
+            return BorrowProvenance::unknown(BorrowKind::Shared);
+        };
+        let mut provenance = BorrowProvenance::default();
+        for &index in reached {
+            if let (Some(arg), Some(param)) = (args.get(index), params.get(index)) {
+                provenance.extend(self.argument_provenance_for_param(arg, param, state));
+            }
+        }
+        provenance
+    }
+
+    /// The callee's return-reachability summary, if it is a named free function
+    /// with one recorded.
+    fn callee_return_reach(&self, callee: &Expr) -> Option<Vec<usize>> {
+        let ExprKind::Variable(name) = &callee.kind else {
+            return None;
+        };
+        self.return_param_reach.get(&name.symbol().ok()?).cloned()
+    }
+
+    /// Pre-pass: record, per free function, which parameter index(es) its returned
+    /// borrow reaches, resolved from the body's tail expression via the pass's own
+    /// provenance computation.
+    fn compute_return_reach(&mut self, asts: &IndexMap<Source, HirFile>) {
+        let mut funcs: Vec<&Func> = vec![];
+        for ast in asts.values() {
+            collect_free_functions(&ast.roots, &mut funcs);
+        }
+        for func in funcs {
+            let Ok(symbol) = func.name.symbol() else {
+                continue;
+            };
+            let reach = self.return_reach_of(func);
+            if !reach.is_empty() {
+                self.return_param_reach.insert(symbol, reach);
+            }
+        }
+    }
+
+    /// The parameter indices a function's returned borrow reaches, by resolving
+    /// the tail expression's provenance loans back to parameter roots.
+    fn return_reach_of(&self, func: &Func) -> Vec<usize> {
+        let Some(ret) = block_tail_expr(&func.body) else {
+            return vec![];
+        };
+        if !self.value_type_contains_borrow(&ret.ty) {
+            return vec![];
+        }
+        let provenance = self.expr_provenance(ret, &MoveState::default());
+        let mut reached: Vec<usize> = vec![];
+        for loan in &provenance.loans {
+            let Some(owner) = &loan.owner else {
+                continue;
+            };
+            if let Some(index) = func
+                .params
+                .iter()
+                .position(|param| param.name.symbol().ok() == Some(owner.root))
+                && !reached.contains(&index)
+            {
+                reached.push(index);
+            }
+        }
+        reached
     }
 
     fn argument_provenance_for_param(
@@ -3828,40 +3870,6 @@ impl OwnershipChecker<'_> {
         self.is_copy_type(inner)
     }
 
-    fn borrow_info(&self, expr: &Expr, env: &BorrowEnv) -> BorrowInfo {
-        match &expr.kind {
-            ExprKind::Variable(name) => match name.symbol() {
-                Ok(symbol) => self.symbol_borrow_info(symbol, env, expr),
-                Err(_) => BorrowInfo::new(BorrowOrigin::Unknown, None),
-            },
-            ExprKind::LiteralString(_) => BorrowInfo::new(BorrowOrigin::Static, None),
-            ExprKind::Member(Some(_), ..) if let Some(owner) = self.key_path(expr) => {
-                self.key_path_borrow_info(&owner, expr, env)
-            }
-            ExprKind::Call { callee, args, .. } => self.call_borrow_info(callee, args, env),
-            _ => BorrowInfo::new(BorrowOrigin::Unknown, None),
-        }
-    }
-
-    fn call_borrow_info(
-        &self,
-        callee: &Expr,
-        args: &[hir::CallArg],
-        env: &BorrowEnv,
-    ) -> BorrowInfo {
-        if !self.call_returns_borrowed(callee) {
-            return BorrowInfo::new(BorrowOrigin::Unknown, None);
-        }
-        if let ExprKind::Member(Some(receiver), ..) = &callee.kind {
-            return self.receiver_borrow_info(receiver, env);
-        }
-        if matches!(callee.kind, ExprKind::Constructor(_)) {
-            return self.single_constructor_borrow_source_info(args, env);
-        }
-        let params = self.call_argument_types(callee);
-        self.single_borrowed_input_info(args, params.as_deref(), env)
-    }
-
     fn call_returns_borrowed(&self, callee: &Expr) -> bool {
         let Ty::Func(_, ret, _) = &callee.ty else {
             return false;
@@ -3871,83 +3879,6 @@ impl OwnershipChecker<'_> {
 
     fn call_constructs_borrowed_value(&self, callee: &Expr) -> bool {
         self.callee_is_type_constructor(callee) && self.call_returns_borrowed(callee)
-    }
-
-    fn receiver_borrow_info(&self, receiver: &Expr, env: &BorrowEnv) -> BorrowInfo {
-        match &receiver.kind {
-            ExprKind::Variable(name) => match name.symbol() {
-                Ok(symbol) => self.borrow_info_with_default_owner(
-                    self.symbol_borrow_info(symbol, env, receiver),
-                    receiver,
-                ),
-                Err(_) => BorrowInfo::new(BorrowOrigin::Unknown, None),
-            },
-            ExprKind::LiteralString(_) => BorrowInfo::new(BorrowOrigin::Static, None),
-            _ if let Some(owner) = self.key_path(receiver) => self.borrow_info_with_default_owner(
-                self.key_path_borrow_info(&owner, receiver, env),
-                receiver,
-            ),
-            _ if self.expr_is_borrowed(receiver) => self.borrow_info(receiver, env),
-            _ => BorrowInfo::new(BorrowOrigin::Unknown, None),
-        }
-    }
-
-    fn borrow_info_with_default_owner(&self, info: BorrowInfo, expr: &Expr) -> BorrowInfo {
-        if info.origin.can_have_owner() {
-            BorrowInfo::with_kind(
-                info.origin,
-                info.owner.or_else(|| self.key_path(expr)),
-                BorrowKind::Shared,
-            )
-        } else {
-            info
-        }
-    }
-
-    fn single_borrowed_input_info(
-        &self,
-        args: &[hir::CallArg],
-        params: Option<&[Ty]>,
-        env: &BorrowEnv,
-    ) -> BorrowInfo {
-        let Some(params) = params else {
-            return BorrowInfo::new(BorrowOrigin::Unknown, None);
-        };
-        self.single_selected_argument_borrow_info(
-            args.iter()
-                .zip(params)
-                .filter_map(|(arg, param)| self.is_borrowed_type(param).then_some(arg)),
-            env,
-        )
-    }
-
-    fn single_constructor_borrow_source_info(
-        &self,
-        args: &[hir::CallArg],
-        env: &BorrowEnv,
-    ) -> BorrowInfo {
-        self.single_selected_argument_borrow_info(
-            args.iter()
-                .filter(|arg| self.expr_is_borrowed(&arg.value) || self.expr_is_owned(&arg.value)),
-            env,
-        )
-    }
-
-    fn single_selected_argument_borrow_info<'expr>(
-        &self,
-        args: impl IntoIterator<Item = &'expr hir::CallArg>,
-        env: &BorrowEnv,
-    ) -> BorrowInfo {
-        let mut result: Option<BorrowInfo> = None;
-        for arg in args {
-            let info =
-                self.borrow_info_with_default_owner(self.borrow_info(&arg.value, env), &arg.value);
-            if result.is_some() {
-                return BorrowInfo::new(BorrowOrigin::Unknown, None);
-            }
-            result = Some(info);
-        }
-        result.unwrap_or_else(|| BorrowInfo::new(BorrowOrigin::Unknown, None))
     }
 
     fn key_path_borrow_info(&self, key_path: &KeyPath, expr: &Expr, env: &BorrowEnv) -> BorrowInfo {
@@ -3966,25 +3897,6 @@ impl OwnershipChecker<'_> {
             BorrowInfo::new(origin, Some(key_path.clone()))
         } else {
             BorrowInfo::new(origin, None)
-        }
-    }
-
-    fn symbol_borrow_info(&self, symbol: Symbol, env: &BorrowEnv, expr: &Expr) -> BorrowInfo {
-        let key_path = KeyPath::root(symbol);
-        if let Some(info) = env.get(&key_path).cloned() {
-            return info;
-        }
-        match symbol {
-            Symbol::ParamLocal(_) => BorrowInfo::new(self.param_origin(symbol, expr), None),
-            Symbol::Global(_) => BorrowInfo::new(BorrowOrigin::Static, None),
-            Symbol::DeclaredLocal(_) | Symbol::PatternBindLocal(_) => {
-                if self.is_borrowed_type(&expr.ty) || self.is_owned_type(&expr.ty) {
-                    BorrowInfo::new(BorrowOrigin::Local, Some(key_path))
-                } else {
-                    BorrowInfo::new(BorrowOrigin::Unknown, None)
-                }
-            }
-            _ => BorrowInfo::new(BorrowOrigin::Unknown, None),
         }
     }
 
@@ -4405,6 +4317,39 @@ fn source_allows_unsafe(source: &Source) -> bool {
     source
         .read()
         .is_ok_and(|text| text.lines().any(|line| line.trim() == "// unsafe"))
+}
+
+fn collect_free_functions<'f>(nodes: &'f [Node], out: &mut Vec<&'f Func>) {
+    for node in nodes {
+        if let Node::Decl(decl) = node {
+            collect_free_functions_in_decl(decl, out);
+        }
+    }
+}
+
+fn collect_free_functions_in_decl<'f>(decl: &'f Decl, out: &mut Vec<&'f Func>) {
+    match &decl.kind {
+        DeclKind::Func(func) => {
+            out.push(func);
+            collect_free_functions(&func.body.body, out);
+        }
+        // A top-level `func f(...)` desugars to `let f = <func literal>`.
+        DeclKind::Let { rhs: Some(rhs), .. } => {
+            if let ExprKind::Func(func) = &rhs.kind {
+                out.push(func);
+                collect_free_functions(&func.body.body, out);
+            }
+        }
+        DeclKind::Struct { body, .. }
+        | DeclKind::Protocol { body, .. }
+        | DeclKind::Extend { body, .. }
+        | DeclKind::Enum { body, .. } => {
+            for decl in &body.decls {
+                collect_free_functions_in_decl(decl, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn block_tail_expr(block: &Block) -> Option<&Expr> {
@@ -5248,6 +5193,77 @@ mod tests {
     }
 
     #[test]
+    fn borrow_of_one_argument_stays_precise_when_another_is_moved() {
+        // `choose` returns a borrow of `a` only, so moving `b` while the result
+        // is live is legal — the result does not reach `b`. (hir's union of all
+        // borrowed arguments over-approximates and would reject this.)
+        let errors = ownership_errors(
+            "func choose(a: &String, b: &String) -> Substring { a.slice(0, 1) }\n\
+             func ok() -> Int {\n\
+               let a = \"x\" + \"y\"\n\
+               let b = \"p\" + \"q\"\n\
+               let sub = choose(a, b)\n\
+               let moved = b\n\
+               sub.length }",
+        );
+        assert!(
+            errors.is_empty(),
+            "moving the un-reached argument must be legal: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn borrow_of_one_argument_still_rejects_moving_that_argument() {
+        // Soundness dual: moving the argument the result *does* reach (`a`) while
+        // the borrow is live must still be rejected.
+        let errors = ownership_errors(
+            "func choose(a: &String, b: &String) -> Substring { a.slice(0, 1) }\n\
+             func bad() -> Int {\n\
+               let a = \"x\" + \"y\"\n\
+               let b = \"p\" + \"q\"\n\
+               let sub = choose(a, b)\n\
+               let moved = a\n\
+               sub.length }",
+        );
+        assert!(
+            errors.iter().any(|error| error.contains("borrowed value 'sub'")),
+            "moving the reached argument must be rejected: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_live_borrow_keeps_its_owned_source_alive_to_a_static_drop() {
+        // Where borrow checking meets deallocation: `s` is an owned value with a
+        // drop obligation; `sub` borrows it and is used afterwards, so `s` must
+        // stay alive across that use. A borrow is not a move — it neither consumes
+        // `s` nor transfers its drop obligation — so `s` is still freed
+        // unconditionally at scope exit (a Static drop), and the borrow checker is
+        // what guarantees no borrow of `s` outlives that free.
+        let (output, names) = ownership_output(
+            "
+            func ok() -> Int {
+                let s = \"hello\" + \" world\"
+                let sub = s.slice(0, 1)
+                let n = sub.length
+                n
+            }
+            ",
+        );
+        let s_drops: Vec<_> = output
+            .drop_plan
+            .obligations
+            .iter()
+            .filter(|obligation| names.get(&obligation.key_path.root).is_some_and(|n| n == "s"))
+            .collect();
+        assert!(
+            s_drops
+                .iter()
+                .any(|obligation| obligation.kind == DropElaboration::Static),
+            "the borrowed owned source `s` must still be freed at scope exit (Static), got {s_drops:?}"
+        );
+    }
+
+    #[test]
     fn ordinary_borrowed_return_from_owned_local_cannot_escape() {
         let errors = ownership_errors(
             "
@@ -5286,7 +5302,12 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_borrowed_return_provenance_is_rejected() {
+    fn borrowed_return_among_several_arguments_is_precisely_provenanced() {
+        // Previously rejected as "provenance unknown": with several borrowed
+        // parameters the pass could not tell which one the result borrows from.
+        // The interprocedural summary resolves `choose`'s result to the argument
+        // it actually returns (`a`), so this safe program — nothing is moved — is
+        // accepted.
         let errors = ownership_errors(
             "
             func choose(a: &String, b: &String) -> Substring {
@@ -5301,12 +5322,7 @@ mod tests {
             }
             ",
         );
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("borrow provenance is unknown")),
-            "{errors:?}"
-        );
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]
