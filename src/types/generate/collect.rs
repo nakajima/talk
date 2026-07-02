@@ -341,14 +341,17 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             // A unique value is the sole reference: never Copy/CheapClone.
             Ty::Unique(_) => false,
             Ty::Nominal(symbol, args) => {
+                // Storage is the intrinsic refcounted buffer: cheap to clone
+                // whatever it stores (the bump never touches elements).
+                if marker == Symbol::CheapClone && *symbol == Symbol::Storage {
+                    return true;
+                }
                 let head_ok = match marker {
                     Symbol::Copy => self.catalog.grade_of(*symbol) == Grade::Copy,
-                    // CheapClone: Copy fields are fine, CheapClone-conforming
-                    // fields are fine, and Storage is the intrinsic
-                    // refcounted buffer base case.
+                    // CheapClone: Copy fields are fine, and CheapClone-
+                    // conforming fields are fine.
                     _ => {
                         self.catalog.grade_of(*symbol) == Grade::Copy
-                            || *symbol == Symbol::Storage
                             || self
                                 .catalog
                                 .conformances

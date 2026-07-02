@@ -97,6 +97,7 @@ pub fn check_flow(
         block_drops: checker.block_drops,
         stmt_drops: checker.stmt_drops,
         consumed: checker.consumed,
+        auto_clones: checker.auto_clones,
     };
     for (file, drops) in hir.values_mut().zip(file_drops) {
         file.drops = drops;
@@ -125,6 +126,7 @@ struct Annotator {
     block_drops: rustc_hash::FxHashMap<crate::node_id::NodeID, Vec<drops::DropSchedule>>,
     stmt_drops: rustc_hash::FxHashMap<crate::node_id::NodeID, Vec<drops::DropSchedule>>,
     consumed: rustc_hash::FxHashSet<crate::node_id::NodeID>,
+    auto_clones: rustc_hash::FxHashSet<crate::node_id::NodeID>,
 }
 
 impl Annotator {
@@ -143,6 +145,9 @@ impl Annotator {
     fn enter_expr(&mut self, expr: &mut crate::hir::Expr) {
         if self.consumed.contains(&expr.id) {
             expr.ownership.consumes = true;
+        }
+        if self.auto_clones.contains(&expr.id) {
+            expr.ownership.auto_clone = true;
         }
     }
 }

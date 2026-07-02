@@ -878,6 +878,26 @@ fn exec_local(
             machine.free(ptr)?;
             frame.regs[dest as usize] = Value::Void;
         }
+        Insn::Retain { dest, ptr } => {
+            let Value::Ptr(ptr) = frame.regs[ptr as usize] else {
+                return Err("vm: retain of a non-pointer".into());
+            };
+            machine
+                .allocations
+                .retain(machine.static_len, ptr)
+                .map_err(vm_memory_error)?;
+            frame.regs[dest as usize] = Value::Void;
+        }
+        Insn::IsUnique { dest, ptr } => {
+            let Value::Ptr(ptr) = frame.regs[ptr as usize] else {
+                return Err("vm: is_unique of a non-pointer".into());
+            };
+            let unique = machine
+                .allocations
+                .is_unique(machine.static_len, ptr)
+                .map_err(vm_memory_error)?;
+            frame.regs[dest as usize] = Value::Bool(unique);
+        }
         Insn::Load { dest, ptr, kind } => {
             let Value::Ptr(addr) = frame.regs[ptr as usize] else {
                 return Err("vm: load of a non-pointer".into());

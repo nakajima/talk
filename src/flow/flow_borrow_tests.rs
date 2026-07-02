@@ -208,27 +208,43 @@ fn rejects_returning_owned_generic_container_containing_borrow() {
 }
 
 // ----- Move-out-of-borrowed ----------------------------------------------------
+//
+// Tier 2: extracting a CheapClone value from a borrow clones it silently (an
+// O(1) buffer retain); only non-CheapClone extraction still moves out.
 
 #[test]
-fn rejects_returning_owned_field_from_shared_borrow() {
+fn clones_returning_cheap_clone_field_from_shared_borrow() {
+    assert_no_errors(
+        "struct Person {\n\tlet name: String\n}\nfunc ok(person: &Person) -> String {\n\tperson.name\n}",
+    );
+}
+
+#[test]
+fn clones_binding_cheap_clone_field_from_shared_borrow() {
+    assert_no_errors(
+        "struct Person {\n\tlet name: String\n}\nfunc ok(person: &Person) -> Int {\n\tlet name = person.name\n\tname.length\n}",
+    );
+}
+
+#[test]
+fn clones_passing_cheap_clone_field_from_shared_borrow_by_value() {
+    assert_no_errors(
+        "struct Person {\n\tlet name: String\n}\nfunc take(name: String) -> Int {\n\tname.length\n}\nfunc ok(person: &Person) -> Int {\n\ttake(person.name)\n}",
+    );
+}
+
+#[test]
+fn rejects_returning_non_cheap_clone_field_from_shared_borrow() {
     assert_error_contains(
-        "struct Person {\n\tlet name: String\n}\nfunc bad(person: &Person) -> String {\n\tperson.name\n}",
+        "struct Name {\n\tlet value: String\n}\nstruct Person {\n\tlet name: Name\n}\nfunc bad(person: &Person) -> Name {\n\tperson.name\n}",
         "out of borrowed value 'person'",
     );
 }
 
 #[test]
-fn rejects_binding_owned_field_from_shared_borrow() {
+fn rejects_binding_non_cheap_clone_field_from_shared_borrow() {
     assert_error_contains(
-        "struct Person {\n\tlet name: String\n}\nfunc bad(person: &Person) -> Int {\n\tlet name = person.name\n\tname.length\n}",
-        "out of borrowed value 'person'",
-    );
-}
-
-#[test]
-fn rejects_passing_owned_field_from_shared_borrow_by_value() {
-    assert_error_contains(
-        "struct Person {\n\tlet name: String\n}\nfunc take(name: String) -> Int {\n\tname.length\n}\nfunc bad(person: &Person) -> Int {\n\ttake(person.name)\n}",
+        "struct Name {\n\tlet value: String\n}\nstruct Person {\n\tlet name: Name\n}\nfunc bad(person: &Person) -> Int {\n\tlet name = person.name\n\t0\n}",
         "out of borrowed value 'person'",
     );
 }
@@ -241,11 +257,77 @@ fn allows_copy_field_read_from_shared_borrow() {
 }
 
 #[test]
-fn rejects_owned_field_extraction_from_borrowed_nominal() {
-    assert_error_contains(
-        "func bad(sub: Substring) -> Int {\n\tlet storage = sub.storage\n\t0\n}",
-        "out of borrowed value 'sub'",
+fn clones_cheap_clone_field_extraction_from_borrowed_nominal() {
+    // ByteStorage is CheapClone: extracting it from a borrowed Substring
+    // retains the refcounted buffer instead of moving out.
+    assert_no_errors("func ok(sub: Substring) -> Int {\n\tlet storage = sub.storage\n\t0\n}");
+}
+
+#[test]
+fn coerces_borrowed_cheap_clone_argument_to_owned_parameter() {
+    let typed = flow_driver(
+        "func take(s: String) -> Int {\n\ts.length\n}\nfunc ok(s: &String) -> Int {\n\ttake(s)\n}",
     );
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+}
+
+#[test]
+fn cheap_clone_extraction_runs_on_vm_without_double_free() {
+    // The clone retains the shared buffer; dropping both the owner and the
+    // clone releases it twice. A missing retain double-frees (VM error).
+    let source = "struct Person {\n\tlet name: String\n}\nfunc extract(person: &Person) -> String {\n\tperson.name\n}\nfunc check() -> Int {\n\tlet p = Person(name: \"hello\" + \" world\")\n\tlet n = extract(p)\n\tn.length\n}\ncheck()";
+    let typed = flow_driver(source);
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let mut lowered = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    let value = lowered.run_vm().expect("vm");
+    match value {
+        crate::vm::interp::Value::I64(n) => assert_eq!(n, 11),
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn cheap_clone_extraction_leaks_nothing() {
+    let source = "struct Person {\n\tlet name: String\n}\nfunc extract(person: &Person) -> String {\n\tperson.name\n}\nfunc check() -> Int {\n\tlet p = Person(name: \"hello\" + \" world\")\n\tlet n = extract(p)\n\tn.length\n}\ncheck()";
+    let typed = flow_driver(source);
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let mut lowered = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    let mut evaluator = crate::lambda_g::eval::Evaluator::new();
+    let value = evaluator
+        .run_main(
+            &mut lowered.phase.program,
+            lowered.phase.main,
+            lowered.phase.result_ty,
+        )
+        .expect("eval");
+    assert_eq!(
+        value,
+        crate::lambda_g::eval::EvalValue::I64(11),
+        "unexpected result"
+    );
+    assert_eq!(
+        evaluator.live_allocations(),
+        0,
+        "every allocation should be released by scope-exit drops"
+    );
+}
+
+#[test]
+fn rejects_borrowed_non_cheap_clone_argument_to_owned_parameter() {
+    let typed = flow_driver(
+        "struct Name {\n\tlet value: String\n}\nfunc take(name: Name) -> Int {\n\t0\n}\nfunc bad(name: &Name) -> Int {\n\ttake(name)\n}",
+    );
+    assert!(typed.has_errors(), "expected a type error");
 }
 
 // ----- Borrow conflicts / invalidation ------------------------------------------

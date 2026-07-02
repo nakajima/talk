@@ -317,6 +317,73 @@ impl<'a> Lowering<'a> {
         }
     }
 
+    /// Retain a value's refcounted buffers (the CoW clone: an rc bump at
+    /// every raw-pointer allocation the value owns), then continue. Mirrors
+    /// [`Self::lower_drop_value_then`]'s teardown structure — retain exactly
+    /// where a drop would free — minus `Deinit` dispatch: auto-clone applies
+    /// only to CheapClone types, which have no destructor to run.
+    pub(super) fn lower_retain_value_then(
+        &mut self,
+        ctx: &Ctx,
+        value: ExprId,
+        ty: &CheckTy,
+        next: ExprId,
+    ) -> ExprId {
+        if !self.needs_drop_type(ctx.unit, ty) {
+            return next;
+        }
+        match Self::borrow_erased_ty(ty.clone()) {
+            CheckTy::Nominal(symbol, args) => {
+                if self.symbol_is_borrowed(symbol) {
+                    return next;
+                }
+                if let Some(index) = self.rawptr_field_index(symbol) {
+                    let ptr_ty = self.p.ty_ptr();
+                    let ptr = self.p.primop(Op::GetField(index), &[value], ptr_ty);
+                    let void_ty = self.p.ty_void();
+                    let retain = self.p.primop(Op::Retain, &[ptr], void_ty);
+                    return self.sequence_void_effect(retain, next);
+                }
+                let fields = self.field_types_for(symbol, &args);
+                let mut body = next;
+                for (index, (_, field_ty)) in fields.into_iter().enumerate().rev() {
+                    if !self.needs_drop_type(ctx.unit, &field_ty) {
+                        continue;
+                    }
+                    let field_lambda_ty = self.map_ty(&field_ty);
+                    let field_value =
+                        self.p
+                            .primop(Op::GetField(index as u32), &[value], field_lambda_ty);
+                    body = self.lower_retain_value_then(ctx, field_value, &field_ty, body);
+                }
+                body
+            }
+            CheckTy::Tuple(items) => {
+                let mut body = next;
+                for (index, item_ty) in items.into_iter().enumerate().rev() {
+                    if !self.needs_drop_type(ctx.unit, &item_ty) {
+                        continue;
+                    }
+                    let field_value = self.p.extract(value, index as u32);
+                    body = self.lower_retain_value_then(ctx, field_value, &item_ty, body);
+                }
+                body
+            }
+            CheckTy::Record(row) if row.tail.is_none() => {
+                let mut body = next;
+                for (index, (_, field_ty)) in row.fields.into_iter().enumerate().rev() {
+                    if !self.needs_drop_type(ctx.unit, &field_ty) {
+                        continue;
+                    }
+                    let field_value = self.p.extract(value, index as u32);
+                    body = self.lower_retain_value_then(ctx, field_value, &field_ty, body);
+                }
+                body
+            }
+            _ => next,
+        }
+    }
+
     /// The `deinit` witness for a nominal's `Deinit` conformance, if any.
     pub(super) fn deinit_witness(&self, symbol: Symbol) -> Option<Symbol> {
         self.units.iter().find_map(|unit| {

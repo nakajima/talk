@@ -33,6 +33,16 @@ impl<'a> GradeView<'a> {
         self.copy_ty(ty, &mut FxHashSet::default())
     }
 
+    /// Cloning this type is an O(1) buffer retain (the `CheapClone`
+    /// marker): extracting it from a borrow clones silently instead of
+    /// moving out.
+    pub(crate) fn is_cheap_clone(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Nominal(symbol, _) => self.has_marker(*symbol, Symbol::CheapClone),
+            _ => false,
+        }
+    }
+
     /// A borrowed *value* type: `Substring` and friends (the `Borrowed`
     /// marker), or a `&T` itself.
     pub(crate) fn is_borrowed_value(&self, ty: &Ty) -> bool {

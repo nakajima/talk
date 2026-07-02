@@ -20,6 +20,7 @@ struct Harness {
     mono: FxHashMap<Symbol, Ty>,
     instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    coerce_clones: rustc_hash::FxHashSet<NodeID>,
 }
 
 impl Harness {
@@ -32,6 +33,7 @@ impl Harness {
             mono: FxHashMap::default(),
             instantiations: FxHashMap::default(),
             member_resolutions: FxHashMap::default(),
+            coerce_clones: rustc_hash::FxHashSet::default(),
         }
     }
 
@@ -44,6 +46,7 @@ impl Harness {
             mono: &self.mono,
             instantiations: &mut self.instantiations,
             member_resolutions: &mut self.member_resolutions,
+            coerce_clones: &mut self.coerce_clones,
             level: Level(1),
             defaulting: false,
             givens: vec![],
@@ -84,6 +87,24 @@ fn level_adjustment_propagates_outward() {
     )]);
     assert!(h.errors.is_empty(), "{:?}", h.errors);
     assert_eq!(h.store.level(inner.0), Level(0));
+}
+
+#[test]
+fn apply_reason_clones_borrowed_cheap_clone_argument() {
+    let mut h = Harness::new();
+    let cheap = Symbol::Struct(StructId::new(ModuleId::Current, 7));
+    h.catalog
+        .conformances
+        .insert((cheap, Symbol::CheapClone), Default::default());
+    let owned = Ty::Nominal(cheap, vec![]);
+    let borrowed = Ty::Borrow(Perm::Shared, Box::new(owned.clone()));
+    let residual = h.solve(vec![Constraint::Eq(owned, borrowed, origin())]);
+    assert!(h.errors.is_empty(), "{:?}", h.errors);
+    assert!(residual.is_empty(), "{residual:?}");
+    assert!(
+        h.coerce_clones.contains(&NodeID::ANY),
+        "the coercion site should be recorded for lowering"
+    );
 }
 
 #[test]

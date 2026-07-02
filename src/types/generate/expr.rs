@@ -254,7 +254,22 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // `Ty::Borrow` branch of `check_expr`). Checking a value against a non-borrow type is
         // not an application of that value, so drop `Apply`: a function value must satisfy a
         // function-typed slot invariantly rather than coercing its contravariant parameters.
-        self.emit_eq(expected.clone(), found, node, reason.nested());
+        // Exception: an owned CheapClone slot keeps `Apply` so the solver's tier-2 coercion
+        // (borrowed argument satisfied by an O(1) clone) can fire even when the argument's
+        // type resolves late.
+        let reason = match self.store.shallow(expected) {
+            Ty::Nominal(symbol, _)
+                if reason == CtReason::Apply
+                    && self
+                        .catalog
+                        .conformances
+                        .contains_key(&(symbol, Symbol::CheapClone)) =>
+            {
+                reason
+            }
+            _ => reason.nested(),
+        };
+        self.emit_eq(expected.clone(), found, node, reason);
     }
 
     pub(super) fn try_implicit_existential_pack(

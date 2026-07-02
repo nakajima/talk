@@ -156,6 +156,14 @@ pub enum Insn {
         dest: u16,
         ptr: u16,
     },
+    Retain {
+        dest: u16,
+        ptr: u16,
+    },
+    IsUnique {
+        dest: u16,
+        ptr: u16,
+    },
     Load {
         dest: u16,
         ptr: u16,
@@ -381,6 +389,8 @@ impl Module {
             } => format!("set_field r{dest} <- r{rec} with .{index} = r{src}"),
             Insn::Alloc { dest, count } => format!("alloc r{dest} <- r{count} bytes"),
             Insn::Free { dest, ptr } => format!("free r{dest} <- r{ptr}"),
+            Insn::Retain { dest, ptr } => format!("retain r{dest} <- r{ptr}"),
+            Insn::IsUnique { dest, ptr } => format!("is_unique r{dest} <- r{ptr}"),
             Insn::Load { dest, ptr, kind } => format!(
                 "load_{} r{dest} <- [r{ptr}]",
                 format!("{kind:?}").to_lowercase()

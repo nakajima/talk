@@ -55,6 +55,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             mono: &*self.mono,
             instantiations: &mut self.artifacts.instantiations,
             member_resolutions: &mut self.artifacts.member_resolutions,
+            coerce_clones: &mut self.artifacts.coerce_clones,
             level: self.level,
             defaulting,
             givens: vec![],

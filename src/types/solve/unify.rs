@@ -86,6 +86,24 @@ impl<'s> Solver<'s> {
                 ));
             }
 
+            // Tier-2 CheapClone coercion: a borrowed argument satisfies an
+            // owned CheapClone parameter by cloning — an O(1) buffer retain,
+            // emitted by lowering at the recorded node.
+            (Ty::Nominal(symbol, _), Ty::Borrow(_, found_inner))
+                if origin.reason == CtReason::Apply
+                    && self
+                        .catalog
+                        .conformances
+                        .contains_key(&(*symbol, Symbol::CheapClone)) =>
+            {
+                self.coerce_clones.insert(origin.node);
+                worklist.push(Constraint::Eq(
+                    a.clone(),
+                    (**found_inner).clone(),
+                    origin.nested(),
+                ));
+            }
+
             (Ty::Var(x), Ty::Var(y)) if self.store.find(x.0) == self.store.find(y.0) => {}
             (Ty::Var(x), Ty::Var(y)) => {
                 let x_root = self.store.find(x.0);

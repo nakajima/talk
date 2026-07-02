@@ -3,6 +3,7 @@ use { Storage, _storage, _load } from ./Memory.tlk
 use { String } from ./String.tlk
 use { Add, Subtract, Comparable } from ./Operators.tlk
 use { Showable } from ./Showable.tlk
+use { CheapClone } from ./Ownership.tlk
 
 public struct Array<Element> {
 	let storage: Storage<Element>
@@ -31,6 +32,7 @@ public struct Array<Element> {
 	}
 }
 
+extend Array<Element>: CheapClone {}
 extend Array<Element: Showable>: Showable {
 	func show() -> String {
 		let result = "["

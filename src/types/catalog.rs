@@ -184,7 +184,10 @@ impl TypeCatalog {
     /// for scalars and explicit `Copy` conformances, `Affine` otherwise
     /// (including unknown heads — affine is the safe default for both).
     pub fn grade_of(&self, symbol: Symbol) -> Grade {
-        if matches!(symbol, Symbol::Int | Symbol::Float | Symbol::Bool | Symbol::Void) {
+        if matches!(symbol, Symbol::Int | Symbol::Float | Symbol::Bool | Symbol::Void)
+            || symbol == Symbol::RawPtr
+            || symbol == Symbol::Byte
+        {
             return Grade::Copy;
         }
         let linear = self

@@ -116,6 +116,7 @@ impl<'a> TypecheckSession<'a> {
                 schemes,
                 instantiations,
                 member_resolutions: self.artifacts.member_resolutions,
+                coerce_clones: self.artifacts.coerce_clones,
                 existential_packs,
                 performs_into: self.artifacts.performs_into,
                 binder_refs: self.artifacts.binder_refs,

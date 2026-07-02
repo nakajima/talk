@@ -213,6 +213,9 @@ pub(crate) struct MoveChecker<'a> {
     pub(crate) stmt_drops: FxHashMap<NodeID, Vec<DropSchedule>>,
     /// Expressions whose use consumes their place.
     pub(crate) consumed: FxHashSet<NodeID>,
+    /// Expressions that clone instead of moving: CheapClone values
+    /// extracted from a borrow (tier 2 — lowering retains the buffers).
+    pub(crate) auto_clones: FxHashSet<NodeID>,
     /// Editor-facing facts (inlay hints, hover), accumulated during the walk.
     pub(crate) facts: super::FlowFacts,
 }
@@ -233,6 +236,7 @@ impl<'a> MoveChecker<'a> {
             block_drops: FxHashMap::default(),
             stmt_drops: FxHashMap::default(),
             consumed: FxHashSet::default(),
+            auto_clones: FxHashSet::default(),
             facts: super::FlowFacts::default(),
         }
     }
@@ -1225,8 +1229,10 @@ impl<'a> MoveChecker<'a> {
             .get(&place)
             .is_some_and(|summary| !summary.is_copyable());
         self.check_use(expr, &place, owned || noncopy_closure, state);
-        if !self.grades.is_copy(&expr.ty) {
-            self.check_move_out_of_borrowed(expr, &place, state);
+        if !self.grades.is_copy(&expr.ty) && self.check_move_out_of_borrowed(expr, &place, state) {
+            // Tier 2: the extraction clones (lowering retains the buffers),
+            // so the owner stays live — a read, not a move.
+            return;
         }
         if (owned || noncopy_closure) && tracked_root(place.root) {
             self.check_move_while_borrowed(expr.id, &place, state);

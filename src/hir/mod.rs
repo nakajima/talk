@@ -69,6 +69,10 @@ pub enum Node {
 pub struct ExprOwnership {
     /// This use consumes (moves) its place; the place is dead afterwards.
     pub consumes: bool,
+    /// This use clones instead of moving/borrowing: lowering retains the
+    /// value's buffers (CheapClone). Set by the type checker's borrowed-to-
+    /// owned coercion or the flow checker's borrowed-field extraction.
+    pub auto_clone: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Drive, DriveMut)]

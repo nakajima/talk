@@ -1,5 +1,5 @@
 // no-core
-use { Owner } from ./Ownership.tlk
+use { CheapClone, Owner } from ./Ownership.tlk
 
 public enum Allocation {
 	case allocate(Int)
@@ -46,6 +46,8 @@ public struct Storage<Element> {
 
 extend Storage<Element>: Owner {}
 
+extend Storage<Element>: CheapClone {}
+
 public func _storage<Element>(capacity: Int) 'alloc -> Storage<Element> {
 	Storage<Element>(base: _alloc<Element>(capacity))
 }
@@ -65,6 +67,8 @@ public struct ByteStorage {
 }
 
 extend ByteStorage: Owner {}
+
+extend ByteStorage: CheapClone {}
 
 public func _byte_storage(capacity: Int) 'alloc -> ByteStorage {
 	ByteStorage(base: _alloc<Byte>(capacity))

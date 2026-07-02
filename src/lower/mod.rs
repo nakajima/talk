@@ -1083,6 +1083,13 @@ impl<'a> Lowering<'a> {
 
     /// Lower `expr`, delivering its value to continuation `k : Fn(T, ⊥)`.
     fn lower_expr(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
+        // Tier-2 auto-clone: retain the value's buffers before handing it to
+        // the consumer, so the clone and the original release independently.
+        let k = if expr.ownership.auto_clone {
+            self.retain_then(expr, ctx, k)
+        } else {
+            k
+        };
         if let Some(pack) = self.existential_pack_at(expr.existential_pack.as_ref(), ctx) {
             if let CheckTy::Any { protocol, .. } = &pack.payload
                 && *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol)
@@ -1108,6 +1115,20 @@ impl<'a> Lowering<'a> {
             return self.lower_expr_unpacked(expr, ctx, pack_ref);
         }
         self.lower_expr_unpacked(expr, ctx, k)
+    }
+
+    /// A continuation that retains `expr`'s refcounted buffers, then applies
+    /// `k` — the receiving end of a tier-2 auto-clone.
+    fn retain_then(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
+        let ty = self.checker_ty(expr, ctx);
+        let value_ty = self.map_ty(&ty);
+        let bot = self.p.ty_bot();
+        let cont = self.p.func("retain", value_ty, bot);
+        let value = self.p.var(cont);
+        let next = self.p.app(k, value);
+        let body = self.lower_retain_value_then(ctx, value, &ty, next);
+        self.p.set_body(cont, body);
+        self.p.func_ref(cont)
     }
 
     fn lower_expr_unpacked(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
@@ -1314,6 +1335,11 @@ impl<'a> Lowering<'a> {
     /// variables, field reads on pure receivers, and @_ir splices over
     /// pure operands.
     fn try_pure(&mut self, expr: &Expr, ctx: &Ctx) -> Option<ExprId> {
+        // An auto-cloned value must retain its buffers — an effect — so it
+        // takes the continuation path (`lower_expr` wraps k with the retains).
+        if expr.ownership.auto_clone {
+            return None;
+        }
         if let Some(pack) = self.existential_pack_at(expr.existential_pack.as_ref(), ctx) {
             if let CheckTy::Any { protocol, .. } = &pack.payload
                 && *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol)

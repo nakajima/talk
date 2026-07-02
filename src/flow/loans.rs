@@ -210,15 +210,18 @@ impl MoveChecker<'_> {
     }
 
     /// The legacy `check_move_out_of_borrowed_value`: extracting a non-copy
-    /// value from inside a borrowed value moves out of it.
+    /// value from inside a borrowed value moves out of it — unless the value
+    /// is CheapClone, in which case the extraction clones (tier 2: lowering
+    /// retains the buffers, the owner stays live). Returns whether the
+    /// tier-2 clone applied.
     pub(crate) fn check_move_out_of_borrowed(
         &mut self,
         expr: &hir::Expr,
         place: &Place,
         state: &MoveState,
-    ) {
+    ) -> bool {
         if place.fields.is_empty() {
-            return;
+            return false;
         }
         let root = Place::root(place.root);
         let root_is_borrowed = state.borrowed_roots.contains_key(&place.root)
@@ -227,6 +230,10 @@ impl MoveChecker<'_> {
                 .symbol_ty(place.root)
                 .is_some_and(|ty| self.grades.is_borrowed_value(&ty));
         if root_is_borrowed {
+            if self.grades.is_cheap_clone(&expr.ty) {
+                self.auto_clones.insert(expr.id);
+                return true;
+            }
             let error = OwnershipError::MoveOutOfBorrowedValue {
                 name: self.render(place),
                 owner: self.render(&root),
@@ -234,6 +241,7 @@ impl MoveChecker<'_> {
             };
             self.error(error, expr.id);
         }
+        false
     }
 
     /// Use of a borrow whose owner has moved or been reassigned.

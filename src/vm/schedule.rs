@@ -818,6 +818,18 @@ impl<'a> ChunkBuilder<'a> {
                 self.code.push(Insn::Free { dest, ptr });
                 Ok(dest)
             }
+            Op::Retain => {
+                let ptr = self.eval(args[0])?;
+                let dest = self.fresh();
+                self.code.push(Insn::Retain { dest, ptr });
+                Ok(dest)
+            }
+            Op::IsUnique => {
+                let ptr = self.eval(args[0])?;
+                let dest = self.fresh();
+                self.code.push(Insn::IsUnique { dest, ptr });
+                Ok(dest)
+            }
             Op::Load => {
                 let Some(kind) = mem_kind_of(self.p.ty_kind(self.p.expr(e).ty)) else {
                     return self.eval_trap("vm: load of a type that cannot live in memory");

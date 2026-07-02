@@ -269,6 +269,8 @@ impl Encoder {
             }
             Insn::Alloc { dest, count } => self.reg2(23, dest, count),
             Insn::Free { dest, ptr } => self.reg2(24, dest, ptr),
+            Insn::Retain { dest, ptr } => self.reg2(38, dest, ptr),
+            Insn::IsUnique { dest, ptr } => self.reg2(39, dest, ptr),
             Insn::Load { dest, ptr, kind } => {
                 self.u8(25);
                 self.u16(dest);
@@ -765,6 +767,14 @@ impl<'a> Decoder<'a> {
                 targets_len: self.u16()?,
             }),
             36 => Ok(Insn::Ret { src: self.u16()? }),
+            38 => Ok(Insn::Retain {
+                dest: self.u16()?,
+                ptr: self.u16()?,
+            }),
+            39 => Ok(Insn::IsUnique {
+                dest: self.u16()?,
+                ptr: self.u16()?,
+            }),
             37 => Ok(Insn::Trap {
                 message: self.u32()?,
             }),
@@ -1011,6 +1021,8 @@ impl Insn {
             | Insn::CellNew { dest, init: src }
             | Insn::Alloc { dest, count: src }
             | Insn::Free { dest, ptr: src }
+            | Insn::Retain { dest, ptr: src }
+            | Insn::IsUnique { dest, ptr: src }
             | Insn::EnvGet { dest, index: src } => {
                 Register::new(n_regs).check_many(&[dest, src])?
             }

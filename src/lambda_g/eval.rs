@@ -102,6 +102,12 @@ impl Evaluator {
         }
     }
 
+    /// Allocation records still live after a run — the leak invariant
+    /// (every retain balanced by a release) asserts this is zero.
+    pub fn live_allocations(&self) -> usize {
+        self.allocations.live_count()
+    }
+
     /// Run a CPS `main : [Fn(R, ⊥)] → ⊥`: apply it to the halt continuation
     /// and evaluate; the value passed to halt is the program's value.
     pub fn run_main(
@@ -486,6 +492,25 @@ impl Evaluator {
                     Ok(EvalValue::Void)
                 }
                 _ => Err(EvalError::Unsupported("free on non-pointer".into())),
+            },
+            Op::Retain => match self.eval_sub(p, args[0])? {
+                EvalValue::Ptr(ptr) => {
+                    self.allocations
+                        .retain(self.static_len, ptr)
+                        .map_err(eval_memory_error)?;
+                    Ok(EvalValue::Void)
+                }
+                _ => Err(EvalError::Unsupported("retain on non-pointer".into())),
+            },
+            Op::IsUnique => match self.eval_sub(p, args[0])? {
+                EvalValue::Ptr(ptr) => {
+                    let unique = self
+                        .allocations
+                        .is_unique(self.static_len, ptr)
+                        .map_err(eval_memory_error)?;
+                    Ok(EvalValue::Bool(unique))
+                }
+                _ => Err(EvalError::Unsupported("is_unique on non-pointer".into())),
             },
             // Width and representation come from the primop's λ_G type
             // (see TyKind::mem_size).

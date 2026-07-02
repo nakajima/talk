@@ -49,7 +49,10 @@ impl HirLowerer<'_> {
             id: e.id,
             kind: self.expr_kind(&e.kind),
             span: e.span,
-            ownership: hir::ExprOwnership::default(),
+            ownership: hir::ExprOwnership {
+                consumes: false,
+                auto_clone: self.types.coerce_clones.contains(&e.id),
+            },
             ty: {
                 let Some(ty) = self.types.node_types.get(&e.id) else {
                     unreachable!("the type checker assigns every expression a type")
