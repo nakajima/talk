@@ -40,9 +40,10 @@ pub fn check_flow(
     module_id: ModuleId,
 ) -> Vec<AnyDiagnostic> {
     let mut checker = moves::MoveChecker::new(types);
+    let mut file_drops = vec![];
     for file in hir.values() {
         let mut state = Default::default();
-        checker.check_roots(&file.roots, &mut state);
+        file_drops.push(checker.check_roots(&file.roots, &mut state));
     }
     let mut errors = checker.errors;
     errors.extend(unsafe_gate::check(hir, module_id));
@@ -54,7 +55,8 @@ pub fn check_flow(
         stmt_drops: checker.stmt_drops,
         consumed: checker.consumed,
     };
-    for file in hir.values_mut() {
+    for (file, drops) in hir.values_mut().zip(file_drops) {
+        file.drops = drops;
         for root in &mut file.roots {
             use derive_visitor::DriveMut;
             root.drive_mut(&mut annotator);

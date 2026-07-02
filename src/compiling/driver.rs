@@ -568,6 +568,13 @@ impl Driver<NameResolved> {
                 if hir.is_empty() {
                     (OwnershipOutput::default(), vec![])
                 } else {
+                    // The flow pass always runs: its HIR annotations
+                    // (`Block::drops`, `Stmt::drops`, `Expr.ownership`) are
+                    // lowering's sole drop/move source. Diagnostics come from
+                    // whichever checker is selected — under Legacy the flow
+                    // pass annotates silently.
+                    let flow_diagnostics =
+                        crate::flow::check_flow(&mut hir, &types, self.config.module_id);
                     match self.config.checker {
                         CheckerKind::Legacy => crate::ownership::check_ownership(
                             &hir,
@@ -575,10 +582,7 @@ impl Driver<NameResolved> {
                             &resolved_names,
                             self.config.module_id,
                         ),
-                        CheckerKind::Flow => (
-                            OwnershipOutput::default(),
-                            crate::flow::check_flow(&mut hir, &types, self.config.module_id),
-                        ),
+                        CheckerKind::Flow => (OwnershipOutput::default(), flow_diagnostics),
                     }
                 }
             }
@@ -612,7 +616,7 @@ impl Driver<Typed> {
             symbols: _,
             resolved_names,
             types,
-            ownership,
+            ownership: _,
             diagnostics,
         } = self.phase;
 
@@ -628,7 +632,6 @@ impl Driver<Typed> {
                 asts: &core.hir,
                 types: &core.types,
                 resolved: &core.resolved_names,
-                ownership: &core.ownership,
             });
         }
         for module in &stdlib {
@@ -636,14 +639,12 @@ impl Driver<Typed> {
                 asts: &module.hir,
                 types: &module.types,
                 resolved: &module.resolved_names,
-                ownership: &module.ownership,
             });
         }
         units.push(LowerUnit {
             asts: &hir,
             types: &types,
             resolved: &resolved_names,
-            ownership: &ownership,
         });
         let entry = units.len() - 1;
         let lowered = lower_program(units, entry);

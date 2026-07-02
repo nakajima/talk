@@ -1,5 +1,5 @@
 use super::*;
-use crate::mir;
+use crate::lower::mir;
 
 #[derive(Clone, Copy)]
 enum MirRestBinding {

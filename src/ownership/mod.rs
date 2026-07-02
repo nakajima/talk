@@ -10,7 +10,7 @@ use crate::{
         self, Block, Body, Decl, DeclKind, Expr, ExprKind, Func, HirFile, Node, Parameter,
         StmtKind,
     },
-    mir,
+    lower::mir,
     name_resolution::{
         name_resolver::ResolvedNames,
         symbol::{Symbol, set_symbol_names},
@@ -38,26 +38,9 @@ pub struct OwnershipOutput {
     pub needs_drop_types: FxHashSet<Ty>,
     pub facts: OwnershipFacts,
     pub drop_plan: DropPlan,
-    /// Every body the ownership pass built, borrow-checked, and elaborated, keyed so a later
-    /// phase can reuse it instead of rebuilding the MIR. Lowering looks its bodies up here and
-    /// reads the drop/move results already projected onto each statement — so the MIR is built
-    /// and the drops elaborated exactly once, in this pass, for both the compiler and the editor.
-    pub(crate) mir_bodies: FxHashMap<BodyCacheKey, crate::mir::Body>,
 }
 
 impl OwnershipOutput {
-    /// The already-built, already-elaborated MIR for a function body, if this pass produced it.
-    /// Lowering reuses this so the MIR is built and its drops elaborated exactly once. (The
-    /// top-level body is not reused: lowering builds one combined cross-file `main` body, whereas
-    /// this pass builds a body per file, so the granularities don't line up.)
-    pub(crate) fn function_body(
-        &self,
-        body: NodeID,
-        owner: Option<Symbol>,
-    ) -> Option<&crate::mir::Body> {
-        self.mir_bodies.get(&BodyCacheKey::Function { body, owner })
-    }
-
     pub fn type_is_borrowed_nominal(&self, symbol: Symbol) -> bool {
         self.borrowed_types.contains(&symbol)
     }
@@ -462,71 +445,6 @@ fn run_ownership<'a>(
     checker.compute_return_reach(asts);
     checker.check_moves(asts);
     checker
-}
-
-/// Annotate `body`'s statements with the drop/move results lowering needs, reusing the
-/// type-ability summary `check_ownership` already produced. Lowering calls this on the MIR
-/// body it builds, then reads the results back off each statement's `ownership` — so it never
-/// looks them up in a side table keyed by program point. The drop elaboration runs on this
-/// exact body (a transient checker), then the per-point obligations/moves are projected onto
-/// the statements they belong to.
-pub(crate) fn elaborate_body_drops(
-    types: &TypeOutput,
-    resolved: &ResolvedNames,
-    summary: &OwnershipOutput,
-    body: &mut mir::Body,
-) {
-    let _names = set_symbol_names(types.display_names.clone());
-    let mut checker = OwnershipChecker {
-        types,
-        resolved,
-        // Unused by drop elaboration (only `check_raw_pointer_surface` reads it).
-        module_id: ModuleId::Core,
-        diagnostics: vec![],
-        reported: FxHashSet::default(),
-        output: OwnershipOutput {
-            borrowed_types: summary.borrowed_types.clone(),
-            owned_types: summary.owned_types.clone(),
-            copyable_types: summary.copyable_types.clone(),
-            droppable_types: summary.droppable_types.clone(),
-            needs_drop_types: summary.needs_drop_types.clone(),
-            ..OwnershipOutput::default()
-        },
-        recorded_mir_bodies: FxHashMap::default(),
-        elaborated_mir_bodies: FxHashSet::default(),
-        checked_independent_bodies: FxHashSet::default(),
-        recorded_move_facts: FxHashSet::default(),
-        recorded_borrow_facts: FxHashMap::default(),
-        nested_body_memos: vec![],
-        return_param_reach: FxHashMap::default(),
-    };
-    // A fresh checker has one body, so every obligation/move is keyed to `BodyId(0)` and
-    // matched onto its statement purely by point index.
-    let body_id = BodyId(0);
-    checker.elaborate_drops(body_id, body);
-    let obligations = checker.output.drop_plan.obligations;
-    let moves = checker.output.facts.moves;
-    for statement in body
-        .blocks
-        .iter_mut()
-        .flat_map(|block| &mut block.statements)
-    {
-        let point = statement.point.0 as u32;
-        if let Some(obligation) = obligations
-            .iter()
-            .find(|obligation| obligation.point.point == point)
-        {
-            statement.ownership.drop = Some(mir::DropElaborationResult {
-                key_path: obligation.key_path.clone(),
-                kind: obligation.kind,
-            });
-        }
-        statement.ownership.moves = moves
-            .iter()
-            .filter(|fact| fact.point.point == point)
-            .map(|fact| fact.source.clone())
-            .collect();
-    }
 }
 
 struct OwnershipChecker<'a> {
@@ -1159,13 +1077,14 @@ impl OwnershipChecker<'_> {
     }
 
     fn check_decl_moves_in_slice(&mut self, file_id: FileID, nodes: &[Node]) {
-        let mut body = mir::build_nodes(self.types, nodes);
+        // The legacy checker's transient MIR ignores flow schedules: it runs
+        // its own elaboration for its fact tables.
+        let mut body = mir::build_nodes(self.types, nodes, vec![]);
         let key = BodyCacheKey::TopLevel(file_id);
         let body_id = self.record_mir_body_once(key, &body, BodyKind::TopLevel);
         self.elaborate_and_project(key, body_id, &mut body);
         let mut state = MoveState::default();
         self.check_mir_body(body_id, &body, &mut state);
-        self.persist_body(key, body);
     }
 
     fn check_body_moves(&mut self, body: &Body) {
@@ -1175,12 +1094,10 @@ impl OwnershipChecker<'_> {
             let body_id = self.record_mir_body_once(key, &body, BodyKind::DeclBody);
             self.elaborate_and_project(key, body_id, &mut body);
             if !self.checked_independent_bodies.insert(key) {
-                self.persist_body(key, body);
                 continue;
             }
             let mut state = MoveState::default();
             self.check_mir_body(body_id, &body, &mut state);
-            self.persist_body(key, body);
         }
     }
 
@@ -1203,13 +1120,11 @@ impl OwnershipChecker<'_> {
             self.check_closure_captures(captures, params, source_body, &body, parent_state);
         }
         if !self.checked_independent_bodies.insert(key) {
-            self.persist_body(key, body);
             return;
         }
         let mut state = MoveState::default();
         self.seed_shared_borrow_params(owner, params, &mut state);
         self.check_mir_body(body_id, &body, &mut state);
-        self.persist_body(key, body);
     }
 
     fn check_closure_captures(
@@ -1908,12 +1823,6 @@ impl OwnershipChecker<'_> {
                 .map(|fact| fact.source.clone())
                 .collect();
         }
-    }
-
-    /// Persist a fully built + elaborated body so lowering can reuse it instead of rebuilding
-    /// the MIR. Keyed once; the first body for a key wins (later identical builds are dropped).
-    fn persist_body(&mut self, key: BodyCacheKey, body: mir::Body) {
-        self.output.mir_bodies.entry(key).or_insert(body);
     }
 
     /// Resolve each `DropCandidate` to a drop obligation and record the moves at each
@@ -4935,9 +4844,9 @@ mod tests {
     use crate::{
         compiling::driver::{Driver, DriverConfig, Source},
         diagnostic::AnyDiagnostic,
-        mir::{DropElaboration, DropReason},
+        lower::mir::{DropElaboration, DropReason},
         name_resolution::symbol::Symbol,
-        ownership::{BodyCacheKey, BodyKind, OwnershipOutput, PointKind},
+        ownership::{BodyKind, OwnershipOutput, PointKind},
     };
     use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -4988,64 +4897,6 @@ mod tests {
         // The ownership pass elaborated the drop/move facts (`drop_plan` + `facts.moves`) once,
         // for both the editor and lowering — no second walk needed.
         (typed.phase.ownership, typed.phase.types.display_names)
-    }
-
-    #[test]
-    fn ownership_pass_elaborates_and_persists_each_body_once() {
-        // The MIR is built and its drops elaborated exactly once, in the ownership pass: the
-        // node-keyed facts the editor reads (`drop_plan` + `facts.moves`) and the per-statement
-        // results lowering reads (`statement.ownership`) come from that single elaboration, and
-        // the elaborated body is persisted in `mir_bodies` so lowering reuses it instead of
-        // rebuilding the MIR.
-        let source = "
-            func make() -> Int {
-                let s = \"hello\" + \" world\"
-                let pair = (s, 1)
-                0
-            }
-            ";
-        let typed = Driver::new(
-            vec![Source::from(source)],
-            DriverConfig::new("OwnershipTest"),
-        )
-        .parse()
-        .expect("parse")
-        .resolve_names()
-        .expect("resolve")
-        .type_check();
-        assert!(
-            !typed.has_errors(),
-            "unexpected diagnostics: {:?}",
-            typed.diagnostics()
-        );
-
-        let ownership = &typed.phase.ownership;
-        assert!(
-            !ownership.drop_plan.obligations.is_empty(),
-            "the ownership pass elaborates drops for the editor's hints"
-        );
-        assert!(
-            !ownership.facts.moves.is_empty(),
-            "the ownership pass records move facts for the editor's hints"
-        );
-
-        // The function body is persisted, and its drop result is projected onto a statement so
-        // lowering reads it off the MIR rather than re-elaborating.
-        let function_body = ownership
-            .mir_bodies
-            .iter()
-            .find(|(key, _)| matches!(key, BodyCacheKey::Function { .. }))
-            .map(|(_, body)| body)
-            .expect("the function body is persisted for lowering to reuse");
-        let has_projected_drop = function_body
-            .blocks
-            .iter()
-            .flat_map(|block| &block.statements)
-            .any(|statement| statement.ownership.drop.is_some());
-        assert!(
-            has_projected_drop,
-            "the elaborated drop is projected onto the persisted body's statements"
-        );
     }
 
     #[test]
@@ -5865,7 +5716,7 @@ mod tests {
     }
 
     #[test]
-    fn elaborate_body_drops_projects_results_onto_statements() {
+    fn built_mir_statements_carry_flow_drop_results() {
         // Lowering reads drop/move handling off `statement.ownership`, which
         // `elaborate_body_drops` projects by running the borrow checker's elaboration on
         // lowering's own body. The projection must land the same results the borrow checker
@@ -5917,26 +5768,22 @@ mod tests {
             })
             .expect("func make in roots");
 
-        let mut body = crate::mir::build_function(types, func.name.symbol().ok(), &func.body);
-        crate::ownership::elaborate_body_drops(
-            types,
-            &typed.phase.resolved_names,
-            &typed.phase.ownership,
-            &mut body,
-        );
+        // The builder carries the flow checker's schedules inline: no
+        // post-hoc projection exists anymore.
+        let body = crate::lower::mir::build_function(types, func.name.symbol().ok(), &func.body);
 
         let statements = || body.blocks.iter().flat_map(|block| &block.statements);
         assert!(
             statements()
                 .filter_map(|statement| statement.ownership.drop.as_ref())
                 .any(|drop| drop.key_path.root == s && drop.kind == DropElaboration::Dead),
-            "expected the projected statements to carry a dead scope drop for s"
+            "expected the built statements to carry a dead scope drop for s"
         );
         assert!(
             statements()
                 .flat_map(|statement| &statement.ownership.moves)
                 .any(|source| source.root == s),
-            "expected the projected statements to carry a move of s"
+            "expected the built statements to carry a move of s"
         );
     }
 

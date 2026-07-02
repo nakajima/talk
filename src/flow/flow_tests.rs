@@ -607,6 +607,61 @@ impl ScheduleCollector {
     }
 }
 
+// ----- VM-output differential: Legacy vs Flow checker --------------------------
+
+/// The same drop-heavy programs produce identical VM results under both
+/// checker kinds. Drops always come from the flow annotations now; this
+/// pins that the checker selection changes diagnostics only, never codegen.
+#[test]
+fn vm_output_identical_under_both_checkers() {
+    let corpus: &[&[&str]] = &[
+        &["let s = \"hello\" + \" world\"\ns.length"],
+        &[
+            "func make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\tlet t = s\n\t\tt.length\n\t} else {\n\t\t2\n\t}\n}\nmake(true) + make(false)",
+        ],
+        &[
+            "func shout(s: String) -> Int {\n\ts.length\n}\nfunc make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet t = s\n\tshout(t)\n}\nmake()",
+        ],
+        // Two files: top-level locals across files drop via the combined
+        // main body's concatenated schedules.
+        &[
+            "let first = \"hello\" + \" world\"\nfirst.length",
+            "let second = \"bye\" + \" now\"\nsecond.length",
+        ],
+    ];
+    for sources in corpus {
+        let legacy = run_vm(sources, CheckerKind::Legacy);
+        let flow = run_vm(sources, CheckerKind::Flow);
+        assert_eq!(
+            format!("{legacy:?}"),
+            format!("{flow:?}"),
+            "VM output diverged between checkers for {sources:?}"
+        );
+    }
+}
+
+fn run_vm(sources: &[&str], checker: CheckerKind) -> crate::vm::interp::Value {
+    let mut config = DriverConfig::new("FlowDiffVm");
+    config.checker = checker;
+    let typed = Driver::new(
+        sources.iter().map(|s| Source::from(*s)).collect(),
+        config,
+    )
+    .parse()
+    .expect("parse")
+    .resolve_names()
+    .expect("resolve")
+    .type_check();
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let mut lowered = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    lowered.run_vm().expect("vm")
+}
+
 // ----- Unsafe gating ----------------------------------------------------------
 
 #[test]

@@ -382,6 +382,52 @@ struct Builder<'types> {
 struct ScopeFrame {
     id: ScopeId,
     locals: Vec<(NodeID, Symbol)>,
+    /// The flow checker's scope-exit schedules for the HIR block this scope
+    /// was built from (empty for synthetic scopes): the sole source of drop
+    /// elaboration, joined to this scope's `DropCandidate`s by root symbol.
+    drops: Vec<crate::flow::drops::DropSchedule>,
+}
+
+/// The flow checker's `Place` and the MIR's symbol-rooted `KeyPath` are the
+/// same shape; drop schedules cross over here.
+fn key_path_for_place(place: &crate::flow::Place) -> crate::ownership::KeyPath {
+    crate::ownership::KeyPath {
+        root: place.root,
+        fields: place.fields.clone(),
+    }
+}
+
+/// The symbol-rooted place an expression names (a variable or a chain of
+/// stored-field accesses off one) — the flow checker's `place()` shape.
+fn symbol_key_path(types: &TypeOutput, expr: &Expr) -> Option<crate::ownership::KeyPath> {
+    match &expr.kind {
+        ExprKind::Variable(name) => name
+            .symbol()
+            .ok()
+            .map(crate::ownership::KeyPath::root),
+        ExprKind::Member(Some(receiver), _) => {
+            let field = stored_field_symbol(types, expr.member_resolution.as_ref())?;
+            let mut base = symbol_key_path(types, receiver)?;
+            base.fields.push(field);
+            Some(base)
+        }
+        _ => None,
+    }
+}
+
+fn elaboration_for_schedule(
+    schedule: &crate::flow::drops::DropSchedule,
+) -> DropElaborationResult {
+    let kind = match schedule.kind {
+        crate::flow::drops::DropElaboration::Static => DropElaboration::Static,
+        crate::flow::drops::DropElaboration::Dead => DropElaboration::Dead,
+        crate::flow::drops::DropElaboration::Conditional => DropElaboration::Conditional,
+        crate::flow::drops::DropElaboration::Open => DropElaboration::Open,
+    };
+    DropElaborationResult {
+        key_path: key_path_for_place(&schedule.place),
+        kind,
+    }
 }
 
 pub(crate) fn build_block(types: &TypeOutput, block: &Block) -> Body {
@@ -391,7 +437,7 @@ pub(crate) fn build_block(types: &TypeOutput, block: &Block) -> Body {
 pub(crate) fn build_function(types: &TypeOutput, owner: Option<Symbol>, block: &Block) -> Body {
     let mut builder = Builder::new(types, owner);
     let entry = builder.new_block();
-    let exit = builder.lower_root_scope(entry, |builder, entry| {
+    let exit = builder.lower_root_scope(entry, block.drops.clone(), |builder, entry| {
         builder.lower_nodes(&block.body, entry, true)
     });
     builder.terminate_if_open(exit, Terminator::Return);
@@ -401,15 +447,23 @@ pub(crate) fn build_function(types: &TypeOutput, owner: Option<Symbol>, block: &
 pub(crate) fn build_decls(types: &TypeOutput, decls: &[Decl]) -> Body {
     let mut builder = Builder::new(types, None);
     let entry = builder.new_block();
-    let exit = builder.lower_root_scope(entry, |builder, entry| builder.lower_decls(decls, entry));
+    let exit = builder.lower_root_scope(entry, vec![], |builder, entry| {
+        builder.lower_decls(decls, entry)
+    });
     builder.terminate_if_open(exit, Terminator::Return);
     builder.finish(entry)
 }
 
-pub(crate) fn build_nodes(types: &TypeOutput, nodes: &[Node]) -> Body {
+/// Build a top-level body. `drops` is the file-scope drop schedule (or the
+/// concatenation of several files' schedules for the combined `main` body).
+pub(crate) fn build_nodes(
+    types: &TypeOutput,
+    nodes: &[Node],
+    drops: Vec<crate::flow::drops::DropSchedule>,
+) -> Body {
     let mut builder = Builder::new(types, None);
     let entry = builder.new_block();
-    let exit = builder.lower_root_scope(entry, |builder, entry| {
+    let exit = builder.lower_root_scope(entry, drops, |builder, entry| {
         builder.lower_nodes(nodes, entry, true)
     });
     builder.terminate_if_open(exit, Terminator::Return);
@@ -761,7 +815,7 @@ impl Builder<'_> {
             StmtKind::Expr(Expr {
                 kind: ExprKind::Block(block),
                 ..
-            }) => self.lower_child_scope(current, |builder, current| {
+            }) => self.lower_child_scope(current, block.drops.clone(), |builder, current| {
                 builder.lower_nodes(&block.body, current, false)
             }),
             StmtKind::Expr(expr) => {
@@ -787,12 +841,12 @@ impl Builder<'_> {
                         destination: ValueDestination::Return,
                     },
                 );
-                self.emit_early_exit_drops(current);
+                self.emit_early_exit_drops(current, &stmt.drops);
                 self.terminate_if_open(current, Terminator::Return);
                 current
             }
             StmtKind::Return(None) => {
-                self.emit_early_exit_drops(current);
+                self.emit_early_exit_drops(current, &stmt.drops);
                 self.terminate_if_open(current, Terminator::ReturnVoid);
                 current
             }
@@ -806,7 +860,7 @@ impl Builder<'_> {
                         value,
                     },
                 );
-                self.emit_early_exit_drops(current);
+                self.emit_early_exit_drops(current, &stmt.drops);
                 let terminator = self
                     .loop_stack
                     .last()
@@ -816,7 +870,7 @@ impl Builder<'_> {
                 current
             }
             StmtKind::Continue(None) => {
-                self.emit_early_exit_drops(current);
+                self.emit_early_exit_drops(current, &stmt.drops);
                 let terminator = self
                     .loop_stack
                     .last()
@@ -826,7 +880,7 @@ impl Builder<'_> {
                 current
             }
             StmtKind::Break => {
-                self.emit_early_exit_drops(current);
+                self.emit_early_exit_drops(current, &stmt.drops);
                 let terminator = self
                     .loop_stack
                     .last()
@@ -840,13 +894,23 @@ impl Builder<'_> {
                 self.lower_assignment_lhs(lhs, current);
                 let target_key_path = self.key_path_for_expr(lhs);
                 let value = self.rvalue_for_expr(rhs);
-                self.push_statement(
+                // The old value's drop, scheduled by the flow checker on
+                // this assignment statement.
+                let elaboration = stmt
+                    .drops
+                    .iter()
+                    .find(|schedule| {
+                        schedule.reason == crate::flow::drops::DropReason::AssignmentReplace
+                    })
+                    .map(elaboration_for_schedule);
+                self.push_statement_with_drop(
                     current,
                     Statement::DropCandidate {
                         target: DropTarget::Expr((**lhs).clone()),
                         key_path: target_key_path.clone(),
                         reason: DropReason::AssignmentReplace,
                     },
+                    elaboration,
                 );
                 self.push_statement(
                     current,
@@ -893,9 +957,11 @@ impl Builder<'_> {
                 self.lower_exprs(items, current)
             }
             ExprKind::As(inner, _) => self.lower_expr(inner, current),
-            ExprKind::Block(block) => self.lower_child_scope(current, |builder, current| {
-                builder.lower_nodes(&block.body, current, true)
-            }),
+            ExprKind::Block(block) => {
+                self.lower_child_scope(current, block.drops.clone(), |builder, current| {
+                    builder.lower_nodes(&block.body, current, true)
+                })
+            }
             ExprKind::Call {
                 callee,
                 args,
@@ -1049,13 +1115,13 @@ impl Builder<'_> {
             },
         );
 
-        let then_exit = self.lower_child_scope(then_id, |builder, then_id| {
+        let then_exit = self.lower_child_scope(then_id, then_block.drops.clone(), |builder, then_id| {
             builder.lower_nodes(&then_block.body, then_id, mark_tail_exprs)
         });
         self.terminate_if_open(then_exit, Terminator::Jump(join_id));
 
         let else_exit = if let Some(else_block) = else_block {
-            self.lower_child_scope(else_id, |builder, else_id| {
+            self.lower_child_scope(else_id, else_block.drops.clone(), |builder, else_id| {
                 builder.lower_nodes(&else_block.body, else_id, mark_tail_exprs)
             })
         } else {
@@ -1097,7 +1163,7 @@ impl Builder<'_> {
             continue_target: header_id,
             break_target: exit_id,
         });
-        let body_exit = self.lower_child_scope(body_id, |builder, body_id| {
+        let body_exit = self.lower_child_scope(body_id, body.drops.clone(), |builder, body_id| {
             builder.lower_nodes(&body.body, body_id, false)
         });
         self.loop_stack.pop();
@@ -1121,7 +1187,7 @@ impl Builder<'_> {
         );
 
         for (arm, arm_id) in arms.iter().zip(arm_blocks) {
-            let arm_exit = self.lower_child_scope(arm_id, |builder, arm_id| {
+            let arm_exit = self.lower_child_scope(arm_id, arm.body.drops.clone(), |builder, arm_id| {
                 builder.lower_pattern_binders(&arm.pattern, arm_id);
                 builder.lower_nodes(&arm.body.body, arm_id, true)
             });
@@ -1169,22 +1235,112 @@ impl Builder<'_> {
         }
         let point = StatementId(self.next_point);
         self.next_point += 1;
+        let moves = self.statement_moves(&statement);
         self.blocks[block.0].statements.push(LocatedStatement {
             point,
             kind: statement,
-            ownership: StatementOwnership::default(),
+            ownership: StatementOwnership {
+                drop: None,
+                moves,
+            },
         });
+    }
+
+    /// Push a statement carrying its drop elaboration (a `DropCandidate`
+    /// whose schedule the flow checker wrote onto the HIR).
+    fn push_statement_with_drop(
+        &mut self,
+        block: BlockId,
+        statement: Statement,
+        elaboration: Option<DropElaborationResult>,
+    ) {
+        self.push_statement(block, statement);
+        if let Some(last) = self.blocks[block.0].statements.last_mut() {
+            last.ownership.drop = elaboration;
+        }
+    }
+
+    /// The places this statement moves, read off the flow checker's
+    /// `Expr.ownership.consumes` annotations on the embedded expressions
+    /// (plus `[consuming]` closure captures). Lowering clears these places'
+    /// drop flags after the statement. The same expression may be embedded
+    /// in more than one statement; flag-clearing is idempotent, so the
+    /// duplication is harmless.
+    fn statement_moves(&mut self, statement: &Statement) -> Vec<crate::ownership::KeyPath> {
+        let mut exprs: Vec<&Expr> = vec![];
+        match statement {
+            Statement::ConsumeValue { expr, .. }
+            | Statement::ReturnValue { expr, .. }
+            | Statement::ContinueValue { expr, .. }
+            | Statement::Read { expr } => exprs.push(expr),
+            Statement::Bind { rhs: Some(rhs), .. } => exprs.push(rhs),
+            Statement::Assign { rhs, .. } => exprs.push(rhs),
+            Statement::Call { callee, args, .. } => {
+                exprs.push(callee);
+                exprs.extend(args.iter().map(|arg| &arg.value));
+            }
+            Statement::Function { captures, .. } => {
+                return captures
+                    .iter()
+                    .filter(|capture| {
+                        matches!(capture.mode, crate::node_kinds::func::CaptureMode::Move)
+                    })
+                    .filter_map(|capture| capture.name.symbol().ok())
+                    .map(crate::ownership::KeyPath::root)
+                    .collect();
+            }
+            _ => {}
+        }
+        let mut moves = vec![];
+        for expr in exprs {
+            self.collect_consumed_places(expr, &mut moves);
+        }
+        moves
+    }
+
+    /// Collect the consumed places directly moved by this statement's
+    /// expression: a consumed place expression, or place-typed elements of
+    /// aggregate literals — exactly the legacy `collect_consumed_value_exprs`
+    /// recursion. Nested control flow, calls, and function bodies are NOT
+    /// descended: their moves ride their own statements, keeping drop-flag
+    /// clearing per-path precise.
+    fn collect_consumed_places(&mut self, expr: &Expr, out: &mut Vec<crate::ownership::KeyPath>) {
+        if expr.ownership.consumes
+            && let Some(key_path) = symbol_key_path(self.types, expr)
+        {
+            out.push(key_path);
+            return;
+        }
+        match &expr.kind {
+            ExprKind::Tuple(items) | ExprKind::LiteralArray(items) => {
+                for item in items {
+                    self.collect_consumed_places(item, out);
+                }
+            }
+            ExprKind::RecordLiteral { fields, spread } => {
+                for field in fields {
+                    self.collect_consumed_places(&field.value, out);
+                }
+                if let Some(spread) = spread {
+                    self.collect_consumed_places(spread, out);
+                }
+            }
+            ExprKind::As(inner, _) => self.collect_consumed_places(inner, out),
+            _ => {}
+        }
     }
 
     fn lower_root_scope(
         &mut self,
         current: BlockId,
+        drops: Vec<crate::flow::drops::DropSchedule>,
         lower: impl FnOnce(&mut Self, BlockId) -> BlockId,
     ) -> BlockId {
         let scope = self.new_scope(None);
         self.scope_stack.push(ScopeFrame {
             id: scope,
             locals: vec![],
+            drops,
         });
         self.push_statement(current, Statement::ScopeEnter { scope });
         let exit = lower(self, current);
@@ -1196,6 +1352,7 @@ impl Builder<'_> {
     fn lower_child_scope(
         &mut self,
         current: BlockId,
+        drops: Vec<crate::flow::drops::DropSchedule>,
         lower: impl FnOnce(&mut Self, BlockId) -> BlockId,
     ) -> BlockId {
         let parent = self.scope_stack.last().map(|scope| scope.id);
@@ -1203,6 +1360,7 @@ impl Builder<'_> {
         self.scope_stack.push(ScopeFrame {
             id: scope,
             locals: vec![],
+            drops,
         });
         self.push_statement(current, Statement::ScopeEnter { scope });
         let exit = lower(self, current);
@@ -1223,15 +1381,21 @@ impl Builder<'_> {
         };
         let scope = frame.id;
         let locals: Vec<(NodeID, Symbol)> = frame.locals.clone();
+        let schedules = frame.drops.clone();
         for (id, symbol) in locals.iter().rev().copied() {
             let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
-            self.push_statement(
+            let elaboration = schedules
+                .iter()
+                .find(|schedule| schedule.place.root == symbol)
+                .map(elaboration_for_schedule);
+            self.push_statement_with_drop(
                 current,
                 Statement::DropCandidate {
                     target: DropTarget::Symbol { id, symbol },
                     key_path,
                     reason: DropReason::ScopeExit,
                 },
+                elaboration,
             );
             self.push_statement(current, Statement::StorageDead { id, symbol });
         }
@@ -1239,7 +1403,14 @@ impl Builder<'_> {
         current
     }
 
-    fn emit_early_exit_drops(&mut self, current: BlockId) {
+    /// Early-exit drops for a `return`/`break`/`continue`, elaborated from
+    /// the statement's flow schedules (all enclosing scopes' locals,
+    /// innermost scope first — the same order the flow checker wrote them).
+    fn emit_early_exit_drops(
+        &mut self,
+        current: BlockId,
+        schedules: &[crate::flow::drops::DropSchedule],
+    ) {
         let locals: Vec<(NodeID, Symbol)> = self
             .scope_stack
             .iter()
@@ -1248,13 +1419,21 @@ impl Builder<'_> {
             .collect();
         for (id, symbol) in locals {
             let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
-            self.push_statement(
+            let elaboration = schedules
+                .iter()
+                .find(|schedule| {
+                    schedule.reason == crate::flow::drops::DropReason::EarlyExit
+                        && schedule.place.root == symbol
+                })
+                .map(elaboration_for_schedule);
+            self.push_statement_with_drop(
                 current,
                 Statement::DropCandidate {
                     target: DropTarget::Symbol { id, symbol },
                     key_path,
                     reason: DropReason::EarlyExit,
                 },
+                elaboration,
             );
         }
     }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::mir;
+use crate::lower::mir;
 
 impl<'a> Lowering<'a> {
     // ----- Blocks and statements -------------------------------------------
@@ -8,23 +8,10 @@ impl<'a> Lowering<'a> {
     /// expression). A block's value is its final expression; divergent
     /// statements (return) ignore `k`.
     pub(super) fn lower_block(&mut self, block: &Block, ctx: &Ctx, k: ExprId) -> ExprId {
+        // The single MIR build: from annotated HIR, drops already elaborated
+        // by the flow checker's schedules on the block itself.
         let unit = &self.units[ctx.unit];
-        // The ownership pass already built and elaborated this body; reuse it (the MIR is built
-        // and its drops elaborated exactly once). Fall back to building it only if it was not
-        // persisted (e.g. a synthetic body the ownership walk never saw).
-        let body = match unit.ownership.function_body(block.id, ctx.owner) {
-            Some(body) => body.clone(),
-            None => {
-                let mut body = mir::build_function(unit.types, ctx.owner, block);
-                crate::ownership::elaborate_body_drops(
-                    unit.types,
-                    unit.resolved,
-                    unit.ownership,
-                    &mut body,
-                );
-                body
-            }
-        };
+        let body = mir::build_function(unit.types, ctx.owner, block);
         self.lower_mir_body(&body, ctx, k)
     }
 
@@ -534,10 +521,7 @@ impl<'a> Lowering<'a> {
                 if self.symbol_is_borrowed(*symbol) {
                     return false;
                 }
-                self.units
-                    .iter()
-                    .any(|unit_data| unit_data.ownership.type_has_needs_drop_fact(ty))
-                    || self.symbol_has_ability(*symbol, "Owner")
+                self.symbol_has_ability(*symbol, "Owner")
                     || self.nominal_needs_drop(unit, *symbol, args, visiting)
             }
             CheckTy::Tuple(items) => items
@@ -618,9 +602,14 @@ impl<'a> Lowering<'a> {
     }
 
     pub(super) fn symbol_is_borrowed(&self, symbol: Symbol) -> bool {
-        self.units
-            .iter()
-            .any(|unit| unit.ownership.type_is_borrowed_nominal(symbol))
+        // The `Borrowed` marker conformance, read structurally from the
+        // catalog (the legacy fact set is empty under the flow checker).
+        self.units.iter().any(|unit| {
+            unit.types
+                .catalog
+                .conformances
+                .contains_key(&(symbol, Symbol::Borrowed))
+        })
     }
 
     pub(super) fn symbol_has_ability(&self, symbol: Symbol, ability: &str) -> bool {

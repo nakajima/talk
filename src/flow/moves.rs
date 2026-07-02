@@ -175,10 +175,34 @@ impl<'a> MoveChecker<'a> {
         self.scopes = outer_scopes;
     }
 
-    /// Check a file's top-level roots as one body, descending into every
-    /// nested function declaration along the way.
-    pub(crate) fn check_roots(&mut self, roots: &[hir::Node], state: &mut MoveState) {
-        self.walk_block_nodes(roots, state);
+    /// Check a file's top-level roots as one body (the file is the top-level
+    /// scope), descending into every nested function declaration along the
+    /// way. Returns the file's scope-exit drop schedules.
+    pub(crate) fn check_roots(
+        &mut self,
+        roots: &[hir::Node],
+        state: &mut MoveState,
+    ) -> Vec<DropSchedule> {
+        self.scopes.push(ScopeFrame {
+            // The file scope has no HIR node; its schedules return to the
+            // caller (annotated onto the `HirFile`) instead of `block_drops`.
+            block_id: NodeID::SYNTHESIZED,
+            locals: vec![],
+        });
+        let diverges = self.walk_block_nodes(roots, state);
+        let Some(frame) = self.scopes.pop() else {
+            unreachable!("file scope frame pushed above")
+        };
+        let mut schedules = vec![];
+        if diverges == Diverges::No {
+            for local in frame.locals.iter().rev().cloned().collect::<Vec<_>>() {
+                self.schedule_drop(&local, DropReason::ScopeExit, state, &mut schedules);
+            }
+        }
+        for local in &frame.locals {
+            state.finish_local(&Place::root(local.symbol));
+        }
+        schedules
     }
 
     /// Function declarations reachable from a node list: their bodies are

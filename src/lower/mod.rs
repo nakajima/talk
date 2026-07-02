@@ -21,6 +21,7 @@
 
 mod derive;
 pub mod lower_tests;
+pub(crate) mod mir;
 mod mir_lowering;
 mod patterns;
 mod statements;
@@ -36,14 +37,13 @@ use crate::hir::{
 use crate::lambda_g::expr::Const;
 use crate::lambda_g::expr::{CmpOp, ExprId, Op, TyId, TyKind};
 use crate::lambda_g::program::{Label, Program};
-use crate::mir;
 use crate::name_resolution::name_resolver::ResolvedNames;
 use crate::name_resolution::symbol::Symbol;
 use crate::node_kinds::{
     inline_ir_instruction::{InlineIRInstructionKind, Value as IrValue},
     type_annotation::{TypeAnnotation, TypeAnnotationKind},
 };
-use crate::ownership::{KeyPath as OwnershipKeyPath, OwnershipOutput};
+use crate::ownership::KeyPath as OwnershipKeyPath;
 use crate::token_kind::TokenKind;
 use crate::types::TypeOutput;
 use crate::types::ty::Ty as CheckTy;
@@ -53,7 +53,6 @@ pub struct LowerUnit<'a> {
     pub asts: &'a IndexMap<Source, HirFile>,
     pub types: &'a TypeOutput,
     pub resolved: &'a ResolvedNames,
-    pub ownership: &'a OwnershipOutput,
 }
 
 /// θ: rigid type parameters (including a protocol's Self and associated
@@ -3690,14 +3689,15 @@ impl<'a> Lowering<'a> {
 
     /// Like lower_nodes, but the final expression's value goes to ret_k.
     fn lower_main_nodes(&mut self, nodes: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
-        let mut body = mir::build_nodes(self.units[ctx.unit].types, nodes);
-        let unit = &self.units[ctx.unit];
-        crate::ownership::elaborate_body_drops(
-            unit.types,
-            unit.resolved,
-            unit.ownership,
-            &mut body,
-        );
+        // The combined main body spans every file's top level: its scope-exit
+        // drops are the files' flow schedules concatenated (a by-symbol
+        // lookup table — emission order comes from the scope's own locals).
+        let drops = self.units[ctx.unit]
+            .asts
+            .values()
+            .flat_map(|file| file.drops.iter().cloned())
+            .collect();
+        let body = mir::build_nodes(self.units[ctx.unit].types, nodes, drops);
         self.lower_mir_body(&body, ctx, k)
     }
 

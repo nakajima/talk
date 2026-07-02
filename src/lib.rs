@@ -27,7 +27,6 @@ pub mod flow;
 pub mod hir;
 pub mod lambda_g;
 pub mod lower;
-pub mod mir;
 pub mod name_resolution;
 pub mod ownership;
 pub mod repl;
