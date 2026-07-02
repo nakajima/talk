@@ -50,8 +50,8 @@ use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
 use crate::types::output::MemberResolution;
 use crate::types::ty::{
-    EffTail, EffVar, EffectRow, Predicate, Row, RowTail, RowVar, Scheme, SchemeParam, Ty, TyFold,
-    TyVar, match_pattern,
+    EffTail, EffVar, EffectRow, Perm, PermVar, Predicate, Row, RowTail, RowVar, Scheme,
+    SchemeParam, Ty, TyFold, TyVar, match_pattern,
 };
 
 /// The per-binding-group solver. Borrows the checker's tables; owns nothing.

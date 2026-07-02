@@ -233,6 +233,9 @@ impl Symbol {
     const WELL_KNOWN_CORE_STORAGE_ID: u32 = u32::MAX - 30;
     const WELL_KNOWN_CORE_BORROWED_ID: u32 = u32::MAX - 29;
     const WELL_KNOWN_CORE_OWNER_ID: u32 = u32::MAX - 28;
+    const WELL_KNOWN_CORE_COPY_ID: u32 = u32::MAX - 27;
+    const WELL_KNOWN_CORE_CHEAP_CLONE_ID: u32 = u32::MAX - 26;
+    const WELL_KNOWN_CORE_DEINIT_ID: u32 = u32::MAX - 25;
 
     pub const Int: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
@@ -291,6 +294,18 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: Self::WELL_KNOWN_CORE_OWNER_ID,
     });
+    pub const Copy: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_COPY_ID,
+    });
+    pub const CheapClone: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_CHEAP_CLONE_ID,
+    });
+    pub const Deinit: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_DEINIT_ID,
+    });
 
     pub fn well_known_core_struct(name: &str) -> Option<Symbol> {
         match name {
@@ -305,6 +320,9 @@ impl Symbol {
         match name {
             "Borrowed" => Some(Symbol::Borrowed),
             "Owner" => Some(Symbol::Owner),
+            "Copy" => Some(Symbol::Copy),
+            "CheapClone" => Some(Symbol::CheapClone),
+            "Deinit" => Some(Symbol::Deinit),
             _ => None,
         }
     }

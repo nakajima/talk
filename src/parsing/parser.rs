@@ -216,6 +216,7 @@ impl<'a> Parser<'a> {
                 | Effect
                 | Use
                 | Public
+                | Linear
         ) {
             self.decl(BlockContext::None, false)
         } else {
@@ -242,6 +243,27 @@ impl<'a> Parser<'a> {
                 // Set visibility to Public on the declaration
                 if let Node::Decl(ref mut decl) = node {
                     decl.visibility = Visibility::Public;
+                }
+                node
+            }
+            Linear => {
+                self.consume(TokenKind::Linear)?;
+                let mut node = self.decl(context, is_static)?;
+                let mut marked = false;
+                if let Node::Decl(ref mut decl) = node {
+                    if let DeclKind::Struct { linear, .. } | DeclKind::Enum { linear, .. } =
+                        &mut decl.kind
+                    {
+                        *linear = true;
+                        marked = true;
+                    }
+                }
+                if !marked {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "a struct or enum declaration after `linear`".into(),
+                        actual: format!("{:?}", current.kind),
+                        token: Some(current),
+                    });
                 }
                 node
             }
@@ -692,6 +714,7 @@ impl<'a> Parser<'a> {
                 generics,
                 where_clause,
                 body,
+                linear: false,
             },
             BlockContext::Struct => DeclKind::Struct {
                 name: name.into(),
@@ -699,6 +722,7 @@ impl<'a> Parser<'a> {
                 generics,
                 where_clause,
                 body,
+                linear: false,
             },
             BlockContext::Extend => DeclKind::Extend {
                 name: name.into(),

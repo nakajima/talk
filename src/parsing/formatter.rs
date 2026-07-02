@@ -521,8 +521,12 @@ impl<'a> Formatter<'a> {
                 generics,
                 where_clause,
                 body,
+                linear,
                 ..
-            } => self.format_struct(name, generics, where_clause.as_ref(), body),
+            } => {
+                let doc = self.format_struct(name, generics, where_clause.as_ref(), body);
+                if *linear { text("linear ") + doc } else { doc }
+            }
             DeclKind::Let {
                 lhs,
                 type_annotation,
@@ -572,8 +576,12 @@ impl<'a> Formatter<'a> {
                 generics,
                 where_clause,
                 body,
+                linear,
                 ..
-            } => self.format_enum_decl(name, generics, where_clause.as_ref(), body),
+            } => {
+                let doc = self.format_enum_decl(name, generics, where_clause.as_ref(), body);
+                if *linear { text("linear ") + doc } else { doc }
+            }
             DeclKind::EnumVariant {
                 name,
                 generics,
@@ -2936,6 +2944,18 @@ mod formatter_tests {
         // Trailing block with args - space before {
         assert_eq!(format_code("foo(1){ 2 }", 80), "foo(1) { 2 }");
         assert_eq!(format_code("foo(1) { 2 }", 80), "foo(1) { 2 }");
+    }
+
+    #[test]
+    fn linear_struct_round_trips() {
+        assert_eq!(
+            format_code("linear struct FileHandle {\n\tlet fd: Int\n}", 80),
+            "linear struct FileHandle {\n\tlet fd: Int\n}"
+        );
+        assert_eq!(
+            format_code("public linear struct Token {\n\tlet id: Int\n}", 80),
+            "public linear struct Token {\n\tlet id: Int\n}"
+        );
     }
 
     #[test]

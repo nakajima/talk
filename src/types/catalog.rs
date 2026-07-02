@@ -14,8 +14,21 @@ use rustc_hash::FxHashMap;
 use crate::name_resolution::symbol::Symbol;
 use crate::types::ty::{Predicate, Scheme, Ty};
 
+/// The usage grade of a declaration over the substructural lattice:
+/// `Copy` values duplicate freely, `Affine` values (the default) move and may
+/// be silently dropped, `Linear` values must be consumed exactly once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Grade {
+    Copy,
+    Affine,
+    Linear,
+}
+
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct StructInfo {
+    /// Declared with the `linear` modifier: must be consumed exactly once.
+    #[serde(default)]
+    pub linear: bool,
     /// Declared generic parameters, as rigid `Ty::Param` symbols.
     pub params: Vec<Symbol>,
     /// Field name → (property symbol, declared type over `params`).
@@ -42,6 +55,9 @@ pub struct Variant {
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Enum {
+    /// Declared with the `linear` modifier: must be consumed exactly once.
+    #[serde(default)]
+    pub linear: bool,
     pub params: Vec<Symbol>,
     pub variants: IndexMap<String, Variant>,
     /// Instance method name → method symbol (methods on enums dispatch
@@ -164,6 +180,28 @@ pub struct TypeCatalog {
 }
 
 impl TypeCatalog {
+    /// The usage grade of a nominal: `Linear` iff declared `linear`, `Copy`
+    /// for scalars and explicit `Copy` conformances, `Affine` otherwise
+    /// (including unknown heads — affine is the safe default for both).
+    pub fn grade_of(&self, symbol: Symbol) -> Grade {
+        if matches!(symbol, Symbol::Int | Symbol::Float | Symbol::Bool | Symbol::Void) {
+            return Grade::Copy;
+        }
+        let linear = self
+            .structs
+            .get(&symbol)
+            .map(|info| info.linear)
+            .or_else(|| self.enums.get(&symbol).map(|info| info.linear))
+            .unwrap_or(false);
+        if linear {
+            return Grade::Linear;
+        }
+        if self.conformances.contains_key(&(symbol, Symbol::Copy)) {
+            return Grade::Copy;
+        }
+        Grade::Affine
+    }
+
     /// Remap every symbol for an importer (the catalog half of
     /// `Module::import_as`).
     pub fn import_as(self, target: crate::compiling::module::ModuleId) -> TypeCatalog {
@@ -177,6 +215,7 @@ impl TypeCatalog {
                     (
                         imp(k, target),
                         StructInfo {
+                            linear: v.linear,
                             params: v.params.iter().map(|s| imp(*s, target)).collect(),
                             fields: v
                                 .fields
@@ -210,6 +249,7 @@ impl TypeCatalog {
                     (
                         imp(k, target),
                         Enum {
+                            linear: v.linear,
                             params: v.params.iter().map(|s| imp(*s, target)).collect(),
                             variants: v
                                 .variants

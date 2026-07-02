@@ -7,6 +7,7 @@ pub enum TokenKind {
     Import,
     Use,
     Public,
+    Linear,
 
     // Effects
     Effect,
@@ -192,6 +193,7 @@ impl TokenKind {
             TokenKind::Import => "import",
             TokenKind::Use => "use",
             TokenKind::Public => "public",
+            TokenKind::Linear => "linear",
             TokenKind::Static => "static",
             TokenKind::At => "@",
             TokenKind::DotDot => "..",

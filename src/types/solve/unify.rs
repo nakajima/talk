@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::ty::BorrowKind;
+use crate::types::ty::Perm;
 
 /// Where a leftover row/effect-row binds its tail when it flows into a
 /// variable. Kind-agnostic: `unify_row_like` decides it from the flattened
@@ -8,6 +8,14 @@ enum TailSpec {
     Var(u32),
     Closed,
     Param(Symbol),
+}
+
+/// Outcome of permission unification: solved (or bound), a concrete
+/// mismatch, or blocked on an untouchable variable inside an implication.
+enum PermUnify {
+    Ok,
+    Mismatch,
+    Defer,
 }
 
 impl<'s> Solver<'s> {
@@ -40,15 +48,17 @@ impl<'s> Solver<'s> {
             // mistake doesn't cascade into follow-on diagnostics.
             (Ty::Error, _) | (_, Ty::Error) => {}
 
-            (Ty::Borrow(k1, inner1), Ty::Borrow(k2, inner2)) if k1 == k2 => {
-                worklist.push(Constraint::Eq(
-                    (**inner1).clone(),
-                    (**inner2).clone(),
-                    origin,
-                ));
+            (Ty::Borrow(p1, inner1), Ty::Borrow(p2, inner2)) => {
+                match self.unify_perm(*p1, *p2) {
+                    PermUnify::Ok => worklist.push(Constraint::Eq(
+                        (**inner1).clone(),
+                        (**inner2).clone(),
+                        origin,
+                    )),
+                    PermUnify::Mismatch => self.report_mismatch(&a, &b, origin),
+                    PermUnify::Defer => return false,
+                }
             }
-
-            (Ty::Borrow(..), Ty::Borrow(..)) => self.report_mismatch(&a, &b, origin),
 
             (Ty::Borrow(_, inner), other) if origin.reason == CtReason::Apply => {
                 worklist.push(Constraint::Eq(
@@ -186,6 +196,37 @@ impl<'s> Solver<'s> {
         true
     }
 
+    /// Unify two borrow permissions over the two-point lattice. Invariant:
+    /// subsumption (`Exclusive ≤ Shared`) lives only in the two coercion
+    /// helpers below, never here — keeping plain unification syntactic keeps
+    /// it decidable and principal. Perm vars bind like type vars (they share
+    /// the `VarStore`), minus the occurs check: permissions have no structure.
+    fn unify_perm(&mut self, a: Perm, b: Perm) -> PermUnify {
+        let a = self.store.shallow_perm(a);
+        let b = self.store.shallow_perm(b);
+        if a == b {
+            return PermUnify::Ok;
+        }
+        match (a, b) {
+            (Perm::Var(x), Perm::Var(y)) => {
+                match (self.is_touchable(x.0), self.is_touchable(y.0)) {
+                    (true, _) => self.store.bind(x.0, VarValue::Perm(Perm::Var(y))),
+                    (_, true) => self.store.bind(y.0, VarValue::Perm(Perm::Var(x))),
+                    (false, false) => return PermUnify::Defer,
+                }
+                PermUnify::Ok
+            }
+            (Perm::Var(x), other) | (other, Perm::Var(x)) => {
+                if !self.is_touchable(x.0) {
+                    return PermUnify::Defer;
+                }
+                self.store.bind(x.0, VarValue::Perm(other));
+                PermUnify::Ok
+            }
+            _ => PermUnify::Mismatch,
+        }
+    }
+
     /// Auto-borrow an immediate call argument to its parameter: an owned value
     /// satisfies a `&`/`&mut` parameter, and a `&mut` value satisfies a `&`
     /// parameter. Only called for `Apply` origins at the application boundary;
@@ -199,25 +240,24 @@ impl<'s> Solver<'s> {
         worklist: &mut Vec<Constraint>,
     ) {
         match self.store.shallow(expected) {
-            Ty::Borrow(expected_kind, expected_inner) => match self.store.shallow(found) {
-                Ty::Borrow(found_kind, found_inner) if found_kind == expected_kind => {
-                    worklist.push(Constraint::Eq(
-                        (*expected_inner).clone(),
-                        (*found_inner).clone(),
-                        origin,
-                    ));
-                }
-                Ty::Borrow(BorrowKind::Mutable, found_inner)
-                    if expected_kind == BorrowKind::Shared =>
-                {
-                    worklist.push(Constraint::Eq(
-                        (*expected_inner).clone(),
-                        (*found_inner).clone(),
-                        origin,
-                    ));
-                }
-                Ty::Borrow(..) => {
-                    worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin));
+            Ty::Borrow(expected_perm, expected_inner) => match self.store.shallow(found) {
+                Ty::Borrow(found_perm, found_inner) => {
+                    let expected_perm = self.store.shallow_perm(expected_perm);
+                    let found_perm = self.store.shallow_perm(found_perm);
+                    // `&mut` satisfies `&` at the application boundary; every
+                    // other pairing (vars included) unifies invariantly via
+                    // the full borrow types.
+                    if expected_perm == found_perm
+                        || (expected_perm == Perm::Shared && found_perm == Perm::Exclusive)
+                    {
+                        worklist.push(Constraint::Eq(
+                            (*expected_inner).clone(),
+                            (*found_inner).clone(),
+                            origin,
+                        ));
+                    } else {
+                        worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin));
+                    }
                 }
                 _ => {
                     worklist.push(Constraint::Eq(
@@ -239,14 +279,16 @@ impl<'s> Solver<'s> {
         worklist: &mut Vec<Constraint>,
     ) {
         match (self.store.shallow(expected), self.store.shallow(found)) {
-            (
-                Ty::Borrow(BorrowKind::Shared, expected_inner),
-                Ty::Borrow(BorrowKind::Mutable, found_inner),
-            ) => worklist.push(Constraint::Eq(
-                (*expected_inner).clone(),
-                (*found_inner).clone(),
-                origin,
-            )),
+            (Ty::Borrow(expected_perm, expected_inner), Ty::Borrow(found_perm, found_inner))
+                if self.store.shallow_perm(expected_perm) == Perm::Shared
+                    && self.store.shallow_perm(found_perm) == Perm::Exclusive =>
+            {
+                worklist.push(Constraint::Eq(
+                    (*expected_inner).clone(),
+                    (*found_inner).clone(),
+                    origin,
+                ))
+            }
             _ => worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin)),
         }
     }

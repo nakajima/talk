@@ -12,7 +12,7 @@ use crate::{
     types::{
         TypeOutput,
         output::stored_field_symbol,
-        ty::{BorrowKind, Ty},
+        ty::{Perm, Ty},
     },
 };
 
@@ -120,7 +120,7 @@ impl KeyPath {
 pub(crate) enum ValueUse {
     Copy(KeyPath),
     Move(KeyPath),
-    Borrow { kind: BorrowKind, target: KeyPath },
+    Borrow { kind: Perm, target: KeyPath },
     Constant(NodeID),
     Function(Symbol),
 }
@@ -142,7 +142,7 @@ pub(crate) enum AggregateKind {
 pub(crate) enum Rvalue {
     Use(ValueUse),
     Borrow {
-        kind: BorrowKind,
+        kind: Perm,
         target: KeyPath,
     },
     Aggregate {

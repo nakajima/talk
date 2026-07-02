@@ -3,3 +3,17 @@
 public protocol Borrowed {}
 
 public protocol Owner {}
+
+// A value that duplicates freely: using it never moves it. Scalars conform
+// intrinsically; a user type may conform when every field is Copy.
+public protocol Copy {}
+
+// A buffer-backed value whose clone is an O(1) refcount bump (copy-on-write).
+// Conformance is legal only when every non-Copy field is itself CheapClone.
+public protocol CheapClone {}
+
+// A destructor run when an owned value is dropped at scope exit. Linear
+// types may not conform: they must be consumed explicitly.
+public protocol Deinit {
+	consuming func deinit() -> Void
+}

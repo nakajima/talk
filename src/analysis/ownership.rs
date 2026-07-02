@@ -9,7 +9,7 @@ use crate::mir::DropElaboration;
 use crate::name_resolution::symbol::{Symbol, set_symbol_names};
 use crate::node_id::NodeID;
 use crate::ownership::{DropObligation, KeyPath, LoanFact, MoveFact, OwnershipOutput};
-use crate::types::ty::{BorrowKind, Ty};
+use crate::types::ty::{Perm, Ty};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnershipInlayHintKind {
@@ -244,18 +244,12 @@ fn render_drop_tooltip(obligation: &DropObligation) -> String {
     )
 }
 
-fn borrow_prefix(kind: BorrowKind) -> &'static str {
-    match kind {
-        BorrowKind::Shared => "&",
-        BorrowKind::Mutable => "&mut",
-    }
+fn borrow_prefix(kind: Perm) -> &'static str {
+    if kind.is_exclusive() { "&mut" } else { "&" }
 }
 
-fn borrow_kind_name(kind: BorrowKind) -> &'static str {
-    match kind {
-        BorrowKind::Shared => "shared",
-        BorrowKind::Mutable => "mutable",
-    }
+fn borrow_kind_name(kind: Perm) -> &'static str {
+    if kind.is_exclusive() { "mutable" } else { "shared" }
 }
 
 fn render_key_path(key_path: &KeyPath) -> String {

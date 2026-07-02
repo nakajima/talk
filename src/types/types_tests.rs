@@ -3351,4 +3351,87 @@ mod with_core {
             .expect("x scheme");
         assert_eq!(typed.phase.types.schemes[&symbol].render(), "Int");
     }
+
+    // === Grades: Copy / Affine / Linear (substructural core) ===
+    // These check against the real core prelude, where the Copy / CheapClone /
+    // Deinit marker protocols live.
+
+    fn assert_no_errors(driver: &Driver<Typed>) {
+        let errors = type_errors(driver);
+        assert!(errors.is_empty(), "expected no type errors: {errors:?}");
+    }
+
+    #[test]
+    fn copy_conformance_requires_all_fields_copy() {
+        let t = check_with_core(Source::from(
+            "struct Point {\n\tlet x: Int\n\tlet y: Int\n}\nextend Point: Copy {}",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn copy_conformance_rejects_non_copy_field() {
+        let t = check_with_core(Source::from(
+            "struct Name {\n\tlet value: String\n}\nextend Name: Copy {}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Copy")),
+            "expected a non-Copy-field error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn linear_struct_rejects_deinit_conformance() {
+        // A linear value must be consumed explicitly; an automatic destructor
+        // would defeat the point of declaring it linear.
+        let t = check_with_core(Source::from(
+            "linear struct FileHandle {\n\tlet fd: Int\n}\nextend FileHandle: Deinit {\n\tfunc deinit() {}\n}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("linear")),
+            "expected a linear/Deinit conflict error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn linear_struct_rejects_copy_conformance() {
+        let t = check_with_core(Source::from(
+            "linear struct Token {\n\tlet id: Int\n}\nextend Token: Copy {}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("linear")),
+            "expected a linear/Copy conflict error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn grades_derive_from_declarations() {
+        use crate::name_resolution::symbol::Symbol;
+        use crate::types::catalog::Grade;
+        let t = check_with_core(Source::from(
+            "linear struct FileHandle {\n\tlet fd: Int\n}\nstruct Plain {\n\tlet x: Int\n}\nextend Plain: Copy {}\nstruct Holder {\n\tlet name: String\n}",
+        ));
+        assert_no_errors(&t);
+        let resolved = &t.phase.resolved_names;
+        let symbol_named = |name: &str| -> Symbol {
+            resolved
+                .symbol_names
+                .iter()
+                .find(|(sym, n)| {
+                    n.as_str() == name && matches!(sym, Symbol::Struct(_) | Symbol::Enum(_))
+                })
+                .map(|(sym, _)| *sym)
+                .unwrap_or_else(|| panic!("no struct symbol named {name}"))
+        };
+        let catalog = &t.phase.types.catalog;
+        assert_eq!(catalog.grade_of(symbol_named("FileHandle")), Grade::Linear);
+        assert_eq!(catalog.grade_of(symbol_named("Plain")), Grade::Copy);
+        assert_eq!(catalog.grade_of(symbol_named("Holder")), Grade::Affine);
+        assert_eq!(catalog.grade_of(Symbol::Int), Grade::Copy);
+        assert_eq!(catalog.grade_of(Symbol::String), Grade::Affine);
+    }
+
 }

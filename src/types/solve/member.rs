@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::ty::BorrowKind;
+use crate::types::ty::Perm;
 
 impl<'s> Solver<'s> {
     /// One step on a HasMember predicate against a known head.
@@ -551,8 +551,8 @@ impl<'s> Solver<'s> {
                         origin,
                     ));
                 }
-                Ty::Borrow(BorrowKind::Mutable, found_inner)
-                    if expected_kind == BorrowKind::Shared =>
+                Ty::Borrow(Perm::Exclusive, found_inner)
+                    if expected_kind == Perm::Shared =>
                 {
                     queue.push(Constraint::Eq(
                         (*expected_inner).clone(),
@@ -591,7 +591,10 @@ impl<'s> Solver<'s> {
         node: NodeID,
         queue: &mut Vec<Constraint>,
     ) -> Ty {
-        if scheme.params.is_empty() && scheme.eff_params.is_empty() && scheme.row_params.is_empty()
+        if scheme.params.is_empty()
+            && scheme.eff_params.is_empty()
+            && scheme.row_params.is_empty()
+            && scheme.perm_params.is_empty()
         {
             return scheme.ty.clone();
         }
@@ -621,6 +624,10 @@ impl<'s> Solver<'s> {
             ));
             rows.insert(*param, RowTail::Var(var));
         }
+        let mut perms = FxHashMap::default();
+        for param in &scheme.perm_params {
+            perms.insert(*param, Perm::Var(self.store.fresh_perm(self.level, node)));
+        }
         for predicate in &scheme.predicates {
             queue.push(
                 predicate
@@ -632,6 +639,9 @@ impl<'s> Solver<'s> {
             .entry(node)
             .or_default()
             .extend(recorded);
-        scheme.ty.substitute(&tys, &effs, &rows)
+        scheme
+            .ty
+            .substitute(&tys, &effs, &rows)
+            .substitute_perms(&perms)
     }
 }

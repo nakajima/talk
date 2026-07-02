@@ -218,9 +218,9 @@ impl<'e> Elaborator<'e> {
         match &annotation.kind {
             TypeAnnotationKind::Borrow { mutable, inner } => {
                 let kind = if *mutable {
-                    BorrowKind::Mutable
+                    Perm::Exclusive
                 } else {
-                    BorrowKind::Shared
+                    Perm::Shared
                 };
                 Ty::Borrow(kind, Box::new(self.lower_annotation(inner)))
             }

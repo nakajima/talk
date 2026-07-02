@@ -755,7 +755,7 @@ pub mod tests {
         let resolved = resolve("struct Person {}");
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct {
+            any_decl!(DeclKind::Struct { linear: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -790,7 +790,7 @@ pub mod tests {
         );
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct {
+            any_decl!(DeclKind::Struct { linear: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -861,7 +861,7 @@ pub mod tests {
         );
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct {
+            any_decl!(DeclKind::Struct { linear: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -896,7 +896,7 @@ pub mod tests {
         );
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct {
+            any_decl!(DeclKind::Struct { linear: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![GenericDecl {
@@ -972,7 +972,7 @@ pub mod tests {
         );
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct {
+            any_decl!(DeclKind::Struct { linear: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -1033,7 +1033,7 @@ pub mod tests {
         );
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct {
+            any_decl!(DeclKind::Struct { linear: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -1338,7 +1338,7 @@ pub mod tests {
 
         assert_eq!(
             *resolved.0.roots[0].as_decl(),
-            any_decl!(DeclKind::Enum {
+            any_decl!(DeclKind::Enum { linear: false,
                 name: Name::Resolved(Symbol::Enum(EnumId::from(1)), "Fizz".into()),
                 name_span: Span::ANY,
                 generics: vec![],

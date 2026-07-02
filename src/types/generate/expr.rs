@@ -198,7 +198,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     fn emit_immediate_borrow_check(
         &mut self,
         node: crate::node_id::NodeID,
-        expected_kind: BorrowKind,
+        expected_kind: Perm,
         expected_inner: Ty,
         expected: Ty,
         found: Ty,
@@ -208,7 +208,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             Ty::Borrow(found_kind, found_inner) if found_kind == expected_kind => {
                 self.emit_eq(expected_inner, (*found_inner).clone(), node, reason);
             }
-            Ty::Borrow(BorrowKind::Mutable, found_inner) if expected_kind == BorrowKind::Shared => {
+            Ty::Borrow(Perm::Exclusive, found_inner) if expected_kind == Perm::Shared => {
                 self.emit_eq(expected_inner, (*found_inner).clone(), node, reason);
             }
             Ty::Borrow(..) => self.emit_eq(expected, found, node, reason),
@@ -225,8 +225,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     ) {
         match (self.store.shallow(&expected), self.store.shallow(&found)) {
             (
-                Ty::Borrow(BorrowKind::Shared, expected_inner),
-                Ty::Borrow(BorrowKind::Mutable, found_inner),
+                Ty::Borrow(Perm::Shared, expected_inner),
+                Ty::Borrow(Perm::Exclusive, found_inner),
             ) => self.emit_eq(
                 (*expected_inner).clone(),
                 (*found_inner).clone(),

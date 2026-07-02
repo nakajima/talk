@@ -129,7 +129,9 @@ impl<'a> TypecheckSession<'a> {
 }
 
 fn final_ty(store: &mut VarStore, catalog: &TypeCatalog, ty: &Ty) -> Ty {
-    let zonked = store.zonk_ty(ty);
+    // All solving is done: a borrow permission nothing forced exclusive
+    // defaults to `Shared` here (binding in the store, so sharers agree).
+    let zonked = store.default_unsolved_perms(ty);
     normalize_deep(store, catalog, zonked)
 }
 

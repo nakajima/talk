@@ -24,6 +24,7 @@ pub(super) fn handle(string: &str) -> TokenKind {
         "import" => Import,
         "use" => Use,
         "public" => Public,
+        "linear" => Linear,
         "static" => Static,
         "associated" => Associated,
         "typealias" => Typealias,

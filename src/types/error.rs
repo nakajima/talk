@@ -114,6 +114,18 @@ pub enum TypeError {
     UnreachableMatchArm,
     UnreachableCode,
     CannotInfer,
+    /// A `Copy`/`CheapClone` conformance whose fields don't support it.
+    NonConformingField {
+        protocol: String,
+        field: String,
+        ty: String,
+    },
+    /// A `linear` declaration claiming a conformance that would defeat
+    /// linearity (`Copy` duplicates it, `Deinit` silently discards it).
+    LinearConformance {
+        ty: String,
+        protocol: String,
+    },
     Unsupported(String),
 }
 
@@ -286,6 +298,18 @@ impl Display for TypeError {
             }
             TypeError::CannotInfer => {
                 write!(f, "Cannot infer type; add an annotation")
+            }
+            TypeError::NonConformingField { protocol, field, ty } => {
+                write!(
+                    f,
+                    "Cannot conform to {protocol}: field `{field}` has type {ty}, which is not {protocol}"
+                )
+            }
+            TypeError::LinearConformance { ty, protocol } => {
+                write!(
+                    f,
+                    "`{ty}` is linear and cannot conform to {protocol}: a linear value must be consumed exactly once"
+                )
             }
             TypeError::Unsupported(what) => {
                 write!(f, "Not yet supported by the type checker: {what}")

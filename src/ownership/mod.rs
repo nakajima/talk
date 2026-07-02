@@ -23,7 +23,7 @@ use crate::{
     types::{
         TypeOutput,
         output::stored_field_symbol,
-        ty::{BorrowKind, Row, Ty},
+        ty::{Perm, Row, Ty},
     },
 };
 
@@ -181,7 +181,7 @@ pub struct LoanFact {
     pub node: Option<NodeID>,
     pub borrower: KeyPath,
     pub owner: Option<KeyPath>,
-    pub kind: BorrowKind,
+    pub kind: Perm,
 }
 
 #[derive(Clone, Debug)]
@@ -564,7 +564,7 @@ struct BorrowFactKey {
     node: Option<NodeID>,
     borrower: KeyPath,
     owner: Option<KeyPath>,
-    kind: BorrowKind,
+    kind: Perm,
 }
 
 #[derive(Clone, Debug)]
@@ -721,7 +721,7 @@ impl DropState {
 struct BorrowInfo {
     origin: BorrowOrigin,
     owner: Option<KeyPath>,
-    kind: BorrowKind,
+    kind: Perm,
 }
 
 impl BorrowInfo {
@@ -729,11 +729,11 @@ impl BorrowInfo {
         Self {
             origin,
             owner,
-            kind: BorrowKind::Shared,
+            kind: Perm::Shared,
         }
     }
 
-    fn with_kind(origin: BorrowOrigin, owner: Option<KeyPath>, kind: BorrowKind) -> Self {
+    fn with_kind(origin: BorrowOrigin, owner: Option<KeyPath>, kind: Perm) -> Self {
         Self {
             origin,
             owner,
@@ -749,7 +749,7 @@ impl BorrowInfo {
 struct ProvenanceLoan {
     origin: BorrowOrigin,
     owner: Option<KeyPath>,
-    kind: BorrowKind,
+    kind: Perm,
 }
 
 impl ProvenanceLoan {
@@ -761,7 +761,7 @@ impl ProvenanceLoan {
         }
     }
 
-    fn unknown(kind: BorrowKind) -> Self {
+    fn unknown(kind: Perm) -> Self {
         Self {
             origin: BorrowOrigin::Unknown,
             owner: None,
@@ -785,7 +785,7 @@ impl BorrowProvenance {
         }
     }
 
-    fn unknown(kind: BorrowKind) -> Self {
+    fn unknown(kind: Perm) -> Self {
         Self {
             loans: vec![ProvenanceLoan::unknown(kind)],
         }
@@ -807,7 +807,7 @@ impl BorrowProvenance {
         }
     }
 
-    fn with_kind(mut self, kind: BorrowKind) -> Self {
+    fn with_kind(mut self, kind: Perm) -> Self {
         for loan in &mut self.loans {
             loan.kind = kind;
         }
@@ -865,7 +865,7 @@ struct StatementContext<'a> {
 struct ActiveLoan {
     borrower: KeyPath,
     owner: KeyPath,
-    kind: BorrowKind,
+    kind: Perm,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -949,7 +949,7 @@ impl MoveState {
             .retain(|path, _| !key_path.contains(path));
     }
 
-    fn add_loan(&mut self, borrower: KeyPath, owner: KeyPath, kind: BorrowKind) {
+    fn add_loan(&mut self, borrower: KeyPath, owner: KeyPath, kind: Perm) {
         let loan = ActiveLoan {
             borrower,
             owner,
@@ -1612,10 +1612,10 @@ impl OwnershipChecker<'_> {
                     self.apply_capture_move(capture, state);
                 }
                 Some(CaptureMode::BorrowShared) => {
-                    self.apply_capture_borrow(capture, BorrowKind::Shared, borrower, point, state);
+                    self.apply_capture_borrow(capture, Perm::Shared, borrower, point, state);
                 }
                 Some(CaptureMode::BorrowMut) => {
-                    self.apply_capture_borrow(capture, BorrowKind::Mutable, borrower, point, state);
+                    self.apply_capture_borrow(capture, Perm::Exclusive, borrower, point, state);
                 }
             }
         }
@@ -1640,7 +1640,7 @@ impl OwnershipChecker<'_> {
     fn apply_capture_borrow(
         &mut self,
         capture: &ClosureCapture,
-        kind: BorrowKind,
+        kind: Perm,
         borrower: Option<&KeyPath>,
         point: OwnershipPoint,
         state: &mut MoveState,
@@ -1692,7 +1692,7 @@ impl OwnershipChecker<'_> {
         node: Option<NodeID>,
         borrower: KeyPath,
         owner: Option<KeyPath>,
-        kind: BorrowKind,
+        kind: Perm,
     ) -> LoanId {
         let key = BorrowFactKey {
             point,
@@ -2634,7 +2634,7 @@ impl OwnershipChecker<'_> {
         } else {
             self.loan_owner_for_key_path(&key_path, state)
         };
-        self.check_borrow_conflicts(lhs.id, &owner, BorrowKind::Mutable, Some(&key_path), state);
+        self.check_borrow_conflicts(lhs.id, &owner, Perm::Exclusive, Some(&key_path), state);
         if self.expr_is_owned(lhs) && key_path.is_tracked_storage_root() {
             self.check_move_while_borrowed(lhs.id, &key_path, state);
             state.invalidate_borrows_of(&key_path);
@@ -2681,26 +2681,26 @@ impl OwnershipChecker<'_> {
             && self.stored_field_symbol(callee).is_none()
         {
             match self.member_self_param(callee) {
-                Some(Ty::Borrow(BorrowKind::Mutable, _)) => {
+                Some(Ty::Borrow(Perm::Exclusive, _)) => {
                     if let Some(key_path) = self.key_path(receiver) {
                         let owner = self.loan_owner_for_key_path(&key_path, state);
                         self.check_borrow_conflicts(
                             receiver.id,
                             &owner,
-                            BorrowKind::Mutable,
+                            Perm::Exclusive,
                             Some(&key_path),
                             state,
                         );
                         state.invalidate_borrows_of(&owner);
                     }
                 }
-                Some(Ty::Borrow(BorrowKind::Shared, _)) => {
+                Some(Ty::Borrow(Perm::Shared, _)) => {
                     if let Some(key_path) = self.key_path(receiver) {
                         let owner = self.loan_owner_for_key_path(&key_path, state);
                         self.check_borrow_conflicts(
                             receiver.id,
                             &owner,
-                            BorrowKind::Shared,
+                            Perm::Shared,
                             Some(&key_path),
                             state,
                         );
@@ -2768,7 +2768,7 @@ impl OwnershipChecker<'_> {
                             Some(&key_path),
                             state,
                         );
-                        if *kind == BorrowKind::Mutable {
+                        if *kind == Perm::Exclusive {
                             state.invalidate_borrows_of(&owner);
                         }
                     }
@@ -2898,7 +2898,7 @@ impl OwnershipChecker<'_> {
                 continue;
             };
             state.borrowed_roots.insert(symbol, ty.clone());
-            if kind == BorrowKind::Shared {
+            if kind == Perm::Shared {
                 state.shared_borrow_roots.insert(symbol, ty);
             }
         }
@@ -3004,7 +3004,7 @@ impl OwnershipChecker<'_> {
         // — reading through a borrow or a copy — needs a shared loan of the owner.
         if !use_is_owned {
             let owner = self.loan_owner_for_key_path(key_path, state);
-            self.check_borrow_conflicts(id, &owner, BorrowKind::Shared, Some(key_path), state);
+            self.check_borrow_conflicts(id, &owner, Perm::Shared, Some(key_path), state);
         }
     }
 
@@ -3167,7 +3167,7 @@ impl OwnershipChecker<'_> {
                 ty.clone(),
             ));
         }
-        if let Ty::Borrow(BorrowKind::Shared, _) = &receiver.ty {
+        if let Ty::Borrow(Perm::Shared, _) = &receiver.ty {
             let name = self
                 .key_path(receiver)
                 .map(|key_path| self.render_key_path(&key_path))
@@ -3178,7 +3178,7 @@ impl OwnershipChecker<'_> {
         self.shared_borrow_assignment_receiver(receiver, state)
     }
 
-    fn param_borrow_ty(&self, param: &Parameter) -> Option<(BorrowKind, String)> {
+    fn param_borrow_ty(&self, param: &Parameter) -> Option<(Perm, String)> {
         if let Some(TypeAnnotationKind::Borrow { mutable, .. }) = param
             .type_annotation
             .as_ref()
@@ -3186,9 +3186,9 @@ impl OwnershipChecker<'_> {
         {
             return Some((
                 if *mutable {
-                    BorrowKind::Mutable
+                    Perm::Exclusive
                 } else {
-                    BorrowKind::Shared
+                    Perm::Shared
                 },
                 if *mutable {
                     "mutable borrow".to_string()
@@ -3200,11 +3200,11 @@ impl OwnershipChecker<'_> {
         if let Some(ty) = param.ty.as_ref()
             && self.is_borrowed_type(ty)
         {
-            return Some((BorrowKind::Shared, ty.render_mono()));
+            return Some((Perm::Shared, ty.render_mono()));
         }
         let annotation = param.type_annotation.as_ref()?;
         let symbol = self.borrowed_annotation_symbol(annotation)?;
-        Some((BorrowKind::Shared, self.render_symbol(symbol)))
+        Some((Perm::Shared, self.render_symbol(symbol)))
     }
 
     fn borrowed_annotation_symbol(
@@ -3240,10 +3240,10 @@ impl OwnershipChecker<'_> {
     fn annotation_borrow_kind(
         &self,
         annotation: Option<&crate::node_kinds::type_annotation::TypeAnnotation>,
-    ) -> Option<BorrowKind> {
+    ) -> Option<Perm> {
         match annotation.map(|annotation| &annotation.kind) {
-            Some(TypeAnnotationKind::Borrow { mutable: true, .. }) => Some(BorrowKind::Mutable),
-            Some(TypeAnnotationKind::Borrow { mutable: false, .. }) => Some(BorrowKind::Shared),
+            Some(TypeAnnotationKind::Borrow { mutable: true, .. }) => Some(Perm::Exclusive),
+            Some(TypeAnnotationKind::Borrow { mutable: false, .. }) => Some(Perm::Shared),
             _ => None,
         }
     }
@@ -3281,7 +3281,7 @@ impl OwnershipChecker<'_> {
             && self.is_borrowed_type(ty)
         {
             if let Some(info) = provenance.first_info() {
-                if borrower.fields.is_empty() && info.kind == BorrowKind::Shared {
+                if borrower.fields.is_empty() && info.kind == Perm::Shared {
                     state
                         .shared_borrow_roots
                         .insert(borrower.root, borrow_kind_name(info.kind).to_string());
@@ -3314,14 +3314,14 @@ impl OwnershipChecker<'_> {
         &mut self,
         id: NodeID,
         owner: &KeyPath,
-        requested: BorrowKind,
+        requested: Perm,
         requester: Option<&KeyPath>,
         state: &MoveState,
     ) {
         let Some(existing) = state.active_loans.iter().find(|loan| {
             loan.owner.overlaps(owner)
                 && !requester.is_some_and(|requester| requester.overlaps(&loan.borrower))
-                && (requested == BorrowKind::Mutable || loan.kind == BorrowKind::Mutable)
+                && (requested == Perm::Exclusive || loan.kind == Perm::Exclusive)
         }) else {
             return;
         };
@@ -3560,15 +3560,15 @@ impl OwnershipChecker<'_> {
                 BorrowProvenance::default()
             }
             ExprKind::Member(None, ..) | ExprKind::Constructor(_) => BorrowProvenance::default(),
-            ExprKind::Match(_, _) => BorrowProvenance::unknown(BorrowKind::Shared),
-            _ => BorrowProvenance::unknown(BorrowKind::Shared),
+            ExprKind::Match(_, _) => BorrowProvenance::unknown(Perm::Shared),
+            _ => BorrowProvenance::unknown(Perm::Shared),
         }
     }
 
     fn direct_borrow_provenance(
         &self,
         expr: &Expr,
-        kind: BorrowKind,
+        kind: Perm,
         state: &MoveState,
     ) -> BorrowProvenance {
         if self.is_borrowed_type(&expr.ty) {
@@ -3619,7 +3619,7 @@ impl OwnershipChecker<'_> {
             let value_params = self.member_value_params(callee).or(params);
             provenance.extend(self.input_provenance(args, value_params.as_deref(), state));
             if provenance.is_empty() {
-                return BorrowProvenance::unknown(BorrowKind::Shared);
+                return BorrowProvenance::unknown(Perm::Shared);
             }
             return provenance;
         }
@@ -3630,7 +3630,7 @@ impl OwnershipChecker<'_> {
             None => self.input_provenance(args, params.as_deref(), state),
         };
         if provenance.is_empty() {
-            BorrowProvenance::unknown(BorrowKind::Shared)
+            BorrowProvenance::unknown(Perm::Shared)
         } else {
             provenance
         }
@@ -3663,7 +3663,7 @@ impl OwnershipChecker<'_> {
         state: &MoveState,
     ) -> BorrowProvenance {
         let Some(params) = params else {
-            return BorrowProvenance::unknown(BorrowKind::Shared);
+            return BorrowProvenance::unknown(Perm::Shared);
         };
         let mut provenance = BorrowProvenance::default();
         for (arg, param) in args.iter().zip(params) {
@@ -3683,7 +3683,7 @@ impl OwnershipChecker<'_> {
         state: &MoveState,
     ) -> BorrowProvenance {
         let Some(params) = params else {
-            return BorrowProvenance::unknown(BorrowKind::Shared);
+            return BorrowProvenance::unknown(Perm::Shared);
         };
         let mut provenance = BorrowProvenance::default();
         for &index in reached {
@@ -4599,11 +4599,8 @@ fn collect_inline_ir_exprs(nodes: &[Node], out: &mut FxHashSet<NodeID>) {
     walk_nodes(nodes, &mut visitor);
 }
 
-fn borrow_kind_name(kind: BorrowKind) -> &'static str {
-    match kind {
-        BorrowKind::Shared => "shared",
-        BorrowKind::Mutable => "mutable",
-    }
+fn borrow_kind_name(kind: Perm) -> &'static str {
+    if kind.is_exclusive() { "mutable" } else { "shared" }
 }
 
 fn capture_mode_name(mode: CaptureMode) -> &'static str {

@@ -73,7 +73,7 @@ use crate::types::error::TypeError;
 use crate::types::output::{ExistentialPack, MemberResolution, TypeOutput};
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
-    BorrowKind, EffTail, EffectRow, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
+    Perm, EffTail, EffectRow, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
 };
 use crate::types::variant::VariantInstantiation;
 
@@ -205,6 +205,10 @@ struct CatalogBuilder<'s, 'a> {
     type_aliases: &'s mut FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'s mut Vec<Symbol>,
     explicit_conformances: FxHashSet<(Symbol, Symbol)>,
+    /// Explicit claims on the substructural marker protocols (Copy,
+    /// CheapClone, Deinit) with their blame nodes, validated once the whole
+    /// catalog is collected.
+    marker_claims: Vec<(Symbol, Symbol, NodeID)>,
     self_types: Vec<Ty>,
     level: Level,
 }
@@ -358,6 +362,7 @@ impl<'a> TypecheckSession<'a> {
                 type_aliases: &mut self.type_aliases,
                 alias_stack: &mut self.alias_stack,
                 explicit_conformances: FxHashSet::default(),
+                marker_claims: vec![],
                 self_types: vec![],
                 level: OUTER_LEVEL,
             };

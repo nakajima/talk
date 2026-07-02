@@ -133,6 +133,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Match => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Import | TokenKind::Use => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Public => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Linear => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::StringLiteral => self.make_string(tok, Kind::STRING, &mut tokens),
                 TokenKind::Underscore => (),
                 TokenKind::QuestionMark => self.make(tok, Kind::OPERATOR, &mut tokens),

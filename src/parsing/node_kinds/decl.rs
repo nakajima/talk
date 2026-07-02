@@ -87,6 +87,9 @@ pub enum DeclKind {
         generics: Vec<GenericDecl>, /* generics */
         where_clause: Option<WhereClause>,
         body: Body, /* body */
+        /// Declared `linear`: values must be consumed exactly once.
+        #[drive(skip)]
+        linear: bool,
     },
 
     Let {
@@ -160,6 +163,9 @@ pub enum DeclKind {
         generics: Vec<GenericDecl>, // Generics TypeParams <T>
         where_clause: Option<WhereClause>,
         body: Body,
+        /// Declared `linear`: values must be consumed exactly once.
+        #[drive(skip)]
+        linear: bool,
     },
 
     // Individual enum variant in declaration

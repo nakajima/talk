@@ -169,7 +169,7 @@ pub mod tests {
 
         assert_eq_diff!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct {
+            any_decl!(DeclKind::Struct { linear: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
