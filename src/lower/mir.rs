@@ -613,6 +613,11 @@ impl Builder<'_> {
                         destination: ValueDestination::Continuation,
                     },
                 );
+                // A tail delivery inside branch scopes leaves the function:
+                // the enclosing frames' scope-exit drops must ride this
+                // path (their own exit blocks are unreachable from here).
+                // Drop flags keep them per-path correct.
+                self.emit_enclosing_scope_drops(current);
             }
         }
         current
@@ -1328,6 +1333,67 @@ impl Builder<'_> {
         id
     }
 
+    /// Scope-exit drop candidates for every frame ENCLOSING the current
+    /// innermost one, innermost-first — used at tail deliveries inside
+    /// branch arms, whose normal exit blocks are unreachable.
+    fn emit_enclosing_scope_drops(&mut self, current: BlockId) {
+        if self.scope_stack.len() < 2 {
+            return;
+        }
+        let outer: Vec<(Vec<(NodeID, Symbol)>, Vec<crate::flow::drops::DropSchedule>)> = self
+            .scope_stack[..self.scope_stack.len() - 1]
+            .iter()
+            .rev()
+            .map(|frame| (frame.locals.clone(), frame.drops.clone()))
+            .collect();
+        for (locals, schedules) in outer {
+            self.emit_frame_drop_candidates(current, &locals, &schedules);
+        }
+    }
+
+    fn emit_frame_drop_candidates(
+        &mut self,
+        current: BlockId,
+        locals: &[(NodeID, Symbol)],
+        schedules: &[crate::flow::drops::DropSchedule],
+    ) {
+        for (id, symbol) in locals.iter().rev().copied() {
+            let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
+            let elaboration = schedules
+                .iter()
+                .find(|schedule| schedule.place.root == symbol)
+                .map(elaboration_for_schedule);
+            self.push_statement_with_drop(
+                current,
+                Statement::DropCandidate {
+                    target: DropTarget::Symbol { id, symbol },
+                    key_path,
+                    reason: DropReason::ScopeExit,
+                },
+                elaboration,
+            );
+        }
+        for schedule in schedules {
+            let symbol = schedule.place.root;
+            if locals.iter().any(|(_, local)| *local == symbol) {
+                continue;
+            }
+            let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
+            self.push_statement_with_drop(
+                current,
+                Statement::DropCandidate {
+                    target: DropTarget::Symbol {
+                        id: schedule.node,
+                        symbol,
+                    },
+                    key_path,
+                    reason: DropReason::ScopeExit,
+                },
+                Some(elaboration_for_schedule(schedule)),
+            );
+        }
+    }
+
     fn emit_scope_exit(&mut self, current: BlockId) -> BlockId {
         let Some(frame) = self.scope_stack.last() else {
             return current;
@@ -1351,6 +1417,28 @@ impl Builder<'_> {
                 elaboration,
             );
             self.push_statement(current, Statement::StorageDead { id, symbol });
+        }
+        // Schedules with no `let`-registered local — owned by-value
+        // parameters (their drops ride the callee) and match-arm payload
+        // binders — still drop at scope exit.
+        for schedule in &schedules {
+            let symbol = schedule.place.root;
+            if locals.iter().any(|(_, local)| *local == symbol) {
+                continue;
+            }
+            let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
+            self.push_statement_with_drop(
+                current,
+                Statement::DropCandidate {
+                    target: DropTarget::Symbol {
+                        id: schedule.node,
+                        symbol,
+                    },
+                    key_path,
+                    reason: DropReason::ScopeExit,
+                },
+                Some(elaboration_for_schedule(schedule)),
+            );
         }
         self.push_statement(current, Statement::ScopeExit { scope });
         current
@@ -1833,6 +1921,7 @@ mod tests {
             assert!(return_has_copy, "{body:#?}");
         });
     }
+
 
     #[test]
     fn distinguishes_source_return_from_block_tail_value() {

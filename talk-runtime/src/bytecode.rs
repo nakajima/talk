@@ -149,6 +149,7 @@ impl Encoder {
             Value::Existential(..) => return Err(EncodeError::UnsupportedConstant("existential")),
             Value::Closure(..) => return Err(EncodeError::UnsupportedConstant("closure")),
             Value::Cell(..) => return Err(EncodeError::UnsupportedConstant("cell")),
+            Value::Object(..) => return Err(EncodeError::UnsupportedConstant("object")),
         }
         Ok(())
     }
@@ -271,6 +272,21 @@ impl Encoder {
             Insn::Free { dest, ptr } => self.reg2(24, dest, ptr),
             Insn::Retain { dest, ptr } => self.reg2(38, dest, ptr),
             Insn::IsUnique { dest, ptr } => self.reg2(39, dest, ptr),
+            Insn::ObjectNew {
+                dest,
+                args_start,
+                args_len,
+            } => {
+                self.u8(40);
+                self.u16(dest);
+                self.u32(args_start);
+                self.u16(args_len);
+            }
+            Insn::SetFinalizer { obj, closure } => self.reg2(41, obj, closure),
+            Insn::ObjectGet { dest, obj, index } => self.reg3(42, dest, obj, index),
+            Insn::ObjectSet { obj, src, index } => self.reg3(43, obj, src, index),
+            Insn::RegionAcquire { dest, src } => self.reg2(44, dest, src),
+            Insn::RegionRelease { dest, src } => self.reg2(45, dest, src),
             Insn::Load { dest, ptr, kind } => {
                 self.u8(25);
                 self.u16(dest);
@@ -778,6 +794,25 @@ impl<'a> Decoder<'a> {
             37 => Ok(Insn::Trap {
                 message: self.u32()?,
             }),
+            40 => Ok(Insn::ObjectNew {
+                dest: self.u16()?,
+                args_start: self.u32()?,
+                args_len: self.u16()?,
+            }),
+            41 => Ok(Insn::SetFinalizer {
+                obj: self.u16()?,
+                closure: self.u16()?,
+            }),
+            42 => self.reg3(|dest, obj, index| Insn::ObjectGet { dest, obj, index }),
+            43 => self.reg3(|obj, src, index| Insn::ObjectSet { obj, src, index }),
+            44 => Ok(Insn::RegionAcquire {
+                dest: self.u16()?,
+                src: self.u16()?,
+            }),
+            45 => Ok(Insn::RegionRelease {
+                dest: self.u16()?,
+                src: self.u16()?,
+            }),
             _ => Err(DecodeError::InvalidTag("instruction", tag)),
         }
     }
@@ -1023,6 +1058,8 @@ impl Insn {
             | Insn::Free { dest, ptr: src }
             | Insn::Retain { dest, ptr: src }
             | Insn::IsUnique { dest, ptr: src }
+            | Insn::RegionAcquire { dest, src }
+            | Insn::RegionRelease { dest, src }
             | Insn::EnvGet { dest, index: src } => {
                 Register::new(n_regs).check_many(&[dest, src])?
             }
@@ -1048,9 +1085,23 @@ impl Insn {
                 args_start,
                 args_len,
                 ..
+            }
+            | Insn::ObjectNew {
+                dest,
+                args_start,
+                args_len,
             } => {
                 Register::new(n_regs).check(dest)?;
                 module.check_arg_registers(args_start, args_len, n_regs)?;
+            }
+            Insn::SetFinalizer { obj, closure } => {
+                Register::new(n_regs).check_many(&[obj, closure])?
+            }
+            Insn::ObjectGet { dest, obj, index: _ } => {
+                Register::new(n_regs).check_many(&[dest, obj])?
+            }
+            Insn::ObjectSet { obj, src, index: _ } => {
+                Register::new(n_regs).check_many(&[obj, src])?
             }
             Insn::VariantNew {
                 dest,
@@ -1226,6 +1277,48 @@ mod tests {
             entry: 0,
         };
 
+        let encoded = module.encode_bytecode().unwrap();
+        let decoded = Module::decode_bytecode(&encoded).unwrap();
+        assert_eq!(decoded.render(), module.render());
+    }
+
+    #[test]
+    fn round_trips_object_opcodes() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::ObjectNew {
+                        dest: 1,
+                        args_start: 0,
+                        args_len: 1,
+                    },
+                    Insn::SetFinalizer { obj: 1, closure: 2 },
+                    Insn::ObjectGet {
+                        dest: 2,
+                        obj: 1,
+                        index: 0,
+                    },
+                    Insn::ObjectSet {
+                        obj: 1,
+                        src: 2,
+                        index: 0,
+                    },
+                    Insn::RegionAcquire { dest: 0, src: 1 },
+                    Insn::RegionRelease { dest: 0, src: 1 },
+                    Insn::Ret { src: 2 },
+                ],
+                arity: 0,
+                n_regs: 3,
+            }],
+            consts: vec![Value::I64(7)],
+            arg_pool: vec![0],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
         let encoded = module.encode_bytecode().unwrap();
         let decoded = Module::decode_bytecode(&encoded).unwrap();
         assert_eq!(decoded.render(), module.render());

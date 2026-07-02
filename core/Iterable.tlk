@@ -24,9 +24,7 @@ public struct Map<T, U> where T: Iterator {
 }
 
 extend Map<T, U>: Iterable where T: Iterator {
-	func iter() -> &Self<T, U> {
-		self
-	}
+	func iter() -> &Self<T, U> { self }
 }
 
 public struct ArrayIterator<Element> {

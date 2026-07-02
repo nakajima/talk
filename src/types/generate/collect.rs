@@ -289,6 +289,19 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 ));
                 continue;
             }
+            // A `'heap` value is a shared reference: copying or cheap-cloning
+            // the handle is meaningless as a *value* operation, and Deinit
+            // dispatch belongs to the region's teardown walk.
+            if self.catalog.is_heap(head) && protocol != Symbol::Deinit {
+                self.diagnostics.errors.push((
+                    TypeError::HeapConformance {
+                        ty: head.to_string(),
+                        protocol: protocol.to_string(),
+                    },
+                    node,
+                ));
+                continue;
+            }
             if protocol == Symbol::Deinit {
                 continue;
             }
@@ -383,6 +396,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             where_clause,
             body,
             linear,
+            heap,
             ..
         } = &decl.kind
         else {
@@ -397,6 +411,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         self.self_types.pop();
         let mut info = StructInfo {
             linear: *linear,
+            heap: *heap,
             params,
             predicates,
             ..Default::default()

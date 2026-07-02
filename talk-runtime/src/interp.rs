@@ -7,6 +7,7 @@
 use crate::CmpOp;
 use crate::io::IO;
 use crate::memory::{Allocations, MemoryError};
+use crate::objects::{ObjectError, Objects};
 use crate::symbol::Symbol;
 use crate::{Chunk, Insn, MemKind, Module};
 use std::rc::Rc;
@@ -36,6 +37,9 @@ pub enum Value {
     Closure(u32, Rc<Vec<Value>>),
     /// Index into the VM's slot arena (a mutable cell).
     Cell(usize),
+    /// A `'heap` object handle: index into the machine's object arena.
+    /// Copies alias; the region, not the handle, owns the storage.
+    Object(u32),
 }
 
 struct Frame {
@@ -52,6 +56,9 @@ struct Frame {
 /// Far above any reasonable program, far below host memory: frames are
 /// heap data, so this only bounds runaway recursion.
 const MAX_FRAMES: usize = 1 << 20;
+
+/// Frame.dest sentinel for finalizer frames: their Ret writes nowhere.
+const FINALIZER_DEST: u16 = u16::MAX;
 
 pub fn run(module: &Module, io: &mut dyn IO) -> Result<Value, String> {
     Ok(run_machine(module, io)?.0)
@@ -85,10 +92,41 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
         static_len: module.statics.len() as u32,
         allocations: Allocations::default(),
         boxed: vec![],
+        objects: Objects::default(),
         io,
     };
 
+    // Finalizer frames currently on the stack: the teardown walk must not
+    // advance (and above all must not bulk-free) while one is running.
+    let mut finalizer_frames: usize = 0;
     loop {
+        // Region-teardown pump: while a region is finalizing, run its
+        // members' finalizer thunks (reverse allocation order) as ordinary
+        // frames before executing anything else; the walk's bulk free
+        // happens inside `next_finalizer` when members are exhausted.
+        if finalizer_frames == 0
+            && let Some((thunk, object)) = machine.objects.next_finalizer()
+        {
+            if frames.len() >= MAX_FRAMES {
+                return Err("vm: call stack overflow".into());
+            }
+            let Value::Closure(fin_chunk, env) = thunk else {
+                return Err("vm: finalizer is not a function value".into());
+            };
+            let target = chunk(module, fin_chunk)?;
+            check_call_shape(target, 1)?;
+            let mut regs = vec![Value::Void; target.n_regs as usize];
+            regs[0] = Value::Object(object);
+            frames.push(Frame {
+                chunk: fin_chunk,
+                pc: 0,
+                regs,
+                env,
+                dest: FINALIZER_DEST,
+            });
+            finalizer_frames += 1;
+            continue;
+        }
         let frame_index = frames.len() - 1;
         let current_chunk = frames[frame_index].chunk;
         let pc = frames[frame_index].pc;
@@ -168,6 +206,12 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                 let dest = frames[frame_index].dest;
                 frames.pop();
                 match frames.last_mut() {
+                    // A finalizer frame (pushed by the teardown pump) has no
+                    // destination: its value is discarded, and the paused
+                    // teardown walk may resume.
+                    Some(_) if dest == FINALIZER_DEST => {
+                        finalizer_frames = finalizer_frames.saturating_sub(1);
+                    }
                     Some(caller) => caller.regs[dest as usize] = value,
                     None => return Ok((value, machine)),
                 }
@@ -280,6 +324,8 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> Result<
         Value::Existential(_, payload, _) => render_value(machine, names, payload),
         Value::Closure(..) => Ok("<func>".to_string()),
         Value::Cell(_) => Ok("<cell>".to_string()),
+        // Shallow: structural rendering would cycle through the graph.
+        Value::Object(object) => Ok(format!("<object #{object}>")),
     }
 }
 
@@ -328,6 +374,8 @@ struct Machine<'io> {
     /// 8-byte index into this arena (Leroy, POPL 1992's mixed
     /// representation — scalars unboxed, aggregates behind a handle).
     boxed: Vec<Value>,
+    /// Region-allocated `'heap` objects (see `objects.rs`).
+    objects: Objects<Value>,
     io: &'io mut dyn IO,
 }
 
@@ -898,6 +946,61 @@ fn exec_local(
                 .map_err(vm_memory_error)?;
             frame.regs[dest as usize] = Value::Bool(unique);
         }
+        Insn::ObjectNew {
+            dest,
+            args_start,
+            args_len,
+        } => {
+            let fields = arg_values(module, frame, args_start, args_len)?;
+            let object = machine.objects.allocate(fields);
+            frame.regs[dest as usize] = Value::Object(object);
+        }
+        Insn::SetFinalizer { obj, closure } => {
+            let Value::Object(object) = frame.regs[obj as usize] else {
+                return Err("vm: set_finalizer of a non-object".into());
+            };
+            let thunk = frame.regs[closure as usize].clone();
+            if !matches!(thunk, Value::Closure(..)) {
+                return Err("vm: finalizer is not a function value".into());
+            }
+            machine
+                .objects
+                .set_finalizer(object, thunk)
+                .map_err(vm_object_error)?;
+        }
+        Insn::ObjectGet { dest, obj, index } => {
+            let Value::Object(object) = frame.regs[obj as usize] else {
+                return Err("vm: object_get of a non-object".into());
+            };
+            frame.regs[dest as usize] = machine
+                .objects
+                .get_field(object, index)
+                .map_err(vm_object_error)?;
+        }
+        Insn::ObjectSet { obj, src, index } => {
+            let Value::Object(object) = frame.regs[obj as usize] else {
+                return Err("vm: object_set of a non-object".into());
+            };
+            let value = frame.regs[src as usize].clone();
+            let mut handles = vec![];
+            scan_handles(&value, &mut handles);
+            machine
+                .objects
+                .set_field(object, index, value, &handles)
+                .map_err(vm_object_error)?;
+        }
+        Insn::RegionAcquire { dest, src } => {
+            let mut handles = vec![];
+            scan_handles(&frame.regs[src as usize], &mut handles);
+            machine.objects.acquire(&handles).map_err(vm_object_error)?;
+            frame.regs[dest as usize] = Value::Void;
+        }
+        Insn::RegionRelease { dest, src } => {
+            let mut handles = vec![];
+            scan_handles(&frame.regs[src as usize], &mut handles);
+            machine.objects.release(&handles).map_err(vm_object_error)?;
+            frame.regs[dest as usize] = Value::Void;
+        }
         Insn::Load { dest, ptr, kind } => {
             let Value::Ptr(addr) = frame.regs[ptr as usize] else {
                 return Err("vm: load of a non-pointer".into());
@@ -1033,6 +1136,42 @@ fn check_call_shape(target: &Chunk, args_len: u16) -> Result<(), String> {
     Ok(())
 }
 
+/// Every object handle reachable in a value — the region ledger's scan.
+/// Cells are frame-local machine state and are not descended (the binding
+/// that owns the cell accounts for its contents).
+fn scan_handles(value: &Value, out: &mut Vec<u32>) {
+    match value {
+        Value::Object(object) => out.push(*object),
+        Value::Record(_, fields) | Value::Tuple(fields) | Value::Variant(_, _, fields) => {
+            for field in fields.iter() {
+                scan_handles(field, out);
+            }
+        }
+        Value::Existential(_, payload, witnesses) => {
+            scan_handles(payload, out);
+            for witness in witnesses.iter() {
+                scan_handles(witness, out);
+            }
+        }
+        Value::Closure(_, env) => {
+            for captured in env.iter() {
+                scan_handles(captured, out);
+            }
+        }
+        Value::I64(_)
+        | Value::F64(_)
+        | Value::Bool(_)
+        | Value::Byte(_)
+        | Value::Void
+        | Value::Ptr(_)
+        | Value::Cell(_) => {}
+    }
+}
+
+fn vm_object_error(error: ObjectError) -> String {
+    format!("vm: {}", error.message())
+}
+
 fn arg_values(
     module: &Module,
     frame: &Frame,
@@ -1120,5 +1259,176 @@ fn compare(a: &Value, b: &Value, op: CmpOp) -> Result<bool, String> {
             _ => Err("vm: ordering comparison on bools".into()),
         },
         _ => Err(format!("vm: comparison on {a:?} and {b:?}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::CaptureIO;
+    use crate::{Chunk, Module};
+
+    fn run_with_machine(module: &Module) -> (Value, usize, usize) {
+        let mut io = CaptureIO::default();
+        let (value, machine) = run_machine(module, &mut io).expect("vm run");
+        (value, machine.objects.live_objects(), io.out.len())
+    }
+
+    /// main: build two objects, link them into a cycle, mutate through one
+    /// alias, read through the other, release both. Finalizers (chunk 1)
+    /// write a byte to fd 1 so the walk is observable.
+    fn object_module(with_finalizers: bool) -> Module {
+        let mut code = vec![
+            Insn::Const { dest: 0, k: 0 }, // 10
+            Insn::ObjectNew {
+                dest: 1,
+                args_start: 0,
+                args_len: 1,
+            }, // a = { 10 }
+            Insn::ObjectNew {
+                dest: 2,
+                args_start: 0,
+                args_len: 1,
+            }, // b = { 10 }
+        ];
+        if with_finalizers {
+            code.push(Insn::MakeClosure {
+                dest: 7,
+                chunk: 1,
+                args_start: 1,
+                args_len: 0,
+            });
+            code.push(Insn::SetFinalizer { obj: 1, closure: 7 });
+            code.push(Insn::SetFinalizer { obj: 2, closure: 7 });
+        }
+        code.extend([
+            // a.f = b; b.f = a — cycle, regions merge.
+            Insn::ObjectSet {
+                obj: 1,
+                src: 2,
+                index: 0,
+            },
+            Insn::ObjectSet {
+                obj: 2,
+                src: 1,
+                index: 0,
+            },
+            // Mutation visible through the alias: (a.f).f is a — set a's
+            // payload via b: b.f = a, so object_get b[0] aliases a.
+            Insn::ObjectGet {
+                dest: 3,
+                obj: 2,
+                index: 0,
+            }, // r3 = a (via b)
+            Insn::Const { dest: 4, k: 1 }, // 42… but store into a fresh field slot
+            // Release both rvalue owners; region should stay alive only
+            // while owned.
+            Insn::RegionRelease { dest: 5, src: 1 },
+            Insn::RegionRelease { dest: 5, src: 2 },
+            Insn::Const { dest: 6, k: 1 },
+            Insn::Ret { src: 6 },
+        ]);
+        Module {
+            chunks: vec![
+                Chunk {
+                    name: "main".into(),
+                    code,
+                    arity: 0,
+                    n_regs: 8,
+                },
+                // Finalizer: λ(self) — read a field (memory must still be
+                // live mid-walk), write one byte, return void.
+                Chunk {
+                    name: "fin".into(),
+                    code: vec![
+                        Insn::ObjectGet {
+                            dest: 5,
+                            obj: 0,
+                            index: 0,
+                        },
+                        Insn::Const { dest: 1, k: 2 }, // fd 1
+                        Insn::Const { dest: 2, k: 3 }, // static offset 0
+                        Insn::Const { dest: 3, k: 2 }, // len 1
+                        Insn::Io {
+                            dest: 4,
+                            op: crate::IoOp::Write,
+                            a: 1,
+                            b: 2,
+                            c: 3,
+                        },
+                        Insn::Ret { src: 4 },
+                    ],
+                    arity: 1,
+                    n_regs: 6,
+                },
+            ],
+            consts: vec![
+                Value::I64(10),
+                Value::I64(42),
+                Value::I64(1),
+                Value::Ptr(0),
+            ],
+            arg_pool: vec![0],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![b'x'],
+            entry: 0,
+        }
+    }
+
+    #[test]
+    fn cycle_frees_at_last_release() {
+        let (value, live, _) = run_with_machine(&object_module(false));
+        assert_eq!(value, Value::I64(42));
+        assert_eq!(live, 0, "cyclic region freed when both owners released");
+    }
+
+    #[test]
+    fn finalizers_pump_as_frames_before_free() {
+        let (value, live, out_len) = run_with_machine(&object_module(true));
+        assert_eq!(value, Value::I64(42));
+        assert_eq!(live, 0);
+        assert_eq!(out_len, 2, "one finalizer write per object");
+    }
+
+    #[test]
+    fn aliased_mutation_is_visible() {
+        // a = {0}; b = a (alias via object handle copy); a.f = 42; read b.f.
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::ObjectNew {
+                        dest: 1,
+                        args_start: 0,
+                        args_len: 1,
+                    },
+                    Insn::Move { dest: 2, src: 1 }, // alias
+                    Insn::Const { dest: 3, k: 1 },  // 42
+                    Insn::ObjectSet {
+                        obj: 1,
+                        src: 3,
+                        index: 0,
+                    },
+                    Insn::ObjectGet {
+                        dest: 4,
+                        obj: 2,
+                        index: 0,
+                    },
+                    Insn::Ret { src: 4 },
+                ],
+                arity: 0,
+                n_regs: 5,
+            }],
+            consts: vec![Value::I64(0), Value::I64(42)],
+            arg_pool: vec![0],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let (value, _, _) = run_with_machine(&module);
+        assert_eq!(value, Value::I64(42), "mutation through one alias visible through the other");
     }
 }

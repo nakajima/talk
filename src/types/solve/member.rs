@@ -82,6 +82,7 @@ impl<'s> Solver<'s> {
     ) -> Option<Constraint> {
         let label_str = label.to_string();
         let (member_receiver, self_receiver) = self.member_receivers(&receiver);
+        let diagnostic_receiver = self_receiver.clone();
         if stuck_projection(self.store, &member_receiver) {
             return Some(Constraint::HasMember {
                 receiver,
@@ -119,7 +120,7 @@ impl<'s> Solver<'s> {
                 ) {
                     return None;
                 }
-                let rendered = self.store.render(&member_receiver);
+                let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
                     TypeError::UnknownMember {
                         receiver: rendered,
@@ -161,7 +162,7 @@ impl<'s> Solver<'s> {
                 ) {
                     return None;
                 }
-                let rendered = self.store.render(&member_receiver);
+                let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
                     TypeError::UnknownMember {
                         receiver: rendered,
@@ -174,7 +175,7 @@ impl<'s> Solver<'s> {
             Ty::Any { protocol, .. } => {
                 let Some((owner, requirement)) = self.catalog.requirement_in(protocol, &label_str)
                 else {
-                    let rendered = self.store.render(&receiver);
+                    let rendered = self.store.render(&diagnostic_receiver);
                     self.errors.push((
                         TypeError::UnknownMember {
                             receiver: rendered,
@@ -332,7 +333,7 @@ impl<'s> Solver<'s> {
                     }
                     return None;
                 }
-                let rendered = self.store.render(&member_receiver);
+                let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
                     TypeError::UnknownMember {
                         receiver: rendered,
@@ -342,8 +343,8 @@ impl<'s> Solver<'s> {
                 ));
                 None
             }
-            other => {
-                let rendered = self.store.render(&other);
+            _ => {
+                let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
                     TypeError::UnknownMember {
                         receiver: rendered,

@@ -522,10 +522,17 @@ impl<'a> Formatter<'a> {
                 where_clause,
                 body,
                 linear,
+                heap,
                 ..
             } => {
-                let doc = self.format_struct(name, generics, where_clause.as_ref(), body);
-                if *linear { text("linear ") + doc } else { doc }
+                let attribute = if *linear {
+                    Some("'linear")
+                } else if *heap {
+                    Some("'heap")
+                } else {
+                    None
+                };
+                self.format_struct(name, generics, attribute, where_clause.as_ref(), body)
             }
             DeclKind::Let {
                 lhs,
@@ -579,8 +586,8 @@ impl<'a> Formatter<'a> {
                 linear,
                 ..
             } => {
-                let doc = self.format_enum_decl(name, generics, where_clause.as_ref(), body);
-                if *linear { text("linear ") + doc } else { doc }
+                let attribute = if *linear { Some("'linear") } else { None };
+                self.format_enum_decl(name, generics, attribute, where_clause.as_ref(), body)
             }
             DeclKind::EnumVariant {
                 name,
@@ -614,7 +621,7 @@ impl<'a> Formatter<'a> {
             text("typealias"),
             join(
                 vec![self.format_name(lhs), self.format_type_annotation(rhs)],
-                text("="),
+                text(" = "),
             ),
         )
     }
@@ -1265,6 +1272,7 @@ impl<'a> Formatter<'a> {
         &self,
         name: &Name,
         generics: &[GenericDecl],
+        attribute: Option<&'static str>,
         where_clause: Option<&WhereClause>,
         body: &Body,
     ) -> Doc {
@@ -1283,6 +1291,10 @@ impl<'a> Formatter<'a> {
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
             );
+        }
+
+        if let Some(attribute) = attribute {
+            result = concat_space(result, text(attribute));
         }
 
         if let Some(where_clause) = where_clause {
@@ -1788,6 +1800,7 @@ impl<'a> Formatter<'a> {
         &self,
         name: &Name,
         generics: &[GenericDecl],
+        attribute: Option<&'static str>,
         where_clause: Option<&WhereClause>,
         body: &Body,
     ) -> Doc {
@@ -1806,6 +1819,10 @@ impl<'a> Formatter<'a> {
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
             );
+        }
+
+        if let Some(attribute) = attribute {
+            result = concat_space(result, text(attribute));
         }
 
         if let Some(where_clause) = where_clause {
@@ -2950,14 +2967,40 @@ mod formatter_tests {
     }
 
     #[test]
+    fn typealias_round_trips_with_spaced_equals() {
+        assert_eq!(
+            format_code("typealias Target = Response", 80),
+            "typealias Target = Response"
+        );
+    }
+
+    #[test]
+    fn long_labeled_call_round_trips() {
+        // Wrapping a long labeled call must produce output the parser can
+        // read back (one argument per line).
+        let source = "let node = RouteNode(path: some_longer_name, handler: another_long_name, next: a_third_long_name)";
+        let formatted = format_code(source, 60);
+        assert!(formatted.contains("(\n"), "expected the call to wrap: {formatted}");
+        assert_eq!(
+            format_code(&formatted, 60),
+            formatted,
+            "the wrapped form must re-parse and be stable"
+        );
+    }
+
+    #[test]
     fn linear_struct_round_trips() {
         assert_eq!(
-            format_code("linear struct FileHandle {\n\tlet fd: Int\n}", 80),
-            "linear struct FileHandle {\n\tlet fd: Int\n}"
+            format_code("struct FileHandle 'linear {\n\tlet fd: Int\n}", 80),
+            "struct FileHandle 'linear {\n\tlet fd: Int\n}"
         );
         assert_eq!(
-            format_code("public linear struct Token {\n\tlet id: Int\n}", 80),
-            "public linear struct Token {\n\tlet id: Int\n}"
+            format_code("public struct Token 'linear {\n\tlet id: Int\n}", 80),
+            "public struct Token 'linear {\n\tlet id: Int\n}"
+        );
+        assert_eq!(
+            format_code("struct Node<T> 'heap {\n\tlet value: T\n}", 80),
+            "struct Node<T> 'heap {\n\tlet value: T\n}"
         );
     }
 

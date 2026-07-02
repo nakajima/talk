@@ -78,6 +78,23 @@ pub enum OwnershipError {
     UnsafeRawPointerUsage {
         ty: String,
     },
+    /// A `'heap` reference captured by a closure that escapes the frame —
+    /// closure environments are invisible to the region ledger.
+    EscapingObjectCapture {
+        name: String,
+        ty: String,
+    },
+    /// A `'heap` value packed behind `any P` — existential payloads are
+    /// invisible to the region ledger.
+    ObjectInExistential {
+        ty: String,
+    },
+    /// A `'heap` type argument to a raw-storage container — raw memory is
+    /// invisible to the region ledger.
+    ObjectInRawStorage {
+        container: String,
+        ty: String,
+    },
 }
 
 impl Error for OwnershipError {}
@@ -181,6 +198,24 @@ impl Display for OwnershipError {
                 write!(
                     f,
                     "Raw pointer type {ty} is only available in core or sources marked '// unsafe'"
+                )
+            }
+            OwnershipError::EscapingObjectCapture { name, ty } => {
+                write!(
+                    f,
+                    "Cannot let closure capture heap value '{name}' of type {ty} escape; heap references cannot outlive the frame through a closure yet"
+                )
+            }
+            OwnershipError::ObjectInExistential { ty } => {
+                write!(
+                    f,
+                    "Heap type {ty} cannot be packed into an existential yet"
+                )
+            }
+            OwnershipError::ObjectInRawStorage { container, ty } => {
+                write!(
+                    f,
+                    "Heap type {ty} cannot be stored in {container}: raw storage bypasses region tracking"
                 )
             }
         }

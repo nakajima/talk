@@ -163,6 +163,7 @@ impl Program {
             TyKind::Ptr => "ptr".into(),
             TyKind::Void => "()".into(),
             TyKind::Bot => "never".into(),
+            TyKind::Object(symbol) => format!("object({symbol:?})"),
             TyKind::Tuple(items) => {
                 let inner: Vec<String> = items.iter().map(|t| self.render_ty(*t)).collect();
                 format!("({})", inner.join(", "))
@@ -203,6 +204,7 @@ impl Program {
                     Const::Void => return "()".into(),
                     Const::StaticPtr(off) => format!("static+{off}"),
                     Const::Slot(index) => format!("slot#{index}"),
+                    Const::Object(index) => format!("object#{index}"),
                 };
                 format!("{}{text}{}", s.num, s.reset)
             }

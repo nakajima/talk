@@ -1,6 +1,13 @@
 use super::*;
 use crate::lower::mir;
 
+/// Where an assignment ultimately writes: a root cell (value semantics,
+/// functional rebuild + write-back) or a `'heap` object handle (in-place).
+pub(super) enum AssignBase {
+    Cell(ExprId),
+    Object(ExprId),
+}
+
 impl<'a> Lowering<'a> {
     // ----- Blocks and statements -------------------------------------------
 
@@ -25,25 +32,41 @@ impl<'a> Lowering<'a> {
         &mut self,
         lhs: &Expr,
         ctx: &Ctx,
-    ) -> Option<(ExprId, Vec<(u32, TyId)>)> {
+    ) -> Option<(AssignBase, Vec<(u32, TyId)>)> {
         match &lhs.kind {
             ExprKind::Variable(name) => {
                 let symbol = name.symbol().ok();
                 if let Some(Binding::Cell(cell)) = symbol.and_then(|s| ctx.env.get(&s).copied()) {
-                    return Some((cell, vec![]));
+                    return Some((AssignBase::Cell(cell), vec![]));
                 }
                 // A mutable top-level binding assigned from inside a
                 // function: its registered cell (captured like any value).
                 if let Some(cell) = symbol.and_then(|s| self.top_level_cells.get(&s).copied()) {
-                    return Some((cell, vec![]));
+                    return Some((AssignBase::Cell(cell), vec![]));
                 }
                 self.diagnostics
                     .push("lowering: assignment to a non-cell binding".into());
                 None
             }
             ExprKind::Member(Some(receiver), label) => {
-                let (cell, mut path) = self.assignment_target(receiver, ctx)?;
                 let head = Self::borrow_erased_ty(self.checker_ty(receiver, ctx));
+                // Nearest-to-leaf `'heap` receiver: the write is an in-place
+                // ObjectSet on the handle — nothing above it is rebuilt or
+                // written back (mutation is visible through the reference).
+                let (base, mut path) = if matches!(&head, CheckTy::Nominal(symbol, _)
+                    if self.symbol_is_heap(*symbol))
+                {
+                    let Some(handle) = self.try_pure(receiver, ctx) else {
+                        self.diagnostics.push(
+                            "lowering: assignment through an impure heap receiver (not yet supported)"
+                                .into(),
+                        );
+                        return None;
+                    };
+                    (AssignBase::Object(handle), vec![])
+                } else {
+                    self.assignment_target(receiver, ctx)?
+                };
                 let index = match &head {
                     CheckTy::Record(row) if row.tail.is_none() => row
                         .fields
@@ -68,7 +91,7 @@ impl<'a> Lowering<'a> {
                 };
                 let record_ty = self.map_ty(&head);
                 path.push((index, record_ty));
-                Some((cell, path))
+                Some((base, path))
             }
             _ => {
                 self.diagnostics
@@ -76,6 +99,57 @@ impl<'a> Lowering<'a> {
                 None
             }
         }
+    }
+
+    /// The write side of `object_assignment`: functional rebuild below the
+    /// handle, one in-place ObjectSet at it.
+    pub(super) fn object_assignment_write(
+        &mut self,
+        base: ExprId,
+        path: &[(u32, TyId)],
+        value: ExprId,
+    ) -> ExprId {
+        let void_ty = self.p.ty_void();
+        let (first_index, _) = path[0];
+        if path.len() == 1 {
+            return self
+                .p
+                .primop(Op::ObjectSet(first_index), &[base, value], void_ty);
+        }
+        // Read down below the object, rebuild functionally back up to the
+        // object's field, then one ObjectSet.
+        let mut levels = Vec::with_capacity(path.len());
+        levels.push(base);
+        for step in 1..path.len() {
+            let (index, _) = path[step - 1];
+            let (_, level_ty) = path[step];
+            let prev = levels[step - 1];
+            levels.push(self.field_get(prev, index, level_ty));
+        }
+        let mut stored = value;
+        for step in (1..path.len()).rev() {
+            let (index, _) = path[step];
+            let level_ty = path[step].1;
+            stored = self.field_set(levels[step], index, stored, level_ty);
+        }
+        self.p
+            .primop(Op::ObjectSet(first_index), &[base, stored], void_ty)
+    }
+
+    pub(super) fn object_assignment_old_value(
+        &mut self,
+        base: ExprId,
+        path: &[(u32, TyId)],
+        leaf_ty: TyId,
+    ) -> ExprId {
+        let mut parent = base;
+        for step in 1..path.len() {
+            let (index, _) = path[step - 1];
+            let (_, level_ty) = path[step];
+            parent = self.field_get(parent, index, level_ty);
+        }
+        let (index, _) = path[path.len() - 1];
+        self.field_get(parent, index, leaf_ty)
     }
 
     pub(super) fn rebuilt_assignment_value(
@@ -136,6 +210,7 @@ impl<'a> Lowering<'a> {
     pub(super) fn field_get(&mut self, record: ExprId, index: u32, field_ty: TyId) -> ExprId {
         match self.p.ty_kind(self.p.expr_ty(record)) {
             TyKind::Tuple(_) => self.p.extract(record, index),
+            TyKind::Object(_) => self.p.primop(Op::ObjectGet(index), &[record], field_ty),
             _ => self.p.primop(Op::GetField(index), &[record], field_ty),
         }
     }
@@ -242,6 +317,21 @@ impl<'a> Lowering<'a> {
         ty: &CheckTy,
         next: ExprId,
     ) -> ExprId {
+        // Ledger: values carrying `'heap` handles release their regions
+        // (one runtime scan covers any shape); owned parts still drop
+        // structurally below, with object interiors left to the finalizer
+        // walk.
+        let mut next = next;
+        if self.contains_object_type(ty) {
+            let void_ty = self.p.ty_void();
+            let release = self.p.primop(Op::RegionRelease, &[value], void_ty);
+            next = self.sequence_void_effect(release, next);
+            if matches!(Self::borrow_erased_ty(ty.clone()), CheckTy::Nominal(symbol, _)
+                if self.symbol_is_heap(symbol))
+            {
+                return next;
+            }
+        }
         if !self.needs_drop_type(ctx.unit, ty) {
             return next;
         }
@@ -249,6 +339,12 @@ impl<'a> Lowering<'a> {
             CheckTy::Nominal(symbol, args) => {
                 if self.symbol_is_borrowed(symbol) {
                     return next;
+                }
+                // An enum's owned payloads drop under a tag dispatch: one
+                // switch arm per variant, each dropping that variant's
+                // owned payloads, joining back to `next`.
+                if self.is_enum(symbol) {
+                    return self.lower_enum_drop_then(ctx, value, symbol, &args, next);
                 }
                 // A `Deinit` conformance runs the user's destructor, which
                 // consumes the value; its own body then drops the fields
@@ -312,7 +408,30 @@ impl<'a> Lowering<'a> {
                 }
                 body
             }
-            CheckTy::Any { .. } => next,
+            CheckTy::Any { protocol, .. } => {
+                // Every existential carries a drop witness in its last
+                // table slot: `λ(payload, k)` (deinit dispatch included).
+                let index = self.units[ctx.unit]
+                    .types
+                    .catalog
+                    .requirements_for_conformance(protocol)
+                    .len() as u32;
+                let void_ty = self.p.ty_void();
+                let bot = self.p.ty_bot();
+                let erased = self.p.ty(TyKind::Erased);
+                let k_ty = self.p.ty_fn(void_ty, bot);
+                let dom = self.p.ty_tuple(&[erased, k_ty]);
+                let witness_ty = self.p.ty_fn(dom, bot);
+                let witness = self
+                    .p
+                    .primop(Op::ExistentialWitness(index), &[value], witness_ty);
+                let payload = self.p.primop(Op::ExistentialPayload, &[value], erased);
+                let cont = self.p.func("after_existential_drop", void_ty, bot);
+                self.p.set_body(cont, next);
+                let cont_ref = self.p.func_ref(cont);
+                let args_tuple = self.p.tuple(&[payload, cont_ref]);
+                self.p.app(witness, args_tuple)
+            }
             _ => next,
         }
     }
@@ -382,6 +501,73 @@ impl<'a> Lowering<'a> {
             }
             _ => next,
         }
+    }
+
+    /// Drop an enum value's owned payloads: `GetTag` + `Switch`, one arm
+    /// per variant in declaration order (the tag numbering), each dropping
+    /// its owned payloads in reverse, all joining back to `next`.
+    fn lower_enum_drop_then(
+        &mut self,
+        ctx: &Ctx,
+        value: ExprId,
+        symbol: Symbol,
+        args: &[CheckTy],
+        next: ExprId,
+    ) -> ExprId {
+        let theta = self.nominal_theta(symbol, args);
+        let Some(info) = self
+            .units
+            .iter()
+            .find_map(|unit| unit.types.catalog.enums.get(&symbol).cloned())
+        else {
+            return next;
+        };
+        let variant_payloads: Vec<Vec<CheckTy>> = info
+            .variants
+            .values()
+            .map(|variant| match &variant.constructor_scheme.ty {
+                CheckTy::Func(payloads, ..) => payloads
+                    .iter()
+                    .map(|ty| ty.substitute(&theta, &Default::default(), &Default::default()))
+                    .collect(),
+                _ => vec![],
+            })
+            .collect();
+        if !variant_payloads
+            .iter()
+            .flatten()
+            .any(|payload| self.needs_drop_type(ctx.unit, payload))
+        {
+            return next;
+        }
+        let void_ty = self.p.ty_void();
+        let bot = self.p.ty_bot();
+        let join = self.p.func("after_enum_drop", void_ty, bot);
+        self.p.set_body(join, next);
+        let join_ref = self.p.func_ref(join);
+        let mut arm_refs = Vec::with_capacity(variant_payloads.len());
+        for payloads in &variant_payloads {
+            let unit_value = self.p.void();
+            let mut body = self.p.app(join_ref, unit_value);
+            for (index, payload_ty) in payloads.iter().enumerate().rev() {
+                if !self.needs_drop_type(ctx.unit, payload_ty) {
+                    continue;
+                }
+                let payload_lambda_ty = self.map_ty(payload_ty);
+                let payload = self.p.primop(
+                    Op::GetPayload(index as u32),
+                    &[value],
+                    payload_lambda_ty,
+                );
+                body = self.lower_drop_value_then(ctx, payload, payload_ty, body);
+            }
+            let arm = self.p.func("drop_variant", void_ty, bot);
+            self.p.set_body(arm, body);
+            arm_refs.push(self.p.func_ref(arm));
+        }
+        let i64_ty = self.p.ty_i64();
+        let tag = self.p.primop(Op::GetTag, &[value], i64_ty);
+        self.p.switch(tag, &arm_refs, join_ref, bot)
     }
 
     /// The `deinit` witness for a nominal's `Deinit` conformance, if any.
@@ -561,6 +747,12 @@ impl<'a> Lowering<'a> {
                 if self.symbol_is_borrowed(symbol) {
                     return next;
                 }
+                // An enum's owned payloads drop under a tag dispatch: one
+                // switch arm per variant, each dropping that variant's
+                // owned payloads, joining back to `next`.
+                if self.is_enum(symbol) {
+                    return self.lower_enum_drop_then(ctx, value, symbol, &args, next);
+                }
                 // A `Deinit` conformance runs the user's destructor, which
                 // consumes the value; its own body then drops the fields
                 // (its scope-exit drops), so no structural teardown follows
@@ -649,6 +841,95 @@ impl<'a> Lowering<'a> {
         self.type_needs_drop(unit, ty, &mut FxHashSet::default())
     }
 
+    /// Owned parts to drop OR `'heap` handles to release: the binding gets
+    /// scope-exit processing either way.
+    pub(super) fn needs_release_type(&self, unit: usize, ty: &CheckTy) -> bool {
+        self.needs_drop_type(unit, ty) || self.contains_object_type(ty)
+    }
+
+    /// Whether a value of this type may carry a `'heap` handle anywhere
+    /// (mirrors the flow checker's `contains_object`).
+    pub(super) fn contains_object_type(&self, ty: &CheckTy) -> bool {
+        self.contains_object_inner(ty, &mut FxHashSet::default())
+    }
+
+    fn contains_object_inner(&self, ty: &CheckTy, visiting: &mut FxHashSet<Symbol>) -> bool {
+        match ty {
+            CheckTy::Borrow(_, inner) | CheckTy::Unique(inner) => {
+                self.contains_object_inner(inner, visiting)
+            }
+            CheckTy::Nominal(symbol, args) => {
+                if self.symbol_is_heap(*symbol) {
+                    return true;
+                }
+                if !visiting.insert(*symbol) {
+                    return false;
+                }
+                let inside = self.nominal_payload_types(*symbol, args).iter().any(|f| {
+                    self.contains_object_inner(f, visiting)
+                }) || args.iter().any(|arg| self.contains_object_inner(arg, visiting));
+                visiting.remove(symbol);
+                inside
+            }
+            CheckTy::Tuple(items) => items
+                .iter()
+                .any(|item| self.contains_object_inner(item, visiting)),
+            CheckTy::Record(row) => row
+                .fields
+                .iter()
+                .any(|(_, field)| self.contains_object_inner(field, visiting)),
+            _ => false,
+        }
+    }
+
+    /// Every stored payload type of a nominal with the application's args
+    /// substituted (struct fields; enum variant payloads).
+    fn nominal_payload_types(&self, symbol: Symbol, args: &[CheckTy]) -> Vec<CheckTy> {
+        for unit in &self.units {
+            let catalog = &unit.types.catalog;
+            if let Some(info) = catalog.structs.get(&symbol) {
+                let subst: crate::lower::Theta =
+                    info.params.iter().copied().zip(args.iter().cloned()).collect();
+                return info
+                    .fields
+                    .values()
+                    .map(|(_, ty)| ty.substitute(&subst, &Default::default(), &Default::default()))
+                    .collect();
+            }
+            if let Some(info) = catalog.enums.get(&symbol) {
+                let subst: crate::lower::Theta =
+                    info.params.iter().copied().zip(args.iter().cloned()).collect();
+                return info
+                    .variants
+                    .values()
+                    .flat_map(|variant| match &variant.constructor_scheme.ty {
+                        CheckTy::Func(payloads, ..) => payloads
+                            .iter()
+                            .map(|ty| {
+                                ty.substitute(&subst, &Default::default(), &Default::default())
+                            })
+                            .collect(),
+                        _ => vec![],
+                    })
+                    .collect();
+            }
+        }
+        vec![]
+    }
+
+    /// A pure place read (variable or stored-field chain): carries no
+    /// unclaimed region count. Anything else is an rvalue.
+    pub(super) fn rhs_is_rvalue(&self, rhs: &Expr, _ctx: &Ctx) -> bool {
+        fn is_place(expr: &Expr) -> bool {
+            match &expr.kind {
+                ExprKind::Variable(_) => true,
+                ExprKind::Member(Some(receiver), _) => is_place(receiver),
+                _ => false,
+            }
+        }
+        !is_place(rhs)
+    }
+
     pub(super) fn type_needs_drop(
         &self,
         unit: usize,
@@ -660,6 +941,12 @@ impl<'a> Lowering<'a> {
             CheckTy::Unique(inner) => self.type_needs_drop(unit, inner, visiting),
             CheckTy::Nominal(symbol, args) => {
                 if self.symbol_is_borrowed(*symbol) {
+                    return false;
+                }
+                // A `'heap` value neither moves nor drops per-use: its
+                // interior is the region's business (finalizer thunks),
+                // its lifetime the ledger's (RegionRelease).
+                if self.symbol_is_heap(*symbol) {
                     return false;
                 }
                 self.symbol_has_ability(*symbol, "Owner")
@@ -695,7 +982,11 @@ impl<'a> Lowering<'a> {
         let result = self
             .field_types_for(symbol, args)
             .into_iter()
-            .any(|(_, field_ty)| self.type_needs_drop(unit, &field_ty, visiting));
+            .any(|(_, field_ty)| self.type_needs_drop(unit, &field_ty, visiting))
+            || self
+                .nominal_payload_types(symbol, args)
+                .iter()
+                .any(|payload| self.type_needs_drop(unit, payload, visiting));
         visiting.remove(&symbol);
         result
     }

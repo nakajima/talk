@@ -329,6 +329,19 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             );
         }
         let body_block = &self.arms[arm].body;
+        // Arm payload binders drop at arm-scope exit (the flow checker
+        // scheduled them on the body block); seed the drop stack so the
+        // candidates resolve.
+        for schedule in &body_block.drops {
+            if binders.contains(&schedule.place.root) {
+                inner.drop_stack.push(crate::lower::DropBinding {
+                    symbol: schedule.place.root,
+                    key_path: crate::lower::OwnershipKeyPath::root(schedule.place.root),
+                    ty: schedule.ty.clone(),
+                    dynamic_flags: vec![],
+                });
+            }
+        }
         let k = self.k;
         let body = self
             .lowering

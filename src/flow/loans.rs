@@ -224,13 +224,29 @@ impl MoveChecker<'_> {
             return false;
         }
         let root = Place::root(place.root);
+        // A `'heap` root's fields belong to the shared object: extracting
+        // an owned value must clone (its buffers are the region's).
+        let root_is_object = self
+            .root_ty(place.root)
+            .is_some_and(|ty| match &ty {
+                Ty::Borrow(_, inner) => self.grades.is_object(inner),
+                other => self.grades.is_object(other),
+            });
         let root_is_borrowed = state.borrowed_roots.contains_key(&place.root)
             || state.provenances.contains_key(&root)
             || self
                 .symbol_ty(place.root)
                 .is_some_and(|ty| self.grades.is_borrowed_value(&ty));
-        if root_is_borrowed {
+        if root_is_borrowed || root_is_object {
             if self.grades.is_cheap_clone(&expr.ty) {
+                self.auto_clones.insert(expr.id);
+                return true;
+            }
+            // A type-parameter extraction from a heap object: the grade is
+            // the instantiation's, so the clone/no-op/error decision moves
+            // to lowering (which holds θ). Mark it and let each
+            // monomorphization resolve.
+            if root_is_object && matches!(expr.ty, Ty::Param(_)) {
                 self.auto_clones.insert(expr.id);
                 return true;
             }

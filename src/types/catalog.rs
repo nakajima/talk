@@ -29,6 +29,9 @@ pub struct StructInfo {
     /// Declared with the `linear` modifier: must be consumed exactly once.
     #[serde(default)]
     pub linear: bool,
+    /// Declared `'heap`: reference semantics, region-allocated.
+    #[serde(default)]
+    pub heap: bool,
     /// Declared generic parameters, as rigid `Ty::Param` symbols.
     pub params: Vec<Symbol>,
     /// Field name → (property symbol, declared type over `params`).
@@ -183,6 +186,12 @@ impl TypeCatalog {
     /// The usage grade of a nominal: `Linear` iff declared `linear`, `Copy`
     /// for scalars and explicit `Copy` conformances, `Affine` otherwise
     /// (including unknown heads — affine is the safe default for both).
+    /// Declared `'heap`: values are region-allocated objects with
+    /// reference semantics.
+    pub fn is_heap(&self, symbol: Symbol) -> bool {
+        self.structs.get(&symbol).is_some_and(|info| info.heap)
+    }
+
     pub fn grade_of(&self, symbol: Symbol) -> Grade {
         if matches!(symbol, Symbol::Int | Symbol::Float | Symbol::Bool | Symbol::Void)
             || symbol == Symbol::RawPtr
@@ -219,6 +228,7 @@ impl TypeCatalog {
                         imp(k, target),
                         StructInfo {
                             linear: v.linear,
+                            heap: v.heap,
                             params: v.params.iter().map(|s| imp(*s, target)).collect(),
                             fields: v
                                 .fields

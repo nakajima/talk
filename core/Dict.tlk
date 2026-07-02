@@ -1,0 +1,45 @@
+// no-core
+use { Optional } from ./Optional.tlk
+use { Add, Equatable } from ./Operators.tlk
+use { String } from ./String.tlk
+
+struct DictNode<Value> 'heap {
+	let key: String
+	let value: Value
+	let next: DictNode<Value>?
+}
+
+func dict_find<Value>(current: DictNode<Value>?, key: &String) -> Value? {
+	match current {
+		.some(node) -> {
+			if node.key == key { Optional.some(node.value) } else {
+				dict_find(node.next, key)
+			}
+		},
+		.none -> Optional.none
+	}
+}
+
+// A string-keyed dictionary over region-allocated ('heap) nodes: insertion
+// conses in O(1); lookup walks linearly. A placeholder for a hash table
+// until raw storage can hold heap elements.
+
+public struct Dict<Value> 'heap {
+	let head: DictNode<Value>?
+	let count: Int
+
+	init() {
+		self.head = Optional.none
+		self.count = 0
+		self
+	}
+
+	mut func insert(key: String, value: Value) -> Void {
+		self.head = Optional.some(DictNode(key: key, value: value, next: self.head))
+		self.count = self.count + 1
+	}
+
+	func get(key: &String) -> Value? {
+		dict_find(self.head, key)
+	}
+}

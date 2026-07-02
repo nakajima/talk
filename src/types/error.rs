@@ -126,6 +126,10 @@ pub enum TypeError {
         ty: String,
         protocol: String,
     },
+    HeapConformance {
+        ty: String,
+        protocol: String,
+    },
     Unsupported(String),
 }
 
@@ -309,6 +313,12 @@ impl Display for TypeError {
                 write!(
                     f,
                     "`{ty}` is linear and cannot conform to {protocol}: a linear value must be consumed exactly once"
+                )
+            }
+            TypeError::HeapConformance { ty, protocol } => {
+                write!(
+                    f,
+                    "`{ty}` is 'heap and cannot conform to {protocol}: heap values are shared by reference"
                 )
             }
             TypeError::Unsupported(what) => {

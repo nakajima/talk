@@ -524,4 +524,151 @@ func outer(k: fn(int)) {
         let s2 = p.add(x, y);
         assert_eq!(s1, s2, "hash-consing = semi-global value numbering");
     }
+
+    // ----- 'heap object ops (regions substrate) ---------------------------------
+
+    use crate::lambda_g::expr::Op;
+
+    fn build_object_main(finalize: bool) -> (Program, Label, crate::lambda_g::expr::TyId) {
+        let mut p = Program::new();
+        let int = p.ty_i64();
+        let bot = p.ty_bot();
+        let void = p.ty_void();
+        let ret_ty = p.ty_fn(int, bot);
+        let main_dom = p.ty_tuple(&[ret_ty]);
+        let main = p.func("main", main_dom, bot);
+
+        // Finalizer: λ(self, k) { k(()) }.
+        let k_ty = p.ty_fn(void, bot);
+        let fin_dom = p.ty_tuple(&[void, k_ty]);
+        let fin = p.func("fin", fin_dom, bot);
+        {
+            let vf = p.var(fin);
+            let fk = p.extract(vf, 1);
+            let unit = p.void();
+            let body = p.app(fk, unit);
+            p.set_body(fin, body);
+        }
+
+        // CPS bindings: objects flow through continuations (expressions
+        // re-evaluate per reference — the same reason lowering binds).
+        let bind_a = p.func("bind_a", void, bot);
+        let bind_b = p.func("bind_b", void, bot);
+        let a = p.var(bind_a);
+        let b = p.var(bind_b);
+
+        // bind_b body: link, mutate through the alias, read through the
+        // other name, release both, return the read value. Effects sequence
+        // through continuations (the scheduler elides tuple-carried
+        // effects), mirroring lowering's sequence_void_effect.
+        {
+            // Built back-to-front.
+            let vmain = p.var(main);
+            let k = p.extract(vmain, 0);
+            let bind_read = p.func("bind_read", int, bot);
+            let read_value = p.var(bind_read);
+            // …after releases: k(read_value)
+            let mut rest = p.app(k, read_value);
+            for (name, target) in [("rel_b", b), ("rel_a", a)] {
+                let cont = p.func(name, void, bot);
+                p.set_body(cont, rest);
+                let cont_ref = p.func_ref(cont);
+                let release = p.primop(Op::RegionRelease, &[target], void);
+                rest = p.app(cont_ref, release);
+            }
+            p.set_body(bind_read, rest);
+            // read a.f1 through the other name, bound via bind_read.
+            let bind_read_ref = p.func_ref(bind_read);
+            let read = p.primop(Op::ObjectGet(1), &[a], int);
+            let mut body = p.app(bind_read_ref, read);
+            // …before the read: the writes (and finalizers), innermost last.
+            let via = p.primop(Op::ObjectGet(0), &[b], void); // aliases a
+            let forty_two = p.int(42);
+            let set_via = p.primop(Op::ObjectSet(1), &[via, forty_two], void);
+            let link_b = p.primop(Op::ObjectSet(0), &[b, a], void);
+            let link_a = p.primop(Op::ObjectSet(0), &[a, b], void);
+            let mut effects = vec![set_via, link_b, link_a];
+            if finalize {
+                let fin_ref_b = p.func_ref(fin);
+                effects.push(p.primop(Op::SetFinalizer, &[b, fin_ref_b], void));
+                let fin_ref_a = p.func_ref(fin);
+                effects.push(p.primop(Op::SetFinalizer, &[a, fin_ref_a], void));
+            }
+            for (i, effect) in effects.into_iter().enumerate() {
+                let cont = p.func(&format!("after_{i}"), void, bot);
+                p.set_body(cont, body);
+                let cont_ref = p.func_ref(cont);
+                body = p.app(cont_ref, effect);
+            }
+            p.set_body(bind_b, body);
+        }
+
+        // bind_a body: allocate b, enter bind_b.
+        {
+            let z1 = p.int(0);
+            let z2 = p.int(0);
+            let new_b = p.primop(Op::ObjectNew, &[z1, z2], void);
+            let bind_b_ref = p.func_ref(bind_b);
+            let body = p.app(bind_b_ref, new_b);
+            p.set_body(bind_a, body);
+        }
+
+        // main body: allocate a, enter bind_a.
+        {
+            let z1 = p.int(0);
+            let z2 = p.int(0);
+            let new_a = p.primop(Op::ObjectNew, &[z1, z2], void);
+            let bind_a_ref = p.func_ref(bind_a);
+            let body = p.app(bind_a_ref, new_a);
+            p.set_body(main, body);
+        }
+        (p, main, int)
+    }
+
+    #[test]
+    fn object_ops_alias_and_free_in_the_evaluator() {
+        let (mut p, main, int) = build_object_main(false);
+        let mut eval = Evaluator::new();
+        let value = eval.run_main(&mut p, main, int).expect("eval");
+        assert_eq!(value, EvalValue::I64(42), "mutation visible through the alias");
+        assert_eq!(eval.live_objects(), 0, "cycle freed at last release");
+    }
+
+    #[test]
+    fn finalizers_run_before_free_in_the_evaluator() {
+        let (mut p, main, int) = build_object_main(true);
+        let mut eval = Evaluator::new();
+        let value = eval.run_main(&mut p, main, int).expect("eval");
+        assert_eq!(value, EvalValue::I64(42));
+        assert_eq!(eval.live_objects(), 0, "finalizer walk then bulk free");
+    }
+
+
+    #[test]
+    fn object_ops_agree_across_engines() {
+        // The same hand-built program through the reference evaluator and
+        // the scheduled VM must produce the same value.
+        let (mut p, main, int) = build_object_main(true);
+        let mut entry = rustc_hash::FxHashSet::default();
+        entry.insert(main);
+        let fin = p
+            .labels()
+            .find(|l| p.name(*l) == "fin")
+            .expect("fin label");
+        entry.insert(fin);
+        let module = crate::vm::schedule::schedule(&mut p, main, &entry).expect("schedule");
+        let mut io = crate::vm::io::CaptureIO::default();
+        let vm_value = talk_runtime::interp::run(&module, &mut io).expect("vm");
+
+        let (mut p2, main2, int2) = build_object_main(true);
+        let mut eval = Evaluator::new();
+        let eval_value = eval.run_main(&mut p2, main2, int2).expect("eval");
+        let _ = int;
+        assert_eq!(eval_value, EvalValue::I64(42));
+        assert!(
+            matches!(vm_value, talk_runtime::interp::Value::I64(42)),
+            "vm disagreed: {vm_value:?}"
+        );
+    }
+
 }

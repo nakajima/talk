@@ -247,24 +247,12 @@ impl<'a> Parser<'a> {
                 node
             }
             Linear => {
-                self.consume(TokenKind::Linear)?;
-                let mut node = self.decl(context, is_static)?;
-                let mut marked = false;
-                if let Node::Decl(ref mut decl) = node
-                    && let DeclKind::Struct { linear, .. } | DeclKind::Enum { linear, .. } =
-                        &mut decl.kind
-                {
-                    *linear = true;
-                    marked = true;
-                }
-                if !marked {
-                    return Err(ParserError::UnexpectedToken {
-                        expected: "a struct or enum declaration after `linear`".into(),
-                        actual: format!("{:?}", current.kind),
-                        token: Some(current),
-                    });
-                }
-                node
+                // The prefix form moved to a tick-suffix attribute.
+                return Err(ParserError::UnexpectedToken {
+                    expected: "`struct Name 'linear { ... }` (the `linear struct` prefix moved to a declaration attribute)".into(),
+                    actual: "linear".into(),
+                    token: Some(current),
+                });
             }
             Static => {
                 self.consume(TokenKind::Static)?;
@@ -688,6 +676,40 @@ impl<'a> Parser<'a> {
         let (name, name_span) = self.identifier()?;
         let generics = self.generics()?;
 
+        // Tick-suffix declaration attributes: `struct Node 'heap { ... }`,
+        // `struct Token 'linear { ... }`. One extensible modifier position.
+        let mut linear = false;
+        let mut heap = false;
+        while self.peek_is(TokenKind::EffectName) {
+            let Some(tok) = self.advance() else { break };
+            let attribute = self.lexeme(&tok).to_string();
+            match attribute.as_str() {
+                "linear" => linear = true,
+                "heap" if context == BlockContext::Struct => heap = true,
+                "heap" => {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "'heap applies to struct declarations only".into(),
+                        actual: format!("{context:?}"),
+                        token: Some(tok),
+                    });
+                }
+                other => {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "a declaration attribute ('heap or 'linear)".into(),
+                        actual: format!("'{other}"),
+                        token: Some(tok),
+                    });
+                }
+            }
+        }
+        if linear && heap {
+            return Err(ParserError::UnexpectedToken {
+                expected: "at most one of 'heap and 'linear (aliased references cannot be consumed exactly once)".into(),
+                actual: "'heap 'linear".into(),
+                token: self.current.clone(),
+            });
+        }
+
         let conformance_colon = self.current.clone();
         let conformances = if self.did_match(TokenKind::Colon)? {
             if context.allows_conformances() {
@@ -713,7 +735,7 @@ impl<'a> Parser<'a> {
                 generics,
                 where_clause,
                 body,
-                linear: false,
+                linear,
             },
             BlockContext::Struct => DeclKind::Struct {
                 name: name.into(),
@@ -721,7 +743,8 @@ impl<'a> Parser<'a> {
                 generics,
                 where_clause,
                 body,
-                linear: false,
+                linear,
+                heap,
             },
             BlockContext::Extend => DeclKind::Extend {
                 name: name.into(),
@@ -2437,6 +2460,13 @@ impl<'a> Parser<'a> {
         let mut args: Vec<CallArg> = vec![];
         let mut i = 0;
         while {
+            // Arguments may sit one per line (the formatter wraps long
+            // calls that way); newlines inside an argument list are
+            // insignificant, and a trailing comma before `)` is fine.
+            self.skip_newlines();
+            if self.peek_is(TokenKind::RightParen) {
+                return Ok(args);
+            }
             let tok = self.push_source_location();
 
             if matches!(
@@ -2478,7 +2508,11 @@ impl<'a> Parser<'a> {
             }
 
             i += 1;
-            self.did_match(TokenKind::Comma)?
+            let more = self.did_match(TokenKind::Comma)?;
+            if !more {
+                self.skip_newlines();
+            }
+            more
         } {}
 
         Ok(args)

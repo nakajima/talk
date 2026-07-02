@@ -74,6 +74,13 @@ struct FuncSource<'a> {
     body: &'a Block,
 }
 
+/// The per-instantiation meaning of a tier-2 auto-clone mark.
+enum AutoClone {
+    Retain,
+    Nothing,
+    Unsupported(CheckTy),
+}
+
 pub struct Lowering<'a> {
     units: Vec<LowerUnit<'a>>,
     entry: usize,
@@ -92,6 +99,8 @@ pub struct Lowering<'a> {
     /// at use sites: symbol → (defining unit, rhs).
     globals: FxHashMap<Symbol, (usize, &'a Expr)>,
     done: FxHashMap<(Symbol, ThetaKey), Label>,
+    /// Synthesized finalizer thunks per `'heap` instantiation.
+    finalizer_thunks: FxHashMap<(Symbol, ThetaKey), Label>,
     queue: Vec<(Symbol, Theta, Label)>,
     /// Function values (literals, trailing blocks): they are called
     /// indirectly, so the scheduler gives each its own chunk and closure
@@ -359,6 +368,7 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
         statics: FxHashMap::default(),
         globals: FxHashMap::default(),
         done: FxHashMap::default(),
+        finalizer_thunks: FxHashMap::default(),
         queue: vec![],
         escaping: FxHashSet::default(),
         abortable: FxHashMap::default(),
@@ -381,6 +391,7 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
     lowering.drain_queue();
     let mut entry_funcs: FxHashSet<Label> = lowering.done.values().copied().collect();
     entry_funcs.extend(lowering.escaping.iter().copied());
+    entry_funcs.extend(lowering.finalizer_thunks.values().copied());
     entry_funcs.insert(main);
     LoweredProgram {
         program: lowering.p,
@@ -475,7 +486,23 @@ impl<'a> Lowering<'a> {
         // caller writes Self back. Initializers are excluded because their
         // self starts blank and is returned as the result instead.
         if !is_init && params.first().is_some_and(Self::is_mutable_self_param) {
-            self.mutating.insert(symbol);
+            // A `'heap` receiver mutates in place through the handle — no
+            // inout pair, no caller write-back.
+            let heap_self = params.first().is_some_and(|param| {
+                matches!(
+                    self.units[unit].types.node_types.get(&param.id),
+                    Some(crate::types::ty::Ty::Borrow(_, inner))
+                        if matches!(**inner, crate::types::ty::Ty::Nominal(inner_symbol, _)
+                            if self.units[unit].types.catalog.is_heap(inner_symbol))
+                ) || matches!(
+                    self.units[unit].types.node_types.get(&param.id),
+                    Some(crate::types::ty::Ty::Nominal(self_symbol, _))
+                        if self.units[unit].types.catalog.is_heap(*self_symbol)
+                )
+            });
+            if !heap_self {
+                self.mutating.insert(symbol);
+            }
         }
         self.sources
             .insert(symbol, FuncSource { unit, params, body });
@@ -928,6 +955,44 @@ impl<'a> Lowering<'a> {
         for (symbol, extract) in mutated_params {
             prologue.push((symbol, extract));
         }
+        // Owned by-value parameters: consumed arguments' drops ride the
+        // callee, so the flow checker schedules them at body exit — seed
+        // the drop stack so those candidates resolve (`'heap`-carrying
+        // params are exempt: the ledger never counts parameters).
+        let signature_params = self
+            .symbol_check_ty(symbol, &ctx.theta)
+            .and_then(|sig| match sig {
+                CheckTy::Func(params, ..) => Some(params),
+                _ => None,
+            })
+            .unwrap_or_default();
+        for (index, param) in source_params.iter().enumerate() {
+            let Ok(param_symbol) = param.name.symbol() else {
+                continue;
+            };
+            let Some(raw) = param
+                .ty
+                .clone()
+                .or_else(|| self.units[unit].types.node_types.get(&param.id).cloned())
+                .or_else(|| signature_params.get(index).cloned())
+            else {
+                continue;
+            };
+            let substituted = raw.substitute(&ctx.theta, &Default::default(), &Default::default());
+            let param_ty = self.normalize_check_ty(substituted, unit);
+            if matches!(param_ty, CheckTy::Borrow(..))
+                || !self.needs_drop_type(unit, &param_ty)
+                || self.contains_object_type(&param_ty)
+            {
+                continue;
+            }
+            ctx.drop_stack.push(DropBinding {
+                symbol: param_symbol,
+                key_path: OwnershipKeyPath::root(param_symbol),
+                ty: param_ty,
+                dynamic_flags: vec![],
+            });
+        }
         let is_mutating = self.mutating.contains(&symbol);
         let is_init = self.is_init(symbol);
         let self_symbol = source_params
@@ -961,7 +1026,52 @@ impl<'a> Lowering<'a> {
                 let bot = this.p.ty_bot();
                 let wrap = this.p.func("init_ret", body_value_ty, bot);
                 let orig_ret = ctx.ret_k;
-                let wrap_body = this.p.app(orig_ret, self_now);
+                // A `'heap` init attaches the instantiation's finalizer
+                // thunk to the fresh object before delivering it (the thunk
+                // rides as a function value so its captures resolve here).
+                let owner = this.units.iter().find_map(|u| {
+                    u.types
+                        .catalog
+                        .structs
+                        .iter()
+                        .find(|(_, info)| info.inits.contains(&symbol))
+                        .map(|(owner, info)| (*owner, info.params.clone()))
+                });
+                let finalizer = owner.and_then(|(head, params)| {
+                    if !this.symbol_is_heap(head) {
+                        return None;
+                    }
+                    let args: Vec<CheckTy> = params
+                        .iter()
+                        .map(|param| {
+                            ctx.theta
+                                .get(param)
+                                .cloned()
+                                .unwrap_or(CheckTy::Param(*param))
+                        })
+                        .collect();
+                    this.finalizer_thunk(ctx, head, &args)
+                });
+                let wrap_body = match finalizer {
+                    Some(thunk) => {
+                        let self_ty = this.p.expr_ty(self_now);
+                        let deliver = this.p.func("attach_finalizer", self_ty, bot);
+                        let bound_self = this.p.var(deliver);
+                        let void_ty = this.p.ty_void();
+                        let thunk_ref = this.p.func_ref(thunk);
+                        let attach = this.p.primop(
+                            Op::SetFinalizer,
+                            &[bound_self, thunk_ref],
+                            void_ty,
+                        );
+                        let done = this.p.app(orig_ret, bound_self);
+                        let body = this.sequence_void_effect(attach, done);
+                        this.p.set_body(deliver, body);
+                        let deliver_ref = this.p.func_ref(deliver);
+                        this.p.app(deliver_ref, self_now)
+                    }
+                    None => this.p.app(orig_ret, self_now),
+                };
                 this.p.set_body(wrap, wrap_body);
                 ctx.ret_k = this.p.func_ref(wrap);
                 ctx.tail_k = ctx.ret_k;
@@ -1085,8 +1195,20 @@ impl<'a> Lowering<'a> {
     fn lower_expr(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
         // Tier-2 auto-clone: retain the value's buffers before handing it to
         // the consumer, so the clone and the original release independently.
+        // The mark may sit on a generic body; the θ-resolved type decides
+        // per instantiation: CheapClone retains, non-owned needs nothing,
+        // owned-but-not-CheapClone is unsupported.
         let k = if expr.ownership.auto_clone {
-            self.retain_then(expr, ctx, k)
+            match self.auto_clone_action(expr, ctx) {
+                AutoClone::Retain => self.retain_then(expr, ctx, k),
+                AutoClone::Nothing => k,
+                AutoClone::Unsupported(ty) => {
+                    self.diagnostics.push(format!(
+                        "lowering: extracting owned value of type {ty:?} from a heap object                          requires a CheapClone (or copy) instantiation"
+                    ));
+                    k
+                }
+            }
         } else {
             k
         };
@@ -1115,6 +1237,29 @@ impl<'a> Lowering<'a> {
             return self.lower_expr_unpacked(expr, ctx, pack_ref);
         }
         self.lower_expr_unpacked(expr, ctx, k)
+    }
+
+    /// What a tier-2 mark means at this instantiation.
+    fn auto_clone_action(&mut self, expr: &Expr, ctx: &Ctx) -> AutoClone {
+        let ty = Self::borrow_erased_ty(self.checker_ty(expr, ctx));
+        if !self.needs_drop_type(ctx.unit, &ty) {
+            return AutoClone::Nothing;
+        }
+        if let CheckTy::Nominal(symbol, _) = &ty
+            && self.symbol_has_conformance(*symbol, Symbol::CheapClone)
+        {
+            return AutoClone::Retain;
+        }
+        AutoClone::Unsupported(ty)
+    }
+
+    fn symbol_has_conformance(&self, symbol: Symbol, protocol: Symbol) -> bool {
+        self.units.iter().any(|unit| {
+            unit.types
+                .catalog
+                .conformances
+                .contains_key(&(symbol, protocol))
+        })
     }
 
     /// A continuation that retains `expr`'s refcounted buffers, then applies
@@ -1157,7 +1302,8 @@ impl<'a> Lowering<'a> {
                             &values,
                             ctx,
                         );
-                        this.p.app(k, value)
+                        let body = this.p.app(k, value);
+                        this.embed_acquires_then(&arg_exprs, &values, ctx, body)
                     });
                 }
                 self.lower_call(expr, callee, args, trailing_block.as_ref(), ctx, k)
@@ -1175,7 +1321,8 @@ impl<'a> Lowering<'a> {
                 let item_exprs: Vec<&Expr> = items.iter().collect();
                 self.lower_args(&item_exprs, ctx, vec![], &mut |this, values| {
                     let tuple = this.p.tuple(&values);
-                    this.p.app(k, tuple)
+                    let body = this.p.app(k, tuple);
+                    this.embed_acquires_then(&item_exprs, &values, ctx, body)
                 })
             }
             // Field read on an impure receiver: bind the receiver through
@@ -1298,7 +1445,8 @@ impl<'a> Lowering<'a> {
                 self.lower_args(&field_exprs, ctx, vec![], &mut |this, values| {
                     let items: Vec<ExprId> = order.iter().map(|&i| values[i]).collect();
                     let tuple = this.p.tuple(&items);
-                    this.p.app(k, tuple)
+                    let body = this.p.app(k, tuple);
+                    this.embed_acquires_then(&field_exprs, &values, ctx, body)
                 })
             }
             other => {
@@ -1323,6 +1471,25 @@ impl<'a> Lowering<'a> {
                 let bot = self.p.ty_bot();
                 let cont = self.p.func("scrut", scrutinee_ty, bot);
                 let value = self.p.var(cont);
+                // Ledger rule D analog: an rvalue scrutinee's carried +1
+                // dies with the match — release once the match delivers.
+                let k = if self.rhs_is_rvalue(scrutinee, ctx)
+                    && self.contains_object_type(&scrutinee_check_ty)
+                {
+                    let TyKind::Fn(result_ty, _) = *self.p.ty_kind(self.p.expr_ty(k)) else {
+                        return self.dead_end("match_continuation_not_a_function");
+                    };
+                    let relk = self.p.func("release_scrutinee", result_ty, bot);
+                    let result = self.p.var(relk);
+                    let deliver = self.p.app(k, result);
+                    let void_ty = self.p.ty_void();
+                    let release = self.p.primop(Op::RegionRelease, &[value], void_ty);
+                    let body = self.sequence_void_effect(release, deliver);
+                    self.p.set_body(relk, body);
+                    self.p.func_ref(relk)
+                } else {
+                    k
+                };
                 let body = patterns::compile_match(self, value, pattern_scrutinee_ty, arms, ctx, k);
                 self.p.set_body(cont, body);
                 let cont_ref = self.p.func_ref(cont);
@@ -1394,9 +1561,15 @@ impl<'a> Lowering<'a> {
                 self.field_read(expr, receiver, receiver_value, ctx)
             }
             // Variant construction over pure payloads (`.some(1)`,
-            // `Maybe.definitely(x)`): pure, exactly like RecordNew.
+            // `Maybe.definitely(x)`): pure, exactly like RecordNew — unless
+            // a payload embeds a `'heap` place read (the impure path emits
+            // the ledger acquire).
             ExprKind::Call { callee, args, .. } => {
                 let (enum_symbol, tag, variant_symbol, site) = self.variant_target(expr, callee)?;
+                let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
+                if self.embeds_object_place_read(&arg_exprs, ctx) {
+                    return None;
+                }
                 let mut payloads = Vec::with_capacity(args.len());
                 for arg in args {
                     payloads.push(self.try_pure(&arg.value, ctx)?);
@@ -1411,9 +1584,14 @@ impl<'a> Lowering<'a> {
                 ))
             }
             // A record literal over pure fields: a tuple in the row's
-            // canonical (label-sorted) field order.
+            // canonical (label-sorted) field order (unless a `'heap` place
+            // read embeds — the impure path emits the ledger acquire).
             ExprKind::RecordLiteral { fields, spread } => {
                 if spread.is_some() {
+                    return None;
+                }
+                let field_exprs: Vec<&Expr> = fields.iter().map(|f| &f.value).collect();
+                if self.embeds_object_place_read(&field_exprs, ctx) {
                     return None;
                 }
                 let order = self.record_field_order(expr, fields, ctx)?;
@@ -1495,8 +1673,13 @@ impl<'a> Lowering<'a> {
             ExprKind::Tuple(items) if items.is_empty() => Some(self.p.void()),
             ExprKind::InlineIR(instruction) => self.splice(instruction, ctx),
             ExprKind::Tuple(items) if items.len() == 1 => self.try_pure(&items[0], ctx),
-            // A tuple literal over pure items.
+            // A tuple literal over pure items (unless a `'heap` place read
+            // embeds — the impure path emits the ledger acquire).
             ExprKind::Tuple(items) => {
+                let item_exprs: Vec<&Expr> = items.iter().collect();
+                if self.embeds_object_place_read(&item_exprs, ctx) {
+                    return None;
+                }
                 let mut values = Vec::with_capacity(items.len());
                 for item in items {
                     values.push(self.try_pure(item, ctx)?);
@@ -1530,6 +1713,33 @@ impl<'a> Lowering<'a> {
             CheckTy::Any { protocol, .. } => Some(*protocol),
             _ => None,
         }
+    }
+
+    /// The drop witness packed into every existential: `λ(payload, k)`
+    /// dropping the payload's owned parts (deinit dispatch included). A
+    /// uniform last slot in the witness table, so layout stays index-stable.
+    fn existential_drop_thunk(&mut self, ctx: &Ctx, payload_ty: &CheckTy) -> Label {
+        let payload_lambda_ty = self.map_ty(payload_ty);
+        let void_ty = self.p.ty_void();
+        let bot = self.p.ty_bot();
+        let k_ty = self.p.ty_fn(void_ty, bot);
+        let dom = self.p.ty_tuple(&[payload_lambda_ty, k_ty]);
+        let thunk = self.p.func("drop_payload", dom, bot);
+        // The thunk escapes into the witness table: it must become a chunk.
+        self.escaping.insert(thunk);
+        let vthunk = self.p.var(thunk);
+        let payload = self.p.extract(vthunk, 0);
+        let k = self.p.extract(vthunk, 1);
+        let unit_value = self.p.void();
+        let finish = self.p.app(k, unit_value);
+        let body = match payload_ty {
+            // A type-parameter payload's drop is unknowable here (generic
+            // repack); the thunk is a no-op — deferred, see plan notes.
+            CheckTy::Param(_) => finish,
+            _ => self.lower_drop_value_then(ctx, payload, payload_ty, finish),
+        };
+        self.p.set_body(thunk, body);
+        thunk
     }
 
     fn existential_pack_value(
@@ -1581,6 +1791,8 @@ impl<'a> Lowering<'a> {
             )?;
             values.push(witness);
         }
+        let drop_thunk = self.existential_drop_thunk(ctx, &pack.payload);
+        values.push(self.p.func_ref(drop_thunk));
         let ty = self.p.ty(TyKind::Existential(*protocol));
         Some(self.p.primop(Op::ExistentialPack(*protocol), &values, ty))
     }
@@ -1613,6 +1825,9 @@ impl<'a> Lowering<'a> {
             values.push(self.p.extract(evidence.table, source_index as u32));
             let _ = label;
         }
+        let payload_ty = CheckTy::Param(param);
+        let drop_thunk = self.existential_drop_thunk(ctx, &payload_ty);
+        values.push(self.p.func_ref(drop_thunk));
         let ty = self.p.ty(TyKind::Existential(protocol));
         Some(self.p.primop(Op::ExistentialPack(protocol), &values, ty))
     }
@@ -2005,10 +2220,11 @@ impl<'a> Lowering<'a> {
             let index = self.field_index(&head, property)?;
             let field_check_ty = self.checker_ty(expr, ctx);
             let field_ty = self.map_ty(&field_check_ty);
-            return Some(
-                self.p
-                    .primop(Op::GetField(index), &[receiver_value], field_ty),
-            );
+            let op = match self.p.ty_kind(self.p.expr_ty(receiver_value)) {
+                TyKind::Object(_) => Op::ObjectGet(index),
+                _ => Op::GetField(index),
+            };
+            return Some(self.p.primop(op, &[receiver_value], field_ty));
         }
 
         let ExprKind::Member(_, label) = &expr.kind else {
@@ -2490,6 +2706,7 @@ impl<'a> Lowering<'a> {
         });
         let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
         self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
+            let k = this.release_temps_then(&arg_exprs, 0, &values, ctx, k);
             if let Some(trailing) = trailing_value {
                 values.push(trailing);
             }
@@ -2578,8 +2795,14 @@ impl<'a> Lowering<'a> {
             k
         };
 
+        // Ledger rule D: an rvalue argument carrying `'heap` handles dies
+        // with the call — release its +1 once the call returns (place-read
+        // arguments carried nothing; the callee's params neither acquire
+        // nor release).
+        let done_len = done.len();
         let func_ref = self.p.func_ref(label);
         self.lower_args(&arg_exprs, ctx, done, &mut |this, values| {
+            let k = this.release_temps_then(&arg_exprs, done_len, &values, ctx, k);
             let mut tuple_items = values;
             if let Some(trailing) = trailing_value {
                 tuple_items.push(trailing);
@@ -2629,6 +2852,7 @@ impl<'a> Lowering<'a> {
         arg_exprs.extend(args.iter().map(|arg| &arg.value));
         Some(
             self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
+                let k = this.release_temps_then(&arg_exprs, 0, &values, ctx, k);
                 let witness = match build_witness(this, &mut values, witness_ty) {
                     Ok(witness) => witness,
                     Err(early) => return early,
@@ -2766,7 +2990,11 @@ impl<'a> Lowering<'a> {
         let Prefix::Receiver(receiver) = prefix else {
             return None;
         };
-        let (cell, path) = self.assignment_target(receiver, ctx)?;
+        let (base, path) = self.assignment_target(receiver, ctx)?;
+        let crate::lower::statements::AssignBase::Cell(cell) = base else {
+            // Heap receivers mutate in place: no write-back.
+            return None;
+        };
 
         // The pair type comes from the demanded function's signature.
         let TyKind::Tuple(dom_items) = self.p.ty_kind(self.p.dom(label)) else {
@@ -2856,9 +3084,9 @@ impl<'a> Lowering<'a> {
                     ));
                     return None;
                 };
+                let constructed = self.checker_ty(expr, ctx);
                 let blank = self.blank_record(struct_symbol)?;
                 let mut theta = self.call_theta(init, expr.instantiation.as_ref(), ctx);
-                let constructed = self.checker_ty(expr, ctx);
                 self.owner_theta(init, &constructed, &mut theta);
                 Some((self.demand(init, theta), init, Prefix::Value(blank)))
             }
@@ -2989,8 +3217,148 @@ impl<'a> Lowering<'a> {
             .map(|info| info.fields.len())?;
         let void = self.p.void();
         let fields = vec![void; field_count];
+        if self.symbol_is_heap(struct_symbol) {
+            let ty = self.p.ty(TyKind::Object(struct_symbol));
+            return Some(self.p.primop(Op::ObjectNew, &fields, ty));
+        }
         let ty = self.p.ty(TyKind::Boxed(struct_symbol));
         Some(self.p.primop(Op::RecordNew(struct_symbol), &fields, ty))
+    }
+
+    /// The finalizer thunk for a `'heap` instantiation: `λ(self, k)` that
+    /// dispatches the `Deinit` witness (if any), drops owned *value* fields
+    /// (buffer frees etc. — object fields are the region's own members and
+    /// are skipped), then continues. `None` when nothing needs doing.
+    fn finalizer_thunk(
+        &mut self,
+        ctx: &Ctx,
+        symbol: Symbol,
+        args: &[CheckTy],
+    ) -> Option<Label> {
+        let theta = self.nominal_theta(symbol, args);
+        let key = (symbol, theta_key(&theta));
+        if let Some(&label) = self.finalizer_thunks.get(&key) {
+            return Some(label);
+        }
+        let fields = self.field_types_for(symbol, args);
+        let witness = self.deinit_witness(symbol);
+        let any_owned = fields
+            .iter()
+            .any(|(_, field_ty)| self.needs_drop_type(ctx.unit, field_ty));
+        if witness.is_none() && !any_owned {
+            return None;
+        }
+        let obj_ty = self.p.ty(TyKind::Object(symbol));
+        let void_ty = self.p.ty_void();
+        let bot = self.p.ty_bot();
+        let k_ty = self.p.ty_fn(void_ty, bot);
+        let dom = self.p.ty_tuple(&[obj_ty, k_ty]);
+        let thunk = self.p.func(&format!("finalize_{symbol}"), dom, bot);
+        self.finalizer_thunks.insert(key, thunk);
+        let vthunk = self.p.var(thunk);
+        let self_value = self.p.extract(vthunk, 0);
+        let k = self.p.extract(vthunk, 1);
+        let unit_value = self.p.void();
+        let mut body = self.p.app(k, unit_value);
+        for (index, (_, field_ty)) in fields.iter().enumerate().rev() {
+            if !self.needs_drop_type(ctx.unit, field_ty) {
+                continue;
+            }
+            let field_lambda_ty = self.map_ty(field_ty);
+            let field_value =
+                self.p
+                    .primop(Op::ObjectGet(index as u32), &[self_value], field_lambda_ty);
+            body = self.lower_drop_value_then(ctx, field_value, field_ty, body);
+        }
+        if let Some(witness) = witness {
+            let label = self.demand(witness, theta);
+            let fn_ref = self.p.func_ref(label);
+            let cont = self.p.func("after_heap_deinit", void_ty, bot);
+            self.p.set_body(cont, body);
+            let cont_ref = self.p.func_ref(cont);
+            let args_tuple = self.p.tuple(&[self_value, cont_ref]);
+            body = self.p.app(fn_ref, args_tuple);
+        }
+        self.p.set_body(thunk, body);
+        Some(thunk)
+    }
+
+    /// Ledger rule D: rvalue arguments carrying `'heap` handles die with
+    /// the call — wrap the continuation to release their +1s once the call
+    /// returns. `values[offset + i]` corresponds to `arg_exprs[i]`.
+    fn release_temps_then(
+        &mut self,
+        arg_exprs: &[&Expr],
+        offset: usize,
+        values: &[ExprId],
+        ctx: &Ctx,
+        k: ExprId,
+    ) -> ExprId {
+        let temp_indices: Vec<usize> = arg_exprs
+            .iter()
+            .enumerate()
+            .filter(|(_, arg)| {
+                self.rhs_is_rvalue(arg, ctx)
+                    && self.contains_object_type(&self.checker_ty(arg, ctx))
+            })
+            .map(|(i, _)| offset + i)
+            .collect();
+        if temp_indices.is_empty() {
+            return k;
+        }
+        let TyKind::Fn(result_ty, _) = *self.p.ty_kind(self.p.expr_ty(k)) else {
+            return self.dead_end("call_continuation_not_a_function");
+        };
+        let bot = self.p.ty_bot();
+        let relk = self.p.func("release_call_temps", result_ty, bot);
+        let result = self.p.var(relk);
+        let mut body = self.p.app(k, result);
+        let void_ty = self.p.ty_void();
+        for &index in &temp_indices {
+            let release = self.p.primop(Op::RegionRelease, &[values[index]], void_ty);
+            body = self.sequence_void_effect(release, body);
+        }
+        self.p.set_body(relk, body);
+        self.p.func_ref(relk)
+    }
+
+    /// Ledger rule B: a `'heap` handle read from a place and embedded into
+    /// a constructed value (tuple/variant/record element) gains +1 — the
+    /// constructed rvalue then carries it, and its consumer (a claiming
+    /// binding, a store, a temp release) accounts for it.
+    fn embed_acquires_then(
+        &mut self,
+        elems: &[&Expr],
+        values: &[ExprId],
+        ctx: &Ctx,
+        mut body: ExprId,
+    ) -> ExprId {
+        let void_ty = self.p.ty_void();
+        for (elem, &value) in elems.iter().zip(values.iter()) {
+            if !self.rhs_is_rvalue(elem, ctx)
+                && self.contains_object_type(&self.checker_ty(elem, ctx))
+            {
+                let acquire = self.p.primop(Op::RegionAcquire, &[value], void_ty);
+                body = self.sequence_void_effect(acquire, body);
+            }
+        }
+        body
+    }
+
+    /// Whether any element forces the impure path so rule-B acquires can
+    /// be emitted (pure construction has no effect slot).
+    fn embeds_object_place_read(&mut self, elems: &[&Expr], ctx: &Ctx) -> bool {
+        elems.iter().any(|elem| {
+            !self.rhs_is_rvalue(elem, ctx)
+                && self.contains_object_type(&self.checker_ty(elem, ctx))
+        })
+    }
+
+    /// Declared `'heap` in any unit's catalog: values are object handles.
+    pub(super) fn symbol_is_heap(&self, symbol: Symbol) -> bool {
+        self.units
+            .iter()
+            .any(|u| u.types.catalog.is_heap(symbol))
     }
 
     /// Witness selection (Wadler & Blott's instance method lookup, made
@@ -3580,6 +3948,8 @@ impl<'a> Lowering<'a> {
                     // Enums are tagged variants; type arguments are erased
                     // (monomorphization already specialized every use).
                     self.p.ty(TyKind::Variant(*symbol))
+                } else if self.symbol_is_heap(*symbol) {
+                    self.p.ty(TyKind::Object(*symbol))
                 } else {
                     self.p.ty(TyKind::Boxed(*symbol))
                 }

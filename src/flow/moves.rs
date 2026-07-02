@@ -188,6 +188,9 @@ struct ScopeLocal {
     symbol: crate::name_resolution::symbol::Symbol,
     binder: NodeID,
     ty: Ty,
+    /// A pure alias of a value that outlives this scope (a match-arm
+    /// payload binder): no ledger events of its own.
+    alias: bool,
 }
 
 pub(crate) struct MoveChecker<'a> {
@@ -216,6 +219,10 @@ pub(crate) struct MoveChecker<'a> {
     /// Expressions that clone instead of moving: CheapClone values
     /// extracted from a borrow (tier 2 — lowering retains the buffers).
     pub(crate) auto_clones: FxHashSet<NodeID>,
+    /// Locals to install in the NEXT pushed scope frame: owned by-value
+    /// parameters (their drops ride the callee) and match-arm payload
+    /// binders (scoped to the arm body).
+    pending_locals: Vec<ScopeLocal>,
     /// Editor-facing facts (inlay hints, hover), accumulated during the walk.
     pub(crate) facts: super::FlowFacts,
 }
@@ -237,6 +244,7 @@ impl<'a> MoveChecker<'a> {
             stmt_drops: FxHashMap::default(),
             consumed: FxHashSet::default(),
             auto_clones: FxHashSet::default(),
+            pending_locals: vec![],
             facts: super::FlowFacts::default(),
         }
     }
@@ -295,6 +303,21 @@ impl<'a> MoveChecker<'a> {
             };
             self.param_tys.insert(symbol, ty.clone());
             if !self.grades.contains_borrowed(&ty) {
+                // A consumed by-value argument's drop rides the callee: the
+                // parameter is a scope local of the body. (`'heap`-carrying
+                // parameters are exempt — params neither acquire nor
+                // release the region ledger.)
+                if self.grades.needs_drop(&ty) && !self.grades.contains_object(&ty) {
+                    self.pending_locals.push(ScopeLocal {
+                        symbol,
+                        binder: param.id,
+                        ty: ty.clone(),
+                        alias: false,
+                    });
+                    // Parameters arrive initialized (else the exit drop
+                    // classifies Dead).
+                    state.restore(&Place::root(symbol));
+                }
                 continue;
             }
             self.borrowed_params.insert(symbol);
@@ -317,9 +340,10 @@ impl<'a> MoveChecker<'a> {
     /// Walk a function body block: its tail expression is the function's
     /// return value (provenance-checked like an explicit `return`).
     fn walk_func_body(&mut self, block: &hir::Block, state: &mut MoveState) {
+        let pending = std::mem::take(&mut self.pending_locals);
         self.scopes.push(ScopeFrame {
             block_id: block.id,
-            locals: vec![],
+            locals: pending,
         });
         let mut diverges = Diverges::No;
         for (index, node) in block.body.iter().enumerate() {
@@ -507,7 +531,8 @@ impl<'a> MoveChecker<'a> {
                     .or_else(|| whole_binding_ty.clone())
                     .unwrap_or(Ty::Error),
             };
-            if self.grades.contains_borrowed(&binder_ty) {
+            if self.grades.contains_borrowed(&binder_ty) && !self.grades.contains_object(&binder_ty)
+            {
                 let mut provenance = self.expr_provenance(rhs, state);
                 // A `&`/`&mut` binding borrows its sources at the annotated
                 // permission.
@@ -554,6 +579,7 @@ impl<'a> MoveChecker<'a> {
                     symbol: binder,
                     binder: id,
                     ty: ty.clone(),
+                    alias: false,
                 });
             }
             let place = Place::root(binder);
@@ -578,12 +604,27 @@ impl<'a> MoveChecker<'a> {
         state: &MoveState,
         out: &mut Vec<DropSchedule>,
     ) {
-        if !self.grades.needs_drop(&local.ty) {
+        // "Needs release": owned values drop; values carrying `'heap`
+        // handles release their regions. Either way the binding gets a
+        // scope-exit schedule (lowering picks the operation by type).
+        if !self.grades.needs_drop(&local.ty) && !self.grades.contains_object(&local.ty) {
+            return;
+        }
+        // A pattern binder over a handle-only payload is a pure alias of
+        // the scrutinee's value (which outlives the arm): no ledger event.
+        if local.alias && !self.grades.needs_drop(&local.ty) {
             return;
         }
         let place = Place::root(local.symbol);
         let kind = classify(&place, state);
-        if kind != DropElaboration::Dead && self.ty_is_linear(&local.ty) {
+        // A by-value parameter received the caller's move: linearity was
+        // discharged at the call; dropping the param here is the intended
+        // end of the value (e.g. a `consuming func`'s self).
+        let is_param = matches!(
+            local.symbol,
+            crate::name_resolution::symbol::Symbol::ParamLocal(_)
+        );
+        if !is_param && kind != DropElaboration::Dead && self.ty_is_linear(&local.ty) {
             let error = OwnershipError::LinearNotConsumed {
                 name: render_place(&place, self.types),
                 ty: local.ty.render_mono(),
@@ -751,9 +792,10 @@ impl<'a> MoveChecker<'a> {
     /// Walk a block as a scope: track its locals and, on the fallthrough
     /// exit, schedule their drops in reverse declaration order.
     fn walk_block(&mut self, block: &hir::Block, state: &mut MoveState) -> Diverges {
+        let pending = std::mem::take(&mut self.pending_locals);
         self.scopes.push(ScopeFrame {
             block_id: block.id,
-            locals: vec![],
+            locals: pending,
         });
         let diverges = self.walk_block_nodes(&block.body, state);
         let Some(frame) = self.scopes.pop() else {
@@ -779,8 +821,10 @@ impl<'a> MoveChecker<'a> {
         rhs: &hir::Expr,
         state: &mut MoveState,
     ) {
-        // Assignment through a shared borrow is rejected.
+        // Assignment through a shared borrow is rejected — except through
+        // `'heap` references, which mutate in place by design.
         if let Some((receiver_root, receiver_ty)) = self.shared_borrow_assignment_receiver(lhs, state)
+            && !self.object_receiver(&receiver_ty)
         {
             let error = OwnershipError::AssignThroughSharedBorrow {
                 name: render_symbol(receiver_root, self.types),
@@ -791,7 +835,10 @@ impl<'a> MoveChecker<'a> {
 
         if let Some(place) = self.place(lhs) {
             // Reassigning a borrowed binding re-derives its provenance.
-            if self.grades.contains_borrowed(&lhs.ty) && place.fields.is_empty() {
+            if self.grades.contains_borrowed(&lhs.ty)
+                && !self.grades.contains_object(&lhs.ty)
+                && place.fields.is_empty()
+            {
                 let mut provenance = self.expr_provenance(rhs, state);
                 if let Ty::Borrow(perm, _) = &lhs.ty {
                     provenance = provenance.with_kind(*perm);
@@ -820,7 +867,7 @@ impl<'a> MoveChecker<'a> {
             // The old value is replaced: drop it first (classified at the
             // pre-assignment state, so a moved-out place drops Dead), and any
             // borrows of it are invalidated.
-            if self.grades.needs_drop(&lhs.ty) {
+            if self.grades.needs_drop(&lhs.ty) || self.grades.contains_object(&lhs.ty) {
                 let kind = classify(&place, state);
                 self.stmt_drops.entry(stmt_id).or_default().push(DropSchedule {
                     place: place.clone(),
@@ -881,6 +928,7 @@ impl<'a> MoveChecker<'a> {
     /// anything else evaluates normally (its interior consume sites are its
     /// own).
     fn consume_expr(&mut self, expr: &hir::Expr, state: &mut MoveState) {
+        self.check_object_boundaries(expr);
         // A closure value consumed by its context escapes the frame.
         if let ExprKind::Func(func) = &expr.kind {
             self.check_closure(func, Some(&expr.ty), state, EscapeContext::Escaping);
@@ -934,6 +982,7 @@ impl<'a> MoveChecker<'a> {
     /// Walk an expression for its uses (reads); consume sites inside it
     /// (call arguments, receivers, aggregate elements) apply their own rules.
     fn walk_expr(&mut self, expr: &hir::Expr, state: &mut MoveState) {
+        self.check_object_boundaries(expr);
         if let Some(place) = self.place(expr) {
             self.check_use(expr, &place, false, state);
             return;
@@ -1045,6 +1094,22 @@ impl<'a> MoveChecker<'a> {
                     }
                 }
             }
+            for (binder_id, binder) in arm.pattern.collect_binders() {
+                let binder_ty = self
+                    .types
+                    .local_tys
+                    .get(&binder)
+                    .or_else(|| self.types.node_types.get(&binder_id))
+                    .cloned()
+                    .unwrap_or(Ty::Error);
+                self.pending_locals.push(ScopeLocal {
+                    symbol: binder,
+                    binder: binder_id,
+                    ty: binder_ty,
+                    alias: true,
+                });
+                arm_state.restore(&Place::root(binder));
+            }
             if self.walk_block(&arm.body, &mut arm_state) == Diverges::No {
                 state.merge_from(&arm_state);
             }
@@ -1071,10 +1136,11 @@ impl<'a> MoveChecker<'a> {
                 let method_params = self.member_callable_params(callee);
                 let self_param = method_params.as_ref().and_then(|params| params.first());
                 match self_param {
-                    Some(Ty::Borrow(perm, _)) => {
+                    Some(Ty::Borrow(perm, inner)) => {
+                        let is_object = self.grades.is_object(inner);
                         let perm = *perm;
                         self.walk_expr(receiver, state);
-                        if let Some(receiver_place) = self.place(receiver) {
+                        if !is_object && let Some(receiver_place) = self.place(receiver) {
                             let owner = state.loan_owner_for(&receiver_place);
                             self.check_borrow_conflicts(
                                 receiver.id,
@@ -1098,16 +1164,21 @@ impl<'a> MoveChecker<'a> {
         }
         let params = value_params.unwrap_or_else(|| callee_params(callee));
 
+        // Constructor args flow into the constructed value: they consume
+        // unless the result is trivially copyable (then nothing owns
+        // anything). Gating on copy — not needs-drop — routes generic and
+        // handle-carrying payloads through the ledger too.
         let borrowed_constructor = matches!(callee.kind, ExprKind::Constructor(_))
-            && !self.grades.needs_drop(&result_ty(callee));
+            && self.grades.is_copy(&result_ty(callee));
 
         for (index, arg) in args.iter().enumerate() {
             let param = params.get(index);
             match param {
-                Some(Ty::Borrow(perm, _)) => {
+                Some(Ty::Borrow(perm, inner)) => {
+                    let is_object = self.grades.is_object(inner);
                     let perm = *perm;
                     self.walk_expr(&arg.value, state);
-                    if let Some(arg_place) = self.place(&arg.value) {
+                    if !is_object && let Some(arg_place) = self.place(&arg.value) {
                         let owner = state.loan_owner_for(&arg_place);
                         self.check_borrow_conflicts(
                             arg.value.id,
@@ -1184,6 +1255,86 @@ impl<'a> MoveChecker<'a> {
                 .get(&symbol)
                 .map(|scheme| scheme.ty.clone())
         })
+    }
+
+    /// The declared/checked type of a place root, searching innermost
+    /// scope locals first, then parameters, then top-level schemes.
+    pub(crate) fn root_ty(
+        &self,
+        root: crate::name_resolution::symbol::Symbol,
+    ) -> Option<Ty> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(local) = scope.locals.iter().rev().find(|l| l.symbol == root) {
+                return Some(local.ty.clone());
+            }
+        }
+        self.param_tys.get(&root).cloned().or_else(|| {
+            self.types
+                .schemes
+                .get(&root)
+                .map(|scheme| scheme.ty.clone())
+        })
+    }
+
+    /// Whether an assignment receiver is a `'heap` reference (directly or
+    /// through a borrow).
+    fn object_receiver(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Borrow(_, inner) => self.grades.is_object(inner),
+            other => self.grades.is_object(other),
+        }
+    }
+
+    /// v1 ledger boundaries: `'heap` values cannot enter existentials or
+    /// raw-storage containers (both are invisible to the region scans).
+    pub(crate) fn check_object_boundaries(&mut self, expr: &hir::Expr) {
+        if let Some(pack) = &expr.existential_pack
+            && self.grades.contains_object(&pack.payload)
+        {
+            let error = OwnershipError::ObjectInExistential {
+                ty: pack.payload.render_mono(),
+            };
+            self.error(error, expr.id);
+        }
+        if let Ty::Nominal(symbol, args) = &expr.ty
+            && !args.is_empty()
+            && self.raw_storage_backed(*symbol)
+        {
+            for arg in args {
+                if self.grades.contains_object(arg) {
+                    let error = OwnershipError::ObjectInRawStorage {
+                        container: expr.ty.render_mono(),
+                        ty: arg.render_mono(),
+                    };
+                    self.error(error, expr.id);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// A struct whose stored fields (transitively) reach a `RawPtr` — its
+    /// element storage is raw memory the region ledger cannot scan.
+    fn raw_storage_backed(&self, symbol: crate::name_resolution::symbol::Symbol) -> bool {
+        use crate::name_resolution::symbol::Symbol;
+        let mut seen = FxHashSet::default();
+        let mut stack = vec![symbol];
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+            if let Some(info) = self.types.catalog.structs.get(&current) {
+                for (_, (_, field_ty)) in &info.fields {
+                    if let Ty::Nominal(field_symbol, _) = field_ty {
+                        if *field_symbol == Symbol::RawPtr {
+                            return true;
+                        }
+                        stack.push(*field_symbol);
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// The place an expression names, if it is one: a variable, or a chain

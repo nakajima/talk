@@ -33,6 +33,54 @@ impl<'a> GradeView<'a> {
         self.copy_ty(ty, &mut FxHashSet::default())
     }
 
+    /// A `'heap` object type: values are region-allocated references —
+    /// alias-on-use, never moved, released at region granularity.
+    pub(crate) fn is_object(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Nominal(symbol, _) => self.types.catalog.is_heap(*symbol),
+            _ => false,
+        }
+    }
+
+    /// Whether the VALUE of this type carries an object handle anywhere —
+    /// the binding needs region acquire/release bookkeeping. Mirrors
+    /// [`GradeView::contains_borrowed`]: function values are excluded.
+    pub(crate) fn contains_object(&self, ty: &Ty) -> bool {
+        self.contains_object_inner(ty, &mut FxHashSet::default())
+    }
+
+    fn contains_object_inner(&self, ty: &Ty, seen: &mut FxHashSet<Symbol>) -> bool {
+        match ty {
+            Ty::Borrow(_, inner) | Ty::Unique(inner) => self.contains_object_inner(inner, seen),
+            Ty::Nominal(symbol, args) => {
+                if self.types.catalog.is_heap(*symbol) {
+                    return true;
+                }
+                if !seen.insert(*symbol) {
+                    return false;
+                }
+                let contains = self
+                    .payload_types(*symbol, args)
+                    .iter()
+                    .any(|field| self.contains_object_inner(field, seen))
+                    || args.iter().any(|arg| self.contains_object_inner(arg, seen));
+                seen.remove(symbol);
+                contains
+            }
+            Ty::Tuple(items) => items.iter().any(|item| self.contains_object_inner(item, seen)),
+            Ty::Record(row) => row
+                .fields
+                .iter()
+                .any(|(_, field)| self.contains_object_inner(field, seen)),
+            Ty::Func(..)
+            | Ty::Any { .. }
+            | Ty::Proj(..)
+            | Ty::Var(_)
+            | Ty::Param(_)
+            | Ty::Error => false,
+        }
+    }
+
     /// Cloning this type is an O(1) buffer retain (the `CheapClone`
     /// marker): extracting it from a borrow clones silently instead of
     /// moving out.
@@ -88,6 +136,11 @@ impl<'a> GradeView<'a> {
                 if self.has_marker(*symbol, Symbol::Borrowed) {
                     return true;
                 }
+                // Object handles copy freely: the region, not the use
+                // site, accounts for the value's lifetime.
+                if self.types.catalog.is_heap(*symbol) {
+                    return true;
+                }
                 if self.contains_owned(ty, &mut FxHashSet::default()) {
                     return false;
                 }
@@ -123,6 +176,11 @@ impl<'a> GradeView<'a> {
             Ty::Unique(_) => true,
             Ty::Nominal(symbol, args) => {
                 if self.has_marker(*symbol, Symbol::Borrowed) {
+                    return false;
+                }
+                // Interior ownership of a heap object is the region's
+                // business: handles neither move nor drop per-use.
+                if self.types.catalog.is_heap(*symbol) {
                     return false;
                 }
                 if self.has_marker(*symbol, Symbol::Owner)

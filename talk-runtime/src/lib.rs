@@ -8,6 +8,7 @@ pub mod bytecode;
 pub mod interp;
 pub mod io;
 pub mod memory;
+pub mod objects;
 pub mod symbol;
 
 /// VM-owned comparison operation. The compiler translates lambda-G
@@ -222,6 +223,33 @@ pub enum Insn {
         targets_len: u16,
     },
     Ret {
+        src: u16,
+    },
+    ObjectNew {
+        dest: u16,
+        args_start: u32,
+        args_len: u16,
+    },
+    SetFinalizer {
+        obj: u16,
+        closure: u16,
+    },
+    ObjectGet {
+        dest: u16,
+        obj: u16,
+        index: u16,
+    },
+    ObjectSet {
+        obj: u16,
+        src: u16,
+        index: u16,
+    },
+    RegionAcquire {
+        dest: u16,
+        src: u16,
+    },
+    RegionRelease {
+        dest: u16,
         src: u16,
     },
     Trap {
@@ -453,6 +481,18 @@ impl Module {
             }
             Insn::Ret { src } => format!("ret r{src}"),
             Insn::Trap { message } => format!("trap {:?}", self.traps[*message as usize]),
+            Insn::ObjectNew {
+                dest,
+                args_start,
+                args_len,
+            } => format!("object_new r{dest} <- {}", self.render_args(*args_start, *args_len)),
+            Insn::SetFinalizer { obj, closure } => format!("set_finalizer r{obj} <- r{closure}"),
+            Insn::ObjectGet { dest, obj, index } => {
+                format!("object_get r{dest} <- r{obj}[{index}]")
+            }
+            Insn::ObjectSet { obj, src, index } => format!("object_set r{obj}[{index}] <- r{src}"),
+            Insn::RegionAcquire { dest, src } => format!("region_acquire r{dest} <- r{src}"),
+            Insn::RegionRelease { dest, src } => format!("region_release r{dest} <- r{src}"),
         }
     }
 }

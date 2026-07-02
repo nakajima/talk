@@ -60,6 +60,9 @@ pub struct TypeOutput {
     /// Argument nodes where a borrowed value satisfies an owned CheapClone
     /// parameter by cloning (an O(1) buffer retain, emitted by lowering).
     pub coerce_clones: rustc_hash::FxHashSet<NodeID>,
+    /// Finalized types of monomorphic local binders (pattern binds
+    /// included) — the flow checker's source for binder grades.
+    pub local_tys: FxHashMap<Symbol, Ty>,
     /// Expression nodes implicitly packed into an existential expected type.
     /// Lowering turns these into payload-plus-witness-table packages.
     pub existential_packs: FxHashMap<NodeID, ExistentialPack>,

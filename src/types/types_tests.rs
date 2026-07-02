@@ -1985,6 +1985,20 @@ pub mod tests {
     }
 
     #[test]
+    fn unknown_member_on_nested_borrow_reports_original_receiver() {
+        let t = check(
+            "// no-core\nstruct DirectoryEntry {}\nfunc f(entry: & &DirectoryEntry) {\n\tentry.show()\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Unknown member 'show' on &&DirectoryEntry")),
+            "expected original nested-borrow receiver in diagnostic, got {errors:?}"
+        );
+    }
+
+    #[test]
     fn mutable_borrow_return_downgrades_to_shared_return() {
         let t = check(
             "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc as_shared(s: &mut String) -> &String {\n\ts\n}\nlet f: (&mut String) -> &String = func(s: &mut String) -> &mut String {\n\ts\n}",
@@ -3386,7 +3400,7 @@ mod with_core {
         // A linear value must be consumed explicitly; an automatic destructor
         // would defeat the point of declaring it linear.
         let t = check_with_core(Source::from(
-            "linear struct FileHandle {\n\tlet fd: Int\n}\nextend FileHandle: Deinit {\n\tfunc deinit() {}\n}",
+            "struct FileHandle 'linear {\n\tlet fd: Int\n}\nextend FileHandle: Deinit {\n\tfunc deinit() {}\n}",
         ));
         let errors = type_errors(&t);
         assert!(
@@ -3398,7 +3412,7 @@ mod with_core {
     #[test]
     fn linear_struct_rejects_copy_conformance() {
         let t = check_with_core(Source::from(
-            "linear struct Token {\n\tlet id: Int\n}\nextend Token: Copy {}",
+            "struct Token 'linear {\n\tlet id: Int\n}\nextend Token: Copy {}",
         ));
         let errors = type_errors(&t);
         assert!(
@@ -3433,7 +3447,7 @@ mod with_core {
         use crate::name_resolution::symbol::Symbol;
         use crate::types::catalog::Grade;
         let t = check_with_core(Source::from(
-            "linear struct FileHandle {\n\tlet fd: Int\n}\nstruct Plain {\n\tlet x: Int\n}\nextend Plain: Copy {}\nstruct Holder {\n\tlet name: String\n}",
+            "struct FileHandle 'linear {\n\tlet fd: Int\n}\nstruct Plain {\n\tlet x: Int\n}\nextend Plain: Copy {}\nstruct Holder {\n\tlet name: String\n}",
         ));
         assert_no_errors(&t);
         let resolved = &t.phase.resolved_names;

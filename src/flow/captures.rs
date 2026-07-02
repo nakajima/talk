@@ -141,6 +141,16 @@ impl MoveChecker<'_> {
     /// and implicit captures must not be escape-sensitive.
     pub(crate) fn check_escaping_summary(&mut self, node: NodeID, summary: &CaptureSummary) {
         for capture in &summary.captures {
+            // A `'heap` handle in an escaping closure's environment is
+            // invisible to the region ledger: reject regardless of mode.
+            if self.grades.contains_object(&capture.ty) {
+                let error = OwnershipError::EscapingObjectCapture {
+                    name: super::moves::render_symbol(capture.symbol, self.types),
+                    ty: capture.ty.render_mono(),
+                };
+                self.error(error, node);
+                continue;
+            }
             match capture.mode {
                 Some(CaptureMode::BorrowShared) | Some(CaptureMode::BorrowMut) => {
                     let error = OwnershipError::EscapingClosureCapture {

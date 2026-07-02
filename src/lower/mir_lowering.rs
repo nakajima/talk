@@ -155,6 +155,21 @@ impl<'a> Lowering<'a> {
                         self.wrap_cont_with_following_drops(ctx, cursor, ctx.ret_k)
                     }
                 };
+                // Ledger rule E: a delivered place read tops up +1 BEFORE
+                // the exit releases run (the receiving binding claims it as
+                // an rvalue result). The initializing self is exempt — the
+                // constructor's fresh +1 rides through to the caller.
+                let returns_initializing_self = ctx
+                    .initializing_self
+                    .is_some_and(|self_symbol| Self::expr_root_symbol(expr) == Some(self_symbol));
+                let target = if !self.rhs_is_rvalue(expr, ctx)
+                    && !returns_initializing_self
+                    && self.contains_object_type(&self.checker_ty(expr, ctx))
+                {
+                    self.acquire_before(target, expr, ctx)
+                } else {
+                    target
+                };
                 let mut tail_ctx;
                 let value_ctx = if target != ctx.tail_k {
                     tail_ctx = ctx.clone();
@@ -221,19 +236,46 @@ impl<'a> Lowering<'a> {
             let mut inner = ctx.clone();
             let mut celled: Vec<(Symbol, ExprId)> = vec![];
             let mut drop_bindings: Vec<DropBinding> = vec![];
+            let mut acquires: Vec<ExprId> = vec![];
             for (symbol, value) in binds {
                 if inner.cellable.contains(&symbol) {
                     celled.push((symbol, value));
                 } else {
                     inner.env.insert(symbol, Binding::Value(value));
                 }
-                if let Some(ty) = self.symbol_check_ty(symbol, &ctx.theta)
-                    && let Some(drop) =
+                let binder_ty = self
+                    .units[ctx.unit]
+                    .types
+                    .local_tys
+                    .get(&symbol)
+                    .cloned()
+                    .map(|raw| {
+                        let substituted =
+                            raw.substitute(&ctx.theta, &Default::default(), &Default::default());
+                        self.normalize_check_ty(substituted, ctx.unit)
+                    })
+                    .or_else(|| self.symbol_check_ty(symbol, &ctx.theta));
+                if let Some(ty) = binder_ty {
+                    // Ledger: destructured binders own their components —
+                    // each acquires (the rvalue rhs's carried +1s release
+                    // below; a place-read rhs keeps its own).
+                    if self.contains_object_type(&ty) {
+                        let void_ty = self.p.ty_void();
+                        acquires.push(self.p.primop(Op::RegionAcquire, &[value], void_ty));
+                    }
+                    if let Some(drop) =
                         self.drop_binding_for_mir_symbol(ctx, cursor.body, symbol, ty)
-                {
-                    drop_bindings.push(drop);
+                    {
+                        drop_bindings.push(drop);
+                    }
                 }
             }
+            let rhs_release = (self.rhs_is_rvalue(rhs, ctx)
+                && self.contains_object_type(&binding_ty))
+            .then(|| {
+                let void_ty = self.p.ty_void();
+                self.p.primop(Op::RegionRelease, &[bound], void_ty)
+            });
             let rest_body = self.with_cells(&celled, &mut inner, |this, inner| {
                 this.with_drop_flags(&drop_bindings, inner, |this, inner| {
                     inner.drop_stack.extend(drop_bindings.clone());
@@ -241,6 +283,13 @@ impl<'a> Lowering<'a> {
                     this.clear_moved_drop_flags_then(inner, cursor.statement(), rest_body)
                 })
             });
+            let mut rest_body = rest_body;
+            if let Some(release) = rhs_release {
+                rest_body = self.sequence_void_effect(release, rest_body);
+            }
+            for acquire in acquires.into_iter().rev() {
+                rest_body = self.sequence_void_effect(acquire, rest_body);
+            }
             self.p.set_body(bind, rest_body);
             let bind_ref = self.p.func_ref(bind);
             return self.lower_expr(rhs, ctx, bind_ref);
@@ -269,8 +318,16 @@ impl<'a> Lowering<'a> {
         let binding_ty = self
             .symbol_check_ty(symbol, &ctx.theta)
             .unwrap_or_else(|| self.checker_ty(rhs, ctx));
-        let drop_binding = self.drop_binding_for_mir_symbol(ctx, cursor.body, symbol, binding_ty);
+        let drop_binding =
+            self.drop_binding_for_mir_symbol(ctx, cursor.body, symbol, binding_ty.clone());
         let mut inner = ctx.clone();
+        // Ledger: a binding initialized from a place read takes references
+        // into the value's regions (rvalues already carry their +1).
+        let acquire = (!self.rhs_is_rvalue(rhs, ctx) && self.contains_object_type(&binding_ty))
+            .then(|| {
+                let void_ty = self.p.ty_void();
+                self.p.primop(Op::RegionAcquire, &[bound], void_ty)
+            });
         let rest_body = if mutated {
             self.with_cells(&[(symbol, bound)], &mut inner, |this, inner| {
                 let drops = drop_binding.clone().into_iter().collect::<Vec<_>>();
@@ -289,6 +346,10 @@ impl<'a> Lowering<'a> {
                 this.clear_moved_drop_flags_then(inner, cursor.statement(), rest_body)
             })
         };
+        let rest_body = match acquire {
+            Some(acquire) => self.sequence_void_effect(acquire, rest_body),
+            None => rest_body,
+        };
         self.p.set_body(bind, rest_body);
         let bind_ref = self.p.func_ref(bind);
         self.lower_expr(rhs, ctx, bind_ref)
@@ -301,7 +362,7 @@ impl<'a> Lowering<'a> {
         symbol: Symbol,
         ty: CheckTy,
     ) -> Option<DropBinding> {
-        if !self.needs_drop_type(ctx.unit, &ty) {
+        if !self.needs_release_type(ctx.unit, &ty) {
             return None;
         }
         let dynamic_flags = self.drop_flag_keys_for_symbol(body, symbol);
@@ -651,8 +712,25 @@ impl<'a> Lowering<'a> {
     ) -> ExprId {
         let drop_elaboration = self.assignment_drop_elaboration(cursor);
         let lowered_target = self.assignment_target(lhs, ctx);
-        let Some((cell, path)) = lowered_target else {
+        let Some((base, path)) = lowered_target else {
             return self.lower_mir_statements(cursor.advance(), ctx, k, cache);
+        };
+        if let crate::lower::statements::AssignBase::Object(handle) = base {
+            return self.lower_object_assignment(
+                lhs,
+                rhs,
+                target,
+                handle,
+                &path,
+                drop_elaboration,
+                cursor,
+                ctx,
+                k,
+                cache,
+            );
+        }
+        let crate::lower::statements::AssignBase::Cell(cell) = base else {
+            unreachable!("object base handled above")
         };
         let void_ty = self.p.ty_void();
         let bot = self.p.ty_bot();
@@ -667,6 +745,12 @@ impl<'a> Lowering<'a> {
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
         let setter = self.p.func("set", rhs_ty, bot);
         let value = self.p.var(setter);
+        // Ledger rule B: a place-read rhs embedding `'heap` handles gains
+        // +1 for the (re)assigned binding's value (the replaced old value's
+        // release rides the AssignmentReplace schedule).
+        let acquire = (!self.rhs_is_rvalue(rhs, ctx)
+            && self.contains_object_type(&self.checker_ty(rhs, ctx)))
+        .then(|| self.p.primop(Op::RegionAcquire, &[value], void_ty));
         let stored = if path.is_empty() {
             value
         } else {
@@ -682,10 +766,14 @@ impl<'a> Lowering<'a> {
                 after_set
             };
             let after_set = self.sequence_void_effect(cell_set, after_set);
+            let after_set = match acquire {
+                Some(acquire) => self.sequence_void_effect(acquire, after_set),
+                None => after_set,
+            };
             let after_set = self.clear_moved_drop_flags_then(ctx, cursor.statement(), after_set);
             let lhs_check_ty = self.checker_ty(lhs, ctx);
             if matches!(drop_elaboration, Some(mir::DropElaboration::Static))
-                && self.needs_drop_type(ctx.unit, &lhs_check_ty)
+                && self.needs_release_type(ctx.unit, &lhs_check_ty)
             {
                 let old_ty = self.map_ty(&lhs_check_ty);
                 let old = self.assignment_old_value(cell, &path, old_ty);
@@ -693,7 +781,7 @@ impl<'a> Lowering<'a> {
             } else if matches!(
                 drop_elaboration,
                 Some(mir::DropElaboration::Conditional | mir::DropElaboration::Open)
-            ) && self.needs_drop_type(ctx.unit, &lhs_check_ty)
+            ) && self.needs_release_type(ctx.unit, &lhs_check_ty)
             {
                 let Some(target_key_path) = &target_key_path else {
                     return self.dead_end("dynamic_assignment_drop_without_key_path");
@@ -714,6 +802,114 @@ impl<'a> Lowering<'a> {
         self.p.set_body(setter, setter_body);
         let setter_ref = self.p.func_ref(setter);
         self.lower_expr(rhs, ctx, setter_ref)
+    }
+
+    /// Assignment whose nearest-to-leaf receiver is a `'heap` handle:
+    /// in-place ObjectSet, no write-back above, old value released/dropped
+    /// per the flow checker's elaboration.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_object_assignment(
+        &mut self,
+        lhs: &Expr,
+        rhs: &Expr,
+        target: Option<&mir::KeyPath>,
+        handle: ExprId,
+        path: &[(u32, TyId)],
+        drop_elaboration: Option<mir::DropElaboration>,
+        cursor: MirCursor,
+        ctx: &Ctx,
+        k: ExprId,
+        cache: &mut MirBlockCache,
+    ) -> ExprId {
+        let void_ty = self.p.ty_void();
+        let bot = self.p.ty_bot();
+        let after = self.p.func("after_object_set", void_ty, bot);
+        let after_body = self.lower_mir_statements(cursor.advance(), ctx, k, cache);
+        self.p.set_body(after, after_body);
+        let after_ref = self.p.func_ref(after);
+        let target_key_path = target
+            .and_then(|target| Self::ownership_key_path_from_mir(cursor.body, target))
+            .or_else(|| self.ownership_key_path_from_assignment_lhs(ctx, lhs));
+
+        let rhs_ty = self.expr_lambda_ty(rhs, ctx);
+        let setter = self.p.func("object_set", rhs_ty, bot);
+        let value = self.p.var(setter);
+        let write = self.object_assignment_write(handle, path, value);
+        let setter_body = {
+            let void = self.p.void();
+            let after_set = self.p.app(after_ref, void);
+            let after_set = if let Some(target_key_path) = &target_key_path {
+                self.set_drop_flags_under_then(ctx, target_key_path, true, after_set)
+            } else {
+                after_set
+            };
+            // Ledger: an rvalue rhs carried +1 per embedded handle; once
+            // stored, the region owns them (place-read rhs carried none).
+            let after_set = if self.rhs_is_rvalue(rhs, ctx)
+                && self.contains_object_type(&self.checker_ty(rhs, ctx))
+            {
+                let release = self.p.primop(Op::RegionRelease, &[value], void_ty);
+                self.sequence_void_effect(release, after_set)
+            } else {
+                after_set
+            };
+            let after_set = self.sequence_void_effect(write, after_set);
+            let after_set = self.clear_moved_drop_flags_then(ctx, cursor.statement(), after_set);
+            let lhs_check_ty = self.checker_ty(lhs, ctx);
+            if matches!(drop_elaboration, Some(mir::DropElaboration::Static))
+                && self.needs_release_type(ctx.unit, &lhs_check_ty)
+            {
+                let old_ty = self.map_ty(&lhs_check_ty);
+                let old = self.object_assignment_old_value(handle, path, old_ty);
+                self.lower_drop_value_then(ctx, old, &lhs_check_ty, after_set)
+            } else if matches!(
+                drop_elaboration,
+                Some(mir::DropElaboration::Conditional | mir::DropElaboration::Open)
+            ) && self.needs_release_type(ctx.unit, &lhs_check_ty)
+            {
+                let Some(target_key_path) = &target_key_path else {
+                    return self.dead_end("dynamic_object_assignment_drop_without_key_path");
+                };
+                let old_ty = self.map_ty(&lhs_check_ty);
+                let old = self.object_assignment_old_value(handle, path, old_ty);
+                self.lower_dynamic_assignment_drop_then(
+                    ctx,
+                    target_key_path,
+                    old,
+                    &lhs_check_ty,
+                    after_set,
+                )
+            } else {
+                after_set
+            }
+        };
+        self.p.set_body(setter, setter_body);
+        let setter_ref = self.p.func_ref(setter);
+        self.lower_expr(rhs, ctx, setter_ref)
+    }
+
+    /// The root variable of a place-read chain, if any.
+    fn expr_root_symbol(expr: &Expr) -> Option<Symbol> {
+        match &expr.kind {
+            ExprKind::Variable(name) => name.symbol().ok(),
+            ExprKind::Member(Some(receiver), _) => Self::expr_root_symbol(receiver),
+            _ => None,
+        }
+    }
+
+    /// Wrap a value continuation so the value's regions acquire before it
+    /// runs (rule E — the drops inside `target` must see the +1).
+    fn acquire_before(&mut self, target: ExprId, expr: &Expr, ctx: &Ctx) -> ExprId {
+        let value_ty = self.expr_lambda_ty(expr, ctx);
+        let bot = self.p.ty_bot();
+        let cont = self.p.func("acquire_result", value_ty, bot);
+        let value = self.p.var(cont);
+        let void_ty = self.p.ty_void();
+        let acquire = self.p.primop(Op::RegionAcquire, &[value], void_ty);
+        let deliver = self.p.app(target, value);
+        let body = self.sequence_void_effect(acquire, deliver);
+        self.p.set_body(cont, body);
+        self.p.func_ref(cont)
     }
 
     fn lower_mir_discard(

@@ -140,7 +140,9 @@ fn type_details(workspace: &Workspace, ty: &Ty) -> Vec<String> {
             let declared = workspace.types.catalog.structs.contains_key(symbol)
                 || workspace.types.catalog.enums.contains_key(symbol);
             if declared {
-                if grades.is_borrowed_value(ty) {
+                if grades.is_object(ty) {
+                    details.push("heap — reference semantics, region-allocated".to_string());
+                } else if grades.is_borrowed_value(ty) {
                     details.push("borrowed view".to_string());
                 } else if workspace.types.catalog.grade_of(*symbol)
                     == crate::types::catalog::Grade::Linear
@@ -149,7 +151,7 @@ fn type_details(workspace: &Workspace, ty: &Ty) -> Vec<String> {
                 } else if grades.needs_drop(ty) {
                     details.push("owned".to_string());
                 }
-                if grades.is_copy(ty) {
+                if grades.is_copy(ty) && !grades.is_object(ty) {
                     details.push("copy".to_string());
                 }
                 if grades.is_cheap_clone(ty) {
@@ -325,13 +327,27 @@ mod tests {
 
     #[test]
     fn hover_details_include_linear_classification() {
-        let source = "linear struct Token {\n\tlet id: Int\n\tconsuming func close() -> Int {\n\t\tself.id\n\t}\n}\nfunc make() -> Int {\n\tlet token = Token(id: 1)\n\ttoken.close()\n}\nmake()";
+        let source = "struct Token 'linear {\n\tlet id: Int\n\tconsuming func close() -> Int {\n\t\tself.id\n\t}\n}\nfunc make() -> Int {\n\tlet token = Token(id: 1)\n\ttoken.close()\n}\nmake()";
         let workspace = workspace(source);
         let offset = source.find("token.close").expect("token use") as u32;
         let hover =
             crate::analysis::hover_at(&workspace, &"<test>".to_string(), offset).expect("hover");
         assert!(
             hover.contents.contains("linear"),
+            "{}",
+            hover.contents
+        );
+    }
+
+    #[test]
+    fn hover_details_include_heap_classification() {
+        let source = "struct Node 'heap {\n\tlet value: Int\n}\nfunc read(n: Node) -> Int {\n\tn.value\n}\nlet n = Node(value: 1)\nread(n)";
+        let workspace = workspace(source);
+        let offset = source.rfind("read(n)").expect("use") as u32 + "read(".len() as u32;
+        let hover =
+            crate::analysis::hover_at(&workspace, &"<test>".to_string(), offset).expect("hover");
+        assert!(
+            hover.contents.contains("heap"),
             "{}",
             hover.contents
         );

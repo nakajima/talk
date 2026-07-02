@@ -87,9 +87,12 @@ pub enum DeclKind {
         generics: Vec<GenericDecl>, /* generics */
         where_clause: Option<WhereClause>,
         body: Body, /* body */
-        /// Declared `linear`: values must be consumed exactly once.
+        /// Declared `'linear`: values must be consumed exactly once.
         #[drive(skip)]
         linear: bool,
+        /// Declared `'heap`: reference semantics, region-allocated.
+        #[drive(skip)]
+        heap: bool,
     },
 
     Let {

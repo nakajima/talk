@@ -561,6 +561,9 @@ impl<'a> ChunkBuilder<'a> {
                     Const::Slot(_) => {
                         return self.eval_trap("vm: cell handle constant in a static program");
                     }
+                    Const::Object(_) => {
+                        return self.eval_trap("vm: object handle constant in a static program");
+                    }
                 };
                 let k = self.const_index(c, value);
                 let dest = self.fresh();
@@ -830,6 +833,66 @@ impl<'a> ChunkBuilder<'a> {
                 self.code.push(Insn::IsUnique { dest, ptr });
                 Ok(dest)
             }
+            Op::ObjectNew => {
+                let mut arg_regs = Vec::with_capacity(args.len());
+                for &a in args {
+                    arg_regs.push(self.eval(a)?);
+                }
+                let args_start = self.module.arg_pool.len() as u32;
+                let args_len = arg_regs.len() as u16;
+                self.module.arg_pool.extend(arg_regs);
+                let dest = self.fresh();
+                self.code.push(Insn::ObjectNew {
+                    dest,
+                    args_start,
+                    args_len,
+                });
+                Ok(dest)
+            }
+            Op::SetFinalizer => {
+                let obj = self.eval(args[0])?;
+                let closure = self.eval(args[1])?;
+                let dest = self.fresh();
+                self.code.push(Insn::SetFinalizer { obj, closure });
+                let k = self.const_index(Const::Void, Value::Void);
+                self.code.push(Insn::Const { dest, k });
+                Ok(dest)
+            }
+            Op::ObjectGet(index) => {
+                let obj = self.eval(args[0])?;
+                let dest = self.fresh();
+                self.code.push(Insn::ObjectGet {
+                    dest,
+                    obj,
+                    index: index as u16,
+                });
+                Ok(dest)
+            }
+            Op::ObjectSet(index) => {
+                let obj = self.eval(args[0])?;
+                let src = self.eval(args[1])?;
+                let dest = self.fresh();
+                self.code.push(Insn::ObjectSet {
+                    obj,
+                    src,
+                    index: index as u16,
+                });
+                let k = self.const_index(Const::Void, Value::Void);
+                self.code.push(Insn::Const { dest, k });
+                Ok(dest)
+            }
+            Op::RegionAcquire => {
+                let src = self.eval(args[0])?;
+                let dest = self.fresh();
+                self.code.push(Insn::RegionAcquire { dest, src });
+                Ok(dest)
+            }
+            Op::RegionRelease => {
+                let src = self.eval(args[0])?;
+                let dest = self.fresh();
+                self.code.push(Insn::RegionRelease { dest, src });
+                Ok(dest)
+            }
             Op::Load => {
                 let Some(kind) = mem_kind_of(self.p.ty_kind(self.p.expr(e).ty)) else {
                     return self.eval_trap("vm: load of a type that cannot live in memory");
@@ -992,6 +1055,6 @@ fn mem_kind_of(ty: &TyKind) -> Option<MemKind> {
         | TyKind::Tuple(_)
         | TyKind::Existential(_)
         | TyKind::Erased => Some(MemKind::Boxed),
-        TyKind::Void | TyKind::Bot | TyKind::Fn(..) | TyKind::Cell(_) => None,
+        TyKind::Void | TyKind::Bot | TyKind::Fn(..) | TyKind::Cell(_) | TyKind::Object(_) => None,
     }
 }

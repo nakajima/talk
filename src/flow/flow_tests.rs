@@ -434,7 +434,7 @@ impl ConsumeCounter<'_> {
 #[test]
 fn linear_value_dropped_at_scope_exit_is_rejected() {
     assert_error_contains(
-        "linear struct Token {\n\tlet id: Int\n}\nfunc make() -> Int {\n\tlet token = Token(id: 1)\n\t0\n}",
+        "struct Token 'linear {\n\tlet id: Int\n}\nfunc make() -> Int {\n\tlet token = Token(id: 1)\n\t0\n}",
         "is linear and must be consumed",
     );
 }
@@ -442,14 +442,14 @@ fn linear_value_dropped_at_scope_exit_is_rejected() {
 #[test]
 fn linear_value_consumed_by_consuming_method_is_accepted() {
     assert_no_errors(
-        "linear struct Token {\n\tlet id: Int\n\tconsuming func close() -> Int {\n\t\tself.id\n\t}\n}\nfunc make() -> Int {\n\tlet token = Token(id: 1)\n\ttoken.close()\n}",
+        "struct Token 'linear {\n\tlet id: Int\n\tconsuming func close() -> Int {\n\t\tself.id\n\t}\n}\nfunc make() -> Int {\n\tlet token = Token(id: 1)\n\ttoken.close()\n}",
     );
 }
 
 #[test]
 fn linear_value_moved_in_one_branch_only_is_rejected() {
     assert_error_contains(
-        "linear struct Token {\n\tlet id: Int\n\tconsuming func close() -> Int {\n\t\tself.id\n\t}\n}\nfunc make(flag: Bool) -> Int {\n\tlet token = Token(id: 1)\n\tif flag {\n\t\ttoken.close()\n\t} else {\n\t\t0\n\t}\n}",
+        "struct Token 'linear {\n\tlet id: Int\n\tconsuming func close() -> Int {\n\t\tself.id\n\t}\n}\nfunc make(flag: Bool) -> Int {\n\tlet token = Token(id: 1)\n\tif flag {\n\t\ttoken.close()\n\t} else {\n\t\t0\n\t}\n}",
         "is linear and must be consumed",
     );
 }
@@ -513,6 +513,585 @@ fn deinit_runs_at_scope_exit() {
         crate::vm::interp::Value::I64(n) => assert_eq!(n, 2, "deinit should run once per scope"),
         other => panic!("unexpected result: {other:?}"),
     }
+}
+
+// ----- Heap classification ------------------------------------------------------
+
+#[test]
+fn heap_struct_classifies_as_object() {
+    let typed = flow_driver("struct Node 'heap {\n\tlet value: Int\n}\n0");
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let types = &typed.phase.types;
+    let grades = crate::flow::grades::GradeView::new(types);
+    let symbol = types
+        .catalog
+        .structs
+        .keys()
+        .copied()
+        .find(|s| types.display_names.get(s).map(String::as_str) == Some("Node"))
+        .expect("Node in catalog");
+    let ty = crate::types::ty::Ty::Nominal(symbol, vec![]);
+    assert!(grades.is_object(&ty), "'heap struct should classify as object");
+    assert!(grades.contains_object(&ty));
+    assert!(!grades.needs_drop(&ty), "objects release via regions, not drops");
+    assert!(grades.is_copy(&ty), "object handles copy freely");
+}
+
+#[test]
+fn value_struct_with_heap_field_stays_value() {
+    let typed = flow_driver(
+        "struct Node 'heap {\n\tlet value: Int\n}\nstruct Wrapper {\n\tlet node: Node\n}\n0",
+    );
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let types = &typed.phase.types;
+    let grades = crate::flow::grades::GradeView::new(types);
+    let symbol = types
+        .catalog
+        .structs
+        .keys()
+        .copied()
+        .find(|s| types.display_names.get(s).map(String::as_str) == Some("Wrapper"))
+        .expect("Wrapper in catalog");
+    let ty = crate::types::ty::Ty::Nominal(symbol, vec![]);
+    assert!(!grades.is_object(&ty), "no contagion: Wrapper stays a value");
+    assert!(
+        grades.contains_object(&ty),
+        "but it carries a handle (bind-boundary scans)"
+    );
+}
+
+#[test]
+fn rejects_heap_struct_claiming_copy() {
+    assert_error_contains_any_diagnostic(
+        "struct Node 'heap {\n\tlet value: Int\n}\nextend Node: Copy {}\n0",
+    );
+}
+
+#[test]
+fn rejects_heap_struct_claiming_cheap_clone() {
+    assert_error_contains_any_diagnostic(
+        "struct Node 'heap {\n\tlet value: Int\n}\nextend Node: CheapClone {}\n0",
+    );
+}
+
+fn assert_error_contains_any_diagnostic(source: &str) {
+    let typed = flow_driver(source);
+    assert!(
+        typed.has_errors(),
+        "expected a diagnostic, got none for {source:?}"
+    );
+}
+
+// ----- Heap aliasing (P3) -------------------------------------------------------
+
+#[test]
+fn heap_aliases_freely_without_moves_or_conflicts() {
+    assert_no_errors(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc ok() -> Int {\n\tlet a = Node(value: 1)\n\tlet b = a\n\tlet c = a\n\tb.value + c.value + a.value\n}\n0",
+    );
+}
+
+#[test]
+fn heap_field_assignment_through_alias_is_clean() {
+    assert_no_errors(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc ok() -> Int {\n\tlet a = Node(value: 1)\n\tlet b = a\n\tb.value = 9\n\ta.value\n}\n0",
+    );
+}
+
+#[test]
+fn heap_borrowed_param_field_assignment_is_clean() {
+    assert_no_errors(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc poke(n: Node) -> Int {\n\tn.value = 5\n\tn.value\n}\n0",
+    );
+}
+
+#[test]
+fn heap_cross_link_and_cycle_are_clean() {
+    assert_no_errors(
+        "struct Node 'heap {\n\tlet value: Int\n\tlet next: Node?\n}\nfunc ok() -> Int {\n\tlet a = Node(value: 1, next: Optional.none)\n\tlet b = Node(value: 2, next: Optional.some(a))\n\ta.next = Optional.some(b)\n\t0\n}\n0",
+    );
+}
+
+#[test]
+fn heap_binding_gets_release_schedule() {
+    let typed = flow_driver(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc scope() -> Int {\n\tlet a = Node(value: 1)\n\t0\n}\n0",
+    );
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    assert!(
+        typed
+            .phase
+            .flow
+            .drops
+            .iter()
+            .any(|fact| fact.place == "a"),
+        "the heap binding should get a scope-exit release schedule: {:?}",
+        typed.phase.flow.drops
+    );
+}
+
+#[test]
+fn value_borrow_conflicts_still_fire() {
+    // Regression: the object exemption must not weaken value checking.
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet borrow: &mut String = s\n\tlet n = s.length\n\tborrow.length + n\n}\n0",
+        "already mutable borrowed",
+    );
+}
+
+#[test]
+fn rejects_heap_capture_in_escaping_closure() {
+    assert_error_contains(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc bad() -> () -> Int {\n\tlet n = Node(value: 1)\n\treturn func() -> Int {\n\t\tn.value\n\t}\n}\n0",
+        "escape",
+    );
+}
+
+#[test]
+fn rejects_heap_in_existential() {
+    assert_error_contains(
+        "struct Node 'heap {\n\tlet value: Int\n}\nextend Node: Showable {\n\tfunc show() -> String {\n\t\t\"node\"\n\t}\n}\nfunc bad() -> Int {\n\tlet s: any Showable = Node(value: 1)\n\t0\n}\n0",
+        "existential",
+    );
+}
+
+#[test]
+fn rejects_heap_in_raw_storage_container() {
+    assert_error_contains(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc bad() -> Int {\n\tlet items = [Node(value: 1)]\n\t0\n}\n0",
+        "raw storage",
+    );
+}
+
+#[test]
+fn heap_global_is_allowed() {
+    assert_no_errors(
+        "struct Node 'heap {\n\tlet value: Int\n}\nlet root = Node(value: 1)\nroot.value",
+    );
+}
+
+// ----- Heap lowering e2e (P4) -----------------------------------------------------
+
+fn run_heap_vm(source: &str) -> crate::vm::interp::Value {
+    let typed = flow_driver(source);
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let mut lowered = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    lowered.run_vm().expect("vm")
+}
+
+fn run_heap_eval(source: &str) -> (crate::lambda_g::eval::EvalValue, usize, usize) {
+    let typed = flow_driver(source);
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let mut lowered = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    let mut evaluator = crate::lambda_g::eval::Evaluator::new();
+    let value = evaluator
+        .run_main(
+            &mut lowered.phase.program,
+            lowered.phase.main,
+            lowered.phase.result_ty,
+        )
+        .expect("eval");
+    (value, evaluator.live_objects(), evaluator.live_allocations())
+}
+
+#[test]
+fn heap_aliased_mutation_is_visible_on_vm() {
+    let value = run_heap_vm(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc check() -> Int {\n\tlet a = Node(value: 1)\n\tlet b = a\n\tb.value = 42\n\ta.value\n}\ncheck()",
+    );
+    assert_eq!(value, crate::vm::interp::Value::I64(42));
+}
+
+#[test]
+fn heap_cycle_frees_and_leaks_nothing() {
+    let (value, live_objects, live_allocations) = run_heap_eval(
+        "struct Node 'heap {\n\tlet value: Int\n\tlet next: Node?\n}\nfunc check() -> Int {\n\tlet a = Node(value: 1, next: Optional.none)\n\tlet b = Node(value: 2, next: Optional.some(a))\n\ta.next = Optional.some(b)\n\tb.value\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
+    assert_eq!(live_objects, 0, "cycle freed at scope exit");
+    assert_eq!(live_allocations, 0, "no buffer leaks");
+}
+
+#[test]
+fn heap_mut_func_mutates_in_place() {
+    let value = run_heap_vm(
+        "struct Counter 'heap {\n\tlet count: Int\n\tmut func bump() -> Int {\n\t\tself.count = self.count + 1\n\t\tself.count\n\t}\n}\nfunc check() -> Int {\n\tlet c = Counter(count: 0)\n\tlet d = c\n\tlet n1 = c.bump()\n\tlet n2 = d.bump()\n\tn1 * 10 + n2\n}\ncheck()",
+    );
+    assert_eq!(
+        value,
+        crate::vm::interp::Value::I64(12),
+        "both names see both bumps (no copy-back)"
+    );
+}
+
+#[test]
+fn heap_deinit_runs_at_region_teardown() {
+    let value = run_heap_vm(
+        "let counter = 0\nstruct Guard 'heap {\n\tlet id: Int\n}\nextend Guard: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tcounter = counter + 1\n\t\t()\n\t}\n}\nfunc scope() -> Int {\n\tlet g = Guard(id: 1)\n\tlet h = Guard(id: 2)\n\t0\n}\nlet n = scope()\ncounter",
+    );
+    assert_eq!(
+        value,
+        crate::vm::interp::Value::I64(2),
+        "deinit once per object at region teardown"
+    );
+}
+
+#[test]
+fn heap_string_fields_release_buffers() {
+    let (_, live_objects, live_allocations) = run_heap_eval(
+        "struct Named 'heap {\n\tlet name: String\n}\nfunc check() -> Int {\n\tlet n = Named(name: \"hello\" + \" world\")\n\tn.name.length\n}\ncheck()",
+    );
+    assert_eq!(live_objects, 0);
+    assert_eq!(live_allocations, 0, "finalizer frees the owned buffer");
+}
+
+#[test]
+fn heap_returned_alias_keeps_region_alive() {
+    let value = run_heap_vm(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc make() -> Node {\n\tNode(value: 7)\n}\nfunc check() -> Int {\n\tlet n = make()\n\tn.value\n}\ncheck()",
+    );
+    assert_eq!(value, crate::vm::interp::Value::I64(7));
+}
+
+
+// ----- Heap adversarial hardening (P5) --------------------------------------------
+
+#[test]
+fn heap_handles_in_value_containers_balance() {
+    let (_, live_objects, live_allocations) = run_heap_eval(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc check() -> Int {\n\tlet n = Node(value: 1)\n\tlet pair = (n, 2)\n\tlet opt = Optional.some(n)\n\t0\n}\ncheck()",
+    );
+    assert_eq!(live_objects, 0, "tuple/enum-carried handles balance");
+    assert_eq!(live_allocations, 0);
+}
+
+#[test]
+fn heap_interior_alias_outlives_constructing_frame() {
+    let value = run_heap_vm(
+        "struct Node 'heap {\n\tlet value: Int\n\tlet next: Node?\n}\nfunc make() -> Node {\n\tlet root = Node(value: 7, next: Optional.none)\n\tlet child = Node(value: 9, next: Optional.none)\n\troot.next = Optional.some(child)\n\tchild\n}\nfunc check() -> Int {\n\tlet a = make()\n\ta.value\n}\ncheck()",
+    );
+    assert_eq!(
+        value,
+        crate::vm::interp::Value::I64(9),
+        "returning an interior alias keeps the region alive"
+    );
+}
+
+#[test]
+fn heap_interior_alias_balances_ledger() {
+    let (value, live_objects, live_allocations) = run_heap_eval(
+        "struct Node 'heap {\n\tlet value: Int\n\tlet next: Node?\n}\nfunc make() -> Node {\n\tlet root = Node(value: 7, next: Optional.none)\n\tlet child = Node(value: 9, next: Optional.none)\n\troot.next = Optional.some(child)\n\tchild\n}\nfunc check() -> Int {\n\tlet a = make()\n\ta.value\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(9));
+    assert_eq!(live_objects, 0, "whole region frees when the alias drops");
+    assert_eq!(live_allocations, 0);
+}
+
+#[test]
+fn heap_global_works_and_mutates() {
+    let value = run_heap_vm(
+        "struct Node 'heap {\n\tlet value: Int\n}\nlet root = Node(value: 1)\nfunc bump() -> Int {\n\troot.value = root.value + 10\n\troot.value\n}\nbump() + root.value",
+    );
+    assert_eq!(value, crate::vm::interp::Value::I64(22));
+}
+
+#[test]
+fn heap_deinit_creating_objects_nests_teardown() {
+    let value = run_heap_vm(
+        "let counter = 0\nstruct Inner 'heap {\n\tlet id: Int\n}\nextend Inner: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tcounter = counter + 1\n\t\t()\n\t}\n}\nstruct Outer 'heap {\n\tlet id: Int\n}\nextend Outer: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tlet extra = Inner(id: 9)\n\t\tcounter = counter + 100\n\t\t()\n\t}\n}\nfunc scope() -> Int {\n\tlet o = Outer(id: 1)\n\t0\n}\nlet n = scope()\ncounter",
+    );
+    assert_eq!(
+        value,
+        crate::vm::interp::Value::I64(101),
+        "a deinit-created region tears down nested inside the walk"
+    );
+}
+
+#[test]
+fn heap_resurrection_from_deinit_traps() {
+    let source = "struct Slot 'heap {\n\tlet held: Guard?\n}\nstruct Guard 'heap {\n\tlet id: Int\n}\nlet keeper = Slot(held: Optional.none)\nextend Guard: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tkeeper.held = Optional.some(self)\n\t\t()\n\t}\n}\nfunc scope() -> Int {\n\tlet g = Guard(id: 1)\n\t0\n}\nscope()";
+    let typed = flow_driver(source);
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let mut lowered = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    let error = lowered.run_vm().expect_err("resurrection should trap");
+    assert!(
+        error.contains("teardown"),
+        "expected the store-during-teardown trap, got: {error}"
+    );
+}
+
+#[test]
+fn heap_linked_regions_free_together() {
+    let (_, live_objects, live_allocations) = run_heap_eval(
+        "struct Node 'heap {\n\tlet value: Int\n\tlet next: Node?\n}\nfunc check() -> Int {\n\tlet a = Node(value: 1, next: Optional.none)\n\tlet b = Node(value: 2, next: Optional.none)\n\ta.next = Optional.some(b)\n\t0\n}\ncheck()",
+    );
+    assert_eq!(live_objects, 0, "merged regions free when both roots drop");
+    assert_eq!(live_allocations, 0);
+}
+
+// ----- Dict (P6 stdlib validation) ----------------------------------------------
+
+#[test]
+fn dict_inserts_and_looks_up() {
+    let value = run_heap_vm(
+        "func check() -> Int {\n\tlet d = Dict<Int>()\n\td.insert(\"one\", 1)\n\td.insert(\"two\", 2)\n\td.insert(\"three\", 3)\n\tlet two: Int? = d.get(\"two\")\n\tlet four: Int? = d.get(\"four\")\n\tlet hit = match two {\n\t\t.some(v) -> v,\n\t\t.none -> 0 - 1\n\t}\n\tlet miss = match four {\n\t\t.some(v) -> v,\n\t\t.none -> 0 - 1\n\t}\n\thit * 10 + miss\n}\ncheck()",
+    );
+    assert_eq!(value, crate::vm::interp::Value::I64(19), "hit=2, miss=-1");
+}
+
+#[test]
+fn dict_leaks_nothing() {
+    let (value, live_objects, _) = run_heap_eval(
+        "func check() -> Int {\n\tlet d = Dict<Int>()\n\td.insert(\"one\", 1)\n\td.insert(\"two\", 2)\n\td.count\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
+    assert_eq!(live_objects, 0, "dict region frees at scope exit");
+}
+
+// ----- Http router on heap chain (P6) ---------------------------------------------
+
+#[test]
+fn http_router_grows_past_four_routes() {
+    // The old router hardcoded 4 slots; the heap chain has no cap.
+    let source = "func check() -> Int {\n\tlet server = HTTP.Server()\n\tserver.get(\"/\", func() -> String { \"home\" })\n\tserver.get(\"/a\", func() -> String { \"aaa\" })\n\tserver.get(\"/b\", func() -> String { \"bbb\" })\n\tserver.get(\"/c\", func() -> String { \"ccc\" })\n\tserver.get(\"/d\", func() -> String { \"ddd\" })\n\tserver.get(\"/e\", func() -> String { \"eee\" })\n\tlet wire = server.handle(\"GET /d HTTP/1.1\")\n\twire.find(\"ddd\")\n}\ncheck()";
+    let value = run_heap_vm(source);
+    let crate::vm::interp::Value::I64(position) = value else {
+        panic!("unexpected result: {value:?}");
+    };
+    assert!(position > 0, "the fifth route should dispatch: {position}");
+}
+
+#[test]
+fn http_router_misses_cleanly() {
+    let source = "func check() -> Int {\n\tlet server = HTTP.Server()\n\tserver.get(\"/\", func() -> String { \"home\" })\n\tlet wire = server.handle(\"GET /nope HTTP/1.1\")\n\twire.find(\"404\")\n}\ncheck()";
+    let value = run_heap_vm(source);
+    let crate::vm::interp::Value::I64(position) = value else {
+        panic!("unexpected result: {value:?}");
+    };
+    assert!(position > 0, "missing routes should 404: {position}");
+}
+
+#[test]
+fn dict_with_string_values_shares_buffers_safely() {
+    // The generic body extracts node.value with Value = String: the
+    // instantiation must retain the buffer (tier-2 decided at lowering).
+    let (value, live_objects, live_allocations) = run_heap_eval(
+        "func check() -> Int {\n\tlet d = Dict<String>()\n\td.insert(\"greet\", \"hello\" + \" world\")\n\tlet got: String? = d.get(\"greet\")\n\tmatch got {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
+    assert_eq!(live_objects, 0);
+    assert_eq!(live_allocations, 0, "extracted String must retain, not share");
+}
+
+#[test]
+fn dict_with_string_values_runs_on_vm() {
+    let value = run_heap_vm(
+        "func check() -> Int {\n\tlet d = Dict<String>()\n\td.insert(\"greet\", \"hello\" + \" world\")\n\tlet got: String? = d.get(\"greet\")\n\tmatch got {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()",
+    );
+    assert_eq!(value, crate::vm::interp::Value::I64(11), "no double free");
+}
+
+#[test]
+fn generic_heap_extraction_clones_per_instantiation() {
+    // The generic body can't know Value's grade; lowering decides at the
+    // instantiation: String retains its buffer, Int does nothing.
+    let source = "struct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: \"hello\" + \" world\")\n\tlet s = extract(h)\n\tlet i = Holder(value: 41)\n\tlet n = extract(i)\n\ts.length + n\n}\ncheck()";
+    let (value, live_objects, live_allocations) = run_heap_eval(source);
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(52));
+    assert_eq!(live_objects, 0);
+    assert_eq!(live_allocations, 0, "String instantiation retains; Int does nothing");
+}
+
+#[test]
+fn generic_heap_extraction_rejects_non_cheap_owned_instantiation() {
+    // Wrap { name: String } is owned but not CheapClone: the instantiation
+    // cannot decide between clone and move, so lowering reports it.
+    let source = "struct Wrap {\n\tlet name: String\n}\nstruct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: Wrap(name: \"hi\" + \"!\"))\n\tlet w = extract(h)\n\t0\n}\ncheck()";
+    let typed = flow_driver(source);
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let lowered = typed.lower();
+    assert!(
+        lowered
+            .phase
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("CheapClone")),
+        "expected the unsupported-instantiation diagnostic: {:?}",
+        lowered.phase.diagnostics
+    );
+}
+
+// ----- Enum payload drops (pre-merge hardening) -----------------------------------
+
+#[test]
+fn enum_payload_drops_at_scope_exit() {
+    let (_, _, live_allocations) = run_heap_eval(
+        "func check() -> Int {\n\tlet o = Optional.some(\"hello\" + \" world\")\n\t0\n}\ncheck()",
+    );
+    assert_eq!(live_allocations, 0, "the Optional's String payload must free");
+}
+
+#[test]
+fn enum_payload_extraction_transfers_ownership() {
+    let (value, _, live_allocations) = run_heap_eval(
+        "func check() -> Int {\n\tlet o = Optional.some(\"hello\" + \" world\")\n\tlet n = match o {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0\n\t}\n\tn\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
+    assert_eq!(live_allocations, 0, "payload freed exactly once");
+}
+
+#[test]
+fn enum_payload_conditional_drop() {
+    let (_, _, live_allocations) = run_heap_eval(
+        "func take(o: String?) -> Int {\n\t0\n}\nfunc check(flag: Bool) -> Int {\n\tlet o = Optional.some(\"hello\" + \" world\")\n\tif flag {\n\t\ttake(o)\n\t} else {\n\t\t0\n\t}\n}\ncheck(true) + check(false)",
+    );
+    assert_eq!(live_allocations, 0, "moved-on-one-path payload drops exactly once");
+}
+
+#[test]
+fn consumed_by_value_param_drops_in_callee() {
+    let (value, _, live_allocations) = run_heap_eval(
+        "func take(name: String) -> Int {\n\tname.length\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
+    assert_eq!(live_allocations, 0, "the consumed argument's drop rides the callee");
+}
+
+
+// ----- Ledger completeness (pre-merge hardening) -----------------------------------
+
+#[test]
+fn destructured_heap_rvalue_balances() {
+    let (_, live_objects, _) = run_heap_eval(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc check() -> Int {\n\tlet (a, b) = (Node(value: 1), Node(value: 2))\n\ta.value + b.value\n}\ncheck()",
+    );
+    assert_eq!(live_objects, 0, "destructured rvalue handles free at scope exit");
+}
+
+#[test]
+fn destructured_heap_place_read_balances() {
+    let (_, live_objects, _) = run_heap_eval(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc check() -> Int {\n\tlet pair = (Node(value: 1), Node(value: 2))\n\tlet (a, b) = pair\n\ta.value + b.value\n}\ncheck()",
+    );
+    assert_eq!(live_objects, 0, "aliasing destructure neither leaks nor double-frees");
+}
+
+#[test]
+fn rvalue_match_scrutinee_releases() {
+    let (value, live_objects, _) = run_heap_eval(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc make() -> Node? {\n\tOptional.some(Node(value: 7))\n}\nfunc check() -> Int {\n\tmatch make() {\n\t\t.some(n) -> n.value,\n\t\t.none -> 0\n\t}\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(7));
+    assert_eq!(live_objects, 0, "the scrutinee temp's region frees after the match");
+}
+
+#[test]
+fn heap_rvalue_arg_through_witness_call_releases() {
+    // Rule D on the protocol-dispatch call path: an rvalue argument
+    // carrying a handle dies with the call.
+    let (value, live_objects, _) = run_heap_eval(
+        "struct Node 'heap {\n\tlet value: Int\n}\nprotocol Taker {\n\tfunc take(n: Node) -> Int\n}\nstruct Sink {}\nextend Sink: Taker {\n\tfunc take(n: Node) -> Int {\n\t\tn.value\n\t}\n}\nfunc check<T: Taker>(sink: T) -> Int {\n\tsink.take(Node(value: 3))\n}\ncheck(Sink())",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(3));
+    assert_eq!(live_objects, 0, "the temp releases after the witness call");
+}
+
+#[test]
+fn heap_rvalue_arg_through_closure_call_releases() {
+    let (value, live_objects, _) = run_heap_eval(
+        "struct Node 'heap {\n\tlet value: Int\n}\nfunc check() -> Int {\n\tlet f = func(n: Node) -> Int {\n\t\tn.value\n\t}\n\tf(Node(value: 5))\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(5));
+    assert_eq!(live_objects, 0, "the temp releases after the closure call");
+}
+
+// ----- Existential drops + derive ban + cross-file (pre-merge hardening) ----------
+
+#[test]
+fn existential_payload_drops() {
+    let (_, _, live_allocations) = run_heap_eval(
+        "func check() -> Int {\n\tlet x: any Showable = \"hello\" + \" world\"\n\t0\n}\ncheck()",
+    );
+    assert_eq!(live_allocations, 0, "the packed String's buffer must free");
+}
+
+#[test]
+fn existential_payload_deinit_runs() {
+    let value = run_heap_vm(
+        "let counter = 0\nstruct Guard {\n\tlet id: Int\n}\nextend Guard: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tcounter = counter + 1\n\t\t()\n\t}\n}\nextend Guard: Showable {\n\tfunc show() -> String {\n\t\t\"guard\"\n\t}\n}\nfunc scope() -> Int {\n\tlet x: any Showable = Guard(id: 1)\n\t0\n}\nlet n = scope()\ncounter",
+    );
+    assert_eq!(
+        value,
+        crate::vm::interp::Value::I64(1),
+        "the packed Guard's deinit runs when the existential drops"
+    );
+}
+
+#[test]
+fn rejects_auto_derived_showable_on_heap_struct() {
+    // Structural derivation would cycle on graphs: heap structs need an
+    // explicit conformance.
+    let typed = flow_driver(
+        "struct Node 'heap {\n\tlet value: Int\n}\nprint(Node(value: 1))\n0",
+    );
+    assert!(
+        typed.has_errors(),
+        "auto-derived Showable on 'heap must be rejected"
+    );
+}
+
+#[test]
+fn cross_file_global_move_drops_once() {
+    let file_a = "public let shared = \"hello\" + \" world\"";
+    let file_b = "use { shared } from ./a.tlk\nlet taken = shared\ntaken.length";
+    let typed = Driver::new(
+        vec![
+            Source::in_memory("a.tlk".into(), file_a),
+            Source::in_memory("b.tlk".into(), file_b),
+        ],
+        DriverConfig::new("CrossFile"),
+    )
+    .parse()
+    .expect("parse")
+    .resolve_names()
+    .expect("resolve")
+    .type_check();
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let mut lowered = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    let mut evaluator = crate::lambda_g::eval::Evaluator::new();
+    let value = evaluator
+        .run_main(
+            &mut lowered.phase.program,
+            lowered.phase.main,
+            lowered.phase.result_ty,
+        )
+        .expect("eval");
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
+    assert_eq!(
+        evaluator.live_allocations(),
+        0,
+        "the moved global drops exactly once"
+    );
 }
 
 // ----- Unsafe gating ----------------------------------------------------------

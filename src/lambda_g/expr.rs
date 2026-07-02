@@ -43,6 +43,9 @@ pub enum TyKind {
     Erased,
     /// A mutable cell (assignment-converted local — ORBIT-style).
     Cell(TyId),
+    /// A `'heap` struct: values are region-allocated object handles with
+    /// reference semantics (in-place mutation, aliasing).
+    Object(Symbol),
 }
 
 impl TyKind {
@@ -61,7 +64,10 @@ impl TyKind {
             | TyKind::Tuple(_)
             | TyKind::Existential(_)
             | TyKind::Erased => Some(8),
-            TyKind::Void | TyKind::Bot | TyKind::Fn(..) | TyKind::Cell(_) => None,
+            // Objects never live in raw memory (region ledger can't scan it).
+            TyKind::Void | TyKind::Bot | TyKind::Fn(..) | TyKind::Cell(_) | TyKind::Object(_) => {
+                None
+            }
         }
     }
 }
@@ -83,6 +89,9 @@ pub enum Const {
     /// A runtime cell handle, reified back into the term language by the
     /// evaluator (slots live in the machine, not the program).
     Slot(u32),
+    /// A runtime object handle, reified back into the term language by the
+    /// evaluator (objects live in the machine's region arena).
+    Object(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -131,6 +140,21 @@ pub enum Op {
     CellNew,
     CellGet,
     CellSet,
+    /// Allocate a `'heap` object in a fresh region (args: initial fields).
+    ObjectNew,
+    /// Attach the finalizer thunk (args: [object, thunk-function-value]) —
+    /// the thunk rides as a first-class function so closure conversion
+    /// resolves its captures at the attachment site.
+    SetFinalizer,
+    /// In-place field read of a `'heap` object.
+    ObjectGet(u32),
+    /// In-place field store; storing a handle merges regions.
+    ObjectSet(u32),
+    /// Ledger: a binding took references into the value's regions.
+    RegionAcquire,
+    /// Ledger: a binding's references went out of scope; a region at zero
+    /// tears down (finalizers in reverse allocation order, then bulk free).
+    RegionRelease,
     /// args: [cond, then_thunk, else_thunk]; thunks have type [] → R.
     Br,
     /// args: [tag, k_0, …, k_n, default]; continuations [] → R.

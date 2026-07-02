@@ -229,7 +229,7 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false,
+            any_decl!(DeclKind::Struct { linear: false, heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -237,6 +237,91 @@ pub mod tests {
                 body: any_body!(vec![])
             })
         );
+    }
+
+    #[test]
+    fn parses_tick_linear_struct_attribute() {
+        let parsed = parse("struct Token 'linear {\n\tlet id: Int\n}");
+        assert!(matches!(
+            &parsed.roots[0].as_decl().kind,
+            DeclKind::Struct { linear: true, heap: false, .. }
+        ));
+    }
+
+    #[test]
+    fn parses_tick_heap_struct_attribute() {
+        let parsed = parse("struct Node 'heap {\n\tlet value: Int\n}");
+        assert!(matches!(
+            &parsed.roots[0].as_decl().kind,
+            DeclKind::Struct { heap: true, linear: false, .. }
+        ));
+    }
+
+    #[test]
+    fn parses_tick_linear_enum_attribute() {
+        let parsed = parse("enum Token 'linear {\n\tcase a\n}");
+        assert!(matches!(
+            &parsed.roots[0].as_decl().kind,
+            DeclKind::Enum { linear: true, .. }
+        ));
+    }
+
+    #[test]
+    fn parses_tick_attribute_after_generics() {
+        let parsed = parse("struct Node<T> 'heap {\n\tlet value: T\n}");
+        assert!(matches!(
+            &parsed.roots[0].as_decl().kind,
+            DeclKind::Struct { heap: true, .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_linear_prefix_keyword() {
+        let lexer = Lexer::new("linear struct Token {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        let result = parser.parse();
+        let err = result.err().expect("the prefix form should no longer parse");
+        assert!(
+            err.to_string().contains("'linear"),
+            "the error should point at the new attribute form: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_tick_attribute() {
+        let lexer = Lexer::new("struct Node 'shiny {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(parser.parse().is_err());
+    }
+
+    #[test]
+    fn rejects_heap_enum() {
+        let lexer = Lexer::new("enum Node 'heap {\n\tcase a\n}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(parser.parse().is_err());
+    }
+
+    #[test]
+    fn rejects_heap_linear_combination() {
+        let lexer = Lexer::new("struct Node 'heap 'linear {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(parser.parse().is_err());
+    }
+
+    #[test]
+    fn parses_multiline_labeled_arguments() {
+        // The formatter wraps long labeled calls one argument per line;
+        // the parser must read its own output back.
+        let parsed = parse(
+            "let node = RouteNode(\n\tpath: path,\n\thandler: wrapped,\n\tnext: routes\n)",
+        );
+        assert_eq!(parsed.roots.len(), 1);
+    }
+
+    #[test]
+    fn parses_multiline_labeled_arguments_with_trailing_comma() {
+        let parsed = parse("let node = Pair(\n\ta: 1,\n\tb: 2,\n)");
+        assert_eq!(parsed.roots.len(), 1);
     }
 
     #[test]
@@ -2313,7 +2398,7 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false,
+            any_decl!(DeclKind::Struct { linear: false, heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2337,7 +2422,7 @@ pub mod tests {
 
         assert_eq_diff!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false,
+            any_decl!(DeclKind::Struct { linear: false, heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2391,7 +2476,7 @@ pub mod tests {
 
         assert_eq_diff!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false,
+            any_decl!(DeclKind::Struct { linear: false, heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2445,7 +2530,7 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false,
+            any_decl!(DeclKind::Struct { linear: false, heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2486,7 +2571,7 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false,
+            any_decl!(DeclKind::Struct { linear: false, heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2566,7 +2651,7 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false,
+            any_decl!(DeclKind::Struct { linear: false, heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],

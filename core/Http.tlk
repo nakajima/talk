@@ -6,6 +6,7 @@ use { From, Into } from ./Convert.tlk
 use { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
 use { Showable } from ./Showable.tlk
 use { String, Substring } from ./String.tlk
+use { Optional } from ./Optional.tlk
 
 public struct Request {
 	let raw: String
@@ -32,13 +33,13 @@ public struct Response {
 }
 
 extend Response: Into {
-	typealias Target=Response
+	typealias Target = Response
 
 	consuming func into() -> Response { self }
 }
 
 extend String: Into {
-	typealias Target=Response
+	typealias Target = Response
 
 	consuming func into() -> Response {
 		Response(200, self)
@@ -49,64 +50,40 @@ struct RouteHandler {
 	let invoke: () -> String
 }
 
-public struct HttpServer {
+// Routes live in a region-allocated ('heap) chain: registration conses,
+// dispatch walks — no fixed slot count.
+struct RouteNode 'heap {
+	let path: String
+	let handler: RouteHandler
+	let next: RouteNode?
+}
+
+func route_walk(current: RouteNode?, path: &Substring) -> Response {
+	match current {
+		.some(node) -> {
+			if path.equals_string(node.path) { Response(200, node.handler.invoke()) } else {
+				route_walk(node.next, path)
+			}
+		},
+		.none -> Response(404, "Not Found")
+	}
+}
+
+public struct HttpServer 'heap {
+	let routes: RouteNode?
 	let route_count: Int
-	let route_path0: String
-	let route_path1: String
-	let route_path2: String
-	let route_path3: String
-	let route_handler0: RouteHandler
-	let route_handler1: RouteHandler
-	let route_handler2: RouteHandler
-	let route_handler3: RouteHandler
 
 	init() {
-		let missing: RouteHandler = RouteHandler(
-			invoke: func() -> String { "Not Found" }
-		)
-
+		self.routes = Optional.none
 		self.route_count = 0
-		self.route_path0 = ""
-		self.route_path1 = ""
-		self.route_path2 = ""
-		self.route_path3 = ""
-		self.route_handler0 = missing
-		self.route_handler1 = missing
-		self.route_handler2 = missing
-		self.route_handler3 = missing
 		self
 	}
 
 	public mut func get(path: String, handler: () -> String) -> () {
-		let rc: Int = self.route_count
-
-		if rc == 0 {
-			self.route_path0 = path
-			self.route_handler0 = RouteHandler(invoke: handler)
-			self.route_count = self.route_count + 1
-			return ()
-		} else {
-			if rc == 1 {
-				self.route_path1 = path
-				self.route_handler1 = RouteHandler(invoke: handler)
-				self.route_count = self.route_count + 1
-				return ()
-			} else {
-				if rc == 2 {
-					self.route_path2 = path
-					self.route_handler2 = RouteHandler(invoke: handler)
-					self.route_count = self.route_count + 1
-					return ()
-				} else {
-					if rc == 3 {
-						self.route_path3 = path
-						self.route_handler3 = RouteHandler(invoke: handler)
-						self.route_count = self.route_count + 1
-						return ()
-					}
-				}
-			}
-		}
+		let wrapped = RouteHandler(invoke: handler)
+		let node = RouteNode(path: path, handler: wrapped, next: self.routes)
+		self.routes = Optional.some(node)
+		self.route_count = self.route_count + 1
 		()
 	}
 
@@ -132,33 +109,8 @@ public struct HttpServer {
 		rest.slice(0, second_space)
 	}
 
-	func route_matches(index: Int, path: Substring) -> Bool {
-		match index {
-			0 -> path.equals_string(self.route_path0),
-			1 -> path.equals_string(self.route_path1),
-			2 -> path.equals_string(self.route_path2),
-			3 -> path.equals_string(self.route_path3),
-			_ -> false
-		}
-	}
-
-	func route_call(index: Int) -> String {
-		match index {
-			0 -> self.route_handler0.invoke(),
-			1 -> self.route_handler1.invoke(),
-			2 -> self.route_handler2.invoke(),
-			3 -> self.route_handler3.invoke(),
-			_ -> "Not Found"
-		}
-	}
-
 	func dispatch(path: Substring) -> Response {
-		let i = 0
-		loop i < self.route_count {
-			if self.route_matches(i, path) { return Response(200, self.route_call(i)) }
-			i = i + 1
-		}
-		Response(404, "Not Found")
+		route_walk(self.routes, path)
 	}
 
 	func render(response: Response) -> String {

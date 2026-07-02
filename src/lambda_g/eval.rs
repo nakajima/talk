@@ -17,6 +17,7 @@ use crate::lambda_g::program::{Label, Program};
 use crate::name_resolution::symbol::Symbol;
 use crate::vm::io::IO;
 use talk_runtime::memory::{Allocations, MemoryError};
+use talk_runtime::objects::{ObjectError, Objects};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalValue {
@@ -37,6 +38,8 @@ pub enum EvalValue {
     Existential(Symbol, Box<EvalValue>, Vec<EvalValue>),
     /// Index into the evaluator's slot store (a mutable cell).
     Cell(usize),
+    /// A `'heap` object handle into the evaluator's region arena.
+    Object(u32),
 }
 
 enum Step {
@@ -66,6 +69,11 @@ pub struct Evaluator {
     mem: Vec<u8>,
     static_len: u32,
     allocations: Allocations,
+    /// Region-allocated `'heap` objects (mirrors the VM's arena).
+    objects: Objects<EvalValue>,
+    /// λ_G type of each object (parallel to `objects.records`) — reify
+    /// needs it to rebuild a well-typed handle constant.
+    object_tys: Vec<crate::lambda_g::expr::TyId>,
     /// Mutable cell store (assignment-converted locals). Cells are machine
     /// state; the term language sees only `Const::Slot` handles.
     slots: Vec<EvalValue>,
@@ -78,6 +86,9 @@ pub struct Evaluator {
     /// its argument as the program value (the standard top-level
     /// continuation of a CPS machine).
     halt: Option<Label>,
+    /// The teardown pump's continuation: finalizer thunks are CPS
+    /// `λ(self, k)`; applying this k ends the thunk's nested evaluation.
+    finalizer_done: Option<Label>,
 }
 
 impl Default for Evaluator {
@@ -95,10 +106,13 @@ impl Evaluator {
             mem: vec![],
             static_len: 0,
             allocations: Allocations::default(),
+            objects: Objects::default(),
+            object_tys: vec![],
             slots: vec![],
             slot_tys: vec![],
             boxed: vec![],
             halt: None,
+            finalizer_done: None,
         }
     }
 
@@ -106,6 +120,35 @@ impl Evaluator {
     /// (every retain balanced by a release) asserts this is zero.
     pub fn live_allocations(&self) -> usize {
         self.allocations.live_count()
+    }
+
+    /// Live `'heap` objects — the region leak invariant's companion to
+    /// [`Evaluator::live_allocations`].
+    pub fn live_objects(&self) -> usize {
+        self.objects.live_objects()
+    }
+
+    /// Invoke one finalizer thunk `λ(self, k)` with the teardown-pump
+    /// continuation as k; the thunk's value is discarded.
+    fn run_finalizer(
+        &mut self,
+        p: &mut Program,
+        label: Label,
+        object: u32,
+    ) -> Result<(), EvalError> {
+        let done = match self.finalizer_done {
+            Some(done) => done,
+            None => {
+                let void = p.ty_void();
+                let bot = p.ty_bot();
+                let done = p.func("finalizer_done", void, bot);
+                self.finalizer_done = Some(done);
+                done
+            }
+        };
+        let arg = EvalValue::Tuple(vec![EvalValue::Object(object), EvalValue::Func(done)]);
+        let _ = self.apply(p, EvalValue::Func(label), arg)?;
+        Ok(())
     }
 
     /// Run a CPS `main : [Fn(R, ⊥)] → ⊥`: apply it to the halt continuation
@@ -192,7 +235,7 @@ impl Evaluator {
         let EvalValue::Func(label) = f else {
             return Err(EvalError::NotAFunction);
         };
-        if self.halt == Some(label) {
+        if self.halt == Some(label) || self.finalizer_done == Some(label) {
             return Ok(Step::Done(a));
         }
         if p.body(label).is_none() {
@@ -219,6 +262,7 @@ impl Evaluator {
                 Const::Void => EvalValue::Void,
                 Const::StaticPtr(off) => EvalValue::Ptr(off),
                 Const::Slot(index) => EvalValue::Cell(index as usize),
+                Const::Object(index) => EvalValue::Object(index),
             }),
             // V-Fun: a label is a value.
             ExprKind::Func(l) => Ok(EvalValue::Func(l)),
@@ -255,8 +299,9 @@ impl Evaluator {
         let EvalValue::Func(label) = f else {
             return Err(EvalError::NotAFunction);
         };
-        if self.halt == Some(label) {
-            // The top-level continuation: evaluation is complete.
+        if self.halt == Some(label) || self.finalizer_done == Some(label) {
+            // The top-level (or finalizer-walk) continuation: this
+            // evaluation is complete.
             return Ok(a);
         }
         if p.body(label).is_none() {
@@ -310,6 +355,10 @@ impl Evaluator {
                 reified.extend(witnesses.iter().map(|witness| self.reify(p, witness)));
                 let ty = p.ty(TyKind::Existential(*protocol));
                 p.primop(Op::ExistentialPack(*protocol), &reified, ty)
+            }
+            EvalValue::Object(object) => {
+                let ty = self.object_tys[*object as usize];
+                p.constant(Const::Object(*object), ty)
             }
             EvalValue::Cell(index) => {
                 let ty = self.slot_tys[*index];
@@ -512,6 +561,75 @@ impl Evaluator {
                 }
                 _ => Err(EvalError::Unsupported("is_unique on non-pointer".into())),
             },
+            Op::ObjectNew => {
+                let mut fields = Vec::with_capacity(args.len());
+                for &a in args {
+                    fields.push(self.eval_sub(p, a)?);
+                }
+                let object = self.objects.allocate(fields);
+                debug_assert_eq!(object as usize, self.object_tys.len());
+                self.object_tys.push(result_ty);
+                Ok(EvalValue::Object(object))
+            }
+            Op::SetFinalizer => match self.eval_sub(p, args[0])? {
+                EvalValue::Object(object) => {
+                    let thunk = self.eval_sub(p, args[1])?;
+                    if !matches!(thunk, EvalValue::Func(_)) {
+                        return Err(EvalError::Unsupported(
+                            "finalizer is not a function value".into(),
+                        ));
+                    }
+                    self.objects
+                        .set_finalizer(object, thunk)
+                        .map_err(eval_object_error)?;
+                    Ok(EvalValue::Void)
+                }
+                _ => Err(EvalError::Unsupported("set_finalizer on non-object".into())),
+            },
+            Op::ObjectGet(index) => match self.eval_sub(p, args[0])? {
+                EvalValue::Object(object) => self
+                    .objects
+                    .get_field(object, index as u16)
+                    .map_err(eval_object_error),
+                _ => Err(EvalError::Unsupported("object_get on non-object".into())),
+            },
+            Op::ObjectSet(index) => match self.eval_sub(p, args[0])? {
+                EvalValue::Object(object) => {
+                    let value = self.eval_sub(p, args[1])?;
+                    let mut handles = vec![];
+                    scan_handles(&value, &mut handles);
+                    self.objects
+                        .set_field(object, index as u16, value, &handles)
+                        .map_err(eval_object_error)?;
+                    Ok(EvalValue::Void)
+                }
+                _ => Err(EvalError::Unsupported("object_set on non-object".into())),
+            },
+            Op::RegionAcquire => {
+                let value = self.eval_sub(p, args[0])?;
+                let mut handles = vec![];
+                scan_handles(&value, &mut handles);
+                self.objects.acquire(&handles).map_err(eval_object_error)?;
+                Ok(EvalValue::Void)
+            }
+            Op::RegionRelease => {
+                let value = self.eval_sub(p, args[0])?;
+                let mut handles = vec![];
+                scan_handles(&value, &mut handles);
+                self.objects.release(&handles).map_err(eval_object_error)?;
+                // Teardown pump: run pending finalizer thunks to completion
+                // before this op's continuation resumes (the walk's bulk
+                // free happens inside `next_finalizer`).
+                while let Some((thunk, object)) = self.objects.next_finalizer() {
+                    let EvalValue::Func(label) = thunk else {
+                        return Err(EvalError::Unsupported(
+                            "finalizer is not a function value".into(),
+                        ));
+                    };
+                    self.run_finalizer(p, label, object)?;
+                }
+                Ok(EvalValue::Void)
+            }
             // Width and representation come from the primop's λ_G type
             // (see TyKind::mem_size).
             Op::Load => match self.eval_sub(p, args[0])? {
@@ -1024,6 +1142,43 @@ fn eval_io_memory_error(error: MemoryError) -> EvalError {
         | MemoryError::AllocationTooLarge
         | MemoryError::OutOfBounds { .. } => "io access out of bounds".to_string(),
     })
+}
+
+
+/// Every object handle reachable in a value (the region ledger's scan).
+/// Cells are machine state and are not descended.
+fn scan_handles(value: &EvalValue, out: &mut Vec<u32>) {
+    match value {
+        EvalValue::Object(object) => out.push(*object),
+        EvalValue::Tuple(items) => {
+            for item in items {
+                scan_handles(item, out);
+            }
+        }
+        EvalValue::Record(_, fields) | EvalValue::Variant(_, _, fields) => {
+            for field in fields {
+                scan_handles(field, out);
+            }
+        }
+        EvalValue::Existential(_, payload, witnesses) => {
+            scan_handles(payload.as_ref(), out);
+            for witness in witnesses {
+                scan_handles(witness, out);
+            }
+        }
+        EvalValue::I64(_)
+        | EvalValue::F64(_)
+        | EvalValue::Bool(_)
+        | EvalValue::Byte(_)
+        | EvalValue::Void
+        | EvalValue::Ptr(_)
+        | EvalValue::Func(_)
+        | EvalValue::Cell(_) => {}
+    }
+}
+
+fn eval_object_error(error: ObjectError) -> EvalError {
+    EvalError::Unsupported(error.message().into())
 }
 
 #[cfg(test)]
