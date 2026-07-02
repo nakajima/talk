@@ -2,6 +2,7 @@ use super::*;
 use crate::compiling::module::ModuleId;
 use crate::name_resolution::symbol::{EffectId, StructId, TypeParameterId};
 use crate::types::constraint::CtReason;
+use crate::types::ty::Perm;
 
 fn origin() -> CtOrigin {
     CtOrigin::new(NodeID::ANY, CtReason::Apply)
@@ -19,6 +20,7 @@ struct Harness {
     mono: FxHashMap<Symbol, Ty>,
     instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    coerce_clones: rustc_hash::FxHashSet<NodeID>,
 }
 
 impl Harness {
@@ -31,6 +33,7 @@ impl Harness {
             mono: FxHashMap::default(),
             instantiations: FxHashMap::default(),
             member_resolutions: FxHashMap::default(),
+            coerce_clones: rustc_hash::FxHashSet::default(),
         }
     }
 
@@ -43,6 +46,7 @@ impl Harness {
             mono: &self.mono,
             instantiations: &mut self.instantiations,
             member_resolutions: &mut self.member_resolutions,
+            coerce_clones: &mut self.coerce_clones,
             level: Level(1),
             defaulting: false,
             givens: vec![],
@@ -83,6 +87,40 @@ fn level_adjustment_propagates_outward() {
     )]);
     assert!(h.errors.is_empty(), "{:?}", h.errors);
     assert_eq!(h.store.level(inner.0), Level(0));
+}
+
+#[test]
+fn apply_reason_clones_borrowed_cheap_clone_argument() {
+    let mut h = Harness::new();
+    let cheap = Symbol::Struct(StructId::new(ModuleId::Current, 7));
+    h.catalog
+        .conformances
+        .insert((cheap, Symbol::CheapClone), Default::default());
+    let owned = Ty::Nominal(cheap, vec![]);
+    let borrowed = Ty::Borrow(Perm::Shared, Box::new(owned.clone()));
+    let residual = h.solve(vec![Constraint::Eq(owned, borrowed, origin())]);
+    assert!(h.errors.is_empty(), "{:?}", h.errors);
+    assert!(residual.is_empty(), "{residual:?}");
+    assert!(
+        h.coerce_clones.contains(&NodeID::ANY),
+        "the coercion site should be recorded for lowering"
+    );
+}
+
+#[test]
+fn apply_reason_does_not_strip_borrows_in_general_unification() {
+    let mut h = Harness::new();
+    let int = Ty::Nominal(Symbol::Int, vec![]);
+    let borrowed_int = Ty::Borrow(Perm::Shared, Box::new(int.clone()));
+    let residual = h.solve(vec![Constraint::Eq(int, borrowed_int, origin())]);
+    assert!(
+        h.errors
+            .iter()
+            .any(|(error, _)| matches!(error, TypeError::Mismatch { .. })),
+        "{:?}",
+        h.errors
+    );
+    assert!(residual.is_empty(), "{residual:?}");
 }
 
 #[test]
@@ -437,4 +475,100 @@ fn closed_record_rows_must_match_exactly() {
     let b = Row::closed(vec![]);
     h.solve(vec![Constraint::Eq(Ty::Record(a), Ty::Record(b), origin())]);
     assert_eq!(h.errors.len(), 1);
+}
+
+fn borrowed_int(perm: Perm) -> Ty {
+    Ty::Borrow(perm, Box::new(Ty::Nominal(Symbol::Int, vec![])))
+}
+
+#[test]
+fn perm_var_unifies_with_concrete_permission() {
+    let mut h = Harness::new();
+    let p = h.store.fresh_perm(Level(1), NodeID::ANY);
+    let lhs = borrowed_int(Perm::Var(p));
+    h.solve(vec![Constraint::Eq(
+        lhs.clone(),
+        borrowed_int(Perm::Exclusive),
+        origin(),
+    )]);
+    assert!(h.errors.is_empty(), "{:?}", h.errors);
+    assert_eq!(h.store.zonk_ty(&lhs), borrowed_int(Perm::Exclusive));
+}
+
+#[test]
+fn perm_vars_union_and_share_solution() {
+    let mut h = Harness::new();
+    let p1 = h.store.fresh_perm(Level(1), NodeID::ANY);
+    let p2 = h.store.fresh_perm(Level(1), NodeID::ANY);
+    let a = borrowed_int(Perm::Var(p1));
+    let b = borrowed_int(Perm::Var(p2));
+    h.solve(vec![
+        Constraint::Eq(a.clone(), b.clone(), origin()),
+        Constraint::Eq(b, borrowed_int(Perm::Exclusive), origin()),
+    ]);
+    assert!(h.errors.is_empty(), "{:?}", h.errors);
+    assert_eq!(h.store.zonk_ty(&a), borrowed_int(Perm::Exclusive));
+}
+
+#[test]
+fn concrete_permission_mismatch_reports_error() {
+    let mut h = Harness::new();
+    h.solve(vec![Constraint::Eq(
+        borrowed_int(Perm::Shared),
+        borrowed_int(Perm::Exclusive),
+        origin(),
+    )]);
+    assert!(
+        h.errors
+            .iter()
+            .any(|(error, _)| matches!(error, TypeError::Mismatch { .. })),
+        "{:?}",
+        h.errors
+    );
+}
+
+#[test]
+fn unsolved_perm_var_defaults_to_shared() {
+    let mut h = Harness::new();
+    let p = h.store.fresh_perm(Level(1), NodeID::ANY);
+    let ty = borrowed_int(Perm::Var(p));
+    assert_eq!(
+        h.store.default_unsolved_perms(&ty),
+        borrowed_int(Perm::Shared)
+    );
+    // Defaulting binds the variable in the store, so every sharer sees it.
+    assert_eq!(h.store.zonk_ty(&ty), borrowed_int(Perm::Shared));
+}
+
+#[test]
+fn generalizer_quantifies_unsolved_perm_var_into_perm_params() {
+    let mut h = Harness::new();
+    let mut symbols = crate::name_resolution::symbol::Symbols::default();
+    let p = h.store.fresh_perm(Level(1), NodeID::ANY);
+    let ty = borrowed_int(Perm::Var(p));
+    let mut generalizer = Generalizer::new(
+        &mut h.store,
+        &mut symbols,
+        ModuleId::Current,
+        Level(0),
+        FxHashMap::default(),
+    );
+    let scheme = generalizer.generalize(&ty, &[]);
+    assert_eq!(scheme.perm_params.len(), 1, "{scheme:?}");
+    let Ty::Borrow(Perm::Param(param), _) = &scheme.ty else {
+        panic!("expected quantified perm param, got {:?}", scheme.ty);
+    };
+    assert_eq!(*param, scheme.perm_params[0]);
+    // Grade polymorphism is invisible in renders: a perm param shows as `&`.
+    assert_eq!(scheme.ty.render_mono(), "&Int");
+}
+
+#[test]
+fn substitute_replaces_perm_params() {
+    let mut symbols = crate::name_resolution::symbol::Symbols::default();
+    let param = Symbol::TypeParameter(symbols.next_type_parameter(ModuleId::Current));
+    let ty = borrowed_int(Perm::Param(param));
+    let mut perms = FxHashMap::default();
+    perms.insert(param, Perm::Exclusive);
+    assert_eq!(ty.substitute_perms(&perms), borrowed_int(Perm::Exclusive));
 }

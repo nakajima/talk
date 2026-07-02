@@ -20,6 +20,14 @@ pub enum Visibility {
     Public,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Drive, DriveMut)]
+pub enum ReceiverMode {
+    #[default]
+    None,
+    Ref,
+    Consuming,
+}
+
 /// Path in an import statement
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum ImportPath {
@@ -79,6 +87,9 @@ pub enum DeclKind {
         generics: Vec<GenericDecl>, /* generics */
         where_clause: Option<WhereClause>,
         body: Body, /* body */
+        /// Declared `linear`: values must be consumed exactly once.
+        #[drive(skip)]
+        linear: bool,
     },
 
     Let {
@@ -120,6 +131,8 @@ pub enum DeclKind {
         func: Box<Func>,
         #[drive(skip)]
         is_static: bool,
+        #[drive(skip)]
+        receiver_mode: ReceiverMode,
     },
 
     Associated {
@@ -150,6 +163,9 @@ pub enum DeclKind {
         generics: Vec<GenericDecl>, // Generics TypeParams <T>
         where_clause: Option<WhereClause>,
         body: Body,
+        /// Declared `linear`: values must be consumed exactly once.
+        #[drive(skip)]
+        linear: bool,
     },
 
     // Individual enum variant in declaration
@@ -164,7 +180,11 @@ pub enum DeclKind {
     },
 
     FuncSignature(FuncSignature),
-    MethodRequirement(FuncSignature),
+    MethodRequirement {
+        signature: FuncSignature,
+        #[drive(skip)]
+        receiver_mode: ReceiverMode,
+    },
 
     TypeAlias(#[drive(skip)] Name, #[drive(skip)] Span, TypeAnnotation),
 }

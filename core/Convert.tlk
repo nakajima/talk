@@ -6,5 +6,5 @@ public protocol From {
 
 public protocol Into {
 	associated Target
-	func into() -> Target
+	consuming func into() -> Target
 }

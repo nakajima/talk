@@ -255,13 +255,11 @@ impl Program {
     /// points at, when they are printable text.
     fn static_text(&self, args: &[ExprId]) -> Option<String> {
         let [ptr, len, ..] = args else { return None };
-        let ExprKind::Const(Const::StaticPtr(off)) = &self.expr(*ptr).kind else {
-            return None;
-        };
+        let off = self.static_pointer(*ptr)?;
         let ExprKind::Const(Const::I64(len)) = &self.expr(*len).kind else {
             return None;
         };
-        let start = *off as usize;
+        let start = off as usize;
         let end = start.checked_add(usize::try_from(*len).ok()?)?;
         let bytes = self.static_mem.get(start..end)?;
         let text = std::str::from_utf8(bytes).ok()?;
@@ -270,6 +268,19 @@ impl Program {
         text.chars()
             .all(|c| !c.is_control() || c.is_whitespace())
             .then(|| text.to_string())
+    }
+
+    fn static_pointer(&self, expr: ExprId) -> Option<u32> {
+        match &self.expr(expr).kind {
+            ExprKind::Const(Const::StaticPtr(off)) => Some(*off),
+            ExprKind::PrimOp(Op::RecordNew(_), args, _) => {
+                let [base, ..] = args.as_ref() else {
+                    return None;
+                };
+                self.static_pointer(*base)
+            }
+            _ => None,
+        }
     }
 
     /// A symbol's display name when the lowerer recorded one; the raw

@@ -24,6 +24,25 @@ pub enum MemberResolution {
     ViaConformance { protocol: Symbol, witness: Symbol },
 }
 
+pub(crate) fn stored_field_symbol(
+    types: &TypeOutput,
+    resolution: Option<&MemberResolution>,
+) -> Option<Symbol> {
+    let MemberResolution::Direct(property) = resolution? else {
+        return None;
+    };
+    let in_catalog = types.catalog.structs.values().any(|info| {
+        info.fields
+            .values()
+            .any(|(field_symbol, _)| field_symbol == property)
+    });
+    let has_field_scheme = types
+        .schemes
+        .get(property)
+        .is_some_and(|scheme| !matches!(scheme.ty, Ty::Func(..)));
+    (in_catalog || has_field_scheme).then_some(*property)
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct TypeOutput {
     /// This module's slice of the type catalog (exported with the module).
@@ -38,6 +57,9 @@ pub struct TypeOutput {
     /// monomorphization or dictionary passing.
     pub instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    /// Argument nodes where a borrowed value satisfies an owned CheapClone
+    /// parameter by cloning (an O(1) buffer retain, emitted by lowering).
+    pub coerce_clones: rustc_hash::FxHashSet<NodeID>,
     /// Expression nodes implicitly packed into an existential expected type.
     /// Lowering turns these into payload-plus-witness-table packages.
     pub existential_packs: FxHashMap<NodeID, ExistentialPack>,

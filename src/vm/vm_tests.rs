@@ -2,8 +2,10 @@
 pub mod tests {
     use crate::compiling::driver::{Driver, DriverConfig, Source};
     use crate::lambda_g::eval::EvalValue;
-    use crate::vm::interp::Value;
-    use crate::vm::{Chunk, Insn, Module};
+    use crate::name_resolution::symbol::Symbol;
+    use crate::vm::interp::{Value, ValueNames, run, run_displayed};
+    use crate::vm::io::CaptureIO;
+    use crate::vm::{Chunk, Insn, MemKind, Module};
 
     /// The same program runs on the reference evaluator (a direct
     /// transcription of the paper's semantics — our trusted baseline) and
@@ -11,7 +13,11 @@ pub mod tests {
     /// safety net for the one novel composition in the backend — λ_G →
     /// nesting-tree schedule → bytecode (plan's flagged seam #2).
     fn run_on_both_engines(code: &'static str) -> Value {
-        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("VmTest"));
+        let code = unsafe_marked_if_raw(code);
+        let driver = Driver::new(
+            vec![Source::from(code.as_str())],
+            DriverConfig::new("VmTest"),
+        );
         let typed = driver
             .parse()
             .expect("parse")
@@ -82,7 +88,7 @@ pub mod tests {
     fn vm_runs_existential_member_dispatch() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nlet x: any Number = 41\nx.value()"
+                "// no-core\nprotocol Number {\n\tconsuming func value() -> Int\n}\nextend Int: Number {\n\tconsuming func value() -> Int { self }\n}\nlet x: any Number = 41\nx.value()"
             ),
             Value::I64(41)
         );
@@ -92,7 +98,7 @@ pub mod tests {
     fn vm_runs_existential_return_and_generic_bound_dispatch() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nfunc make() -> any Number { 9 }\nfunc render<T: Number>(x: T) -> Int { x.value() }\nrender(make())"
+                "// no-core\nprotocol Number {\n\tconsuming func value() -> Int\n}\nextend Int: Number {\n\tconsuming func value() -> Int { self }\n}\nfunc make() -> any Number { 9 }\nfunc render<T: Number>(x: T) -> Int { x.value() }\nrender(make())"
             ),
             Value::I64(9)
         );
@@ -102,7 +108,7 @@ pub mod tests {
     fn vm_runs_existentials_in_records_and_enums() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nstruct Box {\n\tlet item: any Number\n}\nenum MaybeNumber {\n\tcase some(any Number)\n}\nlet box = Box(item: 12)\nlet maybe = MaybeNumber.some(box.item)\nmatch maybe {\n\tMaybeNumber.some(value) -> value.value()\n}"
+                "// no-core\nprotocol Number {\n\tconsuming func value() -> Int\n}\nextend Int: Number {\n\tconsuming func value() -> Int { self }\n}\nstruct Box {\n\tlet item: any Number\n}\nenum MaybeNumber {\n\tcase some(any Number)\n}\nlet box = Box(item: 12)\nlet maybe = MaybeNumber.some(box.item)\nmatch maybe {\n\tMaybeNumber.some(value) -> value.value()\n}"
             ),
             Value::I64(12)
         );
@@ -110,19 +116,17 @@ pub mod tests {
 
     #[test]
     fn vm_runs_existentials_in_arrays() {
-        assert_eq!(
-            run_on_both_engines(
-                "protocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nlet values: Array<any Number> = [3, 4]\nvalues.get(1).value()"
-            ),
-            Value::I64(4)
+        let (_, out) = run_on_both_engines_io(
+            "protocol Number {\n\tfunc report() -> ()\n}\nextend Int: Number {\n\tfunc report() -> () { print(self) }\n}\nlet values: Array<any Number> = [3, 4]\nvalues.get(1).report()",
         );
+        assert_eq!(out, "4\n");
     }
 
     #[test]
     fn vm_runs_gadt_hidden_payload_packed_as_existential() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Showable {\n\tfunc show() -> Int\n}\nextend Int: Showable {\n\tfunc show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n\tmatch box {\n\t\t.hidden(value) -> value\n\t}\n}\nerase(GBox.hidden(5)).show()"
+                "// no-core\nprotocol Showable {\n\tconsuming func show() -> Int\n}\nextend Int: Showable {\n\tconsuming func show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n\tmatch box {\n\t\t.hidden(value) -> value\n\t}\n}\nerase(GBox.hidden(5)).show()"
             ),
             Value::I64(5)
         );
@@ -132,7 +136,7 @@ pub mod tests {
     fn vm_runs_gadt_hidden_payload_direct_bound_call() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Showable {\n\tfunc show() -> Int\n}\nextend Int: Showable {\n\tfunc show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc render(box: GBox<Bool>) -> Int {\n\tmatch box {\n\t\t.hidden(value) -> value.show()\n\t}\n}\nrender(GBox.hidden(6))"
+                "// no-core\nprotocol Showable {\n\tconsuming func show() -> Int\n}\nextend Int: Showable {\n\tconsuming func show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc render(box: GBox<Bool>) -> Int {\n\tmatch box {\n\t\t.hidden(value) -> value.show()\n\t}\n}\nrender(GBox.hidden(6))"
             ),
             Value::I64(6)
         );
@@ -181,7 +185,11 @@ pub mod tests {
     /// Both engines, including captured stdout (the M3 surface: records,
     /// strings, io_write).
     fn run_on_both_engines_io(code: &'static str) -> (Value, String) {
-        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("VmTest"));
+        let code = unsafe_marked_if_raw(code);
+        let driver = Driver::new(
+            vec![Source::from(code.as_str())],
+            DriverConfig::new("VmTest"),
+        );
         let typed = driver
             .parse()
             .expect("parse")
@@ -220,6 +228,18 @@ pub mod tests {
         (vm_value, vm_out)
     }
 
+    fn unsafe_marked_if_raw(code: &str) -> String {
+        if code.contains("RawPtr")
+            || code.contains("_alloc")
+            || code.contains("_io_")
+            || code.contains("@_ir")
+        {
+            format!("// unsafe\n{code}")
+        } else {
+            code.to_string()
+        }
+    }
+
     #[test]
     fn vm_matches_evaluator_on_memberwise_struct() {
         let (value, _) = run_on_both_engines_io(
@@ -249,9 +269,17 @@ pub mod tests {
         // Value semantics + inout self (Racordon et al., JOT 2022): bump's
         // self mutation writes back into the caller's binding.
         let (value, _) = run_on_both_engines_io(
-            "struct Counter {\n\tlet n: Int\n\n\tfunc bump() {\n\t\tself.n = self.n + 1\n\t}\n}\nlet c = Counter(n: 1)\nc.bump()\nc.bump()\nc.n",
+            "struct Counter {\n\tlet n: Int\n\n\tmut func bump() {\n\t\tself.n = self.n + 1\n\t}\n}\nlet c = Counter(n: 1)\nc.bump()\nc.bump()\nc.n",
         );
         assert_eq!(value, Value::I64(3));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_mutating_nested_field_receiver_writeback() {
+        let (value, _) = run_on_both_engines_io(
+            "struct Counter {\n\tlet n: Int\n\n\tmut func bump() {\n\t\tself.n = self.n + 1\n\t}\n}\nstruct Inner {\n\tlet counter: Counter\n\tlet offset: Int\n}\nstruct Outer {\n\tlet inner: Inner\n}\nlet outer = Outer(inner: Inner(counter: Counter(n: 1), offset: 40))\nouter.inner.counter.bump()\nouter.inner.counter.n + outer.inner.offset",
+        );
+        assert_eq!(value, Value::I64(42));
     }
 
     #[test]
@@ -277,7 +305,7 @@ pub mod tests {
     fn vm_matches_evaluator_on_struct_example() {
         // examples/Strings.tlk in miniature: fields + concat + print.
         let (_, out) = run_on_both_engines_io(
-            "struct Person {\n\tlet firstName: String\n\tlet lastName: String\n\n\tfunc greet() {\n\t\tprint(\"hi i'm \" + self.firstName + \" \" + self.lastName)\n\t}\n}\nPerson(firstName: \"Pat\", lastName: \"N\").greet()",
+            "struct Person {\n\tlet firstName: String\n\tlet lastName: String\n\n\tconsuming func greet() {\n\t\tprint(\"hi i'm \" + self.firstName + \" \" + self.lastName)\n\t}\n}\nPerson(firstName: \"Pat\", lastName: \"N\").greet()",
         );
         assert_eq!(out, "hi i'm Pat N\n");
     }
@@ -393,8 +421,9 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_float_array_round_trip() {
-        let (value, _) = run_on_both_engines_io("let a = [1.5, 2.5]\na.get(0) + a.get(1)");
-        assert_eq!(value, Value::F64(4.0));
+        let (_, out) =
+            run_on_both_engines_io("let a = [1.5, 2.5]\nprint(a.get(0))\nprint(a.get(1))");
+        assert_eq!(out, "1.5\n2.5\n");
     }
 
     #[test]
@@ -437,10 +466,10 @@ pub mod tests {
     fn vm_matches_evaluator_on_array_iterator_next() {
         // ArrayIterator.next() is a mutating witness: inout self writes
         // back into the iterator's cell between calls.
-        let (value, _) = run_on_both_engines_io(
-            "let numbers = [7, 8]\nlet it = numbers.iter()\nlet r1: Optional<Int> = it.next()\nlet r2: Optional<Int> = it.next()\nlet r3: Optional<Int> = it.next()\nlet a = match r1 {\n\t.some(v) -> v,\n\t.none -> 0 - 1\n}\nlet b = match r2 {\n\t.some(v) -> v,\n\t.none -> 0 - 1\n}\nlet c = match r3 {\n\t.some(v) -> v,\n\t.none -> 0 - 1\n}\na * 100 + b * 10 + c",
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet numbers = [7, 8]\n\tlet it = numbers.iter()\n\tlet r1: Optional<&Int> = it.next()\n\tmatch r1 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\tlet r2: Optional<&Int> = it.next()\n\tmatch r2 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\tlet r3: Optional<&Int> = it.next()\n\tmatch r3 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\t0\n}",
         );
-        assert_eq!(value, Value::I64(7 * 100 + 8 * 10 - 1));
+        assert_eq!(out, "7\n8\n-1\n");
     }
 
     #[test]
@@ -709,7 +738,7 @@ pub mod tests {
         // open mints a simulated fd; writes append; reads start at the
         // beginning — so a write then read round-trips the bytes.
         let (value, out) = run_on_both_engines_io(
-            "let path = _alloc<Byte>(1)\nlet fd = _io_open(path, 65, 384)\nlet hello = \"hello io\"\n_io_write(fd, hello.base, hello.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
+            "let path = _alloc<Byte>(1)\nlet fd = _io_open(path, 65, 384)\nlet hello = \"hello io\"\n_io_write(fd, hello.storage.base, hello.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
         );
         assert_eq!(out, "hello io");
         assert_eq!(value, Value::I64(0));
@@ -720,7 +749,7 @@ pub mod tests {
         // open_path takes a Talk String (copied with a NUL terminator
         // into fresh memory); the simulated fd then round-trips bytes.
         let (value, out) = run_on_both_engines_io(
-            "let fd = open_path(\"scratch.txt\", 65, 384)\nlet data = \"file data\"\n_io_write(fd, data.base, data.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
+            "let fd = open_path(\"scratch.txt\", 65, 384)\nlet data = \"file data\"\n_io_write(fd, data.storage.base, data.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
         );
         assert_eq!(out, "file data");
         assert_eq!(value, Value::I64(0));
@@ -731,7 +760,7 @@ pub mod tests {
         // CaptureIO sockets are buffers: what a test writes to a
         // connection it can read back — the scripted-client loop.
         let (_, out) = run_on_both_engines_io(
-            "let sock = _io_socket(AF_INET, SOCK_STREAM, 0)\n_io_connect(sock, LOCALHOST, 9900)\nlet msg = \"ping\"\n_io_write(sock, msg.base, msg.length)\nlet buf = _alloc<Byte>(8)\nlet n = _io_read(sock, buf, 8)\n_io_write(STDOUT_FD, buf, n)",
+            "let sock = _io_socket(AF_INET, SOCK_STREAM, 0)\n_io_connect(sock, LOCALHOST, 9900)\nlet msg = \"ping\"\n_io_write(sock, msg.storage.base, msg.length)\nlet buf = _alloc<Byte>(8)\nlet n = _io_read(sock, buf, 8)\n_io_write(STDOUT_FD, buf, n)",
         );
         assert_eq!(out, "ping");
     }
@@ -741,7 +770,7 @@ pub mod tests {
         // The ChatServer slice: bind/listen succeed, accept mints a
         // client fd, and the greeting written to it reads back.
         let (value, out) = run_on_both_engines_io(
-            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet b = _io_bind(server, INADDR_ANY, 9900)\nlet l = _io_listen(server, 128)\nlet client = _io_accept(server)\nlet hi = \"hi client\"\n_io_write(client, hi.base, hi.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(client, buf, 16)\n_io_write(STDOUT_FD, buf, n)\nb + l",
+            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet b = _io_bind(server, INADDR_ANY, 9900)\nlet l = _io_listen(server, 128)\nlet client = _io_accept(server)\nlet hi = \"hi client\"\n_io_write(client, hi.storage.base, hi.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(client, buf, 16)\n_io_write(STDOUT_FD, buf, n)\nb + l",
         );
         assert_eq!(out, "hi client");
         assert_eq!(value, Value::I64(0));
@@ -911,7 +940,7 @@ pub mod tests {
         // The old test used a generic protocol (`Getter<T>`); the new
         // type system expresses this with an associated type.
         let (_, out) = run_on_both_engines_io(
-            "protocol Getter {\n\tassociated T\n\tfunc get() -> T\n}\nstruct Container<Element> {\n\tlet item: Element\n\n\textend Self: Getter {\n\t\tfunc get() -> Element {\n\t\t\tself.item\n\t\t}\n\t}\n}\nlet c = Container<Int>(item: 42)\nprint(c.get())",
+            "protocol Getter {\n\tassociated T\n\tconsuming func get() -> T\n}\nstruct Container<Element> {\n\tlet item: Element\n\n\textend Self: Getter {\n\t\tconsuming func get() -> Element {\n\t\t\tself.item\n\t\t}\n\t}\n}\nlet c = Container<Int>(item: 42)\nprint(c.get())",
         );
         assert_eq!(out, "42\n");
     }
@@ -930,7 +959,10 @@ pub mod tests {
         assert_eq!(value, Value::Bool(true));
         let (value, _) = run_on_both_engines_io("\"hello\" == \"world\"");
         assert_eq!(value, Value::Bool(false));
-        let (_, out) = run_on_both_engines_io("print(\"hello\".slice(1, 3))");
+        let (_, out) = run_on_both_engines_io("print(\"hello\".slice(1, 3).to_string())");
+        assert_eq!(out, "ell\n");
+        let (_, out) =
+            run_on_both_engines_io("print(\"hello\".as_substring().slice(1, 3).to_string())");
         assert_eq!(out, "ell\n");
         let (value, _) = run_on_both_engines_io("\"hello world\".find(\"world\")");
         assert_eq!(value, Value::I64(6));
@@ -1064,9 +1096,9 @@ pub mod tests {
     }
 
     #[test]
-    fn vm_matches_evaluator_on_match_on_an_unannotated_next() {
+    fn vm_matches_evaluator_on_match_on_a_borrowed_next() {
         let (_, out) = run_on_both_engines_io(
-            "let a = [42]\nlet i = a.iter()\nlet opt = i.next()\nmatch opt {\n\t.some(x) -> print(x),\n\t.none -> print(0)\n}",
+            "func main() {\n\tlet a = [42]\n\tlet i = a.iter()\n\tlet opt: Optional<&Int> = i.next()\n\tmatch opt {\n\t\t.some(x) -> print(x),\n\t\t.none -> print(0)\n\t}\n}",
         );
         assert_eq!(out, "42\n");
     }
@@ -1096,7 +1128,7 @@ pub mod tests {
         // Two separate writes (prefix + buffer) read back through a loop
         // — the chat client's segment-splitting pattern.
         let (_, out) = run_on_both_engines_io(
-            "let fd = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet msg = \"hello\"\n_io_write(fd, msg.base, msg.length)\nlet buf = _alloc<Byte>(1024)\nlet n = _io_read(fd, buf, 1024)\nlet echo = \"echo: \"\n_io_write(fd, echo.base, echo.length)\n_io_write(fd, buf, n)\nlet rbuf = _alloc<Byte>(1024)\nloop {\n\tlet chunk = _io_read(fd, rbuf, 1024)\n\tif chunk <= 0 { break }\n\t_io_write(STDOUT_FD, rbuf, chunk)\n}",
+            "let fd = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet msg = \"hello\"\n_io_write(fd, msg.storage.base, msg.length)\nlet buf = _alloc<Byte>(1024)\nlet n = _io_read(fd, buf, 1024)\nlet echo = \"echo: \"\n_io_write(fd, echo.storage.base, echo.length)\n_io_write(fd, buf, n)\nlet rbuf = _alloc<Byte>(1024)\nloop {\n\tlet chunk = _io_read(fd, rbuf, 1024)\n\tif chunk <= 0 { break }\n\t_io_write(STDOUT_FD, rbuf, chunk)\n}",
         );
         assert_eq!(out, "echo: hello");
     }
@@ -1105,7 +1137,7 @@ pub mod tests {
     fn vm_matches_evaluator_on_echo_loop_over_two_connections() {
         // The ChatServer loop body twice over: greeting, read-back, echo.
         let (_, out) = run_on_both_engines_io(
-            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet i = 0\nloop {\n\tif i >= 2 { break }\n\tlet client = _io_accept(server)\n\tlet msg = \"hello\"\n\t_io_write(client, msg.base, msg.length)\n\tlet buf = _alloc<Byte>(1024)\n\tlet n = _io_read(client, buf, 1024)\n\t_io_write(STDOUT_FD, buf, n)\n\t_io_close(client)\n\ti = i + 1\n}",
+            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet i = 0\nloop {\n\tif i >= 2 { break }\n\tlet client = _io_accept(server)\n\tlet msg = \"hello\"\n\t_io_write(client, msg.storage.base, msg.length)\n\tlet buf = _alloc<Byte>(1024)\n\tlet n = _io_read(client, buf, 1024)\n\t_io_write(STDOUT_FD, buf, n)\n\t_io_close(client)\n\ti = i + 1\n}",
         );
         assert_eq!(out, "hellohello");
     }
@@ -1209,6 +1241,7 @@ pub mod tests {
         let code = format!(
             "let buf = _alloc<Byte>(1024)\nlet n = _io_read({read_fd}, buf, 1024)\n_io_write({write_fd}, buf, n)\nn"
         );
+        let code = unsafe_marked_if_raw(&code);
         let driver = Driver::new(
             vec![Source::from(code.as_str())],
             DriverConfig::new("SocketPairTest"),
@@ -1305,6 +1338,228 @@ pub mod tests {
             "protocol Aa {\n\tfunc m() -> Int\n}\nprotocol Bb {\n\tfunc m() -> Int\n}\nextend Int: Aa {\n\tfunc m() -> Int { 1 }\n}\nextend Int: Bb {\n\tfunc m() -> Int { 2 }\n}\nAa.m(5) + Bb.m(5)",
         );
         assert_eq!(value, Value::I64(3));
+    }
+
+    fn run_raw_module(code: Vec<Insn>, consts: Vec<Value>) -> Result<Value, String> {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code,
+                arity: 0,
+                n_regs: 6,
+            }],
+            consts,
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let mut io = CaptureIO::default();
+        run(&module, &mut io)
+    }
+
+    #[test]
+    fn vm_free_marks_allocation_dead() {
+        let value = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Free { dest: 2, ptr: 1 },
+                Insn::Ret { src: 2 },
+            ],
+            vec![Value::I64(8)],
+        )
+        .expect("valid free");
+        assert_eq!(value, Value::Void);
+    }
+
+    #[test]
+    fn vm_rejects_double_free() {
+        let error = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Free { dest: 2, ptr: 1 },
+                Insn::Free { dest: 3, ptr: 1 },
+                Insn::Ret { src: 3 },
+            ],
+            vec![Value::I64(8)],
+        )
+        .expect_err("double-free should fail");
+        assert!(error.contains("double free"), "{error}");
+    }
+
+    #[test]
+    fn vm_rejects_load_after_free() {
+        let error = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Free { dest: 2, ptr: 1 },
+                Insn::Load {
+                    dest: 3,
+                    ptr: 1,
+                    kind: MemKind::I64,
+                },
+                Insn::Ret { src: 3 },
+            ],
+            vec![Value::I64(8)],
+        )
+        .expect_err("use-after-free should fail");
+        assert!(error.contains("invalid pointer"), "{error}");
+    }
+
+    #[test]
+    fn vm_rejects_io_open_at_one_past_heap_allocation() {
+        let error = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Const { dest: 4, k: 1 },
+                Insn::Const { dest: 5, k: 1 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Add {
+                    dest: 2,
+                    a: 1,
+                    b: 0,
+                },
+                Insn::Io {
+                    dest: 3,
+                    op: crate::vm::IoOp::Open,
+                    a: 2,
+                    b: 4,
+                    c: 5,
+                },
+                Insn::Ret { src: 3 },
+            ],
+            vec![Value::I64(4), Value::I64(0)],
+        )
+        .expect_err("one-past heap pointer should fail");
+        assert!(
+            error.contains("out of bounds") || error.contains("invalid pointer"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn vm_rejects_io_open_at_zero_length_heap_allocation() {
+        let error = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Const { dest: 4, k: 0 },
+                Insn::Const { dest: 5, k: 0 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Io {
+                    dest: 2,
+                    op: crate::vm::IoOp::Open,
+                    a: 1,
+                    b: 4,
+                    c: 5,
+                },
+                Insn::Ret { src: 2 },
+            ],
+            vec![Value::I64(0)],
+        )
+        .expect_err("zero-length heap pointer should fail");
+        assert!(error.contains("invalid pointer"), "{error}");
+    }
+
+    #[test]
+    fn vm_display_rejects_freed_string_storage() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::Const { dest: 2, k: 0 },
+                    Insn::Alloc { dest: 1, count: 0 },
+                    Insn::RecordNew {
+                        dest: 3,
+                        symbol: crate::vm::runtime_symbol(Symbol::String),
+                        args_start: 0,
+                        args_len: 3,
+                    },
+                    Insn::Free { dest: 4, ptr: 1 },
+                    Insn::Ret { src: 3 },
+                ],
+                arity: 0,
+                n_regs: 6,
+            }],
+            consts: vec![Value::I64(4)],
+            arg_pool: vec![1, 2, 2],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let names = ValueNames {
+            string_struct: Some(crate::vm::runtime_symbol(Symbol::String)),
+            ..ValueNames::default()
+        };
+        let mut io = CaptureIO::default();
+        let error =
+            run_displayed(&module, &mut io, &names).expect_err("freed string should not display");
+        assert!(error.contains("invalid pointer"), "{error}");
+    }
+
+    #[test]
+    fn vm_display_rejects_negative_string_length() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::Const { dest: 2, k: 1 },
+                    Insn::Alloc { dest: 1, count: 0 },
+                    Insn::RecordNew {
+                        dest: 3,
+                        symbol: crate::vm::runtime_symbol(Symbol::String),
+                        args_start: 0,
+                        args_len: 3,
+                    },
+                    Insn::Ret { src: 3 },
+                ],
+                arity: 0,
+                n_regs: 4,
+            }],
+            consts: vec![Value::I64(1), Value::I64(-1)],
+            arg_pool: vec![1, 2, 2],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let names = ValueNames {
+            string_struct: Some(crate::vm::runtime_symbol(Symbol::String)),
+            ..ValueNames::default()
+        };
+        let mut io = CaptureIO::default();
+        let error = run_displayed(&module, &mut io, &names)
+            .expect_err("negative length should not display");
+        assert!(error.contains("invalid length"), "{error}");
+    }
+
+    #[test]
+    fn vm_rejects_negative_io_poll_count_before_scaling() {
+        let error = run_raw_module(
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Const { dest: 2, k: 1 },
+                Insn::Const { dest: 3, k: 2 },
+                Insn::Alloc { dest: 1, count: 0 },
+                Insn::Io {
+                    dest: 4,
+                    op: crate::vm::IoOp::Poll,
+                    a: 1,
+                    b: 2,
+                    c: 3,
+                },
+                Insn::Ret { src: 4 },
+            ],
+            vec![Value::I64(8), Value::I64(-1), Value::I64(0)],
+        )
+        .expect_err("negative poll count should fail before count * 8");
+        assert!(error.contains("negative count"), "{error}");
     }
 
     #[test]

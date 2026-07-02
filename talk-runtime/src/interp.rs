@@ -4,10 +4,11 @@
 //! conversion put them there — Kranz et al., ORBIT, 1986). Dispatch is a
 //! plain `match` over the decoded instruction (Ertl & Gregg, JILP 2003).
 
-use crate::lambda_g::expr::{CmpOp, Op};
-use crate::name_resolution::symbol::Symbol;
-use crate::vm::io::IO;
-use crate::vm::{Chunk, Insn, MemKind, Module};
+use crate::CmpOp;
+use crate::io::IO;
+use crate::memory::{Allocations, MemoryError};
+use crate::symbol::Symbol;
+use crate::{Chunk, Insn, MemKind, Module};
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,7 +65,7 @@ pub fn run_displayed(
     names: &ValueNames,
 ) -> Result<(Value, String), String> {
     let (value, machine) = run_machine(module, io)?;
-    let display = render_value(&machine, names, &value);
+    let display = render_value(&machine, names, &value)?;
     Ok((value, display))
 }
 
@@ -81,6 +82,8 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
     let mut machine = Machine {
         slots: vec![],
         mem: module.statics.clone(),
+        static_len: module.statics.len() as u32,
+        allocations: Allocations::default(),
         boxed: vec![],
         io,
     };
@@ -109,16 +112,14 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                     return Err("vm: call stack overflow".into());
                 }
                 let target = chunk(module, callee)?;
+                check_call_shape(target, args_len)?;
+                let args = arg_values(module, &frames[frame_index], args_start, args_len)?;
                 let mut regs = vec![Value::Void; target.n_regs as usize];
-                let start = args_start as usize;
-                let end = start + args_len as usize;
-                let arg_regs = module
-                    .arg_pool
-                    .get(start..end)
-                    .ok_or("vm: bad argument pool range")?;
-                let caller = &frames[frame_index];
-                for (i, &src) in arg_regs.iter().enumerate() {
-                    regs[i] = caller.regs[src as usize].clone();
+                for (i, value) in args.into_iter().enumerate() {
+                    let Some(slot) = regs.get_mut(i) else {
+                        return Err("vm: call argument count exceeds callee frame".into());
+                    };
+                    *slot = value;
                 }
                 frames.push(Frame {
                     chunk: callee,
@@ -137,21 +138,22 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                 if frames.len() >= MAX_FRAMES {
                     return Err("vm: call stack overflow".into());
                 }
-                let Value::Closure(target, env) = frames[frame_index].regs[callee as usize].clone()
+                let Some(callee_value) = frames[frame_index].regs.get(callee as usize).cloned()
                 else {
+                    return Err("vm: callee register out of range".into());
+                };
+                let Value::Closure(target, env) = callee_value else {
                     return Err("vm: indirect call of a non-closure".into());
                 };
                 let target_chunk = chunk(module, target)?;
+                check_call_shape(target_chunk, args_len)?;
+                let args = arg_values(module, &frames[frame_index], args_start, args_len)?;
                 let mut regs = vec![Value::Void; target_chunk.n_regs as usize];
-                let start = args_start as usize;
-                let end = start + args_len as usize;
-                let arg_regs = module
-                    .arg_pool
-                    .get(start..end)
-                    .ok_or("vm: bad argument pool range")?;
-                let caller = &frames[frame_index];
-                for (i, &src) in arg_regs.iter().enumerate() {
-                    regs[i] = caller.regs[src as usize].clone();
+                for (i, value) in args.into_iter().enumerate() {
+                    let Some(slot) = regs.get_mut(i) else {
+                        return Err("vm: call argument count exceeds callee frame".into());
+                    };
+                    *slot = value;
                 }
                 frames.push(Frame {
                     chunk: target,
@@ -200,37 +202,39 @@ pub struct ValueNames {
 /// Talk-style rendering, matching the derived-show formats:
 /// `2`, `1.5`, `true`, `"hi"`, `(1, true)`, `Name(field: v…)`,
 /// `Enum.case(payload…)`.
-fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> String {
+fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> Result<String, String> {
     match value {
-        Value::I64(v) => v.to_string(),
+        Value::I64(v) => Ok(v.to_string()),
         Value::F64(v) => {
             let rendered = v.to_string();
-            if rendered.contains('.') || rendered.contains('e') || !v.is_finite() {
-                rendered
-            } else {
-                format!("{rendered}.0")
-            }
+            Ok(
+                if rendered.contains('.') || rendered.contains('e') || !v.is_finite() {
+                    rendered
+                } else {
+                    format!("{rendered}.0")
+                },
+            )
         }
-        Value::Bool(v) => v.to_string(),
-        Value::Byte(v) => v.to_string(),
-        Value::Void => "()".to_string(),
-        Value::Ptr(addr) => format!("RawPtr({addr})"),
+        Value::Bool(v) => Ok(v.to_string()),
+        Value::Byte(v) => Ok(v.to_string()),
+        Value::Void => Ok("()".to_string()),
+        Value::Ptr(addr) => Ok(format!("RawPtr({addr})")),
         Value::Tuple(items) => {
             let items: Vec<String> = items
                 .iter()
                 .map(|item| render_value(machine, names, item))
-                .collect();
-            format!("({})", items.join(", "))
+                .collect::<Result<_, _>>()?;
+            Ok(format!("({})", items.join(", ")))
         }
         Value::Record(symbol, field_values) => {
             if names.string_struct == Some(*symbol)
-                && let [Value::Ptr(base), Value::I64(len), ..] = field_values.as_slice()
+                && let Some((base, len)) = string_bytes(field_values)
             {
-                let start = *base as usize;
-                let end = start + *len as usize;
-                if let Some(bytes) = machine.mem.get(start..end) {
-                    return format!("\"{}\"", escape_string(&String::from_utf8_lossy(bytes)));
-                }
+                let bytes = machine.string_display_bytes(base, len)?;
+                return Ok(format!(
+                    "\"{}\"",
+                    escape_string(&String::from_utf8_lossy(bytes))
+                ));
             }
             let name = names
                 .types
@@ -242,14 +246,14 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> String 
                 .iter()
                 .enumerate()
                 .map(|(index, field)| {
-                    let value = render_value(machine, names, field);
-                    match field_names.and_then(|fields| fields.get(index)) {
+                    let value = render_value(machine, names, field)?;
+                    Ok(match field_names.and_then(|fields| fields.get(index)) {
                         Some(field_name) => format!("{field_name}: {value}"),
                         None => value,
-                    }
+                    })
                 })
-                .collect();
-            format!("{name}({})", rendered.join(", "))
+                .collect::<Result<_, String>>()?;
+            Ok(format!("{name}({})", rendered.join(", ")))
         }
         Value::Variant(symbol, tag, payloads) => {
             let name = names
@@ -264,18 +268,37 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> String 
                 .cloned()
                 .unwrap_or_else(|| format!("case{tag}"));
             if payloads.is_empty() {
-                format!("{name}.{case}")
+                Ok(format!("{name}.{case}"))
             } else {
                 let payloads: Vec<String> = payloads
                     .iter()
                     .map(|payload| render_value(machine, names, payload))
-                    .collect();
-                format!("{name}.{case}({})", payloads.join(", "))
+                    .collect::<Result<_, _>>()?;
+                Ok(format!("{name}.{case}({})", payloads.join(", ")))
             }
         }
         Value::Existential(_, payload, _) => render_value(machine, names, payload),
-        Value::Closure(..) => "<func>".to_string(),
-        Value::Cell(_) => "<cell>".to_string(),
+        Value::Closure(..) => Ok("<func>".to_string()),
+        Value::Cell(_) => Ok("<cell>".to_string()),
+    }
+}
+
+fn string_bytes(field_values: &[Value]) -> Option<(u32, i64)> {
+    match field_values {
+        [Value::Ptr(base), Value::I64(len), ..] => Some((*base, *len)),
+        [storage, Value::I64(len), ..] => storage_base(storage).map(|base| (base, *len)),
+        _ => None,
+    }
+}
+
+fn storage_base(value: &Value) -> Option<u32> {
+    match value {
+        Value::Ptr(base) => Some(*base),
+        Value::Record(_, fields) => match fields.as_slice() {
+            [Value::Ptr(base), ..] => Some(*base),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -299,6 +322,8 @@ fn escape_string(text: &str) -> String {
 struct Machine<'io> {
     slots: Vec<Value>,
     mem: Vec<u8>,
+    static_len: u32,
+    allocations: Allocations,
     /// Aggregates stored in raw memory live here; the memory cell holds an
     /// 8-byte index into this arena (Leroy, POPL 1992's mixed
     /// representation — scalars unboxed, aggregates behind a handle).
@@ -308,6 +333,7 @@ struct Machine<'io> {
 
 impl Machine<'_> {
     fn read_word(&self, addr: u32) -> Result<u64, String> {
+        self.check_access(addr, 8, "load")?;
         let start = addr as usize;
         let bytes = self
             .mem
@@ -319,6 +345,7 @@ impl Machine<'_> {
     }
 
     fn write_word(&mut self, addr: u32, word: u64) -> Result<(), String> {
+        self.check_access(addr, 8, "store")?;
         let start = addr as usize;
         let slot = self
             .mem
@@ -326,6 +353,64 @@ impl Machine<'_> {
             .ok_or("vm: store out of bounds")?;
         slot.copy_from_slice(&word.to_le_bytes());
         Ok(())
+    }
+
+    fn free(&mut self, ptr: u32) -> Result<(), String> {
+        self.allocations
+            .free(self.static_len, ptr)
+            .map_err(vm_memory_error)
+    }
+
+    fn check_access(&self, addr: u32, len: usize, op: &str) -> Result<(), String> {
+        self.allocations
+            .check_access(self.mem.len(), self.static_len, addr, len, op)
+            .map_err(vm_memory_error)
+    }
+
+    fn c_string_tail(&self, addr: u32) -> Result<&[u8], String> {
+        let start = addr as usize;
+        let end = self
+            .allocations
+            .accessible_tail_end(self.mem.len(), self.static_len, addr, "io")
+            .map_err(vm_io_memory_error)?;
+        self.mem
+            .get(start..end)
+            .ok_or_else(|| "vm: io open out of bounds".to_string())
+    }
+
+    fn string_display_bytes(&self, addr: u32, len: i64) -> Result<&[u8], String> {
+        let len = usize::try_from(len)
+            .map_err(|_| "vm: display string has invalid length".to_string())?;
+        self.check_access(addr, len, "display")?;
+        let start = addr as usize;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| "vm: display out of bounds".to_string())?;
+        self.mem
+            .get(start..end)
+            .ok_or_else(|| "vm: display out of bounds".to_string())
+    }
+}
+
+fn vm_memory_error(error: MemoryError) -> String {
+    match error {
+        MemoryError::AddressOutOfRange => "vm: memory address out of range".to_string(),
+        MemoryError::AllocationTooLarge => "vm: alloc count out of range".to_string(),
+        MemoryError::InvalidFree => "vm: free of invalid pointer".to_string(),
+        MemoryError::DoubleFree => "vm: double free".to_string(),
+        MemoryError::OutOfBounds { op } => format!("vm: {op} out of bounds"),
+        MemoryError::InvalidPointer { op } => format!("vm: {op} through invalid pointer"),
+    }
+}
+
+fn vm_io_memory_error(error: MemoryError) -> String {
+    match error {
+        MemoryError::InvalidPointer { .. } | MemoryError::InvalidFree | MemoryError::DoubleFree => {
+            "vm: io through invalid pointer".to_string()
+        }
+        MemoryError::AddressOutOfRange
+        | MemoryError::AllocationTooLarge
+        | MemoryError::OutOfBounds { .. } => "vm: io open out of bounds".to_string(),
     }
 }
 
@@ -336,12 +421,12 @@ impl Machine<'_> {
 fn run_io(
     machine: &mut Machine,
     frame: &Frame,
-    op: crate::vm::IoOp,
+    op: crate::IoOp,
     a: u16,
     b: u16,
     c: u16,
 ) -> Result<i64, String> {
-    use crate::vm::IoOp;
+    use crate::IoOp;
     let int = |reg: u16| -> Result<i64, String> {
         match frame.regs[reg as usize] {
             Value::I64(v) => Ok(v),
@@ -364,6 +449,7 @@ fn run_io(
                 return Ok(count);
             }
             let (start, len) = (ptr(b)?, count as usize);
+            machine.check_access(start as u32, len, "io")?;
             let bytes = machine
                 .mem
                 .get(start..start + len)
@@ -376,6 +462,7 @@ fn run_io(
                 return Ok(count);
             }
             let (start, len) = (ptr(b)?, count as usize);
+            machine.check_access(start as u32, len, "io")?;
             let buf = machine
                 .mem
                 .get_mut(start..start + len)
@@ -384,10 +471,7 @@ fn run_io(
         }
         IoOp::Open => {
             let start = ptr(a)?;
-            let tail = machine
-                .mem
-                .get(start..)
-                .ok_or("vm: io open out of bounds")?;
+            let tail = machine.c_string_tail(start as u32)?;
             let len = tail
                 .iter()
                 .position(|&byte| byte == 0)
@@ -399,10 +483,18 @@ fn run_io(
         IoOp::Sleep => machine.io.sleep(int(a)?),
         IoOp::Ctl => machine.io.ctl(int(a)?, int(b)?, int(c)?),
         IoOp::Poll => {
-            let (start, count, timeout) = (ptr(a)?, int(b)? as usize, int(c)?);
+            let (start, count, timeout) = (ptr(a)?, int(b)?, int(c)?);
+            if count < 0 {
+                return Err("vm: io poll negative count".into());
+            }
+            let count = usize::try_from(count).map_err(|_| "vm: io poll count out of range")?;
+            let len = count
+                .checked_mul(8)
+                .ok_or("vm: io poll count out of range")?;
+            machine.check_access(start as u32, len, "io")?;
             let records = machine
                 .mem
-                .get(start..start + count * 8)
+                .get(start..start + len)
                 .ok_or("vm: io poll out of bounds")?;
             let mut fds: Vec<(i32, i16, i16)> = records
                 .chunks_exact(8)
@@ -417,6 +509,7 @@ fn run_io(
             let result = machine.io.poll(&mut fds, timeout);
             for (index, (_, _, revents)) in fds.iter().enumerate() {
                 let at = start + index * 8 + 6;
+                machine.check_access(at as u32, 2, "io")?;
                 let slot = machine
                     .mem
                     .get_mut(at..at + 2)
@@ -430,6 +523,121 @@ fn run_io(
         IoOp::Listen => machine.io.listen(int(a)?, int(b)?),
         IoOp::Connect => machine.io.connect(int(a)?, int(b)?, int(c)?),
         IoOp::Accept => machine.io.accept(int(a)?),
+        IoOp::CwdLen => machine.io.cwd_len(),
+        IoOp::CwdCopy => {
+            let len = machine.io.cwd_len();
+            if len < 0 {
+                return Ok(len);
+            }
+            let start = ptr(a)?;
+            machine.check_access(start as u32, len as usize, "io")?;
+            let buf = machine
+                .mem
+                .get_mut(start..start + len as usize)
+                .ok_or("vm: io cwd out of bounds")?;
+            machine.io.cwd_copy(buf)
+        }
+        IoOp::GetenvLen => {
+            let (start, len) = (ptr(a)?, int(b)?);
+            if len < 0 {
+                return Ok(len);
+            }
+            machine.check_access(start as u32, len as usize, "io")?;
+            let name = machine
+                .mem
+                .get(start..start + len as usize)
+                .ok_or("vm: io getenv name out of bounds")?;
+            machine.io.getenv_len(name)
+        }
+        IoOp::GetenvCopy => {
+            let (name_start, name_len, dest) = (ptr(a)?, int(b)?, ptr(c)?);
+            if name_len < 0 {
+                return Ok(name_len);
+            }
+            machine.check_access(name_start as u32, name_len as usize, "io")?;
+            let name = machine
+                .mem
+                .get(name_start..name_start + name_len as usize)
+                .ok_or("vm: io getenv name out of bounds")?
+                .to_vec();
+            let len = machine.io.getenv_len(&name);
+            if len < 0 {
+                return Ok(len);
+            }
+            machine.check_access(dest as u32, len as usize, "io")?;
+            let buf = machine
+                .mem
+                .get_mut(dest..dest + len as usize)
+                .ok_or("vm: io getenv out of bounds")?;
+            machine.io.getenv_copy(&name, buf)
+        }
+        IoOp::Argc => machine.io.argc(),
+        IoOp::ArgLen => machine.io.arg_len(int(a)?),
+        IoOp::ArgCopy => {
+            let (index, dest) = (int(a)?, ptr(b)?);
+            let len = machine.io.arg_len(index);
+            if len < 0 {
+                return Ok(len);
+            }
+            machine.check_access(dest as u32, len as usize, "io")?;
+            let buf = machine
+                .mem
+                .get_mut(dest..dest + len as usize)
+                .ok_or("vm: io arg out of bounds")?;
+            machine.io.arg_copy(index, buf)
+        }
+        IoOp::DirCount => {
+            let start = ptr(a)?;
+            let tail = machine.c_string_tail(start as u32)?;
+            let len = tail
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(tail.len());
+            let path = tail[..len].to_vec();
+            machine.io.dir_count(&path)
+        }
+        IoOp::DirEntryKind => {
+            let start = ptr(a)?;
+            let tail = machine.c_string_tail(start as u32)?;
+            let len = tail
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(tail.len());
+            let path = tail[..len].to_vec();
+            machine.io.dir_entry_kind(&path, int(b)?)
+        }
+        IoOp::DirEntryLen => {
+            let start = ptr(a)?;
+            let tail = machine.c_string_tail(start as u32)?;
+            let len = tail
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(tail.len());
+            let path = tail[..len].to_vec();
+            machine.io.dir_entry_len(&path, int(b)?)
+        }
+        IoOp::DirEntryCopy => {
+            let start = ptr(a)?;
+            let tail = machine.c_string_tail(start as u32)?;
+            let len = tail
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(tail.len());
+            let path = tail[..len].to_vec();
+            let index = int(b)?;
+            let entry_len = machine.io.dir_entry_len(&path, index);
+            if entry_len < 0 {
+                return Ok(entry_len);
+            }
+            let dest = ptr(c)?;
+            machine.check_access(dest as u32, entry_len as usize, "io")?;
+            let buf = machine
+                .mem
+                .get_mut(dest..dest + entry_len as usize)
+                .ok_or("vm: io dir entry out of bounds")?;
+            machine.io.dir_entry_copy(&path, index, buf)
+        }
+        IoOp::Exit => machine.io.exit(int(a)?),
     })
 }
 
@@ -452,7 +660,7 @@ fn exec_local(
         Insn::Move { dest, src } => frame.regs[dest as usize] = frame.regs[src as usize].clone(),
         Insn::Add { dest, a, b } => {
             frame.regs[dest as usize] = arith(
-                Op::Add,
+                ArithOp::Add,
                 &frame.regs[a as usize],
                 &frame.regs[b as usize],
                 i64::wrapping_add,
@@ -461,7 +669,7 @@ fn exec_local(
         }
         Insn::Sub { dest, a, b } => {
             frame.regs[dest as usize] = arith(
-                Op::Sub,
+                ArithOp::Sub,
                 &frame.regs[a as usize],
                 &frame.regs[b as usize],
                 i64::wrapping_sub,
@@ -470,7 +678,7 @@ fn exec_local(
         }
         Insn::Mul { dest, a, b } => {
             frame.regs[dest as usize] = arith(
-                Op::Mul,
+                ArithOp::Mul,
                 &frame.regs[a as usize],
                 &frame.regs[b as usize],
                 i64::wrapping_mul,
@@ -524,16 +732,7 @@ fn exec_local(
             args_start,
             args_len,
         } => {
-            let start = args_start as usize;
-            let end = start + args_len as usize;
-            let arg_regs = module
-                .arg_pool
-                .get(start..end)
-                .ok_or("vm: bad argument pool range")?;
-            let fields: Vec<Value> = arg_regs
-                .iter()
-                .map(|&src| frame.regs[src as usize].clone())
-                .collect();
+            let fields = arg_values(module, frame, args_start, args_len)?;
             frame.regs[dest as usize] = Value::Record(symbol, Rc::new(fields));
         }
         Insn::GetField { dest, rec, index } => {
@@ -553,16 +752,7 @@ fn exec_local(
             args_start,
             args_len,
         } => {
-            let start = args_start as usize;
-            let end = start + args_len as usize;
-            let arg_regs = module
-                .arg_pool
-                .get(start..end)
-                .ok_or("vm: bad argument pool range")?;
-            let payloads: Vec<Value> = arg_regs
-                .iter()
-                .map(|&src| frame.regs[src as usize].clone())
-                .collect();
+            let payloads = arg_values(module, frame, args_start, args_len)?;
             frame.regs[dest as usize] = Value::Variant(symbol, tag, Rc::new(payloads));
         }
         Insn::GetTag { dest, src } => {
@@ -587,22 +777,13 @@ fn exec_local(
             args_start,
             args_len,
         } => {
-            let start = args_start as usize;
-            let end = start + args_len as usize;
-            let arg_regs = module
-                .arg_pool
-                .get(start..end)
-                .ok_or("vm: bad argument pool range")?;
-            let Some((&payload_reg, witness_regs)) = arg_regs.split_first() else {
+            let mut values = arg_values(module, frame, args_start, args_len)?;
+            if values.is_empty() {
                 return Err("vm: existential_pack without a payload".into());
-            };
-            let payload = frame.regs[payload_reg as usize].clone();
-            let witnesses: Vec<Value> = witness_regs
-                .iter()
-                .map(|&src| frame.regs[src as usize].clone())
-                .collect();
+            }
+            let payload = values.remove(0);
             frame.regs[dest as usize] =
-                Value::Existential(protocol, Rc::new(payload), Rc::new(witnesses));
+                Value::Existential(protocol, Rc::new(payload), Rc::new(values));
         }
         Insn::ExistentialWitness { dest, src, index } => {
             let Value::Existential(_, _, witnesses) = &frame.regs[src as usize] else {
@@ -626,16 +807,7 @@ fn exec_local(
             args_start,
             args_len,
         } => {
-            let start = args_start as usize;
-            let end = start + args_len as usize;
-            let arg_regs = module
-                .arg_pool
-                .get(start..end)
-                .ok_or("vm: bad argument pool range")?;
-            let env: Vec<Value> = arg_regs
-                .iter()
-                .map(|&src| frame.regs[src as usize].clone())
-                .collect();
+            let env = arg_values(module, frame, args_start, args_len)?;
             frame.regs[dest as usize] = Value::Closure(chunk, Rc::new(env));
         }
         Insn::EnvGet { dest, index } => {
@@ -651,16 +823,7 @@ fn exec_local(
             args_start,
             args_len,
         } => {
-            let start = args_start as usize;
-            let end = start + args_len as usize;
-            let arg_regs = module
-                .arg_pool
-                .get(start..end)
-                .ok_or("vm: bad argument pool range")?;
-            let items: Vec<Value> = arg_regs
-                .iter()
-                .map(|&src| frame.regs[src as usize].clone())
-                .collect();
+            let items = arg_values(module, frame, args_start, args_len)?;
             frame.regs[dest as usize] = Value::Tuple(Rc::new(items));
         }
         Insn::Extract { dest, src, index } => {
@@ -701,22 +864,53 @@ fn exec_local(
             if count < 0 {
                 return Err("vm: alloc of a negative count".into());
             }
-            let addr = machine.mem.len() as u32;
-            machine.mem.resize(machine.mem.len() + count as usize, 0);
+            let count = usize::try_from(count).map_err(|_| "vm: alloc count out of range")?;
+            let addr = machine
+                .allocations
+                .allocate(&mut machine.mem, count)
+                .map_err(vm_memory_error)?;
             frame.regs[dest as usize] = Value::Ptr(addr);
+        }
+        Insn::Free { dest, ptr } => {
+            let Value::Ptr(ptr) = frame.regs[ptr as usize] else {
+                return Err("vm: free of a non-pointer".into());
+            };
+            machine.free(ptr)?;
+            frame.regs[dest as usize] = Value::Void;
+        }
+        Insn::Retain { dest, ptr } => {
+            let Value::Ptr(ptr) = frame.regs[ptr as usize] else {
+                return Err("vm: retain of a non-pointer".into());
+            };
+            machine
+                .allocations
+                .retain(machine.static_len, ptr)
+                .map_err(vm_memory_error)?;
+            frame.regs[dest as usize] = Value::Void;
+        }
+        Insn::IsUnique { dest, ptr } => {
+            let Value::Ptr(ptr) = frame.regs[ptr as usize] else {
+                return Err("vm: is_unique of a non-pointer".into());
+            };
+            let unique = machine
+                .allocations
+                .is_unique(machine.static_len, ptr)
+                .map_err(vm_memory_error)?;
+            frame.regs[dest as usize] = Value::Bool(unique);
         }
         Insn::Load { dest, ptr, kind } => {
             let Value::Ptr(addr) = frame.regs[ptr as usize] else {
                 return Err("vm: load of a non-pointer".into());
             };
             frame.regs[dest as usize] = match kind {
-                MemKind::Byte => Value::Byte(
+                MemKind::Byte => Value::Byte({
+                    machine.check_access(addr, 1, "load")?;
                     machine
                         .mem
                         .get(addr as usize)
                         .copied()
-                        .ok_or("vm: load out of bounds")?,
-                ),
+                        .ok_or("vm: load out of bounds")?
+                }),
                 MemKind::I64 => Value::I64(machine.read_word(addr)? as i64),
                 MemKind::F64 => Value::F64(f64::from_bits(machine.read_word(addr)?)),
                 MemKind::Bool => Value::Bool(machine.read_word(addr)? != 0),
@@ -738,6 +932,7 @@ fn exec_local(
             let value = frame.regs[src as usize].clone();
             match (kind, value) {
                 (MemKind::Byte, Value::Byte(byte)) => {
+                    machine.check_access(addr, 1, "store")?;
                     let slot = machine
                         .mem
                         .get_mut(addr as usize)
@@ -765,10 +960,12 @@ fn exec_local(
             ) else {
                 return Err("vm: copy operands".into());
             };
-            let (from, to, len) = (*from as usize, *to as usize, *len as usize);
-            if from + len > machine.mem.len() || to + len > machine.mem.len() {
-                return Err("vm: copy out of bounds".into());
+            if *len < 0 {
+                return Err("vm: copy negative length".into());
             }
+            machine.check_access(*from, *len as usize, "copy")?;
+            machine.check_access(*to, *len as usize, "copy")?;
+            let (from, to, len) = (*from as usize, *to as usize, *len as usize);
             machine.mem.copy_within(from..from + len, to);
         }
         Insn::Io { dest, op, a, b, c } => {
@@ -823,8 +1020,54 @@ fn chunk(module: &Module, index: u32) -> Result<&Chunk, String> {
         .ok_or_else(|| format!("vm: bad chunk index {index}"))
 }
 
+fn check_call_shape(target: &Chunk, args_len: u16) -> Result<(), String> {
+    if args_len != target.arity {
+        return Err(format!(
+            "vm: call to {} expected {} arguments, got {}",
+            target.name, target.arity, args_len
+        ));
+    }
+    if args_len > target.n_regs {
+        return Err("vm: call argument count exceeds callee frame".into());
+    }
+    Ok(())
+}
+
+fn arg_values(
+    module: &Module,
+    frame: &Frame,
+    args_start: u32,
+    args_len: u16,
+) -> Result<Vec<Value>, String> {
+    let start = usize::try_from(args_start).map_err(|_| "vm: bad argument pool range")?;
+    let end = start
+        .checked_add(usize::from(args_len))
+        .ok_or("vm: bad argument pool range")?;
+    let arg_regs = module
+        .arg_pool
+        .get(start..end)
+        .ok_or("vm: bad argument pool range")?;
+    arg_regs
+        .iter()
+        .map(|&src| {
+            frame
+                .regs
+                .get(src as usize)
+                .cloned()
+                .ok_or_else(|| format!("vm: argument register r{src} out of range"))
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+}
+
 fn arith(
-    op: Op,
+    op: ArithOp,
     a: &Value,
     b: &Value,
     ints: fn(i64, i64) -> i64,
@@ -834,10 +1077,10 @@ fn arith(
         (Value::I64(x), Value::I64(y)) => Ok(Value::I64(ints(*x, *y))),
         (Value::F64(x), Value::F64(y)) => Ok(Value::F64(floats(*x, *y))),
         // Pointer arithmetic (`add RawPtr p offset`).
-        (Value::Ptr(p), Value::I64(off)) if op == Op::Add => {
+        (Value::Ptr(p), Value::I64(off)) if op == ArithOp::Add => {
             Ok(Value::Ptr((*p as i64 + off) as u32))
         }
-        (Value::Ptr(p), Value::I64(off)) if op == Op::Sub => {
+        (Value::Ptr(p), Value::I64(off)) if op == ArithOp::Sub => {
             Ok(Value::Ptr((*p as i64 - off) as u32))
         }
         _ => Err(format!("vm: arithmetic on {a:?} and {b:?}")),

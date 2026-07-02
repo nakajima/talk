@@ -55,6 +55,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             mono: &*self.mono,
             instantiations: &mut self.artifacts.instantiations,
             member_resolutions: &mut self.artifacts.member_resolutions,
+            coerce_clones: &mut self.artifacts.coerce_clones,
             level: self.level,
             defaulting,
             givens: vec![],
@@ -234,7 +235,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         }
 
         for (self_ty, members) in member_queue {
-            let nominal_givens = nominal_predicates_for(&self.catalog, &self_ty);
+            let nominal_givens = nominal_predicates_for(self.catalog, &self_ty);
             let nominal_wanted_start = self.wanteds.len();
             self.self_types.push(self_ty);
             for (symbol, work) in members {
@@ -393,7 +394,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
 
         if generalizable {
             let mut generalizer = Generalizer::new(
-                &mut self.store,
+                self.store,
                 self.symbols,
                 self.module_id,
                 OUTER_LEVEL,

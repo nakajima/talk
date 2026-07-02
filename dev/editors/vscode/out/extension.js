@@ -10,6 +10,7 @@ const os_1 = require("os");
 const vscode_1 = require("vscode");
 const node_1 = require("vscode-languageclient/node");
 let client;
+let restartPromise;
 function activate(context) {
     // If the extension is launched in debug mode then the debug server options are used
     // Otherwise the run options are used
@@ -33,8 +34,22 @@ function activate(context) {
             fileEvents: vscode_1.workspace.createFileSystemWatcher("**/*.tlk"),
         },
     };
+    const createClient = () => new node_1.LanguageClient("TalkTalk", "TalkTalk Language Server", serverOptions, clientOptions);
+    context.subscriptions.push(vscode_1.commands.registerCommand("talktalk.restartLsp", async () => {
+        restartPromise ??= (async () => {
+            if (client) {
+                await client.stop();
+            }
+            client = createClient();
+            await client.start();
+            vscode_1.window.showInformationMessage("TalkTalk language server restarted.");
+        })().finally(() => {
+            restartPromise = undefined;
+        });
+        return restartPromise;
+    }));
     // Create the language client and start the client.
-    client = new node_1.LanguageClient("TalkTalk", "TalkTalk Language Server", serverOptions, clientOptions);
+    client = createClient();
     // Start the client. This will also launch the server
     client.start();
 }

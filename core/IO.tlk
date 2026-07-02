@@ -1,8 +1,8 @@
 // no-core
-import { _alloc, _copy } from ./Memory.tlk
-import { Add, Comparable, Equatable } from ./Operators.tlk
-import { String } from ./String.tlk
-import { Showable } from ./Showable.tlk
+use { _alloc, _copy } from ./Memory.tlk
+use { Add, Comparable, Equatable } from ./Operators.tlk
+use { String } from ./String.tlk
+use { Showable } from ./Showable.tlk
 
 public enum IORequest {
 	case read(Int, RawPtr, Int)
@@ -17,6 +17,18 @@ public enum IORequest {
 	case listen(Int, Int)
 	case connect(Int, Int, Int)
 	case accept(Int)
+	case cwd_len
+	case cwd_copy(RawPtr)
+	case getenv_len(RawPtr, Int)
+	case getenv_copy(RawPtr, Int, RawPtr)
+	case argc
+	case arg_len(Int)
+	case arg_copy(Int, RawPtr)
+	case dir_count(RawPtr)
+	case dir_entry_kind(RawPtr, Int)
+	case dir_entry_len(RawPtr, Int)
+	case dir_entry_copy(RawPtr, Int, RawPtr)
+	case exit(Int)
 }
 
 public effect 'io(request: IORequest) -> Int
@@ -79,7 +91,7 @@ public func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {
 // free) and open through the C-string path.
 public func open_path(path: String, flags: Int, mode: Int) 'io -> Int {
 	let buf = _alloc<Byte>(path.length + 1)
-	_copy(path.base, buf, path.length)
+	_copy(path.storage.base, buf, path.length)
 	_io_open(buf, flags, mode)
 }
 
@@ -95,6 +107,55 @@ public func _io_close(fd: Int) 'io -> Int {
 	'io(.close(fd))
 }
 
+public func _io_cwd_len() 'io -> Int {
+	'io(.cwd_len)
+}
+
+public func _io_cwd_copy(buf: RawPtr) 'io -> Int {
+	'io(.cwd_copy(buf))
+}
+
+public func _io_getenv_len(name: RawPtr, name_len: Int) 'io -> Int {
+	'io(.getenv_len(name, name_len))
+}
+
+public func _io_getenv_copy(name: RawPtr, name_len: Int, buf: RawPtr) 'io -> Int {
+	'io(.getenv_copy(name, name_len, buf))
+}
+
+public func _io_argc() 'io -> Int {
+	'io(.argc)
+}
+
+public func _io_arg_len(index: Int) 'io -> Int {
+	'io(.arg_len(index))
+}
+
+public func _io_arg_copy(index: Int, buf: RawPtr) 'io -> Int {
+	'io(.arg_copy(index, buf))
+}
+
+public func _io_dir_count(path: RawPtr) 'io -> Int {
+	'io(.dir_count(path))
+}
+
+public func _io_dir_entry_kind(path: RawPtr, index: Int) 'io -> Int {
+	'io(.dir_entry_kind(path, index))
+}
+
+public func _io_dir_entry_len(path: RawPtr, index: Int) 'io -> Int {
+	'io(.dir_entry_len(path, index))
+}
+
+public func _io_dir_entry_copy(path: RawPtr, index: Int, buf: RawPtr) 'io -> Int {
+	'io(.dir_entry_copy(path, index, buf))
+}
+
+public func _io_exit(code: Int) 'io -> Never {
+	'io(.exit(code))
+	loop {}
+}
+
 public func _io_ctl(fd: Int, op: Int, arg: Int) 'io -> Int {
 	'io(.ctl(fd, op, arg))
 }
@@ -108,7 +169,7 @@ public func is_error(result: Int) -> Bool {
 }
 
 public func write_string(fd: Int, s: String) -> Int {
-	@_ir(fd, s.base, s.length) { %? = io_write $0 $1 $2 }
+	@_ir(fd, s.storage.base, s.length) { %? = io_write $0 $1 $2 }
 }
 
 public func print_raw(s: String) -> Int {
@@ -116,12 +177,12 @@ public func print_raw(s: String) -> Int {
 }
 
 func _print_line(s: String) -> () {
-	@_ir(STDOUT_FD, s.base, s.length) { %? = io_write $0 $1 $2 }
+	@_ir(STDOUT_FD, s.storage.base, s.length) { %? = io_write $0 $1 $2 }
 	let nl = "\n"
-	@_ir(STDOUT_FD, nl.base, nl.length) { %? = io_write $0 $1 $2 }
+	@_ir(STDOUT_FD, nl.storage.base, nl.length) { %? = io_write $0 $1 $2 }
 	()
 }
 
-public func print<T: Showable>(value: T) -> () {
+public func print<T: Showable>(value: &T) -> () {
 	_print_line(value.show())
 }

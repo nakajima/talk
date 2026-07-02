@@ -21,36 +21,36 @@
 
 mod derive;
 pub mod lower_tests;
+pub(crate) mod mir;
+mod mir_lowering;
 mod patterns;
+mod statements;
 
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ast::{AST, NameResolved};
 use crate::compiling::driver::Source;
+use crate::hir::{
+    self, Block, Decl, DeclKind, Expr, ExprKind, HirFile, InlineIRInstruction, MatchArm, Node,
+    PatternKind, Stmt, StmtKind,
+};
 use crate::lambda_g::expr::Const;
 use crate::lambda_g::expr::{CmpOp, ExprId, Op, TyId, TyKind};
 use crate::lambda_g::program::{Label, Program};
 use crate::name_resolution::name_resolver::ResolvedNames;
 use crate::name_resolution::symbol::Symbol;
-use crate::node::Node;
 use crate::node_kinds::{
-    block::Block,
-    decl::{Decl, DeclKind},
-    expr::{Expr, ExprKind},
-    inline_ir_instruction::{InlineIRInstruction, InlineIRInstructionKind, Value as IrValue},
-    match_arm::MatchArm,
-    pattern::PatternKind,
-    stmt::{Stmt, StmtKind},
+    inline_ir_instruction::{InlineIRInstructionKind, Value as IrValue},
     type_annotation::{TypeAnnotation, TypeAnnotationKind},
 };
+use crate::flow::Place as OwnershipKeyPath;
 use crate::token_kind::TokenKind;
 use crate::types::TypeOutput;
 use crate::types::ty::Ty as CheckTy;
 use crate::types::ty::TyFold;
 
 pub struct LowerUnit<'a> {
-    pub asts: &'a IndexMap<Source, AST<NameResolved>>,
+    pub asts: &'a IndexMap<Source, HirFile>,
     pub types: &'a TypeOutput,
     pub resolved: &'a ResolvedNames,
 }
@@ -70,7 +70,7 @@ fn theta_key(theta: &Theta) -> ThetaKey {
 
 struct FuncSource<'a> {
     unit: usize,
-    params: &'a [crate::node_kinds::parameter::Parameter],
+    params: &'a [crate::hir::Parameter],
     body: &'a Block,
 }
 
@@ -130,7 +130,7 @@ struct HandlerCap {
     resume_pair_ty: Option<TyId>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct EvidenceBinding {
     protocol: Symbol,
     table: ExprId,
@@ -140,10 +140,34 @@ pub(super) struct EvidenceBinding {
 /// (assignment conversion — Kranz et al., ORBIT, 1986; the alternative,
 /// rebuilding SSA form for mutables via Braun et al. CC 2013, is the
 /// documented upgrade path once an optimizing schedule wants it).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Binding {
     Value(ExprId),
     Cell(ExprId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct DropBinding {
+    symbol: Symbol,
+    key_path: OwnershipKeyPath,
+    ty: CheckTy,
+    dynamic_flags: Vec<OwnershipKeyPath>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct LoopBinding {
+    header: ExprId,
+    exit: ExprId,
+    drop_depth: usize,
+}
+
+/// A variant constructor's call site, carried from `variant_target` into
+/// evidence-table generation: the node (for diagnostics) and its per-call-site
+/// instantiation (the θ source, baked on the HIR node by the lowerer).
+#[derive(Clone)]
+struct VariantSite {
+    node: crate::node_id::NodeID,
+    instantiation: Option<Vec<(Symbol, CheckTy)>>,
 }
 
 /// What a resolved call prepends before its source arguments: nothing, a
@@ -158,6 +182,7 @@ enum Prefix<'e> {
 #[derive(Clone)]
 struct Ctx {
     unit: usize,
+    owner: Option<Symbol>,
     theta: Theta,
     /// Talk symbol → λ_G binding (params, locals).
     env: FxHashMap<Symbol, Binding>,
@@ -166,6 +191,9 @@ struct Ctx {
     local_evidence: FxHashMap<(Symbol, Symbol), EvidenceBinding>,
     /// The current function's return continuation (a Fn(R, ⊥) value).
     ret_k: ExprId,
+    /// The continuation currently representing normal fallthrough to the
+    /// function tail. This may be a drop wrapper around `ret_k`.
+    tail_k: ExprId,
     /// The current λ_G function's own machine-return slot, untouched by
     /// the init/inout/normal-return wrappers layered onto `ret_k`. Routed
     /// performs and calls that can abort pass it as the callee's return
@@ -195,11 +223,116 @@ struct Ctx {
     local_handlers: FxHashSet<Symbol>,
     /// The current λ_G function's parameter extracts (for %n in @_ir).
     params: Vec<ExprId>,
-    /// Enclosing loops: (header continuation, exit continuation).
-    loops: Vec<(ExprId, ExprId)>,
+    /// Enclosing loops with the drop-stack depth active at loop entry.
+    loops: Vec<LoopBinding>,
+    /// Owned locals currently in scope. Normal scope exits drop only the
+    /// locals introduced by that scope; early exits wrap their continuation
+    /// with the active suffix recorded here.
+    drop_stack: Vec<DropBinding>,
+    /// Runtime initializedness flags for owned locals whose drop obligation
+    /// is path-sensitive (`Conditional`/`Open` in the MIR drop plan).
+    drop_flags: FxHashMap<OwnershipKeyPath, ExprId>,
+    /// During an initializer, assignments through this self root fill
+    /// uninitialized storage rather than replacing a live value.
+    initializing_self: Option<Symbol>,
     /// Symbols that must live in cells in this body (assigned-to, or
     /// receivers of mutating-method calls).
     cellable: FxHashSet<Symbol>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct MirCtxKey {
+    unit: usize,
+    owner: Option<Symbol>,
+    theta: ThetaKey,
+    env: Vec<(Symbol, Binding)>,
+    local_evidence: Vec<((Symbol, Symbol), EvidenceBinding)>,
+    ret_k: ExprId,
+    tail_k: ExprId,
+    raw_ret_k: ExprId,
+    normal_k: Option<ExprId>,
+    abort_ok: bool,
+    resume_k: Option<ExprId>,
+    top_level: bool,
+    local_handlers: Vec<Symbol>,
+    params: Vec<ExprId>,
+    loops: Vec<LoopBinding>,
+    drop_stack: Vec<DropBinding>,
+    drop_flags: Vec<(OwnershipKeyPath, ExprId)>,
+    initializing_self: Option<Symbol>,
+    cellable: Vec<Symbol>,
+}
+
+/// An active loop in the MIR→λ_G lowering: the header/exit MIR blocks paired
+/// with the λ_G continuations a back-edge or break jumps to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct MirLoop {
+    header_block: mir::BlockId,
+    header: ExprId,
+    exit_block: mir::BlockId,
+    exit: ExprId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct MirBlockKey {
+    block: mir::BlockId,
+    k: ExprId,
+    ctx: MirCtxKey,
+    loops: Vec<MirLoop>,
+}
+
+#[derive(Default)]
+struct MirBlockCache {
+    blocks: FxHashMap<MirBlockKey, ExprId>,
+}
+
+impl Ctx {
+    fn mir_key(&self) -> MirCtxKey {
+        let mut env: Vec<_> = self
+            .env
+            .iter()
+            .map(|(symbol, binding)| (*symbol, *binding))
+            .collect();
+        env.sort_by_key(|(symbol, _)| *symbol);
+        let mut local_evidence: Vec<_> = self
+            .local_evidence
+            .iter()
+            .map(|(key, evidence)| (*key, *evidence))
+            .collect();
+        local_evidence.sort_by_key(|((ty, protocol), _)| (*ty, *protocol));
+        let mut local_handlers: Vec<_> = self.local_handlers.iter().copied().collect();
+        local_handlers.sort();
+        let mut drop_flags: Vec<_> = self
+            .drop_flags
+            .iter()
+            .map(|(key_path, flag)| (key_path.clone(), *flag))
+            .collect();
+        drop_flags.sort_by_key(|(key_path, _)| format!("{key_path:?}"));
+        let mut cellable: Vec<_> = self.cellable.iter().copied().collect();
+        cellable.sort();
+
+        MirCtxKey {
+            unit: self.unit,
+            owner: self.owner,
+            theta: theta_key(&self.theta),
+            env,
+            local_evidence,
+            ret_k: self.ret_k,
+            tail_k: self.tail_k,
+            raw_ret_k: self.raw_ret_k,
+            normal_k: self.normal_k,
+            abort_ok: self.abort_ok,
+            resume_k: self.resume_k,
+            top_level: self.top_level,
+            local_handlers,
+            params: self.params.clone(),
+            loops: self.loops.clone(),
+            drop_stack: self.drop_stack.clone(),
+            drop_flags,
+            initializing_self: self.initializing_self,
+            cellable,
+        }
+    }
 }
 
 pub struct LoweredProgram {
@@ -243,6 +376,7 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
     }
     lowering.index_sources();
     lowering.collect_abortable();
+    lowering.diagnose_unsupported_handlers();
     let (main, result_ty) = lowering.lower_main();
     lowering.drain_queue();
     let mut entry_funcs: FxHashSet<Label> = lowering.done.values().copied().collect();
@@ -332,26 +466,30 @@ impl<'a> Lowering<'a> {
         &mut self,
         unit: usize,
         symbol: Symbol,
-        params: &'a [crate::node_kinds::parameter::Parameter],
+        params: &'a [crate::hir::Parameter],
         body: &'a Block,
         is_init: bool,
     ) {
-        // A method whose `self` is assigned through is inout: ret carries
-        // [result, Self]. Initializers are excluded — their self starts
-        // blank and is returned as the result instead.
-        if !is_init
-            && let Some(first) = params.first()
-            && first.name.name_str() == "self"
-            && let Ok(self_symbol) = first.name.symbol()
-            && self.units[unit]
-                .resolved
-                .mutated_symbols
-                .contains(&self_symbol)
-        {
+        // A `mut func` is internally `self: &mut Self`, which uses the
+        // inout calling convention: ret carries [result, Self] and the
+        // caller writes Self back. Initializers are excluded because their
+        // self starts blank and is returned as the result instead.
+        if !is_init && params.first().is_some_and(Self::is_mutable_self_param) {
             self.mutating.insert(symbol);
         }
         self.sources
             .insert(symbol, FuncSource { unit, params, body });
+    }
+
+    fn is_mutable_self_param(param: &crate::hir::Parameter) -> bool {
+        param.name.name_str() == "self"
+            && matches!(
+                param
+                    .type_annotation
+                    .as_ref()
+                    .map(|annotation| &annotation.kind),
+                Some(TypeAnnotationKind::Borrow { mutable: true, .. })
+            )
     }
 
     // ----- Abort-capable functions (lexical effect handlers) --------------
@@ -419,6 +557,150 @@ impl<'a> Lowering<'a> {
             handlers.sort();
         }
         self.abortable = reached;
+    }
+
+    fn diagnose_unsupported_handlers(&mut self) {
+        for unit_index in 0..self.units.len() {
+            let asts = self.units[unit_index].asts;
+            for ast in asts.values() {
+                for root in &ast.roots {
+                    self.diagnose_unsupported_handlers_in_node(unit_index, root);
+                }
+            }
+        }
+    }
+
+    fn diagnose_unsupported_handlers_in_node(&mut self, unit: usize, node: &Node) {
+        match node {
+            Node::Stmt(stmt) => self.diagnose_unsupported_handlers_in_stmt(unit, stmt),
+            Node::Decl(decl) => match &decl.kind {
+                DeclKind::Let { rhs: Some(rhs), .. } => {
+                    self.diagnose_unsupported_handlers_in_expr(unit, rhs);
+                }
+                DeclKind::Struct { body, .. }
+                | DeclKind::Enum { body, .. }
+                | DeclKind::Protocol { body, .. }
+                | DeclKind::Extend { body, .. } => {
+                    for decl in &body.decls {
+                        self.diagnose_unsupported_handlers_in_node(unit, &Node::Decl(decl.clone()));
+                    }
+                }
+                DeclKind::Method { func, .. } => {
+                    self.diagnose_unsupported_handlers_in_block(unit, &func.body);
+                }
+                DeclKind::Init { body, .. } => {
+                    self.diagnose_unsupported_handlers_in_block(unit, body);
+                }
+                _ => {}
+            },
+            Node::Expr(expr) => self.diagnose_unsupported_handlers_in_expr(unit, expr),
+        }
+    }
+
+    fn diagnose_unsupported_handlers_in_block(&mut self, unit: usize, block: &Block) {
+        for node in &block.body {
+            self.diagnose_unsupported_handlers_in_node(unit, node);
+        }
+    }
+
+    fn diagnose_unsupported_handlers_in_stmt(&mut self, unit: usize, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::Handling {
+                effect_name, body, ..
+            } => {
+                if let Some(symbol) = effect_name.symbol().ok()
+                    && self.units[unit]
+                        .types
+                        .catalog
+                        .effects
+                        .get(&symbol)
+                        .is_some_and(|sig| !sig.generics.is_empty())
+                {
+                    self.diagnostics
+                        .push("lowering: handlers for generic effects (not yet supported)".into());
+                }
+                self.diagnose_unsupported_handlers_in_block(unit, body);
+            }
+            StmtKind::Expr(expr)
+            | StmtKind::Return(Some(expr))
+            | StmtKind::Continue(Some(expr)) => {
+                self.diagnose_unsupported_handlers_in_expr(unit, expr);
+            }
+            StmtKind::If(_, then_block, else_block) => {
+                self.diagnose_unsupported_handlers_in_block(unit, then_block);
+                if let Some(else_block) = else_block {
+                    self.diagnose_unsupported_handlers_in_block(unit, else_block);
+                }
+            }
+            StmtKind::Assignment(lhs, rhs) => {
+                self.diagnose_unsupported_handlers_in_expr(unit, lhs);
+                self.diagnose_unsupported_handlers_in_expr(unit, rhs);
+            }
+            StmtKind::Loop(condition, body) => {
+                if let Some(condition) = condition {
+                    self.diagnose_unsupported_handlers_in_expr(unit, condition);
+                }
+                self.diagnose_unsupported_handlers_in_block(unit, body);
+            }
+            StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue(None) => {}
+        }
+    }
+
+    fn diagnose_unsupported_handlers_in_expr(&mut self, unit: usize, expr: &Expr) {
+        match &expr.kind {
+            ExprKind::Block(block) => self.diagnose_unsupported_handlers_in_block(unit, block),
+            ExprKind::If(condition, then_block, else_block) => {
+                self.diagnose_unsupported_handlers_in_expr(unit, condition);
+                self.diagnose_unsupported_handlers_in_block(unit, then_block);
+                self.diagnose_unsupported_handlers_in_block(unit, else_block);
+            }
+            ExprKind::Match(scrutinee, arms) => {
+                self.diagnose_unsupported_handlers_in_expr(unit, scrutinee);
+                for arm in arms {
+                    self.diagnose_unsupported_handlers_in_block(unit, &arm.body);
+                }
+            }
+            ExprKind::Tuple(items) | ExprKind::LiteralArray(items) => {
+                for item in items {
+                    self.diagnose_unsupported_handlers_in_expr(unit, item);
+                }
+            }
+            ExprKind::As(inner, _) => {
+                self.diagnose_unsupported_handlers_in_expr(unit, inner);
+            }
+            ExprKind::Call {
+                callee,
+                args,
+                trailing_block,
+                ..
+            } => {
+                self.diagnose_unsupported_handlers_in_expr(unit, callee);
+                for arg in args {
+                    self.diagnose_unsupported_handlers_in_expr(unit, &arg.value);
+                }
+                if let Some(block) = trailing_block {
+                    self.diagnose_unsupported_handlers_in_block(unit, block);
+                }
+            }
+            ExprKind::CallEffect { args, .. } => {
+                for arg in args {
+                    self.diagnose_unsupported_handlers_in_expr(unit, &arg.value);
+                }
+            }
+            ExprKind::Member(Some(receiver), ..) => {
+                self.diagnose_unsupported_handlers_in_expr(unit, receiver);
+            }
+            ExprKind::Func(func) => self.diagnose_unsupported_handlers_in_block(unit, &func.body),
+            ExprKind::RecordLiteral { fields, spread } => {
+                if let Some(spread) = spread {
+                    self.diagnose_unsupported_handlers_in_expr(unit, spread);
+                }
+                for field in fields {
+                    self.diagnose_unsupported_handlers_in_expr(unit, &field.value);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Does this symbol's specialization take the abort-capable shape
@@ -602,10 +884,12 @@ impl<'a> Lowering<'a> {
 
         let mut ctx = Ctx {
             unit,
+            owner: Some(symbol),
             theta,
             env,
             local_evidence: FxHashMap::default(),
             ret_k,
+            tail_k: ret_k,
             raw_ret_k: ret_k,
             normal_k: None,
             abort_ok: false,
@@ -614,6 +898,9 @@ impl<'a> Lowering<'a> {
             local_handlers: FxHashSet::default(),
             params,
             loops: vec![],
+            drop_stack: vec![],
+            drop_flags: FxHashMap::default(),
+            initializing_self: None,
             cellable,
         };
         // Abort-capable shape: results pair with our own return slot and
@@ -630,6 +917,7 @@ impl<'a> Lowering<'a> {
             let wrap_body = self.p.app(normal_k, pair);
             self.p.set_body(wrap, wrap_body);
             ctx.ret_k = self.p.func_ref(wrap);
+            ctx.tail_k = ctx.ret_k;
             ctx.raw_ret_k = slot;
             ctx.normal_k = Some(normal_k);
             ctx.abort_ok = true;
@@ -645,6 +933,9 @@ impl<'a> Lowering<'a> {
         let self_symbol = source_params
             .first()
             .and_then(|param| param.name.symbol().ok());
+        if is_init {
+            ctx.initializing_self = self_symbol;
+        }
         let body = self.with_cells(&prologue, &mut ctx, |this, ctx| {
             // Construction semantics: an init's caller receives self, not
             // the body's final value — wrap the ret continuation to drop
@@ -673,6 +964,7 @@ impl<'a> Lowering<'a> {
                 let wrap_body = this.p.app(orig_ret, self_now);
                 this.p.set_body(wrap, wrap_body);
                 ctx.ret_k = this.p.func_ref(wrap);
+                ctx.tail_k = ctx.ret_k;
             }
             // Inout self: wrap the ret continuation so every return
             // delivers [result, current Self] (read from self's cell).
@@ -700,6 +992,7 @@ impl<'a> Lowering<'a> {
                 let wrap_body = this.p.app(orig_ret, pair);
                 this.p.set_body(wrap, wrap_body);
                 ctx.ret_k = this.p.func_ref(wrap);
+                ctx.tail_k = ctx.ret_k;
             }
             let ret_k = ctx.ret_k;
             this.lower_block(source_body, ctx, ret_k)
@@ -708,8 +1001,9 @@ impl<'a> Lowering<'a> {
     }
 
     /// Symbols in this body that must be assignment-converted: those the
-    /// resolver saw assigned, plus receivers of mutating-method calls
-    /// (`c.bump()` writes back into `c`).
+    /// resolver saw assigned, plus roots of mutating-method receivers
+    /// (`c.bump()` and `person.name.bump()` both write back through `c` /
+    /// `person`).
     fn cellable_symbols<D: derive_visitor::Drive>(
         &self,
         unit: usize,
@@ -720,8 +1014,6 @@ impl<'a> Lowering<'a> {
         #[derive(Visitor)]
         #[visitor(Expr(enter))]
         struct ReceiverScan<'s> {
-            resolutions:
-                &'s FxHashMap<crate::node_id::NodeID, crate::types::output::MemberResolution>,
             mutating: &'s FxHashSet<Symbol>,
             found: FxHashSet<Symbol>,
         }
@@ -733,11 +1025,10 @@ impl<'a> Lowering<'a> {
                 let ExprKind::Member(Some(receiver), ..) = &callee.kind else {
                     return;
                 };
-                let ExprKind::Variable(name) = &receiver.kind else {
+                let Some(symbol) = receiver_root_symbol(receiver) else {
                     return;
                 };
-                let Ok(symbol) = name.symbol() else { return };
-                let target = match self.resolutions.get(&callee.id) {
+                let target = match &callee.member_resolution {
                     Some(crate::types::output::MemberResolution::Direct(s)) => *s,
                     Some(crate::types::output::MemberResolution::ViaConformance {
                         witness,
@@ -752,7 +1043,6 @@ impl<'a> Lowering<'a> {
         }
 
         let mut scan = ReceiverScan {
-            resolutions: &self.units[unit].types.member_resolutions,
             mutating: &self.mutating,
             found: FxHashSet::default(),
         };
@@ -789,465 +1079,22 @@ impl<'a> Lowering<'a> {
         self.p.app(bind_ref, cell)
     }
 
-    // ----- Blocks and statements -------------------------------------------
-
-    /// Lower a block whose VALUE flows to continuation `k` (a Fn(R, ⊥)
-    /// expression). A block's value is its final expression; divergent
-    /// statements (return) ignore `k`.
-    fn lower_block(&mut self, block: &Block, ctx: &Ctx, k: ExprId) -> ExprId {
-        self.lower_nodes(&block.body, ctx, k)
-    }
-
-    fn lower_nodes(&mut self, nodes: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
-        let Some((first, rest)) = nodes.split_first() else {
-            let void = self.p.void();
-            return self.p.app(k, void);
-        };
-        let is_last = rest.is_empty();
-        match first {
-            Node::Decl(decl) => self.lower_local_decl(decl, rest, ctx, k),
-            Node::Expr(expr) if is_last => {
-                if let Some(done) = self.try_effect_split(expr, None, rest, ctx, k) {
-                    return done;
-                }
-                self.lower_expr(expr, ctx, k)
-            }
-            Node::Expr(expr) => self.discard_then(expr, rest, ctx, k),
-            Node::Stmt(stmt) => self.lower_stmt(stmt, rest, is_last, ctx, k),
-            _ => self.lower_nodes(rest, ctx, k),
-        }
-    }
-
-    fn lower_stmt(
-        &mut self,
-        stmt: &Stmt,
-        rest: &[Node],
-        is_last: bool,
-        ctx: &Ctx,
-        k: ExprId,
-    ) -> ExprId {
-        match &stmt.kind {
-            StmtKind::Expr(expr) if is_last => {
-                if let Some(done) = self.try_effect_split(expr, None, rest, ctx, k) {
-                    return done;
-                }
-                self.lower_expr(expr, ctx, k)
-            }
-            StmtKind::Expr(expr) => self.discard_then(expr, rest, ctx, k),
-            StmtKind::Handling {
-                effect_name, body, ..
-            } => self.lower_handling(stmt, effect_name, body, rest, ctx, k),
-            // A block-final if/else statement is the block's value (the
-            // checker's rule; both branches deliver to k).
-            StmtKind::If(cond, then_block, Some(else_block)) if is_last => {
-                let then_body = self.lower_block(then_block, ctx, k);
-                let else_body = self.lower_block(else_block, ctx, k);
-                self.branch(cond, then_body, else_body, ctx)
-            }
-            StmtKind::Return(value) => match value {
-                Some(expr) => self.lower_expr(expr, ctx, ctx.ret_k),
-                None => {
-                    let void = self.p.void();
-                    self.p.app(ctx.ret_k, void)
-                }
-            },
-            StmtKind::If(cond, then_block, else_block) => {
-                // Statement-position if: both branches continue with the
-                // rest of the block through a join continuation.
-                let void_ty = self.p.ty_void();
-                let bot = self.p.ty_bot();
-                let join = self.p.func("join", void_ty, bot);
-                let rest_body = if is_last {
-                    let void = self.p.void();
-                    self.p.app(k, void)
-                } else {
-                    self.lower_nodes(rest, ctx, k)
-                };
-                self.p.set_body(join, rest_body);
-                let join_ref = self.p.func_ref(join);
-
-                let then_ty = block_value_ty(self, then_block, ctx);
-                let then_k = self.discarding_cont(then_ty, join_ref);
-                let then_body = self.lower_block(then_block, ctx, then_k);
-                let else_body = match else_block {
-                    Some(else_block) => {
-                        let else_ty = block_value_ty(self, else_block, ctx);
-                        let else_k = self.discarding_cont(else_ty, join_ref);
-                        self.lower_block(else_block, ctx, else_k)
-                    }
-                    None => {
-                        let void = self.p.void();
-                        self.p.app(join_ref, void)
-                    }
-                };
-                self.branch(cond, then_body, else_body, ctx)
-            }
-            StmtKind::Assignment(lhs, rhs) => {
-                // What the new value flows into once evaluated: the cell
-                // itself, or a field path into the record held in the cell
-                // (functional SetField at each level, then one store —
-                // value semantics; `a.b.c = v` rebuilds b with c's slot
-                // replaced, then a with b's).
-                let target = self.assignment_target(lhs, ctx);
-                let Some((cell, path)) = target else {
-                    return self.continue_after(rest, is_last, ctx, k);
-                };
-                // rhs → set the cell → continue (one effect per step keeps
-                // strict left-to-right argument evaluation an ordering).
-                let void_ty = self.p.ty_void();
-                let bot = self.p.ty_bot();
-                let after = self.p.func("after_set", void_ty, bot);
-                let after_body = self.continue_after(rest, is_last, ctx, k);
-                self.p.set_body(after, after_body);
-                let after_ref = self.p.func_ref(after);
-
-                let rhs_ty = self.expr_lambda_ty(rhs, ctx);
-                let setter = self.p.func("set", rhs_ty, bot);
-                let value = self.p.var(setter);
-                let stored = if path.is_empty() {
-                    value
-                } else {
-                    // Read down the path, then rebuild back up from the
-                    // leaf: levels[k] is the record indexed at step k.
-                    let TyKind::Cell(root_ty) = *self.p.ty_kind(self.p.expr_ty(cell)) else {
-                        unreachable!("assignment target is not a cell");
-                    };
-                    let mut levels = Vec::with_capacity(path.len());
-                    levels.push(self.p.primop(Op::CellGet, &[cell], root_ty));
-                    for step in 1..path.len() {
-                        let (index, _) = path[step - 1];
-                        let (_, level_ty) = path[step];
-                        let prev = levels[step - 1];
-                        levels.push(self.field_get(prev, index, level_ty));
-                    }
-                    let mut stored = value;
-                    for step in (0..path.len()).rev() {
-                        let (index, _) = path[step];
-                        let level_ty = if step == 0 { root_ty } else { path[step].1 };
-                        stored = self.field_set(levels[step], index, stored, level_ty);
-                    }
-                    stored
-                };
-                let cell_set = self.p.primop(Op::CellSet, &[cell, stored], void_ty);
-                let setter_body = self.p.app(after_ref, cell_set);
-                self.p.set_body(setter, setter_body);
-                let setter_ref = self.p.func_ref(setter);
-                self.lower_expr(rhs, ctx, setter_ref)
-            }
-
-            StmtKind::Loop(condition, body) => {
-                // A loop is a recursive continuation (Appel, Compiling with
-                // Continuations): header tests/jumps, body jumps back.
-                let void_ty = self.p.ty_void();
-                let bot = self.p.ty_bot();
-                let header = self.p.func("loop_head", void_ty, bot);
-                let exit = self.p.func("loop_exit", void_ty, bot);
-                let exit_body = self.continue_after(rest, is_last, ctx, k);
-                self.p.set_body(exit, exit_body);
-                let header_ref = self.p.func_ref(header);
-                let exit_ref = self.p.func_ref(exit);
-
-                let mut loop_ctx = ctx.clone();
-                loop_ctx.loops.push((header_ref, exit_ref));
-                // The body's value is discarded; its end jumps back to the
-                // header.
-                let body_value_ty = block_value_ty(self, body, ctx);
-                let back = self.discarding_cont(body_value_ty, header_ref);
-                let body_expr = self.lower_block(body, &loop_ctx, back);
-
-                let header_body = match condition {
-                    Some(condition) => {
-                        let exit_jump = {
-                            let void = self.p.void();
-                            self.p.app(exit_ref, void)
-                        };
-                        self.branch(condition, body_expr, exit_jump, ctx)
-                    }
-                    None => body_expr,
-                };
-                self.p.set_body(header, header_body);
-                let void = self.p.void();
-                self.p.app(header_ref, void)
-            }
-
-            StmtKind::Break => match ctx.loops.last() {
-                Some(&(_, exit_ref)) => {
-                    let void = self.p.void();
-                    self.p.app(exit_ref, void)
-                }
-                None => {
-                    self.diagnostics.push("lowering: break outside loop".into());
-                    let void = self.p.void();
-                    self.p.app(k, void)
-                }
-            },
-            // `continue v` inside a resuming handler: tail-transfer into
-            // the resumption with our own return slot as its linkage —
-            // the performer continues as if the perform returned v, and
-            // its eventual value rides the same Ret chain. One-shot by
-            // construction: continue ends this path of the handler body.
-            StmtKind::Continue(Some(expr)) if ctx.resume_k.is_some() => {
-                let Some(resume_k) = ctx.resume_k else {
-                    return self.dead_end("resume_linkage");
-                };
-                let value_ty = self.expr_lambda_ty(expr, ctx);
-                let bot = self.p.ty_bot();
-                let send = self.p.func("resume_value", value_ty, bot);
-                let value = self.p.var(send);
-                let pair = self.p.tuple(&[value, ctx.raw_ret_k]);
-                let body = self.p.app(resume_k, pair);
-                self.p.set_body(send, body);
-                let send_ref = self.p.func_ref(send);
-                self.lower_expr(expr, ctx, send_ref)
-            }
-            StmtKind::Continue(payload) => match ctx.loops.last() {
-                Some(&(header_ref, _)) => {
-                    let void = self.p.void();
-                    self.p.app(header_ref, void)
-                }
-                None => {
-                    if payload.is_some() {
-                        self.diagnostics.push(
-                            "lowering: continue with a value outside an effect handler".into(),
-                        );
-                        return self.dead_end("resume_outside_handler");
-                    }
-                    self.diagnostics
-                        .push("lowering: continue outside loop".into());
-                    let void = self.p.void();
-                    self.p.app(k, void)
-                }
-            },
-
-            other => {
-                self.diagnostics
-                    .push(format!("lowering: statement not yet supported: {other:?}"));
-                let void = self.p.void();
-                self.p.app(k, void)
-            }
-        }
-    }
-
-    /// Resolve an assignment lhs to its root cell and the field path down
-    /// to the assigned location: `a.b.c = …` walks Member receivers to
-    /// the cell-bound variable, collecting per level the field index and
-    /// the record's λ_G type (structs by declared order; anonymous
-    /// records by the row's canonical label-sorted order, matching
-    /// map_ty's layout).
-    fn assignment_target(&mut self, lhs: &Expr, ctx: &Ctx) -> Option<(ExprId, Vec<(u32, TyId)>)> {
-        match &lhs.kind {
-            ExprKind::Variable(name) => {
-                let symbol = name.symbol().ok();
-                if let Some(Binding::Cell(cell)) = symbol.and_then(|s| ctx.env.get(&s).copied()) {
-                    return Some((cell, vec![]));
-                }
-                // A mutable top-level binding assigned from inside a
-                // function: its registered cell (captured like any value).
-                if let Some(cell) = symbol.and_then(|s| self.top_level_cells.get(&s).copied()) {
-                    return Some((cell, vec![]));
-                }
-                self.diagnostics
-                    .push("lowering: assignment to a non-cell binding".into());
-                None
-            }
-            ExprKind::Member(Some(receiver), label, _) => {
-                let (cell, mut path) = self.assignment_target(receiver, ctx)?;
-                let head = self.checker_ty(receiver, ctx);
-                let index = match &head {
-                    CheckTy::Record(row) if row.tail.is_none() => row
-                        .fields
-                        .iter()
-                        .position(|(name, _)| name.to_string() == label.to_string())
-                        .map(|i| i as u32),
-                    _ => {
-                        let resolution = self.units[ctx.unit]
-                            .types
-                            .member_resolutions
-                            .get(&lhs.id)
-                            .cloned();
-                        match resolution {
-                            Some(crate::types::output::MemberResolution::Direct(property)) => {
-                                self.field_index(&head, property)
-                            }
-                            _ => None,
-                        }
-                    }
-                };
-                let Some(index) = index else {
-                    self.diagnostics.push(format!(
-                        "lowering: '{label}' is not a stored field of {head:?}"
-                    ));
-                    return None;
-                };
-                let record_ty = self.map_ty(&head);
-                path.push((index, record_ty));
-                Some((cell, path))
-            }
-            _ => {
-                self.diagnostics
-                    .push("lowering: assignment target not yet supported".into());
-                None
-            }
-        }
-    }
-
-    /// One field read for the assignment path: structs (boxed records)
-    /// use GetField; anonymous records are tuples, so extract.
-    fn field_get(&mut self, record: ExprId, index: u32, field_ty: TyId) -> ExprId {
-        match self.p.ty_kind(self.p.expr_ty(record)) {
-            TyKind::Tuple(_) => self.p.extract(record, index),
-            _ => self.p.primop(Op::GetField(index), &[record], field_ty),
-        }
-    }
-
-    /// One functional field replacement for the assignment path: structs
-    /// use SetField (CoW); anonymous records rebuild the tuple with the
-    /// slot replaced.
-    fn field_set(&mut self, record: ExprId, index: u32, value: ExprId, record_ty: TyId) -> ExprId {
-        let items = match self.p.ty_kind(record_ty) {
-            TyKind::Tuple(items) => Some(items.clone()),
-            _ => None,
-        };
-        match items {
-            Some(items) => {
-                let rebuilt: Vec<ExprId> = (0..items.len() as u32)
-                    .map(|slot| {
-                        if slot == index {
-                            value
-                        } else {
-                            self.p.extract(record, slot)
-                        }
-                    })
-                    .collect();
-                self.p.tuple(&rebuilt)
-            }
-            None => self
-                .p
-                .primop(Op::SetField(index), &[record, value], record_ty),
-        }
-    }
-
-    /// The continuation of a statement: the rest of the block, or k(()).
-    fn continue_after(&mut self, rest: &[Node], is_last: bool, ctx: &Ctx, k: ExprId) -> ExprId {
-        if is_last {
-            let void = self.p.void();
-            self.p.app(k, void)
-        } else {
-            self.lower_nodes(rest, ctx, k)
-        }
-    }
-
-    fn lower_local_decl(&mut self, decl: &Decl, rest: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
-        let DeclKind::Let { lhs, rhs, .. } = &decl.kind else {
-            self.diagnostics.push(format!(
-                "lowering: declaration not yet supported: {:?}",
-                decl.kind
-            ));
-            return self.lower_nodes(rest, ctx, k);
-        };
-        let Some(rhs) = rhs else {
-            return self.lower_nodes(rest, ctx, k);
-        };
-        // Destructuring let: bind the value, then project each binder out
-        // of it (irrefutable patterns only — Extract/GetPayload binds).
-        let PatternKind::Bind(name) = &lhs.kind else {
-            let value_ty = self.expr_lambda_ty(rhs, ctx);
-            let bot = self.p.ty_bot();
-            let bind = self.p.func("let_destructure", value_ty, bot);
-            let bound = self.p.var(bind);
-            let check_ty = self.checker_ty(rhs, ctx);
-            let mut binds: Vec<(Symbol, ExprId)> = vec![];
-            patterns::collect_irrefutable_binds(self, lhs, bound, &check_ty, &mut binds);
-            let mut inner = ctx.clone();
-            let mut celled: Vec<(Symbol, ExprId)> = vec![];
-            for (symbol, value) in binds {
-                if inner.cellable.contains(&symbol) {
-                    celled.push((symbol, value));
-                } else {
-                    inner.env.insert(symbol, Binding::Value(value));
-                }
-            }
-            let rest_body = self.with_cells(&celled, &mut inner, |this, inner| {
-                this.lower_nodes(rest, inner, k)
-            });
-            self.p.set_body(bind, rest_body);
-            let bind_ref = self.p.func_ref(bind);
-            return self.lower_expr(rhs, ctx, bind_ref);
-        };
-        let Ok(symbol) = name.symbol() else {
-            return self.lower_nodes(rest, ctx, k);
-        };
-
-        // Bind the value through a continuation function; the rest of the
-        // block is its body (sharing IS the let). Mutated locals are
-        // assignment-converted into cells (ORBIT); write-back receivers of
-        // mutating methods count as mutated.
-        let mutated = ctx.cellable.contains(&symbol);
-        if let Some(done) = self.try_effect_split(rhs, Some((symbol, mutated)), rest, ctx, k) {
-            return done;
-        }
-        let value_ty = self.expr_lambda_ty(rhs, ctx);
-        let bot = self.p.ty_bot();
-        let bind = self
-            .p
-            .func(&format!("let_{}", name.name_str()), value_ty, bot);
-        let bound = self.p.var(bind);
-        let mut inner = ctx.clone();
-        let rest_body = if mutated {
-            self.with_cells(&[(symbol, bound)], &mut inner, |this, inner| {
-                this.lower_nodes(rest, inner, k)
-            })
-        } else {
-            inner.env.insert(symbol, Binding::Value(bound));
-            self.lower_nodes(rest, &inner, k)
-        };
-        self.p.set_body(bind, rest_body);
-        let bind_ref = self.p.func_ref(bind);
-        self.lower_expr(rhs, ctx, bind_ref)
-    }
-
-    fn discard_then(&mut self, expr: &Expr, rest: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
-        if let Some(done) = self.try_effect_split(expr, None, rest, ctx, k) {
-            return done;
-        }
-        // Pure path first: the drop continuation's domain must match the
-        // VALUE delivered, and an unconstrained statement expression (a
-        // bare @_ir, say) types more precisely in λ_G than in the
-        // checker's residue.
-        let (value_ty, pure_value) = match self.try_pure(expr, ctx) {
-            Some(value) => (self.p.expr_ty(value), Some(value)),
-            None => (self.expr_lambda_ty(expr, ctx), None),
-        };
-        let bot = self.p.ty_bot();
-        let drop_k = self.p.func("drop", value_ty, bot);
-        let rest_body = self.lower_nodes(rest, ctx, k);
-        self.p.set_body(drop_k, rest_body);
-        let drop_ref = self.p.func_ref(drop_k);
-        match pure_value {
-            Some(value) => self.p.app(drop_ref, value),
-            None => self.lower_expr(expr, ctx, drop_ref),
-        }
-    }
-
-    /// A continuation that discards its value and jumps to `target` with ().
-    fn discarding_cont(&mut self, value_ty: TyId, target: ExprId) -> ExprId {
-        let bot = self.p.ty_bot();
-        let cont = self.p.func("discard", value_ty, bot);
-        let void = self.p.void();
-        let body = self.p.app(target, void);
-        self.p.set_body(cont, body);
-        self.p.func_ref(cont)
-    }
-
     // ----- Expressions ------------------------------------------------------
 
     /// Lower `expr`, delivering its value to continuation `k : Fn(T, ⊥)`.
     fn lower_expr(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
-        if let Some(pack) = self.existential_pack_at(expr.id, ctx) {
-            if let CheckTy::Any { protocol, .. } = &pack.payload {
-                if *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol) {
-                    return self.lower_expr_unpacked(expr, ctx, k);
-                }
+        // Tier-2 auto-clone: retain the value's buffers before handing it to
+        // the consumer, so the clone and the original release independently.
+        let k = if expr.ownership.auto_clone {
+            self.retain_then(expr, ctx, k)
+        } else {
+            k
+        };
+        if let Some(pack) = self.existential_pack_at(expr.existential_pack.as_ref(), ctx) {
+            if let CheckTy::Any { protocol, .. } = &pack.payload
+                && *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol)
+            {
+                return self.lower_expr_unpacked(expr, ctx, k);
             }
             if let Some(payload) = self.try_pure_unpacked(expr, ctx) {
                 return match self.existential_pack_value(expr.id, payload, &pack, ctx) {
@@ -1270,6 +1117,20 @@ impl<'a> Lowering<'a> {
         self.lower_expr_unpacked(expr, ctx, k)
     }
 
+    /// A continuation that retains `expr`'s refcounted buffers, then applies
+    /// `k` — the receiving end of a tier-2 auto-clone.
+    fn retain_then(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
+        let ty = self.checker_ty(expr, ctx);
+        let value_ty = self.map_ty(&ty);
+        let bot = self.p.ty_bot();
+        let cont = self.p.func("retain", value_ty, bot);
+        let value = self.p.var(cont);
+        let next = self.p.app(k, value);
+        let body = self.lower_retain_value_then(ctx, value, &ty, next);
+        self.p.set_body(cont, body);
+        self.p.func_ref(cont)
+    }
+
     fn lower_expr_unpacked(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
         if let Some(value) = self.try_pure_unpacked(expr, ctx) {
             return self.p.app(k, value);
@@ -1283,13 +1144,13 @@ impl<'a> Lowering<'a> {
             } => {
                 // Variant construction with impure payloads: chain the
                 // arguments, then build the value (no function is called).
-                if let Some((enum_symbol, tag, variant_symbol, node)) =
-                    self.variant_target(expr, callee, ctx)
+                if let Some((enum_symbol, tag, variant_symbol, site)) =
+                    self.variant_target(expr, callee)
                 {
                     let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
                     return self.lower_args(&arg_exprs, ctx, vec![], &mut |this, values| {
                         let value = this.variant_new_for_expr(
-                            node,
+                            site.clone(),
                             enum_symbol,
                             tag,
                             variant_symbol,
@@ -1319,7 +1180,7 @@ impl<'a> Lowering<'a> {
             }
             // Field read on an impure receiver: bind the receiver through
             // a continuation, then GetField.
-            ExprKind::Member(Some(receiver), label, _) => {
+            ExprKind::Member(Some(receiver), label) => {
                 let receiver_ty = self.expr_lambda_ty(receiver, ctx);
                 let bot = self.p.ty_bot();
                 let cont = self.p.func("recv", receiver_ty, bot);
@@ -1358,6 +1219,8 @@ impl<'a> Lowering<'a> {
             // An array literal: allocate element-sized storage, store each
             // element in order (one effect per continuation step), then
             // build the Array record {storage, count, capacity}.
+            // This stays as direct storage fill for now; routing through
+            // Array.init would not add ownership precision.
             ExprKind::LiteralArray(items) => {
                 let CheckTy::Nominal(array_symbol, args) = self.checker_ty(expr, ctx) else {
                     self.diagnostics
@@ -1387,9 +1250,12 @@ impl<'a> Lowering<'a> {
                     let ptr = this.p.var(array_k);
                     let record_ty = this.p.ty(TyKind::Boxed(array_symbol));
                     let n = this.p.int(count as i64);
+                    let Some(storage) = this.array_storage_value(array_symbol, ptr) else {
+                        return this.dead_end("invalid_array_storage_wrapper");
+                    };
                     let record =
                         this.p
-                            .primop(Op::RecordNew(array_symbol), &[ptr, n, n], record_ty);
+                            .primop(Op::RecordNew(array_symbol), &[storage, n, n], record_ty);
                     let mut body = this.p.app(k, record);
                     // Stores chain backwards so they execute in source
                     // order, each through its own continuation.
@@ -1438,8 +1304,7 @@ impl<'a> Lowering<'a> {
             other => {
                 self.diagnostics
                     .push(format!("lowering: expression not yet supported: {other:?}"));
-                let void = self.p.void();
-                self.p.app(k, void)
+                self.dead_end("unsupported_expr")
             }
         }
     }
@@ -1450,14 +1315,15 @@ impl<'a> Lowering<'a> {
     /// the decision tree (Maranget, ML 2008 — `patterns.rs`).
     fn lower_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], ctx: &Ctx, k: ExprId) -> ExprId {
         let scrutinee_check_ty = self.checker_ty(scrutinee, ctx);
+        let pattern_scrutinee_ty = Self::borrow_erased_ty(scrutinee_check_ty.clone());
         match self.try_pure(scrutinee, ctx) {
-            Some(value) => patterns::compile_match(self, value, scrutinee_check_ty, arms, ctx, k),
+            Some(value) => patterns::compile_match(self, value, pattern_scrutinee_ty, arms, ctx, k),
             None => {
                 let scrutinee_ty = self.expr_lambda_ty(scrutinee, ctx);
                 let bot = self.p.ty_bot();
                 let cont = self.p.func("scrut", scrutinee_ty, bot);
                 let value = self.p.var(cont);
-                let body = patterns::compile_match(self, value, scrutinee_check_ty, arms, ctx, k);
+                let body = patterns::compile_match(self, value, pattern_scrutinee_ty, arms, ctx, k);
                 self.p.set_body(cont, body);
                 let cont_ref = self.p.func_ref(cont);
                 self.lower_expr(scrutinee, ctx, cont_ref)
@@ -1469,11 +1335,16 @@ impl<'a> Lowering<'a> {
     /// variables, field reads on pure receivers, and @_ir splices over
     /// pure operands.
     fn try_pure(&mut self, expr: &Expr, ctx: &Ctx) -> Option<ExprId> {
-        if let Some(pack) = self.existential_pack_at(expr.id, ctx) {
-            if let CheckTy::Any { protocol, .. } = &pack.payload {
-                if *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol) {
-                    return self.try_pure_unpacked(expr, ctx);
-                }
+        // An auto-cloned value must retain its buffers — an effect — so it
+        // takes the continuation path (`lower_expr` wraps k with the retains).
+        if expr.ownership.auto_clone {
+            return None;
+        }
+        if let Some(pack) = self.existential_pack_at(expr.existential_pack.as_ref(), ctx) {
+            if let CheckTy::Any { protocol, .. } = &pack.payload
+                && *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol)
+            {
+                return self.try_pure_unpacked(expr, ctx);
             }
             let payload = self.try_pure_unpacked(expr, ctx)?;
             return self.existential_pack_value(expr.id, payload, &pack, ctx);
@@ -1488,11 +1359,13 @@ impl<'a> Lowering<'a> {
             ExprKind::LiteralTrue => Some(self.p.bool(true)),
             ExprKind::LiteralFalse => Some(self.p.bool(false)),
             // A string literal is a String record over interned static
-            // bytes: {base, length, capacity}.
+            // bytes: {storage, length, capacity}.
             ExprKind::LiteralString(text) => {
                 let bytes = crate::parsing::lexing::unescape(text).into_bytes();
                 let offset = self.intern_static(&bytes);
-                let CheckTy::Nominal(string_symbol, _) = self.checker_ty(expr, ctx) else {
+                let CheckTy::Nominal(string_symbol, _) =
+                    Self::borrow_erased_ty(self.checker_ty(expr, ctx))
+                else {
                     self.diagnostics
                         .push("lowering: string literal with a non-nominal type".into());
                     return None;
@@ -1501,15 +1374,18 @@ impl<'a> Lowering<'a> {
                 let base = self.p.constant(Const::StaticPtr(offset), ptr_ty);
                 let len = self.p.int(bytes.len() as i64);
                 let ty = self.p.ty(TyKind::Boxed(string_symbol));
+                let Some(storage) = self.string_storage_value(string_symbol, base) else {
+                    return Some(self.dead_end("invalid_string_storage_wrapper"));
+                };
                 Some(
                     self.p
-                        .primop(Op::RecordNew(string_symbol), &[base, len, len], ty),
+                        .primop(Op::RecordNew(string_symbol), &[storage, len, len], ty),
                 )
             }
             // Field read on a pure receiver: GetField (records are pure
             // values). A member that resolves to a payload-less enum case
             // (`.none`, `Optional.none`) is a variant value instead.
-            ExprKind::Member(receiver, _, _) => {
+            ExprKind::Member(receiver, _) => {
                 if let Some(value) = self.try_variant_value(expr, ctx) {
                     return Some(value);
                 }
@@ -1520,14 +1396,13 @@ impl<'a> Lowering<'a> {
             // Variant construction over pure payloads (`.some(1)`,
             // `Maybe.definitely(x)`): pure, exactly like RecordNew.
             ExprKind::Call { callee, args, .. } => {
-                let (enum_symbol, tag, variant_symbol, node) =
-                    self.variant_target(expr, callee, ctx)?;
+                let (enum_symbol, tag, variant_symbol, site) = self.variant_target(expr, callee)?;
                 let mut payloads = Vec::with_capacity(args.len());
                 for arg in args {
                     payloads.push(self.try_pure(&arg.value, ctx)?);
                 }
                 Some(self.variant_new_for_expr(
-                    node,
+                    site,
                     enum_symbol,
                     tag,
                     variant_symbol,
@@ -1580,7 +1455,7 @@ impl<'a> Lowering<'a> {
                         );
                         return None;
                     }
-                    let theta = self.instantiation_at(expr.id, ctx);
+                    let theta = self.instantiation_at(expr.instantiation.as_ref(), ctx);
                     let label = self.demand(symbol, theta);
                     return Some(self.p.func_ref(label));
                 }
@@ -1590,10 +1465,12 @@ impl<'a> Lowering<'a> {
                 if let Some(&(unit, rhs)) = self.globals.get(&symbol) {
                     let global_ctx = Ctx {
                         unit,
+                        owner: None,
                         theta: Theta::default(),
                         env: FxHashMap::default(),
                         local_evidence: FxHashMap::default(),
                         ret_k: ctx.ret_k,
+                        tail_k: ctx.ret_k,
                         raw_ret_k: ctx.raw_ret_k,
                         normal_k: None,
                         abort_ok: false,
@@ -1602,6 +1479,9 @@ impl<'a> Lowering<'a> {
                         local_handlers: FxHashSet::default(),
                         params: vec![],
                         loops: vec![],
+                        drop_stack: vec![],
+                        drop_flags: FxHashMap::default(),
+                        initializing_self: None,
                         cellable: FxHashSet::default(),
                     };
                     return self.try_pure(rhs, &global_ctx);
@@ -1629,10 +1509,10 @@ impl<'a> Lowering<'a> {
 
     fn existential_pack_at(
         &self,
-        node: crate::node_id::NodeID,
+        pack: Option<&crate::types::output::ExistentialPack>,
         ctx: &Ctx,
     ) -> Option<crate::types::output::ExistentialPack> {
-        let pack = self.units[ctx.unit].types.existential_packs.get(&node)?;
+        let pack = pack?;
         let existential =
             pack.existential
                 .substitute(&ctx.theta, &Default::default(), &Default::default());
@@ -2010,6 +1890,92 @@ impl<'a> Lowering<'a> {
 
     // ----- Records -----------------------------------------------------------
 
+    /// Array literals allocate raw bytes internally, but the public Array
+    /// storage field may now be a managed storage wrapper. If the core
+    /// Array still has the old RawPtr layout, leave the pointer untouched.
+    fn array_storage_value(&mut self, array_symbol: Symbol, ptr: ExprId) -> Option<ExprId> {
+        let Some(field_ty) = self
+            .units
+            .iter()
+            .find_map(|unit| unit.types.catalog.structs.get(&array_symbol))
+            .and_then(|info| info.fields.get("storage").map(|(_, ty)| ty.clone()))
+        else {
+            return Some(ptr);
+        };
+        self.storage_wrapper_value(&field_ty, ptr, "Array")
+    }
+
+    /// String literals also start from a raw pointer into static bytes, while
+    /// the source-level String may store a managed byte storage wrapper.
+    fn string_storage_value(&mut self, string_symbol: Symbol, ptr: ExprId) -> Option<ExprId> {
+        let Some(field_ty) = self
+            .units
+            .iter()
+            .find_map(|unit| unit.types.catalog.structs.get(&string_symbol))
+            .and_then(|info| {
+                info.fields
+                    .get("storage")
+                    .or_else(|| info.fields.get("base"))
+                    .map(|(_, ty)| ty.clone())
+            })
+        else {
+            return Some(ptr);
+        };
+        self.storage_wrapper_value(&field_ty, ptr, "String")
+    }
+
+    fn storage_wrapper_value(
+        &mut self,
+        field_ty: &CheckTy,
+        ptr: ExprId,
+        owner: &str,
+    ) -> Option<ExprId> {
+        let CheckTy::Nominal(storage_symbol, _) = field_ty else {
+            self.diagnostics.push(format!(
+                "lowering: {owner} storage field is not RawPtr or a RawPtr wrapper"
+            ));
+            return None;
+        };
+        if *storage_symbol == Symbol::RawPtr {
+            return Some(ptr);
+        }
+        let Some(storage_info) = self
+            .units
+            .iter()
+            .find_map(|unit| unit.types.catalog.structs.get(storage_symbol))
+        else {
+            self.diagnostics.push(format!(
+                "lowering: {owner} storage wrapper does not resolve to a struct"
+            ));
+            return None;
+        };
+        if storage_info.fields.len() != 1 {
+            self.diagnostics.push(format!(
+                "lowering: {owner} storage wrapper does not expose a RawPtr field"
+            ));
+            return None;
+        }
+        let Some((_, CheckTy::Nominal(head, _))) =
+            storage_info.fields.values().next().map(|(_, ty)| ((), ty))
+        else {
+            self.diagnostics.push(format!(
+                "lowering: {owner} storage wrapper does not expose a RawPtr field"
+            ));
+            return None;
+        };
+        if *head != Symbol::RawPtr {
+            self.diagnostics.push(format!(
+                "lowering: {owner} storage wrapper does not expose a RawPtr field"
+            ));
+            return None;
+        }
+        let storage_ty = self.map_ty(field_ty);
+        Some(
+            self.p
+                .primop(Op::RecordNew(*storage_symbol), &[ptr], storage_ty),
+        )
+    }
+
     /// GetField for a member read: through member_resolutions when the
     /// checker saw the node, else by name against the receiver's record
     /// type (@_ir binds are trusted, not inferred, so they carry no
@@ -2023,10 +1989,10 @@ impl<'a> Lowering<'a> {
     ) -> Option<ExprId> {
         // Anonymous records are label-sorted tuples (map_ty), so a field
         // read is an extract at the label's canonical position.
-        let head = self.checker_ty(receiver, ctx);
+        let head = Self::borrow_erased_ty(self.checker_ty(receiver, ctx));
         if let CheckTy::Record(row) = &head
             && row.tail.is_none()
-            && let ExprKind::Member(_, label, _) = &expr.kind
+            && let ExprKind::Member(_, label) = &expr.kind
             && let Some(index) = row
                 .fields
                 .iter()
@@ -2034,11 +2000,7 @@ impl<'a> Lowering<'a> {
         {
             return Some(self.p.extract(receiver_value, index as u32));
         }
-        let resolution = self.units[ctx.unit]
-            .types
-            .member_resolutions
-            .get(&expr.id)
-            .cloned();
+        let resolution = expr.member_resolution.clone();
         if let Some(crate::types::output::MemberResolution::Direct(property)) = resolution {
             let index = self.field_index(&head, property)?;
             let field_check_ty = self.checker_ty(expr, ctx);
@@ -2049,7 +2011,7 @@ impl<'a> Lowering<'a> {
             );
         }
 
-        let ExprKind::Member(_, label, _) = &expr.kind else {
+        let ExprKind::Member(_, label) = &expr.kind else {
             return None;
         };
         let TyKind::Boxed(record_symbol) = *self.p.ty_kind(self.p.expr_ty(receiver_value)) else {
@@ -2076,16 +2038,11 @@ impl<'a> Lowering<'a> {
     /// through a record field (`self.route_handler0.invoke()`), as
     /// opposed to a method call? Field callees dispatch indirectly.
     fn is_field_value_callee(&mut self, callee: &Expr, ctx: &Ctx) -> bool {
-        let ExprKind::Member(Some(receiver), label, _) = &callee.kind else {
+        let ExprKind::Member(Some(receiver), label) = &callee.kind else {
             return false;
         };
-        let head = self.checker_ty(receiver, ctx);
-        match self.units[ctx.unit]
-            .types
-            .member_resolutions
-            .get(&callee.id)
-            .cloned()
-        {
+        let head = Self::borrow_erased_ty(self.checker_ty(receiver, ctx));
+        match callee.member_resolution.clone() {
             Some(crate::types::output::MemberResolution::Direct(property)) => {
                 self.field_index(&head, property).is_some()
             }
@@ -2166,25 +2123,29 @@ impl<'a> Lowering<'a> {
         &self,
         expr: &Expr,
         callee: &Expr,
-        ctx: &Ctx,
-    ) -> Option<(Symbol, u16, Symbol, crate::node_id::NodeID)> {
-        let resolutions = &self.units[ctx.unit].types.member_resolutions;
-        let (node, symbol) =
-            [callee.id, expr.id]
-                .iter()
-                .find_map(|node| match resolutions.get(node) {
-                    Some(crate::types::output::MemberResolution::Direct(s)) => Some((*node, *s)),
+    ) -> Option<(Symbol, u16, Symbol, VariantSite)> {
+        let (site, symbol) =
+            [callee, expr]
+                .into_iter()
+                .find_map(|e| match &e.member_resolution {
+                    Some(crate::types::output::MemberResolution::Direct(s)) => Some((
+                        VariantSite {
+                            node: e.id,
+                            instantiation: e.instantiation.clone(),
+                        },
+                        *s,
+                    )),
                     _ => None,
                 })?;
         let (enum_symbol, tag) = self.variant_of(symbol)?;
-        Some((enum_symbol, tag, symbol, node))
+        Some((enum_symbol, tag, symbol, site))
     }
 
     /// Construct a variant value: source payloads followed by hidden runtime
     /// evidence for GADT-local constructor bounds.
     fn variant_new_for_expr(
         &mut self,
-        node: crate::node_id::NodeID,
+        site: VariantSite,
         enum_symbol: Symbol,
         tag: u16,
         variant_symbol: Symbol,
@@ -2192,20 +2153,20 @@ impl<'a> Lowering<'a> {
         ctx: &Ctx,
     ) -> ExprId {
         let mut runtime_payloads = payloads.to_vec();
-        runtime_payloads.extend(self.variant_evidence_tables(node, variant_symbol, ctx));
+        runtime_payloads.extend(self.variant_evidence_tables(site, variant_symbol, ctx));
         self.variant_new(enum_symbol, tag, &runtime_payloads)
     }
 
     fn variant_evidence_tables(
         &mut self,
-        node: crate::node_id::NodeID,
+        site: VariantSite,
         variant_symbol: Symbol,
         ctx: &Ctx,
     ) -> Vec<ExprId> {
         let Some(variant) = self.variant_by_symbol(variant_symbol) else {
             return vec![];
         };
-        let theta = self.instantiation_at(node, ctx);
+        let theta = self.instantiation_at(site.instantiation.as_ref(), ctx);
         let mut tables = vec![];
         for predicate in &variant.constructor_scheme.predicates {
             let crate::types::ty::Predicate::Conforms { ty, protocol } = predicate else {
@@ -2214,11 +2175,8 @@ impl<'a> Lowering<'a> {
             let CheckTy::Param(param) = ty else {
                 continue;
             };
-            let concrete = theta
-                .get(param)
-                .cloned()
-                .unwrap_or_else(|| CheckTy::Param(*param));
-            match self.evidence_table_for_ty(*protocol, &concrete, ctx, node) {
+            let concrete = theta.get(param).cloned().unwrap_or(CheckTy::Param(*param));
+            match self.evidence_table_for_ty(*protocol, &concrete, ctx, site.node) {
                 Some(table) => tables.push(table),
                 None => {
                     self.diagnostics.push(format!(
@@ -2299,10 +2257,7 @@ impl<'a> Lowering<'a> {
     /// A bare member that *is* a payload-less variant (`.none`,
     /// `Optional.none`): a pure value.
     fn try_variant_value(&mut self, expr: &Expr, ctx: &Ctx) -> Option<ExprId> {
-        let resolution = self.units[ctx.unit]
-            .types
-            .member_resolutions
-            .get(&expr.id)?;
+        let resolution = expr.member_resolution.as_ref()?;
         let crate::types::output::MemberResolution::Direct(symbol) = resolution else {
             return None;
         };
@@ -2320,7 +2275,17 @@ impl<'a> Lowering<'a> {
         if has_payloads {
             return None;
         }
-        Some(self.variant_new_for_expr(expr.id, enum_symbol, tag, *symbol, &[], ctx))
+        Some(self.variant_new_for_expr(
+            VariantSite {
+                node: expr.id,
+                instantiation: expr.instantiation.clone(),
+            },
+            enum_symbol,
+            tag,
+            *symbol,
+            &[],
+            ctx,
+        ))
     }
 
     /// For a record literal: row position → source field index, from the
@@ -2329,7 +2294,7 @@ impl<'a> Lowering<'a> {
     fn record_field_order(
         &mut self,
         expr: &Expr,
-        fields: &[crate::node_kinds::record_field::RecordField],
+        fields: &[hir::RecordField],
         ctx: &Ctx,
     ) -> Option<Vec<usize>> {
         let CheckTy::Record(row) = self.checker_ty(expr, ctx) else {
@@ -2364,12 +2329,7 @@ impl<'a> Lowering<'a> {
     /// environment — free variables ARE the captures (paper §2.2's
     /// higher-order setting; the reference evaluator runs them by
     /// dependency-aware substitution, the scheduler closure-converts).
-    fn lower_func_value(
-        &mut self,
-        expr: &Expr,
-        func: &crate::node_kinds::func::Func,
-        ctx: &Ctx,
-    ) -> Option<ExprId> {
+    fn lower_func_value(&mut self, expr: &Expr, func: &hir::Func, ctx: &Ctx) -> Option<ExprId> {
         let CheckTy::Func(param_check_tys, ret_check, _) = self.checker_ty(expr, ctx) else {
             self.diagnostics
                 .push("lowering: function literal without a function type".into());
@@ -2389,7 +2349,10 @@ impl<'a> Lowering<'a> {
         // The enclosing environment stays visible: references to it become
         // the closure's free variables.
         let mut inner = ctx.clone();
+        inner.owner = None;
         inner.loops = vec![];
+        inner.drop_stack = vec![];
+        inner.initializing_self = None;
         let mut params = Vec::with_capacity(func.params.len());
         let mut prologue: Vec<(Symbol, ExprId)> = vec![];
         for (i, param) in func.params.iter().enumerate() {
@@ -2405,6 +2368,7 @@ impl<'a> Lowering<'a> {
         }
         inner.params = params;
         inner.ret_k = self.p.extract(self_var, func.params.len() as u32);
+        inner.tail_k = inner.ret_k;
         inner.raw_ret_k = inner.ret_k;
         inner.normal_k = None;
         // A function value's call sites are indirect: they cannot thread
@@ -2469,7 +2433,10 @@ impl<'a> Lowering<'a> {
         self.escaping.insert(label);
         let self_var = self.p.var(label);
         let mut inner = ctx.clone();
+        inner.owner = None;
         inner.loops = vec![];
+        inner.drop_stack = vec![];
+        inner.initializing_self = None;
         let mut params = Vec::with_capacity(n_params);
         let mut celled: Vec<(Symbol, ExprId)> = vec![];
         for (i, arg) in block.args.iter().enumerate().take(n_params) {
@@ -2486,6 +2453,7 @@ impl<'a> Lowering<'a> {
         }
         inner.params = params;
         inner.ret_k = self.p.extract(self_var, n_params as u32);
+        inner.tail_k = inner.ret_k;
         inner.raw_ret_k = inner.ret_k;
         inner.normal_k = None;
         inner.abort_ok = false;
@@ -2506,7 +2474,7 @@ impl<'a> Lowering<'a> {
     fn lower_value_call(
         &mut self,
         callee: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
@@ -2537,7 +2505,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         expr: &Expr,
         callee: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
@@ -2574,9 +2542,9 @@ impl<'a> Lowering<'a> {
             let expected = self.final_param_ty(callee_ty);
             self.lower_block_closure(b, expected, ctx)
         });
-        // Abort-capable calls are handled on the statement spine
-        // (try_effect_split); reaching one here means it sits in an
-        // expression position the abort linkage cannot thread through yet.
+        // Abort-capable calls are handled by the MIR statement-spine
+        // splitter; reaching one here means it sits in an expression
+        // position the abort linkage cannot thread through yet.
         if self.abort_shape(symbol) {
             self.diagnostics.push(
                 "lowering: a call that can abort in expression position (not yet supported)".into(),
@@ -2632,7 +2600,7 @@ impl<'a> Lowering<'a> {
     fn lower_requirement_call(
         &mut self,
         receiver: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
@@ -2678,16 +2646,22 @@ impl<'a> Lowering<'a> {
     fn try_lower_existential_member_call(
         &mut self,
         callee: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
     ) -> Option<ExprId> {
-        let ExprKind::Member(Some(receiver), label, _) = &callee.kind else {
+        let ExprKind::Member(Some(receiver), label) = &callee.kind else {
             return None;
         };
-        let CheckTy::Any { protocol, assoc } = self.checker_ty(receiver, ctx) else {
-            return None;
+        let receiver_ty = self.checker_ty(receiver, ctx);
+        let (protocol, assoc) = match receiver_ty {
+            CheckTy::Any { protocol, assoc } => (protocol, assoc),
+            CheckTy::Borrow(_, inner) => match *inner {
+                CheckTy::Any { protocol, assoc } => (protocol, assoc),
+                _ => return None,
+            },
+            _ => return None,
         };
         let label_str = label.to_string();
         let (owner, requirement) = self.units[ctx.unit]
@@ -2722,22 +2696,18 @@ impl<'a> Lowering<'a> {
     fn try_lower_local_evidence_member_call(
         &mut self,
         callee: &Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
     ) -> Option<ExprId> {
-        let ExprKind::Member(Some(receiver), label, _) = &callee.kind else {
+        let ExprKind::Member(Some(receiver), label) = &callee.kind else {
             return None;
         };
         let CheckTy::Param(param) = self.checker_ty(receiver, ctx) else {
             return None;
         };
-        let resolution = self.units[ctx.unit]
-            .types
-            .member_resolutions
-            .get(&callee.id)
-            .cloned();
+        let resolution = callee.member_resolution.clone();
         let protocol = match resolution {
             Some(crate::types::output::MemberResolution::ViaConformance { protocol, .. }) => {
                 protocol
@@ -2783,9 +2753,9 @@ impl<'a> Lowering<'a> {
     }
 
     /// The write-back adapter for a mutating-method call: receives
-    /// [result, Self], stores Self into the receiver's cell, passes the
-    /// result on (the "caller performs the write-back" half of inout —
-    /// Racordon et al., JOT 2022).
+    /// [result, Self], writes Self back through the receiver's assignment
+    /// target, and passes the result on (the "caller performs the
+    /// write-back" half of inout — Racordon et al., JOT 2022).
     fn writeback_cont(
         &mut self,
         prefix: &Prefix<'_>,
@@ -2796,13 +2766,7 @@ impl<'a> Lowering<'a> {
         let Prefix::Receiver(receiver) = prefix else {
             return None;
         };
-        let ExprKind::Variable(name) = &receiver.kind else {
-            return None;
-        };
-        let symbol = name.symbol().ok()?;
-        let Some(Binding::Cell(cell)) = ctx.env.get(&symbol).copied() else {
-            return None;
-        };
+        let (cell, path) = self.assignment_target(receiver, ctx)?;
 
         // The pair type comes from the demanded function's signature.
         let TyKind::Tuple(dom_items) = self.p.ty_kind(self.p.dom(label)) else {
@@ -2819,13 +2783,14 @@ impl<'a> Lowering<'a> {
         let pair = self.p.var(unpack);
         let result = self.p.extract(pair, 0);
         let new_self = self.p.extract(pair, 1);
+        let stored = self.rebuilt_assignment_value(cell, &path, new_self);
 
         let after = self.p.func("after_writeback", void_ty, bot);
         let after_body = self.p.app(k, result);
         self.p.set_body(after, after_body);
         let after_ref = self.p.func_ref(after);
 
-        let cell_set = self.p.primop(Op::CellSet, &[cell, new_self], void_ty);
+        let cell_set = self.p.primop(Op::CellSet, &[cell, stored], void_ty);
         let unpack_body = self.p.app(after_ref, cell_set);
         self.p.set_body(unpack, unpack_body);
         Some(self.p.func_ref(unpack))
@@ -2865,7 +2830,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         expr: &Expr,
         callee: &'e Expr,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         ctx: &Ctx,
     ) -> Option<(Label, Symbol, Prefix<'e>)> {
         match &callee.kind {
@@ -2876,7 +2841,7 @@ impl<'a> Lowering<'a> {
                         .push("lowering: calling local function values not yet supported".into());
                     return None;
                 }
-                let theta = self.call_theta(symbol, callee.id, ctx);
+                let theta = self.call_theta(symbol, callee.instantiation.as_ref(), ctx);
                 Some((self.demand(symbol, theta), symbol, Prefix::None))
             }
             // `Person(args…)`: construction is a call to the (explicit or
@@ -2884,11 +2849,7 @@ impl<'a> Lowering<'a> {
             // self; the init body fills the fields and returns self.
             ExprKind::Constructor(name) => {
                 let struct_symbol = name.symbol().ok()?;
-                let resolution = self.units[ctx.unit]
-                    .types
-                    .member_resolutions
-                    .get(&callee.id)
-                    .cloned();
+                let resolution = callee.member_resolution.clone();
                 let Some(crate::types::output::MemberResolution::Direct(init)) = resolution else {
                     self.diagnostics.push(format!(
                         "lowering: unresolved initializer for {struct_symbol}"
@@ -2896,19 +2857,15 @@ impl<'a> Lowering<'a> {
                     return None;
                 };
                 let blank = self.blank_record(struct_symbol)?;
-                let mut theta = self.call_theta(init, expr.id, ctx);
+                let mut theta = self.call_theta(init, expr.instantiation.as_ref(), ctx);
                 let constructed = self.checker_ty(expr, ctx);
                 self.owner_theta(init, &constructed, &mut theta);
                 Some((self.demand(init, theta), init, Prefix::Value(blank)))
             }
             // Protocol-static (operators) or instance member calls: resolve
             // through member_resolutions + the conformance table.
-            ExprKind::Member(receiver, label, _) => {
-                let resolution = self.units[ctx.unit]
-                    .types
-                    .member_resolutions
-                    .get(&callee.id)
-                    .cloned();
+            ExprKind::Member(receiver, label) => {
+                let resolution = callee.member_resolution.clone();
                 let receiver_expr: Option<&'e Expr> = match receiver {
                     Some(r) if !matches!(r.kind, ExprKind::Constructor(_)) => Some(r.as_ref()),
                     _ => None,
@@ -2921,7 +2878,7 @@ impl<'a> Lowering<'a> {
                 // value argument (receiver for instance calls; lhs for
                 // operator protocol-static calls).
                 let head_expr = receiver_expr.or_else(|| args.first().map(|a| &a.value));
-                let head_ty = head_expr.map(|h| self.checker_ty(h, ctx));
+                let head_ty = head_expr.map(|h| Self::borrow_erased_ty(self.checker_ty(h, ctx)));
                 match resolution {
                     Some(crate::types::output::MemberResolution::ViaConformance {
                         protocol,
@@ -2933,7 +2890,7 @@ impl<'a> Lowering<'a> {
                         Some((target, target_symbol, prefix))
                     }
                     Some(crate::types::output::MemberResolution::Direct(member)) => {
-                        let mut theta = self.call_theta(member, callee.id, ctx);
+                        let mut theta = self.call_theta(member, callee.instantiation.as_ref(), ctx);
                         if let Some(head) = &head_ty {
                             self.owner_theta(member, head, &mut theta);
                         }
@@ -2963,7 +2920,8 @@ impl<'a> Lowering<'a> {
                                 .copied();
                             if let Some(member) = method {
                                 let head = head_ty.clone()?;
-                                let mut theta = self.call_theta(member, callee.id, ctx);
+                                let mut theta =
+                                    self.call_theta(member, callee.instantiation.as_ref(), ctx);
                                 self.owner_theta(member, &head, &mut theta);
                                 return Some((self.demand(member, theta), member, prefix));
                             }
@@ -3046,7 +3004,12 @@ impl<'a> Lowering<'a> {
         label: String,
         head: &CheckTy,
     ) -> Option<(Label, Symbol)> {
-        let CheckTy::Nominal(head_symbol, head_args) = head else {
+        let head_for_witness = match head {
+            CheckTy::Nominal(..) => head,
+            CheckTy::Borrow(_, inner) => inner,
+            _ => head,
+        };
+        let CheckTy::Nominal(head_symbol, head_args) = head_for_witness else {
             self.diagnostics.push(format!(
                 "lowering: protocol dispatch on non-nominal head {head:?} (not yet supported)"
             ));
@@ -3071,7 +3034,7 @@ impl<'a> Lowering<'a> {
             // conformance's associated bindings (substituted through the
             // row's params for conditional rows).
             let mut theta = Theta::default();
-            theta.insert(protocol, head.clone());
+            theta.insert(protocol, head_for_witness.clone());
             for (assoc, ty) in &conformance.assoc {
                 let bound = ty.substitute(&row_theta, &Default::default(), &Default::default());
                 theta.insert(*assoc, bound);
@@ -3090,7 +3053,8 @@ impl<'a> Lowering<'a> {
             .any(|u| u.types.catalog.derivable.contains(&protocol));
         if derivable
             && label == "show"
-            && let Some(synth) = self.demand_derived_show(protocol, requirement_or_witness, head)
+            && let Some(synth) =
+                self.demand_derived_show(protocol, requirement_or_witness, head_for_witness)
         {
             return Some((synth, requirement_or_witness));
         }
@@ -3124,7 +3088,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         expr: &Expr,
         effect_name: &crate::name::Name,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         ctx: &Ctx,
         k: ExprId,
     ) -> ExprId {
@@ -3143,20 +3107,36 @@ impl<'a> Lowering<'a> {
             return self.dead_end("undeclared_effect");
         };
 
-        // The request expression: a leading-dot variant construction.
+        // The request expression: a statically-known IORequest variant.
+        // Payload-bearing variants parse as calls (`.read(...)`), while
+        // payload-less variants parse as member values (`.cwd_len`).
         let operation = args.first().and_then(|request| match &request.value.kind {
             ExprKind::Call {
                 callee,
                 args: payloads,
                 ..
             } => {
-                let (enum_symbol, tag, _, _) = self.variant_target(&request.value, callee, ctx)?;
+                let (enum_symbol, tag, _, _) = self.variant_target(&request.value, callee)?;
                 let name = self
                     .enum_info(enum_symbol)?
                     .variants
                     .get_index(tag as usize)
                     .map(|(name, _)| name.clone())?;
-                Some((name, payloads.as_slice()))
+                let payloads = payloads.iter().map(|arg| &arg.value).collect();
+                Some((name, payloads))
+            }
+            ExprKind::Member(_, _) => {
+                let symbol = match request.value.member_resolution {
+                    Some(crate::types::output::MemberResolution::Direct(symbol)) => symbol,
+                    _ => return None,
+                };
+                let (enum_symbol, tag) = self.variant_of(symbol)?;
+                let name = self
+                    .enum_info(enum_symbol)?
+                    .variants
+                    .get_index(tag as usize)
+                    .map(|(name, _)| name.clone())?;
+                Some((name, vec![]))
             }
             _ => None,
         });
@@ -3181,6 +3161,18 @@ impl<'a> Lowering<'a> {
             "listen" => Op::IoListen,
             "connect" => Op::IoConnect,
             "accept" => Op::IoAccept,
+            "cwd_len" => Op::IoCwdLen,
+            "cwd_copy" => Op::IoCwdCopy,
+            "getenv_len" => Op::IoGetenvLen,
+            "getenv_copy" => Op::IoGetenvCopy,
+            "argc" => Op::IoArgc,
+            "arg_len" => Op::IoArgLen,
+            "arg_copy" => Op::IoArgCopy,
+            "dir_count" => Op::IoDirCount,
+            "dir_entry_kind" => Op::IoDirEntryKind,
+            "dir_entry_len" => Op::IoDirEntryLen,
+            "dir_entry_copy" => Op::IoDirEntryCopy,
+            "exit" => Op::IoExit,
             other => {
                 self.diagnostics
                     .push(format!("lowering: unknown io operation '{other}'"));
@@ -3188,8 +3180,7 @@ impl<'a> Lowering<'a> {
             }
         };
         let _ = expr;
-        let payload_exprs: Vec<&Expr> = payloads.iter().map(|a| &a.value).collect();
-        self.lower_args(&payload_exprs, ctx, vec![], &mut |this, values| {
+        self.lower_args(&payloads, ctx, vec![], &mut |this, values| {
             let result = this.p.primop(op, &values, ret_ty);
             this.p.app(k, result)
         })
@@ -3234,155 +3225,8 @@ impl<'a> Lowering<'a> {
                 self.p.func_ref(wrap)
             }
         };
+        inner.tail_k = inner.ret_k;
         inner
-    }
-
-    /// `@handle 'eff { args in … }`: the handler block becomes an escaping
-    /// capability closure; routed performs call it with their payloads and
-    /// their own return slot, so an abort runs the handler once and its
-    /// value rides the scope's Ret chain back — no unwinder, no handler
-    /// stack (capability-passing CPS for lexical handlers — Schuster,
-    /// Brachthäuser & Ostermann, ICFP 2020; Schuster et al., PLDI 2022;
-    /// handler semantics — Plotkin & Pretnar, LMCS 2013). The handled
-    /// scope is the rest of the enclosing block, lowered in place.
-    fn lower_handling(
-        &mut self,
-        stmt: &Stmt,
-        effect_name: &crate::name::Name,
-        handler_block: &Block,
-        rest: &[Node],
-        ctx: &Ctx,
-        k: ExprId,
-    ) -> ExprId {
-        // M7: the scope must run to the end of the enclosing function so
-        // the abort path is a pure Ret chain (abort as unwinding —
-        // Hillerström et al., FSCD 2017 §4.5); a handler in a nested
-        // block has no such chain yet.
-        if k != ctx.ret_k {
-            self.diagnostics
-                .push("lowering: @handle inside a nested block (not yet supported)".into());
-            return self.dead_end("nested_handle");
-        }
-        let handler_sym = self.units[ctx.unit]
-            .resolved
-            .effect_handler_definitions
-            .get(&stmt.id)
-            .copied();
-        let Some(handler_sym) = handler_sym else {
-            self.diagnostics
-                .push("lowering: @handle without a resolved handler".into());
-            return self.dead_end("unresolved_handler");
-        };
-        let sig = effect_name.symbol().ok().and_then(|s| {
-            self.units
-                .iter()
-                .find_map(|u| u.types.catalog.effects.get(&s).cloned())
-        });
-        let Some(sig) = sig else {
-            self.diagnostics
-                .push("lowering: @handle of an undeclared effect".into());
-            return self.dead_end("undeclared_effect");
-        };
-        if !sig.generics.is_empty() {
-            // Each instantiation would need its own capability closure
-            // (the same monomorphization the worklist does for functions).
-            self.diagnostics
-                .push("lowering: handlers for generic effects (not yet supported)".into());
-            return self.dead_end("generic_effect_handler");
-        }
-        // Payload types: the checker's zonked record for this handler
-        // (unannotated effect parameters were inferred from the perform
-        // sites that unified with them).
-        let handler_tys = self
-            .units
-            .iter()
-            .find_map(|u| u.types.handler_payload_tys.get(&handler_sym).cloned());
-        let mut payload_tys = Vec::with_capacity(sig.params.len());
-        for (i, param) in sig.params.iter().enumerate() {
-            let ty = handler_tys
-                .as_ref()
-                .and_then(|tys| tys.get(i))
-                .unwrap_or(param);
-            if matches!(ty, CheckTy::Var(_)) {
-                self.diagnostics.push(
-                    "lowering: effect parameter type unknown (annotate the effect declaration)"
-                        .into(),
-                );
-                return self.dead_end("unknown_effect_parameter");
-            }
-            let ty = ty.clone();
-            payload_tys.push(self.map_ty(&ty));
-        }
-        if handler_block.args.len() > payload_tys.len() {
-            self.diagnostics.push(
-                "lowering: handler block takes more arguments than the effect declares".into(),
-            );
-            return self.dead_end("handler_arity");
-        }
-
-        // The capability closure: [payloads…(, resumption), return slot]
-        // → ⊥. Its body is the handler block: completing normally
-        // delivers its value as the scope's value (abort); for a
-        // resuming handler (effect return ≠ Never) `continue v`
-        // tail-transfers into the resumption instead.
-        let slot_ty = self.p.expr_ty(ctx.raw_ret_k);
-        let bot = self.p.ty_bot();
-        let resume_pair_ty = (!sig.ret.is_never()).then(|| {
-            let resume_value_ty = self.map_ty(&sig.ret);
-            self.p.ty_tuple(&[resume_value_ty, slot_ty])
-        });
-        let mut dom_items = payload_tys;
-        if let Some(pair_ty) = resume_pair_ty {
-            dom_items.push(self.p.ty_fn(pair_ty, bot));
-        }
-        dom_items.push(slot_ty);
-        let dom = self.p.ty_tuple(&dom_items);
-        let cap = self.p.func("handler", dom, bot);
-        self.escaping.insert(cap);
-        let cap_var = self.p.var(cap);
-        let rk = self.p.extract(cap_var, (dom_items.len() - 1) as u32);
-        let mut inner = self.rebase_into_closure(ctx, rk);
-        if resume_pair_ty.is_some() {
-            inner.resume_k = Some(self.p.extract(cap_var, (dom_items.len() - 2) as u32));
-        }
-        let mut celled: Vec<(Symbol, ExprId)> = vec![];
-        for (i, arg) in handler_block.args.iter().enumerate() {
-            let value = self.p.extract(cap_var, i as u32);
-            let Ok(symbol) = arg.name.symbol() else {
-                continue;
-            };
-            if inner.cellable.contains(&symbol) {
-                celled.push((symbol, value));
-            } else {
-                inner.env.insert(symbol, Binding::Value(value));
-            }
-        }
-        let body = self.with_cells(&celled, &mut inner, |this, inner| {
-            let handler_k = inner.ret_k;
-            this.lower_block(handler_block, inner, handler_k)
-        });
-        self.p.set_body(cap, body);
-
-        let scope_result_ty = match *self.p.ty_kind(slot_ty) {
-            TyKind::Fn(carried, _) => carried,
-            _ => self.p.ty_void(),
-        };
-        let cap_ref = self.p.func_ref(cap);
-        self.handler_caps.insert(
-            handler_sym,
-            HandlerCap {
-                cap: cap_ref,
-                scope_result_ty,
-                resume_pair_ty,
-            },
-        );
-
-        // The handled scope: the rest of the block, lowered in place.
-        // The handler is local here: performs routed to it terminate in
-        // this frame, so they are safe regardless of the function's shape.
-        let mut scope_ctx = ctx.clone();
-        scope_ctx.local_handlers.insert(handler_sym);
-        self.lower_nodes(rest, &scope_ctx, k)
     }
 
     /// A perform routed to a lexical handler: call the capability with
@@ -3393,7 +3237,7 @@ impl<'a> Lowering<'a> {
     fn lower_routed_perform(
         &mut self,
         handler_sym: Symbol,
-        args: &[crate::node_kinds::call_arg::CallArg],
+        args: &[hir::CallArg],
         ctx: &Ctx,
         k: ExprId,
     ) -> ExprId {
@@ -3410,8 +3254,8 @@ impl<'a> Lowering<'a> {
             );
             return self.dead_end("perform_before_handler");
         };
-        // Resumable performs are handled on the statement spine
-        // (try_effect_split), where the rest of the block can become the
+        // Resumable performs are handled by the MIR statement-spine
+        // splitter, where the rest of the block can become the
         // resumption; reaching one here means it sits in an expression
         // position the split cannot reach yet.
         if cap.resume_pair_ty.is_some() {
@@ -3442,188 +3286,6 @@ impl<'a> Lowering<'a> {
             return None;
         }
         self.abort_shape(symbol).then_some(symbol)
-    }
-
-    /// A statement-spine expression that crosses a handler boundary: a
-    /// call to an abort-capable function, or a perform routed to a
-    /// resuming handler. Either way the rest of the block moves into an
-    /// escaping closure the callee/handler enters exactly once on the
-    /// normal path, and our own return slot rides along as the return
-    /// linkage — an abort skips the closure entirely and propagates back
-    /// as a plain Ret chain (a continuation that crosses a handler
-    /// boundary is lowered as an escaping closure). Returns None when
-    /// the expression is neither.
-    fn try_effect_split(
-        &mut self,
-        expr: &Expr,
-        bind: Option<(Symbol, bool)>,
-        rest: &[Node],
-        ctx: &Ctx,
-        k: ExprId,
-    ) -> Option<ExprId> {
-        // Performs into a resuming handler: the rest of the block is the
-        // resumption.
-        if let ExprKind::CallEffect { args, .. } = &expr.kind
-            && let Some(&handler_sym) = self.units[ctx.unit].resolved.effect_handlers.get(&expr.id)
-            && let Some(cap) = self.handler_caps.get(&handler_sym).copied()
-            && let Some(pair_ty) = cap.resume_pair_ty
-        {
-            let handler_reachable = ctx.abort_ok || ctx.local_handlers.contains(&handler_sym);
-            if !handler_reachable || k != ctx.ret_k {
-                self.diagnostics.push(
-                    "lowering: a resumable perform outside the enclosing function's statement spine (not yet supported)"
-                        .into(),
-                );
-                return Some(self.dead_end("resumable_perform_off_spine"));
-            }
-            return Some(self.lower_resumable_perform(cap, pair_ty, args, bind, rest, ctx));
-        }
-
-        self.abortable_callee(expr, ctx)?;
-        if !ctx.abort_ok || k != ctx.ret_k {
-            self.diagnostics.push(
-                "lowering: a call that can abort outside the enclosing function's statement spine (not yet supported)"
-                    .into(),
-            );
-            return Some(self.dead_end("abort_call_off_spine"));
-        }
-        let ExprKind::Call {
-            callee,
-            args,
-            trailing_block,
-            ..
-        } = &expr.kind
-        else {
-            return Some(self.dead_end("abort_call_shape"));
-        };
-        if trailing_block.is_some() {
-            self.diagnostics.push(
-                "lowering: trailing block on a call that can abort (not yet supported)".into(),
-            );
-            return Some(self.dead_end("abort_call_trailing_block"));
-        }
-        let target = self.resolve_callee(expr, callee, args, ctx);
-        let Some((label, _, prefix)) = target else {
-            return Some(self.dead_end("abort_call_unresolved"));
-        };
-        if !matches!(prefix, Prefix::None) {
-            self.diagnostics
-                .push("lowering: method or init calls that can abort (not yet supported)".into());
-            return Some(self.dead_end("abort_call_method"));
-        }
-
-        // The callee's normal-continuation slot fixes the closure's
-        // shape: Fn([result, slot], ⊥).
-        let dom_ty = self.p.dom(label);
-        let normal_k_ty = match self.p.ty_kind(dom_ty) {
-            TyKind::Tuple(items) if items.len() >= 2 => items[items.len() - 2],
-            _ => {
-                self.diagnostics
-                    .push("lowering: abort-capable callee without a normal-return slot".into());
-                return Some(self.dead_end("abort_callee_shape"));
-            }
-        };
-        let pair_ty = match *self.p.ty_kind(normal_k_ty) {
-            TyKind::Fn(pair, _) => pair,
-            _ => {
-                self.diagnostics
-                    .push("lowering: abort-capable callee without a paired normal return".into());
-                return Some(self.dead_end("abort_callee_shape"));
-            }
-        };
-        let callee_slot_ty = match self.p.ty_kind(pair_ty) {
-            TyKind::Tuple(items) if items.len() == 2 => items[1],
-            _ => {
-                self.diagnostics
-                    .push("lowering: abort-capable callee without a paired normal return".into());
-                return Some(self.dead_end("abort_callee_shape"));
-            }
-        };
-        if callee_slot_ty != self.p.expr_ty(ctx.raw_ret_k) {
-            self.diagnostics.push(
-                "lowering: abort linkage type mismatch (handler scope and call scope carry different value types)"
-                    .into(),
-            );
-        }
-
-        let rest_ref = self.rest_closure("after_abortable", pair_ty, bind, rest, ctx);
-        let slot = ctx.raw_ret_k;
-        let func_ref = self.p.func_ref(label);
-        let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
-        Some(
-            self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
-                values.push(rest_ref);
-                values.push(slot);
-                let tuple = this.p.tuple(&values);
-                this.p.app(func_ref, tuple)
-            }),
-        )
-    }
-
-    /// The rest of the block, reified as an escaping closure
-    /// `λ(value, slot)`: the value is bound, discarded, or delivered as
-    /// the block's result per `bind`/`rest`, and all return linkage in
-    /// the body is rebased onto the closure's own slot. This is the
-    /// continuation a callee (or a resuming handler) enters exactly once
-    /// on the normal path, and an abort skips entirely.
-    fn rest_closure(
-        &mut self,
-        name: &str,
-        pair_ty: TyId,
-        bind: Option<(Symbol, bool)>,
-        rest: &[Node],
-        ctx: &Ctx,
-    ) -> ExprId {
-        let bot = self.p.ty_bot();
-        let rest_k = self.p.func(name, pair_ty, bot);
-        self.escaping.insert(rest_k);
-        let rest_var = self.p.var(rest_k);
-        let value = self.p.extract(rest_var, 0);
-        let rk = self.p.extract(rest_var, 1);
-        let mut inner = self.rebase_into_closure(ctx, rk);
-        let inner_k = inner.ret_k;
-        let body = match bind {
-            Some((symbol, mutated)) => {
-                if mutated {
-                    self.with_cells(&[(symbol, value)], &mut inner, |this, inner| {
-                        let bound_k = inner.ret_k;
-                        this.lower_nodes(rest, inner, bound_k)
-                    })
-                } else {
-                    inner.env.insert(symbol, Binding::Value(value));
-                    self.lower_nodes(rest, &inner, inner_k)
-                }
-            }
-            None if rest.is_empty() => self.p.app(inner_k, value),
-            None => self.lower_nodes(rest, &inner, inner_k),
-        };
-        self.p.set_body(rest_k, body);
-        self.p.func_ref(rest_k)
-    }
-
-    /// A statement-spine perform routed to a resuming handler: the rest
-    /// of the block becomes the resumption closure, passed to the
-    /// capability alongside the payloads and our own return slot (the
-    /// same split as an abort-capable call, applied at the perform —
-    /// the M9 step of the capability-passing ladder).
-    fn lower_resumable_perform(
-        &mut self,
-        cap: HandlerCap,
-        pair_ty: TyId,
-        args: &[crate::node_kinds::call_arg::CallArg],
-        bind: Option<(Symbol, bool)>,
-        rest: &[Node],
-        ctx: &Ctx,
-    ) -> ExprId {
-        let resume_ref = self.rest_closure("after_perform", pair_ty, bind, rest, ctx);
-        let slot = ctx.raw_ret_k;
-        let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
-        self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
-            values.push(resume_ref);
-            values.push(slot);
-            let tuple = this.p.tuple(&values);
-            this.p.app(cap.cap, tuple)
-        })
     }
 
     // ----- @_ir splices ------------------------------------------------------
@@ -3673,6 +3335,7 @@ impl<'a> Lowering<'a> {
                 (Op::Cmp(cmp), vec![operand(self, lhs)?, operand(self, rhs)?])
             }
             K::Trunc { val, .. } => (Op::Trunc, vec![operand(self, val)?]),
+            K::IsUnique { ptr, .. } => (Op::IsUnique, vec![operand(self, ptr)?]),
             K::IntToFloat { val, .. } => (Op::IToF, vec![operand(self, val)?]),
             K::Alloc { ty, count, .. } => {
                 // `alloc T count`: count elements of T, sized by
@@ -3757,11 +3420,11 @@ impl<'a> Lowering<'a> {
             ),
         };
         let result_ty = match op {
-            Op::Cmp(_) => self.p.ty_bool(),
+            Op::Cmp(_) | Op::IsUnique => self.p.ty_bool(),
             Op::Trunc => self.p.ty_i64(),
             Op::IToF => self.p.ty_f64(),
             Op::Alloc => self.p.ty_ptr(),
-            Op::Copy | Op::Store => self.p.ty_void(),
+            Op::Copy | Op::Store | Op::Free => self.p.ty_void(),
             Op::IoWrite => self.p.ty_i64(),
             _ => self.p.expr_ty(operands[0]),
         };
@@ -3788,14 +3451,16 @@ impl<'a> Lowering<'a> {
 
     /// The checker type of an expression node, θ-substituted.
     fn checker_ty(&self, expr: &Expr, ctx: &Ctx) -> CheckTy {
-        let raw = self.units[ctx.unit]
-            .types
-            .node_types
-            .get(&expr.id)
-            .cloned()
-            .unwrap_or(CheckTy::Error);
+        let raw = expr.ty.clone();
         let substituted = raw.substitute(&ctx.theta, &Default::default(), &Default::default());
         self.normalize_check_ty(substituted, ctx.unit)
+    }
+
+    fn borrow_erased_ty(ty: CheckTy) -> CheckTy {
+        match ty {
+            CheckTy::Borrow(_, inner) | CheckTy::Unique(inner) => *inner,
+            other => other,
+        }
     }
 
     fn normalize_check_ty(&self, ty: CheckTy, unit: usize) -> CheckTy {
@@ -3858,8 +3523,13 @@ impl<'a> Lowering<'a> {
     /// instantiation (monomorphic recursion typed against the group's
     /// skeleton — THIH §11.6.3) inherit the enclosing specialization's
     /// binding.
-    fn call_theta(&self, symbol: Symbol, node: crate::node_id::NodeID, ctx: &Ctx) -> Theta {
-        let mut theta = self.instantiation_at(node, ctx);
+    fn call_theta(
+        &self,
+        symbol: Symbol,
+        instantiation: Option<&Vec<(Symbol, CheckTy)>>,
+        ctx: &Ctx,
+    ) -> Theta {
+        let mut theta = self.instantiation_at(instantiation, ctx);
         if let Some(scheme) = self.units.iter().find_map(|u| u.types.schemes.get(&symbol)) {
             for param in &scheme.params {
                 if !theta.contains_key(&param.symbol)
@@ -3874,9 +3544,9 @@ impl<'a> Lowering<'a> {
 
     /// The per-call-site instantiation, composed with the enclosing θ
     /// (`instantiations ∘ θ` — the worklist's edge label).
-    fn instantiation_at(&self, node: crate::node_id::NodeID, ctx: &Ctx) -> Theta {
+    fn instantiation_at(&self, instantiation: Option<&Vec<(Symbol, CheckTy)>>, ctx: &Ctx) -> Theta {
         let mut theta = Theta::default();
-        if let Some(pairs) = self.units[ctx.unit].types.instantiations.get(&node) {
+        if let Some(pairs) = instantiation {
             for (symbol, ty) in pairs {
                 let ty = ty.substitute(&ctx.theta, &Default::default(), &Default::default());
                 theta.insert(*symbol, ty);
@@ -3889,6 +3559,8 @@ impl<'a> Lowering<'a> {
     /// (T…) → R turns into Fn([T…, Fn(R, ⊥)], ⊥).
     fn map_ty(&mut self, ty: &CheckTy) -> TyId {
         match ty {
+            // Uniqueness is static: `*T` is represented as T.
+            CheckTy::Unique(inner) => self.map_ty(inner),
             CheckTy::Nominal(symbol, _args) => {
                 if *symbol == Symbol::Int {
                     self.p.ty_i64()
@@ -3912,6 +3584,7 @@ impl<'a> Lowering<'a> {
                     self.p.ty(TyKind::Boxed(*symbol))
                 }
             }
+            CheckTy::Borrow(_, inner) => self.map_ty(inner),
             CheckTy::Func(params, ret, _eff) => {
                 let mut dom_items: Vec<TyId> = params.iter().map(|t| self.map_ty(t)).collect();
                 let ret_ty = self.map_ty(ret);
@@ -3996,7 +3669,7 @@ impl<'a> Lowering<'a> {
         // nothing; scanning past it to an earlier expression mistypes
         // main's return).
         let result_check_ty = self
-            .top_level_value_ty(unit, nodes.last())
+            .top_level_value_ty(nodes.last())
             .unwrap_or(CheckTy::Nominal(Symbol::Void, vec![]));
         let result_ty = self.map_ty(&result_check_ty);
 
@@ -4018,10 +3691,12 @@ impl<'a> Lowering<'a> {
 
         let ctx = Ctx {
             unit,
+            owner: None,
             theta: Theta::default(),
             env: FxHashMap::default(),
             local_evidence: FxHashMap::default(),
             ret_k,
+            tail_k: ret_k,
             raw_ret_k: ret_k,
             normal_k: None,
             // Performs directly in main abort straight to its return.
@@ -4031,6 +3706,9 @@ impl<'a> Lowering<'a> {
             local_handlers: FxHashSet::default(),
             params: vec![],
             loops: vec![],
+            drop_stack: vec![],
+            drop_flags: FxHashMap::default(),
+            initializing_self: None,
             cellable,
         };
         let body = self.lower_main_nodes(&nodes, &ctx, ret_k);
@@ -4040,18 +3718,27 @@ impl<'a> Lowering<'a> {
 
     /// Like lower_nodes, but the final expression's value goes to ret_k.
     fn lower_main_nodes(&mut self, nodes: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
-        self.lower_nodes(nodes, ctx, k)
+        // The combined main body spans every file's top level: its scope-exit
+        // drops are the files' flow schedules concatenated (a by-symbol
+        // lookup table — emission order comes from the scope's own locals).
+        let drops = self.units[ctx.unit]
+            .asts
+            .values()
+            .flat_map(|file| file.drops.iter().cloned())
+            .collect();
+        let body = mir::build_nodes(self.units[ctx.unit].types, nodes, drops);
+        self.lower_mir_body(&body, ctx, k)
     }
 
     /// The checker type of a top-level block's final value: the last
     /// node's expression type (or the branch type of a block-final
     /// if/else); None for statements that yield nothing.
-    fn top_level_value_ty(&self, unit: usize, last: Option<&Node>) -> Option<CheckTy> {
+    fn top_level_value_ty(&self, last: Option<&Node>) -> Option<CheckTy> {
         match last? {
             Node::Stmt(Stmt {
                 kind: StmtKind::Expr(expr),
                 ..
-            }) => self.units[unit].types.node_types.get(&expr.id).cloned(),
+            }) => Some(expr.ty.clone()),
             Node::Stmt(Stmt {
                 kind: StmtKind::If(_, then_block, Some(_)),
                 ..
@@ -4060,7 +3747,7 @@ impl<'a> Lowering<'a> {
                     kind: StmtKind::Expr(e),
                     ..
                 })
-                | Node::Expr(e) => self.units[unit].types.node_types.get(&e.id).cloned(),
+                | Node::Expr(e) => Some(e.ty.clone()),
                 _ => None,
             }),
             _ => None,
@@ -4112,10 +3799,12 @@ impl<'a> Lowering<'a> {
         }
         let ctx = Ctx {
             unit,
+            owner: None,
             theta: Theta::default(),
             env: FxHashMap::default(),
             local_evidence: FxHashMap::default(),
             ret_k,
+            tail_k: ret_k,
             raw_ret_k: ret_k,
             normal_k: None,
             abort_ok: true,
@@ -4124,6 +3813,9 @@ impl<'a> Lowering<'a> {
             local_handlers: FxHashSet::default(),
             params: vec![],
             loops: vec![],
+            drop_stack: vec![],
+            drop_flags: FxHashMap::default(),
+            initializing_self: None,
             cellable,
         };
 
@@ -4138,7 +3830,7 @@ impl<'a> Lowering<'a> {
         let call_main_ref = self.p.func_ref(call_main);
 
         let setup_value_ty = self
-            .top_level_value_ty(unit, nodes.last())
+            .top_level_value_ty(nodes.last())
             .map(|ty| self.map_ty(&ty))
             .unwrap_or(void_ty);
         let k = self.discarding_cont(setup_value_ty, call_main_ref);
@@ -4165,6 +3857,14 @@ fn block_value_ty(lowering: &mut Lowering, block: &Block, ctx: &Ctx) -> TyId {
     match last_expr {
         Some(e) => lowering.expr_lambda_ty(e, ctx),
         None => lowering.p.ty_void(),
+    }
+}
+
+fn receiver_root_symbol(expr: &Expr) -> Option<Symbol> {
+    match &expr.kind {
+        ExprKind::Variable(name) => name.symbol().ok(),
+        ExprKind::Member(Some(receiver), ..) => receiver_root_symbol(receiver),
+        _ => None,
     }
 }
 

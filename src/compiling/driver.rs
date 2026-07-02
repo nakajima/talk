@@ -3,19 +3,25 @@ use crate::{
     compiling::module::{Module, ModuleEnvironment, ModuleId, ModuleTypes, StableModuleId},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     lexer::Lexer,
+    name::Name,
     name_resolution::{
         name_resolver::{NameResolver, ResolvedNames},
         symbol::{Symbol, Symbols},
     },
     node::Node,
     node_id::{FileID, NodeID},
-    node_kinds::decl::{DeclKind, ImportPath},
+    node_kinds::{
+        decl::{DeclKind, ImportPath},
+        expr::ExprKind,
+        type_annotation::TypeAnnotationKind,
+    },
     parser::Parser,
     parser_error::ParserError,
     types::TypeOutput,
 };
 use indexmap::IndexMap;
 use rustc_hash::FxHashSet;
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::{hash::Hash, hash::Hasher};
 use std::{io, path::PathBuf, rc::Rc};
@@ -56,10 +62,16 @@ pub struct Lowered {
 
 impl DriverPhase for Typed {}
 pub struct Typed {
-    pub asts: IndexMap<Source, AST<crate::parsing::ast::NameResolved>>,
+    /// The program lowered to HIR (one entry per analyzed file). Built in
+    /// `type_check` by consuming the surface AST, which the compile pipeline
+    /// does not retain past this point — the HIR is the sole program tree from
+    /// here on (ownership checks it, lowering builds the MIR from it). The LSP,
+    /// which needs source-faithful nodes the HIR strips, keeps its own AST.
+    pub hir: IndexMap<Source, crate::hir::HirFile>,
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
     pub types: TypeOutput,
+    pub flow: crate::flow::FlowFacts,
     pub diagnostics: Vec<AnyDiagnostic>,
 }
 
@@ -197,12 +209,11 @@ impl Source {
         }
     }
 
-    pub fn path(&self) -> &str {
-        #[allow(clippy::unwrap_used)]
+    pub fn path(&self) -> Cow<'_, str> {
         match &self.kind {
-            SourceKind::File(path) => path.to_str().unwrap(),
-            SourceKind::String(..) => ":memory:",
-            SourceKind::InMemory { path, .. } => path.to_str().unwrap(),
+            SourceKind::File(path) => path.to_string_lossy(),
+            SourceKind::String(..) => Cow::Borrowed(":memory:"),
+            SourceKind::InMemory { path, .. } => path.to_string_lossy(),
         }
     }
 
@@ -226,8 +237,10 @@ pub struct Driver<Phase: DriverPhase = Initial> {
     pub phase: Phase,
 }
 
-/// Extract all import paths from a parsed AST
+/// Extract all module paths from imports and qualified references in a parsed AST.
 fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
+    use derive_visitor::Drive;
+
     let mut paths = Vec::new();
     for root in &ast.roots {
         if let Node::Decl(decl) = root
@@ -236,7 +249,47 @@ fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
             paths.push(import.path.clone());
         }
     }
+
+    let mut expr_collector =
+        derive_visitor::visitor_enter_fn(|expr: &crate::node_kinds::expr::Expr| {
+            if let ExprKind::Variable(Name::Raw(raw)) = &expr.kind
+                && let Some(path) = qualified_relative_module_path(raw)
+            {
+                paths.push(ImportPath::Relative(path));
+            }
+        });
+    for root in &ast.roots {
+        root.drive(&mut expr_collector);
+    }
+    drop(expr_collector);
+
+    let mut type_collector = derive_visitor::visitor_enter_fn(
+        |ty: &crate::node_kinds::type_annotation::TypeAnnotation| {
+            if let TypeAnnotationKind::Nominal {
+                name: Name::Raw(raw),
+                ..
+            } = &ty.kind
+                && let Some(path) = qualified_relative_module_path(raw)
+            {
+                paths.push(ImportPath::Relative(path));
+            }
+        },
+    );
+    for root in &ast.roots {
+        root.drive(&mut type_collector);
+    }
+    drop(type_collector);
+
     paths
+}
+
+fn qualified_relative_module_path(raw: &str) -> Option<String> {
+    let (module_path, _) = raw.rsplit_once("::")?;
+    if module_path.starts_with("./") || module_path.starts_with("../") {
+        Some(module_path.to_string())
+    } else {
+        None
+    }
 }
 
 /// Resolve an import path relative to a source file path.
@@ -251,7 +304,10 @@ fn resolve_import_path(source_path: &str, import_path: &ImportPath) -> Option<(P
 
             // Strip leading "./" from relative path before joining (to match name resolver)
             let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
-            let resolved = parent.join(clean_rel);
+            let mut resolved = parent.join(clean_rel);
+            if resolved.extension().is_none() {
+                resolved.set_extension("tlk");
+            }
 
             // Canonicalize for cycle detection (normalizes .. and symlinks)
             let canonical = resolved.canonicalize().ok()?;
@@ -268,10 +324,13 @@ fn resolve_import_path(source_path: &str, import_path: &ImportPath) -> Option<(P
 
 impl Driver {
     pub fn new(files: Vec<Source>, mut config: DriverConfig) -> Self {
-        #[allow(clippy::unwrap_used)]
-        let mut modules = Rc::into_inner(config.modules).unwrap();
-        modules.import_core(super::core::compile());
-        config.modules = Rc::new(modules);
+        {
+            let modules = Rc::make_mut(&mut config.modules);
+            modules.import_core(super::core::compile());
+            for module in super::stdlib::modules() {
+                modules.import((*module).clone());
+            }
+        }
 
         Self {
             files,
@@ -340,7 +399,7 @@ impl Driver {
                     let source_path = file.path();
                     for import_path in extract_import_paths(&parsed) {
                         if let Some((canonical, resolved)) =
-                            resolve_import_path(source_path, &import_path)
+                            resolve_import_path(source_path.as_ref(), &import_path)
                             && !processed_paths.contains(&canonical)
                         {
                             processed_paths.insert(canonical);
@@ -415,7 +474,28 @@ fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
         AnyDiagnostic::Parsing(diagnostic) => diagnostic.severity == Severity::Error,
         AnyDiagnostic::NameResolution(diagnostic) => diagnostic.severity == Severity::Error,
         AnyDiagnostic::Types(diagnostic) => diagnostic.severity == Severity::Error,
+        AnyDiagnostic::Ownership(diagnostic) => diagnostic.severity == Severity::Error,
     })
+}
+
+fn error_diagnostic_files(diagnostics: &[AnyDiagnostic]) -> Option<FxHashSet<FileID>> {
+    let mut files = FxHashSet::default();
+    for diag in diagnostics {
+        let (id, severity) = match diag {
+            AnyDiagnostic::Parsing(diagnostic) => (diagnostic.id, &diagnostic.severity),
+            AnyDiagnostic::NameResolution(diagnostic) => (diagnostic.id, &diagnostic.severity),
+            AnyDiagnostic::Types(diagnostic) => (diagnostic.id, &diagnostic.severity),
+            AnyDiagnostic::Ownership(diagnostic) => (diagnostic.id, &diagnostic.severity),
+        };
+        if *severity != Severity::Error {
+            continue;
+        }
+        if id.0 == FileID::SYNTHESIZED {
+            return None;
+        }
+        files.insert(id.0);
+    }
+    Some(files)
 }
 
 impl Driver<NameResolved> {
@@ -456,15 +536,43 @@ impl Driver<NameResolved> {
             self.config.module_id,
         );
         diagnostics.extend(type_diagnostics);
+        // Consume the surface AST into the HIR (once, NodeID-preserving) for the
+        // error-free files: ownership checks it and lowering builds its MIR from
+        // it. Files with errors are dropped rather than lowered. The surface AST
+        // is not retained past here in the compile pipeline.
+        let mut hir: IndexMap<Source, crate::hir::HirFile> = IndexMap::default();
+        let (flow, flow_diagnostics) = match error_diagnostic_files(&diagnostics) {
+            None => (crate::flow::FlowFacts::default(), vec![]),
+            Some(blocked_files) => {
+                for (source, ast) in asts {
+                    if blocked_files.contains(&ast.file_id) {
+                        continue;
+                    }
+                    let file = crate::hir::build::build_file(&ast, &types);
+                    hir.insert(source, file);
+                }
+                if hir.is_empty() {
+                    (crate::flow::FlowFacts::default(), vec![])
+                } else {
+                    // The flow checker annotates the HIR in place
+                    // (`Block::drops`, `Stmt::drops`, `Expr.ownership`) —
+                    // lowering's sole drop/move source — and returns the
+                    // editor-facing facts.
+                    crate::flow::check_flow(&mut hir, &types, self.config.module_id)
+                }
+            }
+        };
+        diagnostics.extend(flow_diagnostics);
 
         Driver {
             files: self.files,
             config: self.config,
             phase: Typed {
-                asts,
+                hir,
                 symbols,
                 resolved_names,
                 types,
+                flow,
                 diagnostics,
             },
         }
@@ -472,17 +580,18 @@ impl Driver<NameResolved> {
 }
 
 impl Driver<Typed> {
-    /// Lower to λ_G (whole-program, with core's typed artifacts — see
+    /// Lower to λ_G (whole-program, with core and stdlib typed artifacts — see
     /// src/lower). Infallible; unsupported constructs surface as lowering
     /// diagnostics.
     pub fn lower(self) -> Driver<Lowered> {
         use crate::lower::{LowerUnit, lower_program};
 
         let Typed {
-            asts,
+            hir,
             symbols: _,
             resolved_names,
             types,
+            flow: _,
             diagnostics,
         } = self.phase;
 
@@ -491,16 +600,24 @@ impl Driver<Typed> {
         } else {
             Some(crate::compiling::core::typed())
         };
+        let stdlib = crate::compiling::stdlib::typed_modules(self.config.modules.as_ref());
         let mut units = vec![];
         if let Some(core) = core.as_ref() {
             units.push(LowerUnit {
-                asts: &core.asts,
+                asts: &core.hir,
                 types: &core.types,
                 resolved: &core.resolved_names,
             });
         }
+        for module in &stdlib {
+            units.push(LowerUnit {
+                asts: &module.hir,
+                types: &module.types,
+                resolved: &module.resolved_names,
+            });
+        }
         units.push(LowerUnit {
-            asts: &asts,
+            asts: &hir,
             types: &types,
             resolved: &resolved_names,
         });
@@ -655,7 +772,49 @@ pub fn render_bytecode_from(
 ) -> Result<String, String> {
     let mut lowered = lower_for_display(name, source)?;
     let module = lowered.schedule()?;
-    Ok(module.render_styled(styles))
+    let vm_styles = crate::vm::Styles {
+        keyword: styles.keyword,
+        func: styles.func,
+        reset: styles.reset,
+    };
+    Ok(module.render_styled(&vm_styles))
+}
+
+/// Compile, schedule, and encode a VM module as Talk bytecode.
+pub fn compile_bytecode_from(name: &str, source: Source) -> Result<Vec<u8>, String> {
+    compile_bytecode_sources(name, vec![source])
+}
+
+/// Compile sources, schedule, and encode a VM module as Talk bytecode.
+pub fn compile_bytecode_sources(name: &str, sources: Vec<Source>) -> Result<Vec<u8>, String> {
+    let driver = Driver::new(sources, DriverConfig::new(name));
+    let parsed = driver.parse().map_err(|err| format!("{err:?}"))?;
+    let resolved = parsed.resolve_names().map_err(|err| format!("{err:?}"))?;
+    let typed = resolved.type_check();
+    if typed.has_errors() {
+        return Err(typed
+            .diagnostics()
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    let mut lowered = typed.lower();
+    if !lowered.phase.diagnostics.is_empty() {
+        return Err(format!(
+            "not yet supported by the backend: {}",
+            lowered.phase.diagnostics.join("; ")
+        ));
+    }
+    let module = lowered.schedule()?;
+    module.encode_bytecode().map_err(|err| err.to_string())
+}
+
+/// Compile and schedule, dumping the raw VM module (`talk bytecode <file>`).
+pub fn render_raw_bytecode_from(name: &str, source: Source) -> Result<String, String> {
+    let mut lowered = lower_for_display(name, source)?;
+    let module = lowered.schedule()?;
+    Ok(format!("{module:#?}"))
 }
 
 fn lower_for_display(name: &str, source: Source) -> Result<Driver<Lowered>, String> {
@@ -714,7 +873,10 @@ pub mod tests {
     fn render_lowered_annotates_string_statics() {
         // A string literal's static pointer shows the bytes it points at.
         let ir = render_lowered("IrTest", "print(\"hi\")").expect("ir");
-        assert!(ir.contains("static+0 (\"hi\")"), "{ir}");
+        assert!(
+            ir.contains("record_new(ByteStorage, static+0) (\"hi\")"),
+            "{ir}"
+        );
     }
 
     #[test]
@@ -733,6 +895,32 @@ pub mod tests {
         .expect("bytecode");
         assert!(listing.contains("chunk 0: main"), "{listing}");
         assert!(listing.contains("ret r"), "{listing}");
+    }
+
+    #[test]
+    fn render_raw_bytecode_dumps_module() {
+        let dump = render_raw_bytecode_from(
+            "BytecodeTest",
+            Source::from("func double(x: Int) -> Int { x * 2 }\ndouble(21)"),
+        )
+        .expect("bytecode");
+        assert!(dump.contains("Module {"), "{dump}");
+        assert!(dump.contains("chunks:"), "{dump}");
+        assert!(dump.contains("code:"), "{dump}");
+        assert!(dump.contains("entry:"), "{dump}");
+    }
+
+    #[test]
+    fn compile_bytecode_from_runs_decoded_module() {
+        let bytes = compile_bytecode_from(
+            "BytecodeTest",
+            Source::from("func double(x: Int) -> Int { x * 2 }\ndouble(21)"),
+        )
+        .expect("bytecode");
+        let module = crate::vm::Module::decode_bytecode(&bytes).expect("decode");
+        let mut io = crate::vm::io::CaptureIO::default();
+        let value = crate::vm::interp::run(&module, &mut io).expect("vm");
+        assert_eq!(value, crate::vm::interp::Value::I64(42));
     }
 
     #[test]
@@ -832,7 +1020,10 @@ pub mod tests {
             preserve_comments: false,
         };
 
-        let driver_b = Driver::new(vec![Source::from("Hello(x: 123).x")], config);
+        let driver_b = Driver::new(
+            vec![Source::from("use { Hello } from A\nHello(x: 123).x")],
+            config,
+        );
 
         let resolved_b = driver_b.parse().unwrap().resolve_names().unwrap();
         assert!(
@@ -840,6 +1031,48 @@ pub mod tests {
             "{:?}",
             resolved_b.phase.diagnostics
         );
+    }
+
+    #[test]
+    fn imports_stdlib_modules_by_package_name() {
+        let driver = Driver::new(
+            vec![Source::from(
+                "use { Directory, File, DirectoryEntry } from fs\nlet dir: Directory\nlet file: File\nlet entry: DirectoryEntry\n",
+            )],
+            DriverConfig::new("TestDriver"),
+        );
+
+        let checked = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        assert!(!checked.has_errors(), "{:?}", checked.diagnostics());
+    }
+
+    #[test]
+    fn auto_discovers_qualified_relative_paths() {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let importer_path = current_dir.join("dev/fixtures/qualified_importer.tlk");
+        let exportee_path = current_dir.join("dev/fixtures/qualified_exportee.tlk");
+
+        std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
+        std::fs::write(&importer_path, "./qualified_exportee::exported\n").unwrap();
+
+        let driver = Driver::new(
+            vec![Source::from(importer_path.clone())],
+            DriverConfig::new("TestDriver"),
+        );
+        let resolved = driver.parse().unwrap().resolve_names().unwrap();
+        assert!(
+            !resolved.has_errors(),
+            "no diagnostics: {:?}",
+            resolved.phase.diagnostics
+        );
+
+        let _ = std::fs::remove_file(&importer_path);
+        let _ = std::fs::remove_file(&exportee_path);
     }
 
     #[test]
@@ -852,7 +1085,7 @@ pub mod tests {
         std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
         std::fs::write(
             &importer_path,
-            "import { exported } from ./exportee.tlk\nexported\n",
+            "use { exported } from ./exportee.tlk\nexported\n",
         )
         .unwrap();
 

@@ -1,43 +1,88 @@
 // no-core
-import { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
-import { _alloc, _copy, _load, _ptr_add } from ./Memory.tlk
+use { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
+use { ByteStorage, _alloc, _copy, _ptr_add } from ./Memory.tlk
+use { Borrowed, CheapClone } from ./Ownership.tlk
 
 public struct String {
-	let base: RawPtr
+	let storage: ByteStorage
 	let length: Int
 	let capacity: Int
 
 	init(base: RawPtr, length: Int, capacity: Int) {
-		self.base = base
+		self.storage = ByteStorage(base: base)
 		self.length = length
 		self.capacity = capacity
 		self
 	}
+
+	func to_string() -> String {
+		let base: RawPtr = _alloc<Byte>(self.length)
+		_copy(self.storage.base, base, self.length)
+		String(base, self.length, self.length)
+	}
 }
 
+public struct Substring {
+	let storage: ByteStorage
+	let start: Int
+	let length: Int
+
+	init(storage: ByteStorage, start: Int, length: Int) {
+		self.storage = storage
+		self.start = start
+		self.length = length
+		self
+	}
+}
+
+extend Substring: Borrowed {}
+
+extend String: CheapClone {}
+
 public protocol StringMethods {
+	func as_substring() -> Substring
 	func byte_at(index: Int) -> Byte
-	func slice(start: Int, length: Int) -> String
-	func find(needle: String) -> Int
-	func find_from(needle: String, start: Int) -> Int
+	func slice(start: Int, length: Int) -> Substring
+	func find(needle: &String) -> Int
+	func find_from(needle: &String, start: Int) -> Int
 }
 
 extend String: StringMethods {
+	func as_substring() -> Substring {
+		Substring(self.storage, 0, self.length)
+	}
+
 	func byte_at(index: Int) -> Byte {
-		let ptr: RawPtr = _ptr_add(self.base, index)
-		_load<Byte>(ptr)
+		self.storage.get(index)
 	}
 
-	func slice(start: Int, length: Int) -> String {
-		let new_base: RawPtr = _ptr_add(self.base, start)
-		String(new_base, length, length)
+	func slice(start: Int, length: Int) -> Substring {
+		self.as_substring().slice(start, length)
 	}
 
-	func find(needle: String) -> Int {
+	func find(needle: &String) -> Int {
+		self.as_substring().find(needle)
+	}
+
+	func find_from(needle: &String, start: Int) -> Int {
+		self.as_substring().find_from(needle, start)
+	}
+}
+
+extend Substring {
+	func byte_at(index: Int) -> Byte {
+		self.storage.get(self.start + index)
+	}
+
+	func slice(start: Int, length: Int) -> Substring {
+		Substring(self.storage, self.start + start, length)
+	}
+
+	func find(needle: &String) -> Int {
 		self.find_from(needle, 0)
 	}
 
-	func find_from(needle: String, start: Int) -> Int {
+	func find_from(needle: &String, start: Int) -> Int {
 		if start < 0 { return -1 }
 		if self.length < start { return -1 }
 		if needle.length == 0 { return start }
@@ -49,10 +94,37 @@ extend String: StringMethods {
 			if last < i {
 				break
 			}
-			if self.slice(i, needle.length).equals(needle) { return i }
+			if self.slice(i, needle.length).equals_string(needle) { return i }
 			i = i + 1
 		}
 		-1
+	}
+
+	func to_string() -> String {
+		let base: RawPtr = _alloc<Byte>(self.length)
+		let source: RawPtr = _ptr_add(self.storage.base, self.start)
+		_copy(source, base, self.length)
+		String(base, self.length, self.length)
+	}
+
+	func equals_string(rhs: &String) -> Bool {
+		if self.length != rhs.length { return false }
+
+		let i = 0
+		loop i < self.length {
+			let lhs_byte: Byte = self.byte_at(i)
+			let rhs_byte: Byte = rhs.byte_at(i)
+			let same: Bool = @_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
+			if same == false { return false }
+			i = i + 1
+		}
+		true
+	}
+}
+
+extend Substring: Add {
+	func add(rhs: String) -> String {
+		self.to_string() + rhs
 	}
 }
 
@@ -62,10 +134,10 @@ extend String: Add {
 		let rhsLen: Int = rhs.length
 		let newLen: Int = selfLen + rhsLen
 		let newBase: RawPtr = _alloc<Byte>(newLen)
-		_copy(self.base, newBase, selfLen)
+		_copy(self.storage.base, newBase, selfLen)
 
 		let rhsDest: RawPtr = _ptr_add(newBase, selfLen)
-		_copy(rhs.base, rhsDest, rhsLen)
+		_copy(rhs.storage.base, rhsDest, rhsLen)
 		String(newBase, newLen, newLen)
 	}
 }

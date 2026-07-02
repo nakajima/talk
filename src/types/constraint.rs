@@ -40,6 +40,21 @@ pub enum CtReason {
     Effect,
 }
 
+impl CtReason {
+    /// The reason for sub-constraints reached by structurally decomposing a
+    /// constraint with this reason. Application-position auto-borrow coercion
+    /// (`Apply`) is only valid at the immediate argument; once we descend under
+    /// a type constructor the position may flip polarity (e.g. a function
+    /// parameter is contravariant), so we drop `Apply` to force invariant
+    /// unification. Other reasons are already non-coercing and pass through.
+    pub fn nested(self) -> CtReason {
+        match self {
+            CtReason::Apply => CtReason::Body,
+            other => other,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CtOrigin {
     pub node: NodeID,
@@ -49,6 +64,16 @@ pub struct CtOrigin {
 impl CtOrigin {
     pub fn new(node: NodeID, reason: CtReason) -> Self {
         CtOrigin { node, reason }
+    }
+
+    /// The origin for sub-constraints reached by structurally decomposing this
+    /// one. See [`CtReason::nested`]: application-position coercion does not
+    /// survive descending under a type constructor.
+    pub fn nested(self) -> CtOrigin {
+        CtOrigin {
+            reason: self.reason.nested(),
+            ..self
+        }
     }
 }
 

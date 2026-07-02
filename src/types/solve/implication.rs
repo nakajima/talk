@@ -140,6 +140,10 @@ impl<'s> Solver<'s> {
             VarValue::Ty(ty) => self.ty_mentions_params(ty, params),
             VarValue::Eff(eff) => self.eff_mentions_params(eff, params),
             VarValue::Row(row) => self.row_mentions_params(row, params),
+            VarValue::Perm(perm) => match perm {
+                Perm::Param(symbol) if params.contains(symbol) => Some(*symbol),
+                _ => None,
+            },
         }
     }
 

@@ -11,10 +11,10 @@ use crate::node_kinds::block::Block;
 use crate::node_kinds::body::Body;
 use crate::node_kinds::call_arg::CallArg;
 use crate::node_kinds::decl::{
-    Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, Visibility,
+    Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, ReceiverMode, Visibility,
 };
 use crate::node_kinds::expr::{Expr, ExprKind};
-use crate::node_kinds::func::{EffectSet, Func};
+use crate::node_kinds::func::{CaptureMode, CaptureSpec, EffectSet, Func};
 use crate::node_kinds::func_signature::FuncSignature;
 use crate::node_kinds::generic_decl::GenericDecl;
 use crate::node_kinds::incomplete_expr::IncompleteExpr;
@@ -208,12 +208,15 @@ impl<'a> Parser<'a> {
                 | Enum
                 | Let
                 | Func
+                | Mut
+                | Consuming
                 | Case
                 | Extend
                 | Typealias
                 | Effect
-                | Import
+                | Use
                 | Public
+                | Linear
         ) {
             self.decl(BlockContext::None, false)
         } else {
@@ -243,11 +246,41 @@ impl<'a> Parser<'a> {
                 }
                 node
             }
+            Linear => {
+                self.consume(TokenKind::Linear)?;
+                let mut node = self.decl(context, is_static)?;
+                let mut marked = false;
+                if let Node::Decl(ref mut decl) = node
+                    && let DeclKind::Struct { linear, .. } | DeclKind::Enum { linear, .. } =
+                        &mut decl.kind
+                {
+                    *linear = true;
+                    marked = true;
+                }
+                if !marked {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "a struct or enum declaration after `linear`".into(),
+                        actual: format!("{:?}", current.kind),
+                        token: Some(current),
+                    });
+                }
+                node
+            }
             Static => {
                 self.consume(TokenKind::Static)?;
                 self.decl(context, true)?
             }
-            Import => self.import_decl()?.into(),
+            Mut => {
+                self.consume(TokenKind::Mut)?;
+                self.method_decl_with_mode(context, is_static, ReceiverMode::Ref)?
+                    .into()
+            }
+            Consuming => {
+                self.consume(TokenKind::Consuming)?;
+                self.method_decl_with_mode(context, is_static, ReceiverMode::Consuming)?
+                    .into()
+            }
+            Use => self.import_decl()?.into(),
             Effect => self.effect()?.into(),
             Typealias => self.typealias()?.into(),
             Protocol => self
@@ -280,7 +313,9 @@ impl<'a> Parser<'a> {
                 BlockContext::Extend
                 | BlockContext::Struct
                 | BlockContext::Enum
-                | BlockContext::Protocol => self.method_decl(context, is_static)?.into(),
+                | BlockContext::Protocol => self
+                    .method_decl(context, is_static, ReceiverMode::None)?
+                    .into(),
                 _ => self.func_decl(context, true)?.into(),
             },
             _ => self.stmt()?.into(),
@@ -323,7 +358,7 @@ impl<'a> Parser<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn import_decl(&mut self) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
-        self.consume(TokenKind::Import)?;
+        self.consume(TokenKind::Use)?;
 
         // Parse imported symbols: either { a, b } or _
         let symbols = if self.did_match(TokenKind::Underscore)? {
@@ -382,34 +417,7 @@ impl<'a> Parser<'a> {
         // Parse import path
         let path_start = self.current.as_ref().map(|t| t.start).unwrap_or(0);
 
-        let path = if matches!(self.current.as_ref().map(|t| &t.kind), Some(TokenKind::Dot)) {
-            // Relative path: ./foo.tlk or ../foo.tlk
-            let mut path_str = String::new();
-
-            while let Some(ref current) = self.current.clone() {
-                match &current.kind {
-                    TokenKind::Dot => {
-                        path_str.push('.');
-                        self.advance();
-                    }
-                    TokenKind::Slash => {
-                        path_str.push('/');
-                        self.advance();
-                    }
-                    TokenKind::Identifier => {
-                        path_str.push_str(self.lexeme(current));
-                        self.advance();
-                    }
-                    _ => break,
-                }
-            }
-
-            ImportPath::Relative(path_str)
-        } else {
-            // Package name: collections
-            let (pkg_name, _) = self.identifier()?;
-            ImportPath::Package(pkg_name)
-        };
+        let path = self.module_path()?;
 
         let path_end = self.current.as_ref().map(|t| t.start).unwrap_or(path_start);
         let path_span = Span {
@@ -428,6 +436,60 @@ impl<'a> Parser<'a> {
                 path_span,
             }),
         })
+    }
+
+    fn module_path(&mut self) -> Result<ImportPath, ParserError> {
+        if matches!(
+            self.current.as_ref().map(|t| &t.kind),
+            Some(TokenKind::Dot | TokenKind::DotDot)
+        ) {
+            return Ok(ImportPath::Relative(self.relative_module_path_string()?));
+        }
+
+        let (mut pkg_name, _) = self.identifier()?;
+        while self.did_match_double_colon()? {
+            let (segment, _) = self.identifier()?;
+            pkg_name.push_str("::");
+            pkg_name.push_str(&segment);
+        }
+        Ok(ImportPath::Package(pkg_name))
+    }
+
+    fn relative_module_path_string(&mut self) -> Result<String, ParserError> {
+        let mut path_str = String::new();
+
+        while let Some(current) = self.current.clone() {
+            match current.kind {
+                TokenKind::Dot => {
+                    path_str.push('.');
+                    self.advance();
+                }
+                TokenKind::DotDot => {
+                    path_str.push_str("..");
+                    self.advance();
+                }
+                TokenKind::Slash => {
+                    path_str.push('/');
+                    self.advance();
+                }
+                TokenKind::Identifier => {
+                    path_str.push_str(self.lexeme(&current));
+                    self.advance();
+                }
+                _ => break,
+            }
+        }
+
+        Ok(path_str)
+    }
+
+    fn did_match_double_colon(&mut self) -> Result<bool, ParserError> {
+        self.did_match(TokenKind::DoubleColon)
+    }
+
+    fn consume_double_colon(&mut self) -> Result<(), ParserError> {
+        self.consume(TokenKind::DoubleColon)?;
+        Ok(())
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -467,7 +529,41 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    fn method_decl(&mut self, context: BlockContext, is_static: bool) -> Result<Decl, ParserError> {
+    fn method_decl_with_mode(
+        &mut self,
+        context: BlockContext,
+        is_static: bool,
+        receiver_mode: ReceiverMode,
+    ) -> Result<Decl, ParserError> {
+        match context {
+            BlockContext::Extend
+            | BlockContext::Struct
+            | BlockContext::Enum
+            | BlockContext::Protocol => {}
+            _ => {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "method declaration".into(),
+                    actual: format!("{:?}", self.current),
+                    token: self.current.clone(),
+                });
+            }
+        }
+        if is_static {
+            return Err(ParserError::UnexpectedToken {
+                expected: "instance method receiver modifier".into(),
+                actual: "static method".into(),
+                token: self.current.clone(),
+            });
+        }
+        self.method_decl(context, is_static, receiver_mode)
+    }
+
+    fn method_decl(
+        &mut self,
+        context: BlockContext,
+        is_static: bool,
+        receiver_mode: ReceiverMode,
+    ) -> Result<Decl, ParserError> {
         let func_decl = self.func_decl(context, true)?;
         match func_decl.kind {
             DeclKind::Func(func) => Ok(Decl {
@@ -475,18 +571,47 @@ impl<'a> Parser<'a> {
                 span: func_decl.span,
                 visibility: func_decl.visibility,
                 kind: DeclKind::Method {
-                    func: Box::new(func),
+                    func: Box::new(self.reject_explicit_self_param(func, is_static)?),
                     is_static,
+                    receiver_mode,
                 },
             }),
             DeclKind::FuncSignature(func_sig) => Ok(Decl {
                 id: func_decl.id,
                 span: func_decl.span,
                 visibility: func_decl.visibility,
-                kind: DeclKind::MethodRequirement(func_sig),
+                kind: DeclKind::MethodRequirement {
+                    signature: self.reject_explicit_self_signature(func_sig, is_static)?,
+                    receiver_mode,
+                },
             }),
             _ => unreachable!(),
         }
+    }
+
+    fn reject_explicit_self_param(&self, func: Func, is_static: bool) -> Result<Func, ParserError> {
+        self.reject_explicit_self_params(&func.params, is_static)?;
+        Ok(func)
+    }
+
+    fn reject_explicit_self_signature(
+        &self,
+        sig: FuncSignature,
+        is_static: bool,
+    ) -> Result<FuncSignature, ParserError> {
+        self.reject_explicit_self_params(&sig.params, is_static)?;
+        Ok(sig)
+    }
+
+    fn reject_explicit_self_params(
+        &self,
+        params: &[Parameter],
+        is_static: bool,
+    ) -> Result<(), ParserError> {
+        if !is_static && first_param_is_self(params) {
+            return Err(ParserError::ExplicitSelfParameterNotAllowed);
+        }
+        Ok(())
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -588,6 +713,7 @@ impl<'a> Parser<'a> {
                 generics,
                 where_clause,
                 body,
+                linear: false,
             },
             BlockContext::Struct => DeclKind::Struct {
                 name: name.into(),
@@ -595,6 +721,7 @@ impl<'a> Parser<'a> {
                 generics,
                 where_clause,
                 body,
+                linear: false,
             },
             BlockContext::Extend => DeclKind::Extend {
                 name: name.into(),
@@ -713,6 +840,7 @@ impl<'a> Parser<'a> {
         });
 
         let generics = self.generics()?;
+        let captures = self.capture_specs()?;
 
         self.consume(TokenKind::LeftParen)?;
         let params = self.parameters()?;
@@ -795,6 +923,7 @@ impl<'a> Parser<'a> {
                     is_open,
                 },
                 generics,
+                captures,
                 where_clause,
                 params,
                 body,
@@ -802,6 +931,43 @@ impl<'a> Parser<'a> {
                 attributes: vec![],
             })
         })
+    }
+
+    fn capture_specs(&mut self) -> Result<Vec<CaptureSpec>, ParserError> {
+        let mut captures = vec![];
+        if !self.did_match(TokenKind::LeftBracket)? {
+            return Ok(captures);
+        }
+
+        while !self.did_match(TokenKind::RightBracket)? && !self.did_match(TokenKind::EOF)? {
+            let mode = if self.did_match(TokenKind::Amp)? {
+                if self.did_match(TokenKind::Mut)? {
+                    CaptureMode::BorrowMut
+                } else {
+                    CaptureMode::BorrowShared
+                }
+            } else if self.did_match(TokenKind::Consuming)? {
+                CaptureMode::Move
+            } else if self.peek_identifier("copy") {
+                self.advance();
+                CaptureMode::Copy
+            } else {
+                CaptureMode::Copy
+            };
+
+            let (name, span) = self.identifier()?;
+            captures.push(CaptureSpec {
+                mode,
+                name: name.into(),
+                span,
+            });
+            if self.did_match(TokenKind::RightBracket)? {
+                return Ok(captures);
+            }
+            self.consume(TokenKind::Comma)?;
+        }
+
+        Ok(captures)
     }
 
     // MARK: Statements
@@ -1354,6 +1520,16 @@ impl<'a> Parser<'a> {
                         kind: InlineIRInstructionKind::Trunc { dest, val },
                     })
                 }
+                "is_unique" => {
+                    let ptr = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IsUnique { dest, ptr },
+                    })
+                }
                 "itof" => {
                     let val = self.ir_value()?;
                     self.save_meta(tok, |id, span| InlineIRInstruction {
@@ -1707,9 +1883,55 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub(crate) fn relative_parent_path_prefix(
+        &mut self,
+        can_assign: bool,
+    ) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::DotDot)?;
+        let mut name = String::from("..");
+        name.push_str(&self.relative_module_path_string()?);
+        self.consume_double_colon()?;
+        let (symbol_name, _) = self.identifier()?;
+        name.push_str("::");
+        name.push_str(&symbol_name);
+        while self.did_match_double_colon()? {
+            let (segment, _) = self.identifier()?;
+            name.push_str("::");
+            name.push_str(&segment);
+        }
+        let variable = self.add_expr(ExprKind::Variable(Name::Raw(name)), tok)?;
+        self.skip_newlines();
+        if let Some(call_expr) = self.check_call(&variable, can_assign)? {
+            return Ok(call_expr.into());
+        }
+        Ok(variable.into())
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Dot)?;
+
+        if self.peek_is(TokenKind::Slash) {
+            let mut name = String::from(".");
+            name.push_str(&self.relative_module_path_string()?);
+            self.consume_double_colon()?;
+            let (symbol_name, _) = self.identifier()?;
+            name.push_str("::");
+            name.push_str(&symbol_name);
+            while self.did_match_double_colon()? {
+                let (segment, _) = self.identifier()?;
+                name.push_str("::");
+                name.push_str(&segment);
+            }
+            let variable = self.add_expr(ExprKind::Variable(Name::Raw(name)), tok)?;
+            self.skip_newlines();
+            if let Some(call_expr) = self.check_call(&variable, can_assign)? {
+                return Ok(call_expr.into());
+            }
+            return Ok(variable.into());
+        }
 
         let (name, name_span) = match self.current.clone() {
             Some(cur) if cur.kind == TokenKind::Identifier => match self.identifier() {
@@ -1917,7 +2139,12 @@ impl<'a> Parser<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn variable(&mut self, can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
-        let (name, _span) = self.identifier()?;
+        let (mut name, _span) = self.identifier()?;
+        while self.did_match_double_colon()? {
+            let (segment, _) = self.identifier()?;
+            name.push_str("::");
+            name.push_str(&segment);
+        }
         let variable = self.add_expr(ExprKind::Variable(Name::Raw(name.to_string())), tok)?;
 
         self.skip_newlines();
@@ -2280,6 +2507,30 @@ impl<'a> Parser<'a> {
     fn type_annotation_base(&mut self) -> Result<TypeAnnotation, ParserError> {
         let tok = self.push_source_location();
 
+        if self.did_match(TokenKind::Amp)? {
+            let mutable = self.did_match(TokenKind::Mut)?;
+            let inner = self.type_annotation()?;
+            return self.save_meta(tok, |id, span| TypeAnnotation {
+                id,
+                span,
+                kind: TypeAnnotationKind::Borrow {
+                    mutable,
+                    inner: Box::new(inner),
+                },
+            });
+        }
+
+        if self.did_match(TokenKind::Star)? {
+            let inner = self.type_annotation()?;
+            return self.save_meta(tok, |id, span| TypeAnnotation {
+                id,
+                span,
+                kind: TypeAnnotationKind::Unique {
+                    inner: Box::new(inner),
+                },
+            });
+        }
+
         if self.did_match(TokenKind::LeftParen)? {
             // it's a func type or tuple repr
             let mut sig_args = vec![];
@@ -2338,7 +2589,30 @@ impl<'a> Parser<'a> {
         }
 
         // It's a nominal.
-        let (name, name_span) = self.identifier()?;
+        let (name, name_span) = if matches!(
+            self.current.as_ref().map(|t| &t.kind),
+            Some(TokenKind::Dot | TokenKind::DotDot)
+        ) {
+            let mut name = self.relative_module_path_string()?;
+            self.consume_double_colon()?;
+            let (symbol_name, symbol_span) = self.identifier()?;
+            name.push_str("::");
+            name.push_str(&symbol_name);
+            while self.did_match_double_colon()? {
+                let (segment, _) = self.identifier()?;
+                name.push_str("::");
+                name.push_str(&segment);
+            }
+            (name, symbol_span)
+        } else {
+            let (mut name, name_span) = self.identifier()?;
+            while self.did_match_double_colon()? {
+                let (segment, _) = self.identifier()?;
+                name.push_str("::");
+                name.push_str(&segment);
+            }
+            (name, name_span)
+        };
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
             while !self.did_match(TokenKind::Greater)? {
@@ -2892,7 +3166,7 @@ impl<'a> Parser<'a> {
     pub(super) fn identifier(&mut self) -> Result<(String, Span), ParserError> {
         self.skip_semicolons_and_newlines();
         if let Some(current) = self.current.clone()
-            && current.kind == TokenKind::Identifier
+            && matches!(current.kind, TokenKind::Identifier | TokenKind::Use)
         {
             let name = self.lexeme(&current).to_string();
             self.push_identifier(current.clone());
@@ -2930,6 +3204,12 @@ impl<'a> Parser<'a> {
         } else {
             false
         }
+    }
+
+    fn peek_identifier(&self, expected: &str) -> bool {
+        self.current.as_ref().is_some_and(|token| {
+            token.kind == TokenKind::Identifier && self.lexeme(token) == expected
+        })
     }
 
     fn push_context(&mut self, ctx: ParseContext) {
@@ -3124,6 +3404,12 @@ fn collect_pattern_binder_names(pattern: &Pattern) -> Vec<Name> {
     let mut names = vec![];
     collect_pattern_binder_names_inner(pattern, &mut names);
     names
+}
+
+fn first_param_is_self(params: &[Parameter]) -> bool {
+    params
+        .first()
+        .is_some_and(|param| param.name.name_str() == "self")
 }
 
 /// Does the pattern contain alternatives anywhere? Or-pattern lets

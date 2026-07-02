@@ -13,12 +13,38 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// (Pierce & Turner; DK 2021's mode recipe), otherwise infer and emit an
     /// equality oriented expected-then-found for blame.
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Ty, reason: CtReason, ctx: &Ctx) {
+        if let Ty::Borrow(expected_kind, inner) = self.store.shallow(expected) {
+            match &expr.kind {
+                ExprKind::Member(None, ..) => {
+                    self.check_expr(expr, &inner, reason, ctx);
+                    return;
+                }
+                ExprKind::Call { callee, .. }
+                    if matches!(callee.kind, ExprKind::Member(None, ..)) =>
+                {
+                    self.check_expr(expr, &inner, reason, ctx);
+                    return;
+                }
+                _ => {}
+            }
+            let found = self.infer_expr(expr, ctx);
+            self.emit_immediate_borrow_check(
+                expr.id,
+                expected_kind,
+                (*inner).clone(),
+                expected.clone(),
+                found,
+                reason,
+            );
+            return;
+        }
+
         match &expr.kind {
             // Leading-dot variant construction (`.sleep(ms)`, `.none`)
             // resolves through the expected enum — checking mode is what
             // makes the head known (bidirectional payoff).
             ExprKind::Member(None, label, _) => {
-                if self.check_leading_dot(expr, label, None, expected, ctx) {
+                if self.check_leading_dot(expr, label, None, expected, ctx, None) {
                     return;
                 }
                 let ty = self.infer_expr(expr, ctx);
@@ -28,7 +54,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 if matches!(callee.kind, ExprKind::Member(None, _, _)) =>
             {
                 if let ExprKind::Member(None, label, _) = &callee.kind
-                    && self.check_leading_dot(expr, label, Some(args), expected, ctx)
+                    && self.check_leading_dot(
+                        expr,
+                        label,
+                        Some(args),
+                        expected,
+                        ctx,
+                        Some(callee.id),
+                    )
                 {
                     return;
                 }
@@ -141,6 +174,69 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
     }
 
+    pub(super) fn emit_immediate_argument_eq(
+        &mut self,
+        expected: &Ty,
+        found: Ty,
+        node: crate::node_id::NodeID,
+        reason: CtReason,
+    ) {
+        if let Ty::Borrow(expected_kind, inner) = self.store.shallow(expected) {
+            self.emit_immediate_borrow_check(
+                node,
+                expected_kind,
+                (*inner).clone(),
+                expected.clone(),
+                found,
+                reason,
+            );
+            return;
+        }
+        self.emit_eq(expected.clone(), found, node, reason);
+    }
+
+    fn emit_immediate_borrow_check(
+        &mut self,
+        node: crate::node_id::NodeID,
+        expected_kind: Perm,
+        expected_inner: Ty,
+        expected: Ty,
+        found: Ty,
+        reason: CtReason,
+    ) {
+        match self.store.shallow(&found) {
+            Ty::Borrow(found_kind, found_inner) if found_kind == expected_kind => {
+                self.emit_eq(expected_inner, (*found_inner).clone(), node, reason);
+            }
+            Ty::Borrow(Perm::Exclusive, found_inner) if expected_kind == Perm::Shared => {
+                self.emit_eq(expected_inner, (*found_inner).clone(), node, reason);
+            }
+            Ty::Borrow(..) => self.emit_eq(expected, found, node, reason),
+            _ => self.emit_eq(expected_inner, found, node, reason),
+        }
+    }
+
+    pub(super) fn emit_borrow_downgrade_or_eq(
+        &mut self,
+        expected: Ty,
+        found: Ty,
+        node: crate::node_id::NodeID,
+        reason: CtReason,
+    ) {
+        match (self.store.shallow(&expected), self.store.shallow(&found)) {
+            (
+                Ty::Borrow(Perm::Shared, expected_inner),
+                Ty::Borrow(Perm::Exclusive, found_inner),
+            ) => self.emit_eq(
+                (*expected_inner).clone(),
+                (*found_inner).clone(),
+                node,
+                reason,
+            ),
+            _ => self.emit_eq(expected, found, node, reason),
+        }
+    }
+
     pub(super) fn check_inferred_against_expected(
         &mut self,
         node: NodeID,
@@ -154,6 +250,25 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         if self.try_implicit_existential_pack(node, expected, &found, reason) {
             return;
         }
+        // Reaching here, `expected` is not a borrow (immediate auto-borrow is handled by the
+        // `Ty::Borrow` branch of `check_expr`). Checking a value against a non-borrow type is
+        // not an application of that value, so drop `Apply`: a function value must satisfy a
+        // function-typed slot invariantly rather than coercing its contravariant parameters.
+        // Exception: an owned CheapClone slot keeps `Apply` so the solver's tier-2 coercion
+        // (borrowed argument satisfied by an O(1) clone) can fire even when the argument's
+        // type resolves late.
+        let reason = match self.store.shallow(expected) {
+            Ty::Nominal(symbol, _)
+                if reason == CtReason::Apply
+                    && self
+                        .catalog
+                        .conformances
+                        .contains_key(&(symbol, Symbol::CheapClone)) =>
+            {
+                reason
+            }
+            _ => reason.nested(),
+        };
         self.emit_eq(expected.clone(), found, node, reason);
     }
 
@@ -254,12 +369,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // equalities are givens, arm-local unification variables are
         // touchable, and outer variables stay untouchable.
         let scrutinee_ty = self.infer_expr(scrutinee, ctx);
+        let pattern_scrutinee_ty = match self.store.shallow(&scrutinee_ty) {
+            Ty::Borrow(_, inner) => *inner,
+            other => other,
+        };
         for arm in arms {
             let old_level = self.level;
             let arm_level = self.level.next();
             let start = self.wanteds.len();
             self.level = arm_level;
-            let refinement = self.check_pattern(&arm.pattern, &scrutinee_ty);
+            let refinement = self.check_pattern(&arm.pattern, &pattern_scrutinee_ty);
             let reason = if inferring_result && !refinement.is_empty() {
                 CtReason::GadtBranch
             } else {
@@ -291,6 +410,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         args: Option<&[CallArg]>,
         expected: &Ty,
         ctx: &Ctx,
+        // When the leading dot is the callee of a call (`.write(fd, buf)`), the id
+        // of that callee node, so it gets the variant's constructor type (the call
+        // checker resolves it structurally and never types it otherwise).
+        callee_id: Option<NodeID>,
     ) -> bool {
         let Ty::Nominal(symbol, enum_args) = self.store.shallow(expected) else {
             return false;
@@ -314,6 +437,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .insert(expr.id, MemberResolution::Direct(variant.symbol));
         let substitution = param_subst(&info.params, &enum_args);
         let instantiation = self.instantiate_variant(&variant, substitution, expr.id);
+        if let Some(callee_id) = callee_id {
+            self.artifacts.node_types.insert(
+                callee_id,
+                Ty::Func(
+                    instantiation.argument_types.clone(),
+                    Box::new(instantiation.result_type.clone()),
+                    EffectRow::pure(),
+                ),
+            );
+        }
         self.record_variant_instantiation(expr.id, &instantiation);
         self.emit_variant_predicates(&instantiation, expr.id);
         self.emit_eq(
@@ -456,6 +589,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     let Ok(symbol) = name.symbol() else {
                         return Ty::Error;
                     };
+                    // The receiver is a bare type name, resolved structurally rather
+                    // than as a value — but it's still an expression node, so record a
+                    // type for it (it has no value type, like a type name used as a
+                    // value, so `Ty::Error`). Keeps `node_types` total over expressions.
+                    self.artifacts.node_types.insert(receiver.id, Ty::Error);
                     return match self.resolve_type_member(symbol, label, expr.id, ctx) {
                         Some(ty) => ty,
                         None => {
@@ -584,10 +722,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }
                 instantiate(&sig.ret)
             }
-            ExprKind::InlineIR(_) => {
-                // Inline IR is trusted: it takes whatever type its context
-                // demands (a fresh variable solved by the surrounding
-                // annotation or return type).
+            ExprKind::InlineIR(instruction) => {
+                // The instruction itself is trusted: it takes whatever type its
+                // context demands (a fresh variable solved by the surrounding
+                // annotation or return type). Its operands, however, are ordinary
+                // value expressions and must be typed.
+                for operand in &instruction.binds {
+                    self.infer_expr(operand, ctx);
+                }
                 Ty::Var(self.store.fresh_ty(self.level, expr.id))
             }
             ExprKind::Unary(..) | ExprKind::Binary(..) => {
@@ -598,6 +740,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             }
             ExprKind::RowVariable(_) => {
                 self.unsupported(expr.id, "row variables in expressions");
+                Ty::Error
+            }
+            ExprKind::Incomplete(crate::node_kinds::incomplete_expr::IncompleteExpr::Member(
+                Some(receiver),
+            )) => {
+                self.infer_expr(receiver, ctx);
                 Ty::Error
             }
             ExprKind::Incomplete(_) => Ty::Error,

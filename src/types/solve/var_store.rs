@@ -5,6 +5,7 @@ pub(super) enum VarValue {
     Ty(Ty),
     Eff(EffectRow),
     Row(Row),
+    Perm(Perm),
 }
 
 #[derive(Clone, Debug)]
@@ -49,6 +50,10 @@ impl VarStore {
 
     pub fn fresh_row(&mut self, level: Level, origin: NodeID) -> RowVar {
         RowVar(self.fresh(level, origin))
+    }
+
+    pub fn fresh_perm(&mut self, level: Level, origin: NodeID) -> PermVar {
+        PermVar(self.fresh(level, origin))
     }
 
     pub fn generation(&self) -> u64 {
@@ -119,11 +124,36 @@ impl VarStore {
         }
     }
 
+    /// Resolve a borrow permission: follow solved perm variables until a
+    /// concrete permission, a rigid param, or an unsolved root.
+    pub fn shallow_perm(&mut self, perm: Perm) -> Perm {
+        let mut current = perm;
+        loop {
+            match current {
+                Perm::Var(v) => match self.value(v.0) {
+                    Some(VarValue::Perm(inner)) => current = inner,
+                    Some(_) => unreachable!("perm var bound to non-perm value"),
+                    None => return Perm::Var(PermVar(self.find(v.0))),
+                },
+                other => return other,
+            }
+        }
+    }
+
     /// Fully substitute solved variables, flattening row tails. The structural
     /// recursion is `TyFold`; only the leaves are store-aware (see the impl
     /// below).
     pub fn zonk_ty(&mut self, ty: &Ty) -> Ty {
         self.fold_ty(ty)
+    }
+
+    /// Bind every unsolved permission variable in `ty` to `Shared` and return
+    /// the resolved type. The defaulting rule: a borrow whose permission was
+    /// never forced exclusive is a read-only borrow. Runs at finalization,
+    /// after all solving, so the binding is safe and every sharer of the
+    /// variable sees the same default.
+    pub fn default_unsolved_perms(&mut self, ty: &Ty) -> Ty {
+        PermDefaulter { store: self }.fold_ty(ty)
     }
 
     pub fn zonk_eff(&mut self, eff: &EffectRow) -> EffectRow {
@@ -210,6 +240,8 @@ impl VarStore {
                     self.query_resolved(arg, f)?;
                 }
             }
+            Ty::Borrow(_, inner) => self.query_resolved(inner, f)?,
+            Ty::Unique(inner) => self.query_resolved(inner, f)?,
             Ty::Func(params, ret, eff) => {
                 for param in params {
                     self.query_resolved(param, f)?;
@@ -264,12 +296,57 @@ impl TyFold for VarStore {
         }
     }
 
+    fn fold_perm(&mut self, perm: Perm) -> Perm {
+        self.shallow_perm(perm)
+    }
+
     fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {
         self.zonk_eff(eff)
     }
 
     fn fold_row(&mut self, row: &Row) -> Row {
         self.zonk_row(row)
+    }
+}
+
+/// Zonk that additionally binds unsolved permission variables to `Shared`
+/// (see [`VarStore::default_unsolved_perms`]).
+struct PermDefaulter<'s> {
+    store: &'s mut VarStore,
+}
+
+impl TyFold for PermDefaulter<'_> {
+    fn fold_var(&mut self, var: TyVar) -> Ty {
+        match self.store.shallow(&Ty::Var(var)) {
+            Ty::Var(root) => Ty::Var(root),
+            resolved => self.fold_ty(&resolved),
+        }
+    }
+
+    fn fold_perm(&mut self, perm: Perm) -> Perm {
+        match self.store.shallow_perm(perm) {
+            Perm::Var(v) => {
+                self.store.bind(v.0, VarValue::Perm(Perm::Shared));
+                Perm::Shared
+            }
+            other => other,
+        }
+    }
+
+    fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {
+        self.store.zonk_eff(eff)
+    }
+
+    fn fold_row(&mut self, row: &Row) -> Row {
+        let zonked = self.store.zonk_row(row);
+        Row {
+            fields: zonked
+                .fields
+                .iter()
+                .map(|(label, ty)| (label.clone(), self.fold_ty(ty)))
+                .collect(),
+            tail: zonked.tail,
+        }
     }
 }
 

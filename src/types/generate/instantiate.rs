@@ -42,7 +42,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// the substitution for the lowerer (the "call sites and substitutions"
     /// surface).
     pub(super) fn instantiate(&mut self, scheme: &Scheme, node: NodeID) -> Ty {
-        if scheme.params.is_empty() && scheme.eff_params.is_empty() && scheme.row_params.is_empty()
+        if scheme.params.is_empty()
+            && scheme.eff_params.is_empty()
+            && scheme.row_params.is_empty()
+            && scheme.perm_params.is_empty()
         {
             return scheme.ty.clone();
         }
@@ -77,6 +80,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             rows.insert(*param, crate::types::ty::RowTail::Var(var));
         }
 
+        let mut perms = FxHashMap::default();
+        for param in &scheme.perm_params {
+            perms.insert(
+                *param,
+                crate::types::ty::Perm::Var(self.store.fresh_perm(self.level, node)),
+            );
+        }
+
         // The scheme's qualified context becomes fresh wanteds under the
         // instantiation substitution (Jones's qualified-type instantiation).
         // This subsumes inline bounds and scheme-carried HasMember facts.
@@ -92,7 +103,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .entry(node)
             .or_default()
             .extend(recorded);
-        scheme.ty.substitute(&tys, &effs, &rows)
+        scheme
+            .ty
+            .substitute(&tys, &effs, &rows)
+            .substitute_perms(&perms)
     }
 
     /// Fresh effect- and row-tail variables for a variant's quantified effect

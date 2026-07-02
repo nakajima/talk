@@ -1,6 +1,7 @@
 {
   "name": "talktalk",
   "displayName": "talktalk",
+  "publisher": "talktalk",
   "description": "",
   "version": "0.0.1",
   "engines": {
@@ -10,10 +11,18 @@
     "Other"
   ],
   "activationEvents": [
-    "workspaceContains:**/*.tlk"
+    "onLanguage:talktalk",
+    "workspaceContains:**/*.tlk",
+    "onCommand:talktalk.restartLsp"
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "talktalk.restartLsp",
+        "title": "TalkTalk: Restart Language Server"
+      }
+    ],
     "languages": [
       {
         "id": "talktalk",

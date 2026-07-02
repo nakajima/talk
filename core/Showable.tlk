@@ -1,6 +1,6 @@
 // no-core
-import { String } from ./String.tlk
-import { Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable } from ./Operators.tlk
+use { String } from ./String.tlk
+use { Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable } from ./Operators.tlk
 
 public protocol Showable {
 	func show() -> String
@@ -49,8 +49,9 @@ extend Int: Showable {
 			result = _digit(digit) + result
 			n = n / 10
 		}
-		if self < 0 { return "-" + result }
-		return result
+		if self < 0 { "-" + result } else {
+			result
+		}
 	}
 }
 
@@ -83,14 +84,16 @@ extend Float: Showable {
 
 extend Bool: Showable {
 	func show() -> String {
-		if self { "true" } else {
+		if self.equals(true) { "true" } else {
 			"false"
 		}
 	}
 }
 
 extend String: Showable {
-	func show() -> String { self }
+	func show() -> String {
+		self.to_string()
+	}
 }
 
 extend RawPtr: Showable {

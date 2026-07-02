@@ -228,6 +228,15 @@ impl std::fmt::Debug for Symbol {
 
 #[allow(non_upper_case_globals)]
 impl Symbol {
+    const WELL_KNOWN_CORE_STRING_ID: u32 = u32::MAX - 32;
+    const WELL_KNOWN_CORE_ARRAY_ID: u32 = u32::MAX - 31;
+    const WELL_KNOWN_CORE_STORAGE_ID: u32 = u32::MAX - 30;
+    const WELL_KNOWN_CORE_BORROWED_ID: u32 = u32::MAX - 29;
+    const WELL_KNOWN_CORE_OWNER_ID: u32 = u32::MAX - 28;
+    const WELL_KNOWN_CORE_COPY_ID: u32 = u32::MAX - 27;
+    const WELL_KNOWN_CORE_CHEAP_CLONE_ID: u32 = u32::MAX - 26;
+    const WELL_KNOWN_CORE_DEINIT_ID: u32 = u32::MAX - 25;
+
     pub const Int: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
         local_id: 1,
@@ -267,12 +276,56 @@ impl Symbol {
 
     pub const String: Symbol = Symbol::Struct(StructId {
         module_id: ModuleId::Core,
-        local_id: 2,
+        local_id: Self::WELL_KNOWN_CORE_STRING_ID,
     });
     pub const Array: Symbol = Symbol::Struct(StructId {
         module_id: ModuleId::Core,
-        local_id: 3,
+        local_id: Self::WELL_KNOWN_CORE_ARRAY_ID,
     });
+    pub const Storage: Symbol = Symbol::Struct(StructId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_STORAGE_ID,
+    });
+    pub const Borrowed: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_BORROWED_ID,
+    });
+    pub const Owner: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_OWNER_ID,
+    });
+    pub const Copy: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_COPY_ID,
+    });
+    pub const CheapClone: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_CHEAP_CLONE_ID,
+    });
+    pub const Deinit: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_DEINIT_ID,
+    });
+
+    pub fn well_known_core_struct(name: &str) -> Option<Symbol> {
+        match name {
+            "String" => Some(Symbol::String),
+            "Array" => Some(Symbol::Array),
+            "Storage" => Some(Symbol::Storage),
+            _ => None,
+        }
+    }
+
+    pub fn well_known_core_protocol(name: &str) -> Option<Symbol> {
+        match name {
+            "Borrowed" => Some(Symbol::Borrowed),
+            "Owner" => Some(Symbol::Owner),
+            "Copy" => Some(Symbol::Copy),
+            "CheapClone" => Some(Symbol::CheapClone),
+            "Deinit" => Some(Symbol::Deinit),
+            _ => None,
+        }
+    }
 
     /// Special type parameter used for the IR builtin
     pub const IR_TYPE_PARAM: Symbol = Symbol::TypeParameter(TypeParameterId {

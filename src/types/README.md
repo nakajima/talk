@@ -38,7 +38,8 @@ information flows in every direction: `let xs = []` followed fifty
 lines later by `xs.push(1)` checks fine because the element-type
 variable stays open until the push constrains it. The solver also gets
 to apply *global* policy — what to do with constraints that can't make
-progress — in one place instead of scattered through the AST walk.
+progress — in one place instead of scattering that policy through
+source-order generation.
 
 The remaining files: `ty.rs` is the type representation and `Scheme`
 (a polymorphic signature shaped as `forall params. predicates => type`);

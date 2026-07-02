@@ -216,6 +216,17 @@ impl<'e> Elaborator<'e> {
 
     fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
         match &annotation.kind {
+            TypeAnnotationKind::Borrow { mutable, inner } => {
+                let kind = if *mutable {
+                    Perm::Exclusive
+                } else {
+                    Perm::Shared
+                };
+                Ty::Borrow(kind, Box::new(self.lower_annotation(inner)))
+            }
+            TypeAnnotationKind::Unique { inner } => {
+                Ty::Unique(Box::new(self.lower_annotation(inner)))
+            }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 if name.name_str() == "Self"
                     && generics.is_empty()
@@ -566,7 +577,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let Ty::Nominal(symbol, args) = self.store.shallow(ty) else {
             return;
         };
-        for predicate in nominal_predicates_for(&self.catalog, &Ty::Nominal(symbol, args)) {
+        for predicate in nominal_predicates_for(self.catalog, &Ty::Nominal(symbol, args)) {
             self.wanteds
                 .push(predicate.into_constraint(CtOrigin::new(node, CtReason::Annotation)));
         }

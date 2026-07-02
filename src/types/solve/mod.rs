@@ -50,8 +50,8 @@ use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
 use crate::types::output::MemberResolution;
 use crate::types::ty::{
-    EffTail, EffVar, EffectRow, Predicate, Row, RowTail, RowVar, Scheme, SchemeParam, Ty, TyFold,
-    TyVar, match_pattern,
+    EffTail, EffVar, EffectRow, Perm, PermVar, Predicate, Row, RowTail, RowVar, Scheme,
+    SchemeParam, Ty, TyFold, TyVar, match_pattern,
 };
 
 /// The per-binding-group solver. Borrows the checker's tables; owns nothing.
@@ -64,6 +64,9 @@ pub struct Solver<'s> {
     pub mono: &'s FxHashMap<Symbol, Ty>,
     pub instantiations: &'s mut FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub member_resolutions: &'s mut FxHashMap<NodeID, MemberResolution>,
+    /// Argument nodes where a borrowed value satisfied an owned CheapClone
+    /// parameter by cloning (an O(1) buffer retain, emitted by lowering).
+    pub coerce_clones: &'s mut FxHashSet<NodeID>,
     pub level: Level,
     /// True only in the final solve: committing a member constraint to its
     /// single nominal owner is defaulting, sound only once no later group

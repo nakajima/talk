@@ -134,7 +134,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let ret = match &func.ret {
             Some(annotation) => {
                 let annotated = self.lower_annotation(annotation);
-                self.emit_eq(
+                self.emit_borrow_downgrade_or_eq(
                     expected_ret.clone(),
                     annotated.clone(),
                     func.id,
@@ -222,13 +222,19 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 Node::Expr(expr) => StmtValue::Value(self.infer_expr(expr, ctx)),
                 _ => StmtValue::Unit,
             };
+            if last.reports_unreachable() {
+                if let Some(next) = block.body.get(index + 1) {
+                    self.unreachable_code(next.node_id());
+                }
+                break;
+            }
         }
         if is_empty {
             return Ty::unit();
         }
         match last {
             StmtValue::Value(ty) => ty,
-            StmtValue::Divergent => Ty::Nominal(Symbol::Never, vec![]),
+            StmtValue::Divergent { .. } => Ty::Nominal(Symbol::Never, vec![]),
             StmtValue::Unit => Ty::unit(),
         }
     }
@@ -254,7 +260,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 match node {
                     Node::Decl(decl) => self.check_local_decl(decl, ctx),
                     Node::Stmt(stmt) => {
-                        self.infer_stmt(stmt, ctx);
+                        let value = self.infer_stmt(stmt, ctx);
+                        if value.reports_unreachable() {
+                            if let Some(next) = block.body.get(index + 1) {
+                                self.unreachable_code(next.node_id());
+                            }
+                            return;
+                        }
                     }
                     Node::Expr(expr) => {
                         self.infer_expr(expr, ctx);
@@ -288,7 +300,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     self.check_block_value_with_reason(else_block, expected, reason, ctx);
                 }
                 Node::Stmt(stmt) => {
-                    if !matches!(self.infer_stmt(stmt, ctx), StmtValue::Divergent) {
+                    if !self.infer_stmt(stmt, ctx).is_divergent() {
                         self.emit_eq(expected.clone(), Ty::unit(), stmt.id, reason);
                     }
                 }
@@ -296,5 +308,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 _ => self.emit_eq(expected.clone(), Ty::unit(), node.node_id(), reason),
             }
         }
+    }
+
+    fn unreachable_code(&mut self, node: NodeID) {
+        self.diagnostics
+            .errors
+            .push((TypeError::UnreachableCode, node));
     }
 }

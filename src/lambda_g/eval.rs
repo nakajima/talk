@@ -16,6 +16,7 @@ use crate::lambda_g::expr::{CmpOp, Const, ExprId, ExprKind, Op, TyKind};
 use crate::lambda_g::program::{Label, Program};
 use crate::name_resolution::symbol::Symbol;
 use crate::vm::io::IO;
+use talk_runtime::memory::{Allocations, MemoryError};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalValue {
@@ -61,9 +62,10 @@ pub struct Evaluator {
     steps: u64,
     limit: u64,
     /// Program memory: statics at the base, bump-allocated heap above
-    /// (Leroy, POPL 1992 — scalars live unboxed in raw bytes; no free
-    /// here, allocation is append).
+    /// (Leroy, POPL 1992 — scalars live unboxed in raw bytes).
     mem: Vec<u8>,
+    static_len: u32,
+    allocations: Allocations,
     /// Mutable cell store (assignment-converted locals). Cells are machine
     /// state; the term language sees only `Const::Slot` handles.
     slots: Vec<EvalValue>,
@@ -91,11 +93,19 @@ impl Evaluator {
             steps: 0,
             limit: 50_000_000,
             mem: vec![],
+            static_len: 0,
+            allocations: Allocations::default(),
             slots: vec![],
             slot_tys: vec![],
             boxed: vec![],
             halt: None,
         }
+    }
+
+    /// Allocation records still live after a run — the leak invariant
+    /// (every retain balanced by a release) asserts this is zero.
+    pub fn live_allocations(&self) -> usize {
+        self.allocations.live_count()
     }
 
     /// Run a CPS `main : [Fn(R, ⊥)] → ⊥`: apply it to the halt continuation
@@ -111,6 +121,8 @@ impl Evaluator {
         let halt = p.func("halt", halt_ty_dom, bot);
         let _ = bot;
         self.mem = p.static_mem.clone();
+        self.static_len = self.mem.len() as u32;
+        self.allocations.clear();
         self.halt = Some(halt);
         let halt_ref = p.func_ref(halt);
         let main_ref = p.func_ref(main);
@@ -460,15 +472,45 @@ impl Evaluator {
                     _ => Err(EvalError::Unsupported("set_field on non-record".into())),
                 }
             }
-            // Raw memory: bump allocation over statics++heap (no free in
-            // the reference evaluator).
+            // Raw memory: bump allocation over statics++heap, tracked so
+            // free/use-after-free are observable.
             Op::Alloc => match self.eval_sub(p, args[0])? {
                 EvalValue::I64(count) if count >= 0 => {
-                    let addr = self.mem.len() as u32;
-                    self.mem.resize(self.mem.len() + count as usize, 0);
+                    let count = usize::try_from(count)
+                        .map_err(|_| EvalError::Unsupported("alloc count out of range".into()))?;
+                    let addr = self
+                        .allocations
+                        .allocate(&mut self.mem, count)
+                        .map_err(eval_memory_error)?;
                     Ok(EvalValue::Ptr(addr))
                 }
                 _ => Err(EvalError::Unsupported("alloc count".into())),
+            },
+            Op::Free => match self.eval_sub(p, args[0])? {
+                EvalValue::Ptr(ptr) => {
+                    self.free(ptr)?;
+                    Ok(EvalValue::Void)
+                }
+                _ => Err(EvalError::Unsupported("free on non-pointer".into())),
+            },
+            Op::Retain => match self.eval_sub(p, args[0])? {
+                EvalValue::Ptr(ptr) => {
+                    self.allocations
+                        .retain(self.static_len, ptr)
+                        .map_err(eval_memory_error)?;
+                    Ok(EvalValue::Void)
+                }
+                _ => Err(EvalError::Unsupported("retain on non-pointer".into())),
+            },
+            Op::IsUnique => match self.eval_sub(p, args[0])? {
+                EvalValue::Ptr(ptr) => {
+                    let unique = self
+                        .allocations
+                        .is_unique(self.static_len, ptr)
+                        .map_err(eval_memory_error)?;
+                    Ok(EvalValue::Bool(unique))
+                }
+                _ => Err(EvalError::Unsupported("is_unique on non-pointer".into())),
             },
             // Width and representation come from the primop's λ_G type
             // (see TyKind::mem_size).
@@ -494,10 +536,12 @@ impl Evaluator {
                 else {
                     return Err(EvalError::Unsupported("copy operands".into()));
                 };
-                let (from, to, len) = (from as usize, to as usize, len as usize);
-                if from + len > self.mem.len() || to + len > self.mem.len() {
-                    return Err(EvalError::Unsupported("copy out of bounds".into()));
+                if len < 0 {
+                    return Err(EvalError::Unsupported("copy negative length".into()));
                 }
+                self.check_access(from, len as usize, "copy")?;
+                self.check_access(to, len as usize, "copy")?;
+                let (from, to, len) = (from as usize, to as usize, len as usize);
                 self.mem.copy_within(from..from + len, to);
                 Ok(EvalValue::Void)
             }
@@ -515,7 +559,19 @@ impl Evaluator {
             | Op::IoBind
             | Op::IoListen
             | Op::IoConnect
-            | Op::IoAccept => {
+            | Op::IoAccept
+            | Op::IoCwdLen
+            | Op::IoCwdCopy
+            | Op::IoGetenvLen
+            | Op::IoGetenvCopy
+            | Op::IoArgc
+            | Op::IoArgLen
+            | Op::IoArgCopy
+            | Op::IoDirCount
+            | Op::IoDirEntryKind
+            | Op::IoDirEntryLen
+            | Op::IoDirEntryCopy
+            | Op::IoExit => {
                 let mut operands = [EvalValue::Void, EvalValue::Void, EvalValue::Void];
                 for (slot, &arg) in operands.iter_mut().zip(args.iter()) {
                     *slot = self.eval_sub(p, arg)?;
@@ -558,6 +614,7 @@ impl Evaluator {
                     return Ok(count);
                 }
                 let (start, len) = (ptr(1)?, count as usize);
+                self.check_access(start as u32, len, "io")?;
                 let bytes = self.mem.get(start..start + len).ok_or_else(oob)?;
                 self.io.write(fd, bytes)
             }
@@ -567,12 +624,13 @@ impl Evaluator {
                     return Ok(count);
                 }
                 let (start, len) = (ptr(1)?, count as usize);
+                self.check_access(start as u32, len, "io")?;
                 let buf = self.mem.get_mut(start..start + len).ok_or_else(oob)?;
                 self.io.read(fd, buf)
             }
             Op::IoOpen => {
                 let start = ptr(0)?;
-                let tail = self.mem.get(start..).ok_or_else(oob)?;
+                let tail = self.c_string_tail(start as u32)?;
                 let len = tail
                     .iter()
                     .position(|&byte| byte == 0)
@@ -584,8 +642,17 @@ impl Evaluator {
             Op::IoSleep => self.io.sleep(int(0)?),
             Op::IoCtl => self.io.ctl(int(0)?, int(1)?, int(2)?),
             Op::IoPoll => {
-                let (start, count, timeout) = (ptr(0)?, int(1)? as usize, int(2)?);
-                let records = self.mem.get(start..start + count * 8).ok_or_else(oob)?;
+                let (start, count, timeout) = (ptr(0)?, int(1)?, int(2)?);
+                if count < 0 {
+                    return Err(EvalError::Unsupported("io poll negative count".into()));
+                }
+                let count = usize::try_from(count)
+                    .map_err(|_| EvalError::Unsupported("io poll count out of range".into()))?;
+                let len = count
+                    .checked_mul(8)
+                    .ok_or_else(|| EvalError::Unsupported("io poll count out of range".into()))?;
+                self.check_access(start as u32, len, "io")?;
+                let records = self.mem.get(start..start + len).ok_or_else(oob)?;
                 let mut fds: Vec<(i32, i16, i16)> = records
                     .chunks_exact(8)
                     .map(|r| {
@@ -599,6 +666,7 @@ impl Evaluator {
                 let result = self.io.poll(&mut fds, timeout);
                 for (index, (_, _, revents)) in fds.iter().enumerate() {
                     let at = start + index * 8 + 6;
+                    self.check_access(at as u32, 2, "io")?;
                     let slot = self.mem.get_mut(at..at + 2).ok_or_else(oob)?;
                     slot.copy_from_slice(&revents.to_le_bytes());
                 }
@@ -609,6 +677,118 @@ impl Evaluator {
             Op::IoListen => self.io.listen(int(0)?, int(1)?),
             Op::IoConnect => self.io.connect(int(0)?, int(1)?, int(2)?),
             Op::IoAccept => self.io.accept(int(0)?),
+            Op::IoCwdLen => self.io.cwd_len(),
+            Op::IoCwdCopy => {
+                let len = self.io.cwd_len();
+                if len < 0 {
+                    return Ok(len);
+                }
+                let start = ptr(0)?;
+                self.check_access(start as u32, len as usize, "io")?;
+                let buf = self
+                    .mem
+                    .get_mut(start..start + len as usize)
+                    .ok_or_else(oob)?;
+                self.io.cwd_copy(buf)
+            }
+            Op::IoGetenvLen => {
+                let (start, len) = (ptr(0)?, int(1)?);
+                if len < 0 {
+                    return Ok(len);
+                }
+                self.check_access(start as u32, len as usize, "io")?;
+                let name = self.mem.get(start..start + len as usize).ok_or_else(oob)?;
+                self.io.getenv_len(name)
+            }
+            Op::IoGetenvCopy => {
+                let (name_start, name_len, dest) = (ptr(0)?, int(1)?, ptr(2)?);
+                if name_len < 0 {
+                    return Ok(name_len);
+                }
+                self.check_access(name_start as u32, name_len as usize, "io")?;
+                let name = self
+                    .mem
+                    .get(name_start..name_start + name_len as usize)
+                    .ok_or_else(oob)?
+                    .to_vec();
+                let len = self.io.getenv_len(&name);
+                if len < 0 {
+                    return Ok(len);
+                }
+                self.check_access(dest as u32, len as usize, "io")?;
+                let buf = self
+                    .mem
+                    .get_mut(dest..dest + len as usize)
+                    .ok_or_else(oob)?;
+                self.io.getenv_copy(&name, buf)
+            }
+            Op::IoArgc => self.io.argc(),
+            Op::IoArgLen => self.io.arg_len(int(0)?),
+            Op::IoArgCopy => {
+                let (index, dest) = (int(0)?, ptr(1)?);
+                let len = self.io.arg_len(index);
+                if len < 0 {
+                    return Ok(len);
+                }
+                self.check_access(dest as u32, len as usize, "io")?;
+                let buf = self
+                    .mem
+                    .get_mut(dest..dest + len as usize)
+                    .ok_or_else(oob)?;
+                self.io.arg_copy(index, buf)
+            }
+            Op::IoDirCount => {
+                let start = ptr(0)?;
+                let tail = self.c_string_tail(start as u32)?;
+                let len = tail
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(tail.len());
+                let path = tail[..len].to_vec();
+                self.io.dir_count(&path)
+            }
+            Op::IoDirEntryKind => {
+                let start = ptr(0)?;
+                let tail = self.c_string_tail(start as u32)?;
+                let len = tail
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(tail.len());
+                let path = tail[..len].to_vec();
+                self.io.dir_entry_kind(&path, int(1)?)
+            }
+            Op::IoDirEntryLen => {
+                let start = ptr(0)?;
+                let tail = self.c_string_tail(start as u32)?;
+                let len = tail
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(tail.len());
+                let path = tail[..len].to_vec();
+                self.io.dir_entry_len(&path, int(1)?)
+            }
+            Op::IoDirEntryCopy => {
+                let start = ptr(0)?;
+                let tail = self.c_string_tail(start as u32)?;
+                let len = tail
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(tail.len());
+                let path = tail[..len].to_vec();
+                let index = int(1)?;
+                let entry_len = self.io.dir_entry_len(&path, index);
+                if entry_len < 0 {
+                    return Ok(entry_len);
+                }
+                let dest = ptr(2)?;
+                self.check_access(dest as u32, entry_len as usize, "io")?;
+                let buf = self
+                    .mem
+                    .get_mut(dest..dest + entry_len as usize)
+                    .ok_or_else(oob)?;
+                self.io.dir_entry_copy(&path, index, buf)
+            }
+            Op::IoExit => self.io.exit(int(0)?),
             other => {
                 return Err(EvalError::Unsupported(format!("not an io op: {other:?}")));
             }
@@ -625,12 +805,14 @@ impl Evaluator {
         ty: crate::lambda_g::expr::TyId,
     ) -> Result<EvalValue, EvalError> {
         match p.ty_kind(ty) {
-            TyKind::Byte => self
-                .mem
-                .get(addr as usize)
-                .copied()
-                .map(EvalValue::Byte)
-                .ok_or_else(|| EvalError::Unsupported("load out of bounds".into())),
+            TyKind::Byte => {
+                self.check_access(addr, 1, "load")?;
+                self.mem
+                    .get(addr as usize)
+                    .copied()
+                    .map(EvalValue::Byte)
+                    .ok_or_else(|| EvalError::Unsupported("load out of bounds".into()))
+            }
             TyKind::I64 => Ok(EvalValue::I64(self.read_word(addr)? as i64)),
             TyKind::F64 => Ok(EvalValue::F64(f64::from_bits(self.read_word(addr)?))),
             TyKind::Bool => Ok(EvalValue::Bool(self.read_word(addr)? != 0)),
@@ -664,6 +846,7 @@ impl Evaluator {
                 let EvalValue::Byte(byte) = value else {
                     return Err(EvalError::Unsupported("store byte mismatch".into()));
                 };
+                self.check_access(addr, 1, "store")?;
                 let slot = self
                     .mem
                     .get_mut(addr as usize)
@@ -707,6 +890,7 @@ impl Evaluator {
                 return Err(EvalError::Unsupported(format!("store of type {other:?}")));
             }
         };
+        self.check_access(addr, 8, "store")?;
         let start = addr as usize;
         let slot = self
             .mem
@@ -717,6 +901,7 @@ impl Evaluator {
     }
 
     fn read_word(&self, addr: u32) -> Result<u64, EvalError> {
+        self.check_access(addr, 8, "load")?;
         let start = addr as usize;
         let bytes = self
             .mem
@@ -725,6 +910,29 @@ impl Evaluator {
         let mut buf = [0u8; 8];
         buf.copy_from_slice(bytes);
         Ok(u64::from_le_bytes(buf))
+    }
+
+    fn free(&mut self, ptr: u32) -> Result<(), EvalError> {
+        self.allocations
+            .free(self.static_len, ptr)
+            .map_err(eval_memory_error)
+    }
+
+    fn check_access(&self, addr: u32, len: usize, op: &str) -> Result<(), EvalError> {
+        self.allocations
+            .check_access(self.mem.len(), self.static_len, addr, len, op)
+            .map_err(eval_memory_error)
+    }
+
+    fn c_string_tail(&self, addr: u32) -> Result<&[u8], EvalError> {
+        let start = addr as usize;
+        let end = self
+            .allocations
+            .accessible_tail_end(self.mem.len(), self.static_len, addr, "io")
+            .map_err(eval_io_memory_error)?;
+        self.mem
+            .get(start..end)
+            .ok_or_else(|| EvalError::Unsupported("io access out of bounds".into()))
     }
 
     /// The unit argument for a thunk of type [] → R: an empty tuple.
@@ -793,5 +1001,58 @@ impl Evaluator {
             _ => return Err(EvalError::Unsupported("cmp operand types".into())),
         };
         Ok(Bool(result))
+    }
+}
+
+fn eval_memory_error(error: MemoryError) -> EvalError {
+    EvalError::Unsupported(match error {
+        MemoryError::AddressOutOfRange => "memory address out of range".to_string(),
+        MemoryError::AllocationTooLarge => "alloc count out of range".to_string(),
+        MemoryError::InvalidFree => "free of invalid pointer".to_string(),
+        MemoryError::DoubleFree => "double free".to_string(),
+        MemoryError::OutOfBounds { op } => format!("{op} out of bounds"),
+        MemoryError::InvalidPointer { op } => format!("{op} through invalid pointer"),
+    })
+}
+
+fn eval_io_memory_error(error: MemoryError) -> EvalError {
+    EvalError::Unsupported(match error {
+        MemoryError::InvalidPointer { .. } | MemoryError::InvalidFree | MemoryError::DoubleFree => {
+            "io through invalid pointer".to_string()
+        }
+        MemoryError::AddressOutOfRange
+        | MemoryError::AllocationTooLarge
+        | MemoryError::OutOfBounds { .. } => "io access out of bounds".to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn c_string_tail_rejects_one_past_heap_allocation() {
+        let mut eval = Evaluator::new();
+        eval.allocations
+            .allocate(&mut eval.mem, 4)
+            .expect("allocation");
+
+        assert!(
+            matches!(eval.c_string_tail(4), Err(EvalError::Unsupported(_))),
+            "one-past heap pointer must not produce an empty C string"
+        );
+    }
+
+    #[test]
+    fn c_string_tail_rejects_zero_length_heap_allocation() {
+        let mut eval = Evaluator::new();
+        eval.allocations
+            .allocate(&mut eval.mem, 0)
+            .expect("allocation");
+
+        assert!(
+            matches!(eval.c_string_tail(0), Err(EvalError::Unsupported(_))),
+            "zero-length heap allocation must not produce an empty C string"
+        );
     }
 }

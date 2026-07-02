@@ -110,6 +110,10 @@ pub enum Op {
     IToF,
     Alloc,
     Free,
+    /// Add one reference to a heap buffer (a copy-on-write clone).
+    Retain,
+    /// Whether a heap buffer has exactly one reference.
+    IsUnique,
     Load,
     Store,
     Copy,
@@ -146,6 +150,18 @@ pub enum Op {
     IoConnect,
     IoAccept,
     IoSleep,
+    IoCwdLen,
+    IoCwdCopy,
+    IoGetenvLen,
+    IoGetenvCopy,
+    IoArgc,
+    IoArgLen,
+    IoArgCopy,
+    IoDirCount,
+    IoDirEntryKind,
+    IoDirEntryLen,
+    IoDirEntryCopy,
+    IoExit,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

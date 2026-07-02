@@ -30,7 +30,6 @@ impl Name {
         }
     }
 
-    #[allow(clippy::panic)]
     pub fn symbol(&self) -> Result<Symbol, NameResolverError> {
         if let Name::Resolved(sym, _) = self {
             return Ok(*sym);

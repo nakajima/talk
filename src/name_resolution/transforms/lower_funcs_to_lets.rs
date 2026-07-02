@@ -62,6 +62,7 @@ impl LowerFuncsToLets {
             name,
             name_span,
             generics,
+            captures,
             where_clause,
             params,
             body,
@@ -79,6 +80,7 @@ impl LowerFuncsToLets {
                     name: name.clone(),
                     name_span,
                     generics,
+                    captures,
                     where_clause,
                     effects,
                     params,
@@ -110,7 +112,7 @@ pub mod tests {
         name_resolution::transforms::lower_funcs_to_lets::LowerFuncsToLets,
         node_id::{FileID, NodeID},
         node_kinds::{
-            decl::DeclKind,
+            decl::{DeclKind, ReceiverMode},
             expr::ExprKind,
             func::Func,
             pattern::{Pattern, PatternKind},
@@ -143,6 +145,7 @@ pub mod tests {
                     name: Name::Raw("fizz".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     params: vec![],
                     body: any_block!(vec![]),
@@ -166,7 +169,7 @@ pub mod tests {
 
         assert_eq_diff!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct {
+            any_decl!(DeclKind::Struct { linear: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -177,6 +180,7 @@ pub mod tests {
                         name: "fizz".into(),
                         name_span: Span::ANY,
                         generics: vec![],
+                        captures: vec![],
                         where_clause: None,
                         params: vec![],
                         body: any_block!(vec![]),
@@ -184,7 +188,8 @@ pub mod tests {
                         ret: None,
                         attributes: vec![]
                     }),
-                    is_static: false
+                    is_static: false,
+                    receiver_mode: ReceiverMode::None
                 })])
             })
         )

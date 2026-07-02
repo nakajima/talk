@@ -1,6 +1,7 @@
 # How the lowerer works
 
-This directory translates the type-checked AST into λ_G, the IR
+This directory translates the type-checked AST — by way of the
+control-flow-graph MIR built in `src/mir` — into λ_G, the IR
 described in `src/lambda_g/README.md`. The detailed source-level
 `@_ir`, printed λ_G, and `talk ir` bytecode formats are documented in
 `../../docs/ir-and-lambda-g-format.md`. Everything the type checker
@@ -11,9 +12,10 @@ VM scheduler can lay out directly. Effect rows are erased in the
 process: they did their checking work upstream, and the runtime never
 sees them.
 
-Three files: `mod.rs` (the translation itself and the
-specialization machinery), `patterns.rs` (match compilation),
-`derive.rs` (synthesized `Showable` witnesses).
+Five files: `mod.rs` (the translation itself and the
+specialization machinery), `mir_lowering.rs` and `statements.rs`
+(walking MIR bodies — blocks, statements, drops), `patterns.rs`
+(match compilation), `derive.rs` (synthesized `Showable` witnesses).
 
 ## Continuation-passing: the calling convention
 

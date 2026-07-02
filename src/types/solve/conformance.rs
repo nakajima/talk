@@ -23,6 +23,7 @@ impl<'s> Solver<'s> {
                 origin,
             }),
             Ty::Error => None,
+            Ty::Borrow(_, inner) => self.try_conforms((*inner).clone(), protocol, origin, queue),
             Ty::Any {
                 protocol: existential_protocol,
                 ..

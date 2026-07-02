@@ -138,6 +138,8 @@ pub enum InlineIRInstructionKind {
     },
     #[doc = "$dest = trunc $val"]
     Trunc { dest: Register, val: Value },
+    #[doc = "$dest = is_unique $ptr"]
+    IsUnique { dest: Register, ptr: Value },
     #[doc = "$dest = itof $val"]
     IntToFloat { dest: Register, val: Value },
 }
@@ -189,6 +191,16 @@ impl Display for Value {
 impl TypeAnnotation {
     fn simple_display(&self) -> String {
         match &self.kind {
+            TypeAnnotationKind::Borrow { mutable, inner } => {
+                if *mutable {
+                    format!("&mut {}", inner.simple_display())
+                } else {
+                    format!("&{}", inner.simple_display())
+                }
+            }
+            TypeAnnotationKind::Unique { inner } => {
+                format!("*{}", inner.simple_display())
+            }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 if generics.is_empty() {
                     name.name_str()
@@ -342,6 +354,9 @@ impl Display for InlineIRInstruction {
             } => write!(f, "{dest} = io_write {} {} {}", fd, buf, count),
             InlineIRInstructionKind::Trunc { dest, val } => {
                 write!(f, "{dest} = trunc {}", val)
+            }
+            InlineIRInstructionKind::IsUnique { dest, ptr } => {
+                write!(f, "{dest} = is_unique {}", ptr)
             }
             InlineIRInstructionKind::IntToFloat { dest, val } => {
                 write!(f, "{dest} = itof {}", val)

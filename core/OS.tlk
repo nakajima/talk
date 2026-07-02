@@ -1,0 +1,48 @@
+// no-core
+use { _io_cwd_len, _io_cwd_copy, _io_getenv_len, _io_getenv_copy, _io_argc, _io_arg_len, _io_arg_copy } from ./IO.tlk
+use { _alloc } from ./Memory.tlk
+use { Add, Comparable } from ./Operators.tlk
+use { String } from ./String.tlk
+use { Array } from ./Array.tlk
+use { Optional } from ./Optional.tlk
+
+public struct OS {
+	public static func cwd() -> String? {
+		let len = _io_cwd_len()
+		if len < 0 { return Optional.none }
+
+		let buf = _alloc<Byte>(len)
+		let copied = _io_cwd_copy(buf)
+		if copied < 0 { return Optional.none }
+
+		Optional.some(String(buf, copied, copied))
+	}
+
+	public static func getenv(name: String) -> String? {
+		let len = _io_getenv_len(name.storage.base, name.length)
+		if len < 0 { return Optional.none }
+
+		let buf = _alloc<Byte>(len)
+		let copied = _io_getenv_copy(name.storage.base, name.length, buf)
+		if copied < 0 { return Optional.none }
+
+		Optional.some(String(buf, copied, copied))
+	}
+
+	public static func argc() -> Array<String> {
+		let count = _io_argc()
+		let result = Array<String>(capacity: count)
+		let i = 0
+
+		loop i < count {
+			let len = _io_arg_len(i)
+			let buf = _alloc<Byte>(len)
+			let copied = _io_arg_copy(i, buf)
+			result.storage.set(i, String(buf, copied, copied))
+			i = i + 1
+		}
+
+		result.count = count
+		result
+	}
+}

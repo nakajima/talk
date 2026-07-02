@@ -29,6 +29,11 @@ pub enum TypeError {
     NotAFunction {
         found: String,
     },
+    InvalidAssignmentTarget,
+    AssignThroughSharedBorrow {
+        target: String,
+        ty: String,
+    },
     NotConforming {
         ty: String,
         protocol: String,
@@ -107,7 +112,20 @@ pub enum TypeError {
     /// Everything this arm matches is already matched by an earlier arm
     /// (reported as a warning, not an error).
     UnreachableMatchArm,
+    UnreachableCode,
     CannotInfer,
+    /// A `Copy`/`CheapClone` conformance whose fields don't support it.
+    NonConformingField {
+        protocol: String,
+        field: String,
+        ty: String,
+    },
+    /// A `linear` declaration claiming a conformance that would defeat
+    /// linearity (`Copy` duplicates it, `Deinit` silently discards it).
+    LinearConformance {
+        ty: String,
+        protocol: String,
+    },
     Unsupported(String),
 }
 
@@ -133,6 +151,18 @@ impl Display for TypeError {
             }
             TypeError::NotAFunction { found } => {
                 write!(f, "Cannot call non-function value of type {found}")
+            }
+            TypeError::InvalidAssignmentTarget => {
+                write!(
+                    f,
+                    "Assignment target must be a variable or stored member path"
+                )
+            }
+            TypeError::AssignThroughSharedBorrow { target, ty } => {
+                write!(
+                    f,
+                    "Cannot assign through shared borrow '{target}' of type {ty}; use `mut func` for a mutable receiver"
+                )
             }
             TypeError::NotConforming { ty, protocol } => {
                 write!(f, "{ty} does not conform to {protocol}")
@@ -263,8 +293,23 @@ impl Display for TypeError {
                     "This arm never runs: the arms above it already match everything it could"
                 )
             }
+            TypeError::UnreachableCode => {
+                write!(f, "This code is unreachable")
+            }
             TypeError::CannotInfer => {
                 write!(f, "Cannot infer type; add an annotation")
+            }
+            TypeError::NonConformingField { protocol, field, ty } => {
+                write!(
+                    f,
+                    "Cannot conform to {protocol}: field `{field}` has type {ty}, which is not {protocol}"
+                )
+            }
+            TypeError::LinearConformance { ty, protocol } => {
+                write!(
+                    f,
+                    "`{ty}` is linear and cannot conform to {protocol}: a linear value must be consumed exactly once"
+                )
             }
             TypeError::Unsupported(what) => {
                 write!(f, "Not yet supported by the type checker: {what}")

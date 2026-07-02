@@ -55,11 +55,51 @@ pub trait IO {
 
     /// Accept a connection: the new fd or negative errno.
     fn accept(&mut self, fd: i64) -> i64;
+
+    /// Current working directory byte length, or negative errno.
+    fn cwd_len(&mut self) -> i64;
+
+    /// Copy the current working directory into `buf`.
+    fn cwd_copy(&mut self, buf: &mut [u8]) -> i64;
+
+    /// Environment variable value byte length, or negative errno.
+    fn getenv_len(&mut self, name: &[u8]) -> i64;
+
+    /// Copy an environment variable value into `buf`.
+    fn getenv_copy(&mut self, name: &[u8], buf: &mut [u8]) -> i64;
+
+    /// Process argument count.
+    fn argc(&mut self) -> i64;
+
+    /// Process argument byte length, or negative errno.
+    fn arg_len(&mut self, index: i64) -> i64;
+
+    /// Copy one process argument into `buf`.
+    fn arg_copy(&mut self, index: i64, buf: &mut [u8]) -> i64;
+
+    /// Count directory entries for a NUL-terminated path.
+    fn dir_count(&mut self, path: &[u8]) -> i64;
+
+    /// Directory entry kind: 1 directory, 2 file, 3 symlink.
+    fn dir_entry_kind(&mut self, path: &[u8], index: i64) -> i64;
+
+    /// Directory entry name byte length.
+    fn dir_entry_len(&mut self, path: &[u8], index: i64) -> i64;
+
+    /// Copy a directory entry name into `buf`.
+    fn dir_entry_copy(&mut self, path: &[u8], index: i64, buf: &mut [u8]) -> i64;
+
+    /// Terminate the process with `code`; test IO returns the code.
+    fn exit(&mut self, code: i64) -> i64;
 }
 
 const EIO: i64 = -5;
+const ENOENT: i64 = -2;
 const EBADF: i64 = -9;
 const EINVAL: i64 = -22;
+const DIR_ENTRY_DIRECTORY: i64 = 1;
+const DIR_ENTRY_FILE: i64 = 2;
+const DIR_ENTRY_SYMLINK: i64 = 3;
 #[cfg(not(unix))]
 const EPERM: i64 = -1;
 
@@ -67,6 +107,66 @@ const EPERM: i64 = -1;
 /// descriptors go straight to the OS).
 #[derive(Default)]
 pub struct StdioIO;
+
+#[derive(Clone)]
+struct DirectoryEntryInfo {
+    name: Vec<u8>,
+    kind: i64,
+}
+
+impl StdioIO {
+    fn io_error(error: std::io::Error) -> i64 {
+        error.raw_os_error().map_or(EIO, |code| -(code as i64))
+    }
+
+    fn host_path(path: &[u8]) -> Result<std::path::PathBuf, i64> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            Ok(std::ffi::OsStr::from_bytes(path).into())
+        }
+        #[cfg(not(unix))]
+        {
+            let path = std::str::from_utf8(path).map_err(|_| EINVAL)?;
+            Ok(std::path::PathBuf::from(path))
+        }
+    }
+
+    fn entry_name_bytes(name: std::ffi::OsString) -> Vec<u8> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            name.as_os_str().as_bytes().to_vec()
+        }
+        #[cfg(not(unix))]
+        {
+            name.to_string_lossy().as_bytes().to_vec()
+        }
+    }
+
+    fn dir_entries(path: &[u8]) -> Result<Vec<DirectoryEntryInfo>, i64> {
+        let path = Self::host_path(path)?;
+        let entries = std::fs::read_dir(path).map_err(Self::io_error)?;
+        let mut out = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(Self::io_error)?;
+            let file_type = entry.file_type().map_err(Self::io_error)?;
+            let kind = if file_type.is_symlink() {
+                DIR_ENTRY_SYMLINK
+            } else if file_type.is_dir() {
+                DIR_ENTRY_DIRECTORY
+            } else {
+                DIR_ENTRY_FILE
+            };
+            out.push(DirectoryEntryInfo {
+                name: Self::entry_name_bytes(entry.file_name()),
+                kind,
+            });
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+}
 
 #[cfg(unix)]
 fn errno() -> i64 {
@@ -285,6 +385,142 @@ impl IO for StdioIO {
             EPERM
         }
     }
+
+    fn cwd_len(&mut self) -> i64 {
+        match std::env::current_dir() {
+            Ok(path) => path.to_string_lossy().len() as i64,
+            Err(_) => EIO,
+        }
+    }
+
+    fn cwd_copy(&mut self, buf: &mut [u8]) -> i64 {
+        match std::env::current_dir() {
+            Ok(path) => {
+                let bytes = path.to_string_lossy();
+                let bytes = bytes.as_bytes();
+                if buf.len() < bytes.len() {
+                    return EINVAL;
+                }
+                buf[..bytes.len()].copy_from_slice(bytes);
+                bytes.len() as i64
+            }
+            Err(_) => EIO,
+        }
+    }
+
+    fn getenv_len(&mut self, name: &[u8]) -> i64 {
+        let Ok(name) = std::str::from_utf8(name) else {
+            return EINVAL;
+        };
+        match std::env::var_os(name) {
+            Some(value) => value.to_string_lossy().len() as i64,
+            None => ENOENT,
+        }
+    }
+
+    fn getenv_copy(&mut self, name: &[u8], buf: &mut [u8]) -> i64 {
+        let Ok(name) = std::str::from_utf8(name) else {
+            return EINVAL;
+        };
+        match std::env::var_os(name) {
+            Some(value) => {
+                let bytes = value.to_string_lossy();
+                let bytes = bytes.as_bytes();
+                if buf.len() < bytes.len() {
+                    return EINVAL;
+                }
+                buf[..bytes.len()].copy_from_slice(bytes);
+                bytes.len() as i64
+            }
+            None => ENOENT,
+        }
+    }
+
+    fn argc(&mut self) -> i64 {
+        std::env::args_os().count() as i64
+    }
+
+    fn arg_len(&mut self, index: i64) -> i64 {
+        if index < 0 {
+            return EINVAL;
+        }
+        match std::env::args_os().nth(index as usize) {
+            Some(arg) => arg.to_string_lossy().len() as i64,
+            None => ENOENT,
+        }
+    }
+
+    fn arg_copy(&mut self, index: i64, buf: &mut [u8]) -> i64 {
+        if index < 0 {
+            return EINVAL;
+        }
+        match std::env::args_os().nth(index as usize) {
+            Some(arg) => {
+                let bytes = arg.to_string_lossy();
+                let bytes = bytes.as_bytes();
+                if buf.len() < bytes.len() {
+                    return EINVAL;
+                }
+                buf[..bytes.len()].copy_from_slice(bytes);
+                bytes.len() as i64
+            }
+            None => ENOENT,
+        }
+    }
+
+    fn dir_count(&mut self, path: &[u8]) -> i64 {
+        match Self::dir_entries(path) {
+            Ok(entries) => entries.len() as i64,
+            Err(error) => error,
+        }
+    }
+
+    fn dir_entry_kind(&mut self, path: &[u8], index: i64) -> i64 {
+        if index < 0 {
+            return EINVAL;
+        }
+        match Self::dir_entries(path) {
+            Ok(entries) => entries
+                .get(index as usize)
+                .map(|entry| entry.kind)
+                .unwrap_or(ENOENT),
+            Err(error) => error,
+        }
+    }
+
+    fn dir_entry_len(&mut self, path: &[u8], index: i64) -> i64 {
+        if index < 0 {
+            return EINVAL;
+        }
+        match Self::dir_entries(path) {
+            Ok(entries) => entries
+                .get(index as usize)
+                .map(|entry| entry.name.len() as i64)
+                .unwrap_or(ENOENT),
+            Err(error) => error,
+        }
+    }
+
+    fn dir_entry_copy(&mut self, path: &[u8], index: i64, buf: &mut [u8]) -> i64 {
+        if index < 0 {
+            return EINVAL;
+        }
+        match Self::dir_entries(path) {
+            Ok(entries) => match entries.get(index as usize) {
+                Some(entry) if buf.len() >= entry.name.len() => {
+                    buf[..entry.name.len()].copy_from_slice(&entry.name);
+                    entry.name.len() as i64
+                }
+                Some(_) => EINVAL,
+                None => ENOENT,
+            },
+            Err(error) => error,
+        }
+    }
+
+    fn exit(&mut self, code: i64) -> i64 {
+        std::process::exit(code as i32)
+    }
 }
 
 #[cfg(unix)]
@@ -410,5 +646,57 @@ impl IO for CaptureIO {
             return EBADF;
         }
         self.fresh_fd()
+    }
+
+    fn cwd_len(&mut self) -> i64 {
+        1
+    }
+
+    fn cwd_copy(&mut self, buf: &mut [u8]) -> i64 {
+        if buf.is_empty() {
+            return EINVAL;
+        }
+        buf[0] = b'.';
+        1
+    }
+
+    fn getenv_len(&mut self, _name: &[u8]) -> i64 {
+        ENOENT
+    }
+
+    fn getenv_copy(&mut self, _name: &[u8], _buf: &mut [u8]) -> i64 {
+        ENOENT
+    }
+
+    fn argc(&mut self) -> i64 {
+        0
+    }
+
+    fn arg_len(&mut self, _index: i64) -> i64 {
+        ENOENT
+    }
+
+    fn arg_copy(&mut self, _index: i64, _buf: &mut [u8]) -> i64 {
+        ENOENT
+    }
+
+    fn dir_count(&mut self, _path: &[u8]) -> i64 {
+        0
+    }
+
+    fn dir_entry_kind(&mut self, _path: &[u8], _index: i64) -> i64 {
+        ENOENT
+    }
+
+    fn dir_entry_len(&mut self, _path: &[u8], _index: i64) -> i64 {
+        ENOENT
+    }
+
+    fn dir_entry_copy(&mut self, _path: &[u8], _index: i64, _buf: &mut [u8]) -> i64 {
+        ENOENT
+    }
+
+    fn exit(&mut self, code: i64) -> i64 {
+        code
     }
 }

@@ -73,7 +73,7 @@ use crate::types::error::TypeError;
 use crate::types::output::{ExistentialPack, MemberResolution, TypeOutput};
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
-    EffTail, EffectRow, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
+    Perm, EffTail, EffectRow, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
 };
 use crate::types::variant::VariantInstantiation;
 
@@ -205,6 +205,10 @@ struct CatalogBuilder<'s, 'a> {
     type_aliases: &'s mut FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'s mut Vec<Symbol>,
     explicit_conformances: FxHashSet<(Symbol, Symbol)>,
+    /// Explicit claims on the substructural marker protocols (Copy,
+    /// CheapClone, Deinit) with their blame nodes, validated once the whole
+    /// catalog is collected.
+    marker_claims: Vec<(Symbol, Symbol, NodeID)>,
     self_types: Vec<Ty>,
     level: Level,
 }
@@ -248,8 +252,35 @@ struct BindingGroupChecker<'s, 'a> {
 /// expression; Return/Break/Continue diverge, so they are `Never` at joins).
 enum StmtValue {
     Value(Ty),
-    Divergent,
+    Divergent { report_unreachable: bool },
     Unit,
+}
+
+impl StmtValue {
+    fn divergent() -> Self {
+        StmtValue::Divergent {
+            report_unreachable: false,
+        }
+    }
+
+    fn divergent_loop() -> Self {
+        StmtValue::Divergent {
+            report_unreachable: true,
+        }
+    }
+
+    fn is_divergent(&self) -> bool {
+        matches!(self, StmtValue::Divergent { .. })
+    }
+
+    fn reports_unreachable(&self) -> bool {
+        matches!(
+            self,
+            StmtValue::Divergent {
+                report_unreachable: true
+            }
+        )
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -331,6 +362,7 @@ impl<'a> TypecheckSession<'a> {
                 type_aliases: &mut self.type_aliases,
                 alias_stack: &mut self.alias_stack,
                 explicit_conformances: FxHashSet::default(),
+                marker_claims: vec![],
                 self_types: vec![],
                 level: OUTER_LEVEL,
             };
@@ -389,6 +421,10 @@ impl<'a> TypecheckSession<'a> {
             if matches!(ty, Ty::Error) {
                 continue;
             }
+            let ty = match ty {
+                Ty::Borrow(_, inner) => *inner,
+                other => other,
+            };
             let arms: Vec<&Pattern> = patterns.iter().collect();
             let report = crate::types::exhaustiveness::check_match(&self.catalog, &ty, &arms);
             if !report.missing.is_empty() {

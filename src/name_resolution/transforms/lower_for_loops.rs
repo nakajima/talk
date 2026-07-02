@@ -20,9 +20,9 @@ use crate::{
 /// Desugars `for pattern in iterable { body }` into:
 /// ```talk
 /// {
-///     let __iter# = iterable.iter()
+///     let __for_iter = iterable.iter()
 ///     loop {
-///         match __iter#.next() {
+///         match __for_iter.next() {
 ///             .some(pattern) { body }
 ///             .none { break }
 ///         }
@@ -65,11 +65,13 @@ impl LowerForLoops {
             return;
         };
 
-        // Build: __iter#.next()
+        let iter_name = format!("__for_iter_{}", stmt.id.1);
+
+        // Build: __for_iter_<id>.next()
         let iter_var = Expr {
             id: self.next_id(),
             span: Span::SYNTHESIZED,
-            kind: ExprKind::Variable("__iter#".into()),
+            kind: ExprKind::Variable(iter_name.clone().into()),
         };
 
         let next_member = Expr {
@@ -100,7 +102,7 @@ impl LowerForLoops {
                 id: self.next_id(),
                 span: pattern.span,
                 kind: PatternKind::Variant {
-                    enum_name: None,
+                    enum_name: Some("Optional".into()),
                     variant_name: "some".to_string(),
                     variant_name_span: Span::SYNTHESIZED,
                     fields: vec![pattern],
@@ -123,7 +125,7 @@ impl LowerForLoops {
                 id: self.next_id(),
                 span: Span::SYNTHESIZED,
                 kind: PatternKind::Variant {
-                    enum_name: None,
+                    enum_name: Some("Optional".into()),
                     variant_name: "none".to_string(),
                     variant_name_span: Span::SYNTHESIZED,
                     fields: vec![],
@@ -182,7 +184,7 @@ impl LowerForLoops {
             },
         };
 
-        // Build: let __iter# = iterable.iter()
+        // Build: let __for_iter_<id> = iterable.iter()
         let let_decl = Decl {
             id: self.next_id(),
             span: Span::SYNTHESIZED,
@@ -191,14 +193,14 @@ impl LowerForLoops {
                 lhs: Pattern {
                     id: self.next_id(),
                     span: Span::SYNTHESIZED,
-                    kind: PatternKind::Bind("__iter#".into()),
+                    kind: PatternKind::Bind(iter_name.into()),
                 },
                 type_annotation: None,
                 rhs: Some(iter_call),
             },
         };
 
-        // Build outer block: { let __iter# = ...; loop { ... } }
+        // Build outer block: { let __for_iter_<id> = ...; loop { ... } }
         let outer_block = Expr {
             id: self.next_id(),
             span: stmt.span,
@@ -234,12 +236,27 @@ mod tests {
 
         // After desugaring, should be a block expression containing let + loop
         let stmt = parsed.roots[0].as_stmt();
+        let crate::node_kinds::stmt::StmtKind::Expr(crate::node_kinds::expr::Expr {
+            kind: crate::node_kinds::expr::ExprKind::Block(block),
+            ..
+        }) = &stmt.kind
+        else {
+            panic!("expected for loop to lower to a block expression");
+        };
+
+        let crate::node::Node::Decl(decl) = &block.body[0] else {
+            panic!("expected lowered block to start with iterator binding");
+        };
+        let crate::node_kinds::decl::DeclKind::Let { rhs: Some(rhs), .. } = &decl.kind else {
+            panic!("expected iterator binding to have an initializer");
+        };
+        let crate::node_kinds::expr::ExprKind::Call { callee, .. } = &rhs.kind else {
+            panic!("expected iterator binding initializer to call iter()");
+        };
         assert!(matches!(
-            stmt.kind,
-            crate::node_kinds::stmt::StmtKind::Expr(crate::node_kinds::expr::Expr {
-                kind: crate::node_kinds::expr::ExprKind::Block(_),
-                ..
-            })
+            &callee.kind,
+            crate::node_kinds::expr::ExprKind::Member(_, label, _)
+                if label.to_string() == "iter"
         ));
     }
 

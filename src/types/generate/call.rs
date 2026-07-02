@@ -53,7 +53,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }
                 let ret = Ty::Var(self.store.fresh_ty(self.level, node));
                 let expected = Ty::Func(arg_tys, Box::new(ret.clone()), ctx.eff.clone());
-                self.emit_eq(expected, callee_ty, node, CtReason::Apply);
+                self.emit_eq(callee_ty, expected, node, CtReason::Apply);
                 ret
             }
             Ty::Error => Ty::Error,
@@ -82,14 +82,15 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     ) -> Ty {
         let receiver_ty = self.infer_expr(receiver, ctx);
         let member = Ty::Var(self.store.fresh_ty(self.level, callee.id));
+        self.artifacts.node_types.insert(callee.id, member.clone());
+        let result = self.finish_call(expr.id, member.clone(), args, trailing_block, ctx);
         self.wanteds.push(Constraint::HasMember {
             receiver: receiver_ty,
             label: label.clone(),
-            member: member.clone(),
+            member,
             origin: CtOrigin::new(callee.id, CtReason::Apply),
         });
-        self.artifacts.node_types.insert(callee.id, member.clone());
-        self.finish_call(expr.id, member, args, trailing_block, ctx)
+        result
     }
 
     /// `Person(args)`: pick an initializer by arity, equate its
@@ -167,7 +168,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     ));
                     return Ty::Error;
                 }
-                self.emit_eq(params[0].clone(), self_ty.clone(), expr.id, CtReason::Apply);
+                self.emit_immediate_argument_eq(
+                    &params[0],
+                    self_ty.clone(),
+                    expr.id,
+                    CtReason::Apply,
+                );
                 for (arg, param) in args.iter().zip(&params[1..]) {
                     self.check_expr(&arg.value, param, CtReason::Apply, ctx);
                 }
@@ -206,6 +212,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 if let Some(block) = trailing_block {
                     arg_tys.push(self.infer_closure_block(block, ctx));
                 }
+                // Record the constructor node's function type, as the `Ty::Func` arm
+                // does, so every expression has a type.
+                self.artifacts.node_types.insert(
+                    callee.id,
+                    Ty::Func(
+                        arg_tys[1..].to_vec(),
+                        Box::new(self_ty.clone()),
+                        EffectRow::pure(),
+                    ),
+                );
                 let expected = Ty::Func(arg_tys, Box::new(self_ty.clone()), ctx.eff.clone());
                 self.emit_eq(signature, expected, expr.id, CtReason::Apply);
                 self_ty

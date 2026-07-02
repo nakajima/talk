@@ -1,20 +1,26 @@
 # How the bytecode VM works
 
-This directory is the execution engine: it takes the λ_G program the
-lowerer produced (see `src/lower/README.md` and
-`src/lambda_g/README.md`) and turns it into register bytecode, then
-runs it on a frame-stack interpreter. The exact `talk ir` listing
-format is documented alongside `@_ir` and λ_G in
-`../../docs/ir-and-lambda-g-format.md`. There are two engines for every
-program — this VM and the reference evaluator in `src/lambda_g/eval.rs`
-— and the test suite requires them to produce identical results, so
-the slow-but-obvious one keeps the fast one honest.
+This directory is the scheduler — the half of the bytecode engine that
+takes the λ_G program the lowerer produced (see `src/lower/README.md`
+and `src/lambda_g/README.md`) and lowers it into register bytecode. The
+bytecode data structures and the interpreter that runs it on a
+frame-stack live in the `talk-runtime` crate, which `mod.rs`
+re-exports. The exact `talk ir` listing format is documented alongside
+`@_ir` and λ_G in `../../docs/ir-and-lambda-g-format.md`. There are two
+engines for every program — the bytecode VM and the reference evaluator
+in `src/lambda_g/eval.rs` — and the test suite requires them to produce
+identical results, so the slow-but-obvious one keeps the fast one
+honest.
 
-- `mod.rs` — the instruction set and the compiled `Module`, plus the
-  bytecode listing `talk ir file.tlk` prints.
-- `schedule.rs` — λ_G → bytecode translation.
-- `interp.rs` — the interpreter, plus value rendering for the REPL.
-- `io.rs` — the IO boundary both engines share.
+- `schedule.rs` — λ_G → bytecode translation; the only translation
+  this crate still owns.
+- `mod.rs` — re-exports the `talk-runtime` types below, plus the
+  `runtime_symbol` bridge.
+- `talk-runtime/src/lib.rs` — the instruction set and the compiled
+  `Module`, plus the bytecode listing `talk ir file.tlk` prints.
+- `talk-runtime/src/interp.rs` — the interpreter, plus value rendering
+  for the REPL.
+- `talk-runtime/src/io.rs` — the IO boundary both engines share.
 
 ## The instruction set
 

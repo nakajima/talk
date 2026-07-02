@@ -1,0 +1,109 @@
+// unsafe
+let _directory_entry_directory = 1
+let _directory_entry_symlink = 3
+
+extend Path {
+	func to_string() -> String {
+		if self.components.count == 0 { return "" }
+
+		let str = self.components.get(0).to_string()
+		let i = 1
+		loop i < self.components.count {
+			let component = self.components.get(i).to_string()
+			if str.to_string() == "/" {
+				str = str + component
+			} else {
+				str = str + "/" + component
+			}
+			i = i + 1
+		}
+		str.to_string()
+	}
+
+	func appending(component: String) -> Path {
+		let count = self.components.count + 1
+		let storage = _storage<String>(count)
+		let i = 0
+		loop i < self.components.count {
+			storage.set(i, self.components.get(i).to_string())
+			i = i + 1
+		}
+		storage.set(self.components.count, component)
+		Path(Array<String>(storage: storage, count: count, capacity: count))
+	}
+}
+
+extend Path: Showable {
+	func show() -> String {
+		self.to_string()
+	}
+}
+
+public struct Directory {
+	let path: Path
+
+	func entries() -> Array<DirectoryEntry> {
+		let path_string = self.path.to_string()
+		let path_buf = _alloc<Byte>(path_string.length + 1)
+		_copy(path_string.storage.base, path_buf, path_string.length)
+
+		let real_count = _io_dir_count(path_buf)
+		if real_count < 0 { return [] }
+
+		let capacity = real_count
+		let storage = _storage<DirectoryEntry>(capacity)
+
+		let i = 0
+		let out = 0
+		loop i < real_count {
+			let name_len = _io_dir_entry_len(path_buf, i)
+			if name_len < 0 { break }
+
+			let name_buf = _alloc<Byte>(name_len)
+			let copied = _io_dir_entry_copy(path_buf, i, name_buf)
+			if copied < 0 { break }
+
+			let name = String(name_buf, copied, copied)
+			let entry_path = self.path.appending(name)
+			let kind = _io_dir_entry_kind(path_buf, i)
+			if kind == _directory_entry_directory {
+				storage.set(out, DirectoryEntry.directory(Directory(path: entry_path)))
+			} else {
+				if kind == _directory_entry_symlink {
+					storage.set(out, DirectoryEntry.symlink(entry_path))
+				} else {
+					storage.set(out, DirectoryEntry.file(FsFile(path: entry_path)))
+				}
+			}
+			i = i + 1
+			out = out + 1
+		}
+
+		Array<DirectoryEntry>(storage: storage, count: out, capacity: capacity)
+	}
+}
+
+public struct FsFile {
+	let path: Path
+}
+
+public typealias File = FsFile
+
+extend FsFile: Showable {
+	func show() -> String {
+		"File(" + self.path.to_string() + ")"
+	}
+}
+
+public enum DirectoryEntry {
+	case directory(Directory)
+	case file(FsFile)
+	case symlink(Path)
+}
+
+extend Directory: Showable {
+	func show() -> String {
+		"Directory(path:" +
+		self.path.to_string() + ")"
+	}
+}

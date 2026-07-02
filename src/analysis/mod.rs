@@ -1,5 +1,6 @@
 pub mod completion;
 pub mod hover;
+pub mod ownership;
 pub mod workspace;
 
 pub type DocumentId = String;
@@ -63,6 +64,7 @@ pub struct CompletionItem {
 }
 
 pub use hover::{Hover, hover_at};
+pub use ownership::{OwnershipInlayHint, ownership_inlay_hints};
 pub use workspace::Workspace;
 
 pub(crate) fn node_ids_at_offset(
