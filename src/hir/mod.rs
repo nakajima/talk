@@ -59,6 +59,15 @@ pub enum Node {
 
 // ----- Expressions ---------------------------------------------------------
 
+/// Per-expression ownership facts, written onto the tree in place by the
+/// flow checker (`src/flow`); `Default` until that pass runs. Lowering reads
+/// these instead of consulting any side table.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExprOwnership {
+    /// This use consumes (moves) its place; the place is dead afterwards.
+    pub consumes: bool,
+}
+
 #[derive(Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct Expr {
     #[drive(skip)]
@@ -66,6 +75,9 @@ pub struct Expr {
     pub kind: ExprKind,
     #[drive(skip)]
     pub span: Span,
+    /// Ownership facts for this expression (see [`ExprOwnership`]).
+    #[drive(skip)]
+    pub ownership: ExprOwnership,
     /// This expression's type, baked on by the HirLowerer (read once from the
     /// checker's tables). Every checked expression has one — `Ty::Error` at
     /// worst — so downstream stages read it here instead of a NodeID-keyed table.
@@ -310,6 +322,10 @@ pub struct Block {
     pub body: Vec<Node>,
     #[drive(skip)]
     pub span: Span,
+    /// Scope-exit drops for this block's locals (reverse declaration order),
+    /// written by the flow checker; empty until it runs.
+    #[drive(skip)]
+    pub drops: Vec<crate::flow::drops::DropSchedule>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
@@ -319,6 +335,11 @@ pub struct Stmt {
     pub kind: StmtKind,
     #[drive(skip)]
     pub span: Span,
+    /// Drops this statement triggers: the enclosing scopes' locals for an
+    /// early exit (`return`/`break`/`continue`), or the overwritten value
+    /// for an assignment. Written by the flow checker; empty until it runs.
+    #[drive(skip)]
+    pub drops: Vec<crate::flow::drops::DropSchedule>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]

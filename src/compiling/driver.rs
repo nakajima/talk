@@ -96,6 +96,17 @@ pub enum ParseMode {
     Lenient,
 }
 
+/// Which ownership checker runs during `type_check`. `Legacy` is the
+/// MIR-based `src/ownership` monolith; `Flow` is its replacement in
+/// `src/flow` (annotates HIR in place). Transitional: `Legacy` is deleted
+/// once `Flow` reaches parity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CheckerKind {
+    #[default]
+    Legacy,
+    Flow,
+}
+
 #[derive(Debug)]
 pub struct DriverConfig {
     pub module_id: ModuleId,
@@ -104,6 +115,7 @@ pub struct DriverConfig {
     pub module_name: String,
     pub parse_mode: ParseMode,
     pub preserve_comments: bool,
+    pub checker: CheckerKind,
 }
 
 impl DriverConfig {
@@ -115,6 +127,7 @@ impl DriverConfig {
             module_name: module_name.into(),
             parse_mode: ParseMode::default(),
             preserve_comments: false,
+            checker: CheckerKind::default(),
         }
     }
 
@@ -555,12 +568,18 @@ impl Driver<NameResolved> {
                 if hir.is_empty() {
                     (OwnershipOutput::default(), vec![])
                 } else {
-                    crate::ownership::check_ownership(
-                        &hir,
-                        &types,
-                        &resolved_names,
-                        self.config.module_id,
-                    )
+                    match self.config.checker {
+                        CheckerKind::Legacy => crate::ownership::check_ownership(
+                            &hir,
+                            &types,
+                            &resolved_names,
+                            self.config.module_id,
+                        ),
+                        CheckerKind::Flow => (
+                            OwnershipOutput::default(),
+                            crate::flow::check_flow(&mut hir, &types, self.config.module_id),
+                        ),
+                    }
                 }
             }
         };
@@ -970,7 +989,7 @@ pub mod tests {
         let module_a = resolved_a.module("A");
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(module_a);
-        let config = DriverConfig {
+        let config = DriverConfig { checker: CheckerKind::default(),
             module_id: ModuleId::Current,
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,
@@ -1016,7 +1035,7 @@ pub mod tests {
 
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(module_a);
-        let config = DriverConfig {
+        let config = DriverConfig { checker: CheckerKind::default(),
             module_id: ModuleId::Current,
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,

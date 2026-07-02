@@ -48,6 +48,7 @@ impl HirLowerer<'_> {
             id: e.id,
             kind: self.expr_kind(&e.kind),
             span: e.span,
+            ownership: hir::ExprOwnership::default(),
             ty: {
                 let Some(ty) = self.types.node_types.get(&e.id) else {
                     unreachable!("the type checker assigns every expression a type")
@@ -241,6 +242,7 @@ impl HirLowerer<'_> {
             args: self.params(&b.args),
             body: self.roots(&b.body),
             span: b.span,
+            drops: vec![],
         }
     }
 
@@ -249,6 +251,7 @@ impl HirLowerer<'_> {
             id: s.id,
             kind: self.stmt_kind(&s.kind),
             span: s.span,
+            drops: vec![],
         }
     }
 

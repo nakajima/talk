@@ -23,6 +23,7 @@ pub mod analysis;
 pub mod common;
 pub mod compiling;
 pub use common::*;
+pub mod flow;
 pub mod hir;
 pub mod lambda_g;
 pub mod lower;

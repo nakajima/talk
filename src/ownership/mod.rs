@@ -250,6 +250,12 @@ pub enum OwnershipError {
         name: String,
         ty: String,
     },
+    /// A linear value would be silently dropped (flow checker only; linearity
+    /// is a grade, which the legacy checker does not know).
+    LinearNotConsumed {
+        name: String,
+        ty: String,
+    },
     UseAfterInvalidatedBorrow {
         name: String,
         owner: String,
@@ -332,6 +338,12 @@ impl Display for OwnershipError {
             }
             OwnershipError::UseAfterMove { name, ty } => {
                 write!(f, "Use of moved value '{name}' of type {ty}")
+            }
+            OwnershipError::LinearNotConsumed { name, ty } => {
+                write!(
+                    f,
+                    "'{name}' of type {ty} is linear and must be consumed exactly once; it would be dropped here"
+                )
             }
             OwnershipError::UseAfterInvalidatedBorrow { name, owner, ty } => {
                 write!(
