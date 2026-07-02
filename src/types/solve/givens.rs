@@ -150,7 +150,7 @@ impl<'s> Solver<'s> {
             Ty::Var(_) | Ty::Param(_) => 0,
             Ty::Proj(..) => 1,
             Ty::Func(..) | Ty::Record(_) | Ty::Tuple(_) => 2,
-            Ty::Borrow(..) | Ty::Nominal(..) | Ty::Any { .. } => 3,
+            Ty::Borrow(..) | Ty::Unique(_) | Ty::Nominal(..) | Ty::Any { .. } => 3,
             Ty::Error => 4,
         }
     }

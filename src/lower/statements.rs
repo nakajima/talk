@@ -250,6 +250,25 @@ impl<'a> Lowering<'a> {
                 if self.symbol_is_borrowed(symbol) {
                     return next;
                 }
+                // A `Deinit` conformance runs the user's destructor, which
+                // consumes the value; its own body then drops the fields
+                // (its scope-exit drops), so no structural teardown follows
+                // here. Inside the deinit body itself, dropping self skips
+                // the dispatch (fields only) — no recursion.
+                if let Some(witness) = self.deinit_witness(symbol)
+                    && ctx.owner != Some(witness)
+                {
+                    let theta = self.nominal_theta(symbol, &args);
+                    let label = self.demand(witness, theta);
+                    let fn_ref = self.p.func_ref(label);
+                    let void_ty = self.p.ty_void();
+                    let bot = self.p.ty_bot();
+                    let cont = self.p.func("after_deinit", void_ty, bot);
+                    self.p.set_body(cont, next);
+                    let cont_ref = self.p.func_ref(cont);
+                    let args_tuple = self.p.tuple(&[value, cont_ref]);
+                    return self.p.app(fn_ref, args_tuple);
+                }
                 if let Some(index) = self.rawptr_field_index(symbol) {
                     let ptr_ty = self.p.ty_ptr();
                     let ptr = self.p.primop(Op::GetField(index), &[value], ptr_ty);
@@ -296,6 +315,41 @@ impl<'a> Lowering<'a> {
             CheckTy::Any { .. } => next,
             _ => next,
         }
+    }
+
+    /// The `deinit` witness for a nominal's `Deinit` conformance, if any.
+    pub(super) fn deinit_witness(&self, symbol: Symbol) -> Option<Symbol> {
+        self.units.iter().find_map(|unit| {
+            unit.types
+                .catalog
+                .conformances
+                .get(&(symbol, Symbol::Deinit))
+                .and_then(|conformance| conformance.witnesses.get("deinit"))
+                .copied()
+        })
+    }
+
+    /// θ binding a nominal's declared params to this application's args.
+    pub(super) fn nominal_theta(&self, symbol: Symbol, args: &[CheckTy]) -> Theta {
+        let params = self
+            .units
+            .iter()
+            .find_map(|unit| {
+                unit.types
+                    .catalog
+                    .structs
+                    .get(&symbol)
+                    .map(|info| info.params.clone())
+                    .or_else(|| {
+                        unit.types
+                            .catalog
+                            .enums
+                            .get(&symbol)
+                            .map(|info| info.params.clone())
+                    })
+            })
+            .unwrap_or_default();
+        params.into_iter().zip(args.iter().cloned()).collect()
     }
 
     pub(super) fn sequence_void_effect(&mut self, effect: ExprId, next: ExprId) -> ExprId {
@@ -440,6 +494,25 @@ impl<'a> Lowering<'a> {
                 if self.symbol_is_borrowed(symbol) {
                     return next;
                 }
+                // A `Deinit` conformance runs the user's destructor, which
+                // consumes the value; its own body then drops the fields
+                // (its scope-exit drops), so no structural teardown follows
+                // here. Inside the deinit body itself, dropping self skips
+                // the dispatch (fields only) — no recursion.
+                if let Some(witness) = self.deinit_witness(symbol)
+                    && ctx.owner != Some(witness)
+                {
+                    let theta = self.nominal_theta(symbol, &args);
+                    let label = self.demand(witness, theta);
+                    let fn_ref = self.p.func_ref(label);
+                    let void_ty = self.p.ty_void();
+                    let bot = self.p.ty_bot();
+                    let cont = self.p.func("after_deinit", void_ty, bot);
+                    self.p.set_body(cont, next);
+                    let cont_ref = self.p.func_ref(cont);
+                    let args_tuple = self.p.tuple(&[value, cont_ref]);
+                    return self.p.app(fn_ref, args_tuple);
+                }
                 if let Some(index) = self.rawptr_field_index(symbol) {
                     let ptr_ty = self.p.ty_ptr();
                     let ptr = self.p.primop(Op::GetField(index), &[value], ptr_ty);
@@ -517,11 +590,13 @@ impl<'a> Lowering<'a> {
     ) -> bool {
         match ty {
             CheckTy::Borrow(_, _) => false,
+            CheckTy::Unique(inner) => self.type_needs_drop(unit, inner, visiting),
             CheckTy::Nominal(symbol, args) => {
                 if self.symbol_is_borrowed(*symbol) {
                     return false;
                 }
                 self.symbol_has_ability(*symbol, "Owner")
+                    || self.deinit_witness(*symbol).is_some()
                     || self.nominal_needs_drop(unit, *symbol, args, visiting)
             }
             CheckTy::Tuple(items) => items

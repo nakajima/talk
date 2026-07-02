@@ -3408,6 +3408,27 @@ mod with_core {
     }
 
     #[test]
+    fn unique_annotation_parses_and_renders() {
+        let t = check_with_core(Source::from(
+            "func pass(x: *String) -> *String {\n\tx\n}",
+        ));
+        assert_no_errors(&t);
+        let resolved = &t.phase.resolved_names;
+        let _names =
+            crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
+        let symbol = resolved
+            .symbol_names
+            .iter()
+            .find(|(sym, n)| n.as_str() == "pass" && t.phase.types.schemes.contains_key(sym))
+            .map(|(sym, _)| *sym)
+            .expect("pass scheme");
+        assert_eq!(
+            t.phase.types.schemes[&symbol].render(),
+            "(*String) -> *String"
+        );
+    }
+
+    #[test]
     fn grades_derive_from_declarations() {
         use crate::name_resolution::symbol::Symbol;
         use crate::types::catalog::Grade;

@@ -67,6 +67,46 @@ fn rejects_borrowed_global() {
     );
 }
 
+#[test]
+fn rejects_borrow_typed_struct_field() {
+    assert_error_contains(
+        "struct Holder {\n\tlet r: &String\n}",
+        "cannot be stored",
+    );
+}
+
+#[test]
+fn rejects_borrow_typed_enum_payload() {
+    assert_error_contains(
+        "enum Holder {\n\tcase r(&String)\n}",
+        "cannot be stored",
+    );
+}
+
+#[test]
+fn allows_function_typed_field_with_borrow_params() {
+    // A function value whose signature mentions borrows is not itself a
+    // stored borrow.
+    assert_no_errors("struct Mapper {\n\tlet f: (&String) -> Int\n}");
+}
+
+// ----- Unique types -------------------------------------------------------------
+
+#[test]
+fn unique_parameter_value_moves_like_owned() {
+    assert_error_contains(
+        "func bad(x: *String) -> Int {\n\tlet y = x\n\tx.length\n}",
+        "Use of moved value 'x'",
+    );
+}
+
+#[test]
+fn owned_argument_satisfies_unique_parameter() {
+    assert_no_errors(
+        "func take(x: *String) -> Int {\n\tx.length\n}\nfunc ok() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}",
+    );
+}
+
 // ----- Provenance / returns ---------------------------------------------------
 
 #[test]

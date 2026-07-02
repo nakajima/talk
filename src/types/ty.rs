@@ -159,6 +159,10 @@ pub enum Ty {
     /// A borrowed view of another type. Flow checking owns the lifetime
     /// facts; the type records the access permission.
     Borrow(Perm, Box<Ty>),
+    /// A uniquely-owned value: statically the sole reference, so in-place
+    /// mutation needs no runtime checks. An owned value moves into `*T` at
+    /// a call boundary (the move makes it unique).
+    Unique(Box<Ty>),
     /// A function type with its latent effect row.
     Func(Vec<Ty>, Box<Ty>, EffectRow),
     Tuple(Vec<Ty>),
@@ -265,6 +269,7 @@ impl Ty {
                 }
             }
             Ty::Borrow(_, inner) => inner.try_visit(visitor)?,
+            Ty::Unique(inner) => inner.try_visit(visitor)?,
             Ty::Func(params, ret, _) => {
                 for param in params {
                     param.try_visit(visitor)?;
@@ -387,6 +392,7 @@ pub(crate) trait TyFold {
             Ty::Borrow(perm, inner) => {
                 Ty::Borrow(self.fold_perm(*perm), Box::new(self.fold_ty(inner)))
             }
+            Ty::Unique(inner) => Ty::Unique(Box::new(self.fold_ty(inner))),
             Ty::Func(params, ret, eff) => Ty::Func(
                 params.iter().map(|p| self.fold_ty(p)).collect(),
                 Box::new(self.fold_ty(ret)),
@@ -748,6 +754,9 @@ pub(crate) fn match_pattern(
         (Ty::Borrow(left_kind, left_inner), Ty::Borrow(right_kind, right_inner)) => {
             left_kind == right_kind && match_pattern(left_inner, right_inner, bindings)
         }
+        (Ty::Unique(left_inner), Ty::Unique(right_inner)) => {
+            match_pattern(left_inner, right_inner, bindings)
+        }
         (Ty::Tuple(left_items), Ty::Tuple(right_items)) => {
             left_items.len() == right_items.len()
                 && left_items
@@ -826,6 +835,7 @@ fn pattern_occurs(param: Symbol, ty: &Ty, bindings: &FxHashMap<Symbol, Ty>) -> b
             args.iter().any(|ty| pattern_occurs(param, ty, bindings))
         }
         Ty::Borrow(_, inner) => pattern_occurs(param, inner, bindings),
+        Ty::Unique(inner) => pattern_occurs(param, inner, bindings),
         Ty::Func(args, ret, _) => {
             args.iter().any(|ty| pattern_occurs(param, ty, bindings))
                 || pattern_occurs(param, ret, bindings)
@@ -964,6 +974,7 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
             let prefix = if perm.is_exclusive() { "&mut " } else { "&" };
             format!("{prefix}{}", render_ty(inner, param_names))
         }
+        Ty::Unique(inner) => format!("*{}", render_ty(inner, param_names)),
         Ty::Func(params, ret, eff) => {
             let params: Vec<String> = params.iter().map(|p| render_ty(p, param_names)).collect();
             let eff = render_effect_row(eff);

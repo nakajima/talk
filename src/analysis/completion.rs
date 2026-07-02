@@ -163,6 +163,8 @@ fn add_member_items_for_ty(
     items: &mut FxHashMap<String, CompletionItem>,
 ) {
     match member_lookup_ty(receiver_ty) {
+        // Stripped by member_lookup_ty; unreachable here.
+        Ty::Unique(_) => {}
         Ty::Nominal(symbol, args) => {
             add_nominal_member_items(types, *symbol, args, receiver_ty, items);
         }
@@ -198,10 +200,12 @@ fn add_member_items_for_ty(
 }
 
 fn member_lookup_ty(mut ty: &Ty) -> &Ty {
-    while let Ty::Borrow(_, inner) = ty {
-        ty = inner;
+    loop {
+        match ty {
+            Ty::Borrow(_, inner) | Ty::Unique(inner) => ty = inner,
+            _ => return ty,
+        }
     }
-    ty
 }
 
 fn add_nominal_member_items(

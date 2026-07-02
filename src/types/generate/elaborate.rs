@@ -224,6 +224,9 @@ impl<'e> Elaborator<'e> {
                 };
                 Ty::Borrow(kind, Box::new(self.lower_annotation(inner)))
             }
+            TypeAnnotationKind::Unique { inner } => {
+                Ty::Unique(Box::new(self.lower_annotation(inner)))
+            }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 if name.name_str() == "Self"
                     && generics.is_empty()

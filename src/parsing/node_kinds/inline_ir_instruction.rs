@@ -196,6 +196,9 @@ impl TypeAnnotation {
                     format!("&{}", inner.simple_display())
                 }
             }
+            TypeAnnotationKind::Unique { inner } => {
+                format!("*{}", inner.simple_display())
+            }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 if generics.is_empty() {
                     name.name_str()

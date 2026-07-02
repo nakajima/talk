@@ -10,6 +10,12 @@ pub enum OwnershipError {
         name: String,
         ty: String,
     },
+    /// A `&T` in a struct field or enum payload.
+    BorrowInStorage {
+        owner: String,
+        field: String,
+        ty: String,
+    },
     ReturningLocalBorrow {
         ty: String,
     },
@@ -79,6 +85,12 @@ impl Error for OwnershipError {}
 impl Display for OwnershipError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            OwnershipError::BorrowInStorage { owner, field, ty } => {
+                write!(
+                    f,
+                    "Borrow type {ty} cannot be stored in '{owner}.{field}'; borrows end with their owner's scope"
+                )
+            }
             OwnershipError::BorrowedGlobal { name, ty } => {
                 write!(f, "Borrowed type {ty} cannot be stored in global '{name}'")
             }

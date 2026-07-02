@@ -27,6 +27,10 @@ pub enum TypeAnnotationKind {
         mutable: bool,
         inner: Box<TypeAnnotation>,
     },
+    /// `*T`: a uniquely-owned value.
+    Unique {
+        inner: Box<TypeAnnotation>,
+    },
     Func {
         params: Vec<TypeAnnotation>,
         returns: Box<TypeAnnotation>,

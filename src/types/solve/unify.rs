@@ -48,6 +48,24 @@ impl<'s> Solver<'s> {
             // mistake doesn't cascade into follow-on diagnostics.
             (Ty::Error, _) | (_, Ty::Error) => {}
 
+            (Ty::Unique(inner1), Ty::Unique(inner2)) => {
+                worklist.push(Constraint::Eq(
+                    (**inner1).clone(),
+                    (**inner2).clone(),
+                    origin,
+                ));
+            }
+
+            // An owned value moves into a unique position at the immediate
+            // application (the move makes it the sole reference).
+            (Ty::Unique(inner), other) if origin.reason == CtReason::Apply => {
+                worklist.push(Constraint::Eq(
+                    (**inner).clone(),
+                    other.clone(),
+                    origin.nested(),
+                ));
+            }
+
             (Ty::Borrow(p1, inner1), Ty::Borrow(p2, inner2)) => {
                 match self.unify_perm(*p1, *p2) {
                     PermUnify::Ok => worklist.push(Constraint::Eq(
@@ -239,6 +257,16 @@ impl<'s> Solver<'s> {
         origin: CtOrigin,
         worklist: &mut Vec<Constraint>,
     ) {
+        if let Ty::Unique(expected_inner) = self.store.shallow(expected) {
+            let constraint = match self.store.shallow(found) {
+                Ty::Unique(found_inner) => {
+                    Constraint::Eq((*expected_inner).clone(), (*found_inner).clone(), origin)
+                }
+                other => Constraint::Eq((*expected_inner).clone(), other.clone(), origin),
+            };
+            worklist.push(constraint);
+            return;
+        }
         match self.store.shallow(expected) {
             Ty::Borrow(expected_perm, expected_inner) => match self.store.shallow(found) {
                 Ty::Borrow(found_perm, found_inner) => {
@@ -397,6 +425,7 @@ impl<'s> Solver<'s> {
                 .iter()
                 .any(|a| self.occurs_and_adjust_ty(root, level, a)),
             Ty::Borrow(_, inner) => self.occurs_and_adjust_ty(root, level, &inner),
+            Ty::Unique(inner) => self.occurs_and_adjust_ty(root, level, &inner),
             Ty::Func(params, ret, eff) => {
                 params
                     .iter()

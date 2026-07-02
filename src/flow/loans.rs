@@ -325,6 +325,63 @@ impl MoveChecker<'_> {
         }
     }
 
+    /// A declared struct field or enum payload cannot store a plain `&T`:
+    /// the borrow would outlive its owner unseen. Borrowed-marker view
+    /// nominals (e.g. `Substring`) stay legal — provenance tracks those —
+    /// and function types are values, not borrows. Core is exempt (its
+    /// iterator machinery stores borrow fields deliberately, like its raw
+    /// pointers).
+    pub(crate) fn check_borrow_storage(&mut self, roots: &[hir::Node]) {
+        if self.module_id == crate::compiling::module::ModuleId::Core {
+            return;
+        }
+        for root in roots {
+            let hir::Node::Decl(decl) = root else {
+                continue;
+            };
+            match &decl.kind {
+                hir::DeclKind::Struct { name, .. } => {
+                    let Ok(symbol) = name.symbol() else { continue };
+                    let Some(info) = self.types.catalog.structs.get(&symbol) else {
+                        continue;
+                    };
+                    for (field, (_, ty)) in info.fields.clone() {
+                        if stores_borrow(&ty) {
+                            let error = OwnershipError::BorrowInStorage {
+                                owner: super::moves::render_symbol(symbol, self.types),
+                                field,
+                                ty: ty.render_mono(),
+                            };
+                            self.error(error, decl.id);
+                        }
+                    }
+                }
+                hir::DeclKind::Enum { name, .. } => {
+                    let Ok(symbol) = name.symbol() else { continue };
+                    let Some(info) = self.types.catalog.enums.get(&symbol) else {
+                        continue;
+                    };
+                    for (variant, info) in info.variants.clone() {
+                        let Ty::Func(payloads, ..) = &info.constructor_scheme.ty else {
+                            continue;
+                        };
+                        for ty in payloads {
+                            if stores_borrow(ty) {
+                                let error = OwnershipError::BorrowInStorage {
+                                    owner: super::moves::render_symbol(symbol, self.types),
+                                    field: variant.clone(),
+                                    ty: ty.render_mono(),
+                                };
+                                self.error(error, decl.id);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// A top-level binder cannot hold a borrowed value: globals outlive
     /// every owner.
     pub(crate) fn check_global_storage(&mut self, roots: &[hir::Node]) {
@@ -714,6 +771,24 @@ impl MoveChecker<'_> {
                     _ => ControlFlow::Continue(()),
                 })
                 .is_break()
+    }
+}
+
+/// A syntactic `&T` in stored position (not under a function type: a
+/// function value whose signature mentions borrows is fine to store).
+fn stores_borrow(ty: &Ty) -> bool {
+    match ty {
+        Ty::Borrow(..) => true,
+        Ty::Unique(inner) => stores_borrow(inner),
+        Ty::Nominal(_, args) => args.iter().any(stores_borrow),
+        Ty::Tuple(items) => items.iter().any(stores_borrow),
+        Ty::Record(row) => row.fields.iter().any(|(_, field)| stores_borrow(field)),
+        Ty::Func(..)
+        | Ty::Any { .. }
+        | Ty::Proj(..)
+        | Ty::Var(_)
+        | Ty::Param(_)
+        | Ty::Error => false,
     }
 }
 

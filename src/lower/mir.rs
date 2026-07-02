@@ -26,21 +26,6 @@ impl BlockId {
     }
 }
 
-// The ownership checker uses StatementId as coordinates for facts:
-//  - recording ownership facts at exact statement locations,
-//  - building CFG edges between statement points,
-//  - tying StorageLive, Move, Borrow, Assign, DropCandidate, etc. facts to a stable point in a MIR body.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub(crate) struct StatementId(pub(crate) usize);
-
-impl StatementId {
-    #[allow(dead_code)]
-    #[cfg(test)]
-    pub(crate) fn index(self) -> usize {
-        self.0
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct ScopeId(pub(crate) usize);
 

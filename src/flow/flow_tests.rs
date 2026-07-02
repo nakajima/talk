@@ -487,6 +487,34 @@ fn vm_and_evaluator_agree_under_flow_checker() {
     }
 }
 
+// ----- Deinit ------------------------------------------------------------------
+
+/// A `Deinit` conformance runs at scope exit: the destructor increments a
+/// global, observable through the VM. The deinit body's own scope drops
+/// self's fields — no double teardown, no recursion.
+#[test]
+fn deinit_runs_at_scope_exit() {
+    let source = "let counter = 0\nstruct Guard {\n\tlet id: Int\n}\nextend Guard: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tcounter = counter + 1\n\t\t()\n\t}\n}\nfunc scope() -> Int {\n\tlet g = Guard(id: 1)\n\t0\n}\nlet n = scope() + scope()\ncounter";
+    let typed = Driver::new(vec![Source::from(source)], DriverConfig::new("DeinitVm"))
+        .parse()
+        .expect("parse")
+        .resolve_names()
+        .expect("resolve")
+        .type_check();
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let mut lowered = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    let value = lowered.run_vm().expect("vm");
+    match value {
+        crate::vm::interp::Value::I64(n) => assert_eq!(n, 2, "deinit should run once per scope"),
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
 // ----- Unsafe gating ----------------------------------------------------------
 
 #[test]

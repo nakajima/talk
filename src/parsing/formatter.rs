@@ -1418,6 +1418,9 @@ impl<'a> Formatter<'a> {
                     concat(text("&"), self.format_type_annotation(inner))
                 }
             }
+            TypeAnnotationKind::Unique { inner } => {
+                concat(text("*"), self.format_type_annotation(inner))
+            }
             TypeAnnotationKind::Record { fields } => self.format_record_type_annotation(fields),
             TypeAnnotationKind::Any {
                 protocol,

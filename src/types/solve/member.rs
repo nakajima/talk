@@ -360,7 +360,7 @@ impl<'s> Solver<'s> {
         let normalized = normalize_ty(self.store, self.catalog, receiver);
         let self_receiver = self.rewrite_ty_from_givens(normalized);
         let lookup_receiver = match self_receiver.clone() {
-            Ty::Borrow(_, inner) => *inner,
+            Ty::Borrow(_, inner) | Ty::Unique(inner) => *inner,
             other => other,
         };
         (lookup_receiver, self_receiver)

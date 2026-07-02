@@ -250,13 +250,12 @@ impl<'a> Parser<'a> {
                 self.consume(TokenKind::Linear)?;
                 let mut node = self.decl(context, is_static)?;
                 let mut marked = false;
-                if let Node::Decl(ref mut decl) = node {
-                    if let DeclKind::Struct { linear, .. } | DeclKind::Enum { linear, .. } =
+                if let Node::Decl(ref mut decl) = node
+                    && let DeclKind::Struct { linear, .. } | DeclKind::Enum { linear, .. } =
                         &mut decl.kind
-                    {
-                        *linear = true;
-                        marked = true;
-                    }
+                {
+                    *linear = true;
+                    marked = true;
                 }
                 if !marked {
                     return Err(ParserError::UnexpectedToken {
@@ -2506,6 +2505,17 @@ impl<'a> Parser<'a> {
                 span,
                 kind: TypeAnnotationKind::Borrow {
                     mutable,
+                    inner: Box::new(inner),
+                },
+            });
+        }
+
+        if self.did_match(TokenKind::Star)? {
+            let inner = self.type_annotation()?;
+            return self.save_meta(tok, |id, span| TypeAnnotation {
+                id,
+                span,
+                kind: TypeAnnotationKind::Unique {
                     inner: Box::new(inner),
                 },
             });

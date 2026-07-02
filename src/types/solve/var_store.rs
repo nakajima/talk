@@ -241,6 +241,7 @@ impl VarStore {
                 }
             }
             Ty::Borrow(_, inner) => self.query_resolved(inner, f)?,
+            Ty::Unique(inner) => self.query_resolved(inner, f)?,
             Ty::Func(params, ret, eff) => {
                 for param in params {
                     self.query_resolved(param, f)?;

@@ -50,6 +50,7 @@ impl<'a> GradeView<'a> {
     pub(crate) fn contains_borrowed(&self, ty: &Ty) -> bool {
         match ty {
             Ty::Borrow(..) => true,
+            Ty::Unique(inner) => self.contains_borrowed(inner),
             Ty::Nominal(symbol, args) => {
                 self.has_marker(*symbol, Symbol::Borrowed)
                     || args.iter().any(|arg| self.contains_borrowed(arg))
@@ -71,6 +72,8 @@ impl<'a> GradeView<'a> {
     fn copy_ty(&self, ty: &Ty, seen: &mut FxHashSet<Symbol>) -> bool {
         match ty {
             Ty::Borrow(..) | Ty::Func(..) => true,
+            // Unique values are the sole reference by definition: never copy.
+            Ty::Unique(_) => false,
             Ty::Nominal(symbol, args) => {
                 if self.has_marker(*symbol, Symbol::Borrowed) {
                     return true;
@@ -106,11 +109,15 @@ impl<'a> GradeView<'a> {
     fn contains_owned(&self, ty: &Ty, seen: &mut FxHashSet<Symbol>) -> bool {
         match ty {
             Ty::Borrow(..) => false,
+            // A unique value is owned by definition: it moves and drops.
+            Ty::Unique(_) => true,
             Ty::Nominal(symbol, args) => {
                 if self.has_marker(*symbol, Symbol::Borrowed) {
                     return false;
                 }
-                if self.has_marker(*symbol, Symbol::Owner) {
+                if self.has_marker(*symbol, Symbol::Owner)
+                    || self.has_marker(*symbol, Symbol::Deinit)
+                {
                     return true;
                 }
                 // A linear declaration is owned by fiat: its values must

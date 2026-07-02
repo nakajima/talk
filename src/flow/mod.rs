@@ -84,6 +84,7 @@ pub fn check_flow(
     let mut file_drops = vec![];
     for file in hir.values() {
         checker.check_global_storage(&file.roots);
+        checker.check_borrow_storage(&file.roots);
         let mut state = Default::default();
         file_drops.push(checker.check_roots(&file.roots, &mut state));
     }

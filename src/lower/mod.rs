@@ -3431,7 +3431,7 @@ impl<'a> Lowering<'a> {
 
     fn borrow_erased_ty(ty: CheckTy) -> CheckTy {
         match ty {
-            CheckTy::Borrow(_, inner) => *inner,
+            CheckTy::Borrow(_, inner) | CheckTy::Unique(inner) => *inner,
             other => other,
         }
     }
@@ -3532,6 +3532,8 @@ impl<'a> Lowering<'a> {
     /// (T…) → R turns into Fn([T…, Fn(R, ⊥)], ⊥).
     fn map_ty(&mut self, ty: &CheckTy) -> TyId {
         match ty {
+            // Uniqueness is static: `*T` is represented as T.
+            CheckTy::Unique(inner) => self.map_ty(inner),
             CheckTy::Nominal(symbol, _args) => {
                 if *symbol == Symbol::Int {
                     self.p.ty_i64()

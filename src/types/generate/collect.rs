@@ -338,6 +338,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             // Error is poison; a variable here means the field type is still
             // being collected — the conformance's own use sites will re-check.
             Ty::Error | Ty::Var(_) => true,
+            // A unique value is the sole reference: never Copy/CheapClone.
+            Ty::Unique(_) => false,
             Ty::Nominal(symbol, args) => {
                 let head_ok = match marker {
                     Symbol::Copy => self.catalog.grade_of(*symbol) == Grade::Copy,
