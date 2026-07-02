@@ -30,6 +30,12 @@ public func _ptr_add(ptr: RawPtr, offset: Int) 'alloc -> RawPtr {
 	@_ir(ptr, offset) { %? = add RawPtr $0 $1 }
 }
 
+// Whether this allocation has exactly one owner (refcount 1). Static data
+// is never unique: it cannot be freed, so callers must copy before writing.
+public func _is_unique(ptr: RawPtr) 'alloc -> Bool {
+	@_ir(ptr) { %? = is_unique $0 }
+}
+
 public struct Storage<Element> {
 	let base: RawPtr
 

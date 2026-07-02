@@ -7,7 +7,7 @@ use rustc_hash::FxHashSet;
 
 use crate::analysis::{DocumentId, TextRange, workspace::Workspace};
 use crate::flow::drops::DropElaboration;
-use crate::flow::{FlowBorrowFact, FlowDropFact, FlowMoveFact};
+use crate::flow::{FlowBorrowFact, FlowCloneFact, FlowDropFact, FlowMoveFact};
 use crate::name_resolution::symbol::set_symbol_names;
 use crate::node_id::NodeID;
 use crate::types::ty::{Perm, Ty};
@@ -17,6 +17,7 @@ pub enum OwnershipInlayHintKind {
     Move,
     Borrow,
     Drop,
+    Clone,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +68,18 @@ pub fn ownership_inlay_hints(
             label: label.to_string(),
             tooltip: render_borrow_tooltip(fact),
             kind: OwnershipInlayHintKind::Borrow,
+        });
+    }
+
+    for fact in &workspace.flow.clones {
+        let Some(position) = fact_position(workspace, document_id, range, fact.node) else {
+            continue;
+        };
+        hints.push(OwnershipInlayHint {
+            position,
+            label: " clone".to_string(),
+            tooltip: render_clone_tooltip(fact),
+            kind: OwnershipInlayHintKind::Clone,
         });
     }
 
@@ -129,11 +142,18 @@ fn type_details(workspace: &Workspace, ty: &Ty) -> Vec<String> {
             if declared {
                 if grades.is_borrowed_value(ty) {
                     details.push("borrowed view".to_string());
+                } else if workspace.types.catalog.grade_of(*symbol)
+                    == crate::types::catalog::Grade::Linear
+                {
+                    details.push("linear (must be consumed)".to_string());
                 } else if grades.needs_drop(ty) {
                     details.push("owned".to_string());
                 }
                 if grades.is_copy(ty) {
                     details.push("copy".to_string());
+                }
+                if grades.is_cheap_clone(ty) {
+                    details.push("cheap to clone (buffer retain)".to_string());
                 }
             }
         }
@@ -165,6 +185,14 @@ fn fact_details_for_node(workspace: &Workspace, node: NodeID) -> Vec<String> {
     }
     for fact in workspace
         .flow
+        .clones
+        .iter()
+        .filter(|fact| fact.node == node)
+    {
+        details.push(render_clone_tooltip(fact));
+    }
+    for fact in workspace
+        .flow
         .drops
         .iter()
         .filter(|fact| fact.node == node)
@@ -179,6 +207,10 @@ fn fact_details_for_node(workspace: &Workspace, node: NodeID) -> Vec<String> {
 
 fn render_move_tooltip(fact: &FlowMoveFact) -> String {
     format!("Moves {} of type {}", fact.place, fact.ty)
+}
+
+fn render_clone_tooltip(fact: &FlowCloneFact) -> String {
+    format!("Clones {} (an O(1) buffer retain)", fact.ty)
 }
 
 fn render_borrow_tooltip(fact: &FlowBorrowFact) -> String {
@@ -266,6 +298,46 @@ mod tests {
     }
 
     #[test]
+    fn inlay_hints_include_silent_clones() {
+        let source = "struct Person {\n\tlet name: String\n}\nfunc f(person: &Person) -> String {\n\tperson.name\n}\nlet p = Person(name: \"a\" + \"b\")\nf(p).length";
+        let workspace = workspace(source);
+        assert!(
+            workspace
+                .diagnostics
+                .get("<test>")
+                .map(Vec::is_empty)
+                .unwrap_or(true),
+            "unexpected diagnostics: {:?}",
+            workspace.diagnostics
+        );
+
+        let hints = ownership_inlay_hints(
+            &workspace,
+            &"<test>".to_string(),
+            TextRange::new(0, source.len() as u32),
+        );
+        assert!(
+            hints.iter().any(|hint| hint.label.contains("clone")),
+            "a silent CheapClone extraction should surface as a hint: {hints:?}"
+        );
+    }
+
+
+    #[test]
+    fn hover_details_include_linear_classification() {
+        let source = "linear struct Token {\n\tlet id: Int\n\tconsuming func close() -> Int {\n\t\tself.id\n\t}\n}\nfunc make() -> Int {\n\tlet token = Token(id: 1)\n\ttoken.close()\n}\nmake()";
+        let workspace = workspace(source);
+        let offset = source.find("token.close").expect("token use") as u32;
+        let hover =
+            crate::analysis::hover_at(&workspace, &"<test>".to_string(), offset).expect("hover");
+        assert!(
+            hover.contents.contains("linear"),
+            "{}",
+            hover.contents
+        );
+    }
+
+    #[test]
     fn hover_details_include_owned_classification() {
         let source = "let s = \"a\" + \"b\"\ns.length";
         let workspace = workspace(source);
@@ -275,6 +347,11 @@ mod tests {
         assert!(
             hover.contents.contains("ownership:") && hover.contents.contains("owned"),
             "{}",
+            hover.contents
+        );
+        assert!(
+            hover.contents.contains("cheap to clone"),
+            "String is CheapClone: {}",
             hover.contents
         );
     }

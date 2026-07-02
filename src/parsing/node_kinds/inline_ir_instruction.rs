@@ -138,6 +138,8 @@ pub enum InlineIRInstructionKind {
     },
     #[doc = "$dest = trunc $val"]
     Trunc { dest: Register, val: Value },
+    #[doc = "$dest = is_unique $ptr"]
+    IsUnique { dest: Register, ptr: Value },
     #[doc = "$dest = itof $val"]
     IntToFloat { dest: Register, val: Value },
 }
@@ -352,6 +354,9 @@ impl Display for InlineIRInstruction {
             } => write!(f, "{dest} = io_write {} {} {}", fd, buf, count),
             InlineIRInstructionKind::Trunc { dest, val } => {
                 write!(f, "{dest} = trunc {}", val)
+            }
+            InlineIRInstructionKind::IsUnique { dest, ptr } => {
+                write!(f, "{dest} = is_unique {}", ptr)
             }
             InlineIRInstructionKind::IntToFloat { dest, val } => {
                 write!(f, "{dest} = itof {}", val)

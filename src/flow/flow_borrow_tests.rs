@@ -292,6 +292,27 @@ fn cheap_clone_extraction_runs_on_vm_without_double_free() {
 }
 
 #[test]
+fn cow_write_to_shared_buffer_preserves_value_semantics() {
+    // items2 shares h.items' buffer (tier-2 clone = retain). Writing
+    // through items2 must copy the shared buffer first, leaving h.items
+    // untouched: 1 * 100 + 99, not 99 * 100 + 99.
+    let source = "struct Holder {\n\tlet items: Array<Int>\n}\nfunc get_items(h: &Holder) -> Array<Int> {\n\th.items\n}\nfunc check() -> Int {\n\tlet arr = [1, 2, 3]\n\tlet h = Holder(items: arr)\n\tlet items2 = get_items(h)\n\titems2.set(0, 99)\n\th.items.get(0) * 100 + (items2.get(0) + 0)\n}\ncheck()";
+    let typed = flow_driver(source);
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let mut lowered = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    let value = lowered.run_vm().expect("vm");
+    match value {
+        crate::vm::interp::Value::I64(n) => assert_eq!(n, 199, "the write must not alias h.items"),
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
 fn cheap_clone_extraction_leaks_nothing() {
     let source = "struct Person {\n\tlet name: String\n}\nfunc extract(person: &Person) -> String {\n\tperson.name\n}\nfunc check() -> Int {\n\tlet p = Person(name: \"hello\" + \" world\")\n\tlet n = extract(p)\n\tn.length\n}\ncheck()";
     let typed = flow_driver(source);

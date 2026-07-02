@@ -3335,6 +3335,7 @@ impl<'a> Lowering<'a> {
                 (Op::Cmp(cmp), vec![operand(self, lhs)?, operand(self, rhs)?])
             }
             K::Trunc { val, .. } => (Op::Trunc, vec![operand(self, val)?]),
+            K::IsUnique { ptr, .. } => (Op::IsUnique, vec![operand(self, ptr)?]),
             K::IntToFloat { val, .. } => (Op::IToF, vec![operand(self, val)?]),
             K::Alloc { ty, count, .. } => {
                 // `alloc T count`: count elements of T, sized by
@@ -3419,7 +3420,7 @@ impl<'a> Lowering<'a> {
             ),
         };
         let result_ty = match op {
-            Op::Cmp(_) => self.p.ty_bool(),
+            Op::Cmp(_) | Op::IsUnique => self.p.ty_bool(),
             Op::Trunc => self.p.ty_i64(),
             Op::IToF => self.p.ty_f64(),
             Op::Alloc => self.p.ty_ptr(),

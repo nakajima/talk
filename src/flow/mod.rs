@@ -35,12 +35,21 @@ pub struct FlowFacts {
     pub moves: Vec<FlowMoveFact>,
     pub borrows: Vec<FlowBorrowFact>,
     pub drops: Vec<FlowDropFact>,
+    /// Silent CheapClone sites (tier 2): the value is cloned — an O(1)
+    /// buffer retain — instead of moved or borrowed.
+    pub clones: Vec<FlowCloneFact>,
 }
 
 #[derive(Clone, Debug)]
 pub struct FlowMoveFact {
     pub node: crate::node_id::NodeID,
     pub place: String,
+    pub ty: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct FlowCloneFact {
+    pub node: crate::node_id::NodeID,
     pub ty: String,
 }
 
@@ -90,6 +99,20 @@ pub fn check_flow(
     }
     let mut errors = checker.errors;
     errors.extend(unsafe_gate::check(hir, module_id));
+
+    // Silent-clone facts, from both tier-2 sources: the flow checker's
+    // borrowed-field extractions and the type checker's borrowed-argument
+    // coercions. Rendered as the owned type the clone produces.
+    for node in checker.auto_clones.iter().chain(&types.coerce_clones) {
+        let Some(ty) = types.node_types.get(node) else {
+            continue;
+        };
+        let ty = match ty {
+            crate::types::ty::Ty::Borrow(_, inner) => inner.render_mono(),
+            other => other.render_mono(),
+        };
+        checker.facts.clones.push(FlowCloneFact { node: *node, ty });
+    }
 
     // Bake the analysis onto the tree: this map dies here — downstream
     // stages read the annotations, never a side table.

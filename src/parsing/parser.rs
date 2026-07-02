@@ -1520,6 +1520,16 @@ impl<'a> Parser<'a> {
                         kind: InlineIRInstructionKind::Trunc { dest, val },
                     })
                 }
+                "is_unique" => {
+                    let ptr = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IsUnique { dest, ptr },
+                    })
+                }
                 "itof" => {
                     let val = self.ir_value()?;
                     self.save_meta(tok, |id, span| InlineIRInstruction {

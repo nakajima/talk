@@ -966,7 +966,8 @@ pub(crate) fn ownership_inlay_hints_lsp(
             let position = byte_offset_to_utf16_position(text, hint.position)?;
             let kind = match hint.kind {
                 crate::analysis::ownership::OwnershipInlayHintKind::Move
-                | crate::analysis::ownership::OwnershipInlayHintKind::Drop => {
+                | crate::analysis::ownership::OwnershipInlayHintKind::Drop
+                | crate::analysis::ownership::OwnershipInlayHintKind::Clone => {
                     Some(InlayHintKind::TYPE)
                 }
                 crate::analysis::ownership::OwnershipInlayHintKind::Borrow => {

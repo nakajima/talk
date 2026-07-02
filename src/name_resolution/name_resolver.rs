@@ -1428,6 +1428,7 @@ impl NameResolver {
                 | InlineIRInstructionKind::Gep { ty, .. } => self.enter_type_annotation(ty),
                 InlineIRInstructionKind::IoWrite { .. }
                 | InlineIRInstructionKind::Trunc { .. }
+                | InlineIRInstructionKind::IsUnique { .. }
                 | InlineIRInstructionKind::IntToFloat { .. } => (),
             }
         });
