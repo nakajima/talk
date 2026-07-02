@@ -28,7 +28,6 @@ pub mod hir;
 pub mod lambda_g;
 pub mod lower;
 pub mod name_resolution;
-pub mod ownership;
 pub mod repl;
 pub mod types;
 pub mod vm;

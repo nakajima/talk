@@ -31,11 +31,13 @@ pub enum DropReason {
     EarlyExit,
 }
 
-/// One drop the lowerer must emit.
+/// One drop the lowerer must emit. `node` is the dropped binding's
+/// declaration (or the assignment overwriting it) — the editor's anchor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DropSchedule {
     pub place: Place,
     pub ty: Ty,
     pub kind: DropElaboration,
     pub reason: DropReason,
+    pub node: crate::node_id::NodeID,
 }

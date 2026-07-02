@@ -8,7 +8,6 @@ use crate::compiling::{
     module::{Module, ModuleId},
 };
 use crate::name_resolution::name_resolver::ResolvedNames;
-use crate::ownership::OwnershipOutput;
 use crate::types::TypeOutput;
 
 /// Core's typed artifacts, retained for whole-program lowering: lazy
@@ -19,7 +18,6 @@ pub struct CoreTyped {
     pub hir: IndexMap<Source, crate::hir::HirFile>,
     pub types: TypeOutput,
     pub resolved_names: ResolvedNames,
-    pub ownership: OwnershipOutput,
 }
 
 lazy_static! {
@@ -103,7 +101,6 @@ fn _compile() -> (Arc<Module>, Arc<CoreTyped>) {
         hir: typed.phase.hir.clone(),
         types: typed.phase.types.clone(),
         resolved_names: typed.phase.resolved_names.clone(),
-        ownership: typed.phase.ownership.clone(),
     };
     (Arc::new(typed.module("Core")), Arc::new(core_typed))
 }

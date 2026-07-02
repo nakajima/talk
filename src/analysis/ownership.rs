@@ -1,14 +1,15 @@
 //! Editor-facing ownership facts. This module keeps LSP protocol types out
 //! of the analysis layer: callers get byte offsets, rendered labels, and
-//! tooltips derived from the ownership pass.
+//! tooltips derived from the flow checker's facts (`FlowFacts`) and the type
+//! catalog.
 
 use rustc_hash::FxHashSet;
 
 use crate::analysis::{DocumentId, TextRange, workspace::Workspace};
-use crate::lower::mir::DropElaboration;
-use crate::name_resolution::symbol::{Symbol, set_symbol_names};
+use crate::flow::drops::DropElaboration;
+use crate::flow::{FlowBorrowFact, FlowDropFact, FlowMoveFact};
+use crate::name_resolution::symbol::set_symbol_names;
 use crate::node_id::NodeID;
-use crate::ownership::{DropObligation, KeyPath, LoanFact, MoveFact, OwnershipOutput};
 use crate::types::ty::{Perm, Ty};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,9 +31,9 @@ pub fn hover_details_for_node(workspace: &Workspace, node: NodeID, ty: Option<&T
     let _names = set_symbol_names(workspace.types.display_names.clone());
     let mut details = Vec::new();
     if let Some(ty) = ty {
-        details.extend(type_details(&workspace.ownership, ty));
+        details.extend(type_details(workspace, ty));
     }
-    details.extend(fact_details_for_node(&workspace.ownership, node));
+    details.extend(fact_details_for_node(workspace, node));
     dedup(details)
 }
 
@@ -44,39 +45,36 @@ pub fn ownership_inlay_hints(
     let _names = set_symbol_names(workspace.types.display_names.clone());
     let mut hints = Vec::new();
 
-    for fact in &workspace.ownership.facts.moves {
+    for fact in &workspace.flow.moves {
         let Some(position) = fact_position(workspace, document_id, range, fact.node) else {
             continue;
         };
         hints.push(OwnershipInlayHint {
             position,
             label: " move".to_string(),
-            tooltip: format!(
-                "Moves {} of type {}",
-                render_key_path(&fact.source),
-                fact.ty.render_mono()
-            ),
+            tooltip: render_move_tooltip(fact),
             kind: OwnershipInlayHintKind::Move,
         });
     }
 
-    for fact in &workspace.ownership.facts.borrows {
+    for fact in &workspace.flow.borrows {
         let Some(position) = fact_position(workspace, document_id, range, fact.node) else {
             continue;
         };
+        let label = if fact.exclusive { " &mut" } else { " &" };
         hints.push(OwnershipInlayHint {
             position,
-            label: format!(" {}", borrow_prefix(fact.kind)),
-            tooltip: render_loan_tooltip(fact),
+            label: label.to_string(),
+            tooltip: render_borrow_tooltip(fact),
             kind: OwnershipInlayHintKind::Borrow,
         });
     }
 
-    for obligation in &workspace.ownership.drop_plan.obligations {
-        let Some(position) = fact_position(workspace, document_id, range, obligation.node) else {
+    for fact in &workspace.flow.drops {
+        let Some(position) = fact_position(workspace, document_id, range, fact.node) else {
             continue;
         };
-        let label = match obligation.kind {
+        let label = match fact.kind {
             DropElaboration::Static => " drop",
             DropElaboration::Dead => " drop(dead)",
             DropElaboration::Conditional => " drop?",
@@ -85,7 +83,7 @@ pub fn ownership_inlay_hints(
         hints.push(OwnershipInlayHint {
             position,
             label: label.to_string(),
-            tooltip: render_drop_tooltip(obligation),
+            tooltip: render_drop_tooltip(fact),
             kind: OwnershipInlayHintKind::Drop,
         });
     }
@@ -97,9 +95,8 @@ fn fact_position(
     workspace: &Workspace,
     document_id: &DocumentId,
     requested: TextRange,
-    node: Option<NodeID>,
+    node: NodeID,
 ) -> Option<u32> {
-    let node = node?;
     let (fact_document, range) = workspace.range_for_node(node, false)?;
     if &fact_document != document_id {
         return None;
@@ -111,182 +108,115 @@ fn fact_position(
     Some(position)
 }
 
-fn type_details(output: &OwnershipOutput, ty: &Ty) -> Vec<String> {
+/// Type-level ownership classifications, from the catalog: borrow kinds,
+/// the `Borrowed` marker, needs-drop ("owned"), and copyability.
+fn type_details(workspace: &Workspace, ty: &Ty) -> Vec<String> {
+    let grades = crate::flow::grades::GradeView::new(&workspace.types);
     let mut details = Vec::new();
     match ty {
         Ty::Borrow(kind, inner) => {
             details.push(format!(
                 "{} borrow of {}",
-                borrow_kind_name(*kind),
+                perm_name(*kind),
                 inner.render_mono()
             ));
         }
         Ty::Nominal(symbol, _) => {
-            if output.borrowed_types.contains(symbol) {
-                details.push("borrowed view".to_string());
-            }
-            if output.owned_types.contains(symbol) {
-                details.push("owned".to_string());
-            }
-            if output.copyable_types.contains(symbol) {
-                details.push("copy".to_string());
+            // Classify declared nominals only (scalars hover bare, matching
+            // the legacy fact sets, which held struct/enum symbols).
+            let declared = workspace.types.catalog.structs.contains_key(symbol)
+                || workspace.types.catalog.enums.contains_key(symbol);
+            if declared {
+                if grades.is_borrowed_value(ty) {
+                    details.push("borrowed view".to_string());
+                } else if grades.needs_drop(ty) {
+                    details.push("owned".to_string());
+                }
+                if grades.is_copy(ty) {
+                    details.push("copy".to_string());
+                }
             }
         }
         _ => {}
     }
-    if output.type_has_needs_drop_fact(ty) {
+    if grades.needs_drop(ty) {
         details.push("needs drop".to_string());
     }
     details
 }
 
-fn fact_details_for_node(output: &OwnershipOutput, node: NodeID) -> Vec<String> {
+fn fact_details_for_node(workspace: &Workspace, node: NodeID) -> Vec<String> {
     let mut details = Vec::new();
-    for fact in output
-        .facts
+    for fact in workspace
+        .flow
         .moves
         .iter()
-        .filter(|fact| fact.node == Some(node))
+        .filter(|fact| fact.node == node)
     {
-        details.push(render_move_fact(fact));
+        details.push(format!("moves {}: {}", fact.place, fact.ty));
     }
-    for fact in output
-        .facts
+    for fact in workspace
+        .flow
         .borrows
         .iter()
-        .filter(|fact| fact.node == Some(node))
+        .filter(|fact| fact.node == node)
     {
-        details.push(render_loan_fact(fact));
+        details.push(render_borrow_tooltip(fact));
     }
-    for fact in output
-        .facts
-        .assignments
+    for fact in workspace
+        .flow
+        .drops
         .iter()
-        .filter(|fact| fact.node == Some(node))
-    {
-        details.push(format!("assigns {}", render_key_path(&fact.target)));
-    }
-    for fact in output
-        .facts
-        .candidate_drops
-        .iter()
-        .filter(|fact| fact.node == Some(node))
+        .filter(|fact| fact.node == node)
     {
         details.push(format!(
-            "drop candidate: {} ({:?})",
-            render_key_path(&fact.target),
-            fact.reason
+            "drop: {} as {:?} ({:?})",
+            fact.place, fact.kind, fact.reason
         ));
-    }
-    for obligation in output
-        .drop_plan
-        .obligations
-        .iter()
-        .filter(|obligation| obligation.node == Some(node))
-    {
-        details.push(render_drop_obligation(obligation));
     }
     details
 }
 
-fn render_move_fact(fact: &MoveFact) -> String {
-    format!(
-        "moves {}: {}",
-        render_key_path(&fact.source),
-        fact.ty.render_mono()
-    )
+fn render_move_tooltip(fact: &FlowMoveFact) -> String {
+    format!("Moves {} of type {}", fact.place, fact.ty)
 }
 
-fn render_loan_fact(fact: &LoanFact) -> String {
-    let owner = fact
-        .owner
-        .as_ref()
-        .map(render_key_path)
-        .unwrap_or_else(|| "unknown owner".to_string());
-    format!(
-        "creates {} borrow {} from {}",
-        borrow_kind_name(fact.kind),
-        render_key_path(&fact.borrower),
-        owner
-    )
-}
-
-fn render_loan_tooltip(fact: &LoanFact) -> String {
-    let owner = fact
-        .owner
-        .as_ref()
-        .map(render_key_path)
-        .unwrap_or_else(|| "unknown owner".to_string());
+fn render_borrow_tooltip(fact: &FlowBorrowFact) -> String {
     format!(
         "Creates a {} borrow of {} as {}",
-        borrow_kind_name(fact.kind),
-        owner,
-        render_key_path(&fact.borrower)
+        if fact.exclusive { "mutable" } else { "shared" },
+        fact.owner,
+        fact.borrower
     )
 }
 
-fn render_drop_obligation(obligation: &DropObligation) -> String {
-    format!(
-        "drop: {} as {:?} ({:?})",
-        render_key_path(&obligation.key_path),
-        obligation.kind,
-        obligation.reason
-    )
-}
-
-fn render_drop_tooltip(obligation: &DropObligation) -> String {
+fn render_drop_tooltip(fact: &FlowDropFact) -> String {
     format!(
         "Drop {} of type {} ({:?}, {:?})",
-        render_key_path(&obligation.key_path),
-        obligation.ty.render_mono(),
-        obligation.kind,
-        obligation.reason
+        fact.place, fact.ty, fact.kind, fact.reason
     )
 }
 
-fn borrow_prefix(kind: Perm) -> &'static str {
-    if kind.is_exclusive() { "&mut" } else { "&" }
-}
-
-fn borrow_kind_name(kind: Perm) -> &'static str {
+fn perm_name(kind: Perm) -> &'static str {
     if kind.is_exclusive() { "mutable" } else { "shared" }
 }
 
-fn render_key_path(key_path: &KeyPath) -> String {
-    let mut out = render_symbol(key_path.root);
-    for field in &key_path.fields {
-        out.push('.');
-        out.push_str(&render_symbol(*field));
-    }
-    out
-}
-
-fn render_symbol(symbol: Symbol) -> String {
-    symbol.to_string()
-}
-
-fn dedup(items: Vec<String>) -> Vec<String> {
+fn dedup(details: Vec<String>) -> Vec<String> {
     let mut seen = FxHashSet::default();
-    let mut result = Vec::new();
-    for item in items {
-        if seen.insert(item.clone()) {
-            result.push(item);
-        }
-    }
-    result
+    details
+        .into_iter()
+        .filter(|detail| seen.insert(detail.clone()))
+        .collect()
 }
 
 fn dedup_hints(hints: Vec<OwnershipInlayHint>) -> Vec<OwnershipInlayHint> {
     let mut seen = FxHashSet::default();
-    let mut result = Vec::new();
-    for hint in hints {
-        let key = (hint.position, hint.label.clone(), hint.tooltip.clone());
-        if seen.insert(key) {
-            result.push(hint);
-        }
-    }
-    result.sort_by_key(|hint| (hint.position, hint.label.clone()));
-    result
+    let mut out: Vec<OwnershipInlayHint> = hints
+        .into_iter()
+        .filter(|hint| seen.insert((hint.position, hint.label.clone())))
+        .collect();
+    out.sort_by_key(|hint| hint.position);
+    out
 }
 
 #[cfg(test)]

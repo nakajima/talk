@@ -43,7 +43,7 @@ use crate::node_kinds::{
     inline_ir_instruction::{InlineIRInstructionKind, Value as IrValue},
     type_annotation::{TypeAnnotation, TypeAnnotationKind},
 };
-use crate::ownership::KeyPath as OwnershipKeyPath;
+use crate::flow::Place as OwnershipKeyPath;
 use crate::token_kind::TokenKind;
 use crate::types::TypeOutput;
 use crate::types::ty::Ty as CheckTy;

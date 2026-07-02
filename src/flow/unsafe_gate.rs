@@ -12,7 +12,7 @@ use crate::compiling::module::ModuleId;
 use crate::hir::{self, HirFile};
 use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
-use crate::ownership::OwnershipError;
+use crate::flow::OwnershipError;
 use crate::types::ty::Ty;
 
 pub(crate) fn check(

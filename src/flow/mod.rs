@@ -2,26 +2,64 @@
 //! substructural core. Permissions and grades live in types (`src/types`);
 //! this pass answers only the flow-sensitive questions — where each value
 //! moves, where borrows end, where drops go — and writes its answers onto the
-//! HIR in place, per the annotated-tree architecture. It replaces
-//! `src/ownership` (selected by `DriverConfig::checker`; the legacy checker
-//! is deleted once this reaches parity).
-//!
-//! Scope so far: moves, use-after-move, copy exemption, unsafe gating.
-//! Drop placement, loans/provenance, and capture inference land in later
-//! phases.
+//! HIR in place, per the annotated-tree architecture: moves, drops (with
+//! linear must-consume), loans/provenance (NLL borrow ends at last use),
+//! closure captures, and raw-pointer gating.
 
+mod captures;
 pub mod drops;
-mod grades;
+pub mod errors;
+pub(crate) mod grades;
+mod liveness;
+mod loans;
 mod moves;
 pub mod place;
 mod unsafe_gate;
 
 #[cfg(test)]
+mod flow_borrow_tests;
+#[cfg(test)]
 mod flow_tests;
 
+pub use errors::OwnershipError;
 pub use place::Place;
 
 use indexmap::IndexMap;
+
+/// Editor-facing facts the flow checker accumulates while walking: what
+/// moves, what borrows, what drops — with the nodes to anchor hints and
+/// hover details. A product for the analysis layer, not a compiler stage
+/// input (lowering reads the HIR annotations, never this).
+#[derive(Clone, Debug, Default)]
+pub struct FlowFacts {
+    pub moves: Vec<FlowMoveFact>,
+    pub borrows: Vec<FlowBorrowFact>,
+    pub drops: Vec<FlowDropFact>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FlowMoveFact {
+    pub node: crate::node_id::NodeID,
+    pub place: String,
+    pub ty: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct FlowBorrowFact {
+    pub node: crate::node_id::NodeID,
+    pub borrower: String,
+    pub owner: String,
+    pub exclusive: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct FlowDropFact {
+    pub node: crate::node_id::NodeID,
+    pub place: String,
+    pub ty: String,
+    pub kind: drops::DropElaboration,
+    pub reason: drops::DropReason,
+}
 
 use crate::compiling::driver::Source;
 use crate::compiling::module::ModuleId;
@@ -29,19 +67,23 @@ use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
 use crate::hir::HirFile;
 use crate::types::TypeOutput;
 
-/// Check every file's HIR: move discipline per body, drop scheduling, raw-
-/// pointer gating per file — and write the results onto the tree in place
-/// (`Expr.ownership`, `Block::drops`, `Stmt::drops`). Diagnostics reuse the
-/// legacy `OwnershipError` surface (message parity for free); the enum moves
-/// here when the legacy checker is deleted.
+/// Check every file's HIR — moves, drops, loans, provenance, captures,
+/// raw-pointer gating — writing the results onto the tree in place
+/// (`Expr.ownership`, `Block::drops`, `Stmt::drops`, `HirFile::drops`) and
+/// returning the editor-facing facts plus diagnostics.
 pub fn check_flow(
     hir: &mut IndexMap<Source, HirFile>,
     types: &TypeOutput,
     module_id: ModuleId,
-) -> Vec<AnyDiagnostic> {
-    let mut checker = moves::MoveChecker::new(types);
+) -> (FlowFacts, Vec<AnyDiagnostic>) {
+    let mut checker = moves::MoveChecker::new(types, module_id);
+    // Which parameter indices each free function's returned borrow reaches:
+    // a single structural pre-pass, consumed at call sites for precise
+    // borrowed-return provenance.
+    checker.seed_return_reach(hir.values());
     let mut file_drops = vec![];
     for file in hir.values() {
+        checker.check_global_storage(&file.roots);
         let mut state = Default::default();
         file_drops.push(checker.check_roots(&file.roots, &mut state));
     }
@@ -63,7 +105,7 @@ pub fn check_flow(
         }
     }
 
-    errors
+    let diagnostics = errors
         .into_iter()
         .map(|(kind, id)| {
             AnyDiagnostic::Ownership(Diagnostic {
@@ -72,7 +114,8 @@ pub fn check_flow(
                 kind,
             })
         })
-        .collect()
+        .collect();
+    (checker.facts, diagnostics)
 }
 
 #[derive(derive_visitor::VisitorMut)]

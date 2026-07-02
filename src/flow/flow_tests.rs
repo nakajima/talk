@@ -1,15 +1,12 @@
-//! Flow-checker tests: the ported legacy move/drop corpus (from
-//! `src/ownership`'s suite) plus the new linear must-consume behaviors, all
-//! running with `CheckerKind::Flow`. Sources are kept byte-identical to the
+//! Flow-checker tests: the ported legacy move/drop corpus plus the new
+//! linear must-consume behaviors. Sources are kept byte-identical to the
 //! legacy tests they port so parity is auditable.
 
-use crate::compiling::driver::{CheckerKind, Driver, DriverConfig, Source, Typed};
+use crate::compiling::driver::{Driver, DriverConfig, Source, Typed};
 use crate::diagnostic::AnyDiagnostic;
 
 fn flow_driver(source: &str) -> Driver<Typed> {
-    let mut config = DriverConfig::new("FlowTest");
-    config.checker = CheckerKind::Flow;
-    Driver::new(vec![Source::from(source)], config)
+    Driver::new(vec![Source::from(source)], DriverConfig::new("FlowTest"))
         .parse()
         .expect("parse failed")
         .resolve_names()
@@ -466,9 +463,7 @@ fn linear_value_moved_in_one_branch_only_is_rejected() {
 #[test]
 fn vm_and_evaluator_agree_under_flow_checker() {
     let source = "func shout(s: String) -> Int {\n\ts.length\n}\nfunc make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\tlet t = s\n\t\tshout(t)\n\t} else {\n\t\t2\n\t}\n}\nmake(true)";
-    let mut config = DriverConfig::new("FlowVmTest");
-    config.checker = CheckerKind::Flow;
-    let typed = Driver::new(vec![Source::from(source)], config)
+    let typed = Driver::new(vec![Source::from(source)], DriverConfig::new("FlowVmTest"))
         .parse()
         .expect("parse")
         .resolve_names()
@@ -490,176 +485,6 @@ fn vm_and_evaluator_agree_under_flow_checker() {
         }
         other => panic!("unexpected results: {other:?}"),
     }
-}
-
-// ----- Differential: flow drop schedules ≡ legacy drop elaboration ------------
-
-/// Every drop the flow checker schedules that will actually emit (kind !=
-/// Dead) must match the legacy checker's drop-plan obligations for the same
-/// source, and vice versa. Dead entries are excluded because the two sides
-/// disagree only on where they bother *recording* a no-op: flow also checks
-/// synthesized init bodies (scheduling Dead replace-drops for first-time
-/// field writes) that legacy never visits. Flow's exact Dead placements are
-/// pinned by the unit tests above. This differential replaces a throwaway
-/// lowering shim: P3 re-points lowering at the annotations; until then this
-/// pins their equivalence.
-#[test]
-fn flow_drop_schedules_match_legacy_obligations() {
-    let corpus: &[&str] = &[
-        "func make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\t1\n}",
-        "func make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet pair = (s, 1)\n\t0\n}",
-        "func make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\tlet t = s\n\t\t1\n\t} else {\n\t\t2\n\t}\n\t0\n}",
-        "struct Person {\n\tlet name: String\n\tlet age: Int\n}\nfunc make() -> Int {\n\tlet person = Person(name: \"Pat\" + \"!\", age: 40)\n\tlet name = person.name\n\tperson.age\n}",
-        "func make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\treturn 1\n\t}\n\ts.length\n}",
-    ];
-    for source in corpus {
-        let legacy = legacy_scope_drops(source);
-        let flow = flow_scope_drops(source);
-        assert_eq!(
-            flow, legacy,
-            "flow schedules diverge from legacy obligations for:\n{source}"
-        );
-    }
-}
-
-/// Legacy: (root name, kind, reason) for every drop obligation, sorted.
-fn legacy_scope_drops(source: &str) -> Vec<(String, String, String)> {
-    let driver = Driver::new(
-        vec![Source::from(source.to_string().leak() as &str)],
-        DriverConfig::new("FlowDiffLegacy"),
-    )
-    .parse()
-    .expect("parse")
-    .resolve_names()
-    .expect("resolve")
-    .type_check();
-    assert!(!driver.has_errors(), "{:?}", driver.diagnostics());
-    let names = &driver.phase.types.display_names;
-    let mut out: Vec<(String, String, String)> = driver
-        .phase
-        .ownership
-        .drop_plan
-        .obligations
-        .iter()
-        .filter(|obligation| format!("{:?}", obligation.kind) != "Dead")
-        .map(|obligation| {
-            let name = names
-                .get(&obligation.key_path.root)
-                .cloned()
-                .unwrap_or_else(|| format!("{}", obligation.key_path.root));
-            (
-                name,
-                format!("{:?}", obligation.kind),
-                format!("{:?}", obligation.reason),
-            )
-        })
-        .collect();
-    out.sort();
-    out
-}
-
-/// Flow: (root name, kind, reason) for every schedule annotated onto the
-/// HIR (blocks and statements), sorted.
-fn flow_scope_drops(source: &str) -> Vec<(String, String, String)> {
-    let driver = flow_driver(source.to_string().leak());
-    assert!(!driver.has_errors(), "{:?}", driver.diagnostics());
-    let names = &driver.phase.types.display_names;
-    let mut collector = ScheduleCollector { out: vec![] };
-    for file in driver.phase.hir.values() {
-        for root in &file.roots {
-            use derive_visitor::Drive;
-            root.drive(&mut collector);
-        }
-    }
-    let mut out: Vec<(String, String, String)> = collector
-        .out
-        .iter()
-        .filter(|schedule| schedule.kind != DropElaboration::Dead)
-        .map(|schedule| {
-            let name = names
-                .get(&schedule.place.root)
-                .cloned()
-                .unwrap_or_else(|| format!("{}", schedule.place.root));
-            (
-                name,
-                format!("{:?}", schedule.kind),
-                format!("{:?}", schedule.reason),
-            )
-        })
-        .collect();
-    out.sort();
-    out
-}
-
-#[derive(derive_visitor::Visitor)]
-#[visitor(hir::Block(enter), hir::Stmt(enter))]
-struct ScheduleCollector {
-    out: Vec<DropSchedule>,
-}
-
-impl ScheduleCollector {
-    fn enter_block(&mut self, block: &hir::Block) {
-        self.out.extend(block.drops.iter().cloned());
-    }
-
-    fn enter_stmt(&mut self, stmt: &hir::Stmt) {
-        self.out.extend(stmt.drops.iter().cloned());
-    }
-}
-
-// ----- VM-output differential: Legacy vs Flow checker --------------------------
-
-/// The same drop-heavy programs produce identical VM results under both
-/// checker kinds. Drops always come from the flow annotations now; this
-/// pins that the checker selection changes diagnostics only, never codegen.
-#[test]
-fn vm_output_identical_under_both_checkers() {
-    let corpus: &[&[&str]] = &[
-        &["let s = \"hello\" + \" world\"\ns.length"],
-        &[
-            "func make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\tlet t = s\n\t\tt.length\n\t} else {\n\t\t2\n\t}\n}\nmake(true) + make(false)",
-        ],
-        &[
-            "func shout(s: String) -> Int {\n\ts.length\n}\nfunc make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet t = s\n\tshout(t)\n}\nmake()",
-        ],
-        // Two files: top-level locals across files drop via the combined
-        // main body's concatenated schedules.
-        &[
-            "let first = \"hello\" + \" world\"\nfirst.length",
-            "let second = \"bye\" + \" now\"\nsecond.length",
-        ],
-    ];
-    for sources in corpus {
-        let legacy = run_vm(sources, CheckerKind::Legacy);
-        let flow = run_vm(sources, CheckerKind::Flow);
-        assert_eq!(
-            format!("{legacy:?}"),
-            format!("{flow:?}"),
-            "VM output diverged between checkers for {sources:?}"
-        );
-    }
-}
-
-fn run_vm(sources: &[&str], checker: CheckerKind) -> crate::vm::interp::Value {
-    let mut config = DriverConfig::new("FlowDiffVm");
-    config.checker = checker;
-    let typed = Driver::new(
-        sources.iter().map(|s| Source::from(*s)).collect(),
-        config,
-    )
-    .parse()
-    .expect("parse")
-    .resolve_names()
-    .expect("resolve")
-    .type_check();
-    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
-    let mut lowered = typed.lower();
-    assert!(
-        lowered.phase.diagnostics.is_empty(),
-        "lowering: {:?}",
-        lowered.phase.diagnostics
-    );
-    lowered.run_vm().expect("vm")
 }
 
 // ----- Unsafe gating ----------------------------------------------------------

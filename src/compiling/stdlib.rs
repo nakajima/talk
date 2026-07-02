@@ -9,7 +9,6 @@ use crate::compiling::{
     module::{Module, ModuleEnvironment, ModuleId},
 };
 use crate::name_resolution::name_resolver::ResolvedNames;
-use crate::ownership::OwnershipOutput;
 use crate::types::TypeOutput;
 
 lazy_static! {
@@ -23,7 +22,6 @@ pub struct StdlibTyped {
     pub hir: IndexMap<Source, crate::hir::HirFile>,
     pub types: TypeOutput,
     pub resolved_names: ResolvedNames,
-    pub ownership: OwnershipOutput,
 }
 
 /// All stdlib source strings, in a fixed order.
@@ -67,14 +65,12 @@ fn compile_typed_module(
         hir,
         resolved_names,
         types,
-        ownership,
         ..
     } = typed.phase;
     StdlibTyped {
         hir,
         types,
         resolved_names,
-        ownership,
     }
 }
 

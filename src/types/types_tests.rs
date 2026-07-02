@@ -3241,7 +3241,7 @@ mod with_core {
 
         let mut modules = ModuleEnvironment::default();
         modules.import(module_a);
-        let config = crate::compiling::driver::DriverConfig { checker: crate::compiling::driver::CheckerKind::default(),
+        let config = crate::compiling::driver::DriverConfig {
             module_id: ModuleId::Current,
             modules: Rc::new(modules),
             mode: crate::compiling::driver::CompilationMode::Library,
@@ -3299,7 +3299,7 @@ mod with_core {
 
         let mut modules = ModuleEnvironment::default();
         modules.import(module_a);
-        let config = crate::compiling::driver::DriverConfig { checker: crate::compiling::driver::CheckerKind::default(),
+        let config = crate::compiling::driver::DriverConfig {
             module_id: ModuleId::Current,
             modules: Rc::new(modules),
             mode: crate::compiling::driver::CompilationMode::Library,

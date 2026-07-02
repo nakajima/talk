@@ -1,0 +1,458 @@
+//! Flow-checker borrow/provenance/capture tests: the remainder of the
+//! ported legacy suite, with byte-identical sources so parity is
+//! auditable.
+
+use crate::compiling::driver::{Driver, DriverConfig, Source, Typed};
+use crate::diagnostic::AnyDiagnostic;
+
+fn flow_driver(source: &str) -> Driver<Typed> {
+    Driver::new(vec![Source::from(source)], DriverConfig::new("FlowBorrowTest"))
+        .parse()
+        .expect("parse failed")
+        .resolve_names()
+        .expect("name resolution failed")
+        .type_check()
+}
+
+fn flow_errors(source: &str) -> Vec<String> {
+    flow_driver(source)
+        .phase
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic {
+            AnyDiagnostic::Ownership(diag) => Some(diag.kind.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn assert_no_errors(source: &str) {
+    let errors = flow_errors(source);
+    assert!(errors.is_empty(), "expected no flow errors, got {errors:?}");
+}
+
+fn assert_error_contains(source: &str, needle: &str) {
+    let errors = flow_errors(source);
+    assert!(
+        errors.iter().any(|error| error.contains(needle)),
+        "expected an error containing {needle:?}, got {errors:?}"
+    );
+}
+
+fn assert_no_error_contains(source: &str, needle: &str) {
+    let errors = flow_errors(source);
+    assert!(
+        !errors.iter().any(|error| error.contains(needle)),
+        "expected no error containing {needle:?}, got {errors:?}"
+    );
+}
+
+// ----- Borrowed-storage / classification -------------------------------------
+
+#[test]
+fn allows_borrowed_field_in_struct_type() {
+    assert_no_errors("struct View {\n\tlet path: Substring\n}");
+}
+
+#[test]
+fn allows_borrowed_payload_in_enum_type() {
+    assert_no_errors("enum View {\n\tcase path(Substring)\n}");
+}
+
+#[test]
+fn rejects_borrowed_global() {
+    assert_error_contains(
+        "let path = \"hello\".slice(0, 1)",
+        "cannot be stored in global 'path'",
+    );
+}
+
+// ----- Provenance / returns ---------------------------------------------------
+
+#[test]
+fn rejects_returning_substring_of_local_owned_value() {
+    assert_error_contains(
+        "func bad() -> Substring {\n\tlet s = \"hello\" + \" world\"\n\ts.slice(0, 1)\n}",
+        "owned by this function",
+    );
+}
+
+#[test]
+fn rejects_returning_substring_of_owned_parameter() {
+    assert_error_contains(
+        "func first(s: String) -> Substring {\n\ts.slice(0, 1)\n}",
+        "owned by this function",
+    );
+}
+
+#[test]
+fn allows_returning_substring_of_borrowed_parameter() {
+    assert_no_errors("func first(s: &String) -> Substring {\n\ts.slice(0, 1)\n}");
+}
+
+#[test]
+fn ordinary_borrowed_return_tracks_single_borrowed_argument_owner() {
+    assert_error_contains(
+        "func first(s: &String) -> Substring {\n\ts.slice(0, 1)\n}\nfunc bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = first(s)\n\tlet moved = s\n\tsub.length\n}",
+        "Use of borrowed value 'sub'",
+    );
+}
+
+#[test]
+fn borrow_of_one_argument_stays_precise_when_another_is_moved() {
+    assert_no_errors(
+        "func choose(a: &String, b: &String) -> Substring {\n\ta.slice(0, 1)\n}\nfunc ok() -> Int {\n\tlet a = \"hello\" + \" world\"\n\tlet b = \"bye\" + \" now\"\n\tlet sub = choose(a, b)\n\tlet moved = b\n\tsub.length\n}",
+    );
+}
+
+#[test]
+fn borrow_of_one_argument_still_rejects_moving_that_argument() {
+    assert_error_contains(
+        "func choose(a: &String, b: &String) -> Substring {\n\ta.slice(0, 1)\n}\nfunc bad() -> Int {\n\tlet a = \"hello\" + \" world\"\n\tlet b = \"bye\" + \" now\"\n\tlet sub = choose(a, b)\n\tlet moved = a\n\tsub.length\n}",
+        "borrowed value 'sub'",
+    );
+}
+
+#[test]
+fn ordinary_borrowed_return_from_owned_local_cannot_escape() {
+    assert_error_contains(
+        "func first(s: &String) -> Substring {\n\ts.slice(0, 1)\n}\nfunc bad() -> Substring {\n\tlet s = \"hello\" + \" world\"\n\tfirst(s)\n}",
+        "owned by this function",
+    );
+}
+
+#[test]
+fn ordinary_borrowed_return_can_escape_borrowed_parameter() {
+    assert_no_errors(
+        "func first(s: &String) -> Substring {\n\ts.slice(0, 1)\n}\nfunc ok(s: &String) -> Substring {\n\tfirst(s)\n}",
+    );
+}
+
+#[test]
+fn borrowed_return_among_several_arguments_is_precisely_provenanced() {
+    assert_no_errors(
+        "func choose(a: &String, b: &String) -> Substring {\n\ta.slice(0, 1)\n}\nfunc bad() -> Int {\n\tlet a = \"hello\" + \" world\"\n\tlet b = \"bye\" + \" now\"\n\tlet sub = choose(a, b)\n\tsub.length\n}",
+    );
+}
+
+#[test]
+fn rejects_returning_tuple_containing_local_borrow() {
+    assert_error_contains(
+        "func bad() -> (Substring, Int) {\n\tlet s = \"hello\" + \" world\"\n\t(s.slice(0, 1), 1)\n}",
+        "owned by this function",
+    );
+}
+
+#[test]
+fn record_containing_borrow_tracks_owner_invalidation() {
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet record = { sub: s.slice(0, 1) }\n\tlet moved = s\n\trecord.sub.length\n}",
+        "Cannot move 's' while it is borrowed as 'record'",
+    );
+}
+
+#[test]
+fn generic_container_containing_borrow_tracks_owner_invalidation() {
+    assert_error_contains(
+        "enum Maybe<T> {\n\tcase some(T)\n\tcase none\n}\nfunc bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet maybe = Maybe.some(s.slice(0, 1))\n\tlet moved = s\n\tmatch maybe {\n\t\t.some(sub) -> sub.length,\n\t\t.none -> 0\n\t}\n}",
+        "Use of borrowed value 'maybe'",
+    );
+}
+
+#[test]
+fn rejects_returning_owned_generic_container_containing_borrow() {
+    assert_error_contains(
+        "enum Maybe<T> {\n\tcase some(T)\n\tcase none\n}\nfunc bad() -> Maybe<Substring> {\n\tlet s = \"hello\" + \" world\"\n\tMaybe.some(s.slice(0, 1))\n}",
+        "owned by this function",
+    );
+}
+
+// ----- Move-out-of-borrowed ----------------------------------------------------
+
+#[test]
+fn rejects_returning_owned_field_from_shared_borrow() {
+    assert_error_contains(
+        "struct Person {\n\tlet name: String\n}\nfunc bad(person: &Person) -> String {\n\tperson.name\n}",
+        "out of borrowed value 'person'",
+    );
+}
+
+#[test]
+fn rejects_binding_owned_field_from_shared_borrow() {
+    assert_error_contains(
+        "struct Person {\n\tlet name: String\n}\nfunc bad(person: &Person) -> Int {\n\tlet name = person.name\n\tname.length\n}",
+        "out of borrowed value 'person'",
+    );
+}
+
+#[test]
+fn rejects_passing_owned_field_from_shared_borrow_by_value() {
+    assert_error_contains(
+        "struct Person {\n\tlet name: String\n}\nfunc take(name: String) -> Int {\n\tname.length\n}\nfunc bad(person: &Person) -> Int {\n\ttake(person.name)\n}",
+        "out of borrowed value 'person'",
+    );
+}
+
+#[test]
+fn allows_copy_field_read_from_shared_borrow() {
+    assert_no_errors(
+        "struct Person {\n\tlet age: Int\n}\nfunc ok(person: &Person) -> Int {\n\tperson.age\n}",
+    );
+}
+
+#[test]
+fn rejects_owned_field_extraction_from_borrowed_nominal() {
+    assert_error_contains(
+        "func bad(sub: Substring) -> Int {\n\tlet storage = sub.storage\n\t0\n}",
+        "out of borrowed value 'sub'",
+    );
+}
+
+// ----- Borrow conflicts / invalidation ------------------------------------------
+
+#[test]
+fn rejects_borrow_use_after_owner_move() {
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.slice(0, 1)\n\tlet moved = s\n\tsub.length\n}",
+        "Use of borrowed value 'sub'",
+    );
+}
+
+#[test]
+fn rejects_borrow_use_after_owner_reassignment() {
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.slice(0, 1)\n\ts = \"new\" + \" value\"\n\tsub.length\n}",
+        "Use of borrowed value 'sub'",
+    );
+}
+
+#[test]
+fn rejects_reassigned_borrow_use_after_owner_move() {
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.slice(0, 1)\n\tsub = s.slice(1, 1)\n\tlet moved = s\n\tsub.length\n}",
+        "Use of borrowed value 'sub'",
+    );
+}
+
+#[test]
+fn allows_owner_move_after_borrow_last_use() {
+    assert_no_errors(
+        "func ok() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.slice(0, 1)\n\tlet n = sub.length\n\tlet moved = s\n\tn\n}",
+    );
+}
+
+#[test]
+fn rejects_owner_move_while_borrow_has_later_use() {
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.slice(0, 1)\n\tlet moved = s\n\tsub.length\n}",
+        "Cannot move 's' while it is borrowed as 'sub'",
+    );
+}
+
+#[test]
+fn move_while_mutably_borrowed_does_not_report_spurious_shared_borrow() {
+    let source = "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet borrow: &mut String = s\n\tlet moved = s\n\tborrow.length\n}";
+    assert_error_contains(source, "Cannot move 's' while it is borrowed as 'borrow'");
+    assert_no_error_contains(source, "Cannot take shared borrow");
+}
+
+#[test]
+fn mutable_method_receiver_invalidates_borrows_of_receiver() {
+    assert_error_contains(
+        "struct Box {\n\tlet value: String\n\tmut func touch() -> Int {\n\t\tself.value.length\n\t}\n}\nfunc bad() -> Int {\n\tlet box = Box(value: \"hello\" + \" world\")\n\tlet sub = box.value.slice(0, 1)\n\tlet n = box.touch()\n\tsub.length + n\n}",
+        "Use of borrowed value 'sub'",
+    );
+}
+
+#[test]
+fn shared_method_receiver_cannot_assign_self_field() {
+    let errors = flow_errors(
+        "struct Counter {\n\tlet n: Int\n\tfunc bump() -> () {\n\t\tself.n = self.n + 1\n\t\t()\n\t}\n}",
+    );
+    assert!(!errors.is_empty(), "expected a rejection, got none");
+}
+
+#[test]
+fn mut_method_receiver_can_assign_self_field() {
+    assert_no_errors(
+        "struct Counter {\n\tlet n: Int\n\tmut func bump() -> () {\n\t\tself.n = self.n + 1\n\t\t()\n\t}\n}",
+    );
+}
+
+#[test]
+fn shared_borrow_ends_at_last_use_before_mutation() {
+    assert_no_errors(
+        "struct Box {\n\tlet value: String\n\tmut func touch() -> Int {\n\t\tself.value.length\n\t}\n}\nfunc ok() -> Int {\n\tlet box = Box(value: \"hello\" + \" world\")\n\tlet sub = box.value.slice(0, 1)\n\tlet n = sub.length\n\tbox.touch() + n\n}",
+    );
+}
+
+#[test]
+fn live_shared_borrow_blocks_later_mutation() {
+    assert_error_contains(
+        "struct Box {\n\tlet value: String\n\tmut func touch() -> Int {\n\t\tself.value.length\n\t}\n}\nfunc bad() -> Int {\n\tlet box = Box(value: \"hello\" + \" world\")\n\tlet sub = box.value.slice(0, 1)\n\tlet n = box.touch()\n\tsub.length + n\n}",
+        "already shared borrowed as 'sub'",
+    );
+}
+
+#[test]
+fn rejects_read_while_mutable_borrow_is_live() {
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet borrow: &mut String = s\n\tlet n = s.length\n\tborrow.length + n\n}",
+        "already mutable borrowed as 'borrow'",
+    );
+}
+
+#[test]
+fn mutable_borrow_ends_at_last_use_before_read() {
+    assert_no_errors(
+        "func ok() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet borrow: &mut String = s\n\tlet n = borrow.length\n\ts.length + n\n}",
+    );
+}
+
+#[test]
+fn loop_carried_mutable_borrow_lives_until_storage_dead() {
+    assert_error_contains(
+        "func observe(s: &String) -> Int {\n\ts.length\n}\nfunc mutate(s: &mut String) -> Int {\n\ts.length\n}\nfunc bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet r: &mut String = s\n\tlet i = 0\n\tloop i < 2 {\n\t\tlet n = observe(r)\n\t\tlet m = mutate(s)\n\t\ti = i + 1\n\t}\n\t0\n}",
+        "already mutable borrowed as 'r'",
+    );
+}
+
+#[test]
+fn per_iteration_mutable_borrow_can_end_before_mutation() {
+    assert_no_errors(
+        "func observe(s: &String) -> Int {\n\ts.length\n}\nfunc mutate(s: &mut String) -> Int {\n\ts.length\n}\nfunc ok() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet i = 0\n\tloop i < 2 {\n\t\tlet r: &mut String = s\n\t\tlet n = observe(r)\n\t\tlet m = mutate(s)\n\t\ti = i + 1\n\t}\n\t0\n}",
+    );
+}
+
+#[test]
+fn mutable_call_argument_invalidates_shared_borrow() {
+    assert_error_contains(
+        "func mutate(s: &mut String) -> Int {\n\ts.length\n}\nfunc bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.slice(0, 1)\n\tlet n = mutate(s)\n\tsub.length + n\n}",
+        "Use of borrowed value 'sub'",
+    );
+}
+
+// ----- Captures ------------------------------------------------------------------
+
+#[test]
+fn rejects_owned_value_capture_without_capture_mode() {
+    assert_error_contains(
+        "func bad() -> () -> Int {\n\tlet s = \"hello\" + \" world\"\n\treturn func() -> Int {\n\t\ts.length\n\t}\n}",
+        "Cannot capture ownership-sensitive value 's'",
+    );
+}
+
+#[test]
+fn rejects_borrowed_value_capture_without_capture_mode() {
+    assert_error_contains(
+        "func bad() -> () -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.slice(0, 1)\n\treturn func() -> Int {\n\t\tsub.length\n\t}\n}",
+        "Cannot capture ownership-sensitive value 'sub'",
+    );
+}
+
+#[test]
+fn explicit_consuming_capture_moves_parent_value() {
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet f = func [consuming s]() -> Int {\n\t\ts.length\n\t}\n\ts.length\n}",
+        "Use of moved value 's'",
+    );
+}
+
+#[test]
+fn explicit_consuming_capture_can_escape() {
+    assert_no_errors(
+        "func ok() -> () -> Int {\n\tlet s = \"hello\" + \" world\"\n\treturn func [consuming s]() -> Int {\n\t\ts.length\n\t}\n}",
+    );
+}
+
+#[test]
+fn owning_closure_value_copy_moves_source() {
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet f = func [consuming s]() -> Int {\n\t\ts.length\n\t}\n\tlet g = f\n\tf() + g()\n}",
+        "Use of moved value 'f'",
+    );
+}
+
+#[test]
+fn capture_free_function_values_remain_copyable() {
+    assert_no_errors(
+        "func ok() -> Int {\n\tlet f = func() -> Int {\n\t\t1\n\t}\n\tlet g = f\n\tf() + g()\n}",
+    );
+}
+
+#[test]
+fn explicit_copy_capture_requires_copy_type() {
+    assert_error_contains(
+        "func bad() -> () -> Int {\n\tlet s = \"hello\" + \" world\"\n\treturn func [copy s]() -> Int {\n\t\ts.length\n\t}\n}",
+        "copy captures require a copyable type",
+    );
+}
+
+#[test]
+fn unused_explicit_borrow_capture_can_end_before_owner_move() {
+    assert_no_errors(
+        "func ok() -> String {\n\tlet s = \"hello\" + \" world\"\n\tlet f = func [&s]() -> Int {\n\t\ts.length\n\t}\n\treturn s\n}",
+    );
+}
+
+#[test]
+fn explicit_borrow_capture_blocks_owner_move_until_closure_last_use() {
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet f = func [&s]() -> Int {\n\t\ts.length\n\t}\n\tlet moved = s\n\tf()\n}",
+        "Cannot move 's' while it is borrowed as 'f'",
+    );
+}
+
+#[test]
+fn unused_explicit_mut_borrow_capture_can_end_before_read() {
+    assert_no_errors(
+        "func ok() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet f = func [&mut s]() -> Int {\n\t\ts.length\n\t}\n\ts.length\n}",
+    );
+}
+
+#[test]
+fn explicit_mut_borrow_capture_blocks_reads_until_closure_last_use() {
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet f = func [&mut s]() -> Int {\n\t\ts.length\n\t}\n\tlet n = s.length\n\tf() + n\n}",
+        "already mutable borrowed as 'f'",
+    );
+}
+
+#[test]
+fn explicit_borrow_capture_cannot_escape() {
+    assert_error_contains(
+        "func bad() -> () -> Int {\n\tlet s = \"hello\" + \" world\"\n\treturn func [&s]() -> Int {\n\t\ts.length\n\t}\n}",
+        "borrow captures are tied to the current stack frame",
+    );
+}
+
+#[test]
+fn rejects_escaping_generic_capture_returned_through_local() {
+    assert_error_contains(
+        "func bad<Value>(value: Value) -> () -> Value {\n\tlet f = func() -> Value {\n\t\tvalue\n\t}\n\treturn f\n}",
+        "Cannot capture ownership-sensitive value 'value'",
+    );
+}
+
+#[test]
+fn rejects_escaping_generic_capture_passed_as_argument() {
+    assert_error_contains(
+        "func accept<Value>(f: () -> Value) -> Int {\n\t0\n}\nfunc bad<Value>(value: Value) -> Int {\n\taccept(func() -> Value {\n\t\tvalue\n\t})\n}",
+        "Cannot capture ownership-sensitive value 'value'",
+    );
+}
+
+#[test]
+fn rejects_escaping_borrow_capture_even_when_referent_is_copy() {
+    assert_error_contains(
+        "func bad(value: &Int) -> () -> &Int {\n\treturn func() -> &Int {\n\t\tvalue\n\t}\n}",
+        "Cannot capture ownership-sensitive value 'value'",
+    );
+}
+
+#[test]
+fn allows_nonescaping_generic_closure_capture() {
+    assert_no_errors(
+        "func ok<Value>(value: Value) -> Value {\n\tlet f = func() -> Value {\n\t\tvalue\n\t}\n\tf()\n}",
+    );
+}

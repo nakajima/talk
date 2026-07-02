@@ -26,6 +26,83 @@ impl<'a> GradeView<'a> {
         self.contains_owned(ty, &mut FxHashSet::default())
     }
 
+    /// Trivially copyable: using the value never moves it. Not the exact
+    /// complement of [`GradeView::needs_drop`] — type params and unsolved
+    /// projections are neither.
+    pub(crate) fn is_copy(&self, ty: &Ty) -> bool {
+        self.copy_ty(ty, &mut FxHashSet::default())
+    }
+
+    /// A borrowed *value* type: `Substring` and friends (the `Borrowed`
+    /// marker), or a `&T` itself.
+    pub(crate) fn is_borrowed_value(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Borrow(..) => true,
+            Ty::Nominal(symbol, _) => self.has_marker(*symbol, Symbol::Borrowed),
+            _ => false,
+        }
+    }
+
+    /// Whether the VALUE of this type contains a borrow: a `&T`, or a
+    /// nominal carrying the `Borrowed` marker (directly or in its
+    /// arguments/fields). Function types are excluded — a function value
+    /// whose signature mentions borrows is not itself a borrowed value.
+    pub(crate) fn contains_borrowed(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Borrow(..) => true,
+            Ty::Nominal(symbol, args) => {
+                self.has_marker(*symbol, Symbol::Borrowed)
+                    || args.iter().any(|arg| self.contains_borrowed(arg))
+            }
+            Ty::Tuple(items) => items.iter().any(|item| self.contains_borrowed(item)),
+            Ty::Record(row) => row
+                .fields
+                .iter()
+                .any(|(_, field)| self.contains_borrowed(field)),
+            Ty::Func(..)
+            | Ty::Any { .. }
+            | Ty::Proj(..)
+            | Ty::Var(_)
+            | Ty::Param(_)
+            | Ty::Error => false,
+        }
+    }
+
+    fn copy_ty(&self, ty: &Ty, seen: &mut FxHashSet<Symbol>) -> bool {
+        match ty {
+            Ty::Borrow(..) | Ty::Func(..) => true,
+            Ty::Nominal(symbol, args) => {
+                if self.has_marker(*symbol, Symbol::Borrowed) {
+                    return true;
+                }
+                if self.contains_owned(ty, &mut FxHashSet::default()) {
+                    return false;
+                }
+                if matches!(
+                    *symbol,
+                    Symbol::Int | Symbol::Float | Symbol::Bool | Symbol::Void | Symbol::Never
+                ) || *symbol == Symbol::RawPtr
+                    || *symbol == Symbol::Byte
+                {
+                    return true;
+                }
+                // Recursion guard: a cycle without owned content is copy.
+                if !seen.insert(*symbol) {
+                    return true;
+                }
+                let copy = self
+                    .payload_types(*symbol, args)
+                    .iter()
+                    .all(|field| self.copy_ty(field, seen));
+                seen.remove(symbol);
+                copy
+            }
+            Ty::Tuple(items) => items.iter().all(|item| self.copy_ty(item, seen)),
+            Ty::Record(row) => row.fields.iter().all(|(_, field)| self.copy_ty(field, seen)),
+            Ty::Any { .. } | Ty::Proj(..) | Ty::Var(_) | Ty::Param(_) | Ty::Error => false,
+        }
+    }
+
     fn contains_owned(&self, ty: &Ty, seen: &mut FxHashSet<Symbol>) -> bool {
         match ty {
             Ty::Borrow(..) => false,

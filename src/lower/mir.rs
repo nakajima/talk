@@ -170,10 +170,8 @@ pub(crate) enum Rvalue {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Body {
-    pub(crate) owner: Option<Symbol>,
     pub(crate) entry: BlockId,
     pub(crate) blocks: Vec<BasicBlock>,
-    pub(crate) scopes: Vec<Scope>,
     pub(crate) locals: Vec<LocalDecl>,
     #[allow(dead_code)]
     pub(crate) return_local: Option<Local>,
@@ -188,7 +186,6 @@ pub(crate) struct BasicBlock {
 
 #[derive(Clone, Debug)]
 pub(crate) struct LocatedStatement {
-    pub(crate) point: StatementId,
     pub(crate) kind: Statement,
     /// Drop/move results projected onto this statement by `ownership::elaborate_body_drops`,
     /// so lowering reads drop/move handling off the statement it is walking rather than
@@ -204,12 +201,12 @@ pub(crate) struct StatementOwnership {
     /// (static / dead / conditional / open), plus the resolved key path it applies to.
     pub(crate) drop: Option<DropElaborationResult>,
     /// Key paths moved at this statement, so lowering can clear their drop flags.
-    pub(crate) moves: Vec<crate::ownership::KeyPath>,
+    pub(crate) moves: Vec<crate::flow::Place>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct DropElaborationResult {
-    pub(crate) key_path: crate::ownership::KeyPath,
+    pub(crate) key_path: crate::flow::Place,
     pub(crate) kind: DropElaboration,
 }
 
@@ -366,14 +363,12 @@ struct LoopTargets {
 
 struct Builder<'types> {
     types: &'types TypeOutput,
-    owner: Option<Symbol>,
     blocks: Vec<BasicBlock>,
     scopes: Vec<Scope>,
     locals: Vec<LocalDecl>,
     local_by_symbol: FxHashMap<Symbol, Local>,
     return_local: Option<Local>,
     scope_stack: Vec<ScopeFrame>,
-    next_point: usize,
     use_counts: FxHashMap<Symbol, usize>,
     loop_stack: Vec<LoopTargets>,
 }
@@ -390,8 +385,8 @@ struct ScopeFrame {
 
 /// The flow checker's `Place` and the MIR's symbol-rooted `KeyPath` are the
 /// same shape; drop schedules cross over here.
-fn key_path_for_place(place: &crate::flow::Place) -> crate::ownership::KeyPath {
-    crate::ownership::KeyPath {
+fn key_path_for_place(place: &crate::flow::Place) -> crate::flow::Place {
+    crate::flow::Place {
         root: place.root,
         fields: place.fields.clone(),
     }
@@ -399,12 +394,12 @@ fn key_path_for_place(place: &crate::flow::Place) -> crate::ownership::KeyPath {
 
 /// The symbol-rooted place an expression names (a variable or a chain of
 /// stored-field accesses off one) — the flow checker's `place()` shape.
-fn symbol_key_path(types: &TypeOutput, expr: &Expr) -> Option<crate::ownership::KeyPath> {
+fn symbol_key_path(types: &TypeOutput, expr: &Expr) -> Option<crate::flow::Place> {
     match &expr.kind {
         ExprKind::Variable(name) => name
             .symbol()
             .ok()
-            .map(crate::ownership::KeyPath::root),
+            .map(crate::flow::Place::root),
         ExprKind::Member(Some(receiver), _) => {
             let field = stored_field_symbol(types, expr.member_resolution.as_ref())?;
             let mut base = symbol_key_path(types, receiver)?;
@@ -434,21 +429,11 @@ pub(crate) fn build_block(types: &TypeOutput, block: &Block) -> Body {
     build_function(types, None, block)
 }
 
-pub(crate) fn build_function(types: &TypeOutput, owner: Option<Symbol>, block: &Block) -> Body {
-    let mut builder = Builder::new(types, owner);
+pub(crate) fn build_function(types: &TypeOutput, _owner: Option<Symbol>, block: &Block) -> Body {
+    let mut builder = Builder::new(types);
     let entry = builder.new_block();
     let exit = builder.lower_root_scope(entry, block.drops.clone(), |builder, entry| {
         builder.lower_nodes(&block.body, entry, true)
-    });
-    builder.terminate_if_open(exit, Terminator::Return);
-    builder.finish(entry)
-}
-
-pub(crate) fn build_decls(types: &TypeOutput, decls: &[Decl]) -> Body {
-    let mut builder = Builder::new(types, None);
-    let entry = builder.new_block();
-    let exit = builder.lower_root_scope(entry, vec![], |builder, entry| {
-        builder.lower_decls(decls, entry)
     });
     builder.terminate_if_open(exit, Terminator::Return);
     builder.finish(entry)
@@ -461,7 +446,7 @@ pub(crate) fn build_nodes(
     nodes: &[Node],
     drops: Vec<crate::flow::drops::DropSchedule>,
 ) -> Body {
-    let mut builder = Builder::new(types, None);
+    let mut builder = Builder::new(types);
     let entry = builder.new_block();
     let exit = builder.lower_root_scope(entry, drops, |builder, entry| {
         builder.lower_nodes(nodes, entry, true)
@@ -476,17 +461,15 @@ pub(crate) fn use_counts(body: &Body) -> FxHashMap<Symbol, usize> {
 }
 
 impl<'types> Builder<'types> {
-    fn new(types: &'types TypeOutput, owner: Option<Symbol>) -> Self {
+    fn new(types: &'types TypeOutput) -> Self {
         Self {
             types,
-            owner,
             blocks: vec![],
             scopes: vec![],
             locals: vec![],
             local_by_symbol: FxHashMap::default(),
             return_local: None,
             scope_stack: vec![],
-            next_point: 0,
             use_counts: FxHashMap::default(),
             loop_stack: vec![],
         }
@@ -502,10 +485,8 @@ impl<'types> Builder<'types> {
 impl Builder<'_> {
     fn finish(self, entry: BlockId) -> Body {
         Body {
-            owner: self.owner,
             entry,
             blocks: self.blocks,
-            scopes: self.scopes,
             locals: self.locals,
             return_local: self.return_local,
             use_counts: self.use_counts,
@@ -620,16 +601,6 @@ impl Builder<'_> {
         let id = BlockId(self.blocks.len());
         self.blocks.push(BasicBlock::default());
         id
-    }
-
-    fn lower_decls(&mut self, decls: &[Decl], mut current: BlockId) -> BlockId {
-        for decl in decls {
-            if self.is_terminated(current) {
-                current = self.new_block();
-            }
-            current = self.lower_decl(decl, current);
-        }
-        current
     }
 
     fn lower_nodes(
@@ -1233,11 +1204,8 @@ impl Builder<'_> {
             | Statement::Handling { .. }
             | Statement::DeclBody { .. } => {}
         }
-        let point = StatementId(self.next_point);
-        self.next_point += 1;
         let moves = self.statement_moves(&statement);
         self.blocks[block.0].statements.push(LocatedStatement {
-            point,
             kind: statement,
             ownership: StatementOwnership {
                 drop: None,
@@ -1266,7 +1234,7 @@ impl Builder<'_> {
     /// drop flags after the statement. The same expression may be embedded
     /// in more than one statement; flag-clearing is idempotent, so the
     /// duplication is harmless.
-    fn statement_moves(&mut self, statement: &Statement) -> Vec<crate::ownership::KeyPath> {
+    fn statement_moves(&mut self, statement: &Statement) -> Vec<crate::flow::Place> {
         let mut exprs: Vec<&Expr> = vec![];
         match statement {
             Statement::ConsumeValue { expr, .. }
@@ -1286,7 +1254,7 @@ impl Builder<'_> {
                         matches!(capture.mode, crate::node_kinds::func::CaptureMode::Move)
                     })
                     .filter_map(|capture| capture.name.symbol().ok())
-                    .map(crate::ownership::KeyPath::root)
+                    .map(crate::flow::Place::root)
                     .collect();
             }
             _ => {}
@@ -1304,7 +1272,7 @@ impl Builder<'_> {
     /// recursion. Nested control flow, calls, and function bodies are NOT
     /// descended: their moves ride their own statements, keeping drop-flag
     /// clearing per-path precise.
-    fn collect_consumed_places(&mut self, expr: &Expr, out: &mut Vec<crate::ownership::KeyPath>) {
+    fn collect_consumed_places(&mut self, expr: &Expr, out: &mut Vec<crate::flow::Place>) {
         if expr.ownership.consumes
             && let Some(key_path) = symbol_key_path(self.types, expr)
         {

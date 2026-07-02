@@ -21,9 +21,8 @@ pub struct Workspace {
     /// The checker's output tables (node types, schemes) — hover reads
     /// them.
     pub types: crate::types::TypeOutput,
-    /// Ownership, borrow, move, and drop facts from the post-type-check
-    /// ownership pass.
-    pub ownership: crate::ownership::OwnershipOutput,
+    /// Move, borrow, and drop facts from the flow checker (editor product).
+    pub flow: crate::flow::FlowFacts,
     pub diagnostics: FxHashMap<DocumentId, Vec<Diagnostic>>,
 }
 
@@ -89,10 +88,9 @@ impl Workspace {
         let Driver { phase, .. } = typed;
         let resolved_names = phase.resolved_names;
         let types = phase.types;
-        // The ownership pass already elaborated the drop/move facts (`drop_plan` + `facts.moves`)
-        // the inlay hints and hover read — the same single elaboration lowering reuses. The editor
-        // just consumes them; no second ownership walk.
-        let ownership = phase.ownership;
+        // The flow checker's editor facts: moves, borrows, drops — no
+        // second ownership walk.
+        let flow = phase.flow;
         let diagnostics_any = phase.diagnostics;
 
         let _symbol_guard = set_symbol_names(resolved_names.symbol_names.clone());
@@ -125,7 +123,7 @@ impl Workspace {
             asts,
             resolved_names,
             types,
-            ownership,
+            flow,
             diagnostics,
         })
     }
@@ -251,7 +249,7 @@ impl Workspace {
             // Name resolution only: the core workspace exists for symbol
             // rendering, not hover.
             types: Default::default(),
-            ownership: Default::default(),
+            flow: Default::default(),
             diagnostics: FxHashMap::default(),
         })
     }

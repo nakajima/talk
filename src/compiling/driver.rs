@@ -15,7 +15,6 @@ use crate::{
         expr::ExprKind,
         type_annotation::TypeAnnotationKind,
     },
-    ownership::OwnershipOutput,
     parser::Parser,
     parser_error::ParserError,
     types::TypeOutput,
@@ -72,7 +71,7 @@ pub struct Typed {
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
     pub types: TypeOutput,
-    pub ownership: OwnershipOutput,
+    pub flow: crate::flow::FlowFacts,
     pub diagnostics: Vec<AnyDiagnostic>,
 }
 
@@ -96,17 +95,6 @@ pub enum ParseMode {
     Lenient,
 }
 
-/// Which ownership checker runs during `type_check`. `Legacy` is the
-/// MIR-based `src/ownership` monolith; `Flow` is its replacement in
-/// `src/flow` (annotates HIR in place). Transitional: `Legacy` is deleted
-/// once `Flow` reaches parity.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CheckerKind {
-    #[default]
-    Legacy,
-    Flow,
-}
-
 #[derive(Debug)]
 pub struct DriverConfig {
     pub module_id: ModuleId,
@@ -115,7 +103,6 @@ pub struct DriverConfig {
     pub module_name: String,
     pub parse_mode: ParseMode,
     pub preserve_comments: bool,
-    pub checker: CheckerKind,
 }
 
 impl DriverConfig {
@@ -127,7 +114,6 @@ impl DriverConfig {
             module_name: module_name.into(),
             parse_mode: ParseMode::default(),
             preserve_comments: false,
-            checker: CheckerKind::default(),
         }
     }
 
@@ -555,8 +541,8 @@ impl Driver<NameResolved> {
         // it. Files with errors are dropped rather than lowered. The surface AST
         // is not retained past here in the compile pipeline.
         let mut hir: IndexMap<Source, crate::hir::HirFile> = IndexMap::default();
-        let (ownership, ownership_diagnostics) = match error_diagnostic_files(&diagnostics) {
-            None => (OwnershipOutput::default(), vec![]),
+        let (flow, flow_diagnostics) = match error_diagnostic_files(&diagnostics) {
+            None => (crate::flow::FlowFacts::default(), vec![]),
             Some(blocked_files) => {
                 for (source, ast) in asts {
                     if blocked_files.contains(&ast.file_id) {
@@ -566,28 +552,17 @@ impl Driver<NameResolved> {
                     hir.insert(source, file);
                 }
                 if hir.is_empty() {
-                    (OwnershipOutput::default(), vec![])
+                    (crate::flow::FlowFacts::default(), vec![])
                 } else {
-                    // The flow pass always runs: its HIR annotations
-                    // (`Block::drops`, `Stmt::drops`, `Expr.ownership`) are
-                    // lowering's sole drop/move source. Diagnostics come from
-                    // whichever checker is selected — under Legacy the flow
-                    // pass annotates silently.
-                    let flow_diagnostics =
-                        crate::flow::check_flow(&mut hir, &types, self.config.module_id);
-                    match self.config.checker {
-                        CheckerKind::Legacy => crate::ownership::check_ownership(
-                            &hir,
-                            &types,
-                            &resolved_names,
-                            self.config.module_id,
-                        ),
-                        CheckerKind::Flow => (OwnershipOutput::default(), flow_diagnostics),
-                    }
+                    // The flow checker annotates the HIR in place
+                    // (`Block::drops`, `Stmt::drops`, `Expr.ownership`) —
+                    // lowering's sole drop/move source — and returns the
+                    // editor-facing facts.
+                    crate::flow::check_flow(&mut hir, &types, self.config.module_id)
                 }
             }
         };
-        diagnostics.extend(ownership_diagnostics);
+        diagnostics.extend(flow_diagnostics);
 
         Driver {
             files: self.files,
@@ -597,7 +572,7 @@ impl Driver<NameResolved> {
                 symbols,
                 resolved_names,
                 types,
-                ownership,
+                flow,
                 diagnostics,
             },
         }
@@ -616,7 +591,7 @@ impl Driver<Typed> {
             symbols: _,
             resolved_names,
             types,
-            ownership: _,
+            flow: _,
             diagnostics,
         } = self.phase;
 
@@ -990,7 +965,7 @@ pub mod tests {
         let module_a = resolved_a.module("A");
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(module_a);
-        let config = DriverConfig { checker: CheckerKind::default(),
+        let config = DriverConfig {
             module_id: ModuleId::Current,
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,
@@ -1036,7 +1011,7 @@ pub mod tests {
 
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(module_a);
-        let config = DriverConfig { checker: CheckerKind::default(),
+        let config = DriverConfig {
             module_id: ModuleId::Current,
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,
