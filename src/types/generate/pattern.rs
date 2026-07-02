@@ -424,6 +424,23 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             Some(name) => name.symbol().ok(),
             None => match &shallow {
                 Ty::Nominal(symbol, _) if self.catalog.enums.contains_key(symbol) => Some(*symbol),
+                // The scrutinee may still be a metavariable (its binding can
+                // ride a member constraint the solver has not discharged
+                // yet): the pattern informs the scrutinee instead. A variant
+                // name carried by exactly one enum in scope pins the enum,
+                // and the Eq below flows it back into inference.
+                Ty::Var(_) => {
+                    let mut owners = self
+                        .catalog
+                        .enums
+                        .iter()
+                        .filter(|(_, info)| info.variants.contains_key(variant_name))
+                        .map(|(symbol, _)| *symbol);
+                    match (owners.next(), owners.next()) {
+                        (Some(symbol), None) => Some(symbol),
+                        _ => None,
+                    }
+                }
                 _ => None,
             },
         };

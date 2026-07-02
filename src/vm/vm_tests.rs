@@ -88,7 +88,7 @@ pub mod tests {
     fn vm_runs_existential_member_dispatch() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Number {\n\tconsuming func value() -> Int\n}\nextend Int: Number {\n\tconsuming func value() -> Int { self }\n}\nlet x: any Number = 41\nx.value()"
+                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nlet x: any Number = 41\nx.value()"
             ),
             Value::I64(41)
         );
@@ -98,7 +98,7 @@ pub mod tests {
     fn vm_runs_existential_return_and_generic_bound_dispatch() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Number {\n\tconsuming func value() -> Int\n}\nextend Int: Number {\n\tconsuming func value() -> Int { self }\n}\nfunc make() -> any Number { 9 }\nfunc render<T: Number>(x: T) -> Int { x.value() }\nrender(make())"
+                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nfunc make() -> any Number { 9 }\nfunc render<T: Number>(x: T) -> Int { x.value() }\nrender(make())"
             ),
             Value::I64(9)
         );
@@ -108,7 +108,7 @@ pub mod tests {
     fn vm_runs_existentials_in_records_and_enums() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Number {\n\tconsuming func value() -> Int\n}\nextend Int: Number {\n\tconsuming func value() -> Int { self }\n}\nstruct Box {\n\tlet item: any Number\n}\nenum MaybeNumber {\n\tcase some(any Number)\n}\nlet box = Box(item: 12)\nlet maybe = MaybeNumber.some(box.item)\nmatch maybe {\n\tMaybeNumber.some(value) -> value.value()\n}"
+                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nstruct Box {\n\tlet item: any Number\n}\nenum MaybeNumber {\n\tcase some(any Number)\n}\nlet box = Box(item: 12)\nlet maybe = MaybeNumber.some(box.item)\nmatch maybe {\n\tMaybeNumber.some(value) -> value.value()\n}"
             ),
             Value::I64(12)
         );
@@ -117,7 +117,7 @@ pub mod tests {
     #[test]
     fn vm_runs_existentials_in_arrays() {
         let (_, out) = run_on_both_engines_io(
-            "protocol Number {\n\tfunc report() -> ()\n}\nextend Int: Number {\n\tfunc report() -> () { print(self) }\n}\nlet values: Array<any Number> = [3, 4]\nvalues.get(1).report()",
+            "protocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nlet values: Array<any Number> = [3, 4]\nprint(values.get(1).value())",
         );
         assert_eq!(out, "4\n");
     }
@@ -126,7 +126,7 @@ pub mod tests {
     fn vm_runs_gadt_hidden_payload_packed_as_existential() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Showable {\n\tconsuming func show() -> Int\n}\nextend Int: Showable {\n\tconsuming func show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n\tmatch box {\n\t\t.hidden(value) -> value\n\t}\n}\nerase(GBox.hidden(5)).show()"
+                "// no-core\nprotocol Showable {\n\tfunc show() -> Int\n}\nextend Int: Showable {\n\tfunc show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n\tmatch box {\n\t\t.hidden(value) -> value\n\t}\n}\nerase(GBox.hidden(5)).show()"
             ),
             Value::I64(5)
         );
@@ -136,7 +136,7 @@ pub mod tests {
     fn vm_runs_gadt_hidden_payload_direct_bound_call() {
         assert_eq!(
             run_on_both_engines(
-                "// no-core\nprotocol Showable {\n\tconsuming func show() -> Int\n}\nextend Int: Showable {\n\tconsuming func show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc render(box: GBox<Bool>) -> Int {\n\tmatch box {\n\t\t.hidden(value) -> value.show()\n\t}\n}\nrender(GBox.hidden(6))"
+                "// no-core\nprotocol Showable {\n\tfunc show() -> Int\n}\nextend Int: Showable {\n\tfunc show() -> Int { self }\n}\nenum GBox<T> {\n\tcase hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc render(box: GBox<Bool>) -> Int {\n\tmatch box {\n\t\t.hidden(value) -> value.show()\n\t}\n}\nrender(GBox.hidden(6))"
             ),
             Value::I64(6)
         );
@@ -467,9 +467,19 @@ pub mod tests {
         // ArrayIterator.next() is a mutating witness: inout self writes
         // back into the iterator's cell between calls.
         let (_, out) = run_on_both_engines_io(
-            "func main() -> Int {\n\tlet numbers = [7, 8]\n\tlet it = numbers.iter()\n\tlet r1: Optional<&Int> = it.next()\n\tmatch r1 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\tlet r2: Optional<&Int> = it.next()\n\tmatch r2 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\tlet r3: Optional<&Int> = it.next()\n\tmatch r3 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\t0\n}",
+            "func main() -> Int {\n\tlet numbers = [7, 8]\n\tlet it = numbers.iter()\n\tlet r1: Optional<Int> = it.next()\n\tmatch r1 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\tlet r2: Optional<Int> = it.next()\n\tmatch r2 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\tlet r3: Optional<Int> = it.next()\n\tmatch r3 {\n\t\t.some(v) -> print(v),\n\t\t.none -> print(0 - 1)\n\t}\n\t0\n}",
         );
         assert_eq!(out, "7\n8\n-1\n");
+    }
+
+    #[test]
+    fn vm_sums_borrowed_scalar_elements() {
+        // arr.get returns &Int; a Copy-grade scalar extracts from the
+        // borrow for free, so it feeds owned arithmetic directly.
+        let (_, out) = run_on_both_engines_io(
+            "func f() -> Int {\n\tlet arr = [10, 20, 30]\n\tlet sum = 0\n\tlet j = 0\n\tloop {\n\t\tif j >= arr.count {\n\t\t\tbreak\n\t\t}\n\t\tsum = sum + arr.get(j)\n\t\tj = j + 1\n\t}\n\tsum\n}\nprint(f())",
+        );
+        assert_eq!(out, "60\n");
     }
 
     #[test]
@@ -481,6 +491,46 @@ pub mod tests {
             "let some: Optional<Int> = Optional.some(5)\nlet none: Optional<Int> = Optional.none\nprint(some)\nprint(none)",
         );
         assert_eq!(out, "Optional.some(5)\nOptional.none\n");
+    }
+
+    // ----- Drop schedules on early exits and match joins ----------------------
+
+    #[test]
+    fn vm_break_after_move_frees_once() {
+        // The loop-local was moved into consume(); the break path must not
+        // free it a second time.
+        let (_, out) = run_on_both_engines_io(
+            "func consume(x: String) -> Int {\n\tx.length\n}\nfunc f() -> Int {\n\tloop {\n\t\tlet s = \"a\" + \"b\"\n\t\tlet n = consume(s)\n\t\tbreak\n\t}\n\t0\n}\nprint(f())",
+        );
+        assert_eq!(out, "0\n");
+    }
+
+    #[test]
+    fn vm_or_pattern_binder_drops_once() {
+        // `.a(s) | .b(s)` binds one `s`; its scope-exit drop must be
+        // scheduled once, not once per or-alternative.
+        let (_, out) = run_on_both_engines_io(
+            "enum E {\n\tcase a(String)\n\tcase b(String)\n}\nfunc main() -> Int {\n\tlet e = E.a(\"x\" + \"y\")\n\tmatch e {\n\t\t.a(s) | .b(s) -> print(s),\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "xy\n");
+    }
+
+    #[test]
+    fn vm_statements_after_match_with_diverging_arm_run() {
+        // A match with one diverging arm still delivers value-arm results
+        // to the join: the binding and everything after the match run.
+        let (_, out) = run_on_both_engines_io(
+            "func pick(m: Optional<Int>) -> Int {\n\tlet x = match m {\n\t\t.some(v) -> v,\n\t\t.none -> return 0,\n\t}\n\tprint(\"after match\")\n\tx + 1\n}\nprint(pick(Optional.some(10)))",
+        );
+        assert_eq!(out, "after match\n11\n");
+    }
+
+    #[test]
+    fn vm_match_with_break_arm_inside_loop() {
+        let (_, out) = run_on_both_engines_io(
+            "func f() -> Int {\n\tlet i = 0\n\tlet total = 0\n\tloop {\n\t\tlet step = match i < 3 {\n\t\t\ttrue -> 1,\n\t\t\tfalse -> break,\n\t\t}\n\t\ttotal = total + step\n\t\ti = i + 1\n\t}\n\ttotal\n}\nprint(f())",
+        );
+        assert_eq!(out, "3\n");
     }
 
     // ----- M6: closures, indirect calls, trailing blocks ---------------------
@@ -1096,9 +1146,9 @@ pub mod tests {
     }
 
     #[test]
-    fn vm_matches_evaluator_on_match_on_a_borrowed_next() {
+    fn vm_matches_evaluator_on_match_on_an_unannotated_next() {
         let (_, out) = run_on_both_engines_io(
-            "func main() {\n\tlet a = [42]\n\tlet i = a.iter()\n\tlet opt: Optional<&Int> = i.next()\n\tmatch opt {\n\t\t.some(x) -> print(x),\n\t\t.none -> print(0)\n\t}\n}",
+            "func main() {\n\tlet a = [42]\n\tlet i = a.iter()\n\tlet opt = i.next()\n\tmatch opt {\n\t\t.some(x) -> print(x),\n\t\t.none -> print(0)\n\t}\n}",
         );
         assert_eq!(out, "42\n");
     }

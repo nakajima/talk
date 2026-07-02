@@ -122,6 +122,10 @@ pub struct Lowering<'a> {
     /// them reference the cell directly (a free variable of main; the
     /// closure machinery carries it, exactly like handler capabilities).
     top_level_cells: FxHashMap<Symbol, ExprId>,
+    /// One MIR body per HIR block: built on first lowering, shared by every
+    /// later lowering of the same block (each θ-specialization of a generic
+    /// function re-lowers its body but must not rebuild its MIR).
+    mir_bodies: FxHashMap<(usize, crate::node_id::NodeID), std::rc::Rc<mir::Body>>,
     pub diagnostics: Vec<String>,
 }
 
@@ -374,6 +378,7 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
         abortable: FxHashMap::default(),
         handler_caps: FxHashMap::default(),
         top_level_cells: FxHashMap::default(),
+        mir_bodies: FxHashMap::default(),
         diagnostics: vec![],
     };
     for unit in &lowering.units {
@@ -981,7 +986,7 @@ impl<'a> Lowering<'a> {
             let substituted = raw.substitute(&ctx.theta, &Default::default(), &Default::default());
             let param_ty = self.normalize_check_ty(substituted, unit);
             if matches!(param_ty, CheckTy::Borrow(..))
-                || !self.needs_drop_type(unit, &param_ty)
+                || !self.needs_drop_type(&param_ty)
                 || self.contains_object_type(&param_ty)
             {
                 continue;
@@ -1242,7 +1247,7 @@ impl<'a> Lowering<'a> {
     /// What a tier-2 mark means at this instantiation.
     fn auto_clone_action(&mut self, expr: &Expr, ctx: &Ctx) -> AutoClone {
         let ty = Self::borrow_erased_ty(self.checker_ty(expr, ctx));
-        if !self.needs_drop_type(ctx.unit, &ty) {
+        if !self.needs_drop_type(&ty) {
             return AutoClone::Nothing;
         }
         if let CheckTy::Nominal(symbol, _) = &ty
@@ -3244,7 +3249,7 @@ impl<'a> Lowering<'a> {
         let witness = self.deinit_witness(symbol);
         let any_owned = fields
             .iter()
-            .any(|(_, field_ty)| self.needs_drop_type(ctx.unit, field_ty));
+            .any(|(_, field_ty)| self.needs_drop_type(field_ty));
         if witness.is_none() && !any_owned {
             return None;
         }
@@ -3261,7 +3266,7 @@ impl<'a> Lowering<'a> {
         let unit_value = self.p.void();
         let mut body = self.p.app(k, unit_value);
         for (index, (_, field_ty)) in fields.iter().enumerate().rev() {
-            if !self.needs_drop_type(ctx.unit, field_ty) {
+            if !self.needs_drop_type(field_ty) {
                 continue;
             }
             let field_lambda_ty = self.map_ty(field_ty);

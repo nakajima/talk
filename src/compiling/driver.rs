@@ -478,7 +478,7 @@ fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
     })
 }
 
-fn error_diagnostic_files(diagnostics: &[AnyDiagnostic]) -> Option<FxHashSet<FileID>> {
+fn error_diagnostic_files(diagnostics: &[AnyDiagnostic]) -> FxHashSet<FileID> {
     let mut files = FxHashSet::default();
     for diag in diagnostics {
         let (id, severity) = match diag {
@@ -490,12 +490,15 @@ fn error_diagnostic_files(diagnostics: &[AnyDiagnostic]) -> Option<FxHashSet<Fil
         if *severity != Severity::Error {
             continue;
         }
+        // A synthesized-id diagnostic names no file: it blocks nothing
+        // rather than everything (HIR building tolerates the odd hole —
+        // a missing node type bakes as `Ty::Error`).
         if id.0 == FileID::SYNTHESIZED {
-            return None;
+            continue;
         }
         files.insert(id.0);
     }
-    Some(files)
+    files
 }
 
 impl Driver<NameResolved> {
@@ -541,26 +544,21 @@ impl Driver<NameResolved> {
         // it. Files with errors are dropped rather than lowered. The surface AST
         // is not retained past here in the compile pipeline.
         let mut hir: IndexMap<Source, crate::hir::HirFile> = IndexMap::default();
-        let (flow, flow_diagnostics) = match error_diagnostic_files(&diagnostics) {
-            None => (crate::flow::FlowFacts::default(), vec![]),
-            Some(blocked_files) => {
-                for (source, ast) in asts {
-                    if blocked_files.contains(&ast.file_id) {
-                        continue;
-                    }
-                    let file = crate::hir::build::build_file(&ast, &types);
-                    hir.insert(source, file);
-                }
-                if hir.is_empty() {
-                    (crate::flow::FlowFacts::default(), vec![])
-                } else {
-                    // The flow checker annotates the HIR in place
-                    // (`Block::drops`, `Stmt::drops`, `Expr.ownership`) —
-                    // lowering's sole drop/move source — and returns the
-                    // editor-facing facts.
-                    crate::flow::check_flow(&mut hir, &types, self.config.module_id)
-                }
+        let blocked_files = error_diagnostic_files(&diagnostics);
+        for (source, ast) in asts {
+            if blocked_files.contains(&ast.file_id) {
+                continue;
             }
+            let file = crate::hir::build::build_file(&ast, &types);
+            hir.insert(source, file);
+        }
+        let (flow, flow_diagnostics) = if hir.is_empty() {
+            (crate::flow::FlowFacts::default(), vec![])
+        } else {
+            // The flow checker annotates the HIR in place (`Block::drops`,
+            // `Stmt::drops`, `Expr.ownership`) — lowering's sole drop/move
+            // source — and returns the editor-facing facts.
+            crate::flow::check_flow(&mut hir, &types, self.config.module_id)
         };
         diagnostics.extend(flow_diagnostics);
 
@@ -845,6 +843,37 @@ pub mod tests {
     use super::*;
     use crate::compiling::module::ModuleId;
     use std::path::PathBuf;
+
+    #[test]
+    fn synthesized_error_blocks_no_file() {
+        // A solver diagnostic with no origin node (NodeID::SYNTHESIZED)
+        // names no file, so it must not block HIR/flow for the whole
+        // workspace — only diagnostics attributed to a file block that file.
+        use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
+        use crate::node_id::{FileID, NodeID};
+        use crate::types::error::TypeError;
+
+        let mismatch = |id: NodeID| {
+            AnyDiagnostic::Types(Diagnostic {
+                id,
+                severity: Severity::Error,
+                kind: TypeError::Mismatch {
+                    expected: "Int".into(),
+                    found: "String".into(),
+                },
+            })
+        };
+        let diagnostics = vec![
+            mismatch(NodeID::SYNTHESIZED),
+            mismatch(NodeID(FileID(1), 7)),
+        ];
+        let blocked = error_diagnostic_files(&diagnostics);
+        assert!(blocked.contains(&FileID(1)));
+        assert!(
+            !blocked.contains(&FileID(0)),
+            "an unattributed error must not block unrelated files"
+        );
+    }
 
     #[test]
     fn render_lowered_shows_the_program_plainly() {

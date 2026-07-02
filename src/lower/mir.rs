@@ -12,7 +12,7 @@ use crate::{
     types::{
         TypeOutput,
         output::stored_field_symbol,
-        ty::{Perm, Ty},
+        ty::Ty,
     },
 };
 
@@ -63,14 +63,9 @@ pub(crate) struct LocalDecl {
     pub(crate) kind: LocalKind,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum KeyPathComponent {
     Field(Symbol),
-    TupleField(u32),
-    VariantPayload { variant: Symbol, index: u32 },
-    DerefBorrow,
-    Index(Local),
 }
 
 /// A source-shaped storage path. This is the MIR equivalent of a place:
@@ -100,67 +95,11 @@ impl KeyPath {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ValueUse {
-    Copy(KeyPath),
-    Move(KeyPath),
-    Borrow { kind: Perm, target: KeyPath },
-    Constant(NodeID),
-    Function(Symbol),
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum AggregateKind {
-    Tuple,
-    Record,
-    Struct(Symbol),
-    Variant {
-        enum_symbol: Symbol,
-        variant: Symbol,
-    },
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Rvalue {
-    Use(ValueUse),
-    Borrow {
-        kind: Perm,
-        target: KeyPath,
-    },
-    Aggregate {
-        kind: AggregateKind,
-        fields: Vec<ValueUse>,
-    },
-    FieldRead {
-        base: ValueUse,
-        field: Symbol,
-    },
-    InlineIr {
-        source: NodeID,
-        operands: Vec<ValueUse>,
-    },
-    ExistentialPack {
-        payload: ValueUse,
-        protocol: Symbol,
-        witnesses: Vec<ValueUse>,
-    },
-    Closure {
-        source: NodeID,
-        captures: Vec<KeyPath>,
-    },
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct Body {
     pub(crate) entry: BlockId,
     pub(crate) blocks: Vec<BasicBlock>,
     pub(crate) locals: Vec<LocalDecl>,
-    #[allow(dead_code)]
-    pub(crate) return_local: Option<Local>,
-    use_counts: FxHashMap<Symbol, usize>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -221,7 +160,6 @@ pub(crate) enum Statement {
     },
     ConsumeValue {
         expr: Expr,
-        value: Option<ValueUse>,
     },
     AssignmentRootUse {
         id: NodeID,
@@ -233,13 +171,11 @@ pub(crate) enum Statement {
         type_annotation: Option<TypeAnnotation>,
         rhs: Option<Expr>,
         bindings: Vec<Local>,
-        value: Option<Rvalue>,
     },
     Assign {
         lhs: Expr,
         rhs: Expr,
         target: Option<KeyPath>,
-        value: Option<Rvalue>,
     },
     DropCandidate {
         target: DropTarget,
@@ -250,17 +186,14 @@ pub(crate) enum Statement {
         callee: Expr,
         args: Vec<CallArg>,
         trailing_block: Option<Block>,
-        trailing_body: Option<Box<Body>>,
     },
     Perform,
     ReturnValue {
         expr: Expr,
-        value: Option<ValueUse>,
         destination: ValueDestination,
     },
     ContinueValue {
         expr: Expr,
-        value: Option<ValueUse>,
     },
     Function {
         owner: Option<Symbol>,
@@ -294,24 +227,9 @@ pub(crate) enum DropTarget {
     Expr(Expr),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DropReason {
-    ScopeExit,
-    AssignmentReplace,
-    EarlyExit,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DropElaboration {
-    /// initialized and not moved. Lowering may emit the drop/free unconditionally.
-    Static,
-    /// already moved/uninitialized. Lowering must not drop it.
-    Dead,
-    /// maybe initialized. Needs a runtime drop flag.
-    Conditional,
-    /// partially moved, usually an aggregate where some subpath moved. Needs more precise/dynamic drop handling.
-    Open,
-}
+// Drop reasons and elaborations are the flow checker's vocabulary; MIR
+// carries them through unchanged.
+pub use crate::flow::drops::{DropElaboration, DropReason};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum Terminator {
@@ -352,9 +270,7 @@ struct Builder<'types> {
     scopes: Vec<Scope>,
     locals: Vec<LocalDecl>,
     local_by_symbol: FxHashMap<Symbol, Local>,
-    return_local: Option<Local>,
     scope_stack: Vec<ScopeFrame>,
-    use_counts: FxHashMap<Symbol, usize>,
     loop_stack: Vec<LoopTargets>,
 }
 
@@ -368,56 +284,19 @@ struct ScopeFrame {
     drops: Vec<crate::flow::drops::DropSchedule>,
 }
 
-/// The flow checker's `Place` and the MIR's symbol-rooted `KeyPath` are the
-/// same shape; drop schedules cross over here.
-fn key_path_for_place(place: &crate::flow::Place) -> crate::flow::Place {
-    crate::flow::Place {
-        root: place.root,
-        fields: place.fields.clone(),
-    }
-}
-
-/// The symbol-rooted place an expression names (a variable or a chain of
-/// stored-field accesses off one) — the flow checker's `place()` shape.
-fn symbol_key_path(types: &TypeOutput, expr: &Expr) -> Option<crate::flow::Place> {
-    match &expr.kind {
-        ExprKind::Variable(name) => name
-            .symbol()
-            .ok()
-            .map(crate::flow::Place::root),
-        ExprKind::Member(Some(receiver), _) => {
-            let field = stored_field_symbol(types, expr.member_resolution.as_ref())?;
-            let mut base = symbol_key_path(types, receiver)?;
-            base.fields.push(field);
-            Some(base)
-        }
-        _ => None,
-    }
-}
-
 fn elaboration_for_schedule(
     schedule: &crate::flow::drops::DropSchedule,
 ) -> DropElaborationResult {
-    let kind = match schedule.kind {
-        crate::flow::drops::DropElaboration::Static => DropElaboration::Static,
-        crate::flow::drops::DropElaboration::Dead => DropElaboration::Dead,
-        crate::flow::drops::DropElaboration::Conditional => DropElaboration::Conditional,
-        crate::flow::drops::DropElaboration::Open => DropElaboration::Open,
-    };
     DropElaborationResult {
-        key_path: key_path_for_place(&schedule.place),
-        kind,
+        key_path: schedule.place.clone(),
+        kind: schedule.kind,
     }
-}
-
-pub(crate) fn build_block(types: &TypeOutput, block: &Block) -> Body {
-    build_function(types, None, block)
 }
 
 pub(crate) fn build_function(types: &TypeOutput, _owner: Option<Symbol>, block: &Block) -> Body {
     let mut builder = Builder::new(types);
     let entry = builder.new_block();
-    let exit = builder.lower_root_scope(entry, block.drops.clone(), |builder, entry| {
+    let exit = builder.lower_scope(entry, block.drops.clone(), |builder, entry| {
         builder.lower_nodes(&block.body, entry, true)
     });
     builder.terminate_if_open(exit, Terminator::Return);
@@ -433,16 +312,11 @@ pub(crate) fn build_nodes(
 ) -> Body {
     let mut builder = Builder::new(types);
     let entry = builder.new_block();
-    let exit = builder.lower_root_scope(entry, drops, |builder, entry| {
+    let exit = builder.lower_scope(entry, drops, |builder, entry| {
         builder.lower_nodes(nodes, entry, true)
     });
     builder.terminate_if_open(exit, Terminator::Return);
     builder.finish(entry)
-}
-
-#[cfg(test)]
-pub(crate) fn use_counts(body: &Body) -> FxHashMap<Symbol, usize> {
-    body.use_counts.clone()
 }
 
 impl<'types> Builder<'types> {
@@ -453,28 +327,16 @@ impl<'types> Builder<'types> {
             scopes: vec![],
             locals: vec![],
             local_by_symbol: FxHashMap::default(),
-            return_local: None,
             scope_stack: vec![],
-            use_counts: FxHashMap::default(),
             loop_stack: vec![],
         }
     }
 
-    fn merge_use_counts(&mut self, body: &Body) {
-        for (symbol, count) in &body.use_counts {
-            *self.use_counts.entry(*symbol).or_insert(0) += count;
-        }
-    }
-}
-
-impl Builder<'_> {
     fn finish(self, entry: BlockId) -> Body {
         Body {
             entry,
             blocks: self.blocks,
             locals: self.locals,
-            return_local: self.return_local,
-            use_counts: self.use_counts,
         }
     }
 
@@ -526,62 +388,6 @@ impl Builder<'_> {
         }
     }
 
-    fn operand_for_expr(&mut self, expr: &Expr) -> Option<ValueUse> {
-        match &expr.kind {
-            ExprKind::LiteralInt(_)
-            | ExprKind::LiteralFloat(_)
-            | ExprKind::LiteralTrue
-            | ExprKind::LiteralFalse
-            | ExprKind::LiteralString(_) => Some(ValueUse::Constant(expr.id)),
-            ExprKind::Variable(_) | ExprKind::Member(Some(_), ..) => {
-                self.key_path_for_expr(expr).map(ValueUse::Copy)
-            }
-            _ => None,
-        }
-    }
-
-    fn rvalue_for_expr(&mut self, expr: &Expr) -> Option<Rvalue> {
-        if let Some(operand) = self.operand_for_expr(expr) {
-            return Some(Rvalue::Use(operand));
-        }
-        match &expr.kind {
-            ExprKind::Tuple(items) => {
-                let fields: Option<Vec<_>> = items
-                    .iter()
-                    .map(|item| self.operand_for_expr(item))
-                    .collect();
-                Some(Rvalue::Aggregate {
-                    kind: AggregateKind::Tuple,
-                    fields: fields?,
-                })
-            }
-            ExprKind::RecordLiteral { fields, spread } if spread.is_none() => {
-                let fields: Option<Vec<_>> = fields
-                    .iter()
-                    .map(|field| self.operand_for_expr(&field.value))
-                    .collect();
-                Some(Rvalue::Aggregate {
-                    kind: AggregateKind::Record,
-                    fields: fields?,
-                })
-            }
-            ExprKind::Member(Some(receiver), ..) => {
-                let field = stored_field_symbol(self.types, expr.member_resolution.as_ref())?;
-                let base = self.operand_for_expr(receiver)?;
-                Some(Rvalue::FieldRead { base, field })
-            }
-            ExprKind::InlineIR(_) => Some(Rvalue::InlineIr {
-                source: expr.id,
-                operands: vec![],
-            }),
-            ExprKind::Func(_) => Some(Rvalue::Closure {
-                source: expr.id,
-                captures: vec![],
-            }),
-            _ => None,
-        }
-    }
-
     fn new_block(&mut self) -> BlockId {
         let id = BlockId(self.blocks.len());
         self.blocks.push(BasicBlock::default());
@@ -604,12 +410,10 @@ impl Builder<'_> {
             let tail_control_value = is_tail && node_is_value_control(node);
             current = self.lower_node(node, current, tail_expr.is_none() && !tail_control_value);
             if let Some(expr) = tail_expr {
-                let value = self.operand_for_expr(expr);
                 self.push_statement(
                     current,
                     Statement::ReturnValue {
                         expr: expr.clone(),
-                        value,
                         destination: ValueDestination::Continuation,
                     },
                 );
@@ -641,12 +445,10 @@ impl Builder<'_> {
             Node::Expr(expr) => {
                 let current = self.lower_expr(expr, current);
                 if consume_expr_value {
-                    let value = self.operand_for_expr(expr);
                     self.push_statement(
                         current,
                         Statement::ConsumeValue {
                             expr: expr.clone(),
-                            value,
                         },
                     );
                 }
@@ -695,7 +497,6 @@ impl Builder<'_> {
                         scope.locals.push((id, symbol));
                     }
                 }
-                let value = rhs.as_ref().and_then(|rhs| self.rvalue_for_expr(rhs));
                 self.push_statement(
                     current,
                     Statement::Bind {
@@ -703,7 +504,6 @@ impl Builder<'_> {
                         type_annotation: type_annotation.clone(),
                         rhs: rhs.clone(),
                         bindings,
-                        value,
                     },
                 );
                 current
@@ -776,29 +576,25 @@ impl Builder<'_> {
             StmtKind::Expr(Expr {
                 kind: ExprKind::Block(block),
                 ..
-            }) => self.lower_child_scope(current, block.drops.clone(), |builder, current| {
+            }) => self.lower_scope(current, block.drops.clone(), |builder, current| {
                 builder.lower_nodes(&block.body, current, false)
             }),
             StmtKind::Expr(expr) => {
                 let current = self.lower_expr(expr, current);
-                let value = self.operand_for_expr(expr);
                 self.push_statement(
                     current,
                     Statement::ConsumeValue {
                         expr: expr.clone(),
-                        value,
                     },
                 );
                 current
             }
             StmtKind::Return(Some(expr)) => {
                 let current = self.lower_expr(expr, current);
-                let value = self.operand_for_expr(expr);
                 self.push_statement(
                     current,
                     Statement::ReturnValue {
                         expr: expr.clone(),
-                        value,
                         destination: ValueDestination::Return,
                     },
                 );
@@ -813,12 +609,10 @@ impl Builder<'_> {
             }
             StmtKind::Continue(Some(expr)) => {
                 let current = self.lower_expr(expr, current);
-                let value = self.operand_for_expr(expr);
                 self.push_statement(
                     current,
                     Statement::ContinueValue {
                         expr: expr.clone(),
-                        value,
                     },
                 );
                 self.emit_early_exit_drops(current, &stmt.drops);
@@ -854,7 +648,6 @@ impl Builder<'_> {
                 let current = self.lower_expr(rhs, current);
                 self.lower_assignment_lhs(lhs, current);
                 let target_key_path = self.key_path_for_expr(lhs);
-                let value = self.rvalue_for_expr(rhs);
                 // The old value's drop, scheduled by the flow checker on
                 // this assignment statement.
                 let elaboration = stmt
@@ -879,7 +672,6 @@ impl Builder<'_> {
                         lhs: (**lhs).clone(),
                         rhs: (**rhs).clone(),
                         target: target_key_path,
-                        value,
                     },
                 );
                 current
@@ -919,7 +711,7 @@ impl Builder<'_> {
             }
             ExprKind::As(inner, _) => self.lower_expr(inner, current),
             ExprKind::Block(block) => {
-                self.lower_child_scope(current, block.drops.clone(), |builder, current| {
+                self.lower_scope(current, block.drops.clone(), |builder, current| {
                     builder.lower_nodes(&block.body, current, true)
                 })
             }
@@ -933,18 +725,12 @@ impl Builder<'_> {
                 for arg in args {
                     current = self.lower_expr(&arg.value, current);
                 }
-                let trailing_body = trailing_block.as_ref().map(|block| {
-                    let body = build_block(self.types, block);
-                    self.merge_use_counts(&body);
-                    Box::new(body)
-                });
                 self.push_statement(
                     current,
                     Statement::Call {
                         callee: (**callee).clone(),
                         args: args.clone(),
                         trailing_block: trailing_block.clone(),
-                        trailing_body,
                     },
                 );
                 current
@@ -1076,13 +862,13 @@ impl Builder<'_> {
             },
         );
 
-        let then_exit = self.lower_child_scope(then_id, then_block.drops.clone(), |builder, then_id| {
+        let then_exit = self.lower_scope(then_id, then_block.drops.clone(), |builder, then_id| {
             builder.lower_nodes(&then_block.body, then_id, mark_tail_exprs)
         });
         self.terminate_if_open(then_exit, Terminator::Jump(join_id));
 
         let else_exit = if let Some(else_block) = else_block {
-            self.lower_child_scope(else_id, else_block.drops.clone(), |builder, else_id| {
+            self.lower_scope(else_id, else_block.drops.clone(), |builder, else_id| {
                 builder.lower_nodes(&else_block.body, else_id, mark_tail_exprs)
             })
         } else {
@@ -1124,7 +910,7 @@ impl Builder<'_> {
             continue_target: header_id,
             break_target: exit_id,
         });
-        let body_exit = self.lower_child_scope(body_id, body.drops.clone(), |builder, body_id| {
+        let body_exit = self.lower_scope(body_id, body.drops.clone(), |builder, body_id| {
             builder.lower_nodes(&body.body, body_id, false)
         });
         self.loop_stack.pop();
@@ -1148,7 +934,7 @@ impl Builder<'_> {
         );
 
         for (arm, arm_id) in arms.iter().zip(arm_blocks) {
-            let arm_exit = self.lower_child_scope(arm_id, arm.body.drops.clone(), |builder, arm_id| {
+            let arm_exit = self.lower_scope(arm_id, arm.body.drops.clone(), |builder, arm_id| {
                 builder.lower_pattern_binders(&arm.pattern, arm_id);
                 builder.lower_nodes(&arm.body.body, arm_id, true)
             });
@@ -1169,31 +955,6 @@ impl Builder<'_> {
     }
 
     fn push_statement(&mut self, block: BlockId, statement: Statement) {
-        match &statement {
-            Statement::Read { expr } => {
-                if let Some(symbol) = syntactic_root_symbol(expr) {
-                    *self.use_counts.entry(symbol).or_insert(0) += 1;
-                }
-            }
-            Statement::AssignmentRootUse { symbol, .. } => {
-                *self.use_counts.entry(*symbol).or_insert(0) += 1;
-            }
-            Statement::ScopeEnter { .. }
-            | Statement::ScopeExit { .. }
-            | Statement::StorageLive { .. }
-            | Statement::StorageDead { .. }
-            | Statement::DropCandidate { .. }
-            | Statement::ConsumeValue { .. }
-            | Statement::Bind { .. }
-            | Statement::Assign { .. }
-            | Statement::Call { .. }
-            | Statement::Perform
-            | Statement::ReturnValue { .. }
-            | Statement::ContinueValue { .. }
-            | Statement::Function { .. }
-            | Statement::Handling { .. }
-            | Statement::DeclBody { .. } => {}
-        }
         let moves = self.statement_moves(&statement);
         self.blocks[block.0].statements.push(LocatedStatement {
             kind: statement,
@@ -1264,7 +1025,7 @@ impl Builder<'_> {
     /// clearing per-path precise.
     fn collect_consumed_places(&mut self, expr: &Expr, out: &mut Vec<crate::flow::Place>) {
         if expr.ownership.consumes
-            && let Some(key_path) = symbol_key_path(self.types, expr)
+            && let Some(key_path) = crate::flow::place_for_expr(self.types, expr)
         {
             out.push(key_path);
             return;
@@ -1288,26 +1049,9 @@ impl Builder<'_> {
         }
     }
 
-    fn lower_root_scope(
-        &mut self,
-        current: BlockId,
-        drops: Vec<crate::flow::drops::DropSchedule>,
-        lower: impl FnOnce(&mut Self, BlockId) -> BlockId,
-    ) -> BlockId {
-        let scope = self.new_scope(None);
-        self.scope_stack.push(ScopeFrame {
-            id: scope,
-            locals: vec![],
-            drops,
-        });
-        self.push_statement(current, Statement::ScopeEnter { scope });
-        let exit = lower(self, current);
-        let exit = self.emit_scope_exit(exit);
-        self.scope_stack.pop();
-        exit
-    }
-
-    fn lower_child_scope(
+    /// Push a scope frame (parent = the enclosing frame, if any), lower
+    /// `lower` inside it, emit its exit drops, pop.
+    fn lower_scope(
         &mut self,
         current: BlockId,
         drops: Vec<crate::flow::drops::DropSchedule>,
@@ -1395,6 +1139,13 @@ impl Builder<'_> {
     }
 
     fn emit_scope_exit(&mut self, current: BlockId) -> BlockId {
+        // A block already terminated by `break`/`continue`/`return` never
+        // reaches its scope exit: the early-exit schedules on that statement
+        // carry the drops. Emitting them here would execute them (statements
+        // run before the terminator) and double-free moved locals.
+        if self.is_terminated(current) {
+            return current;
+        }
         let Some(frame) = self.scope_stack.last() else {
             return current;
         };
@@ -1490,14 +1241,6 @@ impl Builder<'_> {
     }
 }
 
-fn syntactic_root_symbol(expr: &Expr) -> Option<Symbol> {
-    match &expr.kind {
-        ExprKind::Variable(name) => name.symbol().ok(),
-        ExprKind::Member(Some(receiver), ..) => syntactic_root_symbol(receiver),
-        _ => None,
-    }
-}
-
 fn tail_expr(node: &Node) -> Option<&Expr> {
     match node {
         Node::Expr(expr) => Some(expr),
@@ -1568,14 +1311,6 @@ fn render_key_path(key_path: &KeyPath) -> String {
     for component in &key_path.components {
         match component {
             KeyPathComponent::Field(field) => rendered.push_str(&format!(".{field}")),
-            KeyPathComponent::TupleField(index) => rendered.push_str(&format!(".{index}")),
-            KeyPathComponent::VariantPayload { variant, index } => {
-                rendered.push_str(&format!(".{variant}[{index}]"));
-            }
-            KeyPathComponent::DerefBorrow => rendered.push_str(".*"),
-            KeyPathComponent::Index(index) => {
-                rendered.push_str(&format!("[{}]", render_local(*index)))
-            }
         }
     }
     rendered
@@ -1683,12 +1418,12 @@ mod tests {
                     } = &decl.kind
                         && let ExprKind::Func(func) = &expr.kind
                     {
-                        let body = build_block(&types, &func.body);
+                        let body = build_function(&types, None, &func.body);
                         return f(&body);
                     }
                     continue;
                 };
-                let body = build_block(&types, &func.body);
+                let body = build_function(&types, None, &func.body);
                 return f(&body);
             }
         }
@@ -1824,25 +1559,6 @@ mod tests {
     }
 
     #[test]
-    fn caches_source_order_use_counts() {
-        let source = "
-            func f(x, y) {
-                let z = x
-                (z, y)
-            }
-        ";
-        let names = resolved_names(source);
-        let x = symbol_named(&names, "x");
-        let y = symbol_named(&names, "y");
-        let z = symbol_named(&names, "z");
-        let counts = with_first_func_mir(source, use_counts);
-
-        assert_eq!(counts.get(&x), Some(&1));
-        assert_eq!(counts.get(&y), Some(&1));
-        assert_eq!(counts.get(&z), Some(&1));
-    }
-
-    #[test]
     fn records_user_locals_for_binders() {
         let source = "
             func f() {
@@ -1883,43 +1599,6 @@ mod tests {
             rendered.contains("drop_candidate %0 ScopeExit"),
             "{rendered}"
         );
-    }
-
-    #[test]
-    fn records_rvalues_for_simple_binds_and_returns() {
-        let source = "
-            func f() {
-                let first = 1
-                first
-            }
-        ";
-        with_first_func_mir(source, |body| {
-            let bind_has_constant = body.blocks.iter().any(|block| {
-                block.statements.iter().any(|statement| {
-                    matches!(
-                        &statement.kind,
-                        Statement::Bind {
-                            value: Some(Rvalue::Use(ValueUse::Constant(_))),
-                            ..
-                        }
-                    )
-                })
-            });
-            let return_has_copy = body.blocks.iter().any(|block| {
-                block.statements.iter().any(|statement| {
-                    matches!(
-                        &statement.kind,
-                        Statement::ReturnValue {
-                            value: Some(ValueUse::Copy(_)),
-                            ..
-                        }
-                    )
-                })
-            });
-
-            assert!(bind_has_constant, "{body:#?}");
-            assert!(return_has_copy, "{body:#?}");
-        });
     }
 
 

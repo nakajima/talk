@@ -10,11 +10,8 @@ Using manual indexing:
 30
 40
 50
-10
-20
-30
-40
-50
+Sum of [10, 20, 30, 40, 50]:
+150
 Using for over an array:
 1
 2

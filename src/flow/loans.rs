@@ -121,6 +121,25 @@ impl MoveState {
         place.clone()
     }
 
+    /// The permission a use of `place` can actually exert on its rebased
+    /// owner: rebasing through a shared loan caps an exclusive touch of
+    /// the borrower to a shared touch of the owner (mutating an iterator's
+    /// cursor is not a write through its array borrow).
+    pub(crate) fn rebased_perm(&self, place: &Place, requested: Perm) -> Perm {
+        if !requested.is_exclusive() {
+            return requested;
+        }
+        if let Some(provenance) = self
+            .provenances
+            .get(&Place::root(place.root))
+            .or_else(|| self.provenances.get(place))
+            && let Some(loan) = provenance.loans.iter().find(|loan| loan.owner.is_some())
+        {
+            return loan.kind;
+        }
+        requested
+    }
+
     /// Mark every borrow whose owner overlaps `owner` as invalidated.
     pub(crate) fn invalidate_borrows_of(&mut self, owner: &Place) {
         let mut invalid: Vec<(Place, Place)> = vec![];
@@ -406,14 +425,17 @@ impl MoveChecker<'_> {
         }
     }
 
-    /// A top-level binder cannot hold a borrowed value: globals outlive
-    /// every owner.
+    /// A top-level binder cannot hold a borrowed value — unless every loan
+    /// is rooted in another global (validated by provenance when the walk
+    /// installs the binding; see `install_provenance`). This type-level
+    /// pass keeps only the shapes the walk's provenance rule does not
+    /// reach: uninitialized and destructuring binders.
     pub(crate) fn check_global_storage(&mut self, roots: &[hir::Node]) {
         for root in roots {
             let hir::Node::Decl(decl) = root else {
                 continue;
             };
-            let hir::DeclKind::Let { lhs, .. } = &decl.kind else {
+            let hir::DeclKind::Let { lhs, rhs, .. } = &decl.kind else {
                 continue;
             };
             for (binder_id, binder) in lhs.collect_binders() {
@@ -430,6 +452,16 @@ impl MoveChecker<'_> {
                     continue;
                 }
                 if self.grades.contains_borrowed(&ty) {
+                    // Exactly the shape the walk's provenance rule covers:
+                    // an initialized single binder (not `'heap`-carrying)
+                    // installs provenance, which validates global-rooted
+                    // loans in `install_provenance`.
+                    if rhs.is_some()
+                        && matches!(lhs.kind, crate::hir::PatternKind::Bind(_))
+                        && !self.grades.contains_object(&ty)
+                    {
+                        continue;
+                    }
                     let error = OwnershipError::BorrowedGlobal {
                         name: super::moves::render_symbol(binder, self.types),
                         ty: ty.render_mono(),
@@ -703,6 +735,35 @@ impl MoveChecker<'_> {
         provenance: Provenance,
         state: &mut MoveState,
     ) {
+        // A global binder may only borrow other globals — everything else
+        // dies before the global does. Owners recorded in `global_borrows`
+        // become immutable program-wide (`check_flow` rejects function-body
+        // assignments to them, so the borrow cannot dangle).
+        if matches!(
+            borrower.root,
+            crate::name_resolution::symbol::Symbol::Global(_)
+        ) && borrower.fields.is_empty()
+        {
+            for loan in &provenance.loans {
+                match &loan.owner {
+                    Some(owner)
+                        if matches!(
+                            owner.root,
+                            crate::name_resolution::symbol::Symbol::Global(_)
+                        ) =>
+                    {
+                        self.global_borrows.insert(owner.root, borrower.root);
+                    }
+                    _ => {
+                        let error = OwnershipError::BorrowedGlobal {
+                            name: self.render(&borrower),
+                            ty: borrower_ty.render_mono(),
+                        };
+                        self.error(error, node);
+                    }
+                }
+            }
+        }
         for loan in &provenance.loans {
             if let Some(owner) = &loan.owner {
                 self.check_borrow_conflicts(node, owner, loan.kind, Some(&borrower), state);

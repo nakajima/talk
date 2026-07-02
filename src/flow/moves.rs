@@ -21,7 +21,6 @@ use crate::hir::{self, ExprKind};
 use crate::node_id::NodeID;
 use crate::flow::OwnershipError;
 use crate::types::TypeOutput;
-use crate::types::output::stored_field_symbol;
 use crate::types::ty::{Perm, Ty};
 
 use super::drops::{DropElaboration, DropReason, DropSchedule};
@@ -225,6 +224,15 @@ pub(crate) struct MoveChecker<'a> {
     pending_locals: Vec<ScopeLocal>,
     /// Editor-facing facts (inlay hints, hover), accumulated during the walk.
     pub(crate) facts: super::FlowFacts,
+    /// Global → the global that borrows it. A borrow-wrapping global is
+    /// legal when its loans are rooted in other globals; the owners recorded
+    /// here become immutable program-wide (see `check_flow`'s post-pass).
+    pub(crate) global_borrows: FxHashMap<crate::name_resolution::symbol::Symbol, crate::name_resolution::symbol::Symbol>,
+    /// Assignments to globals made inside function bodies: cross-procedural
+    /// writes the per-body NLL walk cannot see.
+    pub(crate) global_writes: Vec<(NodeID, crate::name_resolution::symbol::Symbol)>,
+    /// Nesting depth of function bodies below the file's top level.
+    fn_depth: usize,
 }
 
 impl<'a> MoveChecker<'a> {
@@ -246,6 +254,9 @@ impl<'a> MoveChecker<'a> {
             auto_clones: FxHashSet::default(),
             pending_locals: vec![],
             facts: super::FlowFacts::default(),
+            global_borrows: FxHashMap::default(),
+            global_writes: vec![],
+            fn_depth: 0,
         }
     }
 
@@ -270,8 +281,10 @@ impl<'a> MoveChecker<'a> {
         let outer_param_tys = std::mem::take(&mut self.param_tys);
 
         let mut state = MoveState::default();
+        self.fn_depth += 1;
         self.seed_params(&func.params, func_ty, &mut state);
         self.walk_func_body(&func.body, &mut state);
+        self.fn_depth -= 1;
 
         self.scopes = outer_scopes;
         self.liveness = outer_liveness;
@@ -485,7 +498,9 @@ impl<'a> MoveChecker<'a> {
         let outer_liveness =
             std::mem::replace(&mut self.liveness, Liveness::analyze(&body.body));
         let mut state = MoveState::default();
+        self.fn_depth += 1;
         self.walk_block(body, &mut state);
+        self.fn_depth -= 1;
         self.scopes = outer_scopes;
         self.liveness = outer_liveness;
     }
@@ -834,6 +849,17 @@ impl<'a> MoveChecker<'a> {
         }
 
         if let Some(place) = self.place(lhs) {
+            // A write to a global from inside a function body: the
+            // per-body NLL walk cannot see whether a global borrows it, so
+            // record it for `check_flow`'s cross-procedural post-pass.
+            if self.fn_depth > 0
+                && matches!(
+                    place.root,
+                    crate::name_resolution::symbol::Symbol::Global(_)
+                )
+            {
+                self.global_writes.push((lhs.id, place.root));
+            }
             // Reassigning a borrowed binding re-derives its provenance.
             if self.grades.contains_borrowed(&lhs.ty)
                 && !self.grades.contains_object(&lhs.ty)
@@ -1142,6 +1168,7 @@ impl<'a> MoveChecker<'a> {
                         self.walk_expr(receiver, state);
                         if !is_object && let Some(receiver_place) = self.place(receiver) {
                             let owner = state.loan_owner_for(&receiver_place);
+                            let perm = state.rebased_perm(&receiver_place, perm);
                             self.check_borrow_conflicts(
                                 receiver.id,
                                 &owner,
@@ -1180,6 +1207,7 @@ impl<'a> MoveChecker<'a> {
                     self.walk_expr(&arg.value, state);
                     if !is_object && let Some(arg_place) = self.place(&arg.value) {
                         let owner = state.loan_owner_for(&arg_place);
+                        let perm = state.rebased_perm(&arg_place, perm);
                         self.check_borrow_conflicts(
                             arg.value.id,
                             &owner,
@@ -1340,14 +1368,7 @@ impl<'a> MoveChecker<'a> {
     /// The place an expression names, if it is one: a variable, or a chain
     /// of stored-field accesses off one.
     pub(crate) fn place(&self, expr: &hir::Expr) -> Option<Place> {
-        match &expr.kind {
-            ExprKind::Variable(name) => name.symbol().ok().map(Place::root),
-            ExprKind::Member(Some(receiver), _) => {
-                let field = stored_field_symbol(self.types, expr.member_resolution.as_ref())?;
-                Some(self.place(receiver)?.child(field))
-            }
-            _ => None,
-        }
+        super::place::place_for_expr(self.types, expr)
     }
 
     fn check_use(

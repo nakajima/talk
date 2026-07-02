@@ -214,6 +214,16 @@ impl TypeCatalog {
         Grade::Affine
     }
 
+    /// The copy-out-of-borrow judgment: an owned slot accepts a borrowed
+    /// value of this head because extraction is free — Copy grade (a
+    /// scalar borrow is a value copy at runtime) or CheapClone (an O(1)
+    /// buffer retain, emitted by lowering at the coercion node). The one
+    /// rule unify's coercion and generation's Apply-preservation share.
+    pub fn copies_out_of_borrow(&self, symbol: Symbol) -> bool {
+        self.grade_of(symbol) == Grade::Copy
+            || self.conformances.contains_key(&(symbol, Symbol::CheapClone))
+    }
+
     /// Remap every symbol for an importer (the catalog half of
     /// `Module::import_as`).
     pub fn import_as(self, target: crate::compiling::module::ModuleId) -> TypeCatalog {

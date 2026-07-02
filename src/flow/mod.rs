@@ -22,7 +22,7 @@ mod flow_borrow_tests;
 mod flow_tests;
 
 pub use errors::OwnershipError;
-pub use place::Place;
+pub use place::{Place, place_for_expr};
 
 use indexmap::IndexMap;
 
@@ -97,6 +97,21 @@ pub fn check_flow(
         let mut state = Default::default();
         file_drops.push(checker.check_roots(&file.roots, &mut state));
     }
+    // Cross-procedural write protection: a global borrowed by another
+    // global is immutable everywhere — the borrower would dangle when the
+    // assignment drops the old value. (Top-level reassignments are already
+    // tracked by the NLL walk; this covers writes from function bodies.)
+    let global_writes = std::mem::take(&mut checker.global_writes);
+    for (node, global) in global_writes {
+        if let Some(borrower) = checker.global_borrows.get(&global).copied() {
+            let error = errors::OwnershipError::MutatingBorrowedGlobal {
+                name: moves::render_symbol(global, types),
+                borrower: moves::render_symbol(borrower, types),
+            };
+            checker.error(error, node);
+        }
+    }
+
     let mut errors = checker.errors;
     errors.extend(unsafe_gate::check(hir, module_id));
 

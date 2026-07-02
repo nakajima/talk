@@ -16,9 +16,19 @@ impl<'a> Lowering<'a> {
     /// statements (return) ignore `k`.
     pub(super) fn lower_block(&mut self, block: &Block, ctx: &Ctx, k: ExprId) -> ExprId {
         // The single MIR build: from annotated HIR, drops already elaborated
-        // by the flow checker's schedules on the block itself.
-        let unit = &self.units[ctx.unit];
-        let body = mir::build_function(unit.types, ctx.owner, block);
+        // by the flow checker's schedules on the block itself. One body per
+        // HIR block — every θ-specialization re-lowers the shared body
+        // instead of rebuilding it.
+        let key = (ctx.unit, block.id);
+        let body = match self.mir_bodies.get(&key) {
+            Some(body) => std::rc::Rc::clone(body),
+            None => {
+                let unit = &self.units[ctx.unit];
+                let body = std::rc::Rc::new(mir::build_function(unit.types, ctx.owner, block));
+                self.mir_bodies.insert(key, std::rc::Rc::clone(&body));
+                body
+            }
+        };
         self.lower_mir_body(&body, ctx, k)
     }
 
@@ -332,7 +342,7 @@ impl<'a> Lowering<'a> {
                 return next;
             }
         }
-        if !self.needs_drop_type(ctx.unit, ty) {
+        if !self.needs_drop_type(ty) {
             return next;
         }
         match Self::borrow_erased_ty(ty.clone()) {
@@ -375,7 +385,7 @@ impl<'a> Lowering<'a> {
                 let fields = self.field_types_for(symbol, &args);
                 let mut body = next;
                 for (index, (_, field_ty)) in fields.into_iter().enumerate().rev() {
-                    if !self.needs_drop_type(ctx.unit, &field_ty) {
+                    if !self.needs_drop_type(&field_ty) {
                         continue;
                     }
                     let field_lambda_ty = self.map_ty(&field_ty);
@@ -389,7 +399,7 @@ impl<'a> Lowering<'a> {
             CheckTy::Tuple(items) => {
                 let mut body = next;
                 for (index, item_ty) in items.into_iter().enumerate().rev() {
-                    if !self.needs_drop_type(ctx.unit, &item_ty) {
+                    if !self.needs_drop_type(&item_ty) {
                         continue;
                     }
                     let field_value = self.p.extract(value, index as u32);
@@ -400,7 +410,7 @@ impl<'a> Lowering<'a> {
             CheckTy::Record(row) if row.tail.is_none() => {
                 let mut body = next;
                 for (index, (_, field_ty)) in row.fields.into_iter().enumerate().rev() {
-                    if !self.needs_drop_type(ctx.unit, &field_ty) {
+                    if !self.needs_drop_type(&field_ty) {
                         continue;
                     }
                     let field_value = self.p.extract(value, index as u32);
@@ -448,7 +458,7 @@ impl<'a> Lowering<'a> {
         ty: &CheckTy,
         next: ExprId,
     ) -> ExprId {
-        if !self.needs_drop_type(ctx.unit, ty) {
+        if !self.needs_drop_type(ty) {
             return next;
         }
         match Self::borrow_erased_ty(ty.clone()) {
@@ -466,7 +476,7 @@ impl<'a> Lowering<'a> {
                 let fields = self.field_types_for(symbol, &args);
                 let mut body = next;
                 for (index, (_, field_ty)) in fields.into_iter().enumerate().rev() {
-                    if !self.needs_drop_type(ctx.unit, &field_ty) {
+                    if !self.needs_drop_type(&field_ty) {
                         continue;
                     }
                     let field_lambda_ty = self.map_ty(&field_ty);
@@ -480,7 +490,7 @@ impl<'a> Lowering<'a> {
             CheckTy::Tuple(items) => {
                 let mut body = next;
                 for (index, item_ty) in items.into_iter().enumerate().rev() {
-                    if !self.needs_drop_type(ctx.unit, &item_ty) {
+                    if !self.needs_drop_type(&item_ty) {
                         continue;
                     }
                     let field_value = self.p.extract(value, index as u32);
@@ -491,7 +501,7 @@ impl<'a> Lowering<'a> {
             CheckTy::Record(row) if row.tail.is_none() => {
                 let mut body = next;
                 for (index, (_, field_ty)) in row.fields.into_iter().enumerate().rev() {
-                    if !self.needs_drop_type(ctx.unit, &field_ty) {
+                    if !self.needs_drop_type(&field_ty) {
                         continue;
                     }
                     let field_value = self.p.extract(value, index as u32);
@@ -536,7 +546,7 @@ impl<'a> Lowering<'a> {
         if !variant_payloads
             .iter()
             .flatten()
-            .any(|payload| self.needs_drop_type(ctx.unit, payload))
+            .any(|payload| self.needs_drop_type(payload))
         {
             return next;
         }
@@ -550,7 +560,7 @@ impl<'a> Lowering<'a> {
             let unit_value = self.p.void();
             let mut body = self.p.app(join_ref, unit_value);
             for (index, payload_ty) in payloads.iter().enumerate().rev() {
-                if !self.needs_drop_type(ctx.unit, payload_ty) {
+                if !self.needs_drop_type(payload_ty) {
                     continue;
                 }
                 let payload_lambda_ty = self.map_ty(payload_ty);
@@ -739,7 +749,7 @@ impl<'a> Lowering<'a> {
         ty: &CheckTy,
         next: ExprId,
     ) -> ExprId {
-        if !self.needs_drop_type(ctx.unit, ty) {
+        if !self.needs_drop_type(ty) {
             return next;
         }
         match Self::borrow_erased_ty(ty.clone()) {
@@ -782,7 +792,7 @@ impl<'a> Lowering<'a> {
                 let fields = self.field_types_for(symbol, &args);
                 let mut body = next;
                 for (index, (field_symbol, field_ty)) in fields.into_iter().enumerate().rev() {
-                    if !self.needs_drop_type(ctx.unit, &field_ty) {
+                    if !self.needs_drop_type(&field_ty) {
                         continue;
                     }
                     let field_key_path = key_path.child(field_symbol);
@@ -813,7 +823,7 @@ impl<'a> Lowering<'a> {
             CheckTy::Tuple(items) => {
                 let mut body = next;
                 for (index, item_ty) in items.into_iter().enumerate().rev() {
-                    if !self.needs_drop_type(ctx.unit, &item_ty) {
+                    if !self.needs_drop_type(&item_ty) {
                         continue;
                     }
                     let field_value = self.p.extract(value, index as u32);
@@ -824,7 +834,7 @@ impl<'a> Lowering<'a> {
             CheckTy::Record(row) if row.tail.is_none() => {
                 let mut body = next;
                 for (index, (_, field_ty)) in row.fields.into_iter().enumerate().rev() {
-                    if !self.needs_drop_type(ctx.unit, &field_ty) {
+                    if !self.needs_drop_type(&field_ty) {
                         continue;
                     }
                     let field_value = self.p.extract(value, index as u32);
@@ -837,84 +847,31 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    pub(super) fn needs_drop_type(&self, unit: usize, ty: &CheckTy) -> bool {
-        self.type_needs_drop(unit, ty, &mut FxHashSet::default())
+    /// One `GradeView` per unit: each unit's catalog is import-closed
+    /// (check_types merges every visible module's catalog), so a type is
+    /// classified by whichever unit can see all its symbols. The flow
+    /// checker's `GradeView` is the single definition of owned / object /
+    /// borrowed — lowering must agree with it for scheduled drops to
+    /// match emitted ones.
+    fn grade_views(&self) -> impl Iterator<Item = crate::flow::grades::GradeView<'_>> {
+        self.units
+            .iter()
+            .map(|unit| crate::flow::grades::GradeView::new(unit.types))
+    }
+
+    pub(super) fn needs_drop_type(&self, ty: &CheckTy) -> bool {
+        self.grade_views().any(|grades| grades.needs_drop(ty))
     }
 
     /// Owned parts to drop OR `'heap` handles to release: the binding gets
     /// scope-exit processing either way.
-    pub(super) fn needs_release_type(&self, unit: usize, ty: &CheckTy) -> bool {
-        self.needs_drop_type(unit, ty) || self.contains_object_type(ty)
+    pub(super) fn needs_release_type(&self, ty: &CheckTy) -> bool {
+        self.needs_drop_type(ty) || self.contains_object_type(ty)
     }
 
-    /// Whether a value of this type may carry a `'heap` handle anywhere
-    /// (mirrors the flow checker's `contains_object`).
+    /// Whether a value of this type may carry a `'heap` handle anywhere.
     pub(super) fn contains_object_type(&self, ty: &CheckTy) -> bool {
-        self.contains_object_inner(ty, &mut FxHashSet::default())
-    }
-
-    fn contains_object_inner(&self, ty: &CheckTy, visiting: &mut FxHashSet<Symbol>) -> bool {
-        match ty {
-            CheckTy::Borrow(_, inner) | CheckTy::Unique(inner) => {
-                self.contains_object_inner(inner, visiting)
-            }
-            CheckTy::Nominal(symbol, args) => {
-                if self.symbol_is_heap(*symbol) {
-                    return true;
-                }
-                if !visiting.insert(*symbol) {
-                    return false;
-                }
-                let inside = self.nominal_payload_types(*symbol, args).iter().any(|f| {
-                    self.contains_object_inner(f, visiting)
-                }) || args.iter().any(|arg| self.contains_object_inner(arg, visiting));
-                visiting.remove(symbol);
-                inside
-            }
-            CheckTy::Tuple(items) => items
-                .iter()
-                .any(|item| self.contains_object_inner(item, visiting)),
-            CheckTy::Record(row) => row
-                .fields
-                .iter()
-                .any(|(_, field)| self.contains_object_inner(field, visiting)),
-            _ => false,
-        }
-    }
-
-    /// Every stored payload type of a nominal with the application's args
-    /// substituted (struct fields; enum variant payloads).
-    fn nominal_payload_types(&self, symbol: Symbol, args: &[CheckTy]) -> Vec<CheckTy> {
-        for unit in &self.units {
-            let catalog = &unit.types.catalog;
-            if let Some(info) = catalog.structs.get(&symbol) {
-                let subst: crate::lower::Theta =
-                    info.params.iter().copied().zip(args.iter().cloned()).collect();
-                return info
-                    .fields
-                    .values()
-                    .map(|(_, ty)| ty.substitute(&subst, &Default::default(), &Default::default()))
-                    .collect();
-            }
-            if let Some(info) = catalog.enums.get(&symbol) {
-                let subst: crate::lower::Theta =
-                    info.params.iter().copied().zip(args.iter().cloned()).collect();
-                return info
-                    .variants
-                    .values()
-                    .flat_map(|variant| match &variant.constructor_scheme.ty {
-                        CheckTy::Func(payloads, ..) => payloads
-                            .iter()
-                            .map(|ty| {
-                                ty.substitute(&subst, &Default::default(), &Default::default())
-                            })
-                            .collect(),
-                        _ => vec![],
-                    })
-                    .collect();
-            }
-        }
-        vec![]
+        self.grade_views().any(|grades| grades.contains_object(ty))
     }
 
     /// A pure place read (variable or stored-field chain): carries no
@@ -928,67 +885,6 @@ impl<'a> Lowering<'a> {
             }
         }
         !is_place(rhs)
-    }
-
-    pub(super) fn type_needs_drop(
-        &self,
-        unit: usize,
-        ty: &CheckTy,
-        visiting: &mut FxHashSet<Symbol>,
-    ) -> bool {
-        match ty {
-            CheckTy::Borrow(_, _) => false,
-            CheckTy::Unique(inner) => self.type_needs_drop(unit, inner, visiting),
-            CheckTy::Nominal(symbol, args) => {
-                if self.symbol_is_borrowed(*symbol) {
-                    return false;
-                }
-                // A `'heap` value neither moves nor drops per-use: its
-                // interior is the region's business (finalizer thunks),
-                // its lifetime the ledger's (RegionRelease).
-                if self.symbol_is_heap(*symbol) {
-                    return false;
-                }
-                self.symbol_has_ability(*symbol, "Owner")
-                    || self.deinit_witness(*symbol).is_some()
-                    || self.nominal_needs_drop(unit, *symbol, args, visiting)
-            }
-            CheckTy::Tuple(items) => items
-                .iter()
-                .any(|item| self.type_needs_drop(unit, item, visiting)),
-            CheckTy::Record(row) => row
-                .fields
-                .iter()
-                .any(|(_, field_ty)| self.type_needs_drop(unit, field_ty, visiting)),
-            CheckTy::Any { .. } => true,
-            CheckTy::Func(..)
-            | CheckTy::Proj(..)
-            | CheckTy::Param(_)
-            | CheckTy::Var(_)
-            | CheckTy::Error => false,
-        }
-    }
-
-    pub(super) fn nominal_needs_drop(
-        &self,
-        unit: usize,
-        symbol: Symbol,
-        args: &[CheckTy],
-        visiting: &mut FxHashSet<Symbol>,
-    ) -> bool {
-        if !visiting.insert(symbol) {
-            return false;
-        }
-        let result = self
-            .field_types_for(symbol, args)
-            .into_iter()
-            .any(|(_, field_ty)| self.type_needs_drop(unit, &field_ty, visiting))
-            || self
-                .nominal_payload_types(symbol, args)
-                .iter()
-                .any(|payload| self.type_needs_drop(unit, payload, visiting));
-        visiting.remove(&symbol);
-        result
     }
 
     pub(super) fn field_types_for(
@@ -1042,43 +938,6 @@ impl<'a> Lowering<'a> {
                 .catalog
                 .conformances
                 .contains_key(&(symbol, Symbol::Borrowed))
-        })
-    }
-
-    pub(super) fn symbol_has_ability(&self, symbol: Symbol, ability: &str) -> bool {
-        let Some(protocol) = self.protocol_named(ability) else {
-            return false;
-        };
-        self.units.iter().any(|unit| {
-            unit.types
-                .catalog
-                .conformances_by_head
-                .get(&symbol)
-                .is_some_and(|protocols| {
-                    protocols.iter().any(|candidate| {
-                        unit.types
-                            .catalog
-                            .protocol_and_supers(*candidate)
-                            .contains(&protocol)
-                    })
-                })
-        })
-    }
-
-    pub(super) fn protocol_named(&self, name: &str) -> Option<Symbol> {
-        self.units.iter().find_map(|unit| {
-            unit.types
-                .catalog
-                .protocols
-                .keys()
-                .find(|symbol| {
-                    unit.types
-                        .display_names
-                        .get(symbol)
-                        .or_else(|| unit.resolved.symbol_names.get(symbol))
-                        .is_some_and(|display| display == name)
-                })
-                .copied()
         })
     }
 

@@ -19,6 +19,12 @@ pub enum OwnershipError {
     ReturningLocalBorrow {
         ty: String,
     },
+    /// A function assigns a global that another global borrows: the borrower
+    /// would dangle when the old value drops.
+    MutatingBorrowedGlobal {
+        name: String,
+        borrower: String,
+    },
     UnknownBorrowProvenance {
         ty: String,
     },
@@ -115,6 +121,12 @@ impl Display for OwnershipError {
                 write!(
                     f,
                     "Cannot return borrowed value {ty}; it borrows from a value owned by this function"
+                )
+            }
+            OwnershipError::MutatingBorrowedGlobal { name, borrower } => {
+                write!(
+                    f,
+                    "Cannot assign to global '{name}': global '{borrower}' borrows it"
                 )
             }
             OwnershipError::UnknownBorrowProvenance { ty } => {

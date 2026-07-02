@@ -252,8 +252,11 @@ impl<V: Clone> Objects<V> {
                 Some(object) => {
                     let record = &mut self.records[object as usize];
                     record.finalized = true;
-                    let thunk = record.finalizer.clone().expect("filtered on finalizer");
-                    return Some((thunk, object));
+                    // The candidate filter above admits only records with a
+                    // finalizer, so this always yields.
+                    if let Some(thunk) = record.finalizer.clone() {
+                        return Some((thunk, object));
+                    }
                 }
                 None => {
                     // Walk complete: bulk-free the region.

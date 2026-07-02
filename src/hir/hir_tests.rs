@@ -199,6 +199,46 @@ fn preserves_node_ids_one_to_one() {
     }
 }
 
+#[test]
+fn or_pattern_binders_collect_once() {
+    // `.a(s) | .b(s)` binds one `s`: consumers register scope locals (and
+    // schedule drops) per binder, so a duplicate would double-drop.
+    let source = "enum E {\n\tcase a(Int)\n\tcase b(Int)\n}\nfunc f(e: E) -> Int {\n\tmatch e {\n\t\t.a(s) | .b(s) -> s,\n\t}\n}";
+    let mut or_binders = None;
+    for (_, hir_nodes) in lower(source) {
+        visit_patterns(&hir_nodes, &mut |pattern: &hir::Pattern| {
+            if matches!(pattern.kind, hir::PatternKind::Or(_)) {
+                or_binders = Some(pattern.collect_binders());
+            }
+        });
+    }
+    let binders = or_binders.expect("source contains an or-pattern");
+    assert_eq!(
+        binders.len(),
+        1,
+        "the shared binder must be collected once, got {binders:?}"
+    );
+}
+
+fn visit_patterns(nodes: &[hir::Node], f: &mut impl FnMut(&hir::Pattern)) {
+    use derive_visitor::{Drive, Visitor};
+
+    struct Collect<'a, F>(&'a mut F);
+    impl<F: FnMut(&hir::Pattern)> Visitor for Collect<'_, F> {
+        fn visit(&mut self, item: &dyn std::any::Any, event: derive_visitor::Event) {
+            if matches!(event, derive_visitor::Event::Enter)
+                && let Some(pattern) = item.downcast_ref::<hir::Pattern>()
+            {
+                (self.0)(pattern);
+            }
+        }
+    }
+    let mut collect = Collect(f);
+    for node in nodes {
+        node.drive(&mut collect);
+    }
+}
+
 /// Collect AST `Expr` ids via the derive_visitor `Drive` walk (the `Expr` node is
 /// visited even though its `id` field is `#[drive(skip)]`).
 fn ast_expr_ids(roots: &[Node]) -> Vec<NodeID> {

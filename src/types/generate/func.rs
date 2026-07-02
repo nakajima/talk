@@ -3,6 +3,16 @@ use super::*;
 impl<'s, 'a> BodyChecker<'s, 'a> {
     // ----- Functions ------------------------------------------------------
 
+    /// Bind a parameter's type: into the mono environment for the body, and
+    /// onto the parameter's node so downstream stages (HIR baking, the flow
+    /// checker) see it without consulting the function's scheme.
+    fn bind_param(&mut self, param: &Parameter, ty: &Ty) {
+        self.artifacts.node_types.insert(param.id, ty.clone());
+        if let Ok(symbol) = param.name.symbol() {
+            self.mono.insert(symbol, ty.clone());
+        }
+    }
+
     /// Infer a function literal: parameters from annotations or fresh vars,
     /// a fresh open ambient effect row (Koka-style), body joined into the
     /// return type.
@@ -52,9 +62,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     Some(annotation) => self.lower_annotation(annotation),
                     None => Ty::Var(self.store.fresh_ty(self.level, param.id)),
                 };
-                if let Ok(symbol) = param.name.symbol() {
-                    self.mono.insert(symbol, ty.clone());
-                }
+                self.bind_param(param, &ty);
                 ty
             })
             .collect();
@@ -124,9 +132,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     }
                     None => expected.clone(),
                 };
-                if let Ok(symbol) = param.name.symbol() {
-                    self.mono.insert(symbol, ty.clone());
-                }
+                self.bind_param(param, &ty);
                 ty
             })
             .collect();
@@ -163,9 +169,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     Some(annotation) => self.lower_annotation(annotation),
                     None => Ty::Var(self.store.fresh_ty(self.level, param.id)),
                 };
-                if let Ok(symbol) = param.name.symbol() {
-                    self.mono.insert(symbol, ty.clone());
-                }
+                self.bind_param(param, &ty);
                 ty
             })
             .collect();

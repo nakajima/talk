@@ -108,11 +108,22 @@ fn apply_reason_clones_borrowed_cheap_clone_argument() {
 }
 
 #[test]
-fn apply_reason_does_not_strip_borrows_in_general_unification() {
+fn general_unification_erases_borrows_only_for_copy_grades() {
+    // `&Int ~ Int` unifies anywhere: a scalar borrow is a value copy, so
+    // borrow erasure applies in any position (the copy-out-of-borrow
+    // judgment). A non-copy head keeps its borrow outside Apply coercion
+    // sites.
     let mut h = Harness::new();
     let int = Ty::Nominal(Symbol::Int, vec![]);
     let borrowed_int = Ty::Borrow(Perm::Shared, Box::new(int.clone()));
     let residual = h.solve(vec![Constraint::Eq(int, borrowed_int, origin())]);
+    assert!(h.errors.is_empty(), "{:?}", h.errors);
+    assert!(residual.is_empty(), "{residual:?}");
+
+    let mut h = Harness::new();
+    let string = Ty::Nominal(Symbol::String, vec![]);
+    let borrowed_string = Ty::Borrow(Perm::Shared, Box::new(string.clone()));
+    let residual = h.solve(vec![Constraint::Eq(string, borrowed_string, origin())]);
     assert!(
         h.errors
             .iter()

@@ -106,18 +106,33 @@ impl<'a> GradeView<'a> {
     /// arguments/fields). Function types are excluded — a function value
     /// whose signature mentions borrows is not itself a borrowed value.
     pub(crate) fn contains_borrowed(&self, ty: &Ty) -> bool {
+        self.contains_borrowed_inner(ty, &mut FxHashSet::default())
+    }
+
+    fn contains_borrowed_inner(&self, ty: &Ty, seen: &mut FxHashSet<Symbol>) -> bool {
         match ty {
             Ty::Borrow(..) => true,
-            Ty::Unique(inner) => self.contains_borrowed(inner),
+            Ty::Unique(inner) => self.contains_borrowed_inner(inner, seen),
             Ty::Nominal(symbol, args) => {
-                self.has_marker(*symbol, Symbol::Borrowed)
-                    || args.iter().any(|arg| self.contains_borrowed(arg))
+                if self.has_marker(*symbol, Symbol::Borrowed) {
+                    return true;
+                }
+                if !seen.insert(*symbol) {
+                    return false;
+                }
+                let contains = self
+                    .payload_types(*symbol, args)
+                    .iter()
+                    .any(|field| self.contains_borrowed_inner(field, seen))
+                    || args.iter().any(|arg| self.contains_borrowed_inner(arg, seen));
+                seen.remove(symbol);
+                contains
             }
-            Ty::Tuple(items) => items.iter().any(|item| self.contains_borrowed(item)),
+            Ty::Tuple(items) => items.iter().any(|item| self.contains_borrowed_inner(item, seen)),
             Ty::Record(row) => row
                 .fields
                 .iter()
-                .any(|(_, field)| self.contains_borrowed(field)),
+                .any(|(_, field)| self.contains_borrowed_inner(field, seen)),
             Ty::Func(..)
             | Ty::Any { .. }
             | Ty::Proj(..)

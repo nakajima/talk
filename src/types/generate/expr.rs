@@ -254,21 +254,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // `Ty::Borrow` branch of `check_expr`). Checking a value against a non-borrow type is
         // not an application of that value, so drop `Apply`: a function value must satisfy a
         // function-typed slot invariantly rather than coercing its contravariant parameters.
-        // Exception: an owned CheapClone slot — or a borrowed CheapClone argument (the
+        // Exception: an owned copy-out-of-borrow slot — or a borrowed such argument (the
         // expected side may still be a projection, e.g. a requirement's associated RHS) —
-        // keeps `Apply` so the solver's tier-2 coercion (borrowed argument satisfied by an
-        // O(1) clone) can fire even when either side resolves late.
-        let cheap_clone = |symbol: Symbol| {
-            self.catalog
-                .conformances
-                .contains_key(&(symbol, Symbol::CheapClone))
-        };
+        // keeps `Apply` so the solver's tier-2 coercion (borrowed argument satisfied by a
+        // free copy or an O(1) clone) can fire even when either side resolves late.
+        let copies = |symbol: Symbol| self.catalog.copies_out_of_borrow(symbol);
         let keeps_apply = reason == CtReason::Apply
-            && (matches!(self.store.shallow(expected), Ty::Nominal(symbol, _) if cheap_clone(symbol))
+            && (matches!(self.store.shallow(expected), Ty::Nominal(symbol, _) if copies(symbol))
                 || matches!(
                     self.store.shallow(&found),
                     Ty::Borrow(_, ref inner)
-                        if matches!(self.store.shallow(inner), Ty::Nominal(symbol, _) if cheap_clone(symbol))
+                        if matches!(self.store.shallow(inner), Ty::Nominal(symbol, _) if copies(symbol))
                 ));
         let reason = if keeps_apply { reason } else { reason.nested() };
         self.emit_eq(expected.clone(), found, node, reason);

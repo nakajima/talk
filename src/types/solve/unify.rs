@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::catalog::Grade;
 use crate::types::ty::Perm;
 
 /// Where a leftover row/effect-row binds its tail when it flows into a
@@ -86,21 +87,41 @@ impl<'s> Solver<'s> {
                 ));
             }
 
-            // Tier-2 CheapClone coercion: a borrowed argument satisfies an
-            // owned CheapClone parameter by cloning — an O(1) buffer retain,
-            // emitted by lowering at the recorded node.
+            // Tier-2 copy-out-of-borrow coercion: a borrowed argument
+            // satisfies an owned parameter when extraction is free — Copy
+            // grade (a scalar borrow is a value copy at runtime, nothing to
+            // emit) or CheapClone (an O(1) buffer retain, emitted by
+            // lowering at the recorded node).
             (Ty::Nominal(symbol, _), Ty::Borrow(_, found_inner))
                 if origin.reason == CtReason::Apply
-                    && self
-                        .catalog
-                        .conformances
-                        .contains_key(&(*symbol, Symbol::CheapClone)) =>
+                    && self.catalog.copies_out_of_borrow(*symbol) =>
             {
-                self.coerce_clones.insert(origin.node);
+                if self.catalog.grade_of(*symbol) != Grade::Copy {
+                    self.coerce_clones.insert(origin.node);
+                }
                 worklist.push(Constraint::Eq(
                     a.clone(),
                     (**found_inner).clone(),
                     origin.nested(),
+                ));
+            }
+
+            // Borrow erasure for Copy grades: `&T` and `T` are the same
+            // type up to representation when T copies (using the value
+            // never moves it, and a scalar borrow is a value copy), so they
+            // unify in any position — annotations, nested arguments,
+            // protocol signatures, and inference (`&Int` never surfaces as
+            // an inferred binding type).
+            (Ty::Borrow(_, inner), other) | (other, Ty::Borrow(_, inner))
+                if matches!(
+                    self.store.shallow(inner),
+                    Ty::Nominal(symbol, _) if self.catalog.grade_of(symbol) == Grade::Copy
+                ) =>
+            {
+                worklist.push(Constraint::Eq(
+                    (**inner).clone(),
+                    other.clone(),
+                    origin.clone(),
                 ));
             }
 

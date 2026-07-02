@@ -68,6 +68,27 @@ fn rejects_borrowed_global() {
 }
 
 #[test]
+fn allows_global_iterator_over_global_array() {
+    // A borrow-wrapping global is fine when its loans are rooted in other
+    // globals: both live for the whole program, and reassignment of the
+    // owner is rejected program-wide (see the test below).
+    assert_no_errors(
+        "let numbers = [1, 2, 3]\nlet it = numbers.iter()\nprint(it.next())",
+    );
+}
+
+#[test]
+fn rejects_function_assigning_a_globally_borrowed_global() {
+    // The dangling hole the global-rooted allowance would otherwise open:
+    // a function reassigns the owner between top-level uses of the
+    // borrower. The assignment itself is the error.
+    assert_error_contains(
+        "let numbers = [1, 2, 3]\nlet it = numbers.iter()\nfunc stomp() {\n\tnumbers = [9]\n}\nstomp()\nprint(it.next())",
+        "borrow",
+    );
+}
+
+#[test]
 fn rejects_borrow_typed_struct_field() {
     assert_error_contains(
         "struct Holder {\n\tlet r: &String\n}",
@@ -88,6 +109,23 @@ fn allows_function_typed_field_with_borrow_params() {
     // A function value whose signature mentions borrows is not itself a
     // stored borrow.
     assert_no_errors("struct Mapper {\n\tlet f: (&String) -> Int\n}");
+}
+
+#[test]
+fn mut_method_on_shared_borrowing_struct_keeps_its_loan() {
+    // it.next() mutates the iterator's cursor, not the array it borrows:
+    // an exclusive touch of the borrower is capped at the loan's shared
+    // kind, so it must not invalidate the iterator's own borrow.
+    assert_no_errors(
+        "func main() -> Int {\n\tlet numbers = [7, 8]\n\tlet it = numbers.iter()\n\tlet r1 = it.next()\n\tlet r2 = it.next()\n\t0\n}",
+    );
+}
+
+#[test]
+fn two_shared_iterators_over_one_array_coexist() {
+    assert_no_errors(
+        "func main() -> Int {\n\tlet numbers = [7, 8]\n\tlet it = numbers.iter()\n\tlet it2 = numbers.iter()\n\tlet r1 = it.next()\n\tlet r2 = it2.next()\n\t0\n}",
+    );
 }
 
 // ----- Unique types -------------------------------------------------------------
@@ -128,6 +166,41 @@ fn rejects_returning_substring_of_owned_parameter() {
 #[test]
 fn allows_returning_substring_of_borrowed_parameter() {
     assert_no_errors("func first(s: &String) -> Substring {\n\ts.slice(0, 1)\n}");
+}
+
+#[test]
+fn rejects_returning_struct_wrapping_local_substring() {
+    // A struct with a Borrowed-marked field is itself borrow-containing:
+    // wrapping a local's substring must not smuggle it past the return check.
+    assert_error_contains(
+        "struct Wrapper {\n\tlet sub: Substring\n}\nfunc make() -> Wrapper {\n\tlet s = \"ab\" + \"cd\"\n\tWrapper(sub: s.slice(0, 2))\n}",
+        "owned by this function",
+    );
+}
+
+#[test]
+fn rejects_returning_enum_wrapping_local_substring() {
+    assert_error_contains(
+        "enum View {\n\tcase path(Substring)\n}\nfunc make() -> View {\n\tlet s = \"ab\" + \"cd\"\n\tView.path(s.slice(0, 2))\n}",
+        "owned by this function",
+    );
+}
+
+#[test]
+fn protocol_default_method_receiver_is_borrowed_param() {
+    // The implicit receiver of a protocol default method is `&Self`, so a
+    // borrow derived from it is parameter-derived provenance (core's
+    // Iterator.map returns a struct wrapping the receiver this way).
+    assert_no_errors(
+        "protocol P {\n\tfunc name() -> &String\n\tfunc first() -> Substring {\n\t\tself.name().slice(0, 1)\n\t}\n}",
+    );
+}
+
+#[test]
+fn allows_returning_struct_wrapping_substring_of_borrowed_parameter() {
+    assert_no_errors(
+        "struct Wrapper {\n\tlet sub: Substring\n}\nfunc make(s: &String) -> Wrapper {\n\tWrapper(sub: s.slice(0, 2))\n}",
+    );
 }
 
 #[test]

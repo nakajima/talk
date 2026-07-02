@@ -264,7 +264,7 @@ impl<'a> Lowering<'a> {
                         acquires.push(self.p.primop(Op::RegionAcquire, &[value], void_ty));
                     }
                     if let Some(drop) =
-                        self.drop_binding_for_mir_symbol(ctx, cursor.body, symbol, ty)
+                        self.drop_binding_for_mir_symbol(cursor.body, symbol, ty)
                     {
                         drop_bindings.push(drop);
                     }
@@ -319,7 +319,7 @@ impl<'a> Lowering<'a> {
             .symbol_check_ty(symbol, &ctx.theta)
             .unwrap_or_else(|| self.checker_ty(rhs, ctx));
         let drop_binding =
-            self.drop_binding_for_mir_symbol(ctx, cursor.body, symbol, binding_ty.clone());
+            self.drop_binding_for_mir_symbol(cursor.body, symbol, binding_ty.clone());
         let mut inner = ctx.clone();
         // Ledger: a binding initialized from a place read takes references
         // into the value's regions (rvalues already carry their +1).
@@ -357,12 +357,11 @@ impl<'a> Lowering<'a> {
 
     fn drop_binding_for_mir_symbol(
         &self,
-        ctx: &Ctx,
         body: &mir::Body,
         symbol: Symbol,
         ty: CheckTy,
     ) -> Option<DropBinding> {
-        if !self.needs_release_type(ctx.unit, &ty) {
+        if !self.needs_release_type(&ty) {
             return None;
         }
         let dynamic_flags = self.drop_flag_keys_for_symbol(body, symbol);
@@ -530,32 +529,9 @@ impl<'a> Lowering<'a> {
                 mir::KeyPathComponent::Field(field) => {
                     result = result.child(*field);
                 }
-                mir::KeyPathComponent::TupleField(_)
-                | mir::KeyPathComponent::VariantPayload { .. }
-                | mir::KeyPathComponent::DerefBorrow
-                | mir::KeyPathComponent::Index(_) => return None,
             }
         }
         Some(result)
-    }
-
-    fn ownership_key_path_from_assignment_lhs(
-        &self,
-        ctx: &Ctx,
-        lhs: &Expr,
-    ) -> Option<OwnershipKeyPath> {
-        match &lhs.kind {
-            ExprKind::Variable(name) => name.symbol().ok().map(OwnershipKeyPath::root),
-            ExprKind::Member(Some(receiver), ..) => {
-                let base = self.ownership_key_path_from_assignment_lhs(ctx, receiver)?;
-                let field = crate::types::output::stored_field_symbol(
-                    self.units[ctx.unit].types,
-                    lhs.member_resolution.as_ref(),
-                )?;
-                Some(base.child(field))
-            }
-            _ => None,
-        }
     }
 
     fn assignment_drop_elaboration(&self, cursor: MirCursor) -> Option<mir::DropElaboration> {
@@ -740,7 +716,7 @@ impl<'a> Lowering<'a> {
         let after_ref = self.p.func_ref(after);
         let target_key_path = target
             .and_then(|target| Self::ownership_key_path_from_mir(cursor.body, target))
-            .or_else(|| self.ownership_key_path_from_assignment_lhs(ctx, lhs));
+            .or_else(|| crate::flow::place_for_expr(self.units[ctx.unit].types, lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
         let setter = self.p.func("set", rhs_ty, bot);
@@ -773,7 +749,7 @@ impl<'a> Lowering<'a> {
             let after_set = self.clear_moved_drop_flags_then(ctx, cursor.statement(), after_set);
             let lhs_check_ty = self.checker_ty(lhs, ctx);
             if matches!(drop_elaboration, Some(mir::DropElaboration::Static))
-                && self.needs_release_type(ctx.unit, &lhs_check_ty)
+                && self.needs_release_type(&lhs_check_ty)
             {
                 let old_ty = self.map_ty(&lhs_check_ty);
                 let old = self.assignment_old_value(cell, &path, old_ty);
@@ -781,7 +757,7 @@ impl<'a> Lowering<'a> {
             } else if matches!(
                 drop_elaboration,
                 Some(mir::DropElaboration::Conditional | mir::DropElaboration::Open)
-            ) && self.needs_release_type(ctx.unit, &lhs_check_ty)
+            ) && self.needs_release_type(&lhs_check_ty)
             {
                 let Some(target_key_path) = &target_key_path else {
                     return self.dead_end("dynamic_assignment_drop_without_key_path");
@@ -829,7 +805,7 @@ impl<'a> Lowering<'a> {
         let after_ref = self.p.func_ref(after);
         let target_key_path = target
             .and_then(|target| Self::ownership_key_path_from_mir(cursor.body, target))
-            .or_else(|| self.ownership_key_path_from_assignment_lhs(ctx, lhs));
+            .or_else(|| crate::flow::place_for_expr(self.units[ctx.unit].types, lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
         let setter = self.p.func("object_set", rhs_ty, bot);
@@ -857,7 +833,7 @@ impl<'a> Lowering<'a> {
             let after_set = self.clear_moved_drop_flags_then(ctx, cursor.statement(), after_set);
             let lhs_check_ty = self.checker_ty(lhs, ctx);
             if matches!(drop_elaboration, Some(mir::DropElaboration::Static))
-                && self.needs_release_type(ctx.unit, &lhs_check_ty)
+                && self.needs_release_type(&lhs_check_ty)
             {
                 let old_ty = self.map_ty(&lhs_check_ty);
                 let old = self.object_assignment_old_value(handle, path, old_ty);
@@ -865,7 +841,7 @@ impl<'a> Lowering<'a> {
             } else if matches!(
                 drop_elaboration,
                 Some(mir::DropElaboration::Conditional | mir::DropElaboration::Open)
-            ) && self.needs_release_type(ctx.unit, &lhs_check_ty)
+            ) && self.needs_release_type(&lhs_check_ty)
             {
                 let Some(target_key_path) = &target_key_path else {
                     return self.dead_end("dynamic_object_assignment_drop_without_key_path");
@@ -1206,7 +1182,7 @@ impl<'a> Lowering<'a> {
             MirRestBinding::Bind(symbol, mutated) => {
                 let drop_binding = self
                     .symbol_check_ty(symbol, &ctx.theta)
-                    .and_then(|ty| self.drop_binding_for_mir_symbol(ctx, cursor.body, symbol, ty));
+                    .and_then(|ty| self.drop_binding_for_mir_symbol(cursor.body, symbol, ty));
                 if mutated {
                     self.with_cells(&[(symbol, value)], &mut inner, |this, inner| {
                         let drops = drop_binding.clone().into_iter().collect::<Vec<_>>();
@@ -1304,7 +1280,7 @@ impl<'a> Lowering<'a> {
                 arms: arm_blocks,
                 default,
             } => {
-                if let Some(join) = Self::switch_join_target(cursor.body, arm_blocks, *default) {
+                if let Some(join) = Self::switch_join_target(cursor, arm_blocks, *default) {
                     self.lower_mir_block(cursor.at_block(join), ctx, k, cache)
                 } else {
                     self.lower_match(scrutinee, arms, ctx, k)
@@ -1360,15 +1336,27 @@ impl<'a> Lowering<'a> {
     }
 
     fn switch_join_target(
-        body: &mir::Body,
+        cursor: MirCursor,
         arms: &[mir::BlockId],
         default: Option<mir::BlockId>,
     ) -> Option<mir::BlockId> {
         let mut join = None;
         for block in arms.iter().copied().chain(default) {
-            let mir::Terminator::Jump(target) = body.blocks[block.0].terminator else {
-                return None;
+            // Only arms that jump to the match's own join vote; a diverging
+            // arm — return/break/continue, including a jump straight to an
+            // enclosing loop's edge — never reaches it, and skipping the
+            // join because of one would silently drop the match's binding
+            // and every statement after it.
+            let mir::Terminator::Jump(target) = cursor.body.blocks[block.0].terminator else {
+                continue;
             };
+            if cursor
+                .loops
+                .iter()
+                .any(|loop_| loop_.header_block == target || loop_.exit_block == target)
+            {
+                continue;
+            }
             match join {
                 Some(existing) if existing != target => return None,
                 Some(_) => {}

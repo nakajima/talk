@@ -53,12 +53,16 @@ impl HirLowerer<'_> {
                 consumes: false,
                 auto_clone: self.types.coerce_clones.contains(&e.id),
             },
-            ty: {
-                let Some(ty) = self.types.node_types.get(&e.id) else {
-                    unreachable!("the type checker assigns every expression a type")
-                };
-                ty.clone()
-            },
+            // The type checker assigns every expression a type; a hole can
+            // only arise downstream of an error diagnostic (which normally
+            // blocks the file, but an unattributed solver error blocks
+            // nothing), so it bakes as the poison type rather than a panic.
+            ty: self
+                .types
+                .node_types
+                .get(&e.id)
+                .cloned()
+                .unwrap_or(crate::types::ty::Ty::Error),
             member_resolution: self.types.member_resolutions.get(&e.id).cloned(),
             instantiation: self.types.instantiations.get(&e.id).cloned(),
             existential_pack: self.types.existential_packs.get(&e.id).cloned(),

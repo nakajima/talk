@@ -10,10 +10,6 @@
 //!   `Unary`/`Binary` (→ protocol calls), `For` (→ loop+match), `Incomplete`
 //!   (LSP-only), `Import` (resolved away), comments/trivia, and `*_span` fields
 //!   (a single `span` is kept for diagnostics).
-//!
-//! This module currently defines the owned node types only. The `build_hir`
-//! AST→HIR transform and the consumer re-pointing land in later stages.
-#![allow(dead_code)]
 
 pub mod build;
 
@@ -256,7 +252,19 @@ impl Pattern {
             | PatternKind::LiteralTrue
             | PatternKind::LiteralFalse
             | PatternKind::Wildcard => {}
-            PatternKind::Or(patterns) | PatternKind::Tuple(patterns) => {
+            PatternKind::Or(patterns) => {
+                // Every alternative binds the same names to the same
+                // symbols; collect each binder once, not once per
+                // alternative (a duplicate would double its scope drop).
+                for pattern in patterns {
+                    for (id, symbol) in pattern.collect_binders() {
+                        if !result.iter().any(|(_, seen)| *seen == symbol) {
+                            result.push((id, symbol));
+                        }
+                    }
+                }
+            }
+            PatternKind::Tuple(patterns) => {
                 for pattern in patterns {
                     result.extend(pattern.collect_binders());
                 }
