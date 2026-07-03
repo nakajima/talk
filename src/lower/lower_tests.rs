@@ -28,6 +28,34 @@ pub mod tests {
         lowered.eval_for_tests().expect("evaluation")
     }
 
+    /// [`run`] with the container-element-teardown deficit fenced
+    /// (docs/confidence-and-core-plan.md, Track B): the iterator consumes
+    /// the array rvalue and its buffer is never released.
+    fn run_expecting_container_element_leak(code: &'static str) -> EvalValue {
+        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("LowerTest"));
+        let typed = driver
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
+        let mut lowered = typed.lower();
+        assert!(
+            lowered.phase.diagnostics.is_empty(),
+            "lowering: {:?}",
+            lowered.phase.diagnostics
+        );
+        lowered
+            .eval_expecting_container_element_leak()
+            .expect("evaluation")
+            .0
+    }
+
     fn lowered_ir(code: &'static str) -> String {
         let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("LowerTest"));
         let typed = driver
@@ -213,7 +241,7 @@ pub mod tests {
     #[test]
     fn for_loop_continues_to_following_expression() {
         assert_eq!(
-            run("func f() -> Int {\n\tfor x in [1] { }\n\t2\n}\nf()"),
+            run_expecting_container_element_leak("func f() -> Int {\n\tfor x in [1] { }\n\t2\n}\nf()"),
             EvalValue::I64(2)
         );
     }

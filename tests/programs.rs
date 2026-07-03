@@ -1,0 +1,98 @@
+//! The real-program corpus (A2 of docs/confidence-and-core-plan.md):
+//! small, idiomatic, complete programs, each checked and run on BOTH
+//! engines — any stdout divergence is a bug (differential testing,
+//! McKeeman 1998) — under the allocation-balance policy of A1.
+
+use talk::compiling::driver::{Driver, DriverConfig, Lowered, Source};
+
+/// Programs whose containers leak buffers today — the corpus slice of the
+/// Track B fence. B2 empties this list.
+const EXPECTS_CONTAINER_ELEMENT_LEAK: &[&str] = &[
+    "iterate_and_match",
+    "string_building",
+    "conditional_moves",
+    "handlers",
+];
+
+fn run_program(name: &str) {
+    let path = std::path::PathBuf::from(format!("tests/programs/{name}.tlk"));
+    let driver = Driver::new(vec![Source::from(path)], DriverConfig::new("Corpus"));
+    let typed = driver
+        .parse()
+        .expect("parse")
+        .resolve_names()
+        .expect("resolve")
+        .type_check();
+    assert!(
+        !typed.has_errors(),
+        "{name}: type/flow errors: {:?}",
+        typed.diagnostics()
+    );
+    let mut lowered: Driver<Lowered> = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "{name}: lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    let verified = lowered.phase.program.verify();
+    assert!(verified.is_ok(), "{name}: verifier: {:?}", verified.err());
+
+    let (_, vm_out) = lowered.run_vm_with_output().expect("vm");
+    let (_, evaluator_out) = if EXPECTS_CONTAINER_ELEMENT_LEAK.contains(&name) {
+        lowered
+            .eval_expecting_container_element_leak()
+            .expect("evaluator")
+    } else {
+        lowered.eval_with_output().expect("evaluator")
+    };
+    assert_eq!(evaluator_out, vm_out, "{name}: stdout diverged");
+    assert!(!vm_out.is_empty(), "{name}: corpus programs print evidence");
+}
+
+#[test]
+fn iterate_and_match() {
+    run_program("iterate_and_match");
+}
+
+#[test]
+fn string_building() {
+    run_program("string_building");
+}
+
+#[test]
+fn conditional_moves() {
+    run_program("conditional_moves");
+}
+
+#[test]
+fn handlers() {
+    run_program("handlers");
+}
+
+#[test]
+fn heap_graph() {
+    run_program("heap_graph");
+}
+
+/// Every `.tlk` in the corpus directory has a test — a new program without
+/// one fails here instead of silently going unexercised.
+#[test]
+fn every_corpus_program_is_exercised() {
+    let known = [
+        "iterate_and_match",
+        "string_building",
+        "conditional_moves",
+        "handlers",
+        "heap_graph",
+    ];
+    for entry in std::fs::read_dir("tests/programs").expect("corpus dir") {
+        let path = entry.expect("entry").path();
+        if path.extension().is_some_and(|ext| ext == "tlk") {
+            let stem = path.file_stem().expect("stem").to_string_lossy();
+            assert!(
+                known.contains(&stem.as_ref()),
+                "corpus program {stem}.tlk has no test"
+            );
+        }
+    }
+}

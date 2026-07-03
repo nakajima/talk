@@ -697,10 +697,48 @@ impl Driver<Lowered> {
         Ok(self.eval_with_output()?.0)
     }
 
-    /// Reference-evaluator run returning (value, captured stdout).
+    /// Reference-evaluator run returning (value, captured stdout). On
+    /// success, asserts the leak invariant: every allocation and `'heap`
+    /// object torn down by exit. Leak detection is suite policy (CPython's
+    /// refleak buildbots), not per-test opt-in.
     pub fn eval_with_output(
         &mut self,
     ) -> Result<(crate::lambda_g::eval::EvalValue, String), crate::lambda_g::eval::EvalError> {
+        use crate::lambda_g::eval::EvalValue;
+        let (value, out, live_objects, live_allocations) = self.eval_counted()?;
+        // A program whose VALUE carries buffers legitimately holds them at
+        // exit; exact balance is asserted for scalar-valued programs (the
+        // vast majority — and where a leak can hide nowhere else).
+        if matches!(
+            value,
+            EvalValue::I64(_) | EvalValue::F64(_) | EvalValue::Bool(_) | EvalValue::Void
+        ) {
+            assert_eq!(live_objects, 0, "{live_objects} 'heap objects leaked");
+            assert_eq!(live_allocations, 0, "{live_allocations} allocations leaked");
+        }
+        Ok((value, out))
+    }
+
+    /// [`Self::eval_with_output`] with the known container-element-teardown
+    /// deficit fenced: containers never deep-drop their elements (Track B
+    /// of docs/confidence-and-core-plan.md), so leaked allocations are
+    /// tolerated — leaked `'heap` objects are still an error. Every caller
+    /// is a greppable enumeration of the deficit; Track B's exit criterion
+    /// deletes this method.
+    pub fn eval_expecting_container_element_leak(
+        &mut self,
+    ) -> Result<(crate::lambda_g::eval::EvalValue, String), crate::lambda_g::eval::EvalError> {
+        let (value, out, live_objects, _leaked) = self.eval_counted()?;
+        assert_eq!(live_objects, 0, "{live_objects} 'heap objects leaked");
+        Ok((value, out))
+    }
+
+    fn eval_counted(
+        &mut self,
+    ) -> Result<
+        (crate::lambda_g::eval::EvalValue, String, usize, usize),
+        crate::lambda_g::eval::EvalError,
+    > {
         let mut evaluator = crate::lambda_g::eval::Evaluator::new();
         let value = evaluator.run_main(
             &mut self.phase.program,
@@ -710,6 +748,8 @@ impl Driver<Lowered> {
         Ok((
             value,
             String::from_utf8_lossy(&evaluator.io.out).into_owned(),
+            evaluator.live_objects(),
+            evaluator.live_allocations(),
         ))
     }
 

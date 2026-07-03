@@ -189,7 +189,7 @@ fn drive_embedded(statement: &mut mir::Statement, annotator: &mut Annotator) {
             body.drive_mut(annotator);
         }
         mir::Statement::DeclBody { body } => body.drive_mut(annotator),
-        mir::Statement::Perform { expr } => expr.drive_mut(annotator),
+        mir::Statement::Perform { expr, .. } => expr.drive_mut(annotator),
         mir::Statement::ScopeEnter { .. }
         | mir::Statement::ScopeExit { .. }
         | mir::Statement::StorageLive { .. }

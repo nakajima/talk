@@ -339,7 +339,7 @@ fn transfer_statement(
             checker.check_call(callee, args, state);
             state.temp_provenances.insert(*temp, provenance);
         }
-        mir::Statement::Perform { expr } => {
+        mir::Statement::Perform { expr, .. } => {
             // The effect's arguments are consumed by the perform (their
             // evaluation statements are plain reads).
             if let hir::ExprKind::CallEffect { args, .. } = &expr.kind {

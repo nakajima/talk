@@ -212,8 +212,12 @@ pub(crate) enum Statement {
     },
     Perform {
         /// The whole `CallEffect` expression: the flow checker consumes its
-        /// arguments here (their evaluation statements are plain reads).
+        /// arguments here (their evaluation statements are plain reads),
+        /// and lowering evaluates it here, binding `temp` for the
+        /// consuming statement's read.
         expr: Expr,
+        temp: u32,
+        result_ty: Ty,
     },
     ReturnValue {
         expr: Expr,
@@ -290,6 +294,10 @@ pub(crate) enum Terminator {
         match_arms: Option<Vec<MatchArm>>,
         arms: Vec<BlockId>,
         default: Option<BlockId>,
+        /// The construct's join block, recorded by the builder (deriving
+        /// it from arm terminators fails when an arm tail is itself
+        /// control flow).
+        join: BlockId,
         /// The construct's value as an operand: arm tails deliver to the
         /// join continuation, which binds this temp for the join block's
         /// statements (where the source expression's node now reads
@@ -1135,7 +1143,23 @@ impl<'types> Builder<'types> {
                 for arg in args {
                     current = self.lower_expr(&arg.value, current);
                 }
-                self.push_statement(current, Statement::Perform { expr: expr.clone() });
+                let temp = self.next_temp;
+                self.next_temp += 1;
+                let result_ty = expr
+                    .existential_pack
+                    .as_ref()
+                    .map(|pack| pack.payload.clone())
+                    .or_else(|| self.types.node_types.get(&expr.id).cloned())
+                    .unwrap_or(Ty::Error);
+                self.push_statement(
+                    current,
+                    Statement::Perform {
+                        expr: expr.clone(),
+                        temp,
+                        result_ty,
+                    },
+                );
+                self.temp_subs.insert(expr.id, temp);
                 current
             }
             ExprKind::Proj(..) => {
@@ -1330,6 +1354,7 @@ impl<'types> Builder<'types> {
                 match_arms: Some(arms.to_vec()),
                 arms: arm_blocks.clone(),
                 default: None,
+                join: join_id,
                 result: Some((temp, result_ty)),
             },
         );
@@ -1412,7 +1437,7 @@ impl<'types> Builder<'types> {
             Statement::ConsumeValue { expr }
             | Statement::ReturnValue { expr, .. }
             | Statement::ContinueValue { expr }
-            | Statement::Perform { expr } => expr.drive_mut(&mut subs),
+            | Statement::Perform { expr, .. } => expr.drive_mut(&mut subs),
             Statement::Bind { rhs: Some(rhs), .. } => rhs.drive_mut(&mut subs),
             Statement::Assign { lhs, rhs, .. } => {
                 lhs.drive_mut(&mut subs);
@@ -1715,7 +1740,7 @@ fn render_statement(statement: &Statement) -> String {
 }
 
 #[cfg(test)]
-fn render_terminator(terminator: &Terminator) -> String {
+pub(crate) fn render_terminator(terminator: &Terminator) -> String {
     match terminator {
         Terminator::Unset => "unset".into(),
         Terminator::Return => "return".into(),
@@ -2123,3 +2148,4 @@ mod tests {
         });
     }
 }
+

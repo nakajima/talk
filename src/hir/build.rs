@@ -242,10 +242,35 @@ impl HirLowerer<'_> {
                 self.boxed(scrut),
                 arms.iter().map(|a| self.match_arm(a)).collect(),
             ),
-            expr::ExprKind::RecordLiteral { fields, spread } => hir::ExprKind::RecordLiteral {
-                fields: fields.iter().map(|f| self.record_field(f)).collect(),
-                spread: spread.as_ref().map(|s| self.boxed(s)),
-            },
+            expr::ExprKind::RecordLiteral { fields, spread } => {
+                // A spreadless literal with a closed row is a tuple in the
+                // row's canonical (label-sorted) field order — the runtime
+                // layout. Reordering is safe: elements are pure reads
+                // (effectful ones evaluate at their own MIR statements).
+                if spread.is_none()
+                    && let Some(crate::types::ty::Ty::Record(row)) =
+                        self.types.node_types.get(&e.id)
+                    && row.tail.is_none()
+                    && row.fields.len() == fields.len()
+                    && let Some(ordered) = row
+                        .fields
+                        .iter()
+                        .map(|(label, _)| {
+                            let name = label.to_string();
+                            fields.iter().find(|f| f.label.name_str() == name)
+                        })
+                        .collect::<Option<Vec<_>>>()
+                {
+                    hir::ExprKind::Tuple(
+                        ordered.into_iter().map(|f| self.expr(&f.value)).collect(),
+                    )
+                } else {
+                    hir::ExprKind::RecordLiteral {
+                        fields: fields.iter().map(|f| self.record_field(f)).collect(),
+                        spread: spread.as_ref().map(|s| self.boxed(s)),
+                    }
+                }
+            }
             expr::ExprKind::Unary(..) | expr::ExprKind::Binary(..) => {
                 unreachable!("Unary/Binary should be desugared by LowerOperators before HIR")
             }

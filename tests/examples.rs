@@ -39,9 +39,32 @@ fn lowered(files: &[&str]) -> Driver<talk::compiling::driver::Lowered> {
 
 /// Both engines, identical stdout, matching the frozen expectation file.
 fn expect_stdout(name: &str, files: &[&str]) {
+    let (vm_out, evaluator_out) = both_engine_stdout(files, false);
+    assert_stdout_expected(name, &vm_out, &evaluator_out);
+}
+
+/// [`expect_stdout`] with the container-element-teardown deficit fenced
+/// (docs/confidence-and-core-plan.md, Track B): each caller enumerates an
+/// example whose containers leak buffers today.
+fn expect_stdout_expecting_container_element_leak(name: &str, files: &[&str]) {
+    let (vm_out, evaluator_out) = both_engine_stdout(files, true);
+    assert_stdout_expected(name, &vm_out, &evaluator_out);
+}
+
+fn both_engine_stdout(files: &[&str], leak_fenced: bool) -> (String, String) {
     let mut driver = lowered(files);
     let (_, vm_out) = driver.run_vm_with_output().expect("vm");
-    let (_, evaluator_out) = driver.eval_with_output().expect("evaluator");
+    let (_, evaluator_out) = if leak_fenced {
+        driver
+            .eval_expecting_container_element_leak()
+            .expect("evaluator")
+    } else {
+        driver.eval_with_output().expect("evaluator")
+    };
+    (vm_out, evaluator_out)
+}
+
+fn assert_stdout_expected(name: &str, vm_out: &str, evaluator_out: &str) {
     let expected = std::fs::read_to_string(format!("examples/expected/{name}.stdout"))
         .expect("expected-output file");
     assert_eq!(vm_out, expected, "{name}: vm stdout vs expected");
@@ -58,7 +81,7 @@ fn hello_world() {
 
 #[test]
 fn strings() {
-    expect_stdout("Strings", &["Strings.tlk"]);
+    expect_stdout_expecting_container_element_leak("Strings", &["Strings.tlk"]);
 }
 
 #[test]
@@ -68,7 +91,7 @@ fn struct_example() {
 
 #[test]
 fn identity() {
-    expect_stdout("Identity", &["Identity.tlk"]);
+    expect_stdout_expecting_container_element_leak("Identity", &["Identity.tlk"]);
 }
 
 #[test]
@@ -83,24 +106,24 @@ fn imports_exports() {
 
 #[test]
 fn array() {
-    expect_stdout("Array", &["Array.tlk"]);
+    expect_stdout_expecting_container_element_leak("Array", &["Array.tlk"]);
 }
 
 #[test]
 fn iteratin() {
-    expect_stdout("Iteratin", &["Iteratin.tlk"]);
+    expect_stdout_expecting_container_element_leak("Iteratin", &["Iteratin.tlk"]);
 }
 
 #[test]
 fn for_loop() {
-    expect_stdout("ForLoop", &["ForLoop.tlk"]);
+    expect_stdout_expecting_container_element_leak("ForLoop", &["ForLoop.tlk"]);
 }
 
 #[test]
 fn show() {
     // Float's 1.229999999999999 is the documented core epsilon-loop wart;
     // both engines agree.
-    expect_stdout("Show", &["Show.tlk"]);
+    expect_stdout_expecting_container_element_leak("Show", &["Show.tlk"]);
 }
 
 #[test]
@@ -209,7 +232,11 @@ fn chat_client() {
     let (value, out) = driver.run_vm_with_output().expect("vm");
     assert_eq!(value, talk::vm::interp::Value::I64(0));
     assert_eq!(out, "");
-    let (evaluator_value, evaluator_out) = driver.eval_with_output().expect("evaluator");
+    // Container-element-teardown fence (Track B): the client's read
+    // buffers leak today.
+    let (evaluator_value, evaluator_out) = driver
+        .eval_expecting_container_element_leak()
+        .expect("evaluator");
     assert_eq!(evaluator_value, talk::lambda_g::eval::EvalValue::I64(0));
     assert_eq!(evaluator_out, "");
 }

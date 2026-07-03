@@ -1,0 +1,12 @@
+func line(word: String, n: Int) -> String {
+	let out = word
+	let i = 0
+	loop i < n {
+		out = out + "!"
+		i = i + 1
+	}
+	out
+}
+
+print(line(word: "hey", n: 3))
+print(line(word: "ok", n: 1))

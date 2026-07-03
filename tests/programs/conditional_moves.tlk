@@ -1,0 +1,21 @@
+func take(s: String) -> Int {
+	s.length
+}
+
+func search(flag: Bool) -> Int {
+	let total = 0
+	let i = 0
+	loop i < 4 {
+		i = i + 1
+		let local = "x" + "y"
+		if (flag) {
+			total = total + take(local)
+			continue
+		}
+		total = total + local.length
+	}
+	total
+}
+
+print(search(true))
+print(search(false))

@@ -1000,6 +1000,31 @@ fn enum_payload_conditional_drop() {
 }
 
 #[test]
+#[should_panic(expected = "allocations leaked")]
+fn default_eval_asserts_allocation_balance() {
+    // Leak detection is suite policy: every scalar-valued program run
+    // through the driver's evaluator asserts balance (A1 of
+    // docs/confidence-and-core-plan.md). This program leaks the array
+    // buffer the iterator consumed.
+    let typed = flow_driver("func f() -> Int {\n\tfor x in [1] { }\n\t2\n}\nf()");
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let _ = typed.lower().eval_with_output();
+}
+
+#[test]
+fn container_element_leak_fence_tolerates_the_deficit() {
+    // The greppable fence for Track B's known deficit: leaked allocations
+    // tolerated, leaked 'heap objects still an error, value still checked.
+    let typed = flow_driver("func f() -> Int {\n\tfor x in [1] { }\n\t2\n}\nf()");
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let (value, _) = typed
+        .lower()
+        .eval_expecting_container_element_leak()
+        .expect("eval");
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
+}
+
+#[test]
 fn move_inside_handler_body_is_may_moved_after() {
     // Handler bodies are CFG blocks with may-execute edges: a value moved
     // inside one is may-moved at the handling construct's join, exactly as

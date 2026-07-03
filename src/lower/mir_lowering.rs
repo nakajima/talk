@@ -1,14 +1,7 @@
 use super::*;
 use crate::lower::mir;
 
-#[derive(Clone, Copy)]
-enum MirRestBinding {
-    Bind(Symbol, bool),
-    Discard,
-    Deliver,
-    /// Bind the incoming value as a MIR temp for the rest's `Temp` reads.
-    Temp(u32),
-}
+
 
 struct PendingDrop {
     symbol: Symbol,
@@ -224,7 +217,6 @@ impl<'a> Lowering<'a> {
             | mir::Statement::StorageLive { .. }
             | mir::Statement::Read { .. }
             | mir::Statement::AssignmentRootUse { .. }
-            | mir::Statement::Perform { .. }
             | mir::Statement::DropCandidate { .. } => rest(self, ctx, k),
             mir::Statement::StorageDead { symbol, .. } => {
                 self.lower_mir_storage_dead(*symbol, cursor, ctx, k, cache)
@@ -232,6 +224,37 @@ impl<'a> Lowering<'a> {
             mir::Statement::Function { .. } => {
                 let rest_body = rest(self, ctx, k);
                 self.clear_moved_drop_flags_then(ctx, statement, rest_body)
+            }
+            mir::Statement::Perform {
+                expr,
+                temp,
+                result_ty,
+            } => {
+                // The perform evaluates HERE (resumable ones split the
+                // rest; the value binds the temp either way). A
+                // Never-returning perform aborts: the rest is unreachable.
+                if let Some(done) =
+                    self.try_mir_effect_split(expr, *temp, cursor, ctx, k, cache)
+                {
+                    return done;
+                }
+                let result_ty = result_ty
+                    .clone()
+                    .substitute(&ctx.theta, &Default::default(), &Default::default());
+                let result_ty = self.normalize_check_ty(result_ty, ctx.unit);
+                if result_ty.is_never() {
+                    return self.lower_expr_unpacked(expr, ctx, k);
+                }
+                let value_ty = self.map_ty(&result_ty);
+                let bot = self.p.ty_bot();
+                let kf = self.p.func("perform_temp", value_ty, bot);
+                let param = self.p.var(kf);
+                let mut tctx = ctx.clone();
+                tctx.temps.insert(*temp, param);
+                let rest_body = self.lower_mir_statements(cursor.advance(), &tctx, k, cache);
+                self.p.set_body(kf, rest_body);
+                let kref = self.p.func_ref(kf);
+                self.lower_expr_unpacked(expr, ctx, kref)
             }
             mir::Statement::Call {
                 expr,
@@ -242,14 +265,9 @@ impl<'a> Lowering<'a> {
                 // The call evaluates HERE; its value binds the temp the
                 // consuming statement reads. Abortable calls split the
                 // rest instead (they need the statement spine).
-                if let Some(done) = self.try_mir_effect_split(
-                    expr,
-                    MirRestBinding::Temp(*temp),
-                    cursor,
-                    ctx,
-                    k,
-                    cache,
-                ) {
+                if let Some(done) =
+                    self.try_mir_effect_split(expr, *temp, cursor, ctx, k, cache)
+                {
                     return done;
                 }
                 let result_ty = result_ty
@@ -320,16 +338,6 @@ impl<'a> Lowering<'a> {
                 } else {
                     ctx
                 };
-                if let Some(done) = self.try_mir_effect_split(
-                    expr,
-                    MirRestBinding::Deliver,
-                    cursor,
-                    value_ctx,
-                    target,
-                    cache,
-                ) {
-                    return done;
-                }
                 let target = self.wrap_moved_value_cont(value_ctx, statement, target);
                 self.lower_expr(expr, value_ctx, target)
             }
@@ -441,16 +449,6 @@ impl<'a> Lowering<'a> {
         };
 
         let mutated = ctx.cellable.contains(&symbol);
-        if let Some(done) = self.try_mir_effect_split(
-            rhs,
-            MirRestBinding::Bind(symbol, mutated),
-            cursor,
-            ctx,
-            k,
-            cache,
-        ) {
-            return done;
-        }
         let value_ty = self.expr_lambda_ty(rhs, ctx);
         let bot = self.p.ty_bot();
         let bind = self
@@ -1040,11 +1038,6 @@ impl<'a> Lowering<'a> {
         k: ExprId,
         cache: &mut MirBlockCache,
     ) -> ExprId {
-        if let Some(done) =
-            self.try_mir_effect_split(expr, MirRestBinding::Discard, cursor, ctx, k, cache)
-        {
-            return done;
-        }
         let (value_ty, pure_value) = match self.try_pure(expr, ctx) {
             Some(value) => (self.p.expr_ty(value), Some(value)),
             None => (self.expr_lambda_ty(expr, ctx), None),
@@ -1194,7 +1187,7 @@ impl<'a> Lowering<'a> {
     fn try_mir_effect_split(
         &mut self,
         expr: &Expr,
-        binding: MirRestBinding,
+        temp: u32,
         cursor: MirCursor,
         ctx: &Ctx,
         k: ExprId,
@@ -1214,7 +1207,7 @@ impl<'a> Lowering<'a> {
                 return Some(self.dead_end("resumable_perform_off_spine"));
             }
             let resume_ref =
-                self.rest_mir_closure("after_perform", pair_ty, binding, cursor, ctx, cache);
+                self.rest_mir_closure("after_perform", pair_ty, temp, cursor, ctx, cache);
             let slot = ctx.raw_ret_k;
             let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
             return Some(
@@ -1293,7 +1286,7 @@ impl<'a> Lowering<'a> {
         }
 
         let rest_ref =
-            self.rest_mir_closure("after_abortable", pair_ty, binding, cursor, ctx, cache);
+            self.rest_mir_closure("after_abortable", pair_ty, temp, cursor, ctx, cache);
         let slot = ctx.raw_ret_k;
         let func_ref = self.p.func_ref(label);
         let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
@@ -1311,7 +1304,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         name: &str,
         pair_ty: TyId,
-        binding: MirRestBinding,
+        temp: u32,
         cursor: MirCursor,
         ctx: &Ctx,
         cache: &mut MirBlockCache,
@@ -1324,50 +1317,9 @@ impl<'a> Lowering<'a> {
         let rk = self.p.extract(rest_var, 1);
         let mut inner = self.rebase_into_closure(ctx, rk);
         let inner_k = inner.ret_k;
-        let body_expr = match binding {
-            MirRestBinding::Bind(symbol, mutated) => {
-                let drop_binding = self
-                    .symbol_check_ty(symbol, &ctx.theta)
-                    .and_then(|ty| self.drop_binding_for_mir_symbol(cursor.body, symbol, ty));
-                if mutated {
-                    self.with_cells(&[(symbol, value)], &mut inner, |this, inner| {
-                        let drops = drop_binding.clone().into_iter().collect::<Vec<_>>();
-                        this.with_drop_flags(&drops, inner, |this, inner| {
-                            inner.drop_stack.extend(drops.clone());
-                            let rest_body = this.lower_mir_statements(
-                                cursor.advance(),
-                                inner,
-                                inner.ret_k,
-                                cache,
-                            );
-                            this.clear_moved_drop_flags_then(inner, cursor.statement(), rest_body)
-                        })
-                    })
-                } else {
-                    inner.env.insert(symbol, Binding::Value(value));
-                    let drops = drop_binding.into_iter().collect::<Vec<_>>();
-                    self.with_drop_flags(&drops, &mut inner, |this, inner| {
-                        inner.drop_stack.extend(drops.clone());
-                        let rest_body =
-                            this.lower_mir_statements(cursor.advance(), inner, inner_k, cache);
-                        this.clear_moved_drop_flags_then(inner, cursor.statement(), rest_body)
-                    })
-                }
-            }
-            MirRestBinding::Discard => {
-                let rest_body = self.lower_mir_statements(cursor.advance(), &inner, inner_k, cache);
-                self.clear_moved_drop_flags_then(&inner, cursor.statement(), rest_body)
-            }
-            MirRestBinding::Temp(temp) => {
-                inner.temps.insert(temp, value);
-                let rest_body = self.lower_mir_statements(cursor.advance(), &inner, inner_k, cache);
-                self.clear_moved_drop_flags_then(&inner, cursor.statement(), rest_body)
-            }
-            MirRestBinding::Deliver => {
-                let deliver = self.p.app(inner_k, value);
-                self.clear_moved_drop_flags_then(&inner, cursor.statement(), deliver)
-            }
-        };
+        inner.temps.insert(temp, value);
+        let rest_body = self.lower_mir_statements(cursor.advance(), &inner, inner_k, cache);
+        let body_expr = self.clear_moved_drop_flags_then(&inner, cursor.statement(), rest_body);
         self.p.set_body(rest_k, body_expr);
         self.p.func_ref(rest_k)
     }
@@ -1439,15 +1391,15 @@ impl<'a> Lowering<'a> {
                 scrutinee,
                 match_arms: Some(arms),
                 arms: arm_blocks,
-                default,
+                join,
                 result,
+                ..
             } => {
                 // The arms are real blocks: compile the decision tree with
                 // a value-carrying join continuation — arm tails deliver
                 // the match's value, the join binds it as the temp the
-                // consuming statement (in the join block) reads. No join
-                // (every arm diverges): `k_arm` is never applied.
-                let join = Self::switch_join_target(cursor, arm_blocks, *default);
+                // consuming statement (in the join block) reads.
+                let join = Some(*join);
                 let k_arm = match (join, result) {
                     (Some(join_block), Some((temp, result_ty))) => {
                         // The stored type is the checker's raw (possibly
