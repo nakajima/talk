@@ -100,6 +100,11 @@ pub(crate) struct Body {
     pub(crate) entry: BlockId,
     pub(crate) blocks: Vec<BasicBlock>,
     pub(crate) locals: Vec<LocalDecl>,
+    /// Expression-position control constructs: the construct's expr id →
+    /// the block whose terminator branches into its arm blocks. Lowering
+    /// lowers the construct FROM these blocks (value through the
+    /// continuation) when the consuming statement's expression reaches it.
+    pub(crate) scaffolds: FxHashMap<NodeID, BlockId>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -181,13 +186,22 @@ pub(crate) enum Statement {
         target: DropTarget,
         key_path: Option<KeyPath>,
         reason: DropReason,
+        /// The HIR node whose flow results elaborate this candidate: the
+        /// scope's source block for `ScopeExit`, the jumping/assigning
+        /// statement for `EarlyExit`/`AssignmentReplace`. Placement is
+        /// structural; the flow checker fills `ownership.drop` afterwards.
+        source: NodeID,
     },
     Call {
         callee: Expr,
         args: Vec<CallArg>,
         trailing_block: Option<Block>,
     },
-    Perform,
+    Perform {
+        /// The whole `CallEffect` expression: the flow checker consumes its
+        /// arguments here (their evaluation statements are plain reads).
+        expr: Expr,
+    },
     ReturnValue {
         expr: Expr,
         destination: ValueDestination,
@@ -201,6 +215,11 @@ pub(crate) enum Statement {
         captures: Vec<CaptureSpec>,
         params: Vec<Parameter>,
         body: Box<Block>,
+        /// For a named nested `func` declaration: the whole node, so the
+        /// flow checker can apply its capture effects at this statement.
+        /// Other function-like statements (closure values, methods, inits)
+        /// apply theirs at their embedded consumption sites, or not at all.
+        decl_func: Option<Box<crate::hir::Func>>,
     },
     Handling {
         stmt: Stmt,
@@ -214,7 +233,15 @@ pub(crate) enum Statement {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ValueDestination {
+    /// A nested tail delivery (branch arm, block value): the value flows on
+    /// within the function.
     Continuation,
+    /// The body's own tail expression: the function's return value.
+    /// Lowering treats it exactly like `Continuation` (CPS delivers to the
+    /// same continuation); the flow checker provenance-checks it as a
+    /// return.
+    TailReturn,
+    /// A source `return`.
     Return,
 }
 
@@ -244,6 +271,11 @@ pub(crate) enum Terminator {
         condition: Expr,
         then_block: BlockId,
         else_block: BlockId,
+        /// An expression-position `if`: the arm blocks are analysis
+        /// scaffolding (the value — and evaluation — rides the expression
+        /// embedded in the enclosing statement, like a `Switch`'s arms).
+        /// Statement-position branches own their arm content.
+        in_expression: bool,
     },
     Switch {
         scrutinee: Expr,
@@ -262,74 +294,294 @@ pub(crate) enum Terminator {
 struct LoopTargets {
     continue_target: BlockId,
     break_target: BlockId,
+    /// `scope_stack.len()` at loop entry: a `break`/`continue` leaves only
+    /// the scopes at or above this depth, so its early-exit drops are
+    /// target-relative instead of covering every enclosing scope.
+    scope_depth: usize,
 }
 
 struct Builder<'types> {
     types: &'types TypeOutput,
+    grades: crate::flow::grades::GradeView<'types>,
     blocks: Vec<BasicBlock>,
     scopes: Vec<Scope>,
     locals: Vec<LocalDecl>,
     local_by_symbol: FxHashMap<Symbol, Local>,
     scope_stack: Vec<ScopeFrame>,
     loop_stack: Vec<LoopTargets>,
+    /// Whether this body's root-scope tail is the function's return value
+    /// (true for function/top-level bodies; false for standalone match-arm
+    /// bodies, whose tail delivers to the match join).
+    root_tail_is_return: bool,
+    scaffolds: FxHashMap<NodeID, BlockId>,
 }
 
 #[derive(Debug)]
 struct ScopeFrame {
     id: ScopeId,
+    /// The HIR block this scope was built from (`NodeID::SYNTHESIZED` for
+    /// the top-level file scope): the `source` its drop candidates carry.
+    source: NodeID,
     locals: Vec<(NodeID, Symbol)>,
-    /// The flow checker's scope-exit schedules for the HIR block this scope
-    /// was built from (empty for synthetic scopes): the sole source of drop
-    /// elaboration, joined to this scope's `DropCandidate`s by root symbol.
-    drops: Vec<crate::flow::drops::DropSchedule>,
+    /// Root-scope locals with no `let` of their own — owned by-value
+    /// parameters, whose storage is the caller's move: drop candidates at
+    /// scope exit, but no StorageLive/StorageDead.
+    param_likes: Vec<(NodeID, Symbol)>,
 }
 
-fn elaboration_for_schedule(
-    schedule: &crate::flow::drops::DropSchedule,
-) -> DropElaborationResult {
-    DropElaborationResult {
-        key_path: schedule.place.clone(),
-        kind: schedule.kind,
-    }
-}
-
-pub(crate) fn build_function(types: &TypeOutput, _owner: Option<Symbol>, block: &Block) -> Body {
-    let mut builder = Builder::new(types);
-    let entry = builder.new_block();
-    let exit = builder.lower_scope(entry, block.drops.clone(), |builder, entry| {
-        builder.lower_nodes(&block.body, entry, true)
-    });
-    builder.terminate_if_open(exit, Terminator::Return);
-    builder.finish(entry)
-}
-
-/// Build a top-level body. `drops` is the file-scope drop schedule (or the
-/// concatenation of several files' schedules for the combined `main` body).
-pub(crate) fn build_nodes(
+pub(crate) fn build_function(
     types: &TypeOutput,
-    nodes: &[Node],
-    drops: Vec<crate::flow::drops::DropSchedule>,
+    owner: Option<Symbol>,
+    params: &[Parameter],
+    block: &Block,
 ) -> Body {
     let mut builder = Builder::new(types);
     let entry = builder.new_block();
-    let exit = builder.lower_scope(entry, drops, |builder, entry| {
-        builder.lower_nodes(nodes, entry, true)
+    let param_likes = builder.owned_param_locals(owner, params);
+    let exit = builder.lower_body_scope(entry, block.id, param_likes, |builder, entry| {
+        builder.lower_nodes(&block.body, entry, true, true)
     });
     builder.terminate_if_open(exit, Terminator::Return);
     builder.finish(entry)
+}
+
+/// Build an init's body: no owned params (self is constructed and
+/// delivered, never dropped here), and the tail is not a semantic return —
+/// the caller receives self, so no return-provenance applies to it.
+pub(crate) fn build_init_body(types: &TypeOutput, block: &Block) -> Body {
+    let mut builder = Builder::new(types);
+    builder.root_tail_is_return = false;
+    let entry = builder.new_block();
+    let exit = builder.lower_body_scope(entry, block.id, vec![], |builder, entry| {
+        builder.lower_nodes(&block.body, entry, true, false)
+    });
+    builder.terminate_if_open(exit, Terminator::Return);
+    builder.finish(entry)
+}
+
+/// Match-arm payload binders that need release at arm exit, with their
+/// types — the rest are pure aliases of the scrutinee's payload (the flow
+/// checker's alias rule). Shared between the builder's arm bodies and
+/// lowering's arm drop-stack seeding.
+pub(crate) fn arm_release_binders(
+    types: &TypeOutput,
+    pattern: &Pattern,
+) -> Vec<(NodeID, Symbol, Ty)> {
+    let grades = crate::flow::grades::GradeView::new(types);
+    pattern
+        .collect_binders()
+        .into_iter()
+        .filter_map(|(id, symbol)| {
+            let ty = types
+                .local_tys
+                .get(&symbol)
+                .or_else(|| types.node_types.get(&id))?;
+            grades.needs_drop(ty).then(|| (id, symbol, ty.clone()))
+        })
+        .collect()
+}
+
+/// Build a match arm's body as a standalone body: the arm's pattern
+/// binders that need release are root-frame locals (drop candidates at
+/// scope exit, no storage statements — like owned by-value parameters,
+/// their storage is the scrutinee's).
+pub(crate) fn build_arm_body(types: &TypeOutput, pattern: &Pattern, block: &Block) -> Body {
+    let mut builder = Builder::new(types);
+    builder.root_tail_is_return = false;
+    let entry = builder.new_block();
+    let binders = builder.arm_binder_locals(pattern);
+    let exit = builder.lower_body_scope(entry, block.id, binders, |builder, entry| {
+        builder.lower_nodes(&block.body, entry, true, false)
+    });
+    builder.terminate_if_open(exit, Terminator::Return);
+    builder.finish(entry)
+}
+
+/// Build a top-level body (a file's roots, or several files' concatenated
+/// for the combined `main` body).
+pub(crate) fn build_nodes(types: &TypeOutput, nodes: &[Node]) -> Body {
+    let mut builder = Builder::new(types);
+    let entry = builder.new_block();
+    let exit = builder.lower_scope(entry, NodeID::SYNTHESIZED, |builder, entry| {
+        builder.lower_nodes(nodes, entry, true, true)
+    });
+    builder.terminate_if_open(exit, Terminator::Return);
+    builder.finish(entry)
+}
+
+/// The nodes the synthetic `main` executes: every file's top-level
+/// statements and non-func `let` declarations, in source order — the same
+/// filter `lower_main` applies, shared so the flow checker analyzes and
+/// annotates exactly the body lowering runs.
+pub fn main_body_nodes<'a>(
+    files: impl Iterator<Item = &'a crate::hir::HirFile>,
+) -> Vec<Node> {
+    let mut nodes = vec![];
+    for file in files {
+        for root in &file.roots {
+            match root {
+                Node::Stmt(_) => nodes.push(root.clone()),
+                Node::Decl(decl) => {
+                    if let DeclKind::Let { rhs: Some(rhs), .. } = &decl.kind
+                        && !matches!(rhs.kind, ExprKind::Func(_))
+                    {
+                        nodes.push(root.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    nodes
+}
+
+/// One module's checkable bodies (functions, methods, closures, inits),
+/// keyed by body block, plus the combined top-level `main` body: built
+/// structurally BEFORE the flow pass, annotated by it, consumed by
+/// lowering. Lowering still builds on miss (an inlined constant's nested
+/// value blocks) as an unchecked fallback.
+#[derive(Clone, Debug, Default)]
+pub struct ModuleBodies {
+    map: FxHashMap<NodeID, std::sync::Arc<Body>>,
+    top_level: Option<std::sync::Arc<Body>>,
+}
+
+impl ModuleBodies {
+    pub(crate) fn get(&self, block: NodeID) -> Option<std::sync::Arc<Body>> {
+        self.map.get(&block).cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Mutable access for the flow checker's annotation passes (the store
+    /// is unshared until lowering clones it out).
+    pub(crate) fn get_mut(&mut self, block: NodeID) -> Option<&mut Body> {
+        std::sync::Arc::get_mut(self.map.get_mut(&block)?)
+    }
+
+    /// The combined top-level `main` body (see `main_body_nodes`).
+    pub(crate) fn top_level(&self) -> Option<std::sync::Arc<Body>> {
+        self.top_level.clone()
+    }
+
+    pub(crate) fn set_top_level(&mut self, body: Body) {
+        self.top_level = Some(std::sync::Arc::new(body));
+    }
+}
+
+/// Enumerate and build every function-like body in a module's HIR:
+/// `hir::Func` bodies (functions, methods, closures) and init bodies.
+pub fn build_module_bodies<'a>(
+    types: &TypeOutput,
+    files: impl Iterator<Item = &'a crate::hir::HirFile>,
+) -> ModuleBodies {
+    use derive_visitor::{Drive, Visitor};
+
+    struct Collect<'t> {
+        types: &'t TypeOutput,
+        bodies: ModuleBodies,
+    }
+
+    impl Visitor for Collect<'_> {
+        fn visit(&mut self, item: &dyn std::any::Any, event: derive_visitor::Event) {
+            if !matches!(event, derive_visitor::Event::Enter) {
+                return;
+            }
+            if let Some(func) = item.downcast_ref::<crate::hir::Func>() {
+                let owner = func.name.symbol().ok();
+                let body = build_function(self.types, owner, &func.params, &func.body);
+                self.bodies
+                    .map
+                    .insert(func.body.id, std::sync::Arc::new(body));
+            }
+            if let Some(decl) = item.downcast_ref::<Decl>()
+                && let DeclKind::Init { body, .. } = &decl.kind
+            {
+                let built = build_init_body(self.types, body);
+                self.bodies.map.insert(body.id, std::sync::Arc::new(built));
+            }
+        }
+    }
+
+    let mut collect = Collect {
+        types,
+        bodies: ModuleBodies::default(),
+    };
+    for file in files {
+        for root in &file.roots {
+            root.drive(&mut collect);
+        }
+    }
+    collect.bodies
 }
 
 impl<'types> Builder<'types> {
     fn new(types: &'types TypeOutput) -> Self {
         Self {
             types,
+            grades: crate::flow::grades::GradeView::new(types),
             blocks: vec![],
             scopes: vec![],
             locals: vec![],
             local_by_symbol: FxHashMap::default(),
             scope_stack: vec![],
             loop_stack: vec![],
+            root_tail_is_return: true,
+            scaffolds: FxHashMap::default(),
         }
+    }
+
+    /// The owned by-value parameters of a body: consumed arguments' drops
+    /// ride the callee, so each is a scope local of the body's root frame.
+    /// The same filter the flow checker's `seed_params` applies: borrows
+    /// aren't locals, and `'heap`-carrying parameters are exempt (params
+    /// neither acquire nor release the region ledger).
+    fn owned_param_locals(
+        &mut self,
+        owner: Option<Symbol>,
+        params: &[Parameter],
+    ) -> Vec<(NodeID, Symbol)> {
+        let scheme_params = owner
+            .and_then(|owner| self.types.schemes.get(&owner))
+            .and_then(|scheme| match &scheme.ty {
+                Ty::Func(params, ..) => Some(params.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let mut locals = vec![];
+        for (index, param) in params.iter().enumerate() {
+            let Ok(symbol) = param.name.symbol() else {
+                continue;
+            };
+            let Some(ty) = param
+                .ty
+                .clone()
+                .or_else(|| self.types.node_types.get(&param.id).cloned())
+                .or_else(|| scheme_params.get(index).cloned())
+            else {
+                continue;
+            };
+            if self.grades.contains_borrowed(&ty) {
+                continue;
+            }
+            if self.grades.needs_drop(&ty) && !self.grades.contains_object(&ty) {
+                locals.push((param.id, symbol));
+            }
+        }
+        locals
+    }
+
+    /// Match-arm payload binders that need release at arm exit — the rest
+    /// are pure aliases of the scrutinee's payload (the flow checker's
+    /// alias rule) with no ledger events of their own.
+    fn arm_binder_locals(&mut self, pattern: &Pattern) -> Vec<(NodeID, Symbol)> {
+        arm_release_binders(self.types, pattern)
+            .into_iter()
+            .map(|(id, symbol, _)| (id, symbol))
+            .collect()
     }
 
     fn finish(self, entry: BlockId) -> Body {
@@ -337,6 +589,7 @@ impl<'types> Builder<'types> {
             entry,
             blocks: self.blocks,
             locals: self.locals,
+            scaffolds: self.scaffolds,
         }
     }
 
@@ -399,6 +652,7 @@ impl<'types> Builder<'types> {
         nodes: &[Node],
         mut current: BlockId,
         mark_tail_exprs: bool,
+        tail_exits: bool,
     ) -> BlockId {
         let last = nodes.len().saturating_sub(1);
         for (index, node) in nodes.iter().enumerate() {
@@ -408,26 +662,48 @@ impl<'types> Builder<'types> {
             let is_tail = mark_tail_exprs && index == last;
             let tail_expr = is_tail.then(|| tail_expr(node)).flatten();
             let tail_control_value = is_tail && node_is_value_control(node);
-            current = self.lower_node(node, current, tail_expr.is_none() && !tail_control_value);
+            current = self.lower_node(
+                node,
+                current,
+                tail_expr.is_none() && !tail_control_value,
+                is_tail && tail_exits,
+            );
             if let Some(expr) = tail_expr {
+                // Only the root scope's tail is the function's return value;
+                // nested tails (branch arms, value blocks) deliver within it.
+                let destination = if self.scope_stack.len() == 1 && self.root_tail_is_return {
+                    ValueDestination::TailReturn
+                } else {
+                    ValueDestination::Continuation
+                };
                 self.push_statement(
                     current,
                     Statement::ReturnValue {
                         expr: expr.clone(),
-                        destination: ValueDestination::Continuation,
+                        destination,
                     },
                 );
-                // A tail delivery inside branch scopes leaves the function:
-                // the enclosing frames' scope-exit drops must ride this
-                // path (their own exit blocks are unreachable from here).
-                // Drop flags keep them per-path correct.
-                self.emit_enclosing_scope_drops(current);
+                // A tail delivery that leaves the function (a branch arm on
+                // the function's tail path): the enclosing frames'
+                // scope-exit drops must ride this path (their own exit
+                // blocks are unreachable from here). Drop flags keep them
+                // per-path correct. Expression-position deliveries stay
+                // inside the function: no enclosing drops.
+                if tail_exits {
+                    self.emit_enclosing_scope_drops(current);
+                }
             }
         }
         current
     }
 
-    fn lower_node(&mut self, node: &Node, current: BlockId, consume_expr_value: bool) -> BlockId {
+    fn lower_node(
+        &mut self,
+        node: &Node,
+        current: BlockId,
+        consume_expr_value: bool,
+        tail_exits: bool,
+    ) -> BlockId {
         match node {
             Node::Decl(decl) => self.lower_decl(decl, current),
             Node::Stmt(Stmt {
@@ -441,7 +717,7 @@ impl<'types> Builder<'types> {
                 kind: StmtKind::Expr(expr),
                 ..
             }) if !consume_expr_value => self.lower_expr(expr, current),
-            Node::Stmt(stmt) => self.lower_stmt(stmt, current, consume_expr_value),
+            Node::Stmt(stmt) => self.lower_stmt(stmt, current, consume_expr_value, tail_exits),
             Node::Expr(expr) => {
                 let current = self.lower_expr(expr, current);
                 if consume_expr_value {
@@ -481,6 +757,7 @@ impl<'types> Builder<'types> {
                                 captures: func.captures.clone(),
                                 params: func.params.clone(),
                                 body: Box::new(func.body.clone()),
+                                decl_func: None,
                             },
                         );
                         current
@@ -518,6 +795,7 @@ impl<'types> Builder<'types> {
                         captures: func.captures.clone(),
                         params: func.params.clone(),
                         body: Box::new(func.body.clone()),
+                        decl_func: Some(Box::new(func.clone())),
                     },
                 );
                 current
@@ -532,6 +810,7 @@ impl<'types> Builder<'types> {
                         captures: func.captures.clone(),
                         params: func.params.clone(),
                         body: Box::new(func.body.clone()),
+                        decl_func: None,
                     },
                 );
                 current
@@ -549,6 +828,7 @@ impl<'types> Builder<'types> {
                         captures: vec![],
                         params: params.clone(),
                         body: Box::new(body.clone()),
+                        decl_func: None,
                     },
                 );
                 current
@@ -571,13 +851,19 @@ impl<'types> Builder<'types> {
         }
     }
 
-    fn lower_stmt(&mut self, stmt: &Stmt, current: BlockId, consume_expr_value: bool) -> BlockId {
+    fn lower_stmt(
+        &mut self,
+        stmt: &Stmt,
+        current: BlockId,
+        consume_expr_value: bool,
+        tail_exits: bool,
+    ) -> BlockId {
         match &stmt.kind {
             StmtKind::Expr(Expr {
                 kind: ExprKind::Block(block),
                 ..
-            }) => self.lower_scope(current, block.drops.clone(), |builder, current| {
-                builder.lower_nodes(&block.body, current, false)
+            }) => self.lower_scope(current, block.id, |builder, current| {
+                builder.lower_nodes(&block.body, current, false, false)
             }),
             StmtKind::Expr(expr) => {
                 let current = self.lower_expr(expr, current);
@@ -598,12 +884,12 @@ impl<'types> Builder<'types> {
                         destination: ValueDestination::Return,
                     },
                 );
-                self.emit_early_exit_drops(current, &stmt.drops);
+                self.emit_early_exit_drops(current, stmt.id, 0);
                 self.terminate_if_open(current, Terminator::Return);
                 current
             }
             StmtKind::Return(None) => {
-                self.emit_early_exit_drops(current, &stmt.drops);
+                self.emit_early_exit_drops(current, stmt.id, 0);
                 self.terminate_if_open(current, Terminator::ReturnVoid);
                 current
             }
@@ -615,7 +901,7 @@ impl<'types> Builder<'types> {
                         expr: expr.clone(),
                     },
                 );
-                self.emit_early_exit_drops(current, &stmt.drops);
+                self.emit_early_exit_drops(current, stmt.id, self.loop_scope_depth());
                 let terminator = self
                     .loop_stack
                     .last()
@@ -625,7 +911,7 @@ impl<'types> Builder<'types> {
                 current
             }
             StmtKind::Continue(None) => {
-                self.emit_early_exit_drops(current, &stmt.drops);
+                self.emit_early_exit_drops(current, stmt.id, self.loop_scope_depth());
                 let terminator = self
                     .loop_stack
                     .last()
@@ -635,7 +921,7 @@ impl<'types> Builder<'types> {
                 current
             }
             StmtKind::Break => {
-                self.emit_early_exit_drops(current, &stmt.drops);
+                self.emit_early_exit_drops(current, stmt.id, self.loop_scope_depth());
                 let terminator = self
                     .loop_stack
                     .last()
@@ -648,23 +934,16 @@ impl<'types> Builder<'types> {
                 let current = self.lower_expr(rhs, current);
                 self.lower_assignment_lhs(lhs, current);
                 let target_key_path = self.key_path_for_expr(lhs);
-                // The old value's drop, scheduled by the flow checker on
-                // this assignment statement.
-                let elaboration = stmt
-                    .drops
-                    .iter()
-                    .find(|schedule| {
-                        schedule.reason == crate::flow::drops::DropReason::AssignmentReplace
-                    })
-                    .map(elaboration_for_schedule);
-                self.push_statement_with_drop(
+                // The old value's drop; the flow checker classifies it at
+                // the pre-assignment state.
+                self.push_statement(
                     current,
                     Statement::DropCandidate {
                         target: DropTarget::Expr((**lhs).clone()),
                         key_path: target_key_path.clone(),
                         reason: DropReason::AssignmentReplace,
+                        source: stmt.id,
                     },
-                    elaboration,
                 );
                 self.push_statement(
                     current,
@@ -682,6 +961,8 @@ impl<'types> Builder<'types> {
                 else_block.as_ref(),
                 current,
                 !consume_expr_value,
+                tail_exits,
+                None,
             ),
             StmtKind::Loop(condition, body) => self.lower_loop(condition.as_ref(), body, current),
             StmtKind::Handling {
@@ -710,11 +991,9 @@ impl<'types> Builder<'types> {
                 self.lower_exprs(items, current)
             }
             ExprKind::As(inner, _) => self.lower_expr(inner, current),
-            ExprKind::Block(block) => {
-                self.lower_scope(current, block.drops.clone(), |builder, current| {
-                    builder.lower_nodes(&block.body, current, true)
-                })
-            }
+            ExprKind::Block(block) => self.lower_scope(current, block.id, |builder, current| {
+                builder.lower_nodes(&block.body, current, true, false)
+            }),
             ExprKind::Call {
                 callee,
                 args,
@@ -740,7 +1019,7 @@ impl<'types> Builder<'types> {
                 for arg in args {
                     current = self.lower_expr(&arg.value, current);
                 }
-                self.push_statement(current, Statement::Perform);
+                self.push_statement(current, Statement::Perform { expr: expr.clone() });
                 current
             }
             ExprKind::Member(Some(receiver), ..) => {
@@ -760,16 +1039,29 @@ impl<'types> Builder<'types> {
                         captures: func.captures.clone(),
                         params: func.params.clone(),
                         body: Box::new(func.body.clone()),
+                        decl_func: None,
                     },
                 );
                 current
             }
             ExprKind::If(condition, then_block, else_block) => {
-                let current = self.lower_expr(condition, current);
-                let current = self.lower_block_tail_exprs(then_block, current);
-                self.lower_block_tail_exprs(else_block, current)
+                // An expression-position `if` builds real blocks — a
+                // `break`/`continue`/move inside an arm must be a CFG edge,
+                // not text flattened into the current block. Lowering
+                // lowers the arms from these blocks when the consuming
+                // statement's expression reaches this construct; the arm
+                // tails deliver its value through the continuation.
+                self.lower_if(
+                    condition,
+                    then_block,
+                    Some(else_block),
+                    current,
+                    true,
+                    false,
+                    Some(expr.id),
+                )
             }
-            ExprKind::Match(scrutinee, arms) => self.lower_match(scrutinee, arms, current),
+            ExprKind::Match(scrutinee, arms) => self.lower_match(expr.id, scrutinee, arms, current),
             ExprKind::RecordLiteral { fields, spread } => {
                 let mut current = current;
                 if let Some(spread) = spread {
@@ -797,13 +1089,6 @@ impl<'types> Builder<'types> {
             current = self.lower_expr(expr, current);
         }
         current
-    }
-
-    fn lower_block_tail_exprs(&mut self, block: &Block, current: BlockId) -> BlockId {
-        match block.body.last().and_then(tail_expr) {
-            Some(expr) => self.lower_expr(expr, current),
-            None => current,
-        }
     }
 
     fn lower_assignment_lhs(&mut self, expr: &Expr, current: BlockId) {
@@ -841,6 +1126,7 @@ impl<'types> Builder<'types> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lower_if(
         &mut self,
         condition: &Expr,
@@ -848,28 +1134,34 @@ impl<'types> Builder<'types> {
         else_block: Option<&Block>,
         current: BlockId,
         mark_tail_exprs: bool,
+        tail_exits: bool,
+        scaffold: Option<NodeID>,
     ) -> BlockId {
         let current = self.lower_expr(condition, current);
         let then_id = self.new_block();
         let else_id = self.new_block();
         let join_id = self.new_block();
+        if let Some(expr_id) = scaffold {
+            self.scaffolds.insert(expr_id, current);
+        }
         self.terminate_if_open(
             current,
             Terminator::Branch {
                 condition: condition.clone(),
                 then_block: then_id,
                 else_block: else_id,
+                in_expression: scaffold.is_some(),
             },
         );
 
-        let then_exit = self.lower_scope(then_id, then_block.drops.clone(), |builder, then_id| {
-            builder.lower_nodes(&then_block.body, then_id, mark_tail_exprs)
+        let then_exit = self.lower_scope(then_id, then_block.id, |builder, then_id| {
+            builder.lower_nodes(&then_block.body, then_id, mark_tail_exprs, tail_exits)
         });
         self.terminate_if_open(then_exit, Terminator::Jump(join_id));
 
         let else_exit = if let Some(else_block) = else_block {
-            self.lower_scope(else_id, else_block.drops.clone(), |builder, else_id| {
-                builder.lower_nodes(&else_block.body, else_id, mark_tail_exprs)
+            self.lower_scope(else_id, else_block.id, |builder, else_id| {
+                builder.lower_nodes(&else_block.body, else_id, mark_tail_exprs, tail_exits)
             })
         } else {
             else_id
@@ -909,9 +1201,10 @@ impl<'types> Builder<'types> {
         self.loop_stack.push(LoopTargets {
             continue_target: header_id,
             break_target: exit_id,
+            scope_depth: self.scope_stack.len(),
         });
-        let body_exit = self.lower_scope(body_id, body.drops.clone(), |builder, body_id| {
-            builder.lower_nodes(&body.body, body_id, false)
+        let body_exit = self.lower_scope(body_id, body.id, |builder, body_id| {
+            builder.lower_nodes(&body.body, body_id, false, false)
         });
         self.loop_stack.pop();
         self.terminate_if_open(body_exit, Terminator::Jump(header_id));
@@ -919,10 +1212,17 @@ impl<'types> Builder<'types> {
         exit_id
     }
 
-    fn lower_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], current: BlockId) -> BlockId {
+    fn lower_match(
+        &mut self,
+        expr_id: NodeID,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        current: BlockId,
+    ) -> BlockId {
         let current = self.lower_expr(scrutinee, current);
         let join_id = self.new_block();
         let arm_blocks: Vec<_> = arms.iter().map(|_| self.new_block()).collect();
+        self.scaffolds.insert(expr_id, current);
         self.terminate_if_open(
             current,
             Terminator::Switch {
@@ -934,9 +1234,9 @@ impl<'types> Builder<'types> {
         );
 
         for (arm, arm_id) in arms.iter().zip(arm_blocks) {
-            let arm_exit = self.lower_scope(arm_id, arm.body.drops.clone(), |builder, arm_id| {
+            let arm_exit = self.lower_scope(arm_id, arm.body.id, |builder, arm_id| {
                 builder.lower_pattern_binders(&arm.pattern, arm_id);
-                builder.lower_nodes(&arm.body.body, arm_id, true)
+                builder.lower_nodes(&arm.body.body, arm_id, true, false)
             });
             self.terminate_if_open(arm_exit, Terminator::Jump(join_id));
         }
@@ -955,98 +1255,20 @@ impl<'types> Builder<'types> {
     }
 
     fn push_statement(&mut self, block: BlockId, statement: Statement) {
-        let moves = self.statement_moves(&statement);
         self.blocks[block.0].statements.push(LocatedStatement {
             kind: statement,
-            ownership: StatementOwnership {
-                drop: None,
-                moves,
-            },
+            ownership: StatementOwnership::default(),
         });
     }
 
-    /// Push a statement carrying its drop elaboration (a `DropCandidate`
-    /// whose schedule the flow checker wrote onto the HIR).
-    fn push_statement_with_drop(
-        &mut self,
-        block: BlockId,
-        statement: Statement,
-        elaboration: Option<DropElaborationResult>,
-    ) {
-        self.push_statement(block, statement);
-        if let Some(last) = self.blocks[block.0].statements.last_mut() {
-            last.ownership.drop = elaboration;
-        }
-    }
-
-    /// The places this statement moves, read off the flow checker's
-    /// `Expr.ownership.consumes` annotations on the embedded expressions
-    /// (plus `[consuming]` closure captures). Lowering clears these places'
-    /// drop flags after the statement. The same expression may be embedded
-    /// in more than one statement; flag-clearing is idempotent, so the
-    /// duplication is harmless.
-    fn statement_moves(&mut self, statement: &Statement) -> Vec<crate::flow::Place> {
-        let mut exprs: Vec<&Expr> = vec![];
-        match statement {
-            Statement::ConsumeValue { expr, .. }
-            | Statement::ReturnValue { expr, .. }
-            | Statement::ContinueValue { expr, .. }
-            | Statement::Read { expr } => exprs.push(expr),
-            Statement::Bind { rhs: Some(rhs), .. } => exprs.push(rhs),
-            Statement::Assign { rhs, .. } => exprs.push(rhs),
-            Statement::Call { callee, args, .. } => {
-                exprs.push(callee);
-                exprs.extend(args.iter().map(|arg| &arg.value));
-            }
-            Statement::Function { captures, .. } => {
-                return captures
-                    .iter()
-                    .filter(|capture| {
-                        matches!(capture.mode, crate::node_kinds::func::CaptureMode::Move)
-                    })
-                    .filter_map(|capture| capture.name.symbol().ok())
-                    .map(crate::flow::Place::root)
-                    .collect();
-            }
-            _ => {}
-        }
-        let mut moves = vec![];
-        for expr in exprs {
-            self.collect_consumed_places(expr, &mut moves);
-        }
-        moves
-    }
-
-    /// Collect the consumed places directly moved by this statement's
-    /// expression: a consumed place expression, or place-typed elements of
-    /// aggregate literals — exactly the legacy `collect_consumed_value_exprs`
-    /// recursion. Nested control flow, calls, and function bodies are NOT
-    /// descended: their moves ride their own statements, keeping drop-flag
-    /// clearing per-path precise.
-    fn collect_consumed_places(&mut self, expr: &Expr, out: &mut Vec<crate::flow::Place>) {
-        if expr.ownership.consumes
-            && let Some(key_path) = crate::flow::place_for_expr(self.types, expr)
-        {
-            out.push(key_path);
-            return;
-        }
-        match &expr.kind {
-            ExprKind::Tuple(items) | ExprKind::LiteralArray(items) => {
-                for item in items {
-                    self.collect_consumed_places(item, out);
-                }
-            }
-            ExprKind::RecordLiteral { fields, spread } => {
-                for field in fields {
-                    self.collect_consumed_places(&field.value, out);
-                }
-                if let Some(spread) = spread {
-                    self.collect_consumed_places(spread, out);
-                }
-            }
-            ExprKind::As(inner, _) => self.collect_consumed_places(inner, out),
-            _ => {}
-        }
+    /// The scope depth a `break`/`continue` unwinds to: the innermost
+    /// loop's entry depth (0 outside any loop, where the jump is an error
+    /// anyway).
+    fn loop_scope_depth(&self) -> usize {
+        self.loop_stack
+            .last()
+            .map(|targets| targets.scope_depth)
+            .unwrap_or(0)
     }
 
     /// Push a scope frame (parent = the enclosing frame, if any), lower
@@ -1054,15 +1276,28 @@ impl<'types> Builder<'types> {
     fn lower_scope(
         &mut self,
         current: BlockId,
-        drops: Vec<crate::flow::drops::DropSchedule>,
+        source: NodeID,
+        lower: impl FnOnce(&mut Self, BlockId) -> BlockId,
+    ) -> BlockId {
+        self.lower_body_scope(current, source, vec![], lower)
+    }
+
+    /// `lower_scope` for a body's root frame, seeding its owned by-value
+    /// parameters as param-like locals.
+    fn lower_body_scope(
+        &mut self,
+        current: BlockId,
+        source: NodeID,
+        param_likes: Vec<(NodeID, Symbol)>,
         lower: impl FnOnce(&mut Self, BlockId) -> BlockId,
     ) -> BlockId {
         let parent = self.scope_stack.last().map(|scope| scope.id);
         let scope = self.new_scope(parent);
         self.scope_stack.push(ScopeFrame {
             id: scope,
+            source,
             locals: vec![],
-            drops,
+            param_likes,
         });
         self.push_statement(current, Statement::ScopeEnter { scope });
         let exit = lower(self, current);
@@ -1084,63 +1319,50 @@ impl<'types> Builder<'types> {
         if self.scope_stack.len() < 2 {
             return;
         }
-        let outer: Vec<(Vec<(NodeID, Symbol)>, Vec<crate::flow::drops::DropSchedule>)> = self
-            .scope_stack[..self.scope_stack.len() - 1]
-            .iter()
-            .rev()
-            .map(|frame| (frame.locals.clone(), frame.drops.clone()))
-            .collect();
-        for (locals, schedules) in outer {
-            self.emit_frame_drop_candidates(current, &locals, &schedules);
+        for index in (0..self.scope_stack.len() - 1).rev() {
+            self.emit_frame_drop_candidates(current, index, false);
         }
     }
 
-    fn emit_frame_drop_candidates(
-        &mut self,
-        current: BlockId,
-        locals: &[(NodeID, Symbol)],
-        schedules: &[crate::flow::drops::DropSchedule],
-    ) {
+    /// One frame's scope-exit drop candidates: `let` locals in reverse
+    /// declaration order (with storage teardown when `with_storage`), then
+    /// param-like locals (candidates only — their storage is the caller's).
+    fn emit_frame_drop_candidates(&mut self, current: BlockId, frame: usize, with_storage: bool) {
+        let source = self.scope_stack[frame].source;
+        let locals = self.scope_stack[frame].locals.clone();
+        let param_likes = self.scope_stack[frame].param_likes.clone();
         for (id, symbol) in locals.iter().rev().copied() {
             let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
-            let elaboration = schedules
-                .iter()
-                .find(|schedule| schedule.place.root == symbol)
-                .map(elaboration_for_schedule);
-            self.push_statement_with_drop(
+            self.push_statement(
                 current,
                 Statement::DropCandidate {
                     target: DropTarget::Symbol { id, symbol },
                     key_path,
                     reason: DropReason::ScopeExit,
+                    source,
                 },
-                elaboration,
             );
-        }
-        for schedule in schedules {
-            let symbol = schedule.place.root;
-            if locals.iter().any(|(_, local)| *local == symbol) {
-                continue;
+            if with_storage {
+                self.push_statement(current, Statement::StorageDead { id, symbol });
             }
+        }
+        for (id, symbol) in param_likes.iter().rev().copied() {
             let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
-            self.push_statement_with_drop(
+            self.push_statement(
                 current,
                 Statement::DropCandidate {
-                    target: DropTarget::Symbol {
-                        id: schedule.node,
-                        symbol,
-                    },
+                    target: DropTarget::Symbol { id, symbol },
                     key_path,
                     reason: DropReason::ScopeExit,
+                    source,
                 },
-                Some(elaboration_for_schedule(schedule)),
             );
         }
     }
 
     fn emit_scope_exit(&mut self, current: BlockId) -> BlockId {
         // A block already terminated by `break`/`continue`/`return` never
-        // reaches its scope exit: the early-exit schedules on that statement
+        // reaches its scope exit: the early-exit candidates on that statement
         // carry the drops. Emitting them here would execute them (statements
         // run before the terminator) and double-free moved locals.
         if self.is_terminated(current) {
@@ -1150,82 +1372,41 @@ impl<'types> Builder<'types> {
             return current;
         };
         let scope = frame.id;
-        let locals: Vec<(NodeID, Symbol)> = frame.locals.clone();
-        let schedules = frame.drops.clone();
-        for (id, symbol) in locals.iter().rev().copied() {
-            let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
-            let elaboration = schedules
-                .iter()
-                .find(|schedule| schedule.place.root == symbol)
-                .map(elaboration_for_schedule);
-            self.push_statement_with_drop(
-                current,
-                Statement::DropCandidate {
-                    target: DropTarget::Symbol { id, symbol },
-                    key_path,
-                    reason: DropReason::ScopeExit,
-                },
-                elaboration,
-            );
-            self.push_statement(current, Statement::StorageDead { id, symbol });
-        }
-        // Schedules with no `let`-registered local — owned by-value
-        // parameters (their drops ride the callee) and match-arm payload
-        // binders — still drop at scope exit.
-        for schedule in &schedules {
-            let symbol = schedule.place.root;
-            if locals.iter().any(|(_, local)| *local == symbol) {
-                continue;
-            }
-            let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
-            self.push_statement_with_drop(
-                current,
-                Statement::DropCandidate {
-                    target: DropTarget::Symbol {
-                        id: schedule.node,
-                        symbol,
-                    },
-                    key_path,
-                    reason: DropReason::ScopeExit,
-                },
-                Some(elaboration_for_schedule(schedule)),
-            );
-        }
+        self.emit_frame_drop_candidates(current, self.scope_stack.len() - 1, true);
         self.push_statement(current, Statement::ScopeExit { scope });
         current
     }
 
-    /// Early-exit drops for a `return`/`break`/`continue`, elaborated from
-    /// the statement's flow schedules (all enclosing scopes' locals,
-    /// innermost scope first — the same order the flow checker wrote them).
-    fn emit_early_exit_drops(
-        &mut self,
-        current: BlockId,
-        schedules: &[crate::flow::drops::DropSchedule],
-    ) {
+    /// Early-exit drop candidates for a `return`/`break`/`continue`: the
+    /// locals (and param-like locals) of exactly the scopes between the
+    /// jump and its target
+    /// (`from_depth` — 0 for `return`, the loop's entry depth for
+    /// `break`/`continue`), innermost scope first.
+    fn emit_early_exit_drops(&mut self, current: BlockId, source: NodeID, from_depth: usize) {
         let locals: Vec<(NodeID, Symbol)> = self
             .scope_stack
             .iter()
+            .skip(from_depth)
             .rev()
-            .flat_map(|scope| scope.locals.iter().rev().copied())
+            .flat_map(|scope| {
+                scope
+                    .locals
+                    .iter()
+                    .rev()
+                    .chain(scope.param_likes.iter().rev())
+                    .copied()
+            })
             .collect();
         for (id, symbol) in locals {
             let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
-            let elaboration = schedules
-                .iter()
-                .find(|schedule| {
-                    schedule.reason == crate::flow::drops::DropReason::EarlyExit
-                        && schedule.place.root == symbol
-                })
-                .map(elaboration_for_schedule);
-            self.push_statement_with_drop(
+            self.push_statement(
                 current,
                 Statement::DropCandidate {
                     target: DropTarget::Symbol { id, symbol },
                     key_path,
                     reason: DropReason::EarlyExit,
+                    source,
                 },
-                elaboration,
             );
         }
     }
@@ -1340,7 +1521,7 @@ fn render_statement(statement: &Statement) -> String {
             None => format!("drop_candidate <unresolved> {:?}", reason),
         },
         Statement::Call { .. } => "call".into(),
-        Statement::Perform => "perform".into(),
+        Statement::Perform { .. } => "perform".into(),
         Statement::ReturnValue { .. } => "return_value".into(),
         Statement::ContinueValue { .. } => "continue_value".into(),
         Statement::Function { .. } => "function".into(),
@@ -1418,12 +1599,12 @@ mod tests {
                     } = &decl.kind
                         && let ExprKind::Func(func) = &expr.kind
                     {
-                        let body = build_function(&types, None, &func.body);
+                        let body = build_function(&types, None, &func.params, &func.body);
                         return f(&body);
                     }
                     continue;
                 };
-                let body = build_function(&types, None, &func.body);
+                let body = build_function(&types, None, &func.params, &func.body);
                 return f(&body);
             }
         }
@@ -1506,6 +1687,98 @@ mod tests {
                 );
             },
         );
+    }
+
+    #[test]
+    fn expression_position_if_builds_scaffold_branch_blocks() {
+        // A `break`/`continue`/move inside an expression-position arm must
+        // be a CFG edge — the arms cannot flatten into the current block.
+        with_first_func_mir(
+            "
+            func f(c) {
+                let x = if (c) { 1 } else { 2 }
+                x
+            }
+            ",
+            |body| {
+                assert!(
+                    body.blocks.iter().any(|block| matches!(
+                        block.terminator,
+                        Terminator::Branch {
+                            in_expression: true,
+                            ..
+                        }
+                    )),
+                    "{body:#?}"
+                );
+            },
+        );
+    }
+
+    /// The early-exit drop candidates on each block, as (symbol, reason)
+    /// pairs per block.
+    fn early_exit_candidates(body: &Body) -> Vec<Vec<Symbol>> {
+        body.blocks
+            .iter()
+            .map(|block| {
+                block
+                    .statements
+                    .iter()
+                    .filter_map(|statement| match &statement.kind {
+                        Statement::DropCandidate {
+                            reason: DropReason::EarlyExit,
+                            target: DropTarget::Symbol { symbol, .. },
+                            ..
+                        } => Some(*symbol),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn break_drop_candidates_cover_only_scopes_inside_the_loop() {
+        // `outer` is declared before the loop and survives the break; only
+        // `inner` (a loop-body local) drops on the break path. `return`
+        // still unwinds every scope.
+        let source = "
+            func f(flag) {
+                let outer = 1
+                loop flag {
+                    let inner = 2
+                    if flag {
+                        break
+                    }
+                    if inner {
+                        return 3
+                    }
+                }
+                outer
+            }
+        ";
+        let names = resolved_names(source);
+        let outer = symbol_named(&names, "outer");
+        let inner = symbol_named(&names, "inner");
+        with_first_func_mir(source, |body| {
+            let per_block = early_exit_candidates(body);
+            let break_path: Vec<&Vec<Symbol>> = per_block
+                .iter()
+                .filter(|symbols| symbols.contains(&inner) && !symbols.contains(&outer))
+                .collect();
+            assert!(
+                !break_path.is_empty(),
+                "break drops the loop-local only: {per_block:?}\n{body:#?}"
+            );
+            let return_path: Vec<&Vec<Symbol>> = per_block
+                .iter()
+                .filter(|symbols| symbols.contains(&inner) && symbols.contains(&outer))
+                .collect();
+            assert!(
+                !return_path.is_empty(),
+                "return drops every enclosing scope's locals: {per_block:?}\n{body:#?}"
+            );
+        });
     }
 
     #[test]
@@ -1602,8 +1875,21 @@ mod tests {
     }
 
 
+    fn destinations(body: &Body) -> Vec<ValueDestination> {
+        body.blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match statement.kind {
+                Statement::ReturnValue { destination, .. } => Some(destination),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
-    fn distinguishes_source_return_from_block_tail_value() {
+    fn distinguishes_source_return_from_root_tail_value() {
+        // `return 1` is a source return; the trailing `2` is the root tail —
+        // the function's return value.
         let source = "
             func f(flag) {
                 if flag {
@@ -1613,21 +1899,41 @@ mod tests {
             }
         ";
         with_first_func_mir(source, |body| {
-            let mut has_source_return = false;
-            let mut has_block_tail = false;
-            for block in &body.blocks {
-                for statement in &block.statements {
-                    if let Statement::ReturnValue { destination, .. } = statement.kind {
-                        match destination {
-                            ValueDestination::Return => has_source_return = true,
-                            ValueDestination::Continuation => has_block_tail = true,
-                        }
-                    }
+            let destinations = destinations(body);
+            assert!(
+                destinations.contains(&ValueDestination::Return),
+                "{body:#?}"
+            );
+            assert!(
+                destinations.contains(&ValueDestination::TailReturn),
+                "{body:#?}"
+            );
+        });
+    }
+
+    #[test]
+    fn nested_tail_deliveries_are_continuations_not_returns() {
+        // A tail-position if's arm tails deliver within the function — they
+        // are not the return value itself (no provenance check applies).
+        let source = "
+            func f(flag) {
+                if flag {
+                    2
+                } else {
+                    3
                 }
             }
-
-            assert!(has_source_return, "{body:#?}");
-            assert!(has_block_tail, "{body:#?}");
+        ";
+        with_first_func_mir(source, |body| {
+            let destinations = destinations(body);
+            assert!(
+                destinations.contains(&ValueDestination::Continuation),
+                "{body:#?}"
+            );
+            assert!(
+                !destinations.contains(&ValueDestination::TailReturn),
+                "{body:#?}"
+            );
         });
     }
 }

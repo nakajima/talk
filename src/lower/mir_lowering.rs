@@ -27,6 +27,10 @@ struct MirCursor<'b> {
     block: mir::BlockId,
     index: usize,
     loops: &'b [MirLoop],
+    /// When lowering a scaffold arm with a value continuation: a jump to
+    /// this block (the construct's join) delivers void to `k` instead of
+    /// walking on — the join's statements belong to the enclosing walk.
+    deliver_at: Option<mir::BlockId>,
 }
 
 impl<'b> MirCursor<'b> {
@@ -61,15 +65,120 @@ impl<'b> MirCursor<'b> {
 }
 
 impl<'a> Lowering<'a> {
-    pub(super) fn lower_mir_body(&mut self, body: &mir::Body, ctx: &Ctx, k: ExprId) -> ExprId {
+    pub(super) fn lower_mir_body(
+        &mut self,
+        body: &std::sync::Arc<mir::Body>,
+        ctx: &Ctx,
+        k: ExprId,
+    ) -> ExprId {
         let mut cache = MirBlockCache::default();
         let cursor = MirCursor {
             body,
             block: body.entry,
             index: 0,
             loops: &[],
+            deliver_at: None,
         };
-        self.lower_mir_statements(cursor, ctx, k, &mut cache)
+        // Expression lowering needs this body (and the loops in scope) to
+        // lower expression-position constructs from their scaffold blocks.
+        self.scaffold_ctx.push(ScaffoldCtx {
+            body: std::sync::Arc::clone(body),
+            loops: vec![],
+        });
+        let done = self.lower_mir_statements(cursor, ctx, k, &mut cache);
+        self.scaffold_ctx.pop();
+        done
+    }
+
+    /// Lower an expression-position `if` from its scaffold blocks in the
+    /// body being lowered, delivering the arm values to `k` (arm tails are
+    /// `ReturnValue { Continuation }` statements; a `break`/`continue`/
+    /// `return` inside an arm is a real CFG edge here). `None` when the
+    /// construct has no scaffold in this body (an expression from another
+    /// body, e.g. an inlined global): the caller builds a standalone body.
+    pub(super) fn lower_if_from_scaffold(
+        &mut self,
+        expr: &Expr,
+        cond: &Expr,
+        ctx: &Ctx,
+        k: ExprId,
+    ) -> Option<ExprId> {
+        let scaffold = self.scaffold_ctx.last()?;
+        let body = std::sync::Arc::clone(&scaffold.body);
+        let loops = scaffold.loops.clone();
+        let &branch_block = body.scaffolds.get(&expr.id)?;
+        let mir::Terminator::Branch {
+            then_block,
+            else_block,
+            ..
+        } = body.blocks[branch_block.0].terminator
+        else {
+            return None;
+        };
+        let cursor = MirCursor {
+            body: &body,
+            block: branch_block,
+            index: 0,
+            loops: &loops,
+            deliver_at: None,
+        };
+        let join = Self::switch_join_target(cursor, &[then_block, else_block], None);
+        let cursor = MirCursor {
+            deliver_at: join,
+            ..cursor
+        };
+        let mut cache = MirBlockCache::default();
+        let then_body = self.lower_mir_block(cursor.at_block(then_block), ctx, k, &mut cache);
+        let else_body = self.lower_mir_block(cursor.at_block(else_block), ctx, k, &mut cache);
+        Some(self.branch(cond, then_body, else_body, ctx))
+    }
+
+    /// The scaffold arm blocks of an expression-position match in the body
+    /// being lowered, for the pattern compiler's arm bodies.
+    pub(super) fn match_scaffold_arms(&self, expr: &Expr) -> Option<ScaffoldArms> {
+        let scaffold = self.scaffold_ctx.last()?;
+        let &switch_block = scaffold.body.scaffolds.get(&expr.id)?;
+        let mir::Terminator::Switch { arms, default, .. } =
+            &scaffold.body.blocks[switch_block.0].terminator
+        else {
+            return None;
+        };
+        let cursor = MirCursor {
+            body: &scaffold.body,
+            block: switch_block,
+            index: 0,
+            loops: &scaffold.loops,
+            deliver_at: None,
+        };
+        let join = Self::switch_join_target(cursor, arms, *default);
+        Some(ScaffoldArms {
+            blocks: arms.clone(),
+            join,
+        })
+    }
+
+    /// Lower one scaffold arm block with the match's value continuation:
+    /// the arm's tail delivers to `k`; jumps to the join deliver void;
+    /// breaks/continues/returns are real edges.
+    pub(super) fn lower_arm_from_scaffold(
+        &mut self,
+        arm_block: mir::BlockId,
+        join: Option<mir::BlockId>,
+        ctx: &Ctx,
+        k: ExprId,
+    ) -> Option<ExprId> {
+        let scaffold = self.scaffold_ctx.last()?;
+        let body = std::sync::Arc::clone(&scaffold.body);
+        let loops = scaffold.loops.clone();
+        let cursor = MirCursor {
+            body: &body,
+            block: arm_block,
+            index: 0,
+            loops: &loops,
+            deliver_at: join,
+        };
+        let mut cache = MirBlockCache::default();
+        Some(self.lower_mir_statements(cursor, ctx, k, &mut cache))
     }
 
     fn lower_mir_block(
@@ -120,7 +229,7 @@ impl<'a> Lowering<'a> {
             | mir::Statement::StorageLive { .. }
             | mir::Statement::Read { .. }
             | mir::Statement::AssignmentRootUse { .. }
-            | mir::Statement::Perform
+            | mir::Statement::Perform { .. }
             | mir::Statement::DropCandidate { .. } => rest(self, ctx, k),
             mir::Statement::StorageDead { symbol, .. } => {
                 self.lower_mir_storage_dead(*symbol, cursor, ctx, k, cache)
@@ -148,7 +257,7 @@ impl<'a> Lowering<'a> {
                 expr, destination, ..
             } => {
                 let target = match destination {
-                    mir::ValueDestination::Continuation => {
+                    mir::ValueDestination::Continuation | mir::ValueDestination::TailReturn => {
                         self.wrap_cont_with_following_drops(ctx, cursor, k)
                     }
                     mir::ValueDestination::Return => {
@@ -450,6 +559,7 @@ impl<'a> Lowering<'a> {
                             ..
                         },
                     key_path,
+                    ..
                 } => {
                     let Some(drop) = ctx
                         .drop_stack
@@ -611,6 +721,7 @@ impl<'a> Lowering<'a> {
                     ..
                 },
             key_path,
+            ..
         } = &previous.kind
         else {
             return None;
@@ -1022,7 +1133,7 @@ impl<'a> Lowering<'a> {
         }
         let handler_body_expr = self.with_cells(&celled, &mut inner, |this, inner| {
             let handler_k = inner.ret_k;
-            this.lower_block(handler_block, inner, handler_k)
+            this.lower_block(handler_block, &[], inner, handler_k)
         });
         self.p.set_body(cap, handler_body_expr);
 
@@ -1236,32 +1347,36 @@ impl<'a> Lowering<'a> {
             mir::Terminator::ReturnVoid => {
                 let void = self.p.void();
                 let body = self.p.app(ctx.ret_k, void);
-                self.lower_drop_bindings_then(ctx, &ctx.drop_stack, body)
+                self.lower_early_exit_then(ctx, cursor, 0, body)
             }
-            mir::Terminator::Break => self.lower_mir_break(ctx, k),
-            mir::Terminator::Continue => self.lower_mir_continue(ctx, k),
+            mir::Terminator::Break => self.lower_mir_break(cursor, ctx, k),
+            mir::Terminator::Continue => self.lower_mir_continue(cursor, ctx, k),
             mir::Terminator::Jump(target) => {
-                if let Some(loop_) = cursor
-                    .loops
-                    .iter()
-                    .rev()
-                    .find(|loop_| loop_.header_block == *target)
-                {
+                if cursor.deliver_at == Some(*target) {
                     let void = self.p.void();
-                    let jump = self.p.app(loop_.header, void);
-                    let drops = self.loop_jump_drops(ctx, loop_.header);
-                    return self.lower_drop_bindings_then(ctx, &drops, jump);
+                    return self.p.app(k, void);
                 }
                 if let Some(loop_) = cursor
                     .loops
                     .iter()
                     .rev()
-                    .find(|loop_| loop_.exit_block == *target)
+                    .find(|loop_| loop_.header_block == *target || loop_.exit_block == *target)
                 {
+                    let jump_to = if loop_.header_block == *target {
+                        loop_.header
+                    } else {
+                        loop_.exit
+                    };
+                    let stack_from = ctx
+                        .loops
+                        .iter()
+                        .rev()
+                        .find(|binding| binding.header == loop_.header)
+                        .map(|binding| binding.drop_depth)
+                        .unwrap_or(ctx.drop_stack.len());
                     let void = self.p.void();
-                    let jump = self.p.app(loop_.exit, void);
-                    let drops = self.loop_jump_drops(ctx, loop_.exit);
-                    return self.lower_drop_bindings_then(ctx, &drops, jump);
+                    let jump = self.p.app(jump_to, void);
+                    return self.lower_early_exit_then(ctx, cursor, stack_from, jump);
                 }
                 self.lower_mir_block(cursor.at_block(*target), ctx, k, cache)
             }
@@ -1269,7 +1384,19 @@ impl<'a> Lowering<'a> {
                 condition,
                 then_block,
                 else_block,
+                in_expression,
             } => {
+                // Expression-position branches are analysis scaffolding:
+                // evaluation rides the enclosing statement's embedded copy
+                // of the `if` (in the join block), exactly like a Switch's
+                // arms. Lower the join only; with no join (every arm
+                // diverges), the arm blocks carry the real content.
+                if *in_expression
+                    && let Some(join) =
+                        Self::switch_join_target(cursor, &[*then_block, *else_block], None)
+                {
+                    return self.lower_mir_block(cursor.at_block(join), ctx, k, cache);
+                }
                 let then_body = self.lower_mir_block(cursor.at_block(*then_block), ctx, k, cache);
                 let else_body = self.lower_mir_block(cursor.at_block(*else_block), ctx, k, cache);
                 self.branch(condition, then_body, else_body, ctx)
@@ -1283,7 +1410,11 @@ impl<'a> Lowering<'a> {
                 if let Some(join) = Self::switch_join_target(cursor, arm_blocks, *default) {
                     self.lower_mir_block(cursor.at_block(join), ctx, k, cache)
                 } else {
-                    self.lower_match(scrutinee, arms, ctx, k)
+                    let scaffold_arms = ScaffoldArms {
+                        blocks: arm_blocks.clone(),
+                        join: None,
+                    };
+                    self.lower_match(scrutinee, arms, Some(scaffold_arms), ctx, k)
                 }
             }
             mir::Terminator::Switch { .. } => self.dead_end("mir_switch_without_patterns"),
@@ -1314,12 +1445,21 @@ impl<'a> Lowering<'a> {
                     exit: exit_ref,
                     drop_depth: ctx.drop_stack.len(),
                 });
+                // Mirror the loops-in-scope for expression lowering's
+                // scaffold paths (breaks inside expression-position arms
+                // resolve against them), restoring the parent's view after.
+                if let Some(scaffold) = self.scaffold_ctx.last_mut() {
+                    scaffold.loops = next_loops.clone();
+                }
                 let body_expr = self.lower_mir_block(
                     cursor.at_block(*body_block).with_loops(&next_loops),
                     &loop_ctx,
                     header_ref,
                     cache,
                 );
+                if let Some(scaffold) = self.scaffold_ctx.last_mut() {
+                    scaffold.loops = cursor.loops.to_vec();
+                }
                 let header_body = match condition {
                     Some(condition) => {
                         let void = self.p.void();
@@ -1366,13 +1506,12 @@ impl<'a> Lowering<'a> {
         join
     }
 
-    fn lower_mir_break(&mut self, ctx: &Ctx, k: ExprId) -> ExprId {
+    fn lower_mir_break(&mut self, cursor: MirCursor, ctx: &Ctx, k: ExprId) -> ExprId {
         match ctx.loops.last() {
             Some(loop_binding) => {
                 let void = self.p.void();
-                let drops: Vec<DropBinding> = ctx.drop_stack[loop_binding.drop_depth..].to_vec();
                 let body = self.p.app(loop_binding.exit, void);
-                self.lower_drop_bindings_then(ctx, &drops, body)
+                self.lower_early_exit_then(ctx, cursor, loop_binding.drop_depth, body)
             }
             None => {
                 self.diagnostics.push("lowering: break outside loop".into());
@@ -1382,25 +1521,90 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    fn loop_jump_drops(&self, ctx: &Ctx, target: ExprId) -> Vec<DropBinding> {
-        let Some(loop_binding) = ctx
-            .loops
+    /// The early-exit drop candidates ending this block (emitted just
+    /// before its terminator), as pending drops matched against the drop
+    /// stack for values and types.
+    fn trailing_early_exit_drops(&self, ctx: &Ctx, cursor: MirCursor) -> Vec<PendingDrop> {
+        let statements = cursor.statements();
+        let mut start = statements.len();
+        while start > 0 {
+            match &statements[start - 1].kind {
+                mir::Statement::DropCandidate {
+                    reason: mir::DropReason::EarlyExit,
+                    ..
+                } => start -= 1,
+                _ => break,
+            }
+        }
+        let body = cursor.body;
+        statements[start..]
             .iter()
-            .rev()
-            .find(|loop_binding| loop_binding.header == target || loop_binding.exit == target)
-        else {
-            return vec![];
-        };
-        ctx.drop_stack[loop_binding.drop_depth..].to_vec()
+            .filter_map(|statement| {
+                let mir::Statement::DropCandidate {
+                    target: mir::DropTarget::Symbol { symbol, .. },
+                    key_path,
+                    ..
+                } = &statement.kind
+                else {
+                    return None;
+                };
+                let drop = ctx
+                    .drop_stack
+                    .iter()
+                    .rev()
+                    .find(|drop| drop.symbol == *symbol)?;
+                let key_path = key_path
+                    .as_ref()
+                    .and_then(|key_path| Self::ownership_key_path_from_mir(body, key_path))
+                    .unwrap_or_else(|| drop.key_path.clone());
+                let elaboration = self.drop_elaboration_at(statement, Some(&key_path));
+                Some(PendingDrop {
+                    symbol: drop.symbol,
+                    key_path,
+                    ty: drop.ty.clone(),
+                    has_dynamic_flags: !drop.dynamic_flags.is_empty(),
+                    elaboration,
+                })
+            })
+            .collect()
     }
 
-    fn lower_mir_continue(&mut self, ctx: &Ctx, k: ExprId) -> ExprId {
+    /// Early-exit drops before `body` runs: the block's trailing candidates
+    /// are the authority (per-point elaborations from the flow checker);
+    /// drop-stack entries from `stack_from` they don't cover — bindings of
+    /// an enclosing body, reachable only through the standalone-body
+    /// fallback — drop flag-guarded as before. The remainder dies with the
+    /// fallback path.
+    fn lower_early_exit_then(
+        &mut self,
+        ctx: &Ctx,
+        cursor: MirCursor,
+        stack_from: usize,
+        body: ExprId,
+    ) -> ExprId {
+        let candidates = self.trailing_early_exit_drops(ctx, cursor);
+        let remainder: Vec<DropBinding> = ctx.drop_stack[stack_from..]
+            .iter()
+            .filter(|drop| {
+                !candidates
+                    .iter()
+                    .any(|candidate| candidate.symbol == drop.symbol)
+            })
+            .cloned()
+            .collect();
+        let mut body = self.lower_drop_bindings_then(ctx, &remainder, body);
+        for drop in candidates.iter().rev() {
+            body = self.lower_candidate_drop_then(ctx, drop, body);
+        }
+        body
+    }
+
+    fn lower_mir_continue(&mut self, cursor: MirCursor, ctx: &Ctx, k: ExprId) -> ExprId {
         match ctx.loops.last() {
             Some(loop_binding) => {
                 let void = self.p.void();
-                let drops: Vec<DropBinding> = ctx.drop_stack[loop_binding.drop_depth..].to_vec();
                 let body = self.p.app(loop_binding.header, void);
-                self.lower_drop_bindings_then(ctx, &drops, body)
+                self.lower_early_exit_then(ctx, cursor, loop_binding.drop_depth, body)
             }
             None => {
                 self.diagnostics

@@ -53,6 +53,8 @@ pub struct LowerUnit<'a> {
     pub asts: &'a IndexMap<Source, HirFile>,
     pub types: &'a TypeOutput,
     pub resolved: &'a ResolvedNames,
+    /// The module's flow-annotated MIR bodies, built pre-flow by the driver.
+    pub bodies: &'a mir::ModuleBodies,
 }
 
 /// θ: rigid type parameters (including a protocol's Self and associated
@@ -122,10 +124,15 @@ pub struct Lowering<'a> {
     /// them reference the cell directly (a free variable of main; the
     /// closure machinery carries it, exactly like handler capabilities).
     top_level_cells: FxHashMap<Symbol, ExprId>,
-    /// One MIR body per HIR block: built on first lowering, shared by every
-    /// later lowering of the same block (each θ-specialization of a generic
-    /// function re-lowers its body but must not rebuild its MIR).
-    mir_bodies: FxHashMap<(usize, crate::node_id::NodeID), std::rc::Rc<mir::Body>>,
+    /// One MIR body per HIR block: fetched from the unit's store (or built
+    /// on miss) on first lowering, shared by every later lowering of the
+    /// same block (each θ-specialization of a generic function re-lowers
+    /// its body but must not rebuild its MIR).
+    mir_bodies: FxHashMap<(usize, crate::node_id::NodeID), std::sync::Arc<mir::Body>>,
+    /// Stack of bodies being lowered (innermost last): expression lowering
+    /// resolves expression-position constructs' scaffold blocks against the
+    /// innermost entry.
+    scaffold_ctx: Vec<ScaffoldCtx>,
     pub diagnostics: Vec<String>,
 }
 
@@ -299,6 +306,23 @@ struct MirBlockCache {
     blocks: FxHashMap<MirBlockKey, ExprId>,
 }
 
+/// The MIR body whose statements are currently being lowered, plus the
+/// loops in scope at the consuming statement — what expression lowering
+/// needs to lower an expression-position construct from its scaffold
+/// blocks (delivering the value through the continuation).
+struct ScaffoldCtx {
+    body: std::sync::Arc<mir::Body>,
+    loops: Vec<MirLoop>,
+}
+
+/// A match's scaffold arm blocks, resolved before pattern compilation: the
+/// decision tree's arm bodies lower from these (value through `k`; a jump
+/// to `join` delivers void).
+pub(super) struct ScaffoldArms {
+    pub(super) blocks: Vec<mir::BlockId>,
+    pub(super) join: Option<mir::BlockId>,
+}
+
 impl Ctx {
     fn mir_key(&self) -> MirCtxKey {
         let mut env: Vec<_> = self
@@ -379,6 +403,7 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
         handler_caps: FxHashMap::default(),
         top_level_cells: FxHashMap::default(),
         mir_bodies: FxHashMap::default(),
+        scaffold_ctx: vec![],
         diagnostics: vec![],
     };
     for unit in &lowering.units {
@@ -1000,6 +1025,10 @@ impl<'a> Lowering<'a> {
         }
         let is_mutating = self.mutating.contains(&symbol);
         let is_init = self.is_init(symbol);
+        // An init's self is constructed and delivered to the caller, never
+        // dropped in the body — the flow checker seeds no init params, so
+        // the MIR builder must not either.
+        let drop_params: &[crate::hir::Parameter] = if is_init { &[] } else { source_params };
         let self_symbol = source_params
             .first()
             .and_then(|param| param.name.symbol().ok());
@@ -1088,7 +1117,7 @@ impl<'a> Lowering<'a> {
                     this.diagnostics
                         .push("lowering: mutating method without a self cell".into());
                     let ret_k = ctx.ret_k;
-                    return this.lower_block(source_body, ctx, ret_k);
+                    return this.lower_block(source_body, drop_params, ctx, ret_k);
                 };
                 let TyKind::Fn(pair_ty, _) = *this.p.ty_kind(this.p.expr_ty(ctx.ret_k)) else {
                     unreachable!("ret continuation is not a function");
@@ -1110,7 +1139,7 @@ impl<'a> Lowering<'a> {
                 ctx.tail_k = ctx.ret_k;
             }
             let ret_k = ctx.ret_k;
-            this.lower_block(source_body, ctx, ret_k)
+            this.lower_block(source_body, drop_params, ctx, ret_k)
         });
         self.p.set_body(label, body);
     }
@@ -1314,11 +1343,14 @@ impl<'a> Lowering<'a> {
                 self.lower_call(expr, callee, args, trailing_block.as_ref(), ctx, k)
             }
             ExprKind::If(cond, then_block, else_block) => {
-                let then_body = self.lower_block(then_block, ctx, k);
-                let else_body = self.lower_block(else_block, ctx, k);
+                if let Some(done) = self.lower_if_from_scaffold(expr, cond, ctx, k) {
+                    return done;
+                }
+                let then_body = self.lower_block(then_block, &[], ctx, k);
+                let else_body = self.lower_block(else_block, &[], ctx, k);
                 self.branch(cond, then_body, else_body, ctx)
             }
-            ExprKind::Block(block) => self.lower_block(block, ctx, k),
+            ExprKind::Block(block) => self.lower_block(block, &[], ctx, k),
             // A parenthesized expression parses as a 1-tuple.
             ExprKind::Tuple(items) if items.len() == 1 => self.lower_expr(&items[0], ctx, k),
             // A tuple literal with impure items: chain them left to right.
@@ -1350,7 +1382,10 @@ impl<'a> Lowering<'a> {
                 let cont_ref = self.p.func_ref(cont);
                 self.lower_expr(receiver, ctx, cont_ref)
             }
-            ExprKind::Match(scrutinee, arms) => self.lower_match(scrutinee, arms, ctx, k),
+            ExprKind::Match(scrutinee, arms) => {
+                let scaffold_arms = self.match_scaffold_arms(expr);
+                self.lower_match(scrutinee, arms, scaffold_arms, ctx, k)
+            }
             // Performing an effect with no handler in scope reaches the
             // implicit top-level handler (Plotkin & Pretnar, LMCS 2013).
             // A request that is a syntactic IORequest variant routes
@@ -1466,11 +1501,26 @@ impl<'a> Lowering<'a> {
 
     /// Match compilation: bind the scrutinee to a pure value, then build
     /// the decision tree (Maranget, ML 2008 — `patterns.rs`).
-    fn lower_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], ctx: &Ctx, k: ExprId) -> ExprId {
+    fn lower_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        scaffold_arms: Option<ScaffoldArms>,
+        ctx: &Ctx,
+        k: ExprId,
+    ) -> ExprId {
         let scrutinee_check_ty = self.checker_ty(scrutinee, ctx);
         let pattern_scrutinee_ty = Self::borrow_erased_ty(scrutinee_check_ty.clone());
         match self.try_pure(scrutinee, ctx) {
-            Some(value) => patterns::compile_match(self, value, pattern_scrutinee_ty, arms, ctx, k),
+            Some(value) => patterns::compile_match(
+                self,
+                value,
+                pattern_scrutinee_ty,
+                arms,
+                scaffold_arms,
+                ctx,
+                k,
+            ),
             None => {
                 let scrutinee_ty = self.expr_lambda_ty(scrutinee, ctx);
                 let bot = self.p.ty_bot();
@@ -1495,7 +1545,15 @@ impl<'a> Lowering<'a> {
                 } else {
                     k
                 };
-                let body = patterns::compile_match(self, value, pattern_scrutinee_ty, arms, ctx, k);
+                let body = patterns::compile_match(
+                    self,
+                    value,
+                    pattern_scrutinee_ty,
+                    arms,
+                    scaffold_arms,
+                    ctx,
+                    k,
+                );
                 self.p.set_body(cont, body);
                 let cont_ref = self.p.func_ref(cont);
                 self.lower_expr(scrutinee, ctx, cont_ref)
@@ -2602,7 +2660,7 @@ impl<'a> Lowering<'a> {
         let body_block = &func.body;
         let body = self.with_cells(&prologue, &mut inner, |this, inner| {
             let ret_k = inner.ret_k;
-            this.lower_block(body_block, inner, ret_k)
+            this.lower_block(body_block, &func.params, inner, ret_k)
         });
         self.p.set_body(label, body);
         Some(self.p.func_ref(label))
@@ -2683,7 +2741,7 @@ impl<'a> Lowering<'a> {
         inner.local_handlers = FxHashSet::default();
         let body = self.with_cells(&celled, &mut inner, |this, inner| {
             let ret_k = inner.ret_k;
-            this.lower_block(block, inner, ret_k)
+            this.lower_block(block, &[], inner, ret_k)
         });
         self.p.set_body(label, body);
         self.p.func_ref(label)
@@ -4093,15 +4151,15 @@ impl<'a> Lowering<'a> {
 
     /// Like lower_nodes, but the final expression's value goes to ret_k.
     fn lower_main_nodes(&mut self, nodes: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
-        // The combined main body spans every file's top level: its scope-exit
-        // drops are the files' flow schedules concatenated (a by-symbol
-        // lookup table — emission order comes from the scope's own locals).
-        let drops = self.units[ctx.unit]
-            .asts
-            .values()
-            .flat_map(|file| file.drops.iter().cloned())
-            .collect();
-        let body = mir::build_nodes(self.units[ctx.unit].types, nodes, drops);
+        // The combined main body spans every file's runnable top-level
+        // nodes: the flow checker built, analyzed, and annotated it from
+        // the same node filter (`mir::main_body_nodes`).
+        if let Some(body) = self.units[ctx.unit].bodies.top_level() {
+            return self.lower_mir_body(&body, ctx, k);
+        }
+        // No stored top level (a unit checked before the store existed, or
+        // an empty program): build structurally, unannotated.
+        let body = std::sync::Arc::new(mir::build_nodes(self.units[ctx.unit].types, nodes));
         self.lower_mir_body(&body, ctx, k)
     }
 

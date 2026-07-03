@@ -1,10 +1,9 @@
-//! Move checking: a flow-sensitive walk over HIR bodies tracking which
-//! places have been consumed, which are borrowed (loans, `flow::loans`), and
-//! where drops go. HIR control flow is structured (no gotos), so instead of
-//! the legacy MIR worklist this is a direct walk: branches check against
-//! clones of the incoming state and union at the join (a value moved on any
-//! path is moved after it), and loop bodies are walked twice so back-edge
-//! effects are seen (errors dedup, so the second pass is harmless).
+//! Move checking: the state lattice (`MoveState`), the drop classification
+//! rule, and the expression-level transfer functions the CFG engine
+//! (`flow::cfg`) runs over each body's MIR blocks. Statement-embedded
+//! blocks with no MIR blocks of their own (handler bodies, trailing
+//! blocks) still walk tree-style through `walk_block`: branches check
+//! against clones of the incoming state and merge at the join.
 //!
 //! What consumes a value is the legacy rule set verbatim: binding rhs,
 //! assignment rhs, by-value call argument, by-value/`consuming` receiver,
@@ -60,15 +59,31 @@ pub(crate) struct MoveState {
 impl MoveState {
     /// CFG-join: may-sets union, must-sets intersect (the legacy
     /// `MoveState`/`DropState` merge semantics in one place).
-    fn merge_from(&mut self, other: &MoveState) {
+    pub(crate) fn merge_from(&mut self, other: &MoveState) {
+        self.join_from(other);
+    }
+
+    /// `merge_from`, reporting whether anything changed — the worklist's
+    /// fixpoint test.
+    pub(crate) fn join_from(&mut self, other: &MoveState) -> bool {
+        let mut changed = false;
         for (place, fact) in &other.moved {
-            self.moved.entry(place.clone()).or_insert_with(|| fact.clone());
+            if !self.moved.contains_key(place) {
+                self.moved.insert(place.clone(), fact.clone());
+                changed = true;
+            }
         }
+        let before = self.moved_all.len();
         self.moved_all.retain(|place| other.moved_all.contains(place));
+        changed |= self.moved_all.len() != before;
+        let before = self.initialized_all.len();
         self.initialized_all
             .retain(|place| other.initialized_all.contains(place));
+        changed |= self.initialized_all.len() != before;
+        let before = self.initialized_any.len();
         self.initialized_any
             .extend(other.initialized_any.iter().cloned());
+        changed |= self.initialized_any.len() != before;
         for loan in &other.loans {
             if !self
                 .loans
@@ -76,33 +91,43 @@ impl MoveState {
                 .any(|mine| mine.borrower == loan.borrower && mine.owner == loan.owner)
             {
                 self.loans.push(loan.clone());
+                changed = true;
             }
         }
         for (place, provenance) in &other.provenances {
-            self.provenances
-                .entry(place.clone())
-                .or_insert_with(|| provenance.clone());
+            if !self.provenances.contains_key(place) {
+                self.provenances.insert(place.clone(), provenance.clone());
+                changed = true;
+            }
         }
         for (borrower, owner) in &other.invalid_borrows {
-            self.invalid_borrows
-                .entry(borrower.clone())
-                .or_insert_with(|| owner.clone());
+            if !self.invalid_borrows.contains_key(borrower) {
+                self.invalid_borrows.insert(borrower.clone(), owner.clone());
+                changed = true;
+            }
         }
         for (root, kind) in &other.borrowed_roots {
-            self.borrowed_roots.entry(*root).or_insert(*kind);
+            if !self.borrowed_roots.contains_key(root) {
+                self.borrowed_roots.insert(*root, *kind);
+                changed = true;
+            }
         }
+        let before = self.shared_borrow_roots.len();
         self.shared_borrow_roots
             .extend(other.shared_borrow_roots.iter().copied());
+        changed |= self.shared_borrow_roots.len() != before;
         for (place, summary) in &other.closure_captures {
-            self.closure_captures
-                .entry(place.clone())
-                .or_insert_with(|| summary.clone());
+            if !self.closure_captures.contains_key(place) {
+                self.closure_captures.insert(place.clone(), summary.clone());
+                changed = true;
+            }
         }
+        changed
     }
 
     /// Re-initialize a place (binding or assignment target): the place and
     /// all its sub-places are live again.
-    fn restore(&mut self, place: &Place) {
+    pub(crate) fn restore(&mut self, place: &Place) {
         self.moved.retain(|moved, _| !place.contains(moved));
         self.moved_all.retain(|moved| !place.contains(moved));
         self.initialized_all.insert(place.clone());
@@ -115,7 +140,7 @@ impl MoveState {
     }
 
     /// A local left its scope: forget everything rooted at it.
-    fn finish_local(&mut self, place: &Place) {
+    pub(crate) fn finish_local(&mut self, place: &Place) {
         self.moved.retain(|moved, _| !place.contains(moved));
         self.moved_all.retain(|moved| !place.contains(moved));
         self.initialized_all.retain(|init| !place.contains(init));
@@ -147,7 +172,7 @@ impl MoveState {
 
 /// The legacy `classify_drop` rule, verbatim: how a scheduled drop of
 /// `place` lowers given the state at the drop point.
-fn classify(place: &Place, state: &MoveState) -> DropElaboration {
+pub(crate) fn classify(place: &Place, state: &MoveState) -> DropElaboration {
     if state.moved_all.contains(place) {
         return DropElaboration::Dead;
     }
@@ -174,6 +199,15 @@ fn classify(place: &Place, state: &MoveState) -> DropElaboration {
         return DropElaboration::Conditional;
     }
     DropElaboration::Dead
+}
+
+/// The per-body checker context `enter_body`/`exit_body` swap (mirroring
+/// `check_func`'s save/restore).
+pub(crate) struct BodyContext {
+    scopes: Vec<ScopeFrame>,
+    liveness: Liveness,
+    borrowed_params: FxHashSet<crate::name_resolution::symbol::Symbol>,
+    param_tys: FxHashMap<crate::name_resolution::symbol::Symbol, Ty>,
 }
 
 /// One scope's tracked locals, in declaration order.
@@ -232,7 +266,19 @@ pub(crate) struct MoveChecker<'a> {
     /// writes the per-body NLL walk cannot see.
     pub(crate) global_writes: Vec<(NodeID, crate::name_resolution::symbol::Symbol)>,
     /// Nesting depth of function bodies below the file's top level.
-    fn_depth: usize,
+    pub(crate) fn_depth: usize,
+    /// Whether `error` reports (the CFG engine reports only on its final,
+    /// converged pass; the tree walk's errors are superseded by it).
+    pub(crate) report_errors: bool,
+    /// Whether the walk records persistent side effects (facts, consume /
+    /// auto-clone flags, drop schedules): true for the tree walk, false for
+    /// every CFG-engine walk, whose repeated visits would duplicate them.
+    pub(crate) recording: bool,
+    /// CFG-boundary mode: nested `if`/`match`/block expressions are opaque
+    /// to the expression walkers — their effects already flowed through the
+    /// enclosing body's blocks. Cleared inside statement-embedded blocks
+    /// (handler bodies, trailing blocks), which have no blocks of their own.
+    pub(crate) cfg_exprs: bool,
 }
 
 impl<'a> MoveChecker<'a> {
@@ -257,40 +303,22 @@ impl<'a> MoveChecker<'a> {
             global_borrows: FxHashMap::default(),
             global_writes: vec![],
             fn_depth: 0,
+            report_errors: true,
+            recording: true,
+            cfg_exprs: false,
         }
     }
 
     pub(crate) fn error(&mut self, error: OwnershipError, node: NodeID) {
+        if !self.report_errors {
+            return;
+        }
         if self.reported.insert((node, error.to_string())) {
             self.errors.push((error, node));
         }
     }
 
     // ----- Bodies -----------------------------------------------------------
-
-    /// Check a function body: fresh state, fresh scope stack and liveness (an
-    /// inner body's early exits do not drop its parent's locals), parameters
-    /// seeded, and the tail expression checked as the return value.
-    pub(crate) fn check_func(&mut self, func: &hir::Func, func_ty: Option<&Ty>) {
-        let outer_scopes = std::mem::take(&mut self.scopes);
-        let outer_liveness = std::mem::replace(
-            &mut self.liveness,
-            Liveness::analyze(&func.body.body),
-        );
-        let outer_borrowed = std::mem::take(&mut self.borrowed_params);
-        let outer_param_tys = std::mem::take(&mut self.param_tys);
-
-        let mut state = MoveState::default();
-        self.fn_depth += 1;
-        self.seed_params(&func.params, func_ty, &mut state);
-        self.walk_func_body(&func.body, &mut state);
-        self.fn_depth -= 1;
-
-        self.scopes = outer_scopes;
-        self.liveness = outer_liveness;
-        self.borrowed_params = outer_borrowed;
-        self.param_tys = outer_param_tys;
-    }
 
     /// Seed each parameter: a borrow-containing parameter starts with
     /// caller-owned (`BorrowedParam`) provenance, so returning it is legal
@@ -350,95 +378,11 @@ impl<'a> MoveChecker<'a> {
         }
     }
 
-    /// Walk a function body block: its tail expression is the function's
-    /// return value (provenance-checked like an explicit `return`).
-    fn walk_func_body(&mut self, block: &hir::Block, state: &mut MoveState) {
-        let pending = std::mem::take(&mut self.pending_locals);
-        self.scopes.push(ScopeFrame {
-            block_id: block.id,
-            locals: pending,
-        });
-        let mut diverges = Diverges::No;
-        for (index, node) in block.body.iter().enumerate() {
-            let is_tail = index + 1 == block.body.len();
-            // The body's tail expression (bare or statement-wrapped) is the
-            // function's return value.
-            let tail_expr = if is_tail {
-                match node {
-                    hir::Node::Expr(expr) => Some(expr),
-                    hir::Node::Stmt(hir::Stmt {
-                        kind: hir::StmtKind::Expr(expr),
-                        ..
-                    }) => Some(expr),
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            let step = match tail_expr {
-                Some(expr) => {
-                    self.check_return_value(expr, state);
-                    Diverges::No
-                }
-                None => self.walk_node(node, state),
-            };
-            self.prune_after(node, state);
-            if step == Diverges::Yes {
-                diverges = Diverges::Yes;
-                break;
-            }
-        }
-        let Some(frame) = self.scopes.pop() else {
-            unreachable!("scope frame pushed above")
-        };
-        if diverges == Diverges::No {
-            let mut schedules = vec![];
-            for local in frame.locals.iter().rev().cloned().collect::<Vec<_>>() {
-                self.schedule_drop(&local, DropReason::ScopeExit, state, &mut schedules);
-            }
-            self.block_drops.insert(frame.block_id, schedules);
-        }
-        for local in &frame.locals {
-            state.finish_local(&Place::root(local.symbol));
-        }
-    }
-
-    /// Check a file's top-level roots as one body (the file is the top-level
-    /// scope), descending into every nested function declaration along the
-    /// way. Returns the file's scope-exit drop schedules.
-    pub(crate) fn check_roots(
-        &mut self,
-        roots: &[hir::Node],
-        state: &mut MoveState,
-    ) -> Vec<DropSchedule> {
-        self.liveness = Liveness::analyze(roots);
-        self.scopes.push(ScopeFrame {
-            // The file scope has no HIR node; its schedules return to the
-            // caller (annotated onto the `HirFile`) instead of `block_drops`.
-            block_id: NodeID::SYNTHESIZED,
-            locals: vec![],
-        });
-        let diverges = self.walk_block_nodes(roots, state);
-        let Some(frame) = self.scopes.pop() else {
-            unreachable!("file scope frame pushed above")
-        };
-        let mut schedules = vec![];
-        if diverges == Diverges::No {
-            for local in frame.locals.iter().rev().cloned().collect::<Vec<_>>() {
-                self.schedule_drop(&local, DropReason::ScopeExit, state, &mut schedules);
-            }
-        }
-        for local in &frame.locals {
-            state.finish_local(&Place::root(local.symbol));
-        }
-        schedules
-    }
-
     /// A returned value: borrow-containing returns validate their provenance
     /// (tier 1: parameter-derived is fine; owned/unknown are errors); owned
     /// returns consume (which also checks move-out-of-borrowed and closure
     /// escapes).
-    fn check_return_value(&mut self, expr: &hir::Expr, state: &mut MoveState) {
+    pub(crate) fn check_return_value(&mut self, expr: &hir::Expr, state: &mut MoveState) {
         if self.grades.contains_borrowed(&expr.ty) {
             self.check_return_provenance(expr, state);
             self.walk_expr(expr, state);
@@ -452,24 +396,12 @@ impl<'a> MoveChecker<'a> {
     fn check_decl(&mut self, decl: &hir::Decl, state: &mut MoveState) {
         match &decl.kind {
             hir::DeclKind::Func(func) => {
-                let func_ty = func
-                    .name
-                    .symbol()
-                    .ok()
-                    .and_then(|symbol| self.types.schemes.get(&symbol))
-                    .map(|scheme| scheme.ty.clone());
-                self.check_closure(func, func_ty.as_ref(), state, EscapeContext::Bound);
+                self.check_closure(func, state, EscapeContext::Bound);
             }
-            hir::DeclKind::Method { func, .. } => {
-                let func_ty = func
-                    .name
-                    .symbol()
-                    .ok()
-                    .and_then(|symbol| self.types.schemes.get(&symbol))
-                    .map(|scheme| scheme.ty.clone());
-                self.check_func(func, func_ty.as_ref());
-            }
-            hir::DeclKind::Init { body, .. } => self.check_init_body(body),
+            // Method and init bodies are checked from the store by the
+            // CFG engine; encountering their declarations here (inside a
+            // statement-embedded block) has no parent-state effect.
+            hir::DeclKind::Method { .. } | hir::DeclKind::Init { .. } => {}
             hir::DeclKind::Struct { body, .. }
             | hir::DeclKind::Enum { body, .. }
             | hir::DeclKind::Extend { body, .. }
@@ -493,19 +425,7 @@ impl<'a> MoveChecker<'a> {
         }
     }
 
-    fn check_init_body(&mut self, body: &hir::Block) {
-        let outer_scopes = std::mem::take(&mut self.scopes);
-        let outer_liveness =
-            std::mem::replace(&mut self.liveness, Liveness::analyze(&body.body));
-        let mut state = MoveState::default();
-        self.fn_depth += 1;
-        self.walk_block(body, &mut state);
-        self.fn_depth -= 1;
-        self.scopes = outer_scopes;
-        self.liveness = outer_liveness;
-    }
-
-    fn check_let(
+    pub(crate) fn check_let(
         &mut self,
         lhs: &hir::Pattern,
         annotation: Option<&crate::node_kinds::type_annotation::TypeAnnotation>,
@@ -569,8 +489,7 @@ impl<'a> MoveChecker<'a> {
                 // context, remember its summary for non-copy/escape
                 // classification, and apply its borrow captures with the
                 // binder as the borrower.
-                let summary =
-                    self.check_closure(func, Some(&rhs.ty), state, EscapeContext::Bound);
+                let summary = self.check_closure(func, state, EscapeContext::Bound);
                 let binder_place = Place::root(binder);
                 self.apply_borrow_captures(binder_place.clone(), binder_id, &summary, state);
                 state.closure_captures.insert(binder_place, summary);
@@ -646,13 +565,15 @@ impl<'a> MoveChecker<'a> {
             };
             self.error(error, local.binder);
         }
-        self.facts.drops.push(super::FlowDropFact {
-            node: local.binder,
-            place: render_place(&place, self.types),
-            ty: local.ty.render_mono(),
-            kind,
-            reason,
-        });
+        if self.recording {
+            self.facts.drops.push(super::FlowDropFact {
+                node: local.binder,
+                place: render_place(&place, self.types),
+                ty: local.ty.render_mono(),
+                kind,
+                reason,
+            });
+        }
         out.push(DropSchedule {
             place,
             ty: local.ty.clone(),
@@ -662,7 +583,7 @@ impl<'a> MoveChecker<'a> {
         });
     }
 
-    fn ty_is_linear(&self, ty: &Ty) -> bool {
+    pub(crate) fn ty_is_linear(&self, ty: &Ty) -> bool {
         use crate::types::catalog::Grade;
         matches!(ty, Ty::Nominal(symbol, _)
             if self.types.catalog.grade_of(*symbol) == Grade::Linear)
@@ -682,7 +603,9 @@ impl<'a> MoveChecker<'a> {
         for local in &locals {
             self.schedule_drop(local, DropReason::EarlyExit, state, &mut schedules);
         }
-        self.stmt_drops.insert(stmt_id, schedules);
+        if self.recording {
+            self.stmt_drops.insert(stmt_id, schedules);
+        }
     }
 
     // ----- Statement/node walk ----------------------------------------------
@@ -694,6 +617,78 @@ impl<'a> MoveChecker<'a> {
             hir::Node::Expr(expr) => expr.id,
         };
         state.prune_dead_loans(&self.liveness, id);
+    }
+
+    // ----- CFG-engine support (flow::cfg) --------------------------------------
+
+    /// Prune loans whose borrower is dead after `id` (the engine's
+    /// per-statement equivalent of `prune_after`).
+    pub(crate) fn prune_at(&mut self, state: &mut MoveState, id: NodeID) {
+        state.prune_dead_loans(&self.liveness, id);
+    }
+
+    /// Swap in a body's checking context (fresh scopes/liveness/params, the
+    /// same swaps `check_func` performs), returning the outer context.
+    /// `is_function` distinguishes function bodies from a file's top level
+    /// (which is not nested below it).
+    pub(crate) fn enter_body(&mut self, liveness: Liveness, is_function: bool) -> BodyContext {
+        let outer = BodyContext {
+            scopes: std::mem::take(&mut self.scopes),
+            liveness: std::mem::replace(&mut self.liveness, liveness),
+            borrowed_params: std::mem::take(&mut self.borrowed_params),
+            param_tys: std::mem::take(&mut self.param_tys),
+        };
+        if is_function {
+            self.fn_depth += 1;
+        }
+        outer
+    }
+
+    pub(crate) fn exit_body(&mut self, outer: BodyContext, is_function: bool) {
+        if is_function {
+            self.fn_depth -= 1;
+        }
+        self.scopes = outer.scopes;
+        self.liveness = outer.liveness;
+        self.borrowed_params = outer.borrowed_params;
+        self.param_tys = outer.param_tys;
+    }
+
+    /// Open the body's root scope frame, adopting any pending locals the
+    /// param seeding registered.
+    pub(crate) fn push_body_frame(&mut self, block_id: NodeID) {
+        let pending = std::mem::take(&mut self.pending_locals);
+        self.scopes.push(ScopeFrame {
+            block_id,
+            locals: pending,
+        });
+    }
+
+    pub(crate) fn pop_body_frame(&mut self) {
+        self.scopes.pop();
+    }
+
+    /// Register a storage-live local with the innermost frame so root-type
+    /// lookups see it (the engine's counterpart of `check_let`'s
+    /// registration; `let` binders arrive here too, harmlessly twice).
+    pub(crate) fn register_scope_local(
+        &mut self,
+        id: NodeID,
+        symbol: crate::name_resolution::symbol::Symbol,
+        ty: Ty,
+    ) {
+        let Some(frame) = self.scopes.last_mut() else {
+            return;
+        };
+        if frame.locals.iter().any(|local| local.symbol == symbol) {
+            return;
+        }
+        frame.locals.push(ScopeLocal {
+            symbol,
+            binder: id,
+            ty,
+            alias: false,
+        });
     }
 
     /// Walk a block's nodes in order. Statements after a `return`/`break`/
@@ -806,7 +801,8 @@ impl<'a> MoveChecker<'a> {
 
     /// Walk a block as a scope: track its locals and, on the fallthrough
     /// exit, schedule their drops in reverse declaration order.
-    fn walk_block(&mut self, block: &hir::Block, state: &mut MoveState) -> Diverges {
+    pub(crate) fn walk_block(&mut self, block: &hir::Block, state: &mut MoveState) -> Diverges {
+        let outer_cfg_exprs = std::mem::replace(&mut self.cfg_exprs, false);
         let pending = std::mem::take(&mut self.pending_locals);
         self.scopes.push(ScopeFrame {
             block_id: block.id,
@@ -821,15 +817,18 @@ impl<'a> MoveChecker<'a> {
             for local in frame.locals.iter().rev().cloned().collect::<Vec<_>>() {
                 self.schedule_drop(&local, DropReason::ScopeExit, state, &mut schedules);
             }
-            self.block_drops.insert(frame.block_id, schedules);
+            if self.recording {
+                self.block_drops.insert(frame.block_id, schedules);
+            }
         }
         for local in &frame.locals {
             state.finish_local(&Place::root(local.symbol));
         }
+        self.cfg_exprs = outer_cfg_exprs;
         diverges
     }
 
-    fn check_assignment(
+    pub(crate) fn check_assignment(
         &mut self,
         stmt_id: NodeID,
         lhs: &hir::Expr,
@@ -852,7 +851,8 @@ impl<'a> MoveChecker<'a> {
             // A write to a global from inside a function body: the
             // per-body NLL walk cannot see whether a global borrows it, so
             // record it for `check_flow`'s cross-procedural post-pass.
-            if self.fn_depth > 0
+            if self.recording
+                && self.fn_depth > 0
                 && matches!(
                     place.root,
                     crate::name_resolution::symbol::Symbol::Global(_)
@@ -894,14 +894,16 @@ impl<'a> MoveChecker<'a> {
             // pre-assignment state, so a moved-out place drops Dead), and any
             // borrows of it are invalidated.
             if self.grades.needs_drop(&lhs.ty) || self.grades.contains_object(&lhs.ty) {
-                let kind = classify(&place, state);
-                self.stmt_drops.entry(stmt_id).or_default().push(DropSchedule {
-                    place: place.clone(),
-                    ty: lhs.ty.clone(),
-                    kind,
-                    reason: DropReason::AssignmentReplace,
-                    node: lhs.id,
-                });
+                if self.recording {
+                    let kind = classify(&place, state);
+                    self.stmt_drops.entry(stmt_id).or_default().push(DropSchedule {
+                        place: place.clone(),
+                        ty: lhs.ty.clone(),
+                        kind,
+                        reason: DropReason::AssignmentReplace,
+                        node: lhs.id,
+                    });
+                }
                 state.invalidate_borrows_of(&place);
             }
             state.restore(&place);
@@ -953,11 +955,22 @@ impl<'a> MoveChecker<'a> {
     /// moved (if owned), an aggregate literal consumes its elements, and
     /// anything else evaluates normally (its interior consume sites are its
     /// own).
-    fn consume_expr(&mut self, expr: &hir::Expr, state: &mut MoveState) {
+    pub(crate) fn consume_expr(&mut self, expr: &hir::Expr, state: &mut MoveState) {
         self.check_object_boundaries(expr);
+        // Under CFG boundaries a call's effects (receiver borrows, argument
+        // consumption) rode its own Call/Perform statement; its result is an
+        // rvalue with no place effects.
+        if self.cfg_exprs
+            && matches!(
+                expr.kind,
+                ExprKind::Call { .. } | ExprKind::CallEffect { .. }
+            )
+        {
+            return;
+        }
         // A closure value consumed by its context escapes the frame.
         if let ExprKind::Func(func) = &expr.kind {
-            self.check_closure(func, Some(&expr.ty), state, EscapeContext::Escaping);
+            self.check_closure(func, state, EscapeContext::Escaping);
             return;
         }
         if let Some(place) = self.place(expr) {
@@ -982,10 +995,18 @@ impl<'a> MoveChecker<'a> {
                 }
             }
             ExprKind::As(inner, _) => self.consume_expr(inner, state),
+            // Under CFG boundaries these are opaque: their effects (and the
+            // arms' value consumption) already rode the enclosing body's
+            // blocks.
             ExprKind::Block(block) => {
-                self.walk_block(block, state);
+                if !self.cfg_exprs {
+                    self.walk_block(block, state);
+                }
             }
             ExprKind::If(cond, then_block, else_block) => {
+                if self.cfg_exprs {
+                    return;
+                }
                 self.walk_expr(cond, state);
                 let mut then_state = state.clone();
                 let then_diverges = self.walk_block(then_block, &mut then_state);
@@ -999,6 +1020,9 @@ impl<'a> MoveChecker<'a> {
                 }
             }
             ExprKind::Match(scrutinee, arms) => {
+                if self.cfg_exprs {
+                    return;
+                }
                 self.walk_match(scrutinee, arms, state, true);
             }
             _ => self.walk_expr(expr, state),
@@ -1007,22 +1031,30 @@ impl<'a> MoveChecker<'a> {
 
     /// Walk an expression for its uses (reads); consume sites inside it
     /// (call arguments, receivers, aggregate elements) apply their own rules.
-    fn walk_expr(&mut self, expr: &hir::Expr, state: &mut MoveState) {
+    pub(crate) fn walk_expr(&mut self, expr: &hir::Expr, state: &mut MoveState) {
         self.check_object_boundaries(expr);
         if let Some(place) = self.place(expr) {
             self.check_use(expr, &place, false, state);
             return;
         }
         match &expr.kind {
+            // Under CFG boundaries these are opaque — the Call/Perform
+            // statement transfer applies their effects directly.
             ExprKind::Call {
                 callee,
                 args,
                 trailing_block,
                 ..
             } => {
-                self.check_call(expr, callee, args, trailing_block.as_ref(), state);
+                if self.cfg_exprs {
+                    return;
+                }
+                self.check_call(callee, args, trailing_block.as_ref(), state);
             }
             ExprKind::CallEffect { args, .. } => {
+                if self.cfg_exprs {
+                    return;
+                }
                 for arg in args {
                     self.consume_expr(&arg.value, state);
                 }
@@ -1044,9 +1076,14 @@ impl<'a> MoveChecker<'a> {
             }
             ExprKind::As(inner, _) => self.walk_expr(inner, state),
             ExprKind::Block(block) => {
-                self.walk_block(block, state);
+                if !self.cfg_exprs {
+                    self.walk_block(block, state);
+                }
             }
             ExprKind::If(cond, then_block, else_block) => {
+                if self.cfg_exprs {
+                    return;
+                }
                 self.walk_expr(cond, state);
                 let mut then_state = state.clone();
                 let then_diverges = self.walk_block(then_block, &mut then_state);
@@ -1060,10 +1097,13 @@ impl<'a> MoveChecker<'a> {
                 }
             }
             ExprKind::Match(scrutinee, arms) => {
+                if self.cfg_exprs {
+                    return;
+                }
                 self.walk_match(scrutinee, arms, state, false);
             }
             ExprKind::Func(func) => {
-                self.check_closure(func, Some(&expr.ty), state, EscapeContext::Bound);
+                self.check_closure(func, state, EscapeContext::Bound);
             }
             ExprKind::InlineIR(ir) => {
                 for bind in &ir.binds {
@@ -1142,9 +1182,8 @@ impl<'a> MoveChecker<'a> {
         }
     }
 
-    fn check_call(
+    pub(crate) fn check_call(
         &mut self,
-        _call: &hir::Expr,
         callee: &hir::Expr,
         args: &[hir::CallArg],
         trailing_block: Option<&hir::Block>,
@@ -1408,12 +1447,14 @@ impl<'a> MoveChecker<'a> {
         }
         if (owned || noncopy_closure) && tracked_root(place.root) {
             self.check_move_while_borrowed(expr.id, &place, state);
-            self.consumed.insert(expr.id);
-            self.facts.moves.push(super::FlowMoveFact {
-                node: expr.id,
-                place: render_place(&place, self.types),
-                ty: expr.ty.render_mono(),
-            });
+            if self.recording {
+                self.consumed.insert(expr.id);
+                self.facts.moves.push(super::FlowMoveFact {
+                    node: expr.id,
+                    place: render_place(&place, self.types),
+                    ty: expr.ty.render_mono(),
+                });
+            }
             state.invalidate_borrows_of(&place);
             state.note_move(place, expr.id, expr.ty.clone());
         }

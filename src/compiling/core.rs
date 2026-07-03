@@ -16,6 +16,7 @@ use crate::types::TypeOutput;
 /// model rather than polymorphic IR in modules.
 pub struct CoreTyped {
     pub hir: IndexMap<Source, crate::hir::HirFile>,
+    pub mir_bodies: crate::lower::mir::ModuleBodies,
     pub types: TypeOutput,
     pub resolved_names: ResolvedNames,
 }
@@ -101,6 +102,7 @@ fn _compile() -> (Arc<Module>, Arc<CoreTyped>) {
 
     let core_typed = CoreTyped {
         hir: typed.phase.hir.clone(),
+        mir_bodies: typed.phase.mir_bodies.clone(),
         types: typed.phase.types.clone(),
         resolved_names: typed.phase.resolved_names.clone(),
     };

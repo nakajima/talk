@@ -68,6 +68,9 @@ pub struct Typed {
     /// here on (ownership checks it, lowering builds the MIR from it). The LSP,
     /// which needs source-faithful nodes the HIR strips, keeps its own AST.
     pub hir: IndexMap<Source, crate::hir::HirFile>,
+    /// One structural MIR body per checkable body, built pre-flow and
+    /// annotated by the flow checker; lowering consumes these.
+    pub mir_bodies: crate::lower::mir::ModuleBodies,
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
     pub types: TypeOutput,
@@ -552,13 +555,18 @@ impl Driver<NameResolved> {
             let file = crate::hir::build::build_file(&ast, &types);
             hir.insert(source, file);
         }
+        // The MIR store: one structural body per checkable body, built
+        // BEFORE flow (no flow inputs) so the flow checker can annotate
+        // exactly the bodies lowering consumes.
+        let mut mir_bodies = crate::lower::mir::build_module_bodies(&types, hir.values());
         let (flow, flow_diagnostics) = if hir.is_empty() {
             (crate::flow::FlowFacts::default(), vec![])
         } else {
             // The flow checker annotates the HIR in place (`Block::drops`,
-            // `Stmt::drops`, `Expr.ownership`) — lowering's sole drop/move
-            // source — and returns the editor-facing facts.
-            crate::flow::check_flow(&mut hir, &types, self.config.module_id)
+            // `Stmt::drops`, `Expr.ownership`) and the stored MIR bodies —
+            // lowering's drop/move source — and returns the editor-facing
+            // facts.
+            crate::flow::check_flow(&mut hir, &mut mir_bodies, &types, self.config.module_id)
         };
         diagnostics.extend(flow_diagnostics);
 
@@ -567,6 +575,7 @@ impl Driver<NameResolved> {
             config: self.config,
             phase: Typed {
                 hir,
+                mir_bodies,
                 symbols,
                 resolved_names,
                 types,
@@ -586,6 +595,7 @@ impl Driver<Typed> {
 
         let Typed {
             hir,
+            mir_bodies,
             symbols: _,
             resolved_names,
             types,
@@ -605,6 +615,7 @@ impl Driver<Typed> {
                 asts: &core.hir,
                 types: &core.types,
                 resolved: &core.resolved_names,
+                bodies: &core.mir_bodies,
             });
         }
         for module in &stdlib {
@@ -612,12 +623,14 @@ impl Driver<Typed> {
                 asts: &module.hir,
                 types: &module.types,
                 resolved: &module.resolved_names,
+                bodies: &module.mir_bodies,
             });
         }
         units.push(LowerUnit {
             asts: &hir,
             types: &types,
             resolved: &resolved_names,
+            bodies: &mir_bodies,
         });
         let entry = units.len() - 1;
         let lowered = lower_program(units, entry);

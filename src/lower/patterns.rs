@@ -32,7 +32,7 @@ use crate::lambda_g::program::Label;
 use crate::name_resolution::symbol::Symbol;
 use crate::types::ty::Ty as CheckTy;
 
-use super::{Binding, Ctx, EvidenceBinding, Lowering};
+use super::{Binding, Ctx, EvidenceBinding, Lowering, ScaffoldArms};
 
 /// A matrix column's subject: a pure λ_G value plus its checker type.
 #[derive(Clone)]
@@ -126,6 +126,7 @@ pub(super) fn compile_match(
     value: ExprId,
     scrutinee_ty: CheckTy,
     arms: &[MatchArm],
+    scaffold_arms: Option<ScaffoldArms>,
     ctx: &Ctx,
     k: ExprId,
 ) -> ExprId {
@@ -166,6 +167,7 @@ pub(super) fn compile_match(
         ctx,
         k,
         arms,
+        scaffold_arms,
         targets,
         trap: None,
     }
@@ -178,6 +180,10 @@ struct MatchCompiler<'l, 'a, 'p> {
     /// The continuation every arm's value flows to.
     k: ExprId,
     arms: &'p [MatchArm],
+    /// The arms' scaffold blocks in the body being lowered, when this match
+    /// is embedded there: arm bodies lower from these instead of standalone
+    /// bodies.
+    scaffold_arms: Option<ScaffoldArms>,
     targets: Vec<ArmTarget>,
     /// The shared no-row-matched target (bodyless, so both engines trap) —
     /// reachable only if a non-exhaustive match slips past the checker.
@@ -329,24 +335,39 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             );
         }
         let body_block = &self.arms[arm].body;
-        // Arm payload binders drop at arm-scope exit (the flow checker
-        // scheduled them on the body block); seed the drop stack so the
-        // candidates resolve.
-        for schedule in &body_block.drops {
-            if binders.contains(&schedule.place.root) {
+        // Arm payload binders that need release drop at arm-scope exit;
+        // seed the drop stack so the arm blocks' candidates resolve.
+        let pattern_types = self.lowering.units[self.ctx.unit].types;
+        for (_, symbol, ty) in
+            crate::lower::mir::arm_release_binders(pattern_types, &self.arms[arm].pattern)
+        {
+            if binders.contains(&symbol) {
                 inner.drop_stack.push(crate::lower::DropBinding {
-                    symbol: schedule.place.root,
-                    key_path: crate::lower::OwnershipKeyPath::root(schedule.place.root),
-                    ty: schedule.ty.clone(),
+                    symbol,
+                    key_path: crate::lower::OwnershipKeyPath::root(symbol),
+                    ty,
                     dynamic_flags: vec![],
                 });
             }
         }
         let k = self.k;
+        // The arm body lowers from its scaffold block in the enclosing body
+        // when this match is embedded there (breaks/continues/returns inside
+        // it are real CFG edges); a standalone body otherwise.
+        let scaffold_block = self
+            .scaffold_arms
+            .as_ref()
+            .and_then(|scaffold| Some((*scaffold.blocks.get(arm)?, scaffold.join)));
+        let pattern = &self.arms[arm].pattern;
         let body = self
             .lowering
             .with_cells(&celled, &mut inner, |this, inner| {
-                this.lower_block(body_block, inner, k)
+                if let Some((arm_block, join)) = scaffold_block
+                    && let Some(done) = this.lower_arm_from_scaffold(arm_block, join, inner, k)
+                {
+                    return done;
+                }
+                this.lower_arm_block(pattern, body_block, inner, k)
             });
         self.lowering.p.set_body(label, body);
         label

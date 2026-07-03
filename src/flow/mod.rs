@@ -1,17 +1,22 @@
 //! The flow checker: the small flow-sensitive companion to the type system's
 //! substructural core. Permissions and grades live in types (`src/types`);
 //! this pass answers only the flow-sensitive questions — where each value
-//! moves, where borrows end, where drops go — and writes its answers onto the
-//! HIR in place, per the annotated-tree architecture: moves, drops (with
-//! linear must-consume), loans/provenance (NLL borrow ends at last use),
-//! closure captures, and raw-pointer gating.
+//! moves, where borrows end, where drops go — as a dataflow analysis over
+//! each body's MIR CFG (`cfg`, ADR 0010), writing its answers onto the MIR
+//! in place per the annotated-tree architecture: per-point drop
+//! elaborations and move sets on statements (with linear must-consume),
+//! consume/auto-clone flags on the statement-embedded expressions,
+//! loans/provenance (NLL borrow ends at last use), closure captures, and
+//! raw-pointer gating.
 
 mod captures;
+pub(crate) mod cfg;
 pub mod drops;
 pub mod errors;
 pub(crate) mod grades;
 mod liveness;
 mod loans;
+pub(crate) mod mir_annotate;
 mod moves;
 pub mod place;
 mod unsafe_gate;
@@ -76,12 +81,14 @@ use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
 use crate::hir::HirFile;
 use crate::types::TypeOutput;
 
-/// Check every file's HIR — moves, drops, loans, provenance, captures,
-/// raw-pointer gating — writing the results onto the tree in place
-/// (`Expr.ownership`, `Block::drops`, `Stmt::drops`, `HirFile::drops`) and
-/// returning the editor-facing facts plus diagnostics.
+/// Check every stored MIR body's CFG — moves, drops, loans, provenance,
+/// captures, raw-pointer gating — writing the results onto the bodies in
+/// place (`bodies`, what lowering consumes; consume/auto-clone flags also
+/// land on the HIR tree for lowering's inlined constants), returning the
+/// editor-facing facts plus diagnostics.
 pub fn check_flow(
     hir: &mut IndexMap<Source, HirFile>,
+    bodies: &mut crate::lower::mir::ModuleBodies,
     types: &TypeOutput,
     module_id: ModuleId,
 ) -> (FlowFacts, Vec<AnyDiagnostic>) {
@@ -90,13 +97,16 @@ pub fn check_flow(
     // a single structural pre-pass, consumed at call sites for precise
     // borrowed-return provenance.
     checker.seed_return_reach(hir.values());
-    let mut file_drops = vec![];
     for file in hir.values() {
         checker.check_global_storage(&file.roots);
         checker.check_borrow_storage(&file.roots);
-        let mut state = Default::default();
-        file_drops.push(checker.check_roots(&file.roots, &mut state));
     }
+
+    // The CFG engine: dataflow over each stored body's blocks — the flow
+    // errors, the editor facts, the consume/auto-clone flags, and every
+    // per-point candidate elaboration come from it.
+    cfg::check_bodies(&mut checker, hir, bodies);
+
     // Cross-procedural write protection: a global borrowed by another
     // global is immutable everywhere — the borrower would dangle when the
     // assignment drops the old value. (Top-level reassignments are already
@@ -112,7 +122,7 @@ pub fn check_flow(
         }
     }
 
-    let mut errors = checker.errors;
+    let mut errors = std::mem::take(&mut checker.errors);
     errors.extend(unsafe_gate::check(hir, module_id));
 
     // Silent-clone facts, from both tier-2 sources: the flow checker's
@@ -129,16 +139,16 @@ pub fn check_flow(
         checker.facts.clones.push(FlowCloneFact { node: *node, ty });
     }
 
-    // Bake the analysis onto the tree: this map dies here — downstream
-    // stages read the annotations, never a side table.
-    let mut annotator = Annotator {
-        block_drops: checker.block_drops,
-        stmt_drops: checker.stmt_drops,
-        consumed: checker.consumed,
-        auto_clones: checker.auto_clones,
+    // Consume/auto-clone flags onto the HIR tree too: lowering inlines
+    // constant top-level `let` right-hand sides straight from it.
+    let results = mir_annotate::FlowResults {
+        block_drops: &checker.block_drops,
+        stmt_drops: &checker.stmt_drops,
+        consumed: &checker.consumed,
+        auto_clones: &checker.auto_clones,
     };
-    for (file, drops) in hir.values_mut().zip(file_drops) {
-        file.drops = drops;
+    let mut annotator = mir_annotate::Annotator::new(&results);
+    for file in hir.values_mut() {
         for root in &mut file.roots {
             use derive_visitor::DriveMut;
             root.drive_mut(&mut annotator);
@@ -156,36 +166,4 @@ pub fn check_flow(
         })
         .collect();
     (checker.facts, diagnostics)
-}
-
-#[derive(derive_visitor::VisitorMut)]
-#[visitor(crate::hir::Block(enter), crate::hir::Stmt(enter), crate::hir::Expr(enter))]
-struct Annotator {
-    block_drops: rustc_hash::FxHashMap<crate::node_id::NodeID, Vec<drops::DropSchedule>>,
-    stmt_drops: rustc_hash::FxHashMap<crate::node_id::NodeID, Vec<drops::DropSchedule>>,
-    consumed: rustc_hash::FxHashSet<crate::node_id::NodeID>,
-    auto_clones: rustc_hash::FxHashSet<crate::node_id::NodeID>,
-}
-
-impl Annotator {
-    fn enter_block(&mut self, block: &mut crate::hir::Block) {
-        if let Some(schedules) = self.block_drops.remove(&block.id) {
-            block.drops = schedules;
-        }
-    }
-
-    fn enter_stmt(&mut self, stmt: &mut crate::hir::Stmt) {
-        if let Some(schedules) = self.stmt_drops.remove(&stmt.id) {
-            stmt.drops = schedules;
-        }
-    }
-
-    fn enter_expr(&mut self, expr: &mut crate::hir::Expr) {
-        if self.consumed.contains(&expr.id) {
-            expr.ownership.consumes = true;
-        }
-        if self.auto_clones.contains(&expr.id) {
-            expr.ownership.auto_clone = true;
-        }
-    }
 }

@@ -20,6 +20,7 @@ lazy_static! {
 /// but lowering needs the actual bodies for demanded specializations.
 pub struct StdlibTyped {
     pub hir: IndexMap<Source, crate::hir::HirFile>,
+    pub mir_bodies: crate::lower::mir::ModuleBodies,
     pub types: TypeOutput,
     pub resolved_names: ResolvedNames,
 }
@@ -63,12 +64,14 @@ fn compile_typed_module(
     let typed = compile_driver(name, content, module_id);
     let Typed {
         hir,
+        mir_bodies,
         resolved_names,
         types,
         ..
     } = typed.phase;
     StdlibTyped {
         hir,
+        mir_bodies,
         types,
         resolved_names,
     }

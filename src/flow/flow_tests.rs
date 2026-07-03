@@ -306,16 +306,53 @@ fn func_body(driver: &Driver<Typed>, name: &str) -> hir::Block {
     panic!("no function named {name} in checked HIR");
 }
 
-fn kinds(drops: &[DropSchedule]) -> Vec<DropElaboration> {
-    drops.iter().map(|schedule| schedule.kind).collect()
+/// The named function's STORED, flow-annotated MIR body — the drop
+/// authority lowering consumes.
+fn stored_body(driver: &Driver<Typed>, name: &str) -> std::sync::Arc<crate::lower::mir::Body> {
+    let block = func_body(driver, name);
+    driver
+        .phase
+        .mir_bodies
+        .get(block.id)
+        .expect("function body stored")
+}
+
+/// Every elaborated drop candidate in the body, as (display name of the
+/// dropped symbol — empty for expression targets, reason, kind), in
+/// statement order.
+fn candidate_drops(
+    driver: &Driver<Typed>,
+    body: &crate::lower::mir::Body,
+) -> Vec<(String, DropReason, DropElaboration)> {
+    use crate::lower::mir;
+    let names = &driver.phase.resolved_names.symbol_names;
+    body.blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| {
+            let mir::Statement::DropCandidate { target, reason, .. } = &statement.kind else {
+                return None;
+            };
+            let kind = statement.ownership.drop.as_ref()?.kind;
+            let name = match target {
+                mir::DropTarget::Symbol { symbol, .. } => {
+                    names.get(symbol).cloned().unwrap_or_default()
+                }
+                mir::DropTarget::Expr(_) => String::new(),
+            };
+            Some((name, *reason, kind))
+        })
+        .collect()
 }
 
 #[test]
 fn straight_line_owned_local_drops_static_at_scope_exit() {
     let driver = flow_driver("func make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\t1\n}");
-    let body = func_body(&driver, "make");
-    assert_eq!(kinds(&body.drops), vec![DropElaboration::Static]);
-    assert_eq!(body.drops[0].reason, DropReason::ScopeExit);
+    let body = stored_body(&driver, "make");
+    assert_eq!(
+        candidate_drops(&driver, &body),
+        vec![("s".into(), DropReason::ScopeExit, DropElaboration::Static)]
+    );
 }
 
 #[test]
@@ -323,11 +360,14 @@ fn aggregate_move_makes_source_scope_drop_dead() {
     let driver = flow_driver(
         "func make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet pair = (s, 1)\n\t0\n}",
     );
-    let body = func_body(&driver, "make");
+    let body = stored_body(&driver, "make");
     // Reverse declaration order: `pair` (live) drops first, then `s` (moved).
     assert_eq!(
-        kinds(&body.drops),
-        vec![DropElaboration::Static, DropElaboration::Dead]
+        candidate_drops(&driver, &body),
+        vec![
+            ("pair".into(), DropReason::ScopeExit, DropElaboration::Static),
+            ("s".into(), DropReason::ScopeExit, DropElaboration::Dead),
+        ]
     );
 }
 
@@ -336,8 +376,15 @@ fn branch_move_makes_scope_drop_conditional() {
     let driver = flow_driver(
         "func make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\tlet t = s\n\t\t1\n\t} else {\n\t\t2\n\t}\n\t0\n}",
     );
-    let body = func_body(&driver, "make");
-    assert_eq!(kinds(&body.drops), vec![DropElaboration::Conditional]);
+    let body = stored_body(&driver, "make");
+    let s_drops: Vec<_> = candidate_drops(&driver, &body)
+        .into_iter()
+        .filter(|(name, _, _)| name == "s")
+        .collect();
+    assert_eq!(
+        s_drops,
+        vec![("s".into(), DropReason::ScopeExit, DropElaboration::Conditional)]
+    );
 }
 
 #[test]
@@ -345,11 +392,14 @@ fn field_move_makes_scope_drop_open() {
     let driver = flow_driver(
         "struct Person {\n\tlet name: String\n\tlet age: Int\n}\nfunc make() -> Int {\n\tlet person = Person(name: \"Pat\" + \"!\", age: 40)\n\tlet name = person.name\n\tperson.age\n}",
     );
-    let body = func_body(&driver, "make");
+    let body = stored_body(&driver, "make");
     // Reverse declaration order: `name` (live), then `person` (partly moved).
     assert_eq!(
-        kinds(&body.drops),
-        vec![DropElaboration::Static, DropElaboration::Open]
+        candidate_drops(&driver, &body),
+        vec![
+            ("name".into(), DropReason::ScopeExit, DropElaboration::Static),
+            ("person".into(), DropReason::ScopeExit, DropElaboration::Open),
+        ]
     );
 }
 
@@ -358,26 +408,16 @@ fn early_exit_schedules_enclosing_scope_drops() {
     let driver = flow_driver(
         "func make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\treturn 1\n\t}\n\ts.length\n}",
     );
-    let body = func_body(&driver, "make");
-    // Find the return statement inside the if's then-block.
-    let mut early: Option<Vec<DropSchedule>> = None;
-    for node in &body.body {
-        if let hir::Node::Stmt(stmt) = node
-            && let hir::StmtKind::If(_, then_block, _) = &stmt.kind
-        {
-            for inner in &then_block.body {
-                if let hir::Node::Stmt(inner_stmt) = inner
-                    && matches!(inner_stmt.kind, hir::StmtKind::Return(_))
-                {
-                    early = Some(inner_stmt.drops.clone());
-                }
-            }
-        }
-    }
-    let early = early.expect("return statement with drops");
-    assert_eq!(early.len(), 1, "{early:?}");
-    assert_eq!(early[0].kind, DropElaboration::Static);
-    assert_eq!(early[0].reason, DropReason::EarlyExit);
+    let body = stored_body(&driver, "make");
+    let early: Vec<_> = candidate_drops(&driver, &body)
+        .into_iter()
+        .filter(|(_, reason, _)| *reason == DropReason::EarlyExit)
+        .collect();
+    // The early return drops `s` (still live on that path).
+    assert_eq!(
+        early,
+        vec![("s".into(), DropReason::EarlyExit, DropElaboration::Static)]
+    );
 }
 
 #[test]
@@ -385,19 +425,15 @@ fn assignment_schedules_replace_drop() {
     let driver = flow_driver(
         "func make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ts = \"new\" + \" value\"\n\ts.length\n}",
     );
-    let body = func_body(&driver, "make");
-    let mut replace: Option<Vec<DropSchedule>> = None;
-    for node in &body.body {
-        if let hir::Node::Stmt(stmt) = node
-            && matches!(stmt.kind, hir::StmtKind::Assignment(..))
-        {
-            replace = Some(stmt.drops.clone());
-        }
-    }
-    let replace = replace.expect("assignment statement with drops");
-    assert_eq!(replace.len(), 1, "{replace:?}");
-    assert_eq!(replace[0].kind, DropElaboration::Static);
-    assert_eq!(replace[0].reason, DropReason::AssignmentReplace);
+    let body = stored_body(&driver, "make");
+    let replace: Vec<_> = candidate_drops(&driver, &body)
+        .into_iter()
+        .filter(|(_, reason, _)| *reason == DropReason::AssignmentReplace)
+        .collect();
+    assert_eq!(
+        replace,
+        vec![(String::new(), DropReason::AssignmentReplace, DropElaboration::Static)]
+    );
 }
 
 #[test]
@@ -1107,4 +1143,67 @@ fn rejects_raw_pointer_usage_in_safe_source() {
 #[test]
 fn allows_raw_pointer_usage_in_unsafe_source() {
     assert_no_errors("// unsafe\nlet p = _alloc<Int>(1)\n0");
+}
+
+// ----- ADR 0010: flow analysis on the MIR CFG ----------------------------------
+
+/// Bug 2 (ADR 0010): a `break`'s early-exit drops are target-relative — a
+/// linear value declared BEFORE the loop and consumed after it is fine (the
+/// tree walk scheduled every enclosing scope's drops at the break, then
+/// rejected the "dropped" linear).
+#[test]
+fn linear_consumed_after_a_loop_with_break_is_accepted() {
+    assert_no_errors(
+        "struct Token 'linear {\n\tlet id: Int\n\tconsuming func close() -> Int {\n\t\tself.id\n\t}\n}\nfunc make() -> Int {\n\tlet token = Token(id: 1)\n\tlet i = 0\n\tloop i < 3 {\n\t\ti = i + 1\n\t\tif i == 2 {\n\t\t\tbreak\n\t\t}\n\t}\n\ttoken.close()\n}",
+    );
+}
+
+/// The false UseAfterMove (ADR 0010 context): a value moved before a
+/// branch and reassigned in EVERY branch is initialized at the join — the
+/// tree walk merged arm states INTO the pre-branch state, so the stale
+/// move survived the join.
+#[test]
+fn move_reassigned_in_every_branch_is_accepted() {
+    assert_no_errors(
+        "func consume(s: String) -> Int {\n\ts.length\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = consume(s)\n\tif flag {\n\t\ts = \"c\" + \"d\"\n\t} else {\n\t\ts = \"e\" + \"f\"\n\t}\n\tconsume(s) + n\n}",
+    );
+}
+
+/// Bug 1 (ADR 0010), error side: a value moved on a conditional path
+/// ending in `continue` reaches the loop head as moved — using it on the
+/// next iteration is a use-after-move. The tree walk discarded the
+/// diverging arm's state at the if-join and ACCEPTED this program; it then
+/// double-freed at runtime.
+#[test]
+fn move_on_conditional_continue_path_is_use_after_move_on_reentry() {
+    assert_error_contains(
+        "func consume(s: String) -> Int {\n\ts.length\n}\nfunc f() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet i = 0\n\tlet n = 0\n\tloop i < 2 {\n\t\ti = i + 1\n\t\tif i == 1 {\n\t\t\tn = consume(s)\n\t\t\tcontinue\n\t\t}\n\t}\n\tn\n}\nf()",
+        "Use of moved value 's'",
+    );
+}
+
+/// Bug 1 (ADR 0010), runtime side: a value moved on one `break` path and
+/// live on another is may-moved at the loop exit — its drop is
+/// flag-guarded (Conditional), never unconditional. The tree walk believed
+/// it live (both arms diverge, states discarded) and emitted a static
+/// double-freeing drop.
+#[test]
+fn move_on_conditional_break_path_drops_once() {
+    let (value, _, live_allocations) = run_heap_eval(
+        "func consume(s: String) -> Int {\n\ts.length\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = 0\n\tloop {\n\t\tif flag {\n\t\t\tn = consume(s)\n\t\t\tbreak\n\t\t}\n\t\tbreak\n\t}\n\tn\n}\nf(true) + f(false)",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
+    assert_eq!(live_allocations, 0, "the moved value drops exactly once");
+}
+
+/// A loop-local live at a `break` drops on the break path (the early-exit
+/// candidates at the break are the authority; ADR 0010 observed lowering's
+/// stack-derived compensation leaking here).
+#[test]
+fn live_loop_local_drops_on_break_path() {
+    let (value, _, live_allocations) = run_heap_eval(
+        "func f() -> Int {\n\tlet i = 0\n\tloop i < 3 {\n\t\ti = i + 1\n\t\tlet s = \"a\" + \"b\"\n\t\tif i == 2 {\n\t\t\tbreak\n\t\t}\n\t\tlet n = s.length\n\t}\n\t7\n}\nf()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(7));
+    assert_eq!(live_allocations, 0, "the loop-local drops on the break path too");
 }

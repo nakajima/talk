@@ -526,6 +526,34 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_break_inside_expression_position_if_arm() {
+        // The break is a CFG edge out of the arm block: the binding never
+        // happens on that path, and the loop exits with the accumulator.
+        let (_, out) = run_on_both_engines_io(
+            "func f(n: Int) -> Int {\n\tlet total = 0\n\tlet i = 0\n\tloop i < 5 {\n\t\ti = i + 1\n\t\tlet x = if (i == n) { break } else { i }\n\t\ttotal = total + x\n\t}\n\ttotal\n}\nprint(f(3))\nprint(f(99))",
+        );
+        assert_eq!(out, "3\n15\n");
+    }
+
+    #[test]
+    fn vm_continue_inside_expression_position_if_arm() {
+        let (_, out) = run_on_both_engines_io(
+            "func f() -> Int {\n\tlet total = 0\n\tlet i = 0\n\tloop i < 5 {\n\t\ti = i + 1\n\t\tlet x = if (i == 3) {\n\t\t\tcontinue\n\t\t} else {\n\t\t\ti\n\t\t}\n\t\ttotal = total + x\n\t}\n\ttotal\n}\nprint(f())",
+        );
+        assert_eq!(out, "12\n");
+    }
+
+    #[test]
+    fn vm_move_inside_expression_position_if_arm() {
+        // The moved-on-one-path local needs a drop flag that both arms of
+        // the expression-position if maintain correctly.
+        let (_, out) = run_on_both_engines_io(
+            "func consume(x: String) -> Int {\n\tx.length\n}\nfunc f(n: Int) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet x = if n > 0 { consume(s) } else { 0 }\n\tx\n}\nprint(f(1))\nprint(f(0))",
+        );
+        assert_eq!(out, "2\n0\n");
+    }
+
+    #[test]
     fn vm_match_with_break_arm_inside_loop() {
         let (_, out) = run_on_both_engines_io(
             "func f() -> Int {\n\tlet i = 0\n\tlet total = 0\n\tloop {\n\t\tlet step = match i < 3 {\n\t\t\ttrue -> 1,\n\t\t\tfalse -> break,\n\t\t}\n\t\ttotal = total + step\n\t\ti = i + 1\n\t}\n\ttotal\n}\nprint(f())",

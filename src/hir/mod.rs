@@ -42,9 +42,6 @@ use crate::{
 pub struct HirFile {
     pub file_id: crate::node_id::FileID,
     pub roots: Vec<Node>,
-    /// Scope-exit drops for the file's top-level locals (reverse declaration
-    /// order) — the file is the top-level scope. Written by the flow checker.
-    pub drops: Vec<crate::flow::drops::DropSchedule>,
 }
 
 /// The umbrella node type for a block body (`Vec<Node>`), mirroring the AST's

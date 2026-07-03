@@ -25,7 +25,6 @@ impl HirLowerer<'_> {
         hir::HirFile {
             file_id: ast.file_id,
             roots: self.roots(&ast.roots),
-            drops: vec![],
         }
     }
 

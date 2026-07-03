@@ -258,7 +258,9 @@ impl MoveChecker<'_> {
                 .is_some_and(|ty| self.grades.is_borrowed_value(&ty));
         if root_is_borrowed || root_is_object {
             if self.grades.is_cheap_clone(&expr.ty) {
-                self.auto_clones.insert(expr.id);
+                if self.recording {
+                    self.auto_clones.insert(expr.id);
+                }
                 return true;
             }
             // A type-parameter extraction from a heap object: the grade is
@@ -266,7 +268,9 @@ impl MoveChecker<'_> {
             // to lowering (which holds θ). Mark it and let each
             // monomorphization resolve.
             if root_is_object && matches!(expr.ty, Ty::Param(_)) {
-                self.auto_clones.insert(expr.id);
+                if self.recording {
+                    self.auto_clones.insert(expr.id);
+                }
                 return true;
             }
             let error = OwnershipError::MoveOutOfBorrowedValue {
@@ -752,7 +756,9 @@ impl MoveChecker<'_> {
                             crate::name_resolution::symbol::Symbol::Global(_)
                         ) =>
                     {
-                        self.global_borrows.insert(owner.root, borrower.root);
+                        if self.recording {
+                            self.global_borrows.insert(owner.root, borrower.root);
+                        }
                     }
                     _ => {
                         let error = OwnershipError::BorrowedGlobal {
@@ -767,12 +773,14 @@ impl MoveChecker<'_> {
         for loan in &provenance.loans {
             if let Some(owner) = &loan.owner {
                 self.check_borrow_conflicts(node, owner, loan.kind, Some(&borrower), state);
-                self.facts.borrows.push(super::FlowBorrowFact {
-                    node,
-                    borrower: self.render(&borrower),
-                    owner: self.render(owner),
-                    exclusive: loan.kind.is_exclusive(),
-                });
+                if self.recording {
+                    self.facts.borrows.push(super::FlowBorrowFact {
+                        node,
+                        borrower: self.render(&borrower),
+                        owner: self.render(owner),
+                        exclusive: loan.kind.is_exclusive(),
+                    });
+                }
                 state.add_loan(borrower.clone(), owner.clone(), loan.kind);
             }
         }

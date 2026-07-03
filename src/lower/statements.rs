@@ -13,23 +13,64 @@ impl<'a> Lowering<'a> {
 
     /// Lower a block whose VALUE flows to continuation `k` (a Fn(R, ⊥)
     /// expression). A block's value is its final expression; divergent
-    /// statements (return) ignore `k`.
-    pub(super) fn lower_block(&mut self, block: &Block, ctx: &Ctx, k: ExprId) -> ExprId {
-        // The single MIR build: from annotated HIR, drops already elaborated
-        // by the flow checker's schedules on the block itself. One body per
-        // HIR block — every θ-specialization re-lowers the shared body
-        // instead of rebuilding it.
+    /// statements (return) ignore `k`. `params` are the block's own
+    /// parameters when it is a function/closure body (owned by-value
+    /// parameters drop at its scope exit); empty otherwise.
+    pub(super) fn lower_block(
+        &mut self,
+        block: &Block,
+        params: &[hir::Parameter],
+        ctx: &Ctx,
+        k: ExprId,
+    ) -> ExprId {
+        let body = self.annotated_body(block, ctx, |types, owner, block| {
+            mir::build_function(types, owner, params, block)
+        });
+        self.lower_mir_body(&body, ctx, k)
+    }
+
+    /// Lower a match arm's body: like `lower_block`, but the arm pattern's
+    /// binders are the body's root-frame locals.
+    pub(super) fn lower_arm_block(
+        &mut self,
+        pattern: &hir::Pattern,
+        block: &Block,
+        ctx: &Ctx,
+        k: ExprId,
+    ) -> ExprId {
+        let body = self.annotated_body(block, ctx, |types, _, block| {
+            mir::build_arm_body(types, pattern, block)
+        });
+        self.lower_mir_body(&body, ctx, k)
+    }
+
+    /// One MIR body per HIR block — every θ-specialization re-lowers the
+    /// shared body instead of rebuilding it. Function-like bodies come from
+    /// the module's store (built pre-flow, annotated by the flow checker);
+    /// the rest (nested value blocks, match arms) build on miss and are
+    /// annotated from the flow results the checker left on this subtree.
+    fn annotated_body(
+        &mut self,
+        block: &Block,
+        ctx: &Ctx,
+        build: impl FnOnce(&TypeOutput, Option<Symbol>, &Block) -> mir::Body,
+    ) -> std::sync::Arc<mir::Body> {
         let key = (ctx.unit, block.id);
-        let body = match self.mir_bodies.get(&key) {
-            Some(body) => std::rc::Rc::clone(body),
+        if let Some(body) = self.mir_bodies.get(&key) {
+            return std::sync::Arc::clone(body);
+        }
+        let unit = &self.units[ctx.unit];
+        let body = match unit.bodies.get(block.id) {
+            Some(body) => body,
             None => {
-                let unit = &self.units[ctx.unit];
-                let body = std::rc::Rc::new(mir::build_function(unit.types, ctx.owner, block));
-                self.mir_bodies.insert(key, std::rc::Rc::clone(&body));
-                body
+                let mut body = build(unit.types, ctx.owner, block);
+                let collected = crate::flow::mir_annotate::CollectedSchedules::of_block(block);
+                crate::flow::mir_annotate::annotate_body_from_hir(unit.types, &mut body, &collected);
+                std::sync::Arc::new(body)
             }
         };
-        self.lower_mir_body(&body, ctx, k)
+        self.mir_bodies.insert(key, std::sync::Arc::clone(&body));
+        body
     }
 
     /// Resolve an assignment lhs to its root cell and the field path down

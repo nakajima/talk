@@ -66,12 +66,11 @@ fn mode_name(mode: CaptureMode) -> &'static str {
 
 impl MoveChecker<'_> {
     /// Check a closure at its creation site: build the capture summary,
-    /// validate modes, apply parent-state effects, and check the body as an
-    /// independent function. Returns the summary so bindings can remember it.
+    /// validate modes, and apply the parent-state effects. The body itself
+    /// is checked from the store by the CFG engine.
     pub(crate) fn check_closure(
         &mut self,
         func: &hir::Func,
-        func_ty: Option<&Ty>,
         state: &mut MoveState,
         context: EscapeContext,
     ) -> CaptureSummary {
@@ -112,7 +111,6 @@ impl MoveChecker<'_> {
             }
         }
 
-        self.check_func(func, func_ty);
         summary
     }
 
