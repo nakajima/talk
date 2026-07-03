@@ -3,9 +3,11 @@ struct TickEvent;
 use async_lsp::LanguageClient;
 use async_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionProviderCapability,
-    CodeActionResponse, CompletionOptions, Diagnostic, DiagnosticSeverity, Position, Range,
-    SemanticTokens, SemanticTokensResult, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
+    CodeActionResponse, CompletionOptions, Diagnostic, DiagnosticSeverity, InlayHint,
+    InlayHintKind, InlayHintLabel, InlayHintOptions, InlayHintServerCapabilities, InlayHintTooltip,
+    MessageType, Position, Range, SemanticTokens, SemanticTokensResult, ShowMessageParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions, TextEdit,
 };
 use async_lsp::{
     ClientSocket,
@@ -26,7 +28,9 @@ use async_lsp::{
 };
 use ignore::WalkBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::any::Any;
 use std::fs::File;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::{ops::ControlFlow, path::PathBuf, time::Duration};
 use tokio::spawn;
@@ -77,6 +81,74 @@ struct ServerState {
     workspace_roots: Vec<PathBuf>,
 }
 
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic payload".to_string()
+}
+
+fn report_lsp_internal_error(
+    state: &mut ServerState,
+    uri: Option<&Url>,
+    context: &str,
+    payload: &(dyn Any + Send),
+) {
+    let detail = panic_payload_message(payload);
+    let message = format!(
+        "Talk LSP internal error while {context}: {detail}. The server recovered; results may be incomplete until the next edit."
+    );
+    tracing::error!("{message}");
+
+    let _ = state.client.show_message(ShowMessageParams {
+        typ: MessageType::ERROR,
+        message: message.clone(),
+    });
+
+    let Some(uri) = uri else {
+        return;
+    };
+
+    let range = state
+        .documents
+        .get(uri)
+        .and_then(|document| document.range_of_byte_span(0, 0))
+        .unwrap_or_else(|| Range::new(Position::new(0, 0), Position::new(0, 0)));
+    let version = state.documents.get(uri).map(|document| document.version);
+
+    let diagnostic = Diagnostic {
+        range,
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("talk-lsp".to_string()),
+        message,
+        ..Diagnostic::default()
+    };
+    let _ = state.client.publish_diagnostics(PublishDiagnosticsParams {
+        uri: uri.clone(),
+        diagnostics: vec![diagnostic],
+        version,
+    });
+}
+
+fn recover_lsp<T>(
+    state: &mut ServerState,
+    uri: Option<&Url>,
+    context: &str,
+    fallback: T,
+    f: impl FnOnce() -> T,
+) -> T {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(value) => value,
+        Err(payload) => {
+            report_lsp_internal_error(state, uri, context, payload.as_ref());
+            fallback
+        }
+    }
+}
+
 pub async fn start() {
     let (server, _) = async_lsp::MainLoop::new_server(|client| {
         tokio::spawn({
@@ -119,10 +191,13 @@ pub async fn start() {
                             definition_provider: Some(OneOf::Left(true)),
                             hover_provider: Some(HoverProviderCapability::Simple(true)),
                             rename_provider: Some(OneOf::Left(true)),
-                            completion_provider: Some(CompletionOptions {
-                                trigger_characters: Some(vec![".".to_string()]),
-                                ..Default::default()
-                            }),
+                            completion_provider: Some(completion_options()),
+                            inlay_hint_provider: Some(OneOf::Right(
+                                InlayHintServerCapabilities::Options(InlayHintOptions {
+                                    resolve_provider: Some(false),
+                                    ..Default::default()
+                                }),
+                            )),
                             document_formatting_provider: Some(OneOf::Left(true)),
                             code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                             semantic_tokens_provider: Some(
@@ -182,12 +257,25 @@ pub async fn start() {
 
                 tracing::info!("did change {uri}");
 
+                let mut panic_payload = None;
                 if let Some(document) = state.documents.get_mut(&uri) {
-                    document.apply_changes(&params.content_changes);
+                    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                        document.apply_changes(&params.content_changes);
+                    })) {
+                        panic_payload = Some(payload);
+                    }
                     document.version = version;
                     document.last_edited_tick = state.counter;
-                    state.dirty_documents.insert(uri);
+                    state.dirty_documents.insert(uri.clone());
                     state.workspaces.clear();
+                }
+                if let Some(payload) = panic_payload {
+                    report_lsp_internal_error(
+                        state,
+                        Some(&uri),
+                        "applying document changes",
+                        payload.as_ref(),
+                    );
                 }
 
                 std::ops::ControlFlow::Continue(())
@@ -216,26 +304,32 @@ pub async fn start() {
             })
             .request::<request::Formatting, _>(|st, params| {
                 let uri = params.text_document.uri;
-                let result = if let Some(result) = st.documents.get(&uri) {
-                    let formatted = crate::formatter::format_string(&result.text);
-                    let newline_count = result.text.matches('\n').count();
-                    let ends_with_newline = result.text.ends_with('\n');
-                    let last_line = newline_count as u32;
-                    let last_char = if ends_with_newline {
-                        0
-                    } else {
-                        result
-                            .text
-                            .rsplit('\n')
-                            .next()
-                            .map(|s| s.len())
-                            .unwrap_or(result.text.len()) as u32
-                    };
+                let text = st.documents.get(&uri).map(|document| document.text.clone());
+                let result = if let Some(text) = text {
+                    let formatted =
+                        recover_lsp(st, Some(&uri), "formatting document", None, || {
+                            Some(crate::formatter::format_string(&text))
+                        });
+                    if let Some(formatted) = formatted {
+                        let newline_count = text.matches('\n').count();
+                        let ends_with_newline = text.ends_with('\n');
+                        let last_line = newline_count as u32;
+                        let last_char = if ends_with_newline {
+                            0
+                        } else {
+                            text.rsplit('\n')
+                                .next()
+                                .map(|s| s.len())
+                                .unwrap_or(text.len()) as u32
+                        };
 
-                    Ok(Some(vec![TextEdit::new(
-                        Range::new(Position::new(0, 0), Position::new(last_line, last_char)),
-                        formatted,
-                    )]))
+                        Ok(Some(vec![TextEdit::new(
+                            Range::new(Position::new(0, 0), Position::new(last_line, last_char)),
+                            formatted,
+                        )]))
+                    } else {
+                        Ok(None)
+                    }
                 } else {
                     Ok(None)
                 };
@@ -268,18 +362,16 @@ pub async fn start() {
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
 
                 let workspace = workspace_analysis(st, &uri);
+                let result = match (byte_offset, workspace) {
+                    (Some(byte_offset), Some(workspace)) => {
+                        recover_lsp(st, Some(&uri), "renaming symbol", None, || {
+                            rename_at(&workspace, &uri, byte_offset, &new_name)
+                        })
+                    }
+                    _ => None,
+                };
 
-                async move {
-                    let Some(byte_offset) = byte_offset else {
-                        return Ok(None);
-                    };
-
-                    let Some(workspace) = workspace else {
-                        return Ok(None);
-                    };
-
-                    Ok(rename_at(&workspace, &uri, byte_offset, &new_name))
-                }
+                async move { Ok(result) }
             })
             .request::<request::HoverRequest, _>(|st, params| {
                 let uri = params
@@ -293,12 +385,35 @@ pub async fn start() {
                     .get(&uri)
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
                 let workspace = workspace_analysis(st, &uri);
-                async move {
-                    let (Some(byte_offset), Some(workspace)) = (byte_offset, workspace) else {
-                        return Ok(None);
-                    };
-                    Ok(hover_at_lsp(&workspace, &uri, byte_offset))
-                }
+                let result = match (byte_offset, workspace) {
+                    (Some(byte_offset), Some(workspace)) => {
+                        recover_lsp(st, Some(&uri), "computing hover", None, || {
+                            hover_at_lsp(&workspace, &uri, byte_offset)
+                        })
+                    }
+                    _ => None,
+                };
+                async move { Ok(result) }
+            })
+            .request::<request::InlayHintRequest, _>(|st, params| {
+                let uri = params.text_document.uri.clone();
+                let byte_range = st.documents.get(&uri).and_then(|document| {
+                    Some(crate::analysis::TextRange::new(
+                        document.byte_offset(params.range.start)? as u32,
+                        document.byte_offset(params.range.end)? as u32,
+                    ))
+                });
+                let workspace = workspace_analysis(st, &uri);
+                let result = match (byte_range, workspace) {
+                    (Some(byte_range), Some(workspace)) => {
+                        recover_lsp(st, Some(&uri), "computing inlay hints", Vec::new(), || {
+                            ownership_inlay_hints_lsp(&workspace, &uri, byte_range)
+                        })
+                    }
+                    _ => Vec::new(),
+                };
+
+                async move { Ok(Some(result)) }
             })
             .request::<request::GotoDefinition, _>(|st, params| {
                 let uri = params
@@ -314,25 +429,18 @@ pub async fn start() {
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
 
                 let workspace = workspace_analysis(st, &uri);
-                let core = core_analysis(st);
+                let core = core_analysis(st, &uri);
+                let result = match (byte_offset, workspace) {
+                    (Some(byte_offset), Some(workspace)) => {
+                        recover_lsp(st, Some(&uri), "resolving definition", None, || {
+                            goto_definition(&workspace, core.as_deref(), &uri, byte_offset)
+                                .map(GotoDefinitionResponse::Scalar)
+                        })
+                    }
+                    _ => None,
+                };
 
-                async move {
-                    let Some(byte_offset) = byte_offset else {
-                        return Ok(None);
-                    };
-
-                    let Some(workspace) = workspace else {
-                        return Ok(None);
-                    };
-
-                    let Some(target) =
-                        goto_definition(&workspace, core.as_deref(), &uri, byte_offset)
-                    else {
-                        return Ok(None);
-                    };
-
-                    Ok(Some(GotoDefinitionResponse::Scalar(target)))
-                }
+                async move { Ok(result) }
             })
             .request::<request::Completion, _>(|st, params| {
                 let uri = params.text_document_position.text_document.uri.clone();
@@ -343,25 +451,28 @@ pub async fn start() {
                     .get(&uri)
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
                 let workspace = workspace_analysis(st, &uri);
+                let result = match (byte_offset, workspace) {
+                    (Some(byte_offset), Some(workspace)) => recover_lsp(
+                        st,
+                        Some(&uri),
+                        "computing completions",
+                        Some(CompletionResponse::Array(vec![])),
+                        || {
+                            let document_id = document_id_for_uri(&uri);
+                            let items = analysis_completion::complete_in_workspace(
+                                &workspace,
+                                &document_id,
+                                byte_offset,
+                            );
+                            let items = completion::to_lsp_items(items);
+                            Some(CompletionResponse::Array(items))
+                        },
+                    ),
+                    (Some(_), None) => Some(CompletionResponse::Array(vec![])),
+                    _ => None,
+                };
 
-                async move {
-                    let Some(byte_offset) = byte_offset else {
-                        return Ok(None);
-                    };
-
-                    let Some(workspace) = workspace else {
-                        return Ok(Some(CompletionResponse::Array(vec![])));
-                    };
-
-                    let document_id = document_id_for_uri(&uri);
-                    let items = analysis_completion::complete_in_workspace(
-                        &workspace,
-                        &document_id,
-                        byte_offset,
-                    );
-                    let items = completion::to_lsp_items(items);
-                    Ok(Some(CompletionResponse::Array(items)))
-                }
+                async move { Ok(result) }
             })
             .notification::<notification::Initialized>(|_, _| ControlFlow::Continue(()))
             .notification::<notification::DidChangeConfiguration>(|_, _| ControlFlow::Continue(()))
@@ -369,20 +480,27 @@ pub async fn start() {
                 let uri = params.text_document.uri.clone();
                 let range = params.range;
                 let workspace = workspace_analysis(state, &uri);
+                let actions = if let Some(workspace) = workspace {
+                    recover_lsp(
+                        state,
+                        Some(&uri),
+                        "computing code actions",
+                        Vec::new(),
+                        || {
+                            let document_id = document_id_for_uri(&uri);
+                            compute_code_actions(&workspace, &document_id, &uri, range)
+                        },
+                    )
+                } else {
+                    Vec::new()
+                };
+                let result = if actions.is_empty() {
+                    None
+                } else {
+                    Some(actions)
+                };
 
-                async move {
-                    let Some(workspace) = workspace else {
-                        return Ok(None);
-                    };
-
-                    let document_id = document_id_for_uri(&uri);
-                    let actions = compute_code_actions(&workspace, &document_id, &uri, range);
-                    if actions.is_empty() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(actions))
-                    }
-                }
+                async move { Ok(result) }
             })
             .notification::<notification::DidSaveTextDocument>(|_, _| ControlFlow::Continue(()))
             .notification::<notification::DidChangeWatchedFiles>(|state, params| {
@@ -443,13 +561,28 @@ pub async fn start() {
                             .or_insert_with(|| document_url.clone());
                     }
 
+                    let semantic_tokens = if let Some(text) = state
+                        .documents
+                        .get(&document_url)
+                        .map(|document| document.text.clone())
+                    {
+                        recover_lsp(
+                            state,
+                            Some(&document_url),
+                            "collecting semantic tokens",
+                            None,
+                            || {
+                                Some(SemanticTokensResult::Tokens(SemanticTokens {
+                                    result_id: None,
+                                    data: collect(text),
+                                }))
+                            },
+                        )
+                    } else {
+                        None
+                    };
                     if let Some(document) = state.documents.get_mut(&document_url) {
-                        document.semantic_tokens =
-                            Some(SemanticTokensResult::Tokens(SemanticTokens {
-                                result_id: None,
-                                data: collect(document.text.clone()),
-                            }));
-
+                        document.semantic_tokens = semantic_tokens;
                         needs_refresh = true;
                     }
                     state.dirty_documents.remove(&document_url);
@@ -482,31 +615,27 @@ pub async fn start() {
             .layer(ClientProcessMonitorLayer::new(client))
             .service(router)
     });
-    // Open (or create) a file for logs
-    #[allow(clippy::expect_used)]
-    let file = File::options()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open("server.log")
-        .expect("Could not create LSP server log");
-
-    tracing_subscriber::fmt()
-        .with_max_level(Level::WARN)
-        .with_ansi(false)
-        .with_writer(file)
-        .with_target(false)
-        .with_file(false)
-        .with_line_number(false)
-        .init();
+    init_tracing();
 
     // Prefer truly asynchronous piped stdin/stdout without blocking tasks.
     #[cfg(unix)]
-    #[allow(clippy::unwrap_used)]
-    let (stdin, stdout) = (
-        async_lsp::stdio::PipeStdin::lock_tokio().unwrap(),
-        async_lsp::stdio::PipeStdout::lock_tokio().unwrap(),
-    );
+    let (stdin, stdout) = {
+        let stdin = match async_lsp::stdio::PipeStdin::lock_tokio() {
+            Ok(stdin) => stdin,
+            Err(err) => {
+                eprintln!("Talk LSP could not lock stdin: {err}");
+                return;
+            }
+        };
+        let stdout = match async_lsp::stdio::PipeStdout::lock_tokio() {
+            Ok(stdout) => stdout,
+            Err(err) => {
+                eprintln!("Talk LSP could not lock stdout: {err}");
+                return;
+            }
+        };
+        (stdin, stdout)
+    };
     // Fallback to spawn blocking read/write otherwise.
     #[cfg(not(unix))]
     let (stdin, stdout) = (
@@ -514,8 +643,46 @@ pub async fn start() {
         tokio_util::compat::TokioAsyncWriteCompatExt::compat_write(tokio::io::stdout()),
     );
 
-    #[allow(clippy::unwrap_used)]
-    server.run_buffered(stdin, stdout).await.unwrap();
+    if let Err(err) = server.run_buffered(stdin, stdout).await {
+        eprintln!("Talk LSP server stopped with error: {err}");
+    }
+}
+
+fn init_tracing() {
+    let log_file = File::options()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("server.log");
+
+    match log_file {
+        Ok(file) => {
+            if let Err(err) = tracing_subscriber::fmt()
+                .with_max_level(Level::WARN)
+                .with_ansi(false)
+                .with_writer(file)
+                .with_target(false)
+                .with_file(false)
+                .with_line_number(false)
+                .try_init()
+            {
+                eprintln!("Talk LSP could not initialize file logging: {err}");
+            }
+        }
+        Err(err) => {
+            eprintln!("Talk LSP could not create server.log: {err}");
+            if let Err(err) = tracing_subscriber::fmt()
+                .with_max_level(Level::WARN)
+                .with_ansi(false)
+                .with_target(false)
+                .with_file(false)
+                .with_line_number(false)
+                .try_init()
+            {
+                eprintln!("Talk LSP could not initialize stderr logging: {err}");
+            }
+        }
+    }
 }
 
 fn is_tlk_uri(uri: &Url) -> bool {
@@ -694,7 +861,9 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
         return None;
     }
 
-    let analysis = AnalysisWorkspace::new(docs)?;
+    let analysis = recover_lsp(state, Some(focus_uri), "analyzing workspace", None, || {
+        AnalysisWorkspace::new(docs)
+    })?;
     let analysis = Arc::new(analysis);
     state.workspaces.insert(root, analysis.clone());
     Some(analysis)
@@ -724,12 +893,14 @@ fn publish_workspace_diagnostics(state: &mut ServerState, workspace: &AnalysisWo
     }
 }
 
-fn core_analysis(state: &mut ServerState) -> Option<Arc<AnalysisWorkspace>> {
+fn core_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<AnalysisWorkspace>> {
     if let Some(core) = state.core.as_ref() {
         return Some(core.clone());
     }
 
-    let core = AnalysisWorkspace::core()?;
+    let core = recover_lsp(state, Some(focus_uri), "analyzing core", None, || {
+        AnalysisWorkspace::core()
+    })?;
     let core = Arc::new(core);
     state.core = Some(core.clone());
     Some(core)
@@ -771,6 +942,50 @@ pub(crate) fn hover_at_lsp(
         }),
         range,
     })
+}
+
+fn completion_options() -> CompletionOptions {
+    CompletionOptions {
+        trigger_characters: Some(vec![".".to_string()]),
+        ..Default::default()
+    }
+}
+
+pub(crate) fn ownership_inlay_hints_lsp(
+    workspace: &AnalysisWorkspace,
+    uri: &Url,
+    byte_range: crate::analysis::TextRange,
+) -> Vec<InlayHint> {
+    let document_id = document_id_for_uri(uri);
+    let Some(text) = workspace.text_for(&document_id) else {
+        return vec![];
+    };
+    crate::analysis::ownership_inlay_hints(workspace, &document_id, byte_range)
+        .into_iter()
+        .filter_map(|hint| {
+            let position = byte_offset_to_utf16_position(text, hint.position)?;
+            let kind = match hint.kind {
+                crate::analysis::ownership::OwnershipInlayHintKind::Move
+                | crate::analysis::ownership::OwnershipInlayHintKind::Drop
+                | crate::analysis::ownership::OwnershipInlayHintKind::Clone => {
+                    Some(InlayHintKind::TYPE)
+                }
+                crate::analysis::ownership::OwnershipInlayHintKind::Borrow => {
+                    Some(InlayHintKind::PARAMETER)
+                }
+            };
+            Some(InlayHint {
+                position,
+                label: InlayHintLabel::String(hint.label),
+                kind,
+                text_edits: None,
+                tooltip: Some(InlayHintTooltip::String(hint.tooltip)),
+                padding_left: Some(true),
+                padding_right: Some(false),
+                data: None,
+            })
+        })
+        .collect()
 }
 
 fn document_path_for_uri(uri: &Url) -> String {
@@ -939,7 +1154,7 @@ fn compute_code_actions(
                 };
 
                 // Create the import statement
-                let import_stmt = format!("import {{ {} }} from {}\n", name, relative_path);
+                let import_stmt = format!("use {{ {} }} from {}\n", name, relative_path);
 
                 // Find where to insert (at the start of the file, after any existing imports)
                 let insert_position = Position::new(0, 0);
@@ -1080,6 +1295,7 @@ mod tests {
     use crate::lsp::document::Document;
     use async_lsp::ClientSocket;
     use async_lsp::lsp_types::HoverContents;
+    use async_lsp::lsp_types::InlayHintLabel;
     use async_lsp::lsp_types::Range;
     use async_lsp::lsp_types::Url;
     use async_lsp::lsp_types::WorkspaceEdit;
@@ -1109,6 +1325,14 @@ mod tests {
             .collect();
         ranges.sort_by_key(|r| (r.start.line, r.start.character, r.end.line, r.end.character));
         ranges
+    }
+
+    #[test]
+    fn completion_options_trigger_on_dot() {
+        assert_eq!(
+            super::completion_options().trigger_characters,
+            Some(vec![".".to_string()])
+        );
     }
 
     #[test]
@@ -1231,6 +1455,35 @@ mod tests {
     }
 
     #[test]
+    fn inlay_hints_show_ownership_events() {
+        let code = "func f() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet b: &String = s\n\tlet t = s\n\t0\n}\nf()";
+        let uri = Url::from_file_path(std::env::temp_dir().join("ownership_inlay_hints.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let hints = super::ownership_inlay_hints_lsp(
+            &module,
+            &uri,
+            crate::analysis::TextRange::new(0, code.len() as u32),
+        );
+        let labels: Vec<_> = hints
+            .iter()
+            .filter_map(|hint| match &hint.label {
+                InlayHintLabel::String(label) => Some(label.as_str()),
+                InlayHintLabel::LabelParts(_) => None,
+            })
+            .collect();
+        assert!(labels.iter().any(|label| label.contains("&")), "{hints:?}");
+        assert!(
+            labels.iter().any(|label| label.contains("move")),
+            "{hints:?}"
+        );
+        assert!(
+            labels.iter().any(|label| label.contains("drop")),
+            "{hints:?}"
+        );
+    }
+
+    #[test]
     fn hover_shows_generic_function_type_not_instantiation() {
         let code = "func id(x) { x }\nid(123)\nid(1.23)\n";
         let uri =
@@ -1303,7 +1556,7 @@ mod tests {
         let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_across_files_b.tlk"))
             .expect("file uri");
         let code_a = "public let foo = 1\n";
-        let code_b = "import { foo } from ./rename_across_files_a.tlk\nfoo\n";
+        let code_b = "use { foo } from ./rename_across_files_a.tlk\nfoo\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
 
@@ -1311,6 +1564,13 @@ mod tests {
         let foo_in_b = code_b.rfind("foo").expect("foo");
         let byte_offset = foo_in_b as u32;
         let edit = super::rename_at(&module, &uri_b, byte_offset, "bar").expect("workspace edit");
+        let import_edit = super::rename_at(
+            &module,
+            &uri_b,
+            code_b.find("foo").expect("foo") as u32,
+            "bar",
+        )
+        .expect("workspace edit from import");
 
         let range_a = super::byte_span_to_range_utf16(
             code_a,
@@ -1318,13 +1578,108 @@ mod tests {
             (code_a.find("foo").expect("foo") + 3) as u32,
         )
         .expect("range a");
-        // The foo reference in B is at the last occurrence
-        let range_b =
+        let range_b_import = super::byte_span_to_range_utf16(
+            code_b,
+            code_b.find("foo").expect("foo") as u32,
+            (code_b.find("foo").expect("foo") + 3) as u32,
+        )
+        .expect("range b import");
+        let range_b_reference =
             super::byte_span_to_range_utf16(code_b, foo_in_b as u32, (foo_in_b + 3) as u32)
-                .expect("range b");
+                .expect("range b reference");
 
         assert_eq!(edit_ranges_for_uri(&edit, &uri_a), vec![range_a]);
-        assert_eq!(edit_ranges_for_uri(&edit, &uri_b), vec![range_b]);
+        assert_eq!(
+            edit_ranges_for_uri(&edit, &uri_b),
+            vec![range_b_import, range_b_reference]
+        );
+        assert_eq!(edit_ranges_for_uri(&import_edit, &uri_a), vec![range_a]);
+        assert_eq!(
+            edit_ranges_for_uri(&import_edit, &uri_b),
+            vec![range_b_import, range_b_reference]
+        );
+    }
+
+    #[test]
+    fn rename_imported_symbol_with_alias_preserves_alias_uses() {
+        let uri_a =
+            Url::from_file_path(std::env::temp_dir().join("rename_alias_a.tlk")).expect("file uri");
+        let uri_b =
+            Url::from_file_path(std::env::temp_dir().join("rename_alias_b.tlk")).expect("file uri");
+        let code_a = "public struct Point {}\n";
+        let code_b = "use { Point: Pt } from ./rename_alias_a.tlk\nlet p = Pt()\n";
+
+        let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
+        let alias_use = code_b.rfind("Pt").expect("alias use");
+        let edit =
+            super::rename_at(&module, &uri_b, alias_use as u32, "Vec3").expect("workspace edit");
+        let import_edit = super::rename_at(
+            &module,
+            &uri_b,
+            code_b.find("Point").expect("imported name") as u32,
+            "Vec3",
+        )
+        .expect("workspace edit from import");
+
+        let range_a = super::byte_span_to_range_utf16(
+            code_a,
+            code_a.find("Point").expect("Point") as u32,
+            (code_a.find("Point").expect("Point") + 5) as u32,
+        )
+        .expect("range a");
+        let range_b_import = super::byte_span_to_range_utf16(
+            code_b,
+            code_b.find("Point").expect("Point") as u32,
+            (code_b.find("Point").expect("Point") + 5) as u32,
+        )
+        .expect("range b import");
+
+        assert_eq!(edit_ranges_for_uri(&edit, &uri_a), vec![range_a]);
+        assert_eq!(edit_ranges_for_uri(&edit, &uri_b), vec![range_b_import]);
+        assert_eq!(edit_ranges_for_uri(&import_edit, &uri_a), vec![range_a]);
+        assert_eq!(
+            edit_ranges_for_uri(&import_edit, &uri_b),
+            vec![range_b_import]
+        );
+
+        let rewritten_b = apply_edits(code_b, &edit, &uri_b);
+        assert!(rewritten_b.contains("use { Vec3: Pt }"), "{rewritten_b}");
+        assert!(rewritten_b.contains("let p = Pt()"), "{rewritten_b}");
+    }
+
+    #[test]
+    fn rename_imported_symbol_with_mixed_alias_keeps_unaliased_uses() {
+        let uri_a = Url::from_file_path(std::env::temp_dir().join("rename_mixed_alias_a.tlk"))
+            .expect("file uri");
+        let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_mixed_alias_b.tlk"))
+            .expect("file uri");
+        let code_a = "public struct Point {}\n";
+        let code_b = "use { Point: Pt, Point } from ./rename_mixed_alias_a.tlk\nlet a = Point()\nlet b = Pt()\n";
+
+        let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
+        let unaliased_use = code_b.rfind("Point").expect("unaliased use");
+        let edit = super::rename_at(&module, &uri_b, unaliased_use as u32, "Vec3")
+            .expect("workspace edit");
+
+        let point_offsets: Vec<_> = code_b.match_indices("Point").map(|(idx, _)| idx).collect();
+        assert_eq!(point_offsets.len(), 3, "source: {code_b}");
+        let expected_b: Vec<_> = point_offsets
+            .iter()
+            .map(|start| {
+                super::byte_span_to_range_utf16(code_b, *start as u32, (*start + 5) as u32)
+                    .expect("range")
+            })
+            .collect();
+
+        assert_eq!(edit_ranges_for_uri(&edit, &uri_b), expected_b);
+
+        let rewritten_b = apply_edits(code_b, &edit, &uri_b);
+        assert!(
+            rewritten_b.contains("use { Vec3: Pt, Vec3 }"),
+            "{rewritten_b}"
+        );
+        assert!(rewritten_b.contains("let a = Vec3()"), "{rewritten_b}");
+        assert!(rewritten_b.contains("let b = Pt()"), "{rewritten_b}");
     }
 
     #[test]
@@ -1342,7 +1697,7 @@ mod tests {
 
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
-        let code_a = "import { foo } from ./b.tlk\nfoo\n";
+        let code_a = "use { foo } from ./b.tlk\nfoo\n";
         let code_b = "public let foo = 1\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
@@ -1419,7 +1774,7 @@ mod tests {
         let uri_b = Url::from_file_path(std::env::temp_dir().join("extend_before_struct_b.tlk"))
             .expect("file uri");
 
-        let code_a = r#"import { Person } from ./extend_before_struct_b.tlk
+        let code_a = r#"use { Person } from ./extend_before_struct_b.tlk
 extend Person {
   func foo() {}
 }
@@ -1511,7 +1866,7 @@ extend Person {
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
         let code_a = "public let foo = 1\n";
-        let code_b = "import { foo } from ./a.tlk\nfoo\n";
+        let code_b = "use { foo } from ./a.tlk\nfoo\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
 
@@ -1520,7 +1875,7 @@ extend Person {
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
 
-        // Click on "foo" in "import { foo }" - should navigate to definition in a.tlk
+        // Click on "foo" in "use { foo }" - should navigate to definition in a.tlk
         let import_foo_offset = code_b.find("{ foo }").expect("import foo") + 2;
         let target = super::goto_definition(&module, None, &uri_b, import_foo_offset as u32)
             .expect("target");
@@ -1546,7 +1901,7 @@ extend Person {
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
         let code_a = "public let foo = 1\n";
-        let code_b = "import { foo } from ./a.tlk\nfoo\n";
+        let code_b = "use { foo } from ./a.tlk\nfoo\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
 
@@ -1655,7 +2010,7 @@ extend Person {
     #[test]
     fn goto_definition_on_cross_file_function_call() {
         let code_a = "public func helper() -> Int { 1 }\n";
-        let code_b = "import { helper } from ./goto_cross_a.tlk\nhelper()\n";
+        let code_b = "use { helper } from ./goto_cross_a.tlk\nhelper()\n";
         let uri_a =
             Url::from_file_path(std::env::temp_dir().join("goto_cross_a.tlk")).expect("file uri");
         let uri_b =

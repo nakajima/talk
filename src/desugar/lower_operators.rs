@@ -162,9 +162,10 @@ impl LowerOperators {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        any_expr, any_stmt, assert_eq_diff, invocation,
+        any_expr, any_stmt, assert_eq_diff,
+        desugar::lower_operators::LowerOperators,
+        invocation,
         label::Label,
-        name_resolution::transforms::lower_operators::LowerOperators,
         node_id::NodeID,
         node_kinds::{call_arg::CallArg, expr::ExprKind, stmt::StmtKind},
         parser_tests::tests::parse,

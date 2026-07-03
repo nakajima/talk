@@ -259,6 +259,9 @@ fn goto_definition_symbol_from_type_annotation(
     use crate::node_kinds::type_annotation::TypeAnnotationKind;
 
     match &ty.kind {
+        TypeAnnotationKind::Borrow { inner, .. } => {
+            goto_definition_symbol_from_type_annotation(inner, byte_offset)
+        }
         TypeAnnotationKind::Nominal {
             name, name_span, ..
         } => {

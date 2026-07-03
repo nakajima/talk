@@ -21,7 +21,9 @@ impl Document {
                         utf16_position_to_byte_offset(&self.text, range.start),
                         utf16_position_to_byte_offset(&self.text, range.end),
                     );
-                    if let (Some(start), Some(end)) = (start, end) {
+                    if let (Some(start), Some(end)) = (start, end)
+                        && start <= end
+                    {
                         self.text.replace_range(start..end, new_text);
                     } else {
                         // Fallback: if mapping fails, replace whole text

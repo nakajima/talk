@@ -1,4 +1,6 @@
 use super::*;
+use crate::types::catalog::Grade;
+use crate::types::ty::Perm;
 
 /// Where a leftover row/effect-row binds its tail when it flows into a
 /// variable. Kind-agnostic: `unify_row_like` decides it from the flattened
@@ -7,6 +9,14 @@ enum TailSpec {
     Var(u32),
     Closed,
     Param(Symbol),
+}
+
+/// Outcome of permission unification: solved (or bound), a concrete
+/// mismatch, or blocked on an untouchable variable inside an implication.
+enum PermUnify {
+    Ok,
+    Mismatch,
+    Defer,
 }
 
 impl<'s> Solver<'s> {
@@ -38,6 +48,76 @@ impl<'s> Solver<'s> {
             // Error is poison: it unifies with anything silently so a single
             // mistake doesn't cascade into follow-on diagnostics.
             (Ty::Error, _) | (_, Ty::Error) => {}
+
+            (Ty::Unique(inner1), Ty::Unique(inner2)) => {
+                worklist.push(Constraint::Eq(
+                    (**inner1).clone(),
+                    (**inner2).clone(),
+                    origin,
+                ));
+            }
+
+            // An owned value moves into a unique position at the immediate
+            // application (the move makes it the sole reference).
+            (Ty::Unique(inner), other) if origin.reason == CtReason::Apply => {
+                worklist.push(Constraint::Eq(
+                    (**inner).clone(),
+                    other.clone(),
+                    origin.nested(),
+                ));
+            }
+
+            (Ty::Borrow(p1, inner1), Ty::Borrow(p2, inner2)) => match self.unify_perm(*p1, *p2) {
+                PermUnify::Ok => worklist.push(Constraint::Eq(
+                    (**inner1).clone(),
+                    (**inner2).clone(),
+                    origin,
+                )),
+                PermUnify::Mismatch => self.report_mismatch(&a, &b, origin),
+                PermUnify::Defer => return false,
+            },
+
+            (Ty::Borrow(_, inner), other) if origin.reason == CtReason::Apply => {
+                worklist.push(Constraint::Eq(
+                    (**inner).clone(),
+                    other.clone(),
+                    origin.nested(),
+                ));
+            }
+
+            // Tier-2 copy-out-of-borrow coercion: a borrowed argument
+            // satisfies an owned parameter when extraction is free — Copy
+            // grade (a scalar borrow is a value copy at runtime, nothing to
+            // emit) or CheapClone (an O(1) buffer retain, emitted by
+            // lowering at the recorded node).
+            (Ty::Nominal(symbol, _), Ty::Borrow(_, found_inner))
+                if origin.reason == CtReason::Apply
+                    && self.catalog.copies_out_of_borrow(*symbol) =>
+            {
+                if self.catalog.grade_of(*symbol) != Grade::Copy {
+                    self.coerce_clones.insert(origin.node);
+                }
+                worklist.push(Constraint::Eq(
+                    a.clone(),
+                    (**found_inner).clone(),
+                    origin.nested(),
+                ));
+            }
+
+            // Borrow erasure for Copy grades: `&T` and `T` are the same
+            // type up to representation when T copies (using the value
+            // never moves it, and a scalar borrow is a value copy), so they
+            // unify in any position — annotations, nested arguments,
+            // protocol signatures, and inference (`&Int` never surfaces as
+            // an inferred binding type).
+            (Ty::Borrow(_, inner), other) | (other, Ty::Borrow(_, inner))
+                if matches!(
+                    self.store.shallow(inner),
+                    Ty::Nominal(symbol, _) if self.catalog.grade_of(symbol) == Grade::Copy
+                ) =>
+            {
+                worklist.push(Constraint::Eq((**inner).clone(), other.clone(), origin));
+            }
 
             (Ty::Var(x), Ty::Var(y)) if self.store.find(x.0) == self.store.find(y.0) => {}
             (Ty::Var(x), Ty::Var(y)) => {
@@ -90,8 +170,9 @@ impl<'s> Solver<'s> {
             (Ty::Nominal(s1, args1), Ty::Nominal(s2, args2))
                 if s1 == s2 && args1.len() == args2.len() =>
             {
+                let nested = origin.nested();
                 for (a1, a2) in args1.iter().zip(args2) {
-                    worklist.push(Constraint::Eq(a1.clone(), a2.clone(), origin));
+                    worklist.push(Constraint::Eq(a1.clone(), a2.clone(), nested));
                 }
             }
 
@@ -111,8 +192,9 @@ impl<'s> Solver<'s> {
                     .zip(a2)
                     .all(|((left, _), (right, _))| left == right) =>
             {
+                let nested = origin.nested();
                 for ((_, left), (_, right)) in a1.iter().zip(a2) {
-                    worklist.push(Constraint::Eq(left.clone(), right.clone(), origin));
+                    worklist.push(Constraint::Eq(left.clone(), right.clone(), nested));
                 }
             }
 
@@ -127,21 +209,33 @@ impl<'s> Solver<'s> {
                     ));
                     return true;
                 }
+                // `Apply` auto-borrows the supplied argument to its parameter, but only at
+                // the immediate application. `nested` drops `Apply`, so parameters of a
+                // *nested* function type (which are contravariant) unify invariantly rather
+                // than letting a function needing `&mut`/owned satisfy one invoked with `&`.
+                let nested = origin.nested();
                 for (a1, a2) in p1.iter().zip(p2) {
-                    worklist.push(Constraint::Eq(a1.clone(), a2.clone(), origin));
+                    if origin.reason == CtReason::Apply {
+                        self.push_apply_param_eq(a1, a2, nested, worklist);
+                    } else {
+                        worklist.push(Constraint::Eq(a1.clone(), a2.clone(), nested));
+                    }
                 }
-                worklist.push(Constraint::Eq((**r1).clone(), (**r2).clone(), origin));
-                worklist.push(Constraint::EffEq(e1.clone(), e2.clone(), origin));
+                // Returns are covariant, so a found `&mut` return may downgrade to an
+                // expected `&` return.
+                self.push_borrow_downgrade_eq(r1, r2, nested, worklist);
+                worklist.push(Constraint::EffEq(e1.clone(), e2.clone(), nested));
             }
 
             (Ty::Tuple(i1), Ty::Tuple(i2)) if i1.len() == i2.len() => {
+                let nested = origin.nested();
                 for (a1, a2) in i1.iter().zip(i2) {
-                    worklist.push(Constraint::Eq(a1.clone(), a2.clone(), origin));
+                    worklist.push(Constraint::Eq(a1.clone(), a2.clone(), nested));
                 }
             }
 
             (Ty::Record(r1), Ty::Record(r2)) => {
-                if !self.unify_rows(r1, r2, origin, worklist) {
+                if !self.unify_rows(r1, r2, origin.nested(), worklist) {
                     return false;
                 }
             }
@@ -151,6 +245,113 @@ impl<'s> Solver<'s> {
             _ => self.report_mismatch(&a, &b, origin),
         }
         true
+    }
+
+    /// Unify two borrow permissions over the two-point lattice. Invariant:
+    /// subsumption (`Exclusive ≤ Shared`) lives only in the two coercion
+    /// helpers below, never here — keeping plain unification syntactic keeps
+    /// it decidable and principal. Perm vars bind like type vars (they share
+    /// the `VarStore`), minus the occurs check: permissions have no structure.
+    fn unify_perm(&mut self, a: Perm, b: Perm) -> PermUnify {
+        let a = self.store.shallow_perm(a);
+        let b = self.store.shallow_perm(b);
+        if a == b {
+            return PermUnify::Ok;
+        }
+        match (a, b) {
+            (Perm::Var(x), Perm::Var(y)) => {
+                match (self.is_touchable(x.0), self.is_touchable(y.0)) {
+                    (true, _) => self.store.bind(x.0, VarValue::Perm(Perm::Var(y))),
+                    (_, true) => self.store.bind(y.0, VarValue::Perm(Perm::Var(x))),
+                    (false, false) => return PermUnify::Defer,
+                }
+                PermUnify::Ok
+            }
+            (Perm::Var(x), other) | (other, Perm::Var(x)) => {
+                if !self.is_touchable(x.0) {
+                    return PermUnify::Defer;
+                }
+                self.store.bind(x.0, VarValue::Perm(other));
+                PermUnify::Ok
+            }
+            _ => PermUnify::Mismatch,
+        }
+    }
+
+    /// Auto-borrow an immediate call argument to its parameter: an owned value
+    /// satisfies a `&`/`&mut` parameter, and a `&mut` value satisfies a `&`
+    /// parameter. Only called for `Apply` origins at the application boundary;
+    /// the emitted sub-constraints use the (demoted) `origin` so nested
+    /// function types do not coerce.
+    fn push_apply_param_eq(
+        &mut self,
+        expected: &Ty,
+        found: &Ty,
+        origin: CtOrigin,
+        worklist: &mut Vec<Constraint>,
+    ) {
+        if let Ty::Unique(expected_inner) = self.store.shallow(expected) {
+            let constraint = match self.store.shallow(found) {
+                Ty::Unique(found_inner) => {
+                    Constraint::Eq((*expected_inner).clone(), (*found_inner).clone(), origin)
+                }
+                other => Constraint::Eq((*expected_inner).clone(), other.clone(), origin),
+            };
+            worklist.push(constraint);
+            return;
+        }
+        match self.store.shallow(expected) {
+            Ty::Borrow(expected_perm, expected_inner) => match self.store.shallow(found) {
+                Ty::Borrow(found_perm, found_inner) => {
+                    let expected_perm = self.store.shallow_perm(expected_perm);
+                    let found_perm = self.store.shallow_perm(found_perm);
+                    // `&mut` satisfies `&` at the application boundary; every
+                    // other pairing (vars included) unifies invariantly via
+                    // the full borrow types.
+                    if expected_perm == found_perm
+                        || (expected_perm == Perm::Shared && found_perm == Perm::Exclusive)
+                    {
+                        worklist.push(Constraint::Eq(
+                            (*expected_inner).clone(),
+                            (*found_inner).clone(),
+                            origin,
+                        ));
+                    } else {
+                        worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin));
+                    }
+                }
+                _ => {
+                    worklist.push(Constraint::Eq(
+                        (*expected_inner).clone(),
+                        found.clone(),
+                        origin,
+                    ));
+                }
+            },
+            _ => worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin)),
+        }
+    }
+
+    fn push_borrow_downgrade_eq(
+        &mut self,
+        expected: &Ty,
+        found: &Ty,
+        origin: CtOrigin,
+        worklist: &mut Vec<Constraint>,
+    ) {
+        match (self.store.shallow(expected), self.store.shallow(found)) {
+            (Ty::Borrow(expected_perm, expected_inner), Ty::Borrow(found_perm, found_inner))
+                if self.store.shallow_perm(expected_perm) == Perm::Shared
+                    && self.store.shallow_perm(found_perm) == Perm::Exclusive =>
+            {
+                worklist.push(Constraint::Eq(
+                    (*expected_inner).clone(),
+                    (*found_inner).clone(),
+                    origin,
+                ))
+            }
+            _ => worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin)),
+        }
     }
 
     pub(super) fn report_mismatch(&mut self, expected_ty: &Ty, found_ty: &Ty, origin: CtOrigin) {
@@ -256,6 +457,8 @@ impl<'s> Solver<'s> {
             Ty::Nominal(_, args) => args
                 .iter()
                 .any(|a| self.occurs_and_adjust_ty(root, level, a)),
+            Ty::Borrow(_, inner) => self.occurs_and_adjust_ty(root, level, &inner),
+            Ty::Unique(inner) => self.occurs_and_adjust_ty(root, level, &inner),
             Ty::Func(params, ret, eff) => {
                 params
                     .iter()

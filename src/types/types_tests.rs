@@ -176,7 +176,7 @@ pub mod tests {
             ),
             (
                 "types::types_alloc",
-                "let x: RawPtr = __IR(\"$? = alloc int 1\"); x",
+                "// unsafe\nlet x: RawPtr = __IR(\"$? = alloc int 1\"); x",
                 true,
                 false,
             ),
@@ -579,7 +579,7 @@ pub mod tests {
             ),
             (
                 "types::types_generic_struct_method",
-                "\n        struct Wrapper<T> {\n            let wrapped: T\n\n            func getWrapped() {\n                self.wrapped\n            }\n        }\n\n        Wrapper(wrapped: 123).getWrapped()\n        Wrapper(wrapped: 1.23).getWrapped()\n        ",
+                "\n        struct Wrapper<T> {\n            let wrapped: T\n\n            consuming func getWrapped() {\n                self.wrapped\n            }\n        }\n\n        Wrapper(wrapped: 123).getWrapped()\n        Wrapper(wrapped: 1.23).getWrapped()\n        ",
                 true,
                 false,
             ),
@@ -693,13 +693,13 @@ pub mod tests {
             ),
             (
                 "types::generic_constructor_in_extension_block",
-                "\n          struct Wrapper<T> {\n              let value: T\n\n              init(value: T) {\n                  self.value = value\n              }\n          }\n\n          struct Box<T> {\n              let inner: T\n          }\n\n          extend Box<T> {\n              func wrap() -> Wrapper<T> {\n                  Wrapper<T>(value: self.inner)\n              }\n          }\n          ",
+                "\n          struct Wrapper<T> {\n              let value: T\n\n              init(value: T) {\n                  self.value = value\n              }\n          }\n\n          struct Box<T> {\n              let inner: T\n          }\n\n          extend Box<T> {\n              consuming func wrap() -> Wrapper<T> {\n                  Wrapper<T>(value: self.inner)\n              }\n          }\n          ",
                 true,
                 false,
             ),
             (
                 "types::generic_constructor_with_explicit_type_arg",
-                "\n          struct Container<Element> {\n              let item: Element\n\n              init(item: Element) {\n                  self.item = item\n              }\n          }\n\n          struct MyList<Element> {\n              let first: Element\n          }\n\n          extend MyList<Element> {\n              func boxFirst() -> Container<Element> {\n                  Container<Element>(item: self.first)\n              }\n          }\n          ",
+                "\n          struct Container<Element> {\n              let item: Element\n\n              init(item: Element) {\n                  self.item = item\n              }\n          }\n\n          struct MyList<Element> {\n              let first: Element\n          }\n\n          extend MyList<Element> {\n              consuming func boxFirst() -> Container<Element> {\n                  Container<Element>(item: self.first)\n              }\n          }\n          ",
                 true,
                 false,
             ),
@@ -735,7 +735,7 @@ pub mod tests {
             ),
             (
                 "types::add_protocol_prototype",
-                "\n        protocol Addy {\n            associated RHS\n            associated Ret\n            func addy(rhs: RHS) -> Ret\n        }\n\n        extend Int: Addy {\n            func addy(rhs: Int) -> Int {\n                self\n            }\n        }\n\n        1.addy(2)\n        ",
+                "\n        protocol Addy {\n            associated RHS\n            associated Ret\n            consuming func addy(rhs: RHS) -> Ret\n        }\n\n        extend Int: Addy {\n            consuming func addy(rhs: Int) -> Int {\n                self\n            }\n        }\n\n        1.addy(2)\n        ",
                 true,
                 false,
             ),
@@ -825,7 +825,7 @@ pub mod tests {
             ),
             (
                 "types::types_struct_call_regression",
-                "\n            struct Person {\n                let firstName: String\n                let lastName: String\n\n                func greet() {\n                    // Strings can be concat'd\n                    print(\"hi i'm \" + self.firstName + \" \" + self.lastName)\n                }\n            }\n\n            Person(firstName: \"Pat\", lastName: \"N\").greet()\n            ",
+                "\n            struct Person {\n                let firstName: String\n                let lastName: String\n\n                consuming func greet() {\n                    // Strings can be concat'd\n                    print(\"hi i'm \" + self.firstName + \" \" + self.lastName)\n                }\n            }\n\n            Person(firstName: \"Pat\", lastName: \"N\").greet()\n            ",
                 true,
                 true,
             ),
@@ -1005,7 +1005,7 @@ pub mod tests {
             ),
             (
                 "effects::types_handlers",
-                "\n            effect 'fizz(x: Int, y: Bool) -> Int\n\n            @handle 'fizz { a, b in\n                0\n            }\n            ",
+                "\n            effect 'fizz(x: Int, y: Bool) -> Int\n\n            @handle 'fizz { a, b in\n                continue 0\n            }\n            ",
                 true,
                 false,
             ),
@@ -1179,7 +1179,7 @@ pub mod tests {
     #[test]
     fn expected_any_protocol_implicitly_packs_conforming_values() {
         let t = check(
-            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\nextend Int: Showable {\n  func show() -> Int { self }\n}\nlet value: any Showable = 1",
+            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nlet value: any Showable = 1",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "value"), "any Showable");
@@ -1207,7 +1207,7 @@ pub mod tests {
     #[test]
     fn object_safe_any_protocol_satisfies_generic_protocol_bounds() {
         let t = check(
-            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\nextend Int: Showable {\n  func show() -> Int { self }\n}\nfunc render<T: Showable>(value: T) -> Int { value.show() }\nlet value: any Showable = 1\nlet rendered = render(value)",
+            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nfunc render<T: Showable>(value: T) -> Int { value.show() }\nlet value: any Showable = 1\nlet rendered = render(value)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "rendered"), "Int");
@@ -1232,7 +1232,7 @@ pub mod tests {
     #[test]
     fn existential_self_conformance_satisfies_superprotocol_bounds() {
         let t = check(
-            "// no-core\nprotocol Readable {\n  func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> Int\n}\nextend Int: ReadWrite {\n  func read() -> Int { self }\n  func write(value: Int) -> Int { value }\n}\nfunc readIt<T: Readable>(value: T) -> Int { value.read() }\nlet value: any ReadWrite = 1\nlet result = readIt(value)",
+            "// no-core\nprotocol Readable {\n  consuming func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> Int\n}\nextend Int: ReadWrite {\n  consuming func read() -> Int { self }\n  func write(value: Int) -> Int { value }\n}\nfunc readIt<T: Readable>(value: T) -> Int { value.read() }\nlet value: any ReadWrite = 1\nlet result = readIt(value)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "result"), "Int");
@@ -1524,7 +1524,7 @@ pub mod tests {
             "// no-core\nstruct Counter {\n\tlet n: Int\n\tfunc get() { self.n }\n}\nlet c = Counter(n: 1)\nlet v = c.get()",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "get"), "(Counter) -> Int");
+        assert_eq!(ty_of(&t, "get"), "(&Counter) -> Int");
         assert_eq!(ty_of(&t, "v"), "Int");
     }
 
@@ -1876,6 +1876,218 @@ pub mod tests {
         );
     }
 
+    #[test]
+    fn borrow_parameters_auto_borrow_owned_arguments() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = len(s)\nlet z = s.length",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "len"), "(&String) -> Int");
+        assert_eq!(ty_of(&t, "y"), "Int");
+        assert_eq!(ty_of(&t, "z"), "Int");
+    }
+
+    #[test]
+    fn auto_borrow_does_not_overwrite_argument_node_type() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &String) -> Int {\n\t0\n}\nlet s = String(length: 4)\nlet y = len(s)",
+        );
+        assert_clean(&t);
+        let borrowed_exprs: Vec<_> = t
+            .phase
+            .types
+            .node_types
+            .values()
+            .filter(|ty| ty.render_mono() == "&String")
+            .collect();
+        assert!(
+            borrowed_exprs.is_empty(),
+            "auto-borrow should not stamp an owned argument expression as &String: {borrowed_exprs:?}"
+        );
+    }
+
+    #[test]
+    fn borrowed_return_does_not_satisfy_owned_argument() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(s: String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = take(id(s))",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("String") && error.contains("&String")),
+            "expected owned/borrowed mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn nested_borrow_does_not_satisfy_owned_argument() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nstruct Box<T> {\n\tlet value: T\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(b: Box<String>) -> Int {\n\tb.value.length\n}\nlet s = String(length: 4)\nlet b = Box(value: id(s))\nlet y = take(b)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("String") && error.contains("&String")),
+            "expected nested owned/borrowed mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn function_return_borrow_does_not_satisfy_owned_function_argument() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nlet s = String(length: 4)\nlet f: () -> &String = func() { s }\nfunc take(f: () -> String) -> String {\n\tf()\n}\nlet y = take(f)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("String") && error.contains("&String")),
+            "expected function return owned/borrowed mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn function_with_mutable_param_does_not_satisfy_shared_param_argument() {
+        // `take` will invoke f with only a shared borrow, but `needs_mut` requires &mut.
+        // Function parameters are contravariant, so this substitution is unsound.
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc needs_mut(s: &mut String) -> Int {\n\ts.length\n}\nfunc take(f: (&String) -> Int) -> Int {\n\t0\n}\nlet y = take(needs_mut)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("&String")),
+            "expected contravariant param mismatch (&mut required, & supplied), got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn function_with_owned_param_does_not_satisfy_shared_param_argument() {
+        // `take` passes a borrow, but `needs_owned` consumes an owned value.
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc needs_owned(s: String) -> Int {\n\ts.length\n}\nfunc take(f: (&String) -> Int) -> Int {\n\t0\n}\nlet y = take(needs_owned)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("&String")),
+            "expected contravariant param mismatch (owned required, & supplied), got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn mutable_borrow_parameters_support_member_access() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &mut String) -> Int {\n\ts.length\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "len"), "(&mut String) -> Int");
+    }
+
+    #[test]
+    fn unknown_member_on_nested_borrow_reports_original_receiver() {
+        let t = check(
+            "// no-core\nstruct DirectoryEntry {}\nfunc f(entry: & &DirectoryEntry) {\n\tentry.show()\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Unknown member 'show' on &&DirectoryEntry")),
+            "expected original nested-borrow receiver in diagnostic, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn mutable_borrow_return_downgrades_to_shared_return() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc as_shared(s: &mut String) -> &String {\n\ts\n}\nlet f: (&mut String) -> &String = func(s: &mut String) -> &mut String {\n\ts\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "as_shared"), "(&mut String) -> &String");
+        assert_eq!(ty_of(&t, "f"), "(&mut String) -> &String");
+    }
+
+    #[test]
+    fn mutable_borrow_parameter_does_not_satisfy_shared_function_parameter() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nlet f: (&String) -> Int = func(s: &mut String) -> Int {\n\ts.length\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("&String") && error.contains("&mut String")),
+            "expected shared/mutable function parameter mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn borrowed_enum_expectation_preserves_leading_dot_inference() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet x: &Opt<Int> = .some(1)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "&Opt<Int>");
+    }
+
+    #[test]
+    fn inferred_match_result_is_concrete_within_its_binding_group() {
+        // An inferred match joins its non-refining arms eagerly (like `if`),
+        // so a later unannotated variant match in the same binding group
+        // already knows the enum. With a deferred fresh-var result, `x`
+        // stays unresolved and `.red` has no enum to resolve against.
+        let t = check(
+            "// no-core\nenum Color {\n\tcase red\n\tcase green\n}\nlet x = match 1 {\n\t1 -> Color.red,\n\t_ -> Color.green\n}\nmatch x {\n\t.red -> 1,\n\t.green -> 2\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn mutable_self_can_call_shared_self_method() {
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet n: Int\n\tfunc peek() -> Int { self.n }\n\tmut func bump() -> Int { self.peek() }\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "bump"), "(&mut Counter) -> Int");
+    }
+
+    #[test]
+    fn shared_borrows_do_not_satisfy_mutable_borrow_parameters() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc takes_mut(s: &mut String) -> Int {\n\ts.length\n}\nfunc bad(s: &String) -> Int {\n\ttakes_mut(s)\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("&mut String") && error.contains("&String")),
+            "expected shared/mutable borrow mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn shared_method_receiver_cannot_assign_self_field() {
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet n: Int\n\n\tfunc bump() -> () {\n\t\tself.n = 2\n\t\t()\n\t}\n}",
+        );
+        let errors: Vec<String> = t.diagnostics().iter().map(|d| d.to_string()).collect();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Cannot assign through shared borrow 'self'")),
+            "expected shared receiver assignment error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn mut_method_receiver_can_assign_self_field() {
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet n: Int\n\n\tmut func bump() -> () {\n\t\tself.n = 2\n\t\t()\n\t}\n}",
+        );
+        assert!(t.diagnostics().is_empty(), "{:?}", t.diagnostics());
+    }
+
     // ----- Milestone 5: effects -----------------------------------------
 
     #[test]
@@ -1884,7 +2096,7 @@ pub mod tests {
         // perform never reaches the function's latent row (the row-typed
         // algebraic-effects reading).
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}",
+            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nsafe()",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "safe"), "() -> Int");
@@ -1898,7 +2110,7 @@ pub mod tests {
         // name lookup, handler payload types zonked from what the perform
         // sites taught the unannotated parameter.
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}",
+            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}\nouter()",
         );
         assert_clean(&t);
         let resolved = &t.phase.resolved_names;
@@ -2148,6 +2360,40 @@ pub mod tests {
         assert!(
             !errors.is_empty(),
             "expected an error for continue-with-value outside a handler"
+        );
+    }
+
+    #[test]
+    fn conditionless_loop_without_break_is_never() {
+        let t = check("// no-core\nfunc nope() -> Never {\n\tloop {}\n}");
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn conditionless_loop_with_break_completes_as_unit() {
+        let t = check("// no-core\nfunc nope() -> Never {\n\tloop {\n\t\tbreak\n\t}\n}");
+        let errors = type_errors(&t);
+        assert!(
+            !errors.is_empty(),
+            "a loop with a break can complete normally, so it is not Never"
+        );
+    }
+
+    #[test]
+    fn nested_loop_break_does_not_exit_outer_loop() {
+        let t = check(
+            "// no-core\nfunc nope() -> Never {\n\tloop {\n\t\tloop {\n\t\t\tbreak\n\t\t}\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn code_after_divergent_loop_is_unreachable() {
+        let t = check("// no-core\nfunc nope() -> Int {\n\tloop {}\n\t123\n}");
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("unreachable")),
+            "expected an unreachable-code error, got {errors:?}"
         );
     }
 
@@ -2835,7 +3081,7 @@ pub mod tests {
     #[test]
     fn gadt_hidden_payload_can_be_returned_as_existential() {
         let typed = check(
-            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\nextend Int: Showable {\n  func show() -> Int { self }\n}\nenum GBox<T> {\n  case hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n  match box {\n    .hidden(value) -> value\n  }\n}",
+            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nenum GBox<T> {\n  case hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n  match box {\n    .hidden(value) -> value\n  }\n}",
         );
         assert_clean(&typed);
         assert_eq!(ty_of(&typed, "erase"), "(GBox<Bool>) -> any Showable");
@@ -3030,7 +3276,9 @@ mod with_core {
             preserve_comments: false,
         };
         let driver_b = Driver::new(
-            vec![Source::from("let v = make(3).x\nlet bad: Int = make(3)")],
+            vec![Source::from(
+                "use { make } from A\nlet v = make(3).x\nlet bad: Int = make(3)",
+            )],
             config,
         );
         let typed = driver_b
@@ -3085,7 +3333,12 @@ mod with_core {
             parse_mode: crate::compiling::driver::ParseMode::Strict,
             preserve_comments: false,
         };
-        let driver_b = Driver::new(vec![Source::from("let id: UserId = make()")], config);
+        let driver_b = Driver::new(
+            vec![Source::from(
+                "use { UserId, make } from A\nlet id: UserId = make()",
+            )],
+            config,
+        );
         let typed = driver_b
             .parse()
             .unwrap()
@@ -3123,5 +3376,143 @@ mod with_core {
             .map(|(sym, _)| *sym)
             .expect("x scheme");
         assert_eq!(typed.phase.types.schemes[&symbol].render(), "Int");
+    }
+
+    // === Grades: Copy / Affine / Linear (substructural core) ===
+    // These check against the real core prelude, where the Copy / CheapClone /
+    // Deinit marker protocols live.
+
+    fn assert_no_errors(driver: &Driver<Typed>) {
+        let errors = type_errors(driver);
+        assert!(errors.is_empty(), "expected no type errors: {errors:?}");
+    }
+
+    #[test]
+    fn copy_conformance_requires_all_fields_copy() {
+        let t = check_with_core(Source::from(
+            "struct Point {\n\tlet x: Int\n\tlet y: Int\n}\nextend Point: Copy {}",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn copy_conformance_rejects_non_copy_field() {
+        let t = check_with_core(Source::from(
+            "struct Name {\n\tlet value: String\n}\nextend Name: Copy {}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Copy")),
+            "expected a non-Copy-field error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn linear_struct_rejects_deinit_conformance() {
+        // A linear value must be consumed explicitly; an automatic destructor
+        // would defeat the point of declaring it linear.
+        let t = check_with_core(Source::from(
+            "struct FileHandle 'linear {\n\tlet fd: Int\n}\nextend FileHandle: Deinit {\n\tfunc deinit() {}\n}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("linear")),
+            "expected a linear/Deinit conflict error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn linear_struct_rejects_copy_conformance() {
+        let t = check_with_core(Source::from(
+            "struct Token 'linear {\n\tlet id: Int\n}\nextend Token: Copy {}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("linear")),
+            "expected a linear/Copy conflict error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn aborting_handler_body_must_match_the_scope_value_type() {
+        // A handler that completes without `continue` aborts the handled
+        // scope with its value: an Int-valued handler over a ()-valued
+        // scope must be a type error, not a lowering panic.
+        let t = check_with_core(Source::from(
+            "effect 'oops(e) -> Never\n@handle 'oops { e in\n\t42\n}\nfunc boom() 'oops -> () {\n\t'oops(\"x\")\n}\nboom()",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.to_lowercase().contains("mismatch")),
+            "expected a handler/scope type mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn aborting_handler_body_must_match_the_function_return_type() {
+        let t = check_with_core(Source::from(
+            "effect 'oops(e) -> Never\nfunc f() -> Int {\n\t@handle 'oops { e in\n\t\t\"nope\"\n\t}\n\t'oops(\"x\")\n\t42\n}\nf()",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.to_lowercase().contains("mismatch")),
+            "expected a handler/return type mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn matching_and_resuming_handler_bodies_stay_clean() {
+        // An aborting handler whose value matches the scope, and an
+        // always-resuming handler (Never body), both check clean.
+        let t = check_with_core(Source::from(
+            "effect 'oops(e) -> Never\neffect 'ask(q) -> Int\n@handle 'oops { e in\n\t0\n}\n@handle 'ask { q in\n\tcontinue 1\n}\nfunc go() '[oops, ask] -> Int {\n\t'ask(\"?\")\n}\ngo()",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn unique_annotation_parses_and_renders() {
+        let t = check_with_core(Source::from("func pass(x: *String) -> *String {\n\tx\n}"));
+        assert_no_errors(&t);
+        let resolved = &t.phase.resolved_names;
+        let _names =
+            crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
+        let symbol = resolved
+            .symbol_names
+            .iter()
+            .find(|(sym, n)| n.as_str() == "pass" && t.phase.types.schemes.contains_key(sym))
+            .map(|(sym, _)| *sym)
+            .expect("pass scheme");
+        assert_eq!(
+            t.phase.types.schemes[&symbol].render(),
+            "(*String) -> *String"
+        );
+    }
+
+    #[test]
+    fn grades_derive_from_declarations() {
+        use crate::name_resolution::symbol::Symbol;
+        use crate::types::catalog::Grade;
+        let t = check_with_core(Source::from(
+            "struct FileHandle 'linear {\n\tlet fd: Int\n}\nstruct Plain {\n\tlet x: Int\n}\nextend Plain: Copy {}\nstruct Holder {\n\tlet name: String\n}",
+        ));
+        assert_no_errors(&t);
+        let resolved = &t.phase.resolved_names;
+        let symbol_named = |name: &str| -> Symbol {
+            resolved
+                .symbol_names
+                .iter()
+                .find(|(sym, n)| {
+                    n.as_str() == name && matches!(sym, Symbol::Struct(_) | Symbol::Enum(_))
+                })
+                .map(|(sym, _)| *sym)
+                .unwrap_or_else(|| panic!("no struct symbol named {name}"))
+        };
+        let catalog = &t.phase.types.catalog;
+        assert_eq!(catalog.grade_of(symbol_named("FileHandle")), Grade::Linear);
+        assert_eq!(catalog.grade_of(symbol_named("Plain")), Grade::Copy);
+        assert_eq!(catalog.grade_of(symbol_named("Holder")), Grade::Affine);
+        assert_eq!(catalog.grade_of(Symbol::Int), Grade::Copy);
+        assert_eq!(catalog.grade_of(Symbol::String), Grade::Affine);
     }
 }

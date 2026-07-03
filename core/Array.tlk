@@ -1,26 +1,52 @@
 // no-core
-import { _alloc, _load } from ./Memory.tlk
-import { String } from ./String.tlk
-import { Add, Subtract, Comparable } from ./Operators.tlk
-import { Showable } from ./Showable.tlk
+use { Storage, _storage, _load, _store, _is_unique } from ./Memory.tlk
+use { String } from ./String.tlk
+use { Add, Subtract, Comparable } from ./Operators.tlk
+use { Showable } from ./Showable.tlk
+use { CheapClone } from ./Ownership.tlk
 
 public struct Array<Element> {
-	let storage: RawPtr
+	let storage: Storage<Element>
 	let count: Int
 	let capacity: Int
 
 	init(capacity: Int) {
 		self.capacity = capacity
 		self.count = 0
-		self.storage = _alloc<Element>(capacity)
+		self.storage = _storage<Element>(capacity)
 	}
 
-	func get(index: Int) -> Element {
-		let ptr: RawPtr = @_ir(self.storage, index) { %? = gep Element $0 $1 }
-		_load(ptr)
+	init(storage: Storage<Element>, count: Int, capacity: Int) {
+		self.storage = storage
+		self.count = count
+		self.capacity = capacity
+	}
+
+	func get(index: Int) -> &Element {
+		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
+		_load<Element>(ptr)
+	}
+
+	mut func set(index: Int, value: Element) -> Void {
+		// Copy-on-write: a buffer shared with another Array (or with
+		// static data) is copied before the first write, so writes never
+		// alias — Arrays keep value semantics.
+		if _is_unique(self.storage.base) { self.storage.set(index, value) } else {
+			let fresh = _storage<Element>(self.capacity)
+			let i = 0
+			loop i < self.count {
+				let from: RawPtr = @_ir(self.storage.base, i) { %? = gep Element $0 $1 }
+				let to: RawPtr = @_ir(fresh.base, i) { %? = gep Element $0 $1 }
+				_store<Element>(to, _load<Element>(from))
+				i = i + 1
+			}
+			self.storage = fresh
+			self.storage.set(index, value)
+		}
 	}
 }
 
+extend Array<Element>: CheapClone {}
 extend Array<Element: Showable>: Showable {
 	func show() -> String {
 		let result = "["

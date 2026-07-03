@@ -26,6 +26,7 @@ pub struct Generalizer<'s> {
     params: Vec<SchemeParam>,
     eff_params: Vec<Symbol>,
     row_params: Vec<Symbol>,
+    perm_params: Vec<Symbol>,
     predicates: Vec<Predicate>,
 }
 
@@ -47,6 +48,7 @@ impl<'s> Generalizer<'s> {
             params: vec![],
             eff_params: vec![],
             row_params: vec![],
+            perm_params: vec![],
             predicates: vec![],
         }
     }
@@ -63,12 +65,14 @@ impl<'s> Generalizer<'s> {
         }
         self.eff_params.clear();
         self.row_params.clear();
+        self.perm_params.clear();
         self.predicates.clear();
         let ty = self.quantify_ty(&zonked);
         Scheme {
             params: std::mem::take(&mut self.params),
             eff_params: std::mem::take(&mut self.eff_params),
             row_params: std::mem::take(&mut self.row_params),
+            perm_params: std::mem::take(&mut self.perm_params),
             predicates: std::mem::take(&mut self.predicates),
             ty,
         }
@@ -185,6 +189,27 @@ impl TyFold for Generalizer<'_> {
             self.params.push(SchemeParam { symbol });
         }
         Ty::Param(symbol)
+    }
+
+    fn fold_perm(&mut self, perm: Perm) -> Perm {
+        match self.store.shallow_perm(perm) {
+            // An unsolved permission this group owns quantifies into a perm
+            // param — grade polymorphism, so one accessor serves `&` and
+            // `&mut` call sites alike.
+            Perm::Var(v) if self.store.level(v.0) > self.base_level => {
+                let param = self.mint_param();
+                self.store.bind(v.0, VarValue::Perm(Perm::Param(param)));
+                self.perm_params.push(param);
+                Perm::Param(param)
+            }
+            Perm::Param(symbol) => {
+                if self.minted.contains(&symbol) && !self.perm_params.contains(&symbol) {
+                    self.perm_params.push(symbol);
+                }
+                Perm::Param(symbol)
+            }
+            other => other,
+        }
     }
 
     fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {

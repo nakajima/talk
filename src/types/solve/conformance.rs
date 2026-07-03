@@ -23,6 +23,7 @@ impl<'s> Solver<'s> {
                 origin,
             }),
             Ty::Error => None,
+            Ty::Borrow(_, inner) => self.try_conforms((*inner).clone(), protocol, origin, queue),
             Ty::Any {
                 protocol: existential_protocol,
                 ..
@@ -142,6 +143,12 @@ impl<'s> Solver<'s> {
         queue: &mut Vec<Constraint>,
     ) -> bool {
         if !self.catalog.derivable.contains(&protocol) {
+            return false;
+        }
+        // A `'heap` struct's derived instance would walk the object graph
+        // structurally — cyclic graphs would never terminate at runtime.
+        // Require an explicit conformance instead.
+        if self.catalog.is_heap(symbol) {
             return false;
         }
         if !self.derived_seen.insert((symbol, protocol)) {

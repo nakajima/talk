@@ -1,0 +1,19 @@
+effect 'oops(message) -> Never
+
+@handle 'oops { message in
+	print("handled: " + message)
+	0
+}
+
+func risky(flag: Bool) 'oops -> Int {
+	if (flag) {
+		'oops("boom")
+	}
+	10
+}
+
+let ok = risky(false)
+print(ok)
+let bad = risky(true)
+print(bad)
+bad

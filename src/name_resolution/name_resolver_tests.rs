@@ -27,9 +27,9 @@ pub mod tests {
         node_kinds::{
             block::Block,
             call_arg::CallArg,
-            decl::{Decl, DeclKind},
+            decl::{Decl, DeclKind, ReceiverMode},
             expr::{Expr, ExprKind},
-            func::{EffectSet, Func},
+            func::{CaptureMode, EffectSet, Func},
             func_signature::FuncSignature,
             generic_decl::GenericDecl,
             match_arm::MatchArm,
@@ -121,7 +121,8 @@ pub mod tests {
         let parsed = parse(code);
         let modules = ModuleEnvironment::default();
         let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
-        let parseds = vec![parsed];
+        let mut parseds = vec![parsed];
+        crate::desugar::desugar(&mut parseds);
         let (asts, resolved) = name_resolver.resolve(parseds);
         (asts[0].clone(), resolved)
     }
@@ -219,6 +220,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     effects: Default::default(),
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y"),],
@@ -263,6 +265,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "odd".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     params: vec![],
                     effects: Default::default(),
@@ -295,6 +298,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "even".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     params: vec![],
                     effects: Default::default(),
@@ -332,6 +336,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     effects: Default::default(),
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y")],
@@ -354,6 +359,7 @@ pub mod tests {
                                 ),
                                 name_span: Span::ANY,
                                 generics: vec![],
+                                captures: vec![],
                                 where_clause: None,
                                 effects: Default::default(),
                                 params: vec![param!(ParamLocalId(3), "x")],
@@ -405,6 +411,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "fizz".into()),
                     name_span: Span::ANY,
                     generics: Default::default(),
+                    captures: vec![],
                     where_clause: None,
                     params: Default::default(),
                     effects: Default::default(),
@@ -432,6 +439,7 @@ pub mod tests {
                                 ),
                                 name_span: Span::ANY,
                                 generics: vec![],
+                                captures: vec![],
                                 where_clause: None,
                                 effects: Default::default(),
                                 params: vec![param!(ParamLocalId(1), "x")],
@@ -473,6 +481,68 @@ pub mod tests {
             Some(&expected),
             "{:?}",
             resolved.1.captures
+        );
+    }
+
+    #[test]
+    fn resolves_explicit_capture_specs() {
+        let resolved = resolve(
+            "
+        func outer() {
+            let a = 1
+            let b = 2
+            let c = 3
+            let d = 4
+            let e = 5
+            let f = func [a, copy b, consuming c, &d, &mut e]() {
+                a
+            }
+        }
+        ",
+        );
+
+        let DeclKind::Let {
+            rhs: Some(outer_expr),
+            ..
+        } = &resolved.0.roots[0].as_decl().kind
+        else {
+            panic!("expected outer function declaration");
+        };
+        let ExprKind::Func(outer) = &outer_expr.kind else {
+            panic!("expected outer function literal");
+        };
+        let DeclKind::Let {
+            rhs: Some(inner_expr),
+            ..
+        } = &outer.body.body[5].as_decl().kind
+        else {
+            panic!("expected nested function binding");
+        };
+        let ExprKind::Func(inner) = &inner_expr.kind else {
+            panic!("expected nested function literal");
+        };
+
+        let captures: Vec<_> = inner
+            .captures
+            .iter()
+            .map(|capture| {
+                assert!(
+                    capture.name.symbol().is_ok(),
+                    "capture should be resolved: {:?}",
+                    capture
+                );
+                (capture.name.name_str(), capture.mode)
+            })
+            .collect();
+        assert_eq!(
+            captures,
+            vec![
+                ("a".to_string(), CaptureMode::Copy),
+                ("b".to_string(), CaptureMode::Copy),
+                ("c".to_string(), CaptureMode::Move),
+                ("d".to_string(), CaptureMode::BorrowShared),
+                ("e".to_string(), CaptureMode::BorrowMut),
+            ]
         );
     }
 
@@ -574,6 +644,7 @@ pub mod tests {
                         generics: vec![],
                         conformances: vec![],
                     }],
+                    captures: vec![],
                     where_clause: None,
                     effects: Default::default(),
                     params: vec![param!(
@@ -686,6 +757,8 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -721,6 +794,8 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -792,6 +867,8 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -827,6 +904,8 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![GenericDecl {
@@ -903,6 +982,8 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -933,13 +1014,15 @@ pub mod tests {
                             name_span: Span::ANY,
                             effects: Default::default(),
                             generics: vec![],
+                            captures: vec![],
                             where_clause: None,
                             params: vec![],
                             body: any_block!(vec![]),
                             ret: None,
                             attributes: vec![]
                         }),
-                        is_static: true
+                        is_static: true,
+                        receiver_mode: ReceiverMode::None
                     }),
                 ])
             })
@@ -962,6 +1045,8 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -991,15 +1076,18 @@ pub mod tests {
                             ),
                             name_span: Span::ANY,
                             generics: vec![],
+                            captures: vec![],
                             where_clause: None,
                             effects: Default::default(),
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(1)),
                                 "self",
-                                annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
-                                    StructId::from(1).into(),
-                                    "Self".into()
-                                )))
+                                annotation!(TypeAnnotationKind::Borrow {
+                                    mutable: false,
+                                    inner: Box::new(annotation!(TypeAnnotationKind::SelfType(
+                                        Name::Resolved(StructId::from(1).into(), "Self".into())
+                                    )))
+                                })
                             )],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                                 callee: any_expr!(ExprKind::Member(
@@ -1021,7 +1109,8 @@ pub mod tests {
                             ret: None,
                             attributes: vec![]
                         }),
-                        is_static: false
+                        is_static: false,
+                        receiver_mode: ReceiverMode::None
                     }),
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
@@ -1033,14 +1122,17 @@ pub mod tests {
                             name_span: Span::ANY,
                             effects: Default::default(),
                             generics: vec![],
+                            captures: vec![],
                             where_clause: None,
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(2)),
                                 "self",
-                                annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
-                                    StructId::from(1).into(),
-                                    "Self".into()
-                                )))
+                                annotation!(TypeAnnotationKind::Borrow {
+                                    mutable: false,
+                                    inner: Box::new(annotation!(TypeAnnotationKind::SelfType(
+                                        Name::Resolved(StructId::from(1).into(), "Self".into())
+                                    )))
+                                })
                             )],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                                 callee: any_expr!(ExprKind::Member(
@@ -1059,7 +1151,8 @@ pub mod tests {
                             ret: None,
                             attributes: vec![]
                         }),
-                        is_static: false
+                        is_static: false,
+                        receiver_mode: ReceiverMode::None
                     })
                 ])
             })
@@ -1137,6 +1230,7 @@ pub mod tests {
                         ),
                         name_span: Span::ANY,
                         generics: vec![],
+                        captures: vec![],
                         where_clause: None,
                         effects: Default::default(),
                         params: vec![Parameter {
@@ -1146,16 +1240,23 @@ pub mod tests {
                                 "self".into()
                             ),
                             name_span: Span::ANY,
-                            type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
-                                Name::Resolved(Symbol::Struct(StructId::from(1)), "Self".into())
-                            ))),
+                            type_annotation: Some(annotation!(TypeAnnotationKind::Borrow {
+                                mutable: false,
+                                inner: Box::new(annotation!(TypeAnnotationKind::SelfType(
+                                    Name::Resolved(
+                                        Symbol::Struct(StructId::from(1)),
+                                        "Self".into()
+                                    )
+                                )))
+                            })),
                             span: Span::ANY,
                         }],
                         body: any_block!(vec![]),
                         ret: None,
                         attributes: vec![]
                     }),
-                    is_static: false
+                    is_static: false,
+                    receiver_mode: ReceiverMode::None
                 })])
             }),
         )
@@ -1251,6 +1352,7 @@ pub mod tests {
         assert_eq!(
             *resolved.0.roots[0].as_decl(),
             any_decl!(DeclKind::Enum {
+                linear: false,
                 name: Name::Resolved(Symbol::Enum(EnumId::from(1)), "Fizz".into()),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -1289,8 +1391,8 @@ pub mod tests {
                 conformances: vec![],
                 generics: vec![],
                 where_clause: None,
-                body: any_body!(vec![any_decl!(DeclKind::MethodRequirement(
-                    FuncSignature {
+                body: any_body!(vec![any_decl!(DeclKind::MethodRequirement {
+                    signature: FuncSignature {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: Name::Resolved(
@@ -1302,16 +1404,20 @@ pub mod tests {
                             id: NodeID::ANY,
                             name: Name::Resolved(ParamLocalId::from(1u32).into(), "self".into()),
                             name_span: Span::ANY,
-                            type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
-                                Name::Resolved(ProtocolId::from(1).into(), "Self".into())
-                            ))),
+                            type_annotation: Some(annotation!(TypeAnnotationKind::Borrow {
+                                mutable: false,
+                                inner: Box::new(annotation!(TypeAnnotationKind::SelfType(
+                                    Name::Resolved(ProtocolId::from(1).into(), "Self".into())
+                                )))
+                            })),
                             span: Span::ANY
                         }],
                         generics: vec![],
                         where_clause: None,
                         ret: Some(Box::new(annotation!(TypeAnnotationKind::Tuple(vec![]))))
-                    }
-                ))])
+                    },
+                    receiver_mode: ReceiverMode::None
+                })])
             })
         )
     }
@@ -1351,34 +1457,43 @@ pub mod tests {
                         },
                         where_clause: None
                     }),
-                    any_decl!(DeclKind::MethodRequirement(FuncSignature {
-                        id: NodeID::ANY,
-                        span: Span::ANY,
-                        name: Name::Resolved(
-                            Symbol::MethodRequirement(MethodRequirementId::from(1)),
-                            "buzz".into()
-                        ),
-                        params: vec![Parameter {
+                    any_decl!(DeclKind::MethodRequirement {
+                        signature: FuncSignature {
                             id: NodeID::ANY,
-                            name: Name::Resolved(ParamLocalId::from(1u32).into(), "self".into()),
-                            name_span: Span::ANY,
-                            type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
-                                Name::Resolved(ProtocolId::from(1).into(), "Self".into())
-                            ))),
-                            span: Span::ANY
-                        }],
-                        effects: Default::default(),
-                        generics: vec![],
-                        where_clause: None,
-                        ret: Some(Box::new(annotation!(TypeAnnotationKind::Nominal {
+                            span: Span::ANY,
                             name: Name::Resolved(
-                                Symbol::AssociatedType(AssociatedTypeId::from(1)),
-                                "T".into()
+                                Symbol::MethodRequirement(MethodRequirementId::from(1)),
+                                "buzz".into()
                             ),
-                            name_span: Span::ANY,
-                            generics: vec![]
-                        })))
-                    })),
+                            params: vec![Parameter {
+                                id: NodeID::ANY,
+                                name: Name::Resolved(
+                                    ParamLocalId::from(1u32).into(),
+                                    "self".into()
+                                ),
+                                name_span: Span::ANY,
+                                type_annotation: Some(annotation!(TypeAnnotationKind::Borrow {
+                                    mutable: false,
+                                    inner: Box::new(annotation!(TypeAnnotationKind::SelfType(
+                                        Name::Resolved(ProtocolId::from(1).into(), "Self".into())
+                                    )))
+                                })),
+                                span: Span::ANY
+                            }],
+                            effects: Default::default(),
+                            generics: vec![],
+                            where_clause: None,
+                            ret: Some(Box::new(annotation!(TypeAnnotationKind::Nominal {
+                                name: Name::Resolved(
+                                    Symbol::AssociatedType(AssociatedTypeId::from(1)),
+                                    "T".into()
+                                ),
+                                name_span: Span::ANY,
+                                generics: vec![]
+                            })))
+                        },
+                        receiver_mode: ReceiverMode::None
+                    }),
                 ])
             })
         )
@@ -1628,6 +1743,7 @@ pub mod tests {
                         is_open: false
                     },
                     generics: vec![],
+                    captures: vec![],
                     where_clause: None,
                     params: vec![],
                     body: any_block!(vec![]),
@@ -1700,6 +1816,7 @@ pub mod tests {
             parseds.push(ast);
         }
 
+        crate::desugar::desugar(&mut parseds);
         name_resolver.resolve(parseds)
     }
 
@@ -1707,7 +1824,7 @@ pub mod tests {
     fn resolves_named_import() {
         let (asts, resolved) = resolve_multi(&[
             ("./utils.tlk", "public let helper = 42"),
-            ("./main.tlk", "import { helper } from ./utils.tlk\nhelper"),
+            ("./main.tlk", "use { helper } from ./utils.tlk\nhelper"),
         ]);
 
         // Check that the main file resolved 'helper' to the symbol from utils
@@ -1742,7 +1859,7 @@ pub mod tests {
     fn resolves_import_all() {
         let (asts, resolved) = resolve_multi(&[
             ("./lib.tlk", "public let a = 1\npublic let b = 2"),
-            ("./main.tlk", "import _ from ./lib.tlk\na\nb"),
+            ("./main.tlk", "use _ from ./lib.tlk\na\nb"),
         ]);
 
         assert!(
@@ -1760,7 +1877,7 @@ pub mod tests {
     fn import_nonexistent_symbol_errors() {
         let (_, resolved) = resolve_multi(&[
             ("./lib.tlk", "let existing = 1"),
-            ("./main.tlk", "import { nonexistent } from ./lib.tlk"),
+            ("./main.tlk", "use { nonexistent } from ./lib.tlk"),
         ]);
 
         assert!(
@@ -1771,7 +1888,7 @@ pub mod tests {
 
     #[test]
     fn import_nonexistent_module_errors() {
-        let (_, resolved) = resolve_multi(&[("./main.tlk", "import { a } from ./missing.tlk")]);
+        let (_, resolved) = resolve_multi(&[("./main.tlk", "use { a } from ./missing.tlk")]);
 
         assert!(
             !resolved.diagnostics.is_empty(),
@@ -1783,7 +1900,7 @@ pub mod tests {
     fn import_private_symbol_errors() {
         let (_, resolved) = resolve_multi(&[
             ("./lib.tlk", "let private_val = 42"),
-            ("./main.tlk", "import { private_val } from ./lib.tlk"),
+            ("./main.tlk", "use { private_val } from ./lib.tlk"),
         ]);
 
         assert!(
@@ -1835,7 +1952,9 @@ public let a = 2
         let code = "let x: Optional<Int> = Optional.some(42)";
         let parsed = parse(code);
         let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
-        let (_, resolved) = name_resolver.resolve(vec![parsed]);
+        let mut parseds = vec![parsed];
+        crate::desugar::desugar(&mut parseds);
+        let (_, resolved) = name_resolver.resolve(parseds);
 
         assert!(
             resolved.diagnostics.is_empty(),
@@ -1857,7 +1976,9 @@ public let a = 2
             modules.import_core(core_module);
             let parsed = parse(code);
             let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
-            let (_, resolved) = name_resolver.resolve(vec![parsed]);
+            let mut parseds = vec![parsed];
+            crate::desugar::desugar(&mut parseds);
+            let (_, resolved) = name_resolver.resolve(parseds);
             let file_scope = resolved.scopes.get(&NodeID(FileID(0), 0)).unwrap();
             assert!(
                 file_scope.types.contains_key("Optional"),
@@ -1873,7 +1994,9 @@ public let a = 2
             let mut parsed = parse(code);
             parsed.skip_core_prelude = true;
             let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
-            let (_, resolved) = name_resolver.resolve(vec![parsed]);
+            let mut parseds = vec![parsed];
+            crate::desugar::desugar(&mut parseds);
+            let (_, resolved) = name_resolver.resolve(parseds);
             let file_scope = resolved.scopes.get(&NodeID(FileID(0), 0)).unwrap();
             assert!(
                 !file_scope.types.contains_key("Optional"),

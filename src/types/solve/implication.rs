@@ -72,7 +72,8 @@ impl<'s> Solver<'s> {
             Constraint::Eq(_, _, origin)
             | Constraint::EffEq(_, _, origin)
             | Constraint::Conforms { origin, .. }
-            | Constraint::HasMember { origin, .. } => Some(*origin),
+            | Constraint::HasMember { origin, .. }
+            | Constraint::PatternView { origin, .. } => Some(*origin),
             Constraint::Implic(_) => None,
         }
     }
@@ -118,6 +119,11 @@ impl<'s> Solver<'s> {
             } => self
                 .ty_mentions_params(receiver, params)
                 .or_else(|| self.ty_mentions_params(member, params)),
+            Constraint::PatternView {
+                scrutinee, view, ..
+            } => self
+                .ty_mentions_params(scrutinee, params)
+                .or_else(|| self.ty_mentions_params(view, params)),
             Constraint::Implic(implication) => implication
                 .givens
                 .iter()
@@ -140,6 +146,10 @@ impl<'s> Solver<'s> {
             VarValue::Ty(ty) => self.ty_mentions_params(ty, params),
             VarValue::Eff(eff) => self.eff_mentions_params(eff, params),
             VarValue::Row(row) => self.row_mentions_params(row, params),
+            VarValue::Perm(perm) => match perm {
+                Perm::Param(symbol) if params.contains(symbol) => Some(*symbol),
+                _ => None,
+            },
         }
     }
 

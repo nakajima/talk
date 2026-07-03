@@ -3,10 +3,8 @@
  * Licensed under the MIT License. See License.txt in the project root for license information.
  * ------------------------------------------------------------------------------------------ */
 
-import { fstat } from "fs";
 import { homedir } from "os";
-import * as path from "path";
-import { workspace, ExtensionContext } from "vscode";
+import { commands, window, workspace, ExtensionContext } from "vscode";
 
 import {
   LanguageClient,
@@ -16,6 +14,7 @@ import {
 } from "vscode-languageclient/node";
 
 let client: LanguageClient;
+let restartPromise: Promise<void> | undefined;
 
 export function activate(context: ExtensionContext) {
   // If the extension is launched in debug mode then the debug server options are used
@@ -42,13 +41,33 @@ export function activate(context: ExtensionContext) {
     },
   };
 
-  // Create the language client and start the client.
-  client = new LanguageClient(
-    "TalkTalk",
-    "TalkTalk Language Server",
-    serverOptions,
-    clientOptions
+  const createClient = () =>
+    new LanguageClient(
+      "TalkTalk",
+      "TalkTalk Language Server",
+      serverOptions,
+      clientOptions
+    );
+
+  context.subscriptions.push(
+    commands.registerCommand("talktalk.restartLsp", async () => {
+      restartPromise ??= (async () => {
+        if (client) {
+          await client.stop();
+        }
+        client = createClient();
+        await client.start();
+        window.showInformationMessage("TalkTalk language server restarted.");
+      })().finally(() => {
+        restartPromise = undefined;
+      });
+
+      return restartPromise;
+    })
   );
+
+  // Create the language client and start the client.
+  client = createClient();
 
   // Start the client. This will also launch the server
   client.start();

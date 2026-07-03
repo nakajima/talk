@@ -104,7 +104,7 @@ impl<'a> Lexer<'a> {
         match ch {
             '.' => self.dot(),
             ',' => self.make(Comma),
-            ':' => self.make(Colon),
+            ':' => self.compound(':', DoubleColon, Colon),
             '?' => self.make(QuestionMark),
             '+' => self.compound('=', PlusEquals, Plus),
             '-' => self.minus(),

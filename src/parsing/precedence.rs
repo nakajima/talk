@@ -139,7 +139,7 @@ impl Precedence {
                 precedence: Precedence::Call,
             },
 
-            TokenKind::Import => ParseHandler {
+            TokenKind::Import | TokenKind::Use => ParseHandler {
                 prefix: None,
                 infix: None,
                 precedence: Precedence::Primary,
@@ -302,8 +302,13 @@ impl Precedence {
             TokenKind::Comma => ParseHandler::NONE,
             TokenKind::EOF => ParseHandler::NONE,
             TokenKind::Colon => ParseHandler::NONE,
+            TokenKind::DoubleColon => ParseHandler::NONE,
             TokenKind::Arrow => ParseHandler::NONE,
-            TokenKind::DotDot => ParseHandler::NONE,
+            TokenKind::DotDot => ParseHandler {
+                prefix: Some(Parser::relative_parent_path_prefix),
+                infix: None,
+                precedence: Precedence::Primary,
+            },
             TokenKind::DotDotDot => ParseHandler::NONE,
             _ => ParseHandler::NONE,
         })

@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::ty::Perm;
 
 impl<'s> Solver<'s> {
     /// One step on a HasMember predicate against a known head.
@@ -14,7 +15,8 @@ impl<'s> Solver<'s> {
         &mut self,
         protocols: &[Symbol],
         head: Option<Symbol>,
-        receiver: &Ty,
+        lookup_receiver: &Ty,
+        self_receiver: &Ty,
         label: &str,
         member: &Ty,
         origin: CtOrigin,
@@ -46,7 +48,8 @@ impl<'s> Solver<'s> {
                 self.bind_requirement(
                     *owner,
                     requirement,
-                    receiver,
+                    lookup_receiver,
+                    self_receiver,
                     member,
                     origin,
                     queue,
@@ -55,7 +58,7 @@ impl<'s> Solver<'s> {
                 true
             }
             many => {
-                let rendered = self.store.render(receiver);
+                let rendered = self.store.render(self_receiver);
                 self.errors.push((
                     TypeError::AmbiguousMember {
                         receiver: rendered,
@@ -78,9 +81,9 @@ impl<'s> Solver<'s> {
         queue: &mut Vec<Constraint>,
     ) -> Option<Constraint> {
         let label_str = label.to_string();
-        let normalized = normalize_ty(self.store, self.catalog, &receiver);
-        let normalized = self.rewrite_ty_from_givens(normalized);
-        if stuck_projection(self.store, &normalized) {
+        let (member_receiver, self_receiver) = self.member_receivers(&receiver);
+        let diagnostic_receiver = self_receiver.clone();
+        if stuck_projection(self.store, &member_receiver) {
             return Some(Constraint::HasMember {
                 receiver,
                 label,
@@ -88,7 +91,7 @@ impl<'s> Solver<'s> {
                 origin,
             });
         }
-        match normalized {
+        match member_receiver.clone() {
             Ty::Var(_) => Some(Constraint::HasMember {
                 receiver,
                 label,
@@ -106,11 +109,18 @@ impl<'s> Solver<'s> {
                     .cloned()
                     .unwrap_or_default();
                 if self.dispatch_member_through(
-                    &bounds, None, &receiver, &label_str, &member, origin, queue,
+                    &bounds,
+                    None,
+                    &member_receiver,
+                    &self_receiver,
+                    &label_str,
+                    &member,
+                    origin,
+                    queue,
                 ) {
                     return None;
                 }
-                let rendered = self.store.render(&receiver);
+                let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
                     TypeError::UnknownMember {
                         receiver: rendered,
@@ -129,7 +139,7 @@ impl<'s> Solver<'s> {
                     fields: vec![(Label::Named(label_str), member)],
                     tail: Some(RowTail::Var(tail)),
                 });
-                queue.push(Constraint::Eq(receiver, probe, origin));
+                queue.push(Constraint::Eq(member_receiver.clone(), probe, origin));
                 None
             }
             Ty::Param(param) => {
@@ -139,13 +149,20 @@ impl<'s> Solver<'s> {
                     .get(&param)
                     .cloned()
                     .unwrap_or_default();
-                bounds.extend(self.given_protocols_for(&receiver));
+                bounds.extend(self.given_protocols_for(&member_receiver));
                 if self.dispatch_member_through(
-                    &bounds, None, &receiver, &label_str, &member, origin, queue,
+                    &bounds,
+                    None,
+                    &member_receiver,
+                    &self_receiver,
+                    &label_str,
+                    &member,
+                    origin,
+                    queue,
                 ) {
                     return None;
                 }
-                let rendered = self.store.render(&receiver);
+                let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
                     TypeError::UnknownMember {
                         receiver: rendered,
@@ -158,7 +175,7 @@ impl<'s> Solver<'s> {
             Ty::Any { protocol, .. } => {
                 let Some((owner, requirement)) = self.catalog.requirement_in(protocol, &label_str)
                 else {
-                    let rendered = self.store.render(&receiver);
+                    let rendered = self.store.render(&diagnostic_receiver);
                     self.errors.push((
                         TypeError::UnknownMember {
                             receiver: rendered,
@@ -172,7 +189,8 @@ impl<'s> Solver<'s> {
                 self.bind_requirement(
                     owner,
                     &requirement,
-                    &receiver,
+                    &member_receiver,
+                    &self_receiver,
                     &member,
                     origin,
                     queue,
@@ -203,7 +221,7 @@ impl<'s> Solver<'s> {
                         return self.dispatch_nominal_method(
                             method,
                             &substitution,
-                            receiver,
+                            self_receiver.clone(),
                             label,
                             member,
                             origin,
@@ -226,7 +244,7 @@ impl<'s> Solver<'s> {
                     return self.dispatch_nominal_method(
                         method,
                         &substitution,
-                        receiver,
+                        self_receiver.clone(),
                         label,
                         member,
                         origin,
@@ -242,7 +260,8 @@ impl<'s> Solver<'s> {
                     if self.dispatch_member_through(
                         &protocols,
                         Some(symbol),
-                        &receiver,
+                        &member_receiver,
+                        &self_receiver,
                         &label_str,
                         &member,
                         origin,
@@ -266,7 +285,8 @@ impl<'s> Solver<'s> {
                             self.bind_requirement(
                                 owner,
                                 &requirement,
-                                &receiver,
+                                &member_receiver,
+                                &self_receiver,
                                 &member,
                                 origin,
                                 queue,
@@ -297,10 +317,15 @@ impl<'s> Solver<'s> {
                     if let Ty::Func(params, ret, eff) = signature
                         && !params.is_empty()
                     {
-                        queue.push(Constraint::Eq(params[0].clone(), receiver.clone(), origin));
+                        self.push_immediate_argument_eq(
+                            queue,
+                            params[0].clone(),
+                            self_receiver.clone(),
+                            origin,
+                        );
                         queue.push(Constraint::Eq(
-                            member,
                             Ty::Func(params[1..].to_vec(), ret, eff),
+                            member,
                             origin,
                         ));
                         self.member_resolutions
@@ -308,7 +333,7 @@ impl<'s> Solver<'s> {
                     }
                     return None;
                 }
-                let rendered = self.store.render(&receiver);
+                let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
                     TypeError::UnknownMember {
                         receiver: rendered,
@@ -318,8 +343,8 @@ impl<'s> Solver<'s> {
                 ));
                 None
             }
-            other => {
-                let rendered = self.store.render(&other);
+            _ => {
+                let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
                     TypeError::UnknownMember {
                         receiver: rendered,
@@ -330,6 +355,16 @@ impl<'s> Solver<'s> {
                 None
             }
         }
+    }
+
+    pub(super) fn member_receivers(&mut self, receiver: &Ty) -> (Ty, Ty) {
+        let normalized = normalize_ty(self.store, self.catalog, receiver);
+        let self_receiver = self.rewrite_ty_from_givens(normalized);
+        let lookup_receiver = match self_receiver.clone() {
+            Ty::Borrow(_, inner) | Ty::Unique(inner) => *inner,
+            other => other,
+        };
+        (lookup_receiver, self_receiver)
     }
 
     /// Type a method use on a nominal head (struct or enum): instantiate the
@@ -352,10 +387,10 @@ impl<'s> Solver<'s> {
             signature.substitute(substitution, &Default::default(), &Default::default());
         match self.store.shallow(&signature) {
             Ty::Func(params, ret, eff) if !params.is_empty() => {
-                queue.push(Constraint::Eq(params[0].clone(), receiver, origin));
+                self.push_immediate_argument_eq(queue, params[0].clone(), receiver, origin);
                 queue.push(Constraint::Eq(
-                    member,
                     Ty::Func(params[1..].to_vec(), ret, eff),
+                    member,
                     origin,
                 ));
                 self.member_resolutions
@@ -386,7 +421,8 @@ impl<'s> Solver<'s> {
         &mut self,
         protocol: Symbol,
         requirement: &Requirement,
-        receiver: &Ty,
+        lookup_receiver: &Ty,
+        self_receiver: &Ty,
         member: &Ty,
         origin: CtOrigin,
         queue: &mut Vec<Constraint>,
@@ -399,7 +435,7 @@ impl<'s> Solver<'s> {
             .map(|info| info.assoc.iter().map(|(n, s)| (n.clone(), *s)).collect())
             .unwrap_or_default();
 
-        let receiver_head = self.store.shallow(receiver);
+        let receiver_head = self.store.shallow(lookup_receiver);
         let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
         match &receiver_head {
             Ty::Param(self_symbol @ Symbol::Protocol(_)) => {
@@ -433,7 +469,7 @@ impl<'s> Solver<'s> {
                         .iter()
                         .find_map(|(symbol, ty)| (symbol == owner_symbol).then(|| ty.clone()))
                         .unwrap_or_else(|| {
-                            Ty::Proj(Box::new(receiver.clone()), protocol, *owner_symbol)
+                            Ty::Proj(Box::new(lookup_receiver.clone()), protocol, *owner_symbol)
                         });
                     tys.insert(*owner_symbol, substituted);
                 }
@@ -442,12 +478,12 @@ impl<'s> Solver<'s> {
                 for (_, owner_symbol) in &owner_assoc {
                     tys.insert(
                         *owner_symbol,
-                        Ty::Proj(Box::new(receiver.clone()), protocol, *owner_symbol),
+                        Ty::Proj(Box::new(lookup_receiver.clone()), protocol, *owner_symbol),
                     );
                 }
             }
         }
-        tys.insert(protocol, receiver.clone());
+        tys.insert(protocol, lookup_receiver.clone());
         let mut effs = FxHashMap::default();
         effs.insert(
             requirement.symbol,
@@ -459,10 +495,15 @@ impl<'s> Solver<'s> {
         if let Ty::Func(params, ret, eff) = signature
             && !params.is_empty()
         {
-            local_wanteds.push(Constraint::Eq(params[0].clone(), receiver.clone(), origin));
+            self.push_immediate_argument_eq(
+                &mut local_wanteds,
+                params[0].clone(),
+                self_receiver.clone(),
+                origin,
+            );
             local_wanteds.push(Constraint::Eq(
-                member.clone(),
                 Ty::Func(params[1..].to_vec(), ret, eff),
+                member.clone(),
                 origin,
             ));
         }
@@ -485,7 +526,7 @@ impl<'s> Solver<'s> {
             )));
         }
         queue.push(Constraint::Conforms {
-            ty: receiver.clone(),
+            ty: lookup_receiver.clone(),
             protocol,
             origin,
         });
@@ -493,6 +534,36 @@ impl<'s> Solver<'s> {
             origin.node,
             MemberResolution::ViaConformance { protocol, witness },
         );
+    }
+
+    fn push_immediate_argument_eq(
+        &mut self,
+        queue: &mut Vec<Constraint>,
+        expected: Ty,
+        found: Ty,
+        origin: CtOrigin,
+    ) {
+        match self.store.shallow(&expected) {
+            Ty::Borrow(expected_kind, expected_inner) => match self.store.shallow(&found) {
+                Ty::Borrow(found_kind, found_inner) if found_kind == expected_kind => {
+                    queue.push(Constraint::Eq(
+                        (*expected_inner).clone(),
+                        (*found_inner).clone(),
+                        origin,
+                    ));
+                }
+                Ty::Borrow(Perm::Exclusive, found_inner) if expected_kind == Perm::Shared => {
+                    queue.push(Constraint::Eq(
+                        (*expected_inner).clone(),
+                        (*found_inner).clone(),
+                        origin,
+                    ));
+                }
+                Ty::Borrow(..) => queue.push(Constraint::Eq(expected, found, origin)),
+                _ => queue.push(Constraint::Eq((*expected_inner).clone(), found, origin)),
+            },
+            _ => queue.push(Constraint::Eq(expected, found, origin)),
+        }
     }
 
     /// Solver-side symbol lookup: in-flight monomorphic signature, or a
@@ -519,7 +590,10 @@ impl<'s> Solver<'s> {
         node: NodeID,
         queue: &mut Vec<Constraint>,
     ) -> Ty {
-        if scheme.params.is_empty() && scheme.eff_params.is_empty() && scheme.row_params.is_empty()
+        if scheme.params.is_empty()
+            && scheme.eff_params.is_empty()
+            && scheme.row_params.is_empty()
+            && scheme.perm_params.is_empty()
         {
             return scheme.ty.clone();
         }
@@ -549,6 +623,10 @@ impl<'s> Solver<'s> {
             ));
             rows.insert(*param, RowTail::Var(var));
         }
+        let mut perms = FxHashMap::default();
+        for param in &scheme.perm_params {
+            perms.insert(*param, Perm::Var(self.store.fresh_perm(self.level, node)));
+        }
         for predicate in &scheme.predicates {
             queue.push(
                 predicate
@@ -560,6 +638,9 @@ impl<'s> Solver<'s> {
             .entry(node)
             .or_default()
             .extend(recorded);
-        scheme.ty.substitute(&tys, &effs, &rows)
+        scheme
+            .ty
+            .substitute(&tys, &effs, &rows)
+            .substitute_perms(&perms)
     }
 }

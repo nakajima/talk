@@ -1,0 +1,13 @@
+struct Node 'heap {
+	let value: Int
+	let next: Node?
+}
+
+func ring() -> Int {
+	let a = Node(value: 1, next: Optional.none)
+	let b = Node(value: 2, next: Optional.some(a))
+	a.next = Optional.some(b)
+	a.value + b.value
+}
+
+print(ring())

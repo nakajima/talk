@@ -53,6 +53,33 @@ pub enum EffTail {
     Param(Symbol),
 }
 
+/// A borrow-permission unification variable.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct PermVar(pub u32);
+
+/// The permission of a borrow, over the two-point lattice {Shared,
+/// Exclusive}: either concrete, still being solved, or a rigid quantified
+/// permission parameter (grade polymorphism, so one accessor can serve `&`
+/// and `&mut` call sites alike).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum Perm {
+    Shared,
+    Exclusive,
+    Var(PermVar),
+    Param(Symbol),
+}
+
+impl Perm {
+    /// Whether this permission grants write access. Only meaningful on
+    /// concrete permissions; defaulting binds every leftover perm var to
+    /// `Shared` before anything downstream of the type phase runs.
+    pub fn is_exclusive(self) -> bool {
+        matches!(self, Perm::Exclusive)
+    }
+}
+
 /// A record row: sorted labeled fields plus an optional tail.
 /// `tail: None` means the row is closed (exactly these fields).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -129,6 +156,13 @@ pub enum Ty {
     /// A nominal type application: structs, enums, builtins.
     /// `Int` is `Nominal(Symbol::Int, [])`.
     Nominal(Symbol, Vec<Ty>),
+    /// A borrowed view of another type. Flow checking owns the lifetime
+    /// facts; the type records the access permission.
+    Borrow(Perm, Box<Ty>),
+    /// A uniquely-owned value: statically the sole reference, so in-place
+    /// mutation needs no runtime checks. An owned value moves into `*T` at
+    /// a call boundary (the move makes it unique).
+    Unique(Box<Ty>),
     /// A function type with its latent effect row.
     Func(Vec<Ty>, Box<Ty>, EffectRow),
     Tuple(Vec<Ty>),
@@ -234,6 +268,8 @@ impl Ty {
                     arg.try_visit(visitor)?;
                 }
             }
+            Ty::Borrow(_, inner) => inner.try_visit(visitor)?,
+            Ty::Unique(inner) => inner.try_visit(visitor)?,
             Ty::Func(params, ret, _) => {
                 for param in params {
                     param.try_visit(visitor)?;
@@ -268,6 +304,9 @@ impl Ty {
                         .iter()
                         .zip(right_args)
                         .all(|(left, right)| left.try_zip(right, visitor))
+            }
+            (Ty::Borrow(left_kind, left_inner), Ty::Borrow(right_kind, right_inner)) => {
+                left_kind == right_kind && left_inner.try_zip(right_inner, visitor)
             }
             (Ty::Func(left_params, left_ret, _), Ty::Func(right_params, right_ret, _)) => {
                 left_params.len() == right_params.len()
@@ -313,6 +352,13 @@ impl Ty {
     ) -> Ty {
         Substituter { tys, effs, rows }.fold_ty(self)
     }
+
+    /// Substitute quantified permission params. A separate fold from
+    /// [`Ty::substitute`] because only scheme instantiation carries perms;
+    /// the many type-only substitution sites stay three-argument.
+    pub fn substitute_perms(&self, perms: &FxHashMap<Symbol, Perm>) -> Ty {
+        PermSubstituter { perms }.fold_ty(self)
+    }
 }
 
 /// A rebuilding fold over the type structure (Lämmel & Peyton Jones, *Scrap
@@ -343,6 +389,10 @@ pub(crate) trait TyFold {
                 self.fold_symbol(*symbol),
                 args.iter().map(|a| self.fold_ty(a)).collect(),
             ),
+            Ty::Borrow(perm, inner) => {
+                Ty::Borrow(self.fold_perm(*perm), Box::new(self.fold_ty(inner)))
+            }
+            Ty::Unique(inner) => Ty::Unique(Box::new(self.fold_ty(inner))),
             Ty::Func(params, ret, eff) => Ty::Func(
                 params.iter().map(|p| self.fold_ty(p)).collect(),
                 Box::new(self.fold_ty(ret)),
@@ -368,6 +418,13 @@ pub(crate) trait TyFold {
 
     fn fold_var(&mut self, var: TyVar) -> Ty {
         Ty::Var(var)
+    }
+
+    fn fold_perm(&mut self, perm: Perm) -> Perm {
+        match perm {
+            Perm::Param(symbol) => Perm::Param(self.fold_symbol(symbol)),
+            other => other,
+        }
     }
 
     fn fold_symbol(&mut self, symbol: Symbol) -> Symbol {
@@ -412,6 +469,20 @@ struct Substituter<'a> {
     tys: &'a FxHashMap<Symbol, Ty>,
     effs: &'a FxHashMap<Symbol, EffTail>,
     rows: &'a FxHashMap<Symbol, RowTail>,
+}
+
+/// Instantiation's permission-param leg (see [`Ty::substitute_perms`]).
+struct PermSubstituter<'a> {
+    perms: &'a FxHashMap<Symbol, Perm>,
+}
+
+impl TyFold for PermSubstituter<'_> {
+    fn fold_perm(&mut self, perm: Perm) -> Perm {
+        match perm {
+            Perm::Param(symbol) => self.perms.get(&symbol).copied().unwrap_or(perm),
+            other => other,
+        }
+    }
 }
 
 impl TyFold for Substituter<'_> {
@@ -486,6 +557,15 @@ struct ExportSanitizer {
 impl TyFold for ExportSanitizer {
     fn fold_var(&mut self, _var: TyVar) -> Ty {
         Ty::Error
+    }
+
+    // A leftover perm var degrades to the safe default rather than poisoning
+    // the whole type: `&T` is always a sound reading of an undecided borrow.
+    fn fold_perm(&mut self, perm: Perm) -> Perm {
+        match perm {
+            Perm::Var(_) => Perm::Shared,
+            other => other,
+        }
     }
 
     fn fold_eff_tail(&mut self, tail: &Option<EffTail>) -> Option<EffTail> {
@@ -618,6 +698,11 @@ impl Scheme {
                 .iter()
                 .map(|s| import_symbol(*s, target))
                 .collect(),
+            perm_params: self
+                .perm_params
+                .iter()
+                .map(|s| import_symbol(*s, target))
+                .collect(),
             predicates: self
                 .predicates
                 .iter()
@@ -665,6 +750,12 @@ pub(crate) fn match_pattern(
                     .iter()
                     .zip(right_args)
                     .all(|(left, right)| match_pattern(left, right, bindings))
+        }
+        (Ty::Borrow(left_kind, left_inner), Ty::Borrow(right_kind, right_inner)) => {
+            left_kind == right_kind && match_pattern(left_inner, right_inner, bindings)
+        }
+        (Ty::Unique(left_inner), Ty::Unique(right_inner)) => {
+            match_pattern(left_inner, right_inner, bindings)
         }
         (Ty::Tuple(left_items), Ty::Tuple(right_items)) => {
             left_items.len() == right_items.len()
@@ -743,6 +834,8 @@ fn pattern_occurs(param: Symbol, ty: &Ty, bindings: &FxHashMap<Symbol, Ty>) -> b
         Ty::Nominal(_, args) | Ty::Tuple(args) => {
             args.iter().any(|ty| pattern_occurs(param, ty, bindings))
         }
+        Ty::Borrow(_, inner) => pattern_occurs(param, inner, bindings),
+        Ty::Unique(inner) => pattern_occurs(param, inner, bindings),
         Ty::Func(args, ret, _) => {
             args.iter().any(|ty| pattern_occurs(param, ty, bindings))
                 || pattern_occurs(param, ret, bindings)
@@ -774,6 +867,9 @@ pub struct Scheme {
     pub params: Vec<SchemeParam>,
     pub eff_params: Vec<Symbol>,
     pub row_params: Vec<Symbol>,
+    /// Quantified borrow-permission parameters: grade polymorphism over the
+    /// {Shared, Exclusive} lattice, invisible in renders.
+    pub perm_params: Vec<Symbol>,
     /// The qualified context P: declared bounds, inferred HasMember
     /// constraints, same-type equalities, and row/effect predicates.
     pub predicates: Vec<Predicate>,
@@ -787,6 +883,7 @@ impl Scheme {
             predicates: vec![],
             eff_params: vec![],
             row_params: vec![],
+            perm_params: vec![],
             ty,
         }
     }
@@ -870,6 +967,14 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
                 format!("{head}<{}>", args.join(", "))
             }
         }
+        // A solver perm var or quantified perm param renders as a plain `&`:
+        // permission polymorphism stays invisible unless two concrete
+        // permissions clash.
+        Ty::Borrow(perm, inner) => {
+            let prefix = if perm.is_exclusive() { "&mut " } else { "&" };
+            format!("{prefix}{}", render_ty(inner, param_names))
+        }
+        Ty::Unique(inner) => format!("*{}", render_ty(inner, param_names)),
         Ty::Func(params, ret, eff) => {
             let params: Vec<String> = params.iter().map(|p| render_ty(p, param_names)).collect();
             let eff = render_effect_row(eff);

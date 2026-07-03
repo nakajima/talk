@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::types::catalog::Grade;
+
 impl<'s, 'a> CatalogBuilder<'s, 'a> {
     // ----- Declaration collection ---------------------------------------
 
@@ -124,6 +126,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             }
         }
 
+        self.validate_marker_conformances();
+
         Collected {
             decls,
             stmts,
@@ -206,7 +210,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             let ty = self.lower_type_alias(symbol, alias.rhs.id, None);
             let params = alias
                 .owner
-                .map(|owner| nominal_params(&self.catalog, owner))
+                .map(|owner| nominal_params(self.catalog, owner))
                 .unwrap_or_default();
             self.catalog.type_aliases.insert(
                 symbol,
@@ -232,6 +236,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 for conformance in conformances {
                     if let Ok(protocol) = conformance.symbol() {
                         self.explicit_conformances.insert((head, protocol));
+                        self.record_marker_claim(head, protocol, decl.id);
                     }
                 }
             }
@@ -246,10 +251,142 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     for conformance in conformances {
                         if let Ok(protocol) = conformance.symbol() {
                             self.explicit_conformances.insert((*head, protocol));
+                            self.record_marker_claim(*head, protocol, member.id);
                         }
                     }
                 }
             }
+        }
+    }
+
+    fn record_marker_claim(&mut self, head: Symbol, protocol: Symbol, node: NodeID) {
+        if matches!(protocol, Symbol::Copy | Symbol::CheapClone | Symbol::Deinit) {
+            self.marker_claims.push((head, protocol, node));
+        }
+    }
+
+    /// Validate the substructural marker protocols once the whole catalog is
+    /// collected: a `linear` declaration may not claim any of them (Copy
+    /// duplicates the value, CheapClone shares it, Deinit silently discards
+    /// it), and `Copy`/`CheapClone` require every field to satisfy the
+    /// marker.
+    fn validate_marker_conformances(&mut self) {
+        for (head, protocol, node) in std::mem::take(&mut self.marker_claims) {
+            let declared_linear = self
+                .catalog
+                .structs
+                .get(&head)
+                .map(|info| info.linear)
+                .or_else(|| self.catalog.enums.get(&head).map(|info| info.linear))
+                .unwrap_or(false);
+            if declared_linear {
+                self.diagnostics.errors.push((
+                    TypeError::LinearConformance {
+                        ty: head.to_string(),
+                        protocol: protocol.to_string(),
+                    },
+                    node,
+                ));
+                continue;
+            }
+            // A `'heap` value is a shared reference: copying or cheap-cloning
+            // the handle is meaningless as a *value* operation, and Deinit
+            // dispatch belongs to the region's teardown walk.
+            if self.catalog.is_heap(head) && protocol != Symbol::Deinit {
+                self.diagnostics.errors.push((
+                    TypeError::HeapConformance {
+                        ty: head.to_string(),
+                        protocol: protocol.to_string(),
+                    },
+                    node,
+                ));
+                continue;
+            }
+            if protocol == Symbol::Deinit {
+                continue;
+            }
+            for (field, ty) in self.marker_checked_fields(head) {
+                if !self.satisfies_marker(&ty, protocol) {
+                    self.diagnostics.errors.push((
+                        TypeError::NonConformingField {
+                            protocol: protocol.to_string(),
+                            field,
+                            ty: ty.render_mono(),
+                        },
+                        node,
+                    ));
+                }
+            }
+        }
+    }
+
+    /// The stored payload types a Copy/CheapClone claim must cover: struct
+    /// fields, or every enum variant's constructor parameters.
+    fn marker_checked_fields(&self, head: Symbol) -> Vec<(String, Ty)> {
+        if let Some(info) = self.catalog.structs.get(&head) {
+            return info
+                .fields
+                .iter()
+                .map(|(name, (_, ty))| (name.clone(), ty.clone()))
+                .collect();
+        }
+        if let Some(info) = self.catalog.enums.get(&head) {
+            return info
+                .variants
+                .iter()
+                .flat_map(|(name, variant)| match &variant.constructor_scheme.ty {
+                    Ty::Func(payloads, ..) => payloads
+                        .iter()
+                        .map(|ty| (name.clone(), ty.clone()))
+                        .collect(),
+                    _ => vec![],
+                })
+                .collect();
+        }
+        vec![]
+    }
+
+    fn satisfies_marker(&self, ty: &Ty, marker: Symbol) -> bool {
+        match ty {
+            // Error is poison; a variable here means the field type is still
+            // being collected — the conformance's own use sites will re-check.
+            Ty::Error | Ty::Var(_) => true,
+            // A unique value is the sole reference: never Copy/CheapClone.
+            Ty::Unique(_) => false,
+            Ty::Nominal(symbol, args) => {
+                // Storage is the intrinsic refcounted buffer: cheap to clone
+                // whatever it stores (the bump never touches elements).
+                if marker == Symbol::CheapClone && *symbol == Symbol::Storage {
+                    return true;
+                }
+                let head_ok = match marker {
+                    Symbol::Copy => self.catalog.grade_of(*symbol) == Grade::Copy,
+                    // CheapClone: Copy fields are fine, and CheapClone-
+                    // conforming fields are fine.
+                    _ => {
+                        self.catalog.grade_of(*symbol) == Grade::Copy
+                            || self
+                                .catalog
+                                .conformances
+                                .contains_key(&(*symbol, Symbol::CheapClone))
+                    }
+                };
+                head_ok && args.iter().all(|arg| self.satisfies_marker(arg, marker))
+            }
+            Ty::Param(symbol) => self
+                .catalog
+                .param_bounds
+                .get(symbol)
+                .is_some_and(|bounds| bounds.contains(&marker)),
+            Ty::Tuple(items) => items.iter().all(|item| self.satisfies_marker(item, marker)),
+            Ty::Record(row) => {
+                row.tail.is_none()
+                    && row
+                        .fields
+                        .iter()
+                        .all(|(_, field)| self.satisfies_marker(field, marker))
+            }
+            Ty::Borrow(..) | Ty::Func(..) | Ty::Any { .. } | Ty::Proj(..) => false,
         }
     }
 
@@ -258,6 +395,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             generics,
             where_clause,
             body,
+            linear,
+            heap,
             ..
         } = &decl.kind
         else {
@@ -271,6 +410,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         let predicates = self.declared_predicates(generics, where_clause.as_ref());
         self.self_types.pop();
         let mut info = StructInfo {
+            linear: *linear,
+            heap: *heap,
             params,
             predicates,
             ..Default::default()
@@ -302,7 +443,9 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     };
                     info.fields.insert(name.name_str(), (property, ty));
                 }
-                DeclKind::Method { func, is_static } => {
+                DeclKind::Method {
+                    func, is_static, ..
+                } => {
                     let Ok(method) = func.name.symbol() else {
                         continue;
                     };
@@ -335,6 +478,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             generics,
             where_clause,
             body,
+            linear,
             ..
         } = &decl.kind
         else {
@@ -348,6 +492,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         let predicates = self.declared_predicates(generics, where_clause.as_ref());
         self.self_types.pop();
         let mut info = Enum {
+            linear: *linear,
             params,
             predicates,
             ..Default::default()
@@ -422,6 +567,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                         params: scheme_params,
                         eff_params: vec![],
                         row_params: vec![],
+                        perm_params: vec![],
                         predicates,
                         ty: Ty::Func(payloads, Box::new(case_result_ty), EffectRow::pure()),
                     };
@@ -436,6 +582,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 DeclKind::Method {
                     func,
                     is_static: false,
+                    ..
                 } => {
                     if let Ok(method) = func.name.symbol() {
                         info.methods.insert(func.name.name_str(), method);
@@ -555,7 +702,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         for member in &body.decls {
             match &member.kind {
                 DeclKind::Associated { .. } => {}
-                DeclKind::MethodRequirement(signature) | DeclKind::FuncSignature(signature) => {
+                DeclKind::MethodRequirement { signature, .. }
+                | DeclKind::FuncSignature(signature) => {
                     if let Some(requirement) = self.lower_requirement(signature, false) {
                         info.requirements
                             .insert(signature.name.name_str(), requirement);

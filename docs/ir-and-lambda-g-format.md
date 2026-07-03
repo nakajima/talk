@@ -10,6 +10,7 @@ There are three related things:
 | `@_ir` | Inside Talk source files | A way for core library code to ask for one low-level built-in operation. |
 | lambda G, written `λ_G` in code | `talk lower file.tlk` and `show_ir` | Talk after type checking, before bytecode. This is the main compiler middle form. |
 | VM bytecode | `talk ir file.tlk` | Numbered instructions that the interpreter runs. |
+| Raw VM module | `talk bytecode file.tlk` | The scheduled bytecode data structure, including chunks and side pools. |
 
 The flow is:
 
@@ -18,6 +19,7 @@ Talk source
   -> type checked Talk
   -> lambda G listing       (`talk lower`)
   -> bytecode listing       (`talk ir`)
+  -> raw bytecode dump      (`talk bytecode`)
   -> interpreter
 ```
 
@@ -495,6 +497,7 @@ Raw memory sizes:
 | `trunc` | Convert `float` to `int` by dropping the fractional part. |
 | `i_to_f` | Convert `int` to `float`. |
 | `alloc` | Allocate raw bytes. |
+| `free` | Release a pointer-shaped allocation. The evaluator and VM track allocation records and reject double-free/use-after-free; freeing static storage is a no-op. |
 | `load` | Read from raw memory. |
 | `store` | Write to raw memory. |
 | `copy` | Copy raw bytes. |
@@ -618,7 +621,9 @@ fail at verification instead of silently producing bad bytecode.
 ## 3. VM bytecode: the `talk ir` format
 
 `talk ir` prints what the interpreter will run. This format is lower
-level than lambda G.
+level than lambda G. `talk bytecode` dumps the same scheduled module in
+its raw Rust debug shape, including side pools such as `arg_pool`,
+`switch_pool`, `traps`, and `statics`.
 
 The bytecode uses numbered temporary slots called registers: `r0`, `r1`,
 `r2`, and so on. Each function call gets its own set of registers.

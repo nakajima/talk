@@ -1,4 +1,4 @@
-import { A } from ./a.tlk
+use { A } from ./a.tlk
 
 struct B {
   let a: A

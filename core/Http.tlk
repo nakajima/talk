@@ -1,11 +1,12 @@
 // no-core
-import { _alloc } from ./Memory.tlk
-import { _io_read, _io_write, _io_close } from ./IO.tlk
-import { _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM } from ./Net.tlk
-import { From, Into } from ./Convert.tlk
-import { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
-import { Showable } from ./Showable.tlk
-import { String } from ./String.tlk
+use { _alloc } from ./Memory.tlk
+use { _io_read, _io_write, _io_close } from ./IO.tlk
+use { _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM } from ./Net.tlk
+use { From, Into } from ./Convert.tlk
+use { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
+use { Showable } from ./Showable.tlk
+use { String, Substring } from ./String.tlk
+use { Optional } from ./Optional.tlk
 
 public struct Request {
 	let raw: String
@@ -32,15 +33,15 @@ public struct Response {
 }
 
 extend Response: Into {
-	typealias Target=Response
+	typealias Target = Response
 
-	func into() -> Response { self }
+	consuming func into() -> Response { self }
 }
 
 extend String: Into {
-	typealias Target=Response
+	typealias Target = Response
 
-	func into() -> Response {
+	consuming func into() -> Response {
 		Response(200, self)
 	}
 }
@@ -49,109 +50,67 @@ struct RouteHandler {
 	let invoke: () -> String
 }
 
-public struct HttpServer {
+// Routes live in a region-allocated ('heap) chain: registration conses,
+// dispatch walks — no fixed slot count.
+struct RouteNode 'heap {
+	let path: String
+	let handler: RouteHandler
+	let next: RouteNode?
+}
+
+func route_walk(current: RouteNode?, path: &Substring) -> Response {
+	match current {
+		.some(node) -> {
+			if path.equals_string(node.path) { Response(200, node.handler.invoke()) } else {
+				route_walk(node.next, path)
+			}
+		},
+		.none -> Response(404, "Not Found")
+	}
+}
+
+public struct HttpServer 'heap {
+	let routes: RouteNode?
 	let route_count: Int
-	let route_path0: String
-	let route_path1: String
-	let route_path2: String
-	let route_path3: String
-	let route_handler0: RouteHandler
-	let route_handler1: RouteHandler
-	let route_handler2: RouteHandler
-	let route_handler3: RouteHandler
 
 	init() {
-		let missing: RouteHandler = RouteHandler(
-			invoke: func() -> String { "Not Found" }
-		)
-
+		self.routes = Optional.none
 		self.route_count = 0
-		self.route_path0 = ""
-		self.route_path1 = ""
-		self.route_path2 = ""
-		self.route_path3 = ""
-		self.route_handler0 = missing
-		self.route_handler1 = missing
-		self.route_handler2 = missing
-		self.route_handler3 = missing
 		self
 	}
 
-	public func get(path: String, handler: () -> String) -> () {
-		let rc: Int = self.route_count
-
-		if rc == 0 {
-			self.route_path0 = path
-			self.route_handler0 = RouteHandler(invoke: handler)
-			self.route_count = self.route_count + 1
-		}
-		if rc == 1 {
-			self.route_path1 = path
-			self.route_handler1 = RouteHandler(invoke: handler)
-			self.route_count = self.route_count + 1
-		}
-		if rc == 2 {
-			self.route_path2 = path
-			self.route_handler2 = RouteHandler(invoke: handler)
-			self.route_count = self.route_count + 1
-		}
-		if rc == 3 {
-			self.route_path3 = path
-			self.route_handler3 = RouteHandler(invoke: handler)
-			self.route_count = self.route_count + 1
-		}
+	public mut func get(path: String, handler: () -> String) -> () {
+		let wrapped = RouteHandler(invoke: handler)
+		let node = RouteNode(path: path, handler: wrapped, next: self.routes)
+		self.routes = Optional.some(node)
+		self.route_count = self.route_count + 1
 		()
 	}
 
-	func extract_method(raw_request: String) -> String {
+	func extract_method(raw_request: &String) -> Substring {
 		let first_space: Int = raw_request.find(" ")
-		if first_space < 0 { return "" }
+		if first_space < 0 { return "".as_substring() }
 
 		raw_request.slice(0, first_space)
 	}
 
-	func extract_path(raw_request: String) -> String {
+	func extract_path(raw_request: &String) -> Substring {
 		let first_space: Int = raw_request.find(" ")
-		if first_space < 0 { return "" }
+		if first_space < 0 { return "".as_substring() }
 
 		let rest_start: Int = first_space + 1
 		let rest_len: Int = raw_request.length - rest_start
-		if rest_len <= 0 { return "" }
+		if rest_len <= 0 { return "".as_substring() }
 
-		let rest: String = raw_request.slice(rest_start, rest_len)
+		let rest: Substring = raw_request.slice(rest_start, rest_len)
 		let second_space: Int = rest.find(" ")
 		if second_space < 0 { return rest }
 
 		rest.slice(0, second_space)
 	}
 
-	func route_matches(index: Int, path: String) -> Bool {
-		match index {
-			0 -> self.route_path0.equals(path),
-			1 -> self.route_path1.equals(path),
-			2 -> self.route_path2.equals(path),
-			3 -> self.route_path3.equals(path),
-			_ -> false
-		}
-	}
-
-	func route_call(index: Int) -> String {
-		match index {
-			0 -> self.route_handler0.invoke(),
-			1 -> self.route_handler1.invoke(),
-			2 -> self.route_handler2.invoke(),
-			3 -> self.route_handler3.invoke(),
-			_ -> "Not Found"
-		}
-	}
-
-	func dispatch(path: String) -> Response {
-		let i = 0
-		loop i < self.route_count {
-			if self.route_matches(i, path) { return Response(200, self.route_call(i)) }
-			i = i + 1
-		}
-		Response(404, "Not Found")
+	func dispatch(path: Substring) -> Response {
+		route_walk(self.routes, path)
 	}
 
 	func render(response: Response) -> String {
@@ -178,12 +137,12 @@ public struct HttpServer {
 	}
 
 	public func handle(raw_request: String) -> String {
-		let method: String = self.extract_method(raw_request)
-		if method.equals("GET") == false { return self.render(
+		let method: Substring = self.extract_method(raw_request)
+		if method.equals_string("GET") == false { return self.render(
 			Response(404, "Not Found")
 		) }
 
-		let path: String = self.extract_path(raw_request)
+		let path: Substring = self.extract_path(raw_request)
 		self.render(self.dispatch(path))
 	}
 
@@ -209,7 +168,7 @@ public struct HttpServer {
 
 			let raw_request = String(buf, n, max_request_size)
 			let wire = self.handle(raw_request)
-			_io_write(client_fd, wire.base, wire.length)
+			_io_write(client_fd, wire.storage.base, wire.length)
 			_io_close(client_fd)
 		}
 	}

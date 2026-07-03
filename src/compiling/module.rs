@@ -68,7 +68,7 @@ impl std::fmt::Debug for ModuleId {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ModuleEnvironment {
     modules_by_name: FxHashMap<String, ModuleId>,
     modules_by_local: FxHashMap<ModuleId, StableModuleId>,
@@ -96,6 +96,11 @@ impl ModuleEnvironment {
     pub fn get_module_by_name(&self, name: &str) -> Option<&Module> {
         let module_id = self.modules_by_name.get(name)?;
         self.get_module(*module_id)
+    }
+
+    /// Get the local module ID assigned to an imported module name.
+    pub fn get_module_id_by_name(&self, name: &str) -> Option<ModuleId> {
+        self.modules_by_name.get(name).copied()
     }
 
     pub fn imported_symbol_names(&self) -> FxHashMap<Symbol, String> {

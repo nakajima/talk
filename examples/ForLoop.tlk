@@ -36,3 +36,9 @@ loop {
 }
 print("Sum of [10, 20, 30, 40, 50]:")
 print(sum)
+
+print("Using for over an array:")
+let for_iter_numbers = [1, 2, 3]
+for x in for_iter_numbers {
+	print(x)
+}

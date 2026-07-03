@@ -1,0 +1,19 @@
+enum Entry {
+	case doc(String)
+	case folder(String)
+}
+
+func describe(entries: Array<Entry>) -> Int {
+	let count = 0
+	for entry in entries {
+		match entry {
+			.doc(name) -> print("file: " + name),
+			.folder(name) -> print("dir: " + name)
+		}
+		count = count + 1
+	}
+	count
+}
+
+let entries = [Entry.doc("a.txt"), Entry.folder("src"), Entry.doc("b.txt")]
+print(describe(entries: entries))

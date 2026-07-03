@@ -26,16 +26,13 @@
 
 use rustc_hash::FxHashMap;
 
+use crate::hir::{MatchArm, Pattern, PatternKind, RecordFieldPatternKind};
 use crate::lambda_g::expr::{CmpOp, ExprId, Op};
 use crate::lambda_g::program::Label;
 use crate::name_resolution::symbol::Symbol;
-use crate::node_kinds::{
-    match_arm::MatchArm,
-    pattern::{Pattern, PatternKind, RecordFieldPatternKind},
-};
 use crate::types::ty::Ty as CheckTy;
 
-use super::{Binding, Ctx, EvidenceBinding, Lowering};
+use super::{Binding, Ctx, EvidenceBinding, Lowering, ScaffoldArms};
 
 /// A matrix column's subject: a pure λ_G value plus its checker type.
 #[derive(Clone)]
@@ -124,11 +121,14 @@ struct ArmTarget {
 /// Compile a `match` whose scrutinee is already lowered to the pure value
 /// `value` (checker type `scrutinee_ty`), delivering each arm's value to
 /// `k`. Returns the ⊥-typed decision tree.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn compile_match(
     lowering: &mut Lowering<'_>,
     value: ExprId,
     scrutinee_ty: CheckTy,
     arms: &[MatchArm],
+    scaffold_arms: Option<ScaffoldArms>,
+    scrutinee_borrowed: bool,
     ctx: &Ctx,
     k: ExprId,
 ) -> ExprId {
@@ -169,6 +169,8 @@ pub(super) fn compile_match(
         ctx,
         k,
         arms,
+        scaffold_arms,
+        scrutinee_borrowed,
         targets,
         trap: None,
     }
@@ -181,6 +183,13 @@ struct MatchCompiler<'l, 'a, 'p> {
     /// The continuation every arm's value flows to.
     k: ExprId,
     arms: &'p [MatchArm],
+    /// The arms' scaffold blocks in the body being lowered, when this match
+    /// is embedded there: arm bodies lower from these instead of standalone
+    /// bodies.
+    scaffold_arms: Option<ScaffoldArms>,
+    /// A borrowed scrutinee keeps ownership of its payloads: arm binders
+    /// are pure aliases and never drop.
+    scrutinee_borrowed: bool,
     targets: Vec<ArmTarget>,
     /// The shared no-row-matched target (bodyless, so both engines trap) —
     /// reachable only if a non-exhaustive match slips past the checker.
@@ -332,11 +341,42 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             );
         }
         let body_block = &self.arms[arm].body;
+        // Arm payload binders that take ownership (owned scrutinee) drop at
+        // arm-scope exit; seed the drop stack so the arm blocks' candidates
+        // resolve. A borrowed scrutinee keeps its payloads: binders alias.
+        if !self.scrutinee_borrowed {
+            let pattern_types = self.lowering.units[self.ctx.unit].types;
+            for (_, symbol, ty) in
+                crate::lower::mir::arm_release_binders(pattern_types, &self.arms[arm].pattern)
+            {
+                if binders.contains(&symbol) {
+                    inner.drop_stack.push(crate::lower::DropBinding {
+                        symbol,
+                        key_path: crate::lower::Place::root(symbol),
+                        ty,
+                        dynamic_flags: vec![],
+                    });
+                }
+            }
+        }
         let k = self.k;
+        // The arm body lowers from its scaffold block in the enclosing body
+        // when this match is embedded there (breaks/continues/returns inside
+        // it are real CFG edges); a standalone body otherwise.
+        let scaffold_block = self
+            .scaffold_arms
+            .as_ref()
+            .and_then(|scaffold| Some((*scaffold.blocks.get(arm)?, scaffold.join)));
+        let pattern = &self.arms[arm].pattern;
         let body = self
             .lowering
             .with_cells(&celled, &mut inner, |this, inner| {
-                this.lower_block(body_block, inner, k)
+                if let Some((arm_block, join)) = scaffold_block
+                    && let Some(done) = this.lower_arm_from_scaffold(arm_block, join, inner, k)
+                {
+                    return done;
+                }
+                this.lower_arm_block(pattern, body_block, inner, k)
             });
         self.lowering.p.set_body(label, body);
         label

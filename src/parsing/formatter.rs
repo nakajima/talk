@@ -12,9 +12,9 @@ use crate::{
         block::Block,
         body::Body,
         call_arg::CallArg,
-        decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, Visibility},
+        decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, ReceiverMode, Visibility},
         expr::{Expr, ExprKind},
-        func::Func,
+        func::{CaptureMode, CaptureSpec, Func},
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
         inline_ir_instruction::InlineIRInstruction,
@@ -37,6 +37,7 @@ use crate::{
 pub enum Doc {
     Empty,
     Text(String),
+    Comment(String),
     Line,
     Softline,
     Hardline,
@@ -187,39 +188,6 @@ impl FormatterDecorator for DefaultDecorator {
     }
 }
 
-pub struct DebugHTMLFormatter {}
-impl FormatterDecorator for DebugHTMLFormatter {
-    fn wrap_expr(&self, expr: &Expr, doc: Doc) -> Doc {
-        concat(
-            concat(
-                annotate(format!("<span class=\"expr\" id=\"node-{}\">", expr.id)),
-                doc,
-            ),
-            annotate("</span>"),
-        )
-    }
-
-    fn wrap_decl(&self, decl: &Decl, doc: Doc) -> Doc {
-        concat(
-            concat(
-                annotate(format!("<span class=\"decl\" id=\"node-{}\">", decl.id)),
-                doc,
-            ),
-            annotate("</span>"),
-        )
-    }
-
-    fn wrap_stmt(&self, stmt: &Stmt, doc: Doc) -> Doc {
-        concat(
-            concat(
-                annotate(format!("<span class=\"stmt\" id=\"node-{}\">", stmt.id)),
-                doc,
-            ),
-            annotate("</span>"),
-        )
-    }
-}
-
 pub struct Formatter<'a> {
     // Track expression metadata for source location info
     meta_storage: &'a NodeMetaStorage,
@@ -291,7 +259,7 @@ impl<'a> Formatter<'a> {
     }
 
     fn comment_doc(comment: Comment) -> Doc {
-        text(comment.text)
+        Doc::Comment(comment.text)
     }
 
     fn append_doc_with_spacing(
@@ -359,7 +327,7 @@ impl<'a> Formatter<'a> {
             if let Some(meta) = meta
                 && let Some(comment) = self.take_inline_comment(meta)
             {
-                doc = concat(doc, concat(text(" "), text(comment.text)));
+                doc = concat(doc, concat(text(" "), Self::comment_doc(comment)));
             }
 
             Self::push_doc_output(
@@ -462,11 +430,13 @@ impl<'a> Formatter<'a> {
             ExprKind::If(cond, then_block, else_block) => {
                 self.format_if(cond, then_block, else_block)
             }
+            ExprKind::Match(target, arms) if Self::is_if_let_match(arms) => {
+                self.format_if_let_match(target, arms)
+            }
             ExprKind::Match(target, arms) => self.format_match(target, arms),
             ExprKind::RecordLiteral { fields, spread } => {
                 self.format_record_literal(fields, spread)
             }
-            ExprKind::RowVariable(name) => join(vec![text(".."), text(name.name_str())], text("")),
             ExprKind::InlineIR(instruction) => {
                 if instruction.binds.is_empty() {
                     concat(
@@ -550,8 +520,19 @@ impl<'a> Formatter<'a> {
                 generics,
                 where_clause,
                 body,
+                linear,
+                heap,
                 ..
-            } => self.format_struct(name, generics, where_clause.as_ref(), body),
+            } => {
+                let attribute = if *linear {
+                    Some("'linear")
+                } else if *heap {
+                    Some("'heap")
+                } else {
+                    None
+                };
+                self.format_struct(name, generics, attribute, where_clause.as_ref(), body)
+            }
             DeclKind::Let {
                 lhs,
                 type_annotation,
@@ -578,7 +559,11 @@ impl<'a> Formatter<'a> {
                 type_annotation.as_ref(),
                 default_value.as_ref(),
             ),
-            DeclKind::Method { func, is_static } => self.format_method(func, *is_static),
+            DeclKind::Method {
+                func,
+                is_static,
+                receiver_mode,
+            } => self.format_method(func, *is_static, *receiver_mode),
             DeclKind::Associated {
                 generic,
                 where_clause,
@@ -597,8 +582,12 @@ impl<'a> Formatter<'a> {
                 generics,
                 where_clause,
                 body,
+                linear,
                 ..
-            } => self.format_enum_decl(name, generics, where_clause.as_ref(), body),
+            } => {
+                let attribute = if *linear { Some("'linear") } else { None };
+                self.format_enum_decl(name, generics, attribute, where_clause.as_ref(), body)
+            }
             DeclKind::EnumVariant {
                 name,
                 generics,
@@ -607,7 +596,10 @@ impl<'a> Formatter<'a> {
                 ..
             } => self.format_enum_variant(name, generics, payloads, result.as_ref()),
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
-            DeclKind::MethodRequirement(sig) => self.format_func_signature(sig),
+            DeclKind::MethodRequirement {
+                signature,
+                receiver_mode,
+            } => self.format_method_signature(signature, *receiver_mode),
             DeclKind::TypeAlias(lhs, .., rhs) => self.format_type_alias(lhs, rhs),
         };
 
@@ -628,7 +620,7 @@ impl<'a> Formatter<'a> {
             text("typealias"),
             join(
                 vec![self.format_name(lhs), self.format_type_annotation(rhs)],
-                text("="),
+                text(" = "),
             ),
         )
     }
@@ -687,7 +679,12 @@ impl<'a> Formatter<'a> {
                     self.format_pattern(pattern),
                     concat_space(
                         text("in"),
-                        concat_space(self.format_expr(iterable), self.format_block(body)),
+                        // A `for` body always formats multi-line; collapsing it to
+                        // `for x in xs { ... }` hurts readability of the loop.
+                        concat_space(
+                            self.format_expr(iterable),
+                            self.format_block_multiline(body),
+                        ),
                     ),
                 ),
             ),
@@ -898,7 +895,7 @@ impl<'a> Formatter<'a> {
             if let Some(meta) = meta
                 && let Some(comment) = self.take_inline_comment(meta)
             {
-                stmt_doc = concat(stmt_doc, concat(text(" "), text(comment.text)));
+                stmt_doc = concat(stmt_doc, concat(text(" "), Self::comment_doc(comment)));
             }
 
             final_doc = Self::append_doc_with_spacing(
@@ -1007,7 +1004,7 @@ impl<'a> Formatter<'a> {
             if let Some(meta) = meta
                 && let Some(comment) = self.take_inline_comment(meta)
             {
-                decl_doc = concat(decl_doc, concat(text(" "), text(comment.text)));
+                decl_doc = concat(decl_doc, concat(text(" "), Self::comment_doc(comment)));
             }
 
             final_doc = Self::append_doc_with_spacing(
@@ -1267,13 +1264,14 @@ impl<'a> Formatter<'a> {
             ImportPath::Package(p) => text(p),
         };
 
-        join(vec![text("import"), symbols, text("from"), path], text(" "))
+        join(vec![text("use"), symbols, text("from"), path], text(" "))
     }
 
     fn format_struct(
         &self,
         name: &Name,
         generics: &[GenericDecl],
+        attribute: Option<&'static str>,
         where_clause: Option<&WhereClause>,
         body: &Body,
     ) -> Doc {
@@ -1292,6 +1290,10 @@ impl<'a> Formatter<'a> {
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
             );
+        }
+
+        if let Some(attribute) = attribute {
+            result = concat_space(result, text(attribute));
         }
 
         if let Some(where_clause) = where_clause {
@@ -1420,6 +1422,16 @@ impl<'a> Formatter<'a> {
     fn format_type_annotation(&self, ty: &TypeAnnotation) -> Doc {
         match &ty.kind {
             TypeAnnotationKind::SelfType(..) => text("Self"),
+            TypeAnnotationKind::Borrow { mutable, inner } => {
+                if *mutable {
+                    concat(text("&mut "), self.format_type_annotation(inner))
+                } else {
+                    concat(text("&"), self.format_type_annotation(inner))
+                }
+            }
+            TypeAnnotationKind::Unique { inner } => {
+                concat(text("*"), self.format_type_annotation(inner))
+            }
             TypeAnnotationKind::Record { fields } => self.format_record_type_annotation(fields),
             TypeAnnotationKind::Any {
                 protocol,
@@ -1477,7 +1489,11 @@ impl<'a> Formatter<'a> {
             TypeAnnotationKind::Nominal { name, generics, .. }
                 if name.name_str() == "Optional" && generics.len() == 1 =>
             {
-                concat(self.format_type_annotation(&generics[0]), text("?"))
+                if matches!(generics[0].kind, TypeAnnotationKind::Borrow { .. }) {
+                    self.format_nominal_type_annotation(name.name_str(), generics)
+                } else {
+                    concat(self.format_type_annotation(&generics[0]), text("?"))
+                }
             }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 self.format_nominal_type_annotation(name.name_str(), generics)
@@ -1550,6 +1566,22 @@ impl<'a> Formatter<'a> {
                 concat(
                     text("<"),
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
+                ),
+            );
+        }
+
+        if !func.captures.is_empty() {
+            let capture_docs: Vec<_> = func
+                .captures
+                .iter()
+                .map(|capture| self.format_capture_spec(capture))
+                .collect();
+
+            result = concat_space(
+                result,
+                concat(
+                    text("["),
+                    concat(join(capture_docs, concat(text(","), text(" "))), text("]")),
                 ),
             );
         }
@@ -1687,6 +1719,15 @@ impl<'a> Formatter<'a> {
         result
     }
 
+    fn format_capture_spec(&self, capture: &CaptureSpec) -> Doc {
+        match capture.mode {
+            CaptureMode::Copy => self.format_name(&capture.name),
+            CaptureMode::Move => concat_space(text("consuming"), self.format_name(&capture.name)),
+            CaptureMode::BorrowShared => concat(text("&"), self.format_name(&capture.name)),
+            CaptureMode::BorrowMut => concat_space(text("&mut"), self.format_name(&capture.name)),
+        }
+    }
+
     fn format_let_decl(
         &self,
         pattern: &Pattern,
@@ -1726,10 +1767,39 @@ impl<'a> Formatter<'a> {
         result
     }
 
+    fn is_if_let_match(arms: &[MatchArm]) -> bool {
+        arms.len() == 2
+            && arms
+                .iter()
+                .all(|arm| arm.span == crate::span::Span::SYNTHESIZED)
+            && matches!(arms[1].pattern.kind, PatternKind::Wildcard)
+    }
+
+    fn format_if_let_match(&self, target: &Expr, arms: &[MatchArm]) -> Doc {
+        let condition = concat_space(
+            concat_space(text("let"), self.format_pattern(&arms[0].pattern)),
+            concat_space(text("="), self.format_expr(target)),
+        );
+        let mut result = concat_space(
+            text("if"),
+            concat_space(condition, self.format_block_multiline(&arms[0].body)),
+        );
+
+        if !arms[1].body.body.is_empty() || arms[1].body.span != crate::span::Span::SYNTHESIZED {
+            result = concat_space(
+                result,
+                concat_space(text("else"), self.format_block_multiline(&arms[1].body)),
+            );
+        }
+
+        result
+    }
+
     fn format_enum_decl(
         &self,
         name: &Name,
         generics: &[GenericDecl],
+        attribute: Option<&'static str>,
         where_clause: Option<&WhereClause>,
         body: &Body,
     ) -> Doc {
@@ -1748,6 +1818,10 @@ impl<'a> Formatter<'a> {
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
             );
+        }
+
+        if let Some(attribute) = attribute {
+            result = concat_space(result, text(attribute));
         }
 
         if let Some(where_clause) = where_clause {
@@ -1919,11 +1993,19 @@ impl<'a> Formatter<'a> {
         ))
     }
 
-    fn format_method(&self, func: &Func, is_static: bool) -> Doc {
+    fn format_method(&self, func: &Func, is_static: bool, receiver_mode: ReceiverMode) -> Doc {
         if is_static {
             concat_space(text("static"), self.format_func(func))
         } else {
-            self.format_func(func)
+            self.receiver_mode_prefix(receiver_mode, self.format_func(func))
+        }
+    }
+
+    fn receiver_mode_prefix(&self, receiver_mode: ReceiverMode, doc: Doc) -> Doc {
+        match receiver_mode {
+            ReceiverMode::None => doc,
+            ReceiverMode::Ref => concat_space(text("mut"), doc),
+            ReceiverMode::Consuming => concat_space(text("consuming"), doc),
         }
     }
 
@@ -1981,6 +2063,10 @@ impl<'a> Formatter<'a> {
         }
 
         result
+    }
+
+    fn format_method_signature(&self, sig: &FuncSignature, receiver_mode: ReceiverMode) -> Doc {
+        self.receiver_mode_prefix(receiver_mode, self.format_func_signature(sig))
     }
 
     fn format_where_clause(&self, where_clause: &WhereClause) -> Doc {
@@ -2050,20 +2136,35 @@ impl<'a> Formatter<'a> {
         text(name.name_str())
     }
 
+    fn expr_contains_control_flow(expr: &Expr) -> bool {
+        matches!(
+            &expr.kind,
+            ExprKind::Func { .. } | ExprKind::If(..) | ExprKind::Match(..)
+        )
+    }
+
+    fn stmt_contains_control_flow(stmt: &Stmt) -> bool {
+        match &stmt.kind {
+            StmtKind::Expr(expr) => Self::expr_contains_control_flow(expr),
+            StmtKind::If(..) | StmtKind::Loop(..) | StmtKind::Continue(..) | StmtKind::Break => {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn decl_contains_control_flow(decl: &Decl) -> bool {
+        matches!(
+            &decl.kind,
+            DeclKind::Func(_) | DeclKind::Init { .. } | DeclKind::Method { .. }
+        )
+    }
+
     fn contains_control_flow(node: &Node) -> bool {
         match node {
-            Node::Decl(decl) => matches!(
-                &decl.kind,
-                DeclKind::Func(_) | DeclKind::Init { .. } | DeclKind::Method { .. }
-            ),
-            Node::Expr(expr) => matches!(
-                &expr.kind,
-                ExprKind::Func { .. } | ExprKind::If(..) | ExprKind::Match(..)
-            ),
-            Node::Stmt(stmt) => matches!(
-                &stmt.kind,
-                StmtKind::If(..) | StmtKind::Loop(..) | StmtKind::Continue(..) | StmtKind::Break
-            ),
+            Node::Decl(decl) => Self::decl_contains_control_flow(decl),
+            Node::Expr(expr) => Self::expr_contains_control_flow(expr),
+            Node::Stmt(stmt) => Self::stmt_contains_control_flow(stmt),
             Node::Block(block) => block.body.iter().any(Self::contains_control_flow),
             _ => false,
         }
@@ -2088,6 +2189,14 @@ impl<'a> Formatter<'a> {
                     }
                     output.push_str(&s);
                     column += s.len();
+                }
+                Doc::Comment(s) => {
+                    if was_newline {
+                        output.push_str(&"\t".repeat(indent as usize));
+                        column += indent as usize;
+                        was_newline = false;
+                    }
+                    Self::render_comment(&mut output, &s, width, indent as usize, &mut column);
                 }
                 Doc::Line | Doc::Softline | Doc::Hardline => {
                     output.push('\n');
@@ -2115,9 +2224,73 @@ impl<'a> Formatter<'a> {
         output
     }
 
+    fn render_comment(
+        output: &mut String,
+        comment: &str,
+        width: usize,
+        indent: usize,
+        column: &mut usize,
+    ) {
+        let (prefix, body) = Self::line_comment_parts(comment);
+        if body.is_empty() {
+            output.push_str(comment);
+            *column += comment.len();
+            return;
+        }
+
+        let words: Vec<&str> = body.split_whitespace().collect();
+        if words.is_empty() {
+            output.push_str(&prefix);
+            *column += prefix.len();
+            return;
+        }
+
+        let mut line_body = String::new();
+        let mut current_column = *column;
+
+        for word in words {
+            let separator_width = usize::from(!line_body.is_empty());
+            let projected_width =
+                current_column + prefix.len() + line_body.len() + separator_width + word.len();
+            if !line_body.is_empty() && projected_width > width {
+                output.push_str(&prefix);
+                output.push_str(&line_body);
+                output.push('\n');
+                output.push_str(&"\t".repeat(indent));
+                current_column = indent;
+                line_body.clear();
+            }
+
+            if !line_body.is_empty() {
+                line_body.push(' ');
+            }
+            line_body.push_str(word);
+        }
+
+        output.push_str(&prefix);
+        output.push_str(&line_body);
+        *column = current_column + prefix.len() + line_body.len();
+    }
+
+    fn line_comment_parts(comment: &str) -> (String, &str) {
+        let Some(after_slashes) = comment.strip_prefix("//") else {
+            return (String::new(), comment);
+        };
+
+        let slash_count = 2 + after_slashes.chars().take_while(|ch| *ch == '/').count();
+        let rest = &comment[slash_count..];
+        let body = rest.trim_start();
+        if body.is_empty() {
+            (comment.to_string(), body)
+        } else {
+            let body_offset = comment.len() - body.len();
+            (comment[..body_offset].to_string(), body)
+        }
+    }
+
     fn flatten(doc: Doc) -> Doc {
         match doc {
-            Doc::Empty | Doc::Text(_) => doc,
+            Doc::Empty | Doc::Text(_) | Doc::Comment(_) => doc,
             Doc::Hardline => Doc::Hardline,
             Doc::Softline => Doc::Empty,
             Doc::Annotation(_) => doc,
@@ -2141,7 +2314,7 @@ impl<'a> Formatter<'a> {
             match current_doc {
                 Doc::Empty => continue,
                 Doc::Annotation(_) => continue,
-                Doc::Text(s) => width += s.len(),
+                Doc::Text(s) | Doc::Comment(s) => width += s.len(),
                 Doc::Line => width += 1,
                 Doc::Softline => continue,
                 Doc::Hardline => return None,
@@ -2161,12 +2334,14 @@ impl<'a> Formatter<'a> {
         let mut width = remaining_width;
         let mut queue = vec![doc];
 
-        while width >= 0 && !queue.is_empty() {
-            #[allow(clippy::unwrap_used)]
-            match queue.pop().unwrap() {
+        while width >= 0 {
+            let Some(doc) = queue.pop() else {
+                break;
+            };
+            match doc {
                 Doc::Empty => continue,
                 Doc::Annotation(_) => continue,
-                Doc::Text(s) => width -= s.len() as isize,
+                Doc::Text(s) | Doc::Comment(s) => width -= s.len() as isize,
                 Doc::Line | Doc::Softline | Doc::Hardline => return true,
                 Doc::Concat(left, right) => {
                     queue.push(right);
@@ -2220,7 +2395,6 @@ fn format_with_comments<Phase: ASTPhase>(
     formatter.format(&ast.roots, width)
 }
 
-#[allow(clippy::unwrap_used)]
 pub fn format_string(string: &str) -> String {
     let lexer = Lexer::preserving_comments(string);
     match Parser::new("", FileID(0), lexer).parse_with_comments() {
@@ -2236,7 +2410,21 @@ pub fn format_string(string: &str) -> String {
     }
 }
 
-#[allow(clippy::unwrap_used)]
+pub fn format_string_with_width(string: &str, width: usize) -> String {
+    let lexer = Lexer::preserving_comments(string);
+    match Parser::new("", FileID(0), lexer).parse_with_comments() {
+        Ok((ast, _diagnostics, comments)) => {
+            let formatted = if ast.roots.is_empty() {
+                string.to_string()
+            } else {
+                format_with_comments(&ast, width, comments_from_tokens(comments, string))
+            };
+            adjust_trailing_newlines(string, formatted)
+        }
+        Err(_err) => string.to_string(),
+    }
+}
+
 pub fn format_node(node: &Node, meta: &NodeMetaStorage) -> String {
     let formatter = Formatter::new(meta);
     formatter.format(std::slice::from_ref(node), 80)
@@ -2361,6 +2549,14 @@ mod formatter_tests {
     }
 
     #[test]
+    fn test_capture_spec_formatting() {
+        assert_eq!(
+            format_code("let f = func [copy a, consuming b, &c, &mut d]() {}", 80),
+            "let f = func [a, consuming b, &c, &mut d]() {}"
+        );
+    }
+
+    #[test]
     fn test_function_bodies() {
         assert_eq!(format_code("func foo() { 123 }", 80), "func foo() { 123 }");
 
@@ -2438,6 +2634,21 @@ mod formatter_tests {
         assert_eq!(
             format_code("if true { 123 } else { 456 }", 80),
             "if true { 123 } else {\n\t456\n}"
+        );
+        assert_eq!(
+            format_code("if let .some(cwd) = optionalthing { cwd }", 80),
+            "if let .some(cwd) = optionalthing {\n\tcwd\n}"
+        );
+        assert_eq!(
+            format_code(
+                "if let .some(cwd) = optionalthing { cwd } else { \"\" }",
+                80
+            ),
+            "if let .some(cwd) = optionalthing {\n\tcwd\n} else {\n\t\"\"\n}"
+        );
+        assert_eq!(
+            format_code("if let .pattern(x) = foo { } else { }", 80),
+            "if let .pattern(x) = foo {\n} else {\n}"
         );
 
         // Nested
@@ -2642,6 +2853,15 @@ mod formatter_tests {
     }
 
     #[test]
+    fn test_for_loop_is_always_multiline() {
+        // A `for` body never collapses to one line, even when it would fit.
+        assert_eq!(
+            format_code("for x in xs { print(x) }", 80),
+            "for x in xs {\n\tprint(x)\n}"
+        );
+    }
+
+    #[test]
     fn test_block_args_formatting() {
         assert_eq!(
             format_code("@handle 'fizz { x in x }", 80),
@@ -2654,6 +2874,10 @@ mod formatter_tests {
 
         let input = "@handle 'fizz { x in\nx\nx\n}";
         let expected = "@handle 'fizz { x in\n\tx\n\tx\n}";
+        assert_eq!(format_code(input, 80), expected);
+
+        let input = "@handle 'os { request in match request { .cwd -> \"\", .args -> [] } }";
+        let expected = "@handle 'os { request in\n\tmatch request {\n\t\t.cwd -> \"\",\n\t\t.args -> []\n\t}\n}";
         assert_eq!(format_code(input, 80), expected);
     }
 
@@ -2688,6 +2912,27 @@ mod formatter_tests {
     }
 
     #[test]
+    fn test_wraps_long_standalone_line_comments() {
+        let input = "// alpha beta gamma delta\nlet x = 1";
+        let expected = "// alpha beta\n// gamma delta\nlet x = 1";
+        assert_eq!(format_string_with_width(input, 18), expected);
+    }
+
+    #[test]
+    fn test_wraps_long_inline_line_comments() {
+        let input = "let x = 1 // alpha beta gamma";
+        let expected = "let x = 1 // alpha\n// beta gamma";
+        assert_eq!(format_string_with_width(input, 20), expected);
+    }
+
+    #[test]
+    fn test_wraps_long_line_comments_in_block() {
+        let input = "func foo() {\n// alpha beta gamma delta\n}";
+        let expected = "func foo() {\n\t// alpha beta\n\t// gamma delta\n}";
+        assert_eq!(format_string_with_width(input, 18), expected);
+    }
+
+    #[test]
     fn test_string_literal_formatting() {
         assert_eq!(format_code(r#""hello""#, 80), r#""hello""#);
         // \n escape preserved
@@ -2718,6 +2963,47 @@ mod formatter_tests {
         // Trailing block with args - space before {
         assert_eq!(format_code("foo(1){ 2 }", 80), "foo(1) { 2 }");
         assert_eq!(format_code("foo(1) { 2 }", 80), "foo(1) { 2 }");
+    }
+
+    #[test]
+    fn typealias_round_trips_with_spaced_equals() {
+        assert_eq!(
+            format_code("typealias Target = Response", 80),
+            "typealias Target = Response"
+        );
+    }
+
+    #[test]
+    fn long_labeled_call_round_trips() {
+        // Wrapping a long labeled call must produce output the parser can
+        // read back (one argument per line).
+        let source = "let node = RouteNode(path: some_longer_name, handler: another_long_name, next: a_third_long_name)";
+        let formatted = format_code(source, 60);
+        assert!(
+            formatted.contains("(\n"),
+            "expected the call to wrap: {formatted}"
+        );
+        assert_eq!(
+            format_code(&formatted, 60),
+            formatted,
+            "the wrapped form must re-parse and be stable"
+        );
+    }
+
+    #[test]
+    fn linear_struct_round_trips() {
+        assert_eq!(
+            format_code("struct FileHandle 'linear {\n\tlet fd: Int\n}", 80),
+            "struct FileHandle 'linear {\n\tlet fd: Int\n}"
+        );
+        assert_eq!(
+            format_code("public struct Token 'linear {\n\tlet id: Int\n}", 80),
+            "public struct Token 'linear {\n\tlet id: Int\n}"
+        );
+        assert_eq!(
+            format_code("struct Node<T> 'heap {\n\tlet value: T\n}", 80),
+            "struct Node<T> 'heap {\n\tlet value: T\n}"
+        );
     }
 
     #[test]

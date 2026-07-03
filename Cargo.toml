@@ -1,11 +1,11 @@
 [workspace]
-members = [".", "wasm", "www"]
+members = [".", "wasm", "www", "talk-runtime", "talk-static"]
 default-members = ["."]
 resolver = "2"
 
 [package]
 name = "talk"
-version = "0.1.10"
+version = "0.1.20"
 edition = "2024"
 
 [dev-dependencies]
@@ -44,6 +44,7 @@ derive-visitor = "0.4.0"
 petgraph = "0.8.2"
 sha2 = "0.10.9"
 ignore = { version = "0.4", optional = true }
+talk-runtime = { path = "talk-runtime" }
 
 # POSIX io (StdioIO's file and socket operations); wasm builds use the
 # non-unix stubs in src/vm/io.rs instead.

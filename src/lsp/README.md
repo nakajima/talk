@@ -21,7 +21,10 @@ compiler runs (see `src/compiling`), packaged for editors by
 - `hover.rs` — type-at-cursor: find the smallest node at the offset,
   prefer a named binder's full signature (schemes), fall back to the
   node's inferred type.
-- `completion.rs` — scope-based completions from the resolved names.
+- `completion.rs` — scope-based completions from resolved names, and dot member completions from the checker's type output/catalog.
+- `ownership.rs` — editor-facing ownership facts (move/borrow/drop)
+  from the post-type-check ownership pass, rendered as hover detail
+  lines and inlay hints, with no protocol types.
 
 `src/lsp` then translates: `server.rs` wires protocol requests to
 those functions, manages document lifecycles and a debounce for
@@ -31,12 +34,15 @@ is byte offsets) and incremental text edits.
 
 ## What the server provides
 
-- **Diagnostics** — parser, name-resolution, and type errors, on open
+- **Diagnostics** — parser, name-resolution, type, and ownership errors, on open
   and (debounced) on change. Whatever message the compiler produces
   is what the editor shows, so improvements to checker errors are
   improvements here for free.
 - **Hover** — signatures for bindings (`<T0, T1>(T0) -> T1 where
   T0.go: () -> T1`), inferred types for expressions.
+- **Inlay hints** (`ownership_inlay_hints_lsp` in `server.rs`) —
+  move/borrow/drop annotations from the ownership pass, rendered
+  inline (see `src/analysis/ownership.rs`).
 - **Go to definition** (`goto_definition.rs`) — symbol under cursor →
   its declaration site, including through imports, variants in
   patterns, and members.

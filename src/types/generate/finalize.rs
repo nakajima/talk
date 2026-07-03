@@ -107,6 +107,11 @@ impl<'a> TypecheckSession<'a> {
             );
         }
 
+        let mut local_tys = FxHashMap::default();
+        for (symbol, ty) in std::mem::take(&mut self.mono) {
+            local_tys.insert(symbol, self.final_ty(&ty));
+        }
+
         let diagnostics = self.diagnostics.into_diagnostics();
 
         (
@@ -116,6 +121,8 @@ impl<'a> TypecheckSession<'a> {
                 schemes,
                 instantiations,
                 member_resolutions: self.artifacts.member_resolutions,
+                coerce_clones: self.artifacts.coerce_clones,
+                local_tys,
                 existential_packs,
                 performs_into: self.artifacts.performs_into,
                 binder_refs: self.artifacts.binder_refs,
@@ -129,7 +136,9 @@ impl<'a> TypecheckSession<'a> {
 }
 
 fn final_ty(store: &mut VarStore, catalog: &TypeCatalog, ty: &Ty) -> Ty {
-    let zonked = store.zonk_ty(ty);
+    // All solving is done: a borrow permission nothing forced exclusive
+    // defaults to `Shared` here (binding in the store, so sharers agree).
+    let zonked = store.default_unsolved_perms(ty);
     normalize_deep(store, catalog, zonked)
 }
 

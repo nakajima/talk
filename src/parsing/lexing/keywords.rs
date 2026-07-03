@@ -22,7 +22,9 @@ pub(super) fn handle(string: &str) -> TokenKind {
         "init" => Init,
         "protocol" => Protocol,
         "import" => Import,
+        "use" => Use,
         "public" => Public,
+        "linear" => Linear,
         "static" => Static,
         "associated" => Associated,
         "typealias" => Typealias,
@@ -31,6 +33,7 @@ pub(super) fn handle(string: &str) -> TokenKind {
         "in" => In,
         "continue" => Continue,
         "mut" => Mut,
+        "consuming" => Consuming,
         "for" => For,
         _ => Identifier,
     }

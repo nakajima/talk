@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "talk"
-version = "0.1.10"
+version = "0.1.20"
 dependencies = [
  "anyhow",
  "async-lsp",
@@ -1905,11 +1905,27 @@ dependencies = [
  "rustyline",
  "serde",
  "sha2",
+ "talk-runtime",
  "tokio",
  "tower",
  "tracing",
  "tracing-subscriber",
  "tracing-tree",
+]
+
+[[package]]
+name = "talk-runtime"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rustc-hash",
+]
+
+[[package]]
+name = "talk-static"
+version = "0.1.0"
+dependencies = [
+ "talk-runtime",
 ]
 
 [[package]]

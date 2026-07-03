@@ -2,8 +2,8 @@ use std::error::Error;
 use std::fmt;
 
 use crate::{
-    name_resolution::name_resolver::NameResolverError, node_id::NodeID, parser_error::ParserError,
-    types::TypeError,
+    flow::OwnershipError, name_resolution::name_resolver::NameResolverError, node_id::NodeID,
+    parser_error::ParserError, types::TypeError,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -24,6 +24,7 @@ pub enum AnyDiagnostic {
     Parsing(Diagnostic<ParserError>),
     NameResolution(Diagnostic<NameResolverError>),
     Types(Diagnostic<TypeError>),
+    Ownership(Diagnostic<OwnershipError>),
 }
 
 impl From<Diagnostic<ParserError>> for AnyDiagnostic {
@@ -44,12 +45,19 @@ impl From<Diagnostic<TypeError>> for AnyDiagnostic {
     }
 }
 
+impl From<Diagnostic<OwnershipError>> for AnyDiagnostic {
+    fn from(value: Diagnostic<OwnershipError>) -> Self {
+        Self::Ownership(value)
+    }
+}
+
 impl fmt::Display for AnyDiagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AnyDiagnostic::Parsing(d) => write!(f, "{}", d.kind),
             AnyDiagnostic::NameResolution(d) => write!(f, "{}", d.kind),
             AnyDiagnostic::Types(d) => write!(f, "{}", d.kind),
+            AnyDiagnostic::Ownership(d) => write!(f, "{}", d.kind),
         }
     }
 }

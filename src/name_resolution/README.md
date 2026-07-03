@@ -48,10 +48,10 @@ constructs no longer exist.
 
 **Pass 1 — declare** (`decl_declarer.rs`). Before resolving anything,
 declarations are entered into scopes in rounds: first the nominal
-types (structs, enums, protocols), then effects, then top-level
-values, then imports, then a full walk declaring everything else
-(fields, methods, parameters, pattern bindings). The rounds are what
-make top-level forward references work: by the time any *use* is
+types (structs, enums, protocols), then top-level values, then
+effects, then type aliases, then imports, then a full walk declaring
+everything else (fields, methods, parameters, pattern bindings). The
+rounds are what make top-level forward references work: by the time any *use* is
 looked at, every top-level name in the file (and everything imported)
 is already declared. Inside a function body, locals are declared as
 the walk reaches them, so a local must be bound before it's used.

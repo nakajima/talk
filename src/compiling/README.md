@@ -19,7 +19,8 @@ Driver<Initial>
 ```
 
 Each state carries that stage's outputs (ASTs, then resolved names,
-then `TypeOutput`, then the λ_G `Program`), so a consumer like the
+then `TypeOutput` plus the ownership/borrow-check results, then the
+λ_G `Program`), so a consumer like the
 LSP can stop at `Typed` and never pay for lowering, while `talk run`
 goes all the way and hands the program to the VM (or the reference
 evaluator — both engines run the same lowered program).
@@ -51,10 +52,11 @@ id spaces touch.
 
 ## The core library (`core.rs`)
 
-The standard library is ordinary Talk source — `Optional`,
-`Operators`, `Convert`, `String`, `Memory`, `Array`, `Iterable`,
-`Async`, `IO`, `Net`, `File`, `Showable`, `Http` — embedded into the
-binary at build time from `core/*.tlk` and compiled once, lazily, the
+The standard library is ordinary Talk source — `Ownership`,
+`Optional`, `Operators`, `Convert`, `String`, `Memory`, `Array`,
+`Iterable`, `Async`, `IO`, `Net`, `File`, `Showable`, `Http` —
+embedded into the binary at build time from `core/*.tlk` and compiled
+once, lazily, the
 first time a driver needs it. Every program implicitly imports it
 (that's where `print`, `Optional`, operators, and the io surface come
 from) unless the source starts with the `// no-core` marker, which the
