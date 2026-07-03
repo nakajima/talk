@@ -85,7 +85,6 @@ pub enum ExprKind {
         fields: Vec<RecordField>,
         spread: Option<Box<Expr>>,
     }, // List of RecordField expressions
-
 }
 
 impl ExprKind {

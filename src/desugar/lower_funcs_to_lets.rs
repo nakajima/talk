@@ -108,8 +108,8 @@ impl LowerFuncsToLets {
 pub mod tests {
     use crate::{
         any_block, any_body, any_decl, any_expr, assert_eq_diff,
-        name::Name,
         desugar::lower_funcs_to_lets::LowerFuncsToLets,
+        name::Name,
         node_id::{FileID, NodeID},
         node_kinds::{
             decl::{DeclKind, ReceiverMode},
@@ -169,7 +169,9 @@ pub mod tests {
 
         assert_eq_diff!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false, heap: false,
+            any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],

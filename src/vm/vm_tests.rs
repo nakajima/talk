@@ -99,7 +99,10 @@ pub mod tests {
         // `as` erases at HIR build: the inner expression grafts under the
         // As node's annotations (ascribed type; existential pack when the
         // ascription packs).
-        assert_eq!(run_on_both_engines("let n = (1 as Int)\nn + 2"), Value::I64(3));
+        assert_eq!(
+            run_on_both_engines("let n = (1 as Int)\nn + 2"),
+            Value::I64(3)
+        );
         assert_eq!(
             run_on_both_engines(
                 "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nlet x = (41 as any Number)\nx.value()"
@@ -361,7 +364,8 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_string_concat() {
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak("print(\"hi \" + \"there\")");
+        let (_, out) =
+            run_on_both_engines_io_expecting_container_element_leak("print(\"hi \" + \"there\")");
         assert_eq!(out, "hi there\n");
     }
 
@@ -492,8 +496,9 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_float_array_round_trip() {
-        let (_, out) =
-            run_on_both_engines_io_expecting_container_element_leak("let a = [1.5, 2.5]\nprint(a.get(0))\nprint(a.get(1))");
+        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+            "let a = [1.5, 2.5]\nprint(a.get(0))\nprint(a.get(1))",
+        );
         assert_eq!(out, "1.5\n2.5\n");
     }
 
@@ -511,7 +516,8 @@ pub mod tests {
     fn vm_matches_evaluator_on_conditional_conformance_array_show() {
         // extend Array<Element: Showable>: Showable — the witness demands
         // at Element := Int (context discharged by monomorphization).
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak("let a = [1, 2, 3]\nprint(a)");
+        let (_, out) =
+            run_on_both_engines_io_expecting_container_element_leak("let a = [1, 2, 3]\nprint(a)");
         assert_eq!(out, "[1, 2, 3]\n");
     }
 
@@ -870,6 +876,17 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_resuming_handler_preserves_enclosing_locals() {
+        // The handler's `continue` must drop only handler-scope bindings:
+        // `s` belongs to `f`, stays live across the resume, and is dropped
+        // exactly once at f's exit.
+        let (_, out) = run_on_both_engines_io(
+            "effect 'ask(prompt) -> Int\nfunc f() -> Int {\n\tlet s = \"hello\" + \" world\"\n\t@handle 'ask { p in\n\t\tcontinue 41\n\t}\n\tlet answer = 'ask(\"q\")\n\tanswer + s.length\n}\nprint(f())",
+        );
+        assert_eq!(out, "52\n");
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_repeated_performs_through_one_handler() {
         // Deep-handler semantics: the handler stays installed; every
         // perform runs it afresh (three resumes through a loop).
@@ -939,7 +956,9 @@ pub mod tests {
     fn vm_matches_evaluator_on_empty_poll() {
         // Zero descriptors: poll reports zero ready (the marshaling
         // boundary, without hand-building pollfd records in Talk).
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak("let fds = _alloc<Byte>(8)\n_io_poll(fds, 0, 0)");
+        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
+            "let fds = _alloc<Byte>(8)\n_io_poll(fds, 0, 0)",
+        );
         assert_eq!(value, Value::I64(0));
     }
 
@@ -967,6 +986,17 @@ pub mod tests {
         assert_eq!(value, Value::I64(123));
         let (value, _) = run_on_both_engines_io("let r = { fizz: 123, buzz: 1.23 }\nr.buzz");
         assert_eq!(value, Value::F64(1.23));
+    }
+
+    #[test]
+    fn record_literal_fields_evaluate_in_source_order() {
+        // Labels are given out of row (label-sorted) order: the effectful
+        // field values must still run in source order.
+        let (value, out) = run_on_both_engines_io(
+            "func first() -> Int {\n\tprint(\"first\")\n\t1\n}\nfunc second() -> Int {\n\tprint(\"second\")\n\t2\n}\nlet r = { b: first(), a: second() }\nprint(r.b)\nr.a",
+        );
+        assert_eq!(out, "first\nsecond\n1\n");
+        assert_eq!(value, Value::I64(2));
     }
 
     #[test]
@@ -1104,20 +1134,31 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_string_operations() {
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak("\"hello\" == \"hello\"");
+        let (value, _) =
+            run_on_both_engines_io_expecting_container_element_leak("\"hello\" == \"hello\"");
         assert_eq!(value, Value::Bool(true));
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak("\"hello\" == \"world\"");
+        let (value, _) =
+            run_on_both_engines_io_expecting_container_element_leak("\"hello\" == \"world\"");
         assert_eq!(value, Value::Bool(false));
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak("print(\"hello\".slice(1, 3).to_string())");
+        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+            "print(\"hello\".slice(1, 3).to_string())",
+        );
         assert_eq!(out, "ell\n");
-        let (_, out) =
-            run_on_both_engines_io_expecting_container_element_leak("print(\"hello\".as_substring().slice(1, 3).to_string())");
+        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+            "print(\"hello\".as_substring().slice(1, 3).to_string())",
+        );
         assert_eq!(out, "ell\n");
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak("\"hello world\".find(\"world\")");
+        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
+            "\"hello world\".find(\"world\")",
+        );
         assert_eq!(value, Value::I64(6));
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak("\"hello world\".find(\"missing\")");
+        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
+            "\"hello world\".find(\"missing\")",
+        );
         assert_eq!(value, Value::I64(0 - 1));
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak("\"banana\".find_from(\"na\", 3)");
+        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
+            "\"banana\".find_from(\"na\", 3)",
+        );
         assert_eq!(value, Value::I64(4));
     }
 
@@ -1264,11 +1305,13 @@ pub mod tests {
     fn vm_matches_evaluator_on_negative_io_counts_pass_through() {
         // A failed read's errno fed straight into the next write (the
         // chat client's loop) must come back untouched, not trap.
-        let (value, _) =
-            run_on_both_engines_io_expecting_container_element_leak("let buf = _alloc<Byte>(16)\n_io_write(STDOUT_FD, buf, 0 - 91)");
+        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
+            "let buf = _alloc<Byte>(16)\n_io_write(STDOUT_FD, buf, 0 - 91)",
+        );
         assert_eq!(value, Value::I64(-91));
-        let (value, _) =
-            run_on_both_engines_io_expecting_container_element_leak("let buf = _alloc<Byte>(16)\n_io_read(STDIN_FD, buf, 0 - 91)");
+        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
+            "let buf = _alloc<Byte>(16)\n_io_read(STDIN_FD, buf, 0 - 91)",
+        );
         assert_eq!(value, Value::I64(-91));
     }
 

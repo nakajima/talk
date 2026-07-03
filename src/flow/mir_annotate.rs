@@ -98,8 +98,7 @@ fn annotate(body: &mut mir::Body, results: &FlowResults, elaborate_candidates: b
                     ..
                 } = &statement.kind
             {
-                statement.ownership.drop =
-                    candidate_elaboration(results, *reason, *source, target);
+                statement.ownership.drop = candidate_elaboration(results, *reason, *source, target);
             }
         }
         drive_terminator(&mut block.terminator, &mut annotator);
@@ -370,7 +369,9 @@ mod tests {
         let mut bodies = vec![];
         for file in typed.phase.hir.values() {
             for node in &file.roots {
-                let hir::Node::Decl(decl) = node else { continue };
+                let hir::Node::Decl(decl) = node else {
+                    continue;
+                };
                 let hir::DeclKind::Let { rhs: Some(rhs), .. } = &decl.kind else {
                     continue;
                 };
@@ -448,7 +449,9 @@ mod tests {
         let mut elaborated = 0;
         for file in typed.phase.hir.values() {
             for node in &file.roots {
-                let hir::Node::Decl(decl) = node else { continue };
+                let hir::Node::Decl(decl) = node else {
+                    continue;
+                };
                 let hir::DeclKind::Let { rhs: Some(rhs), .. } = &decl.kind else {
                     continue;
                 };

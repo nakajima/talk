@@ -485,7 +485,10 @@ impl Module {
                 dest,
                 args_start,
                 args_len,
-            } => format!("object_new r{dest} <- {}", self.render_args(*args_start, *args_len)),
+            } => format!(
+                "object_new r{dest} <- {}",
+                self.render_args(*args_start, *args_len)
+            ),
             Insn::SetFinalizer { obj, closure } => format!("set_finalizer r{obj} <- r{closure}"),
             Insn::ObjectGet { dest, obj, index } => {
                 format!("object_get r{dest} <- r{obj}[{index}]")

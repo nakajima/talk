@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::{
-    name_resolution::name_resolver::NameResolverError, node_id::NodeID, flow::OwnershipError,
+    flow::OwnershipError, name_resolution::name_resolver::NameResolverError, node_id::NodeID,
     parser_error::ParserError, types::TypeError,
 };
 

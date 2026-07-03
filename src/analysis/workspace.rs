@@ -38,13 +38,14 @@ impl Workspace {
             docs = Self::core_documents_with_overrides(&docs);
         }
 
-        let file_id_to_document: Vec<DocumentId> = docs.iter().map(|doc| doc.id.clone()).collect();
+        let mut file_id_to_document: Vec<DocumentId> =
+            docs.iter().map(|doc| doc.id.clone()).collect();
         let file_count = file_id_to_document.len();
         if file_count == 0 {
             return None;
         }
 
-        let document_to_file_id: FxHashMap<DocumentId, FileID> = file_id_to_document
+        let mut document_to_file_id: FxHashMap<DocumentId, FileID> = file_id_to_document
             .iter()
             .enumerate()
             .map(|(i, id)| (id.clone(), FileID(i as u32)))
@@ -55,7 +56,7 @@ impl Workspace {
             .map(|doc| (doc.id.clone(), doc.version))
             .collect();
 
-        let texts: Vec<String> = docs.iter().map(|doc| doc.text.clone()).collect();
+        let mut texts: Vec<String> = docs.iter().map(|doc| doc.text.clone()).collect();
 
         let sources: Vec<Source> = docs
             .iter()
@@ -84,6 +85,23 @@ impl Workspace {
         // imports, identifier spans the HIR strips). Capture it here, before
         // `type_check` consumes the AST into the compile pipeline's HIR.
         let asts_by_source = resolved.phase.asts.clone();
+        // Files discovered through imports get FileIDs past the input docs
+        // (Driver::parse appends them). Extend the file-id-indexed tables so
+        // their ASTs and diagnostics map to documents instead of being
+        // silently dropped.
+        let mut discovered: Vec<(FileID, &Source)> = asts_by_source
+            .iter()
+            .map(|(source, ast)| (ast.file_id, source))
+            .filter(|(file_id, _)| (file_id.0 as usize) >= file_id_to_document.len())
+            .collect();
+        discovered.sort_by_key(|(file_id, _)| file_id.0);
+        for (file_id, source) in discovered {
+            debug_assert_eq!(file_id.0 as usize, file_id_to_document.len());
+            let doc_id = source.path().into_owned();
+            document_to_file_id.insert(doc_id.clone(), file_id);
+            file_id_to_document.push(doc_id);
+            texts.push(source.read().unwrap_or_default());
+        }
         let typed = resolved.type_check();
         let Driver { phase, .. } = typed;
         let resolved_names = phase.resolved_names;
@@ -487,6 +505,42 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.message.contains("Use of moved value")),
             "expected ownership diagnostic, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn import_discovered_files_report_diagnostics() {
+        // A file pulled in by `use ... from` gets a FileID past the input
+        // docs; its diagnostics must still reach the workspace instead of
+        // being silently dropped (`talk check` exit code depends on this).
+        let dir = std::env::temp_dir().join("talk-import-diagnostics");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let lib_path = dir.join("lib.tlk");
+        let main_path = dir.join("main.tlk");
+        std::fs::write(&lib_path, "public let broken: Int = \"not an int\"\n").expect("lib");
+        let main_text = "use { broken } from ./lib.tlk\nprint(broken)\n";
+        std::fs::write(&main_path, main_text).expect("main");
+
+        let main_id = main_path.to_string_lossy().into_owned();
+        let docs = vec![DocumentInput {
+            id: main_id.clone(),
+            path: main_id.clone(),
+            version: 0,
+            text: main_text.to_string(),
+        }];
+        let workspace = Workspace::new(docs).expect("workspace");
+        let lib_diagnostics: Vec<_> = workspace
+            .diagnostics
+            .iter()
+            .filter(|(doc, _)| doc.contains("lib.tlk"))
+            .flat_map(|(_, diagnostics)| diagnostics.iter())
+            .collect();
+        assert!(
+            lib_diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("mismatch")),
+            "expected the imported file's type error to surface, got {:?}",
+            workspace.diagnostics
         );
     }
 

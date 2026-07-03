@@ -241,7 +241,9 @@ pub mod tests {
     #[test]
     fn for_loop_continues_to_following_expression() {
         assert_eq!(
-            run_expecting_container_element_leak("func f() -> Int {\n\tfor x in [1] { }\n\t2\n}\nf()"),
+            run_expecting_container_element_leak(
+                "func f() -> Int {\n\tfor x in [1] { }\n\t2\n}\nf()"
+            ),
             EvalValue::I64(2)
         );
     }
@@ -323,6 +325,72 @@ pub mod tests {
             "func main() {\n\tlet directory = fs::Directory(path: Path([\".\"]))\n\tprint(directory)\n\tfor entry in directory.entries() {\n\t\tprint(entry)\n\t}\n}",
         );
         assert!(ir.contains("show_DirectoryEntry"), "{ir}");
+    }
+
+    #[test]
+    fn continue_value_in_a_trailing_block_is_diagnosed() {
+        // The checker deliberately lets a trailing block keep the handler
+        // context, but lowering has no resume continuation across the
+        // closure boundary: that must be a diagnostic, not a silent
+        // evaluate-and-discard of the resumed value.
+        let code = "effect 'ask(prompt) -> Int\nfunc twice(fn: () -> Int) -> Int {\n\tfn() + fn()\n}\n@handle 'ask { p in\n\ttwice {\n\t\tcontinue 42\n\t}\n}\nlet r = 'ask(\"meaning?\")\nr + 1";
+        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("LowerTest"));
+        let typed = driver
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
+        let lowered = typed.lower();
+        assert!(
+            lowered
+                .phase
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("continue with a value outside an effect handler")),
+            "expected the trailing-block continue to be diagnosed, got {:?}",
+            lowered.phase.diagnostics
+        );
+    }
+
+    #[test]
+    fn break_crossing_a_closure_boundary_is_diagnosed() {
+        // A break inside a trailing block crosses a closure boundary: it
+        // must be diagnosed, not silently re-lower the enclosing
+        // function's post-loop code into the closure. (The handler-body
+        // analogue is unreachable today: @handle inside a loop is fenced
+        // as a nested block.)
+        for code in [
+            "func twice(fn: () -> ()) {\n\tfn()\n\tfn()\n}\nfunc f() {\n\tloop true {\n\t\ttwice {\n\t\t\tbreak\n\t\t}\n\t}\n}\nf()",
+        ] {
+            let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("LowerTest"));
+            let typed = driver
+                .parse()
+                .expect("parse")
+                .resolve_names()
+                .expect("resolve")
+                .type_check();
+            assert!(
+                !typed.has_errors(),
+                "type errors: {:?}",
+                typed.diagnostics()
+            );
+            let lowered = typed.lower();
+            assert!(
+                lowered
+                    .phase
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.contains("break outside loop")),
+                "expected a break-outside-loop diagnostic, got {:?}",
+                lowered.phase.diagnostics
+            );
+        }
     }
 
     #[test]

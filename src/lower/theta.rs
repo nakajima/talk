@@ -98,7 +98,11 @@ impl<'a> Lowering<'a> {
 
     /// The per-call-site instantiation, composed with the enclosing θ
     /// (`instantiations ∘ θ` — the worklist's edge label).
-    pub(super) fn instantiation_at(&self, instantiation: Option<&Vec<(Symbol, CheckTy)>>, ctx: &Ctx) -> Theta {
+    pub(super) fn instantiation_at(
+        &self,
+        instantiation: Option<&Vec<(Symbol, CheckTy)>>,
+        ctx: &Ctx,
+    ) -> Theta {
         let mut theta = Theta::default();
         if let Some(pairs) = instantiation {
             for (symbol, ty) in pairs {

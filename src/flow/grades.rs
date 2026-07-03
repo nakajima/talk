@@ -67,7 +67,9 @@ impl<'a> GradeView<'a> {
                 seen.remove(symbol);
                 contains
             }
-            Ty::Tuple(items) => items.iter().any(|item| self.contains_object_inner(item, seen)),
+            Ty::Tuple(items) => items
+                .iter()
+                .any(|item| self.contains_object_inner(item, seen)),
             Ty::Record(row) => row
                 .fields
                 .iter()
@@ -124,11 +126,15 @@ impl<'a> GradeView<'a> {
                     .payload_types(*symbol, args)
                     .iter()
                     .any(|field| self.contains_borrowed_inner(field, seen))
-                    || args.iter().any(|arg| self.contains_borrowed_inner(arg, seen));
+                    || args
+                        .iter()
+                        .any(|arg| self.contains_borrowed_inner(arg, seen));
                 seen.remove(symbol);
                 contains
             }
-            Ty::Tuple(items) => items.iter().any(|item| self.contains_borrowed_inner(item, seen)),
+            Ty::Tuple(items) => items
+                .iter()
+                .any(|item| self.contains_borrowed_inner(item, seen)),
             Ty::Record(row) => row
                 .fields
                 .iter()
@@ -179,7 +185,10 @@ impl<'a> GradeView<'a> {
                 copy
             }
             Ty::Tuple(items) => items.iter().all(|item| self.copy_ty(item, seen)),
-            Ty::Record(row) => row.fields.iter().all(|(_, field)| self.copy_ty(field, seen)),
+            Ty::Record(row) => row
+                .fields
+                .iter()
+                .all(|(_, field)| self.copy_ty(field, seen)),
             Ty::Any { .. } | Ty::Proj(..) | Ty::Var(_) | Ty::Param(_) | Ty::Error => false,
         }
     }
@@ -249,7 +258,9 @@ impl<'a> GradeView<'a> {
                 .variants
                 .values()
                 .flat_map(|variant| match &variant.constructor_scheme.ty {
-                    Ty::Func(payloads, ..) => payloads.iter().map(|ty| substitute(ty, &subst)).collect(),
+                    Ty::Func(payloads, ..) => {
+                        payloads.iter().map(|ty| substitute(ty, &subst)).collect()
+                    }
                     _ => vec![],
                 })
                 .collect();

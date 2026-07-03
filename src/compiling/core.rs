@@ -10,11 +10,12 @@ use crate::compiling::{
 use crate::name_resolution::name_resolver::ResolvedNames;
 use crate::types::TypeOutput;
 
-/// Core's typed artifacts, retained for whole-program lowering: lazy
-/// monomorphization needs core's *bodies* (witnesses, protocol defaults,
-/// @_ir splices) at user-program lower time — the MLton whole-program
-/// model rather than polymorphic IR in modules.
-pub struct CoreTyped {
+/// A bundled library's typed artifacts (core, stdlib), retained for
+/// whole-program lowering: lazy monomorphization needs the library's
+/// *bodies* (witnesses, protocol defaults, @_ir splices) at user-program
+/// lower time — the MLton whole-program model rather than polymorphic IR
+/// in modules.
+pub struct LibraryTyped {
     pub hir: IndexMap<Source, crate::hir::HirFile>,
     pub mir_bodies: crate::lower::mir::ModuleBodies,
     pub types: TypeOutput,
@@ -22,14 +23,14 @@ pub struct CoreTyped {
 }
 
 lazy_static! {
-    static ref CORE: (Arc<Module>, Arc<CoreTyped>) = _compile();
+    static ref CORE: (Arc<Module>, Arc<LibraryTyped>) = _compile();
 }
 
 pub fn compile() -> Arc<Module> {
     CORE.0.clone()
 }
 
-pub fn typed() -> Arc<CoreTyped> {
+pub fn typed() -> Arc<LibraryTyped> {
     CORE.1.clone()
 }
 
@@ -75,7 +76,7 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-fn _compile() -> (Arc<Module>, Arc<CoreTyped>) {
+fn _compile() -> (Arc<Module>, Arc<LibraryTyped>) {
     let _s = tracing::trace_span!("compile_prelude", prelude = true).entered();
     let mut config = DriverConfig::new("Core");
     config.module_id = ModuleId::Core;
@@ -100,7 +101,7 @@ fn _compile() -> (Arc<Module>, Arc<CoreTyped>) {
         typed.diagnostics()
     );
 
-    let core_typed = CoreTyped {
+    let core_typed = LibraryTyped {
         hir: typed.phase.hir.clone(),
         mir_bodies: typed.phase.mir_bodies.clone(),
         types: typed.phase.types.clone(),

@@ -91,7 +91,9 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
         mem: module.statics.clone(),
         static_len: module.statics.len() as u32,
         allocations: Allocations::default(),
-        boxed: vec![],
+        // Slot 0 is a reserved placeholder (like arg_pool's) so that a
+        // zeroed, never-stored cell can't alias a real handle.
+        boxed: vec![Value::Void],
         objects: Objects::default(),
         io,
     };
@@ -1020,6 +1022,11 @@ fn exec_local(
                 MemKind::Ptr => Value::Ptr(machine.read_word(addr)? as u32),
                 MemKind::Boxed => {
                     let handle = machine.read_word(addr)? as usize;
+                    if handle == 0 {
+                        // The reserved placeholder: this cell was never
+                        // stored to.
+                        return Err("vm: load of a bad arena handle".into());
+                    }
                     machine
                         .boxed
                         .get(handle)
@@ -1047,8 +1054,18 @@ fn exec_local(
                 (MemKind::Bool, Value::Bool(v)) => machine.write_word(addr, v as u64)?,
                 (MemKind::Ptr, Value::Ptr(v)) => machine.write_word(addr, v as u64)?,
                 (MemKind::Boxed, value) => {
-                    machine.boxed.push(value);
-                    machine.write_word(addr, (machine.boxed.len() - 1) as u64)?;
+                    // The bump allocator never reuses addresses and fresh
+                    // memory is zeroed, so a nonzero word here can only be
+                    // this cell's own handle (slot 0 is the reserved
+                    // placeholder): overwrite its slot instead of growing
+                    // the arena on every store.
+                    let existing = machine.read_word(addr)? as usize;
+                    if existing != 0 && existing < machine.boxed.len() {
+                        machine.boxed[existing] = value;
+                    } else {
+                        machine.boxed.push(value);
+                        machine.write_word(addr, (machine.boxed.len() - 1) as u64)?;
+                    }
                 }
                 (kind, value) => {
                     return Err(format!("vm: store kind {kind:?} got {value:?}"));
@@ -1362,12 +1379,7 @@ mod tests {
                     n_regs: 6,
                 },
             ],
-            consts: vec![
-                Value::I64(10),
-                Value::I64(42),
-                Value::I64(1),
-                Value::Ptr(0),
-            ],
+            consts: vec![Value::I64(10), Value::I64(42), Value::I64(1), Value::Ptr(0)],
             arg_pool: vec![0],
             switch_pool: vec![],
             traps: vec![],
@@ -1389,6 +1401,61 @@ mod tests {
         assert_eq!(value, Value::I64(42));
         assert_eq!(live, 0);
         assert_eq!(out_len, 2, "one finalizer write per object");
+    }
+
+    #[test]
+    fn boxed_store_reuses_the_cell_slot() {
+        // Overwriting a boxed cell must not grow the arena: a loop that
+        // stores into the same element would otherwise leak one slot per
+        // iteration for the machine's lifetime.
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 }, // 8 bytes
+                    Insn::Alloc { dest: 1, count: 0 },
+                    Insn::Const { dest: 2, k: 1 }, // 111
+                    Insn::Store {
+                        ptr: 1,
+                        src: 2,
+                        kind: MemKind::Boxed,
+                    },
+                    Insn::Const { dest: 3, k: 2 }, // 222
+                    Insn::Store {
+                        ptr: 1,
+                        src: 3,
+                        kind: MemKind::Boxed,
+                    },
+                    Insn::Store {
+                        ptr: 1,
+                        src: 3,
+                        kind: MemKind::Boxed,
+                    },
+                    Insn::Load {
+                        dest: 4,
+                        ptr: 1,
+                        kind: MemKind::Boxed,
+                    },
+                    Insn::Ret { src: 4 },
+                ],
+                arity: 0,
+                n_regs: 5,
+            }],
+            consts: vec![Value::I64(8), Value::I64(111), Value::I64(222)],
+            arg_pool: vec![0],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let mut io = CaptureIO::default();
+        let (value, machine) = run_machine(&module, &mut io).expect("vm run");
+        assert_eq!(value, Value::I64(222), "load sees the latest store");
+        assert!(
+            machine.boxed.len() <= 2,
+            "three stores to one cell must reuse its slot, arena has {} slots",
+            machine.boxed.len()
+        );
     }
 
     #[test]
@@ -1429,6 +1496,10 @@ mod tests {
             entry: 0,
         };
         let (value, _, _) = run_with_machine(&module);
-        assert_eq!(value, Value::I64(42), "mutation through one alias visible through the other");
+        assert_eq!(
+            value,
+            Value::I64(42),
+            "mutation through one alias visible through the other"
+        );
     }
 }

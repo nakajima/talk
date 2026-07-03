@@ -16,9 +16,9 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::compiling::module::ModuleId;
+use crate::flow::OwnershipError;
 use crate::hir::{self, ExprKind};
 use crate::node_id::NodeID;
-use crate::flow::OwnershipError;
 use crate::types::TypeOutput;
 use crate::types::ty::{Perm, Ty};
 
@@ -73,7 +73,8 @@ impl MoveState {
             }
         }
         let before = self.moved_all.len();
-        self.moved_all.retain(|place| other.moved_all.contains(place));
+        self.moved_all
+            .retain(|place| other.moved_all.contains(place));
         changed |= self.moved_all.len() != before;
         let before = self.initialized_all.len();
         self.initialized_all
@@ -261,7 +262,8 @@ pub(crate) struct MoveChecker<'a> {
     /// Global → the global that borrows it. A borrow-wrapping global is
     /// legal when its loans are rooted in other globals; the owners recorded
     /// here become immutable program-wide (see `check_flow`'s post-pass).
-    pub(crate) global_borrows: FxHashMap<crate::name_resolution::symbol::Symbol, crate::name_resolution::symbol::Symbol>,
+    pub(crate) global_borrows:
+        FxHashMap<crate::name_resolution::symbol::Symbol, crate::name_resolution::symbol::Symbol>,
     /// Assignments to globals made inside function bodies: cross-procedural
     /// writes the per-body NLL walk cannot see.
     pub(crate) global_writes: Vec<(NodeID, crate::name_resolution::symbol::Symbol)>,
@@ -359,9 +361,10 @@ impl<'a> MoveChecker<'a> {
                 Ty::Borrow(perm, _) => *perm,
                 _ => Perm::Shared,
             };
-            state
-                .provenances
-                .insert(place.clone(), Provenance::direct(Origin::BorrowedParam, None, kind));
+            state.provenances.insert(
+                place.clone(),
+                Provenance::direct(Origin::BorrowedParam, None, kind),
+            );
             let _ = &place;
             state.borrowed_roots.insert(symbol, kind);
             if !kind.is_exclusive() {
@@ -382,7 +385,6 @@ impl<'a> MoveChecker<'a> {
             self.consume_expr(expr, state);
         }
     }
-
 
     pub(crate) fn check_let(
         &mut self,
@@ -486,16 +488,13 @@ impl<'a> MoveChecker<'a> {
 
     // ----- Drop scheduling ----------------------------------------------------
 
-
     pub(crate) fn ty_is_linear(&self, ty: &Ty) -> bool {
         use crate::types::catalog::Grade;
         matches!(ty, Ty::Nominal(symbol, _)
             if self.types.catalog.grade_of(*symbol) == Grade::Linear)
     }
 
-
     // ----- Statement/node walk ----------------------------------------------
-
 
     // ----- CFG-engine support (flow::cfg) --------------------------------------
 
@@ -536,9 +535,7 @@ impl<'a> MoveChecker<'a> {
     /// param seeding registered.
     pub(crate) fn push_body_frame(&mut self) {
         let pending = std::mem::take(&mut self.pending_locals);
-        self.scopes.push(ScopeFrame {
-            locals: pending,
-        });
+        self.scopes.push(ScopeFrame { locals: pending });
     }
 
     pub(crate) fn pop_body_frame(&mut self) {
@@ -562,7 +559,6 @@ impl<'a> MoveChecker<'a> {
         frame.locals.push(ScopeLocal { symbol, ty });
     }
 
-
     pub(crate) fn check_assignment(
         &mut self,
         stmt_id: NodeID,
@@ -572,7 +568,8 @@ impl<'a> MoveChecker<'a> {
     ) {
         // Assignment through a shared borrow is rejected — except through
         // `'heap` references, which mutate in place by design.
-        if let Some((receiver_root, receiver_ty)) = self.shared_borrow_assignment_receiver(lhs, state)
+        if let Some((receiver_root, receiver_ty)) =
+            self.shared_borrow_assignment_receiver(lhs, state)
             && !self.object_receiver(&receiver_ty)
         {
             let error = OwnershipError::AssignThroughSharedBorrow {
@@ -631,13 +628,16 @@ impl<'a> MoveChecker<'a> {
             if self.grades.needs_drop(&lhs.ty) || self.grades.contains_object(&lhs.ty) {
                 if self.recording {
                     let kind = classify(&place, state);
-                    self.stmt_drops.entry(stmt_id).or_default().push(DropSchedule {
-                        place: place.clone(),
-                        ty: lhs.ty.clone(),
-                        kind,
-                        reason: DropReason::AssignmentReplace,
-                        node: lhs.id,
-                    });
+                    self.stmt_drops
+                        .entry(stmt_id)
+                        .or_default()
+                        .push(DropSchedule {
+                            place: place.clone(),
+                            ty: lhs.ty.clone(),
+                            kind,
+                            reason: DropReason::AssignmentReplace,
+                            node: lhs.id,
+                        });
                 }
                 state.invalidate_borrows_of(&place);
             }
@@ -780,7 +780,6 @@ impl<'a> MoveChecker<'a> {
         }
     }
 
-
     pub(crate) fn check_call(
         &mut self,
         callee: &hir::Expr,
@@ -864,7 +863,6 @@ impl<'a> MoveChecker<'a> {
                 _ => self.consume_expr(&arg.value, state),
             }
         }
-
     }
 
     /// The full self-first parameter list of a member call's method, from
@@ -884,8 +882,7 @@ impl<'a> MoveChecker<'a> {
                 .get(witness)
                 .and_then(|scheme| func_params(&scheme.ty))
                 .or_else(|| {
-                    let (ExprKind::Member(_, label) | ExprKind::Proj(_, label, _)) =
-                        &callee.kind
+                    let (ExprKind::Member(_, label) | ExprKind::Proj(_, label, _)) = &callee.kind
                     else {
                         return None;
                     };
@@ -922,10 +919,7 @@ impl<'a> MoveChecker<'a> {
 
     /// The declared/checked type of a place root, searching innermost
     /// scope locals first, then parameters, then top-level schemes.
-    pub(crate) fn root_ty(
-        &self,
-        root: crate::name_resolution::symbol::Symbol,
-    ) -> Option<Ty> {
+    pub(crate) fn root_ty(&self, root: crate::name_resolution::symbol::Symbol) -> Option<Ty> {
         for scope in self.scopes.iter().rev() {
             if let Some(local) = scope.locals.iter().rev().find(|l| l.symbol == root) {
                 return Some(local.ty.clone());

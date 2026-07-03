@@ -2979,7 +2979,10 @@ mod formatter_tests {
         // read back (one argument per line).
         let source = "let node = RouteNode(path: some_longer_name, handler: another_long_name, next: a_third_long_name)";
         let formatted = format_code(source, 60);
-        assert!(formatted.contains("(\n"), "expected the call to wrap: {formatted}");
+        assert!(
+            formatted.contains("(\n"),
+            "expected the call to wrap: {formatted}"
+        );
         assert_eq!(
             format_code(&formatted, 60),
             formatted,

@@ -7,7 +7,12 @@ impl<'a> Lowering<'a> {
     /// environment — free variables ARE the captures (paper §2.2's
     /// higher-order setting; the reference evaluator runs them by
     /// dependency-aware substitution, the scheduler closure-converts).
-    pub(super) fn lower_func_value(&mut self, expr: &Expr, func: &hir::Func, ctx: &Ctx) -> Option<ExprId> {
+    pub(super) fn lower_func_value(
+        &mut self,
+        expr: &Expr,
+        func: &hir::Func,
+        ctx: &Ctx,
+    ) -> Option<ExprId> {
         let CheckTy::Func(param_check_tys, ret_check, _) = self.checker_ty(expr, ctx) else {
             self.diagnostics
                 .push("lowering: function literal without a function type".into());
@@ -83,7 +88,12 @@ impl<'a> Lowering<'a> {
     /// a λ_G Fn type) — the checker already typed the block's arguments
     /// against it; without one (no parameters), the block's value type
     /// suffices.
-    pub(super) fn lower_block_closure(&mut self, block: &Block, expected: Option<TyId>, ctx: &Ctx) -> ExprId {
+    pub(super) fn lower_block_closure(
+        &mut self,
+        block: &Block,
+        expected: Option<TyId>,
+        ctx: &Ctx,
+    ) -> ExprId {
         let bot = self.p.ty_bot();
         let expected_dom = expected.and_then(|ty| match *self.p.ty_kind(ty) {
             TyKind::Fn(dom, _) => Some(dom),

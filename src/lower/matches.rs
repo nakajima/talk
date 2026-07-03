@@ -19,8 +19,8 @@ impl<'a> Lowering<'a> {
         // Ledger rule D analog: an rvalue scrutinee's carried +1 dies with
         // the match — release once the match delivers. (A call-result temp
         // is pure to read but still an rvalue.)
-        let release_rvalue = self.rhs_is_rvalue(scrutinee, ctx)
-            && self.contains_object_type(&scrutinee_check_ty);
+        let release_rvalue =
+            self.rhs_is_rvalue(scrutinee, ctx) && self.contains_object_type(&scrutinee_check_ty);
         let release_wrapped = |this: &mut Self, value: ExprId, k: ExprId| {
             if !release_rvalue {
                 return Some(k);
@@ -236,7 +236,7 @@ impl<'a> Lowering<'a> {
                         theta: Theta::default(),
                         env: FxHashMap::default(),
                         local_evidence: FxHashMap::default(),
-            temps: FxHashMap::default(),
+                        temps: FxHashMap::default(),
                         ret_k: ctx.ret_k,
                         tail_k: ctx.ret_k,
                         raw_ret_k: ctx.raw_ret_k,
@@ -661,7 +661,13 @@ impl<'a> Lowering<'a> {
 
     /// Branch on a condition expression: br(cond, then_thunk, else_thunk)
     /// (the paper's br_⊥, §2.2).
-    pub(super) fn branch(&mut self, cond: &Expr, then_body: ExprId, else_body: ExprId, ctx: &Ctx) -> ExprId {
+    pub(super) fn branch(
+        &mut self,
+        cond: &Expr,
+        then_body: ExprId,
+        else_body: ExprId,
+        ctx: &Ctx,
+    ) -> ExprId {
         // The condition itself may need CPS (e.g. `n <= 1` is a call).
         match self.try_pure(cond, ctx) {
             Some(cv) => self.branch_value(cv, then_body, else_body),
@@ -679,7 +685,12 @@ impl<'a> Lowering<'a> {
     }
 
     /// br over an already-lowered condition value.
-    pub(super) fn branch_value(&mut self, cond: ExprId, then_body: ExprId, else_body: ExprId) -> ExprId {
+    pub(super) fn branch_value(
+        &mut self,
+        cond: ExprId,
+        then_body: ExprId,
+        else_body: ExprId,
+    ) -> ExprId {
         let void_ty = self.p.ty_void();
         let bot = self.p.ty_bot();
         let then_fn = self.p.func("then", void_ty, bot);

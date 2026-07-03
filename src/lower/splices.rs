@@ -6,7 +6,11 @@ impl<'a> Lowering<'a> {
     /// Map an inline-IR instruction to a PrimOp: `$n` → lowered bind
     /// expressions, `%n` → the enclosing function's parameters, literals
     /// pass through; the type argument is θ-resolved.
-    pub(super) fn splice(&mut self, instruction: &InlineIRInstruction, ctx: &Ctx) -> Option<ExprId> {
+    pub(super) fn splice(
+        &mut self,
+        instruction: &InlineIRInstruction,
+        ctx: &Ctx,
+    ) -> Option<ExprId> {
         let mut binds = Vec::with_capacity(instruction.binds.len());
         for (i, bind) in instruction.binds.iter().enumerate() {
             let Some(value) = self.try_pure(bind, ctx) else {

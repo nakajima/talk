@@ -6,9 +6,9 @@
 //! closure captures. A loan lives until its borrower's last use
 //! (`flow::liveness`).
 
+use crate::flow::OwnershipError;
 use crate::hir::{self, ExprKind};
 use crate::node_id::NodeID;
-use crate::flow::OwnershipError;
 use crate::types::ty::{Perm, Ty};
 
 use super::moves::{MoveChecker, MoveState};
@@ -52,7 +52,11 @@ pub(crate) struct Provenance {
 impl Provenance {
     pub(crate) fn direct(origin: Origin, owner: Option<Place>, kind: Perm) -> Provenance {
         Provenance {
-            loans: vec![ProvLoan { origin, owner, kind }],
+            loans: vec![ProvLoan {
+                origin,
+                owner,
+                kind,
+            }],
         }
     }
 
@@ -109,10 +113,7 @@ impl MoveState {
             .provenances
             .get(&Place::root(place.root))
             .or_else(|| self.provenances.get(place))
-            && let Some(owner) = provenance
-                .loans
-                .iter()
-                .find_map(|loan| loan.owner.clone())
+            && let Some(owner) = provenance.loans.iter().find_map(|loan| loan.owner.clone())
         {
             let mut rebased = owner;
             rebased.fields.extend(place.fields.iter().copied());
@@ -165,11 +166,7 @@ impl MoveState {
     }
 
     /// Drop every loan/provenance whose borrower root has no later use.
-    pub(crate) fn prune_dead_loans(
-        &mut self,
-        liveness: &super::liveness::Liveness,
-        node: NodeID,
-    ) {
+    pub(crate) fn prune_dead_loans(&mut self, liveness: &super::liveness::Liveness, node: NodeID) {
         self.loans
             .retain(|loan| !liveness.dead_after(node, loan.borrower.root));
         self.provenances
@@ -215,11 +212,7 @@ impl MoveChecker<'_> {
         place: &Place,
         state: &MoveState,
     ) {
-        if let Some(loan) = state
-            .loans
-            .iter()
-            .find(|loan| loan.owner.overlaps(place))
-        {
+        if let Some(loan) = state.loans.iter().find(|loan| loan.owner.overlaps(place)) {
             let error = OwnershipError::MoveWhileBorrowed {
                 name: self.render(place),
                 borrower: self.render(&loan.borrower),
@@ -245,12 +238,10 @@ impl MoveChecker<'_> {
         let root = Place::root(place.root);
         // A `'heap` root's fields belong to the shared object: extracting
         // an owned value must clone (its buffers are the region's).
-        let root_is_object = self
-            .root_ty(place.root)
-            .is_some_and(|ty| match &ty {
-                Ty::Borrow(_, inner) => self.grades.is_object(inner),
-                other => self.grades.is_object(other),
-            });
+        let root_is_object = self.root_ty(place.root).is_some_and(|ty| match &ty {
+            Ty::Borrow(_, inner) => self.grades.is_object(inner),
+            other => self.grades.is_object(other),
+        });
         let root_is_borrowed = state.borrowed_roots.contains_key(&place.root)
             || state.provenances.contains_key(&root)
             || self
@@ -334,11 +325,7 @@ impl MoveChecker<'_> {
             return Provenance::direct(self.origin_of_root(place.root), Some(place), kind);
         }
         match &expr.kind {
-            ExprKind::Call {
-                callee,
-                args,
-                ..
-            } => self.call_provenance(callee, args, state),
+            ExprKind::Call { callee, args, .. } => self.call_provenance(callee, args, state),
             ExprKind::Tuple(items)
             | ExprKind::LiteralArray(items)
             | ExprKind::Con { args: items, .. } => {
@@ -447,13 +434,12 @@ impl MoveChecker<'_> {
                 continue;
             };
             for (binder_id, binder) in lhs.collect_binders() {
-                let Some(ty) = self
-                    .types
-                    .node_types
-                    .get(&binder_id)
-                    .cloned()
-                    .or_else(|| self.types.schemes.get(&binder).map(|scheme| scheme.ty.clone()))
-                else {
+                let Some(ty) = self.types.node_types.get(&binder_id).cloned().or_else(|| {
+                    self.types
+                        .schemes
+                        .get(&binder)
+                        .map(|scheme| scheme.ty.clone())
+                }) else {
                     continue;
                 };
                 if matches!(ty, Ty::Func(..)) {
@@ -878,12 +864,9 @@ fn stores_borrow(ty: &Ty) -> bool {
         Ty::Nominal(_, args) => args.iter().any(stores_borrow),
         Ty::Tuple(items) => items.iter().any(stores_borrow),
         Ty::Record(row) => row.fields.iter().any(|(_, field)| stores_borrow(field)),
-        Ty::Func(..)
-        | Ty::Any { .. }
-        | Ty::Proj(..)
-        | Ty::Var(_)
-        | Ty::Param(_)
-        | Ty::Error => false,
+        Ty::Func(..) | Ty::Any { .. } | Ty::Proj(..) | Ty::Var(_) | Ty::Param(_) | Ty::Error => {
+            false
+        }
     }
 }
 
@@ -892,5 +875,9 @@ fn callee_param_tys(callee: &hir::Expr) -> Option<Vec<Ty>> {
 }
 
 pub(crate) fn perm_name(perm: Perm) -> &'static str {
-    if perm.is_exclusive() { "mutable" } else { "shared" }
+    if perm.is_exclusive() {
+        "mutable"
+    } else {
+        "shared"
+    }
 }

@@ -630,7 +630,11 @@ func outer(k: fn(int)) {
         let (mut p, main, int) = build_object_main(false);
         let mut eval = Evaluator::new();
         let value = eval.run_main(&mut p, main, int).expect("eval");
-        assert_eq!(value, EvalValue::I64(42), "mutation visible through the alias");
+        assert_eq!(
+            value,
+            EvalValue::I64(42),
+            "mutation visible through the alias"
+        );
         assert_eq!(eval.live_objects(), 0, "cycle freed at last release");
     }
 
@@ -643,7 +647,6 @@ func outer(k: fn(int)) {
         assert_eq!(eval.live_objects(), 0, "finalizer walk then bulk free");
     }
 
-
     #[test]
     fn object_ops_agree_across_engines() {
         // The same hand-built program through the reference evaluator and
@@ -651,10 +654,7 @@ func outer(k: fn(int)) {
         let (mut p, main, int) = build_object_main(true);
         let mut entry = rustc_hash::FxHashSet::default();
         entry.insert(main);
-        let fin = p
-            .labels()
-            .find(|l| p.name(*l) == "fin")
-            .expect("fin label");
+        let fin = p.labels().find(|l| p.name(*l) == "fin").expect("fin label");
         entry.insert(fin);
         let module = crate::vm::schedule::schedule(&mut p, main, &entry).expect("schedule");
         let mut io = crate::vm::io::CaptureIO::default();
@@ -670,5 +670,4 @@ func outer(k: fn(int)) {
             "vm disagreed: {vm_value:?}"
         );
     }
-
 }

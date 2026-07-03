@@ -8,6 +8,14 @@ pub(super) enum AssignBase {
     Object(ExprId),
 }
 
+/// The leaf operation a structural teardown walk applies to owned
+/// buffers: release them (drop) or rc-bump them (the CoW clone's retain).
+#[derive(Clone, Copy)]
+enum PayloadAction {
+    Drop,
+    Retain,
+}
+
 impl<'a> Lowering<'a> {
     // ----- Blocks and statements -------------------------------------------
 
@@ -49,7 +57,7 @@ impl<'a> Lowering<'a> {
     /// the module's store (built pre-flow, annotated by the flow checker);
     /// the rest (nested value blocks, match arms) build on miss and are
     /// annotated from the flow results the checker left on this subtree.
-    fn annotated_body(
+    pub(super) fn annotated_body(
         &mut self,
         block: &Block,
         ctx: &Ctx,
@@ -395,7 +403,14 @@ impl<'a> Lowering<'a> {
                 // switch arm per variant, each dropping that variant's
                 // owned payloads, joining back to `next`.
                 if self.is_enum(symbol) {
-                    return self.lower_enum_drop_then(ctx, value, symbol, &args, next);
+                    return self.lower_enum_payloads_then(
+                        ctx,
+                        value,
+                        symbol,
+                        &args,
+                        next,
+                        PayloadAction::Drop,
+                    );
                 }
                 // A `Deinit` conformance runs the user's destructor, which
                 // consumes the value; its own body then drops the fields
@@ -507,6 +522,19 @@ impl<'a> Lowering<'a> {
                 if self.symbol_is_borrowed(symbol) {
                     return next;
                 }
+                // An enum retains under the same tag dispatch its drop
+                // uses: each variant's owned payloads rc-bump exactly
+                // where they would free.
+                if self.is_enum(symbol) {
+                    return self.lower_enum_payloads_then(
+                        ctx,
+                        value,
+                        symbol,
+                        &args,
+                        next,
+                        PayloadAction::Retain,
+                    );
+                }
                 if let Some(index) = self.rawptr_field_index(symbol) {
                     let ptr_ty = self.p.ty_ptr();
                     let ptr = self.p.primop(Op::GetField(index), &[value], ptr_ty);
@@ -554,16 +582,19 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// Drop an enum value's owned payloads: `GetTag` + `Switch`, one arm
-    /// per variant in declaration order (the tag numbering), each dropping
-    /// its owned payloads in reverse, all joining back to `next`.
-    fn lower_enum_drop_then(
+    /// Walk an enum value's owned payloads: `GetTag` + `Switch`, one arm
+    /// per variant in declaration order (the tag numbering), applying
+    /// `action` to each variant's owned payloads in reverse, all joining
+    /// back to `next`. Shared by the drop and retain walkers so a variant
+    /// retains exactly where it would free.
+    fn lower_enum_payloads_then(
         &mut self,
         ctx: &Ctx,
         value: ExprId,
         symbol: Symbol,
         args: &[CheckTy],
         next: ExprId,
+        action: PayloadAction,
     ) -> ExprId {
         let theta = self.nominal_theta(symbol, args);
         let Some(info) = self
@@ -591,9 +622,13 @@ impl<'a> Lowering<'a> {
         {
             return next;
         }
+        let (join_name, arm_name) = match action {
+            PayloadAction::Drop => ("after_enum_drop", "drop_variant"),
+            PayloadAction::Retain => ("after_enum_retain", "retain_variant"),
+        };
         let void_ty = self.p.ty_void();
         let bot = self.p.ty_bot();
-        let join = self.p.func("after_enum_drop", void_ty, bot);
+        let join = self.p.func(join_name, void_ty, bot);
         self.p.set_body(join, next);
         let join_ref = self.p.func_ref(join);
         let mut arm_refs = Vec::with_capacity(variant_payloads.len());
@@ -605,14 +640,19 @@ impl<'a> Lowering<'a> {
                     continue;
                 }
                 let payload_lambda_ty = self.map_ty(payload_ty);
-                let payload = self.p.primop(
-                    Op::GetPayload(index as u32),
-                    &[value],
-                    payload_lambda_ty,
-                );
-                body = self.lower_drop_value_then(ctx, payload, payload_ty, body);
+                let payload =
+                    self.p
+                        .primop(Op::GetPayload(index as u32), &[value], payload_lambda_ty);
+                body = match action {
+                    PayloadAction::Drop => {
+                        self.lower_drop_value_then(ctx, payload, payload_ty, body)
+                    }
+                    PayloadAction::Retain => {
+                        self.lower_retain_value_then(ctx, payload, payload_ty, body)
+                    }
+                };
             }
-            let arm = self.p.func("drop_variant", void_ty, bot);
+            let arm = self.p.func(arm_name, void_ty, bot);
             self.p.set_body(arm, body);
             arm_refs.push(self.p.func_ref(arm));
         }
@@ -684,7 +724,7 @@ impl<'a> Lowering<'a> {
 
     fn with_drop_flag_keys(
         &mut self,
-        keys: &[OwnershipKeyPath],
+        keys: &[Place],
         ctx: &mut Ctx,
         finish: impl FnOnce(&mut Self, &mut Ctx) -> ExprId,
     ) -> ExprId {
@@ -708,11 +748,11 @@ impl<'a> Lowering<'a> {
     pub(super) fn set_drop_flags_under_then(
         &mut self,
         ctx: &Ctx,
-        key_path: &OwnershipKeyPath,
+        key_path: &Place,
         live: bool,
         next: ExprId,
     ) -> ExprId {
-        let mut keys: Vec<OwnershipKeyPath> = ctx
+        let mut keys: Vec<Place> = ctx
             .drop_flags
             .keys()
             .filter(|key| key_path.contains(key))
@@ -729,7 +769,7 @@ impl<'a> Lowering<'a> {
     fn set_drop_flag_then(
         &mut self,
         ctx: &Ctx,
-        key_path: &OwnershipKeyPath,
+        key_path: &Place,
         live: bool,
         next: ExprId,
     ) -> ExprId {
@@ -745,7 +785,7 @@ impl<'a> Lowering<'a> {
     pub(super) fn lower_dynamic_assignment_drop_then(
         &mut self,
         ctx: &Ctx,
-        key_path: &OwnershipKeyPath,
+        key_path: &Place,
         value: ExprId,
         ty: &CheckTy,
         next: ExprId,
@@ -766,7 +806,7 @@ impl<'a> Lowering<'a> {
     fn lower_drop_key_path_if_live_then(
         &mut self,
         ctx: &Ctx,
-        key_path: &OwnershipKeyPath,
+        key_path: &Place,
         value: ExprId,
         ty: &CheckTy,
         next: ExprId,
@@ -785,7 +825,7 @@ impl<'a> Lowering<'a> {
     fn lower_drop_value_with_dynamic_fields_then(
         &mut self,
         ctx: &Ctx,
-        key_path: &OwnershipKeyPath,
+        key_path: &Place,
         value: ExprId,
         ty: &CheckTy,
         next: ExprId,
@@ -802,7 +842,14 @@ impl<'a> Lowering<'a> {
                 // switch arm per variant, each dropping that variant's
                 // owned payloads, joining back to `next`.
                 if self.is_enum(symbol) {
-                    return self.lower_enum_drop_then(ctx, value, symbol, &args, next);
+                    return self.lower_enum_payloads_then(
+                        ctx,
+                        value,
+                        symbol,
+                        &args,
+                        next,
+                        PayloadAction::Drop,
+                    );
                 }
                 // A `Deinit` conformance runs the user's destructor, which
                 // consumes the value; its own body then drops the fields

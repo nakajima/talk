@@ -25,12 +25,32 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         self.level = GROUP_LEVEL;
         let top_eff = EffectRow::open(self.store.fresh_eff(OUTER_LEVEL, NodeID::SYNTHESIZED));
         let top_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
-        let top_ctx = Ctx::root().with_ret_eff(top_ret, top_eff);
+        let top_ctx = Ctx::root().with_ret_eff(top_ret.clone(), top_eff);
         for decl in destructuring_lets {
             self.body().check_local_decl(decl, &top_ctx);
         }
+        let mut last = StmtValue::Unit;
+        let mut top_level_handler: Option<NodeID> = None;
         for stmt in stmts {
-            self.body().infer_stmt(stmt, &top_ctx);
+            if matches!(stmt.kind, StmtKind::Handling { .. }) {
+                top_level_handler = Some(stmt.id);
+            }
+            last = self.body().infer_stmt(stmt, &top_ctx);
+        }
+        // A top-level handler can abort the rest of the program, so the
+        // top-level scope's result (`top_ret`, which the Handling arm
+        // constrained the handler body against) is the program value —
+        // the final statement's.
+        if let Some(handler_id) = top_level_handler {
+            let program_ty = match last {
+                StmtValue::Value(ty) => ty,
+                StmtValue::Divergent { .. } => Ty::Nominal(Symbol::Never, vec![]),
+                StmtValue::Unit => Ty::unit(),
+            };
+            if !program_ty.is_never() {
+                self.body()
+                    .emit_eq(top_ret, program_ty, handler_id, CtReason::Body);
+            }
         }
         let wanteds = std::mem::take(self.wanteds);
         let residuals = self.run_solver(wanteds);

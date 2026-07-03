@@ -303,7 +303,11 @@ impl Display for TypeError {
             TypeError::CannotInfer => {
                 write!(f, "Cannot infer type; add an annotation")
             }
-            TypeError::NonConformingField { protocol, field, ty } => {
+            TypeError::NonConformingField {
+                protocol,
+                field,
+                ty,
+            } => {
                 write!(
                     f,
                     "Cannot conform to {protocol}: field `{field}` has type {ty}, which is not {protocol}"

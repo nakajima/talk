@@ -25,20 +25,21 @@ mod demand;
 mod derive;
 mod effects;
 mod functions;
-mod matches;
-mod splices;
-mod theta;
-mod values;
 pub mod lower_tests;
+mod matches;
 pub(crate) mod mir;
 mod mir_lowering;
 mod patterns;
+mod splices;
 mod statements;
+mod theta;
+mod values;
 
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::compiling::driver::Source;
+use crate::flow::Place;
 use crate::hir::{
     self, Block, Decl, DeclKind, Expr, ExprKind, HirFile, InlineIRInstruction, MatchArm, Node,
     PatternKind, Stmt, StmtKind,
@@ -52,7 +53,6 @@ use crate::node_kinds::{
     inline_ir_instruction::{InlineIRInstructionKind, Value as IrValue},
     type_annotation::{TypeAnnotation, TypeAnnotationKind},
 };
-use crate::flow::Place as OwnershipKeyPath;
 use crate::token_kind::TokenKind;
 use crate::types::TypeOutput;
 use crate::types::ty::Ty as CheckTy;
@@ -178,9 +178,9 @@ enum Binding {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct DropBinding {
     symbol: Symbol,
-    key_path: OwnershipKeyPath,
+    key_path: Place,
     ty: CheckTy,
-    dynamic_flags: Vec<OwnershipKeyPath>,
+    dynamic_flags: Vec<Place>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -267,7 +267,7 @@ struct Ctx {
     drop_stack: Vec<DropBinding>,
     /// Runtime initializedness flags for owned locals whose drop obligation
     /// is path-sensitive (`Conditional`/`Open` in the MIR drop plan).
-    drop_flags: FxHashMap<OwnershipKeyPath, ExprId>,
+    drop_flags: FxHashMap<Place, ExprId>,
     /// During an initializer, assignments through this self root fill
     /// uninitialized storage rather than replacing a live value.
     initializing_self: Option<Symbol>,
@@ -294,7 +294,7 @@ struct MirCtxKey {
     params: Vec<ExprId>,
     loops: Vec<LoopBinding>,
     drop_stack: Vec<DropBinding>,
-    drop_flags: Vec<(OwnershipKeyPath, ExprId)>,
+    drop_flags: Vec<(Place, ExprId)>,
     initializing_self: Option<Symbol>,
     cellable: Vec<Symbol>,
 }

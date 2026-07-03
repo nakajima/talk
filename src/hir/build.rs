@@ -200,9 +200,7 @@ impl HirLowerer<'_> {
             expr::ExprKind::LiteralFloat(s) => hir::ExprKind::Lit(hir::Literal::Float(s.clone())),
             expr::ExprKind::LiteralTrue => hir::ExprKind::Lit(hir::Literal::Bool(true)),
             expr::ExprKind::LiteralFalse => hir::ExprKind::Lit(hir::Literal::Bool(false)),
-            expr::ExprKind::LiteralString(s) => {
-                hir::ExprKind::Lit(hir::Literal::String(s.clone()))
-            }
+            expr::ExprKind::LiteralString(s) => hir::ExprKind::Lit(hir::Literal::String(s.clone())),
             expr::ExprKind::Tuple(items) => {
                 hir::ExprKind::Tuple(items.iter().map(|i| self.expr(i)).collect())
             }
@@ -243,27 +241,23 @@ impl HirLowerer<'_> {
                 arms.iter().map(|a| self.match_arm(a)).collect(),
             ),
             expr::ExprKind::RecordLiteral { fields, spread } => {
-                // A spreadless literal with a closed row is a tuple in the
-                // row's canonical (label-sorted) field order — the runtime
-                // layout. Reordering is safe: elements are pure reads
-                // (effectful ones evaluate at their own MIR statements).
+                // A spreadless literal with a closed row whose fields are
+                // written in the row's canonical (label-sorted) order is a
+                // tuple as-is. Out-of-order literals stay RecordLiteral:
+                // field values must evaluate in source order, and only the
+                // RecordLiteral lowering permutes at assembly time.
                 if spread.is_none()
                     && let Some(crate::types::ty::Ty::Record(row)) =
                         self.types.node_types.get(&e.id)
                     && row.tail.is_none()
                     && row.fields.len() == fields.len()
-                    && let Some(ordered) = row
+                    && row
                         .fields
                         .iter()
-                        .map(|(label, _)| {
-                            let name = label.to_string();
-                            fields.iter().find(|f| f.label.name_str() == name)
-                        })
-                        .collect::<Option<Vec<_>>>()
+                        .zip(fields.iter())
+                        .all(|((label, _), f)| f.label.name_str() == label.to_string())
                 {
-                    hir::ExprKind::Tuple(
-                        ordered.into_iter().map(|f| self.expr(&f.value)).collect(),
-                    )
+                    hir::ExprKind::Tuple(fields.iter().map(|f| self.expr(&f.value)).collect())
                 } else {
                     hir::ExprKind::RecordLiteral {
                         fields: fields.iter().map(|f| self.record_field(f)).collect(),

@@ -193,8 +193,10 @@ impl TypeCatalog {
     }
 
     pub fn grade_of(&self, symbol: Symbol) -> Grade {
-        if matches!(symbol, Symbol::Int | Symbol::Float | Symbol::Bool | Symbol::Void)
-            || symbol == Symbol::RawPtr
+        if matches!(
+            symbol,
+            Symbol::Int | Symbol::Float | Symbol::Bool | Symbol::Void
+        ) || symbol == Symbol::RawPtr
             || symbol == Symbol::Byte
         {
             return Grade::Copy;
@@ -221,7 +223,9 @@ impl TypeCatalog {
     /// rule unify's coercion and generation's Apply-preservation share.
     pub fn copies_out_of_borrow(&self, symbol: Symbol) -> bool {
         self.grade_of(symbol) == Grade::Copy
-            || self.conformances.contains_key(&(symbol, Symbol::CheapClone))
+            || self
+                .conformances
+                .contains_key(&(symbol, Symbol::CheapClone))
     }
 
     /// Remap every symbol for an importer (the catalog half of

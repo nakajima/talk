@@ -552,9 +552,7 @@ impl<'s> Solver<'s> {
                         origin,
                     ));
                 }
-                Ty::Borrow(Perm::Exclusive, found_inner)
-                    if expected_kind == Perm::Shared =>
-                {
+                Ty::Borrow(Perm::Exclusive, found_inner) if expected_kind == Perm::Shared => {
                     queue.push(Constraint::Eq(
                         (*expected_inner).clone(),
                         (*found_inner).clone(),

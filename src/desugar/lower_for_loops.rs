@@ -238,9 +238,7 @@ impl LowerForLoops {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        desugar::lower_for_loops::LowerForLoops, parser_tests::tests::parse,
-    };
+    use crate::{desugar::lower_for_loops::LowerForLoops, parser_tests::tests::parse};
 
     #[test]
     fn parses_for_loop() {

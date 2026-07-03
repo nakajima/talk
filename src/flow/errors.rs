@@ -219,10 +219,7 @@ impl Display for OwnershipError {
                 )
             }
             OwnershipError::ObjectInExistential { ty } => {
-                write!(
-                    f,
-                    "Heap type {ty} cannot be packed into an existential yet"
-                )
+                write!(f, "Heap type {ty} cannot be packed into an existential yet")
             }
             OwnershipError::ObjectInRawStorage { container, ty } => {
                 write!(

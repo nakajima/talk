@@ -6,7 +6,11 @@ impl<'a> Lowering<'a> {
     /// Array literals allocate raw bytes internally, but the public Array
     /// storage field may now be a managed storage wrapper. If the core
     /// Array still has the old RawPtr layout, leave the pointer untouched.
-    pub(super) fn array_storage_value(&mut self, array_symbol: Symbol, ptr: ExprId) -> Option<ExprId> {
+    pub(super) fn array_storage_value(
+        &mut self,
+        array_symbol: Symbol,
+        ptr: ExprId,
+    ) -> Option<ExprId> {
         let Some(field_ty) = self
             .units
             .iter()
@@ -20,7 +24,11 @@ impl<'a> Lowering<'a> {
 
     /// String literals also start from a raw pointer into static bytes, while
     /// the source-level String may store a managed byte storage wrapper.
-    pub(super) fn string_storage_value(&mut self, string_symbol: Symbol, ptr: ExprId) -> Option<ExprId> {
+    pub(super) fn string_storage_value(
+        &mut self,
+        string_symbol: Symbol,
+        ptr: ExprId,
+    ) -> Option<ExprId> {
         let Some(field_ty) = self
             .units
             .iter()
@@ -308,7 +316,10 @@ impl<'a> Lowering<'a> {
         evidence
     }
 
-    pub(super) fn variant_by_symbol(&self, variant_symbol: Symbol) -> Option<crate::types::catalog::Variant> {
+    pub(super) fn variant_by_symbol(
+        &self,
+        variant_symbol: Symbol,
+    ) -> Option<crate::types::catalog::Variant> {
         for unit in &self.units {
             for info in unit.types.catalog.enums.values() {
                 if let Some(variant) = info
@@ -324,7 +335,12 @@ impl<'a> Lowering<'a> {
     }
 
     /// Construct a raw variant value: pure, exactly like `RecordNew`.
-    pub(super) fn variant_new(&mut self, enum_symbol: Symbol, tag: u16, payloads: &[ExprId]) -> ExprId {
+    pub(super) fn variant_new(
+        &mut self,
+        enum_symbol: Symbol,
+        tag: u16,
+        payloads: &[ExprId],
+    ) -> ExprId {
         let ty = self.p.ty(TyKind::Variant(enum_symbol));
         self.p
             .primop(Op::VariantNew(enum_symbol, tag), payloads, ty)

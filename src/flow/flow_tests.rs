@@ -288,14 +288,16 @@ fn func_body(driver: &Driver<Typed>, name: &str) -> hir::Block {
                 hir::DeclKind::Func(func) if func.name.name_str() == name => {
                     return func.body.clone();
                 }
-                hir::DeclKind::Let { lhs, rhs: Some(rhs), .. } => {
+                hir::DeclKind::Let {
+                    lhs,
+                    rhs: Some(rhs),
+                    ..
+                } => {
                     let binds_name = matches!(
                         &lhs.kind,
                         hir::PatternKind::Bind(bound) if bound.name_str() == name
                     );
-                    if binds_name
-                        && let hir::ExprKind::Func(func) = &rhs.kind
-                    {
+                    if binds_name && let hir::ExprKind::Func(func) = &rhs.kind {
                         return func.body.clone();
                     }
                 }
@@ -365,7 +367,11 @@ fn aggregate_move_makes_source_scope_drop_dead() {
     assert_eq!(
         candidate_drops(&driver, &body),
         vec![
-            ("pair".into(), DropReason::ScopeExit, DropElaboration::Static),
+            (
+                "pair".into(),
+                DropReason::ScopeExit,
+                DropElaboration::Static
+            ),
             ("s".into(), DropReason::ScopeExit, DropElaboration::Dead),
         ]
     );
@@ -383,7 +389,11 @@ fn branch_move_makes_scope_drop_conditional() {
         .collect();
     assert_eq!(
         s_drops,
-        vec![("s".into(), DropReason::ScopeExit, DropElaboration::Conditional)]
+        vec![(
+            "s".into(),
+            DropReason::ScopeExit,
+            DropElaboration::Conditional
+        )]
     );
 }
 
@@ -397,8 +407,16 @@ fn field_move_makes_scope_drop_open() {
     assert_eq!(
         candidate_drops(&driver, &body),
         vec![
-            ("name".into(), DropReason::ScopeExit, DropElaboration::Static),
-            ("person".into(), DropReason::ScopeExit, DropElaboration::Open),
+            (
+                "name".into(),
+                DropReason::ScopeExit,
+                DropElaboration::Static
+            ),
+            (
+                "person".into(),
+                DropReason::ScopeExit,
+                DropElaboration::Open
+            ),
         ]
     );
 }
@@ -432,7 +450,11 @@ fn assignment_schedules_replace_drop() {
         .collect();
     assert_eq!(
         replace,
-        vec![(String::new(), DropReason::AssignmentReplace, DropElaboration::Static)]
+        vec![(
+            String::new(),
+            DropReason::AssignmentReplace,
+            DropElaboration::Static
+        )]
     );
 }
 
@@ -567,9 +589,15 @@ fn heap_struct_classifies_as_object() {
         .find(|s| types.display_names.get(s).map(String::as_str) == Some("Node"))
         .expect("Node in catalog");
     let ty = crate::types::ty::Ty::Nominal(symbol, vec![]);
-    assert!(grades.is_object(&ty), "'heap struct should classify as object");
+    assert!(
+        grades.is_object(&ty),
+        "'heap struct should classify as object"
+    );
     assert!(grades.contains_object(&ty));
-    assert!(!grades.needs_drop(&ty), "objects release via regions, not drops");
+    assert!(
+        !grades.needs_drop(&ty),
+        "objects release via regions, not drops"
+    );
     assert!(grades.is_copy(&ty), "object handles copy freely");
 }
 
@@ -589,7 +617,10 @@ fn value_struct_with_heap_field_stays_value() {
         .find(|s| types.display_names.get(s).map(String::as_str) == Some("Wrapper"))
         .expect("Wrapper in catalog");
     let ty = crate::types::ty::Ty::Nominal(symbol, vec![]);
-    assert!(!grades.is_object(&ty), "no contagion: Wrapper stays a value");
+    assert!(
+        !grades.is_object(&ty),
+        "no contagion: Wrapper stays a value"
+    );
     assert!(
         grades.contains_object(&ty),
         "but it carries a handle (bind-boundary scans)"
@@ -655,12 +686,7 @@ fn heap_binding_gets_release_schedule() {
     );
     assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
     assert!(
-        typed
-            .phase
-            .flow
-            .drops
-            .iter()
-            .any(|fact| fact.place == "a"),
+        typed.phase.flow.drops.iter().any(|fact| fact.place == "a"),
         "the heap binding should get a scope-exit release schedule: {:?}",
         typed.phase.flow.drops
     );
@@ -737,7 +763,11 @@ fn run_heap_eval(source: &str) -> (crate::lambda_g::eval::EvalValue, usize, usiz
             lowered.phase.result_ty,
         )
         .expect("eval");
-    (value, evaluator.live_objects(), evaluator.live_allocations())
+    (
+        value,
+        evaluator.live_objects(),
+        evaluator.live_allocations(),
+    )
 }
 
 #[test]
@@ -798,7 +828,6 @@ fn heap_returned_alias_keeps_region_alive() {
     );
     assert_eq!(value, crate::vm::interp::Value::I64(7));
 }
-
 
 // ----- Heap adversarial hardening (P5) --------------------------------------------
 
@@ -931,7 +960,10 @@ fn dict_with_string_values_shares_buffers_safely() {
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
     assert_eq!(live_objects, 0);
-    assert_eq!(live_allocations, 0, "extracted String must retain, not share");
+    assert_eq!(
+        live_allocations, 0,
+        "extracted String must retain, not share"
+    );
 }
 
 #[test]
@@ -950,7 +982,26 @@ fn generic_heap_extraction_clones_per_instantiation() {
     let (value, live_objects, live_allocations) = run_heap_eval(source);
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(52));
     assert_eq!(live_objects, 0);
-    assert_eq!(live_allocations, 0, "String instantiation retains; Int does nothing");
+    assert_eq!(
+        live_allocations, 0,
+        "String instantiation retains; Int does nothing"
+    );
+}
+
+#[test]
+fn generic_heap_extraction_retains_cheap_clone_enum_payloads() {
+    // The tier-2 retain walker must dispatch enums like the drop walker
+    // does: extracting a CheapClone enum whose payload owns a buffer has
+    // to bump that buffer's rc, or the copy and the object's teardown
+    // both free it.
+    let source = "enum Wrapped {\n\tcase tagged(String)\n}\nextend Wrapped: CheapClone {}\nstruct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: Wrapped.tagged(\"hello\" + \" world\"))\n\tlet w = extract(h)\n\tmatch w {\n\t\t.tagged(s) -> s.length\n\t}\n}\ncheck()";
+    let (value, live_objects, live_allocations) = run_heap_eval(source);
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
+    assert_eq!(live_objects, 0);
+    assert_eq!(
+        live_allocations, 0,
+        "the enum payload's buffer retains on extraction and frees exactly once per owner"
+    );
 }
 
 #[test]
@@ -979,7 +1030,10 @@ fn enum_payload_drops_at_scope_exit() {
     let (_, _, live_allocations) = run_heap_eval(
         "func check() -> Int {\n\tlet o = Optional.some(\"hello\" + \" world\")\n\t0\n}\ncheck()",
     );
-    assert_eq!(live_allocations, 0, "the Optional's String payload must free");
+    assert_eq!(
+        live_allocations, 0,
+        "the Optional's String payload must free"
+    );
 }
 
 #[test]
@@ -996,7 +1050,10 @@ fn enum_payload_conditional_drop() {
     let (_, _, live_allocations) = run_heap_eval(
         "func take(o: String?) -> Int {\n\t0\n}\nfunc check(flag: Bool) -> Int {\n\tlet o = Optional.some(\"hello\" + \" world\")\n\tif flag {\n\t\ttake(o)\n\t} else {\n\t\t0\n\t}\n}\ncheck(true) + check(false)",
     );
-    assert_eq!(live_allocations, 0, "moved-on-one-path payload drops exactly once");
+    assert_eq!(
+        live_allocations, 0,
+        "moved-on-one-path payload drops exactly once"
+    );
 }
 
 #[test]
@@ -1066,7 +1123,10 @@ fn trailing_block_locals_balance_allocations() {
         "func run(f: () -> Int) -> Int {\n\tf()\n}\nfunc check() -> Int {\n\trun {\n\t\tlet local = \"x\" + \"y\"\n\t\tlocal.length\n\t}\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
-    assert_eq!(live_allocations, 0, "trailing-block locals free exactly once");
+    assert_eq!(
+        live_allocations, 0,
+        "trailing-block locals free exactly once"
+    );
 }
 
 #[test]
@@ -1077,7 +1137,10 @@ fn variant_construction_shapes_balance_allocations() {
         "func check() -> Int {\n\tlet a: String? = .some(\"x\" + \"y\")\n\tlet b = Optional.some(\"p\" + \"q\")\n\tlet c: String? = .none\n\tlet n = match a {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0\n\t}\n\tlet m = match b {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0\n\t}\n\tn + m\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(4));
-    assert_eq!(live_allocations, 0, "constructed payloads free exactly once");
+    assert_eq!(
+        live_allocations, 0,
+        "constructed payloads free exactly once"
+    );
 }
 
 #[test]
@@ -1109,9 +1172,37 @@ fn consumed_by_value_param_drops_in_callee() {
         "func take(name: String) -> Int {\n\tname.length\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
-    assert_eq!(live_allocations, 0, "the consumed argument's drop rides the callee");
+    assert_eq!(
+        live_allocations, 0,
+        "the consumed argument's drop rides the callee"
+    );
 }
 
+#[test]
+fn maybe_moved_param_drops_exactly_once() {
+    // A parameter moved on only one path gets a Conditional exit drop:
+    // the flag must guard it (moved path: the callee already dropped it;
+    // unmoved path: the exit drop runs).
+    let (value, _, live_allocations) = run_heap_eval(
+        "func take(name: String) -> Int {\n\tname.length\n}\nfunc f(s: String, flag: Bool) -> Int {\n\tlet n = 0\n\tif flag {\n\t\tn = take(s)\n\t}\n\tn\n}\nf(\"hello\" + \" world\", true) + f(\"bye\" + \" now\", false)",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
+    assert_eq!(live_allocations, 0, "each param buffer frees exactly once");
+}
+
+#[test]
+fn perform_argument_stays_owned_by_the_performer() {
+    // The checker consumes effect-call arguments (no use after the
+    // perform), but at RUNTIME the capability never takes ownership: the
+    // performer's scope-exit drop is the payload's only free. Unlike
+    // Call, the Perform statement must NOT clear the drop flag — doing
+    // so would leak the buffer on the performed path.
+    let (value, _, live_allocations) = run_heap_eval(
+        "effect 'log(msg) -> Int\n@handle 'log { msg in\n\tcontinue msg.length\n}\nfunc f(flag: Bool) 'log -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet n = 0\n\tif flag {\n\t\tn = 'log(s)\n\t}\n\tn\n}\nf(true) + f(false)",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
+    assert_eq!(live_allocations, 0, "the payload frees exactly once, at f's exit");
+}
 
 // ----- Ledger completeness (pre-merge hardening) -----------------------------------
 
@@ -1120,7 +1211,10 @@ fn destructured_heap_rvalue_balances() {
     let (_, live_objects, _) = run_heap_eval(
         "struct Node 'heap {\n\tlet value: Int\n}\nfunc check() -> Int {\n\tlet (a, b) = (Node(value: 1), Node(value: 2))\n\ta.value + b.value\n}\ncheck()",
     );
-    assert_eq!(live_objects, 0, "destructured rvalue handles free at scope exit");
+    assert_eq!(
+        live_objects, 0,
+        "destructured rvalue handles free at scope exit"
+    );
 }
 
 #[test]
@@ -1128,7 +1222,10 @@ fn destructured_heap_place_read_balances() {
     let (_, live_objects, _) = run_heap_eval(
         "struct Node 'heap {\n\tlet value: Int\n}\nfunc check() -> Int {\n\tlet pair = (Node(value: 1), Node(value: 2))\n\tlet (a, b) = pair\n\ta.value + b.value\n}\ncheck()",
     );
-    assert_eq!(live_objects, 0, "aliasing destructure neither leaks nor double-frees");
+    assert_eq!(
+        live_objects, 0,
+        "aliasing destructure neither leaks nor double-frees"
+    );
 }
 
 #[test]
@@ -1137,7 +1234,10 @@ fn rvalue_match_scrutinee_releases() {
         "struct Node 'heap {\n\tlet value: Int\n}\nfunc make() -> Node? {\n\tOptional.some(Node(value: 7))\n}\nfunc check() -> Int {\n\tmatch make() {\n\t\t.some(n) -> n.value,\n\t\t.none -> 0\n\t}\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(7));
-    assert_eq!(live_objects, 0, "the scrutinee temp's region frees after the match");
+    assert_eq!(
+        live_objects, 0,
+        "the scrutinee temp's region frees after the match"
+    );
 }
 
 #[test]
@@ -1186,9 +1286,7 @@ fn existential_payload_deinit_runs() {
 fn rejects_auto_derived_showable_on_heap_struct() {
     // Structural derivation would cycle on graphs: heap structs need an
     // explicit conformance.
-    let typed = flow_driver(
-        "struct Node 'heap {\n\tlet value: Int\n}\nprint(Node(value: 1))\n0",
-    );
+    let typed = flow_driver("struct Node 'heap {\n\tlet value: Int\n}\nprint(Node(value: 1))\n0");
     assert!(
         typed.has_errors(),
         "auto-derived Showable on 'heap must be rejected"
@@ -1309,7 +1407,10 @@ fn live_loop_local_drops_on_break_path() {
         "func f() -> Int {\n\tlet i = 0\n\tloop i < 3 {\n\t\ti = i + 1\n\t\tlet s = \"a\" + \"b\"\n\t\tif i == 2 {\n\t\t\tbreak\n\t\t}\n\t\tlet n = s.length\n\t}\n\t7\n}\nf()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(7));
-    assert_eq!(live_allocations, 0, "the loop-local drops on the break path too");
+    assert_eq!(
+        live_allocations, 0,
+        "the loop-local drops on the break path too"
+    );
 }
 
 /// A `for` body declaring its own block argument (`{ e in … }`) binds the
@@ -1331,7 +1432,10 @@ fn match_on_borrowed_enum_neither_leaks_nor_double_frees() {
         "enum E {\n\tcase a(String)\n\tcase b(Int)\n}\nfunc f(e: &E) -> Int {\n\tmatch e {\n\t\t.a(s) -> s.length,\n\t\t.b(n) -> n\n\t}\n}\nfunc check() -> Int {\n\tlet e = E.a(\"hello\" + \" world\")\n\tlet first = f(e)\n\tlet second = f(e)\n\tfirst + second\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(22));
-    assert_eq!(live_allocations, 0, "borrowed match aliases; owner drops once");
+    assert_eq!(
+        live_allocations, 0,
+        "borrowed match aliases; owner drops once"
+    );
 }
 
 /// Iterating an array of enums and matching each element — the borrowed
@@ -1347,6 +1451,3 @@ fn for_over_enum_array_with_match_runs() {
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(42));
 }
-
-
-

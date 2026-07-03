@@ -378,8 +378,7 @@ impl<'a> Higlighter<'a> {
                 }
             }
             Node::TypeAnnotation(type_annotation) => match &type_annotation.kind {
-                TypeAnnotationKind::Borrow { inner, .. }
-                | TypeAnnotationKind::Unique { inner } => {
+                TypeAnnotationKind::Borrow { inner, .. } | TypeAnnotationKind::Unique { inner } => {
                     result.extend(self.tokens_from_expr(inner.as_ref(), ast));
                 }
                 TypeAnnotationKind::Nominal {

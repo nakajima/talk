@@ -169,12 +169,7 @@ fn type_details(workspace: &Workspace, ty: &Ty) -> Vec<String> {
 
 fn fact_details_for_node(workspace: &Workspace, node: NodeID) -> Vec<String> {
     let mut details = Vec::new();
-    for fact in workspace
-        .flow
-        .moves
-        .iter()
-        .filter(|fact| fact.node == node)
-    {
+    for fact in workspace.flow.moves.iter().filter(|fact| fact.node == node) {
         details.push(format!("moves {}: {}", fact.place, fact.ty));
     }
     for fact in workspace
@@ -193,12 +188,7 @@ fn fact_details_for_node(workspace: &Workspace, node: NodeID) -> Vec<String> {
     {
         details.push(render_clone_tooltip(fact));
     }
-    for fact in workspace
-        .flow
-        .drops
-        .iter()
-        .filter(|fact| fact.node == node)
-    {
+    for fact in workspace.flow.drops.iter().filter(|fact| fact.node == node) {
         details.push(format!(
             "drop: {} as {:?} ({:?})",
             fact.place, fact.kind, fact.reason
@@ -232,7 +222,11 @@ fn render_drop_tooltip(fact: &FlowDropFact) -> String {
 }
 
 fn perm_name(kind: Perm) -> &'static str {
-    if kind.is_exclusive() { "mutable" } else { "shared" }
+    if kind.is_exclusive() {
+        "mutable"
+    } else {
+        "shared"
+    }
 }
 
 fn dedup(details: Vec<String>) -> Vec<String> {
@@ -324,7 +318,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn hover_details_include_linear_classification() {
         let source = "struct Token 'linear {\n\tlet id: Int\n\tconsuming func close() -> Int {\n\t\tself.id\n\t}\n}\nfunc make() -> Int {\n\tlet token = Token(id: 1)\n\ttoken.close()\n}\nmake()";
@@ -332,11 +325,7 @@ mod tests {
         let offset = source.find("token.close").expect("token use") as u32;
         let hover =
             crate::analysis::hover_at(&workspace, &"<test>".to_string(), offset).expect("hover");
-        assert!(
-            hover.contents.contains("linear"),
-            "{}",
-            hover.contents
-        );
+        assert!(hover.contents.contains("linear"), "{}", hover.contents);
     }
 
     #[test]
@@ -346,11 +335,7 @@ mod tests {
         let offset = source.rfind("read(n)").expect("use") as u32 + "read(".len() as u32;
         let hover =
             crate::analysis::hover_at(&workspace, &"<test>".to_string(), offset).expect("hover");
-        assert!(
-            hover.contents.contains("heap"),
-            "{}",
-            hover.contents
-        );
+        assert!(hover.contents.contains("heap"), "{}", hover.contents);
     }
 
     #[test]

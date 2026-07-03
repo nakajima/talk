@@ -1144,7 +1144,6 @@ fn eval_io_memory_error(error: MemoryError) -> EvalError {
     })
 }
 
-
 /// Every object handle reachable in a value (the region ledger's scan).
 /// Cells are machine state and are not descended.
 fn scan_handles(value: &EvalValue, out: &mut Vec<u32>) {

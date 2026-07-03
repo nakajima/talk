@@ -107,7 +107,10 @@ mod tests {
             panic!("expected a let binding");
         };
         let ExprKind::Match(_, arms) = &rhs.kind else {
-            panic!("expected the if expression to lower to a match, got {:?}", rhs.kind);
+            panic!(
+                "expected the if expression to lower to a match, got {:?}",
+                rhs.kind
+            );
         };
         assert_eq!(arms.len(), 2);
         assert!(matches!(arms[0].pattern.kind, PatternKind::LiteralTrue));
@@ -130,8 +133,7 @@ mod tests {
         let ExprKind::Match(_, arms) = &rhs.kind else {
             panic!("expected the outer if expression to lower to a match");
         };
-        let crate::node::Node::Stmt(stmt) =
-            arms[0].body.body.last().expect("non-empty then block")
+        let crate::node::Node::Stmt(stmt) = arms[0].body.body.last().expect("non-empty then block")
         else {
             panic!("expected the then block to hold a statement");
         };

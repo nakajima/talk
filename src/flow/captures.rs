@@ -17,10 +17,10 @@
 
 use rustc_hash::FxHashSet;
 
+use crate::flow::OwnershipError;
 use crate::hir;
 use crate::node_id::NodeID;
 use crate::node_kinds::func::CaptureMode;
-use crate::flow::OwnershipError;
 use crate::types::ty::{Perm, Ty};
 
 use super::liveness::collect_free_reads;
@@ -212,13 +212,7 @@ impl MoveChecker<'_> {
         }
     }
 
-    fn check_capture_use(
-        &mut self,
-        node: NodeID,
-        place: &Place,
-        owned: bool,
-        state: &MoveState,
-    ) {
+    fn check_capture_use(&mut self, node: NodeID, place: &Place, owned: bool, state: &MoveState) {
         if let Some((moved, (_, ty))) = state.moved_for_use(place, owned) {
             let error = OwnershipError::UseAfterMove {
                 name: super::moves::render_place(moved, self.types),
@@ -246,8 +240,7 @@ impl MoveChecker<'_> {
             .filter_map(|spec| spec.name.symbol().ok().map(|symbol| (symbol, spec.mode)))
             .collect();
 
-        let mut symbols: Vec<crate::name_resolution::symbol::Symbol> =
-            used.into_iter().collect();
+        let mut symbols: Vec<crate::name_resolution::symbol::Symbol> = used.into_iter().collect();
         symbols.sort();
         for (symbol, _) in &explicit {
             if !symbols.contains(symbol) {

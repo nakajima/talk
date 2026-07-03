@@ -1,11 +1,9 @@
 use super::*;
 use crate::lower::mir;
 
-
-
 struct PendingDrop {
     symbol: Symbol,
-    key_path: OwnershipKeyPath,
+    key_path: Place,
     ty: CheckTy,
     has_dynamic_flags: bool,
     elaboration: Option<mir::DropElaboration>,
@@ -233,14 +231,14 @@ impl<'a> Lowering<'a> {
                 // The perform evaluates HERE (resumable ones split the
                 // rest; the value binds the temp either way). A
                 // Never-returning perform aborts: the rest is unreachable.
-                if let Some(done) =
-                    self.try_mir_effect_split(expr, *temp, cursor, ctx, k, cache)
-                {
+                if let Some(done) = self.try_mir_effect_split(expr, *temp, cursor, ctx, k, cache) {
                     return done;
                 }
-                let result_ty = result_ty
-                    .clone()
-                    .substitute(&ctx.theta, &Default::default(), &Default::default());
+                let result_ty = result_ty.clone().substitute(
+                    &ctx.theta,
+                    &Default::default(),
+                    &Default::default(),
+                );
                 let result_ty = self.normalize_check_ty(result_ty, ctx.unit);
                 if result_ty.is_never() {
                     return self.lower_expr_unpacked(expr, ctx, k);
@@ -265,14 +263,14 @@ impl<'a> Lowering<'a> {
                 // The call evaluates HERE; its value binds the temp the
                 // consuming statement reads. Abortable calls split the
                 // rest instead (they need the statement spine).
-                if let Some(done) =
-                    self.try_mir_effect_split(expr, *temp, cursor, ctx, k, cache)
-                {
+                if let Some(done) = self.try_mir_effect_split(expr, *temp, cursor, ctx, k, cache) {
                     return done;
                 }
-                let result_ty = result_ty
-                    .clone()
-                    .substitute(&ctx.theta, &Default::default(), &Default::default());
+                let result_ty = result_ty.clone().substitute(
+                    &ctx.theta,
+                    &Default::default(),
+                    &Default::default(),
+                );
                 let result_ty = self.normalize_check_ty(result_ty, ctx.unit);
                 let value_ty = self.map_ty(&result_ty);
                 let bot = self.p.ty_bot();
@@ -350,15 +348,27 @@ impl<'a> Lowering<'a> {
                 let send = self.p.func("resume_value", value_ty, bot);
                 let value = self.p.var(send);
                 let pair = self.p.tuple(&[value, ctx.raw_ret_k]);
-                let resume_body = self.p.app(resume_k, pair);
-                let resume_body = self.lower_drop_bindings_then(ctx, &ctx.drop_stack, resume_body);
+                let mut resume_body = self.p.app(resume_k, pair);
+                // Only the handler-scope suffix dies here: the MIR builder
+                // emitted EarlyExit candidates from the handler's scope
+                // depth. Enclosing-function locals stay live across the
+                // resume (they drop at their own scope's exit).
+                for drop in self.following_drop_candidates(ctx, cursor).iter().rev() {
+                    resume_body = self.lower_candidate_drop_then(ctx, drop, resume_body);
+                }
                 let resume_body = self.clear_moved_drop_flags_then(ctx, statement, resume_body);
                 self.p.set_body(send, resume_body);
                 let send_ref = self.p.func_ref(send);
                 self.lower_expr(expr, ctx, send_ref)
             }
-            mir::Statement::ContinueValue { expr, .. } => {
-                self.lower_mir_discard(expr, cursor, ctx, k, cache)
+            mir::Statement::ContinueValue { .. } => {
+                // The checker lets a trailing block keep the handler
+                // context, but the resume continuation does not cross the
+                // closure boundary: without one, discarding the value would
+                // silently break the perform site.
+                self.diagnostics
+                    .push("lowering: continue with a value outside an effect handler".into());
+                self.dead_end("resume_outside_handler")
             }
         }
     }
@@ -393,8 +403,7 @@ impl<'a> Lowering<'a> {
                 } else {
                     inner.env.insert(symbol, Binding::Value(value));
                 }
-                let binder_ty = self
-                    .units[ctx.unit]
+                let binder_ty = self.units[ctx.unit]
                     .types
                     .local_tys
                     .get(&symbol)
@@ -413,9 +422,7 @@ impl<'a> Lowering<'a> {
                         let void_ty = self.p.ty_void();
                         acquires.push(self.p.primop(Op::RegionAcquire, &[value], void_ty));
                     }
-                    if let Some(drop) =
-                        self.drop_binding_for_mir_symbol(cursor.body, symbol, ty)
-                    {
+                    if let Some(drop) = self.drop_binding_for_mir_symbol(cursor.body, symbol, ty) {
                         drop_bindings.push(drop);
                     }
                 }
@@ -510,15 +517,19 @@ impl<'a> Lowering<'a> {
         }
         Some(DropBinding {
             symbol,
-            key_path: OwnershipKeyPath::root(symbol),
+            key_path: Place::root(symbol),
             ty,
             dynamic_flags,
         })
     }
 
-    fn drop_flag_keys_for_symbol(&self, body: &mir::Body, symbol: Symbol) -> Vec<OwnershipKeyPath> {
+    pub(super) fn drop_flag_keys_for_symbol(
+        &self,
+        body: &mir::Body,
+        symbol: Symbol,
+    ) -> Vec<Place> {
         let mut keys = Vec::new();
-        let root = OwnershipKeyPath::root(symbol);
+        let root = Place::root(symbol);
         let mut needs_root_flag = false;
 
         for statement in body.blocks.iter().flat_map(|block| &block.statements) {
@@ -578,7 +589,6 @@ impl<'a> Lowering<'a> {
     }
 
     fn following_drop_candidates(&self, ctx: &Ctx, cursor: MirCursor) -> Vec<PendingDrop> {
-        let body = cursor.body;
         let mut drops = Vec::new();
         for statement in cursor.statements().iter().skip(cursor.index + 1) {
             match &statement.kind {
@@ -601,8 +611,7 @@ impl<'a> Lowering<'a> {
                         continue;
                     };
                     let key_path = key_path
-                        .as_ref()
-                        .and_then(|key_path| Self::ownership_key_path_from_mir(body, key_path))
+                        .clone()
                         .unwrap_or_else(|| drop.key_path.clone());
                     let elaboration = self.drop_elaboration_at(statement, Some(&key_path));
                     drops.push(PendingDrop {
@@ -627,7 +636,7 @@ impl<'a> Lowering<'a> {
     fn drop_elaboration_at(
         &self,
         statement: &mir::LocatedStatement,
-        key_path: Option<&OwnershipKeyPath>,
+        key_path: Option<&Place>,
     ) -> Option<mir::DropElaboration> {
         let drop = statement.ownership.drop.as_ref()?;
         key_path
@@ -653,26 +662,10 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    fn push_unique_drop_flag_key(keys: &mut Vec<OwnershipKeyPath>, key: OwnershipKeyPath) {
+    fn push_unique_drop_flag_key(keys: &mut Vec<Place>, key: Place) {
         if !keys.iter().any(|existing| existing == &key) {
             keys.push(key);
         }
-    }
-
-    fn ownership_key_path_from_mir(
-        body: &mir::Body,
-        key_path: &mir::KeyPath,
-    ) -> Option<OwnershipKeyPath> {
-        let root = body.locals.get(key_path.root.0)?.symbol;
-        let mut result = OwnershipKeyPath::root(root);
-        for component in &key_path.components {
-            match component {
-                mir::KeyPathComponent::Field(field) => {
-                    result = result.child(*field);
-                }
-            }
-        }
-        Some(result)
     }
 
     fn assignment_drop_elaboration(&self, cursor: MirCursor) -> Option<mir::DropElaboration> {
@@ -741,7 +734,6 @@ impl<'a> Lowering<'a> {
         cursor: MirCursor,
         symbol: Symbol,
     ) -> Option<mir::DropElaboration> {
-        let body = cursor.body;
         let previous = cursor.index.checked_sub(1)?;
         let previous = cursor.statements().get(previous)?;
         let mir::Statement::DropCandidate {
@@ -761,16 +753,15 @@ impl<'a> Lowering<'a> {
             return None;
         }
         let key_path = key_path
-            .as_ref()
-            .and_then(|key_path| Self::ownership_key_path_from_mir(body, key_path))
-            .unwrap_or_else(|| OwnershipKeyPath::root(symbol));
+            .clone()
+            .unwrap_or_else(|| Place::root(symbol));
         self.drop_elaboration_at(previous, Some(&key_path))
     }
 
     fn moved_key_paths_at_statement(
         &self,
         statement: &mir::LocatedStatement,
-    ) -> Vec<OwnershipKeyPath> {
+    ) -> Vec<Place> {
         let mut moved = Vec::new();
         for source in &statement.ownership.moves {
             Self::push_unique_drop_flag_key(&mut moved, source.clone());
@@ -822,7 +813,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         lhs: &Expr,
         rhs: &Expr,
-        target: Option<&mir::KeyPath>,
+        target: Option<&Place>,
         cursor: MirCursor,
         ctx: &Ctx,
         k: ExprId,
@@ -857,7 +848,7 @@ impl<'a> Lowering<'a> {
         self.p.set_body(after, after_body);
         let after_ref = self.p.func_ref(after);
         let target_key_path = target
-            .and_then(|target| Self::ownership_key_path_from_mir(cursor.body, target))
+            .cloned()
             .or_else(|| crate::flow::place_for_expr(lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
@@ -930,7 +921,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         lhs: &Expr,
         rhs: &Expr,
-        target: Option<&mir::KeyPath>,
+        target: Option<&Place>,
         handle: ExprId,
         path: &[(u32, TyId)],
         drop_elaboration: Option<mir::DropElaboration>,
@@ -946,7 +937,7 @@ impl<'a> Lowering<'a> {
         self.p.set_body(after, after_body);
         let after_ref = self.p.func_ref(after);
         let target_key_path = target
-            .and_then(|target| Self::ownership_key_path_from_mir(cursor.body, target))
+            .cloned()
             .or_else(|| crate::flow::place_for_expr(lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
@@ -1285,8 +1276,7 @@ impl<'a> Lowering<'a> {
             );
         }
 
-        let rest_ref =
-            self.rest_mir_closure("after_abortable", pair_ty, temp, cursor, ctx, cache);
+        let rest_ref = self.rest_mir_closure("after_abortable", pair_ty, temp, cursor, ctx, cache);
         let slot = ctx.raw_ret_k;
         let func_ref = self.p.func_ref(label);
         let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
@@ -1404,9 +1394,11 @@ impl<'a> Lowering<'a> {
                     (Some(join_block), Some((temp, result_ty))) => {
                         // The stored type is the checker's raw (possibly
                         // generic) type: θ-substitute per instantiation.
-                        let result_ty = result_ty
-                            .clone()
-                            .substitute(&ctx.theta, &Default::default(), &Default::default());
+                        let result_ty = result_ty.clone().substitute(
+                            &ctx.theta,
+                            &Default::default(),
+                            &Default::default(),
+                        );
                         let result_ty = self.normalize_check_ty(result_ty, ctx.unit);
                         let value_ty = self.map_ty(&result_ty);
                         let bot = self.p.ty_bot();
@@ -1546,7 +1538,6 @@ impl<'a> Lowering<'a> {
                 _ => break,
             }
         }
-        let body = cursor.body;
         statements[start..]
             .iter()
             .filter_map(|statement| {
@@ -1564,8 +1555,7 @@ impl<'a> Lowering<'a> {
                     .rev()
                     .find(|drop| drop.symbol == *symbol)?;
                 let key_path = key_path
-                    .as_ref()
-                    .and_then(|key_path| Self::ownership_key_path_from_mir(body, key_path))
+                    .clone()
                     .unwrap_or_else(|| drop.key_path.clone());
                 let elaboration = self.drop_elaboration_at(statement, Some(&key_path));
                 Some(PendingDrop {

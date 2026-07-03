@@ -9,10 +9,10 @@ use indexmap::IndexMap;
 
 use crate::compiling::driver::Source;
 use crate::compiling::module::ModuleId;
+use crate::flow::OwnershipError;
 use crate::hir::{self, HirFile};
 use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
-use crate::flow::OwnershipError;
 use crate::types::ty::Ty;
 
 pub(crate) fn check(
@@ -27,7 +27,9 @@ pub(crate) fn check(
         if source_allows_unsafe(source) {
             continue;
         }
-        let mut visitor = RawPtrVisitor { errors: &mut errors };
+        let mut visitor = RawPtrVisitor {
+            errors: &mut errors,
+        };
         for root in &file.roots {
             use derive_visitor::Drive;
             root.drive(&mut visitor);

@@ -229,7 +229,9 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false, heap: false,
+            any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -244,7 +246,11 @@ pub mod tests {
         let parsed = parse("struct Token 'linear {\n\tlet id: Int\n}");
         assert!(matches!(
             &parsed.roots[0].as_decl().kind,
-            DeclKind::Struct { linear: true, heap: false, .. }
+            DeclKind::Struct {
+                linear: true,
+                heap: false,
+                ..
+            }
         ));
     }
 
@@ -253,7 +259,11 @@ pub mod tests {
         let parsed = parse("struct Node 'heap {\n\tlet value: Int\n}");
         assert!(matches!(
             &parsed.roots[0].as_decl().kind,
-            DeclKind::Struct { heap: true, linear: false, .. }
+            DeclKind::Struct {
+                heap: true,
+                linear: false,
+                ..
+            }
         ));
     }
 
@@ -280,7 +290,9 @@ pub mod tests {
         let lexer = Lexer::new("linear struct Token {}");
         let parser = Parser::new("-", FileID(0), lexer);
         let result = parser.parse();
-        let err = result.err().expect("the prefix form should no longer parse");
+        let err = result
+            .err()
+            .expect("the prefix form should no longer parse");
         assert!(
             err.to_string().contains("'linear"),
             "the error should point at the new attribute form: {err}"
@@ -312,9 +324,8 @@ pub mod tests {
     fn parses_multiline_labeled_arguments() {
         // The formatter wraps long labeled calls one argument per line;
         // the parser must read its own output back.
-        let parsed = parse(
-            "let node = RouteNode(\n\tpath: path,\n\thandler: wrapped,\n\tnext: routes\n)",
-        );
+        let parsed =
+            parse("let node = RouteNode(\n\tpath: path,\n\thandler: wrapped,\n\tnext: routes\n)");
         assert_eq!(parsed.roots.len(), 1);
     }
 
@@ -1687,7 +1698,8 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Enum { linear: false,
+            any_decl!(DeclKind::Enum {
+                linear: false,
                 name: "Fizz".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -1751,7 +1763,8 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Enum { linear: false,
+            any_decl!(DeclKind::Enum {
+                linear: false,
                 name: "Fizz".into(),
                 name_span: Span::ANY,
                 generics: vec![
@@ -1814,7 +1827,8 @@ pub mod tests {
         );
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Enum { linear: false,
+            any_decl!(DeclKind::Enum {
+                linear: false,
                 name: "Fizz".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -1880,7 +1894,8 @@ pub mod tests {
         );
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Enum { linear: false,
+            any_decl!(DeclKind::Enum {
+                linear: false,
                 name: "Fizz".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2143,7 +2158,8 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Enum { linear: false,
+            any_decl!(DeclKind::Enum {
+                linear: false,
                 name: "MyEnum".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2398,7 +2414,9 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false, heap: false,
+            any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2422,7 +2440,9 @@ pub mod tests {
 
         assert_eq_diff!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false, heap: false,
+            any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2476,7 +2496,9 @@ pub mod tests {
 
         assert_eq_diff!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false, heap: false,
+            any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2530,7 +2552,9 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false, heap: false,
+            any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2571,7 +2595,9 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false, heap: false,
+            any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
@@ -2651,7 +2677,9 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Struct { linear: false, heap: false,
+            any_decl!(DeclKind::Struct {
+                linear: false,
+                heap: false,
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],

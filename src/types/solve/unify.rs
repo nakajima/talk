@@ -67,17 +67,15 @@ impl<'s> Solver<'s> {
                 ));
             }
 
-            (Ty::Borrow(p1, inner1), Ty::Borrow(p2, inner2)) => {
-                match self.unify_perm(*p1, *p2) {
-                    PermUnify::Ok => worklist.push(Constraint::Eq(
-                        (**inner1).clone(),
-                        (**inner2).clone(),
-                        origin,
-                    )),
-                    PermUnify::Mismatch => self.report_mismatch(&a, &b, origin),
-                    PermUnify::Defer => return false,
-                }
-            }
+            (Ty::Borrow(p1, inner1), Ty::Borrow(p2, inner2)) => match self.unify_perm(*p1, *p2) {
+                PermUnify::Ok => worklist.push(Constraint::Eq(
+                    (**inner1).clone(),
+                    (**inner2).clone(),
+                    origin,
+                )),
+                PermUnify::Mismatch => self.report_mismatch(&a, &b, origin),
+                PermUnify::Defer => return false,
+            },
 
             (Ty::Borrow(_, inner), other) if origin.reason == CtReason::Apply => {
                 worklist.push(Constraint::Eq(

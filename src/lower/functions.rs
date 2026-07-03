@@ -90,6 +90,24 @@ impl<'a> Lowering<'a> {
         for (symbol, extract) in mutated_params {
             prologue.push((symbol, extract));
         }
+        let is_mutating = self.mutating.contains(&symbol);
+        let is_init = self.is_init(symbol);
+        // An init's self is constructed and delivered to the caller, never
+        // dropped in the body — the flow checker seeds no init params, so
+        // the MIR builder must not either.
+        let drop_params: &[crate::hir::Parameter] = if is_init { &[] } else { source_params };
+        let self_symbol = source_params
+            .first()
+            .and_then(|param| param.name.symbol().ok());
+        if is_init {
+            ctx.initializing_self = self_symbol;
+        }
+        // The flow-annotated MIR body (the same one `lower_block` reuses
+        // below): a parameter moved on only some paths has Conditional
+        // drops annotated here, which need flag cells like a let-bind's.
+        let mir_body = self.annotated_body(source_body, &ctx, |types, owner, block| {
+            mir::build_function(types, owner, drop_params, block)
+        });
         // Owned by-value parameters: consumed arguments' drops ride the
         // callee, so the flow checker schedules them at body exit — seed
         // the drop stack so those candidates resolve (`'heap`-carrying
@@ -101,6 +119,7 @@ impl<'a> Lowering<'a> {
                 _ => None,
             })
             .unwrap_or_default();
+        let mut param_drops: Vec<DropBinding> = vec![];
         for (index, param) in source_params.iter().enumerate() {
             let Ok(param_symbol) = param.name.symbol() else {
                 continue;
@@ -121,130 +140,119 @@ impl<'a> Lowering<'a> {
             {
                 continue;
             }
-            ctx.drop_stack.push(DropBinding {
+            param_drops.push(DropBinding {
                 symbol: param_symbol,
-                key_path: OwnershipKeyPath::root(param_symbol),
+                key_path: Place::root(param_symbol),
                 ty: param_ty,
-                dynamic_flags: vec![],
+                dynamic_flags: self.drop_flag_keys_for_symbol(&mir_body, param_symbol),
             });
         }
-        let is_mutating = self.mutating.contains(&symbol);
-        let is_init = self.is_init(symbol);
-        // An init's self is constructed and delivered to the caller, never
-        // dropped in the body — the flow checker seeds no init params, so
-        // the MIR builder must not either.
-        let drop_params: &[crate::hir::Parameter] = if is_init { &[] } else { source_params };
-        let self_symbol = source_params
-            .first()
-            .and_then(|param| param.name.symbol().ok());
-        if is_init {
-            ctx.initializing_self = self_symbol;
-        }
-        let body = self.with_cells(&prologue, &mut ctx, |this, ctx| {
-            // Construction semantics: an init's caller receives self, not
-            // the body's final value — wrap the ret continuation to drop
-            // the value and deliver self's current state.
-            if is_init && let Some(self_symbol) = self_symbol {
-                let self_now = match ctx.env.get(&self_symbol).copied() {
-                    Some(Binding::Cell(cell)) => match *this.p.ty_kind(this.p.expr_ty(cell)) {
-                        TyKind::Cell(inner) => this.p.primop(Op::CellGet, &[cell], inner),
-                        _ => {
+        ctx.drop_stack.extend(param_drops.clone());
+        let body = self.with_drop_flags(&param_drops, &mut ctx, |this, ctx| {
+            this.with_cells(&prologue, ctx, |this, ctx| {
+                // Construction semantics: an init's caller receives self, not
+                // the body's final value — wrap the ret continuation to drop
+                // the value and deliver self's current state.
+                if is_init && let Some(self_symbol) = self_symbol {
+                    let self_now = match ctx.env.get(&self_symbol).copied() {
+                        Some(Binding::Cell(cell)) => match *this.p.ty_kind(this.p.expr_ty(cell)) {
+                            TyKind::Cell(inner) => this.p.primop(Op::CellGet, &[cell], inner),
+                            _ => {
+                                this.diagnostics
+                                    .push("lowering: init self cell without a cell type".into());
+                                this.p.void()
+                            }
+                        },
+                        Some(Binding::Value(value)) => value,
+                        None => {
                             this.diagnostics
-                                .push("lowering: init self cell without a cell type".into());
+                                .push("lowering: init without a self binding".into());
                             this.p.void()
                         }
-                    },
-                    Some(Binding::Value(value)) => value,
-                    None => {
+                    };
+                    let body_value_ty = block_value_ty(this, source_body, ctx);
+                    let bot = this.p.ty_bot();
+                    let wrap = this.p.func("init_ret", body_value_ty, bot);
+                    let orig_ret = ctx.ret_k;
+                    // A `'heap` init attaches the instantiation's finalizer
+                    // thunk to the fresh object before delivering it (the thunk
+                    // rides as a function value so its captures resolve here).
+                    let owner = this.units.iter().find_map(|u| {
+                        u.types
+                            .catalog
+                            .structs
+                            .iter()
+                            .find(|(_, info)| info.inits.contains(&symbol))
+                            .map(|(owner, info)| (*owner, info.params.clone()))
+                    });
+                    let finalizer = owner.and_then(|(head, params)| {
+                        if !this.symbol_is_heap(head) {
+                            return None;
+                        }
+                        let args: Vec<CheckTy> = params
+                            .iter()
+                            .map(|param| {
+                                ctx.theta
+                                    .get(param)
+                                    .cloned()
+                                    .unwrap_or(CheckTy::Param(*param))
+                            })
+                            .collect();
+                        this.finalizer_thunk(ctx, head, &args)
+                    });
+                    let wrap_body = match finalizer {
+                        Some(thunk) => {
+                            let self_ty = this.p.expr_ty(self_now);
+                            let deliver = this.p.func("attach_finalizer", self_ty, bot);
+                            let bound_self = this.p.var(deliver);
+                            let void_ty = this.p.ty_void();
+                            let thunk_ref = this.p.func_ref(thunk);
+                            let attach =
+                                this.p
+                                    .primop(Op::SetFinalizer, &[bound_self, thunk_ref], void_ty);
+                            let done = this.p.app(orig_ret, bound_self);
+                            let body = this.sequence_void_effect(attach, done);
+                            this.p.set_body(deliver, body);
+                            let deliver_ref = this.p.func_ref(deliver);
+                            this.p.app(deliver_ref, self_now)
+                        }
+                        None => this.p.app(orig_ret, self_now),
+                    };
+                    this.p.set_body(wrap, wrap_body);
+                    ctx.ret_k = this.p.func_ref(wrap);
+                    ctx.tail_k = ctx.ret_k;
+                }
+                // Inout self: wrap the ret continuation so every return
+                // delivers [result, current Self] (read from self's cell).
+                if is_mutating && let Some(self_symbol) = self_symbol {
+                    let Some(Binding::Cell(self_cell)) = ctx.env.get(&self_symbol).copied() else {
                         this.diagnostics
-                            .push("lowering: init without a self binding".into());
-                        this.p.void()
-                    }
-                };
-                let body_value_ty = block_value_ty(this, source_body, ctx);
-                let bot = this.p.ty_bot();
-                let wrap = this.p.func("init_ret", body_value_ty, bot);
-                let orig_ret = ctx.ret_k;
-                // A `'heap` init attaches the instantiation's finalizer
-                // thunk to the fresh object before delivering it (the thunk
-                // rides as a function value so its captures resolve here).
-                let owner = this.units.iter().find_map(|u| {
-                    u.types
-                        .catalog
-                        .structs
-                        .iter()
-                        .find(|(_, info)| info.inits.contains(&symbol))
-                        .map(|(owner, info)| (*owner, info.params.clone()))
-                });
-                let finalizer = owner.and_then(|(head, params)| {
-                    if !this.symbol_is_heap(head) {
-                        return None;
-                    }
-                    let args: Vec<CheckTy> = params
-                        .iter()
-                        .map(|param| {
-                            ctx.theta
-                                .get(param)
-                                .cloned()
-                                .unwrap_or(CheckTy::Param(*param))
-                        })
-                        .collect();
-                    this.finalizer_thunk(ctx, head, &args)
-                });
-                let wrap_body = match finalizer {
-                    Some(thunk) => {
-                        let self_ty = this.p.expr_ty(self_now);
-                        let deliver = this.p.func("attach_finalizer", self_ty, bot);
-                        let bound_self = this.p.var(deliver);
-                        let void_ty = this.p.ty_void();
-                        let thunk_ref = this.p.func_ref(thunk);
-                        let attach = this.p.primop(
-                            Op::SetFinalizer,
-                            &[bound_self, thunk_ref],
-                            void_ty,
-                        );
-                        let done = this.p.app(orig_ret, bound_self);
-                        let body = this.sequence_void_effect(attach, done);
-                        this.p.set_body(deliver, body);
-                        let deliver_ref = this.p.func_ref(deliver);
-                        this.p.app(deliver_ref, self_now)
-                    }
-                    None => this.p.app(orig_ret, self_now),
-                };
-                this.p.set_body(wrap, wrap_body);
-                ctx.ret_k = this.p.func_ref(wrap);
-                ctx.tail_k = ctx.ret_k;
-            }
-            // Inout self: wrap the ret continuation so every return
-            // delivers [result, current Self] (read from self's cell).
-            if is_mutating && let Some(self_symbol) = self_symbol {
-                let Some(Binding::Cell(self_cell)) = ctx.env.get(&self_symbol).copied() else {
-                    this.diagnostics
-                        .push("lowering: mutating method without a self cell".into());
-                    let ret_k = ctx.ret_k;
-                    return this.lower_block(source_body, drop_params, ctx, ret_k);
-                };
-                let TyKind::Fn(pair_ty, _) = *this.p.ty_kind(this.p.expr_ty(ctx.ret_k)) else {
-                    unreachable!("ret continuation is not a function");
-                };
-                let TyKind::Tuple(items) = this.p.ty_kind(pair_ty) else {
-                    unreachable!("mutating ret payload is not a tuple");
-                };
-                let result_ty = items[0];
-                let self_ty = items[1];
-                let bot = this.p.ty_bot();
-                let wrap = this.p.func("ret_inout", result_ty, bot);
-                let result = this.p.var(wrap);
-                let self_now = this.p.primop(Op::CellGet, &[self_cell], self_ty);
-                let pair = this.p.tuple(&[result, self_now]);
-                let orig_ret = ctx.ret_k;
-                let wrap_body = this.p.app(orig_ret, pair);
-                this.p.set_body(wrap, wrap_body);
-                ctx.ret_k = this.p.func_ref(wrap);
-                ctx.tail_k = ctx.ret_k;
-            }
-            let ret_k = ctx.ret_k;
-            this.lower_block(source_body, drop_params, ctx, ret_k)
+                            .push("lowering: mutating method without a self cell".into());
+                        let ret_k = ctx.ret_k;
+                        return this.lower_block(source_body, drop_params, ctx, ret_k);
+                    };
+                    let TyKind::Fn(pair_ty, _) = *this.p.ty_kind(this.p.expr_ty(ctx.ret_k)) else {
+                        unreachable!("ret continuation is not a function");
+                    };
+                    let TyKind::Tuple(items) = this.p.ty_kind(pair_ty) else {
+                        unreachable!("mutating ret payload is not a tuple");
+                    };
+                    let result_ty = items[0];
+                    let self_ty = items[1];
+                    let bot = this.p.ty_bot();
+                    let wrap = this.p.func("ret_inout", result_ty, bot);
+                    let result = this.p.var(wrap);
+                    let self_now = this.p.primop(Op::CellGet, &[self_cell], self_ty);
+                    let pair = this.p.tuple(&[result, self_now]);
+                    let orig_ret = ctx.ret_k;
+                    let wrap_body = this.p.app(orig_ret, pair);
+                    this.p.set_body(wrap, wrap_body);
+                    ctx.ret_k = this.p.func_ref(wrap);
+                    ctx.tail_k = ctx.ret_k;
+                }
+                let ret_k = ctx.ret_k;
+                this.lower_block(source_body, drop_params, ctx, ret_k)
+            })
         });
         self.p.set_body(label, body);
     }

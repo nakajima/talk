@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (2026-07-02)
+## Unreleased (2026-07-03)
 
 Talk's memory story is rebuilt end to end. Ownership lives in the type
 system — permissions and grades, with a small flow pass for the
@@ -114,9 +114,72 @@ classification is otherwise derived from a type's structure and grade.
 
 ### Fixed
 
+- **`for x in xs { x in … }` (a body block with its own argument) works.**
+  The desugar bound the block argument as a second, never-reseeded
+  symbol, so the body's argument was untyped and a `match` on it reported
+  a false "Use of moved value" on every iteration after the first.
+- **Matching variant patterns on iterator elements works.** Iterating a
+  container yields borrowed elements; variant patterns on a scrutinee
+  whose element type was still being inferred pinned it to the owned enum
+  ("expected &E, found E"). Pattern matching now looks through the borrow
+  once the element type resolves — `for e in items { match e { .a(x) ->
+  … } }` is usable for any enum container.
+- **Matching a borrowed enum no longer double-frees its payloads.** Arm
+  binders over a borrowed scrutinee are aliases; they no longer drop
+  values the owner still holds, and moving a payload out routes through
+  the silent-clone rule (or errors) instead of silently consuming the
+  owner's buffer.
+- **`as` expressions run.** `1 as Int` and packing ascriptions like
+  `41 as any Number` previously failed to lower ("expression not yet
+  supported"); the coercion now erases at the HIR boundary and the
+  ascribed pack applies to the value.
 - **The formatter's multiline labeled calls now re-parse.** Argument
   lists accept newlines between arguments (and a trailing comma before
   `)`), so formatting a long labeled call no longer produces unparseable
   code.
 - **`typealias` formats with spaced `=`** (`typealias Target = Response`,
   not `Target=Response`).
+
+### Compiler internals
+
+The middle end is rebuilt around a small core (the strangler arc of the
+core-IR plan, C1–C6):
+
+- **A desugar phase** runs between parsing and name resolution
+  (`src/desugar/`): for-loops, operators, `func`-to-`let`, method `self`,
+  and expression-`if` → boolean `match` all collapse before any analysis
+  runs; the name resolver only binds names.
+- **The HIR is Core-shaped.** Literal forms merged, `as` and
+  parenthesization erased at build, stored-field reads (`Proj`) and
+  variant constructions (`Con`) split from `Member`/`Call` by the
+  checker's resolutions — every type-directed classification happens
+  once, at HIR build, instead of per analysis.
+- **Flow analysis is pure CFG dataflow** (ADR 0010 completed): handler
+  bodies and trailing blocks are basic blocks with may-execute edges; the
+  tree-walking checker is deleted. `break`/`continue`/`return` are edges,
+  conditional-path moves join correctly at loop heads, and early-exit
+  drops are target-relative.
+- **MIR statements are evaluation units.** Matches lower through
+  value-carrying join points, and calls/performs evaluate at their own
+  statements with results flowing through temporaries — expression trees
+  embedded in statements are straight-line and pure. Abortable calls and
+  resumable performs split the continuation at their own statement, so
+  the old "statement spine" restriction is local.
+- **`lower/` is decomposed by concern** (demand/monomorphization,
+  functions, matches, values, closures, calls, effects, splices, θ).
+
+### Testing
+
+- **Leak detection is suite policy.** Every program-running test executes
+  on the allocation-tracking evaluator and asserts that allocations and
+  `'heap` objects balance to zero at exit (scalar-valued programs; a
+  program whose value carries buffers legitimately holds them). The known
+  deficit — containers do not yet tear down their elements' buffers, and
+  the builtin io path does not drop its by-value arguments — is fenced by
+  the greppable `eval_expecting_container_element_leak`, deleted when
+  element teardown lands (the buffers are already refcounted; teardown is
+  an element-release loop at last release).
+- **A real-program corpus** (`tests/programs/`): small, complete,
+  idiomatic programs (iterate-and-match, string building, conditional
+  moves in loops, effect handlers, `'heap` graphs) checked and run on
+  both engines with stdout equality under the balance policy.

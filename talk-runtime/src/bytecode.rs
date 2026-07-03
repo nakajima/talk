@@ -1097,9 +1097,11 @@ impl Insn {
             Insn::SetFinalizer { obj, closure } => {
                 Register::new(n_regs).check_many(&[obj, closure])?
             }
-            Insn::ObjectGet { dest, obj, index: _ } => {
-                Register::new(n_regs).check_many(&[dest, obj])?
-            }
+            Insn::ObjectGet {
+                dest,
+                obj,
+                index: _,
+            } => Register::new(n_regs).check_many(&[dest, obj])?,
             Insn::ObjectSet { obj, src, index: _ } => {
                 Register::new(n_regs).check_many(&[obj, src])?
             }

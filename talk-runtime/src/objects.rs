@@ -56,9 +56,7 @@ pub enum ObjectError {
 impl ObjectError {
     pub fn message(&self) -> &'static str {
         match self {
-            ObjectError::StoreDuringTeardown => {
-                "cannot store an object during region teardown"
-            }
+            ObjectError::StoreDuringTeardown => "cannot store an object during region teardown",
             ObjectError::ReleaseUnderflow => "region released more times than acquired",
             ObjectError::DeadObject => "use of an object in a dead region",
             ObjectError::UnknownObject => "unknown object handle",
@@ -225,7 +223,9 @@ impl<V: Clone> Objects<V> {
             self.regions[root].owner_count -= 1;
             if self.regions[root].owner_count == 0 {
                 self.regions[root].finalizing = true;
-                self.finalize_stack.push(FinalizeState { region: root as u32 });
+                self.finalize_stack.push(FinalizeState {
+                    region: root as u32,
+                });
             }
         }
         Ok(())

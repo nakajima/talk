@@ -634,16 +634,13 @@ impl<'a> Lowering<'a> {
     /// be emitted (pure construction has no effect slot).
     pub(super) fn embeds_object_place_read(&mut self, elems: &[&Expr], ctx: &Ctx) -> bool {
         elems.iter().any(|elem| {
-            !self.rhs_is_rvalue(elem, ctx)
-                && self.contains_object_type(&self.checker_ty(elem, ctx))
+            !self.rhs_is_rvalue(elem, ctx) && self.contains_object_type(&self.checker_ty(elem, ctx))
         })
     }
 
     /// Declared `'heap` in any unit's catalog: values are object handles.
     pub(super) fn symbol_is_heap(&self, symbol: Symbol) -> bool {
-        self.units
-            .iter()
-            .any(|u| u.types.catalog.is_heap(symbol))
+        self.units.iter().any(|u| u.types.catalog.is_heap(symbol))
     }
 
     /// Witness selection (Wadler & Blott's instance method lookup, made

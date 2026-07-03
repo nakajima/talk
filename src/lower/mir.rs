@@ -6,6 +6,7 @@ use crate::{
         PatternKind, Stmt, StmtKind,
     },
     name::Name,
+    flow::{Place, place_for_expr},
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     node_kinds::{func::CaptureSpec, type_annotation::TypeAnnotation},
@@ -31,71 +32,10 @@ pub(crate) struct Scope {
     pub(crate) parent: Option<ScopeId>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub(crate) struct Local(pub(crate) usize);
-
-impl Local {
-    #[allow(dead_code)]
-    #[cfg(test)]
-    pub(crate) fn index(self) -> usize {
-        self.0
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum LocalKind {
-    Param,
-    UserLocal,
-    CompilerTemp,
-    Return,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LocalDecl {
-    pub(crate) local: Local,
-    pub(crate) symbol: Symbol,
-    pub(crate) ty: Option<Ty>,
-    pub(crate) kind: LocalKind,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum KeyPathComponent {
-    Field(Symbol),
-}
-
-/// A source-shaped storage path. This is the MIR equivalent of a place:
-/// ownership and lowering should reason about this representation instead of
-/// rediscovering roots and field paths from AST expressions.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct KeyPath {
-    pub(crate) root: Local,
-    pub(crate) components: Vec<KeyPathComponent>,
-}
-
-impl KeyPath {
-    pub(crate) fn root(root: Local) -> Self {
-        Self {
-            root,
-            components: vec![],
-        }
-    }
-
-    pub(crate) fn project(&self, component: KeyPathComponent) -> Self {
-        let mut components = self.components.clone();
-        components.push(component);
-        Self {
-            root: self.root,
-            components,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct Body {
     pub(crate) entry: BlockId,
     pub(crate) blocks: Vec<BasicBlock>,
-    pub(crate) locals: Vec<LocalDecl>,
     /// Expression-position control constructs: the construct's expr id →
     /// the block whose terminator branches into its arm blocks. Lowering
     /// lowers the construct FROM these blocks (value through the
@@ -126,12 +66,12 @@ pub(crate) struct StatementOwnership {
     /// (static / dead / conditional / open), plus the resolved key path it applies to.
     pub(crate) drop: Option<DropElaborationResult>,
     /// Key paths moved at this statement, so lowering can clear their drop flags.
-    pub(crate) moves: Vec<crate::flow::Place>,
+    pub(crate) moves: Vec<Place>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct DropElaborationResult {
-    pub(crate) key_path: crate::flow::Place,
+    pub(crate) key_path: Place,
     pub(crate) kind: DropElaboration,
 }
 
@@ -163,7 +103,7 @@ pub(crate) enum Statement {
     Read {
         node: NodeID,
         ty: Ty,
-        place: Option<crate::flow::place::Place>,
+        place: Option<Place>,
         /// Set by the annotate pass when this node's value is consumed by
         /// its consuming statement (the use is checked there, as an owned
         /// use); default-false is load-bearing — per-file error bodies
@@ -183,16 +123,15 @@ pub(crate) enum Statement {
         lhs: Pattern,
         type_annotation: Option<TypeAnnotation>,
         rhs: Option<Expr>,
-        bindings: Vec<Local>,
     },
     Assign {
         lhs: Expr,
         rhs: Expr,
-        target: Option<KeyPath>,
+        target: Option<Place>,
     },
     DropCandidate {
         target: DropTarget,
-        key_path: Option<KeyPath>,
+        key_path: Option<Place>,
         reason: DropReason,
         /// The HIR node whose flow results elaborate this candidate: the
         /// scope's source block for `ScopeExit`, the jumping/assigning
@@ -359,8 +298,6 @@ struct Builder<'types> {
     grades: crate::flow::grades::GradeView<'types>,
     blocks: Vec<BasicBlock>,
     scopes: Vec<Scope>,
-    locals: Vec<LocalDecl>,
-    local_by_symbol: FxHashMap<Symbol, Local>,
     scope_stack: Vec<ScopeFrame>,
     loop_stack: Vec<LoopTargets>,
     handler_stack: Vec<HandlerTargets>,
@@ -472,9 +409,7 @@ pub(crate) fn build_nodes(types: &TypeOutput, nodes: &[Node]) -> Body {
 /// statements and non-func `let` declarations, in source order — the same
 /// filter `lower_main` applies, shared so the flow checker analyzes and
 /// annotates exactly the body lowering runs.
-pub fn main_body_nodes<'a>(
-    files: impl Iterator<Item = &'a crate::hir::HirFile>,
-) -> Vec<Node> {
+pub fn main_body_nodes<'a>(files: impl Iterator<Item = &'a crate::hir::HirFile>) -> Vec<Node> {
     let mut nodes = vec![];
     for file in files {
         for root in &file.roots {
@@ -584,8 +519,6 @@ impl<'types> Builder<'types> {
             grades: crate::flow::grades::GradeView::new(types),
             blocks: vec![],
             scopes: vec![],
-            locals: vec![],
-            local_by_symbol: FxHashMap::default(),
             scope_stack: vec![],
             loop_stack: vec![],
             handler_stack: vec![],
@@ -650,53 +583,7 @@ impl<'types> Builder<'types> {
         Body {
             entry,
             blocks: self.blocks,
-            locals: self.locals,
             scaffolds: self.scaffolds,
-        }
-    }
-
-    fn declare_local(&mut self, symbol: Symbol, ty: Option<Ty>, kind: LocalKind) -> Local {
-        if let Some(local) = self.local_by_symbol.get(&symbol).copied() {
-            return local;
-        }
-        let local = Local(self.locals.len());
-        self.locals.push(LocalDecl {
-            local,
-            symbol,
-            ty,
-            kind,
-        });
-        self.local_by_symbol.insert(symbol, local);
-        local
-    }
-
-    fn declare_symbol_local(&mut self, symbol: Symbol, kind: LocalKind) -> Local {
-        let ty = self
-            .types
-            .schemes
-            .get(&symbol)
-            .map(|scheme| scheme.ty.clone());
-        self.declare_local(symbol, ty, kind)
-    }
-
-    fn local_for_symbol(&mut self, symbol: Symbol) -> Local {
-        self.local_by_symbol
-            .get(&symbol)
-            .copied()
-            .unwrap_or_else(|| self.declare_symbol_local(symbol, LocalKind::UserLocal))
-    }
-
-    fn key_path_for_expr(&mut self, expr: &Expr) -> Option<KeyPath> {
-        match &expr.kind {
-            ExprKind::Variable(name) => {
-                let symbol = name.symbol().ok()?;
-                Some(KeyPath::root(self.local_for_symbol(symbol)))
-            }
-            ExprKind::Proj(receiver, _, field) => Some(
-                self.key_path_for_expr(receiver)?
-                    .project(KeyPathComponent::Field(*field)),
-            ),
-            _ => None,
         }
     }
 
@@ -766,10 +653,11 @@ impl<'types> Builder<'types> {
         match node {
             Node::Decl(decl) => self.lower_decl(decl, current),
             Node::Stmt(Stmt {
-                kind: StmtKind::Expr(Expr {
-                    kind: ExprKind::Block(_),
-                    ..
-                }),
+                kind:
+                    StmtKind::Expr(Expr {
+                        kind: ExprKind::Block(_),
+                        ..
+                    }),
                 ..
             }) if !consume_expr_value => current,
             Node::Stmt(Stmt {
@@ -780,12 +668,7 @@ impl<'types> Builder<'types> {
             Node::Expr(expr) => {
                 let current = self.lower_expr(expr, current);
                 if consume_expr_value {
-                    self.push_statement(
-                        current,
-                        Statement::ConsumeValue {
-                            expr: expr.clone(),
-                        },
-                    );
+                    self.push_statement(current, Statement::ConsumeValue { expr: expr.clone() });
                 }
                 current
             }
@@ -824,10 +707,7 @@ impl<'types> Builder<'types> {
                     Some(rhs) => self.lower_expr(rhs, current),
                     None => current,
                 };
-                let mut bindings = vec![];
                 for (id, symbol) in lhs.collect_binders() {
-                    let local = self.declare_symbol_local(symbol, LocalKind::UserLocal);
-                    bindings.push(local);
                     self.push_statement(current, Statement::StorageLive { id, symbol });
                     if let Some(scope) = self.scope_stack.last_mut() {
                         scope.locals.push((id, symbol));
@@ -839,7 +719,6 @@ impl<'types> Builder<'types> {
                         lhs: lhs.clone(),
                         type_annotation: type_annotation.clone(),
                         rhs: rhs.clone(),
-                        bindings,
                     },
                 );
                 current
@@ -926,12 +805,7 @@ impl<'types> Builder<'types> {
             }),
             StmtKind::Expr(expr) => {
                 let current = self.lower_expr(expr, current);
-                self.push_statement(
-                    current,
-                    Statement::ConsumeValue {
-                        expr: expr.clone(),
-                    },
-                );
+                self.push_statement(current, Statement::ConsumeValue { expr: expr.clone() });
                 current
             }
             StmtKind::Return(Some(expr)) => {
@@ -956,12 +830,7 @@ impl<'types> Builder<'types> {
                 // `continue v` is a RESUME: the handler-body path ends at
                 // the handling construct's join, never at a loop header.
                 let current = self.lower_expr(expr, current);
-                self.push_statement(
-                    current,
-                    Statement::ContinueValue {
-                        expr: expr.clone(),
-                    },
-                );
+                self.push_statement(current, Statement::ContinueValue { expr: expr.clone() });
                 if let Some(handler) = self.handler_stack.last().copied() {
                     self.emit_early_exit_drops(current, stmt.id, handler.scope_depth);
                     self.terminate_if_open(current, Terminator::Jump(handler.join));
@@ -999,7 +868,7 @@ impl<'types> Builder<'types> {
             StmtKind::Assignment(lhs, rhs) => {
                 let current = self.lower_expr(rhs, current);
                 self.lower_assignment_lhs(lhs, current);
-                let target_key_path = self.key_path_for_expr(lhs);
+                let target_key_path = place_for_expr(lhs);
                 // The old value's drop; the flow checker classifies it at
                 // the pre-assignment state.
                 self.push_statement(
@@ -1058,9 +927,15 @@ impl<'types> Builder<'types> {
                     join: join_id,
                     scope_depth: self.scope_stack.len(),
                 });
+                // The handler body becomes a closure: enclosing loops are
+                // not jump targets from inside it — a break/continue here
+                // must surface as Terminator::Break/Continue (which
+                // lowering diagnoses), not a jump into the enclosing CFG.
+                let enclosing_loops = std::mem::take(&mut self.loop_stack);
                 let body_exit = self.lower_scope(body_id, body.id, |builder, body_id| {
                     builder.lower_nodes(&body.body, body_id, true, false)
                 });
+                self.loop_stack = enclosing_loops;
                 self.handler_stack.pop();
                 self.terminate_if_open(body_exit, Terminator::Jump(join_id));
                 join_id
@@ -1076,9 +951,7 @@ impl<'types> Builder<'types> {
             }
             ExprKind::LiteralArray(items)
             | ExprKind::Tuple(items)
-            | ExprKind::Con { args: items, .. } => {
-                self.lower_exprs(items, current)
-            }
+            | ExprKind::Con { args: items, .. } => self.lower_exprs(items, current),
             ExprKind::Block(block) => self.lower_scope(current, block.id, |builder, current| {
                 builder.lower_nodes(&block.body, current, true, false)
             }),
@@ -1130,9 +1003,13 @@ impl<'types> Builder<'types> {
                             join: join_id,
                         },
                     );
+                    // Like a handler body: the trailing block is a closure,
+                    // so enclosing loops are not jump targets from inside.
+                    let enclosing_loops = std::mem::take(&mut self.loop_stack);
                     let body_exit = self.lower_scope(body_id, block.id, |builder, body_id| {
                         builder.lower_nodes(&block.body, body_id, true, false)
                     });
+                    self.loop_stack = enclosing_loops;
                     self.terminate_if_open(body_exit, Terminator::Jump(join_id));
                     return join_id;
                 }
@@ -1372,7 +1249,6 @@ impl<'types> Builder<'types> {
 
     fn lower_pattern_binders(&mut self, pattern: &Pattern, current: BlockId) {
         for (id, symbol) in pattern.collect_binders() {
-            self.declare_symbol_local(symbol, LocalKind::UserLocal);
             self.push_statement(current, Statement::StorageLive { id, symbol });
             if let Some(scope) = self.scope_stack.last_mut() {
                 scope.locals.push((id, symbol));
@@ -1541,7 +1417,7 @@ impl<'types> Builder<'types> {
         let locals = self.scope_stack[frame].locals.clone();
         let param_likes = self.scope_stack[frame].param_likes.clone();
         for (id, symbol) in locals.iter().rev().copied() {
-            let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
+            let key_path = Some(Place::root(symbol));
             self.push_statement(
                 current,
                 Statement::DropCandidate {
@@ -1556,7 +1432,7 @@ impl<'types> Builder<'types> {
             }
         }
         for (id, symbol) in param_likes.iter().rev().copied() {
-            let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
+            let key_path = Some(Place::root(symbol));
             self.push_statement(
                 current,
                 Statement::DropCandidate {
@@ -1607,7 +1483,7 @@ impl<'types> Builder<'types> {
             })
             .collect();
         for (id, symbol) in locals {
-            let key_path = Some(KeyPath::root(self.local_for_symbol(symbol)));
+            let key_path = Some(Place::root(symbol));
             self.push_statement(
                 current,
                 Statement::DropCandidate {
@@ -1656,15 +1532,6 @@ impl Body {
     #[cfg(test)]
     pub(crate) fn render(&self) -> String {
         let mut out = String::new();
-        out.push_str("locals:\n");
-        for local in &self.locals {
-            out.push_str(&format!(
-                "  {} {}{}\n",
-                render_local(local.local),
-                render_local_kind(local.kind),
-                format!(" {}", local.symbol)
-            ));
-        }
         for (index, block) in self.blocks.iter().enumerate() {
             out.push_str(&format!("bb{index}:\n"));
             for statement in &block.statements {
@@ -1681,27 +1548,10 @@ impl Body {
 }
 
 #[cfg(test)]
-fn render_local(local: Local) -> String {
-    format!("%{}", local.0)
-}
-
-#[cfg(test)]
-fn render_local_kind(kind: LocalKind) -> &'static str {
-    match kind {
-        LocalKind::Param => "param",
-        LocalKind::UserLocal => "local",
-        LocalKind::CompilerTemp => "temp",
-        LocalKind::Return => "return",
-    }
-}
-
-#[cfg(test)]
-fn render_key_path(key_path: &KeyPath) -> String {
-    let mut rendered = render_local(key_path.root);
-    for component in &key_path.components {
-        match component {
-            KeyPathComponent::Field(field) => rendered.push_str(&format!(".{field}")),
-        }
+fn render_key_path(key_path: &Place) -> String {
+    let mut rendered = format!("{}", key_path.root);
+    for field in &key_path.fields {
+        rendered.push_str(&format!(".{field}"));
     }
     rendered
 }
@@ -2043,7 +1893,7 @@ mod tests {
     }
 
     #[test]
-    fn records_user_locals_for_binders() {
+    fn records_storage_lifetimes_for_binders() {
         let source = "
             func f() {
                 let first = 1
@@ -2055,15 +1905,17 @@ mod tests {
         let first = symbol_named(&names, "first");
         let second = symbol_named(&names, "second");
         with_first_func_mir(source, |body| {
-            let local_symbols: Vec<_> = body.locals.iter().map(|local| local.symbol).collect();
-            assert!(local_symbols.contains(&first), "{body:#?}");
-            assert!(local_symbols.contains(&second), "{body:#?}");
-            assert!(
-                body.locals
-                    .iter()
-                    .all(|local| matches!(local.kind, LocalKind::UserLocal)),
-                "{body:#?}"
-            );
+            let live: Vec<_> = body
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .filter_map(|statement| match statement.kind {
+                    Statement::StorageLive { symbol, .. } => Some(symbol),
+                    _ => None,
+                })
+                .collect();
+            assert!(live.contains(&first), "{body:#?}");
+            assert!(live.contains(&second), "{body:#?}");
         });
     }
 
@@ -2077,14 +1929,14 @@ mod tests {
         ";
         let rendered = with_first_func_mir(source, |body| body.render());
 
-        assert!(rendered.contains("locals:\n"), "{rendered}");
-        assert!(rendered.contains("  %0 local "), "{rendered}");
+        // The candidate's key path is the binder's place (symbol-rooted,
+        // like the flow checker's), not "<unresolved>".
+        assert!(rendered.contains("ScopeExit"), "{rendered}");
         assert!(
-            rendered.contains("drop_candidate %0 ScopeExit"),
+            !rendered.contains("drop_candidate <unresolved>"),
             "{rendered}"
         );
     }
-
 
     fn destinations(body: &Body) -> Vec<ValueDestination> {
         body.blocks
@@ -2148,4 +2000,3 @@ mod tests {
         });
     }
 }
-

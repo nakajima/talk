@@ -131,7 +131,15 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 // `continue v` inside this block resumes the perform: v
                 // checks against the effect's return type.
                 let resume_ty = sig.map(|sig| sig.ret).unwrap_or(Ty::Error);
-                self.infer_block_value(body, &ctx.with_handler_ret(resume_ty));
+                let body_ty = self.infer_block_value(body, &ctx.with_handler_ret(resume_ty));
+                // A handler that completes without resuming ABORTS the
+                // handled scope with its value, so that value must be what
+                // the scope produces (`ctx.ret`: the enclosing return, or
+                // the top-level scope's value). An always-resuming body is
+                // Never and constrains nothing.
+                if !body_ty.is_never() {
+                    self.emit_eq(ctx.ret.clone(), body_ty, stmt.id, CtReason::Body);
+                }
                 StmtValue::Unit
             }
         }

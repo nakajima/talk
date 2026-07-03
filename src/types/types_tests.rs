@@ -1005,7 +1005,7 @@ pub mod tests {
             ),
             (
                 "effects::types_handlers",
-                "\n            effect 'fizz(x: Int, y: Bool) -> Int\n\n            @handle 'fizz { a, b in\n                0\n            }\n            ",
+                "\n            effect 'fizz(x: Int, y: Bool) -> Int\n\n            @handle 'fizz { a, b in\n                continue 0\n            }\n            ",
                 true,
                 false,
             ),
@@ -2096,7 +2096,7 @@ pub mod tests {
         // perform never reaches the function's latent row (the row-typed
         // algebraic-effects reading).
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}",
+            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nsafe()",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "safe"), "() -> Int");
@@ -2110,7 +2110,7 @@ pub mod tests {
         // name lookup, handler payload types zonked from what the perform
         // sites taught the unannotated parameter.
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}",
+            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}\nouter()",
         );
         assert_clean(&t);
         let resolved = &t.phase.resolved_names;
@@ -3434,10 +3434,45 @@ mod with_core {
     }
 
     #[test]
-    fn unique_annotation_parses_and_renders() {
+    fn aborting_handler_body_must_match_the_scope_value_type() {
+        // A handler that completes without `continue` aborts the handled
+        // scope with its value: an Int-valued handler over a ()-valued
+        // scope must be a type error, not a lowering panic.
         let t = check_with_core(Source::from(
-            "func pass(x: *String) -> *String {\n\tx\n}",
+            "effect 'oops(e) -> Never\n@handle 'oops { e in\n\t42\n}\nfunc boom() 'oops -> () {\n\t'oops(\"x\")\n}\nboom()",
         ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.to_lowercase().contains("mismatch")),
+            "expected a handler/scope type mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn aborting_handler_body_must_match_the_function_return_type() {
+        let t = check_with_core(Source::from(
+            "effect 'oops(e) -> Never\nfunc f() -> Int {\n\t@handle 'oops { e in\n\t\t\"nope\"\n\t}\n\t'oops(\"x\")\n\t42\n}\nf()",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.to_lowercase().contains("mismatch")),
+            "expected a handler/return type mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn matching_and_resuming_handler_bodies_stay_clean() {
+        // An aborting handler whose value matches the scope, and an
+        // always-resuming handler (Never body), both check clean.
+        let t = check_with_core(Source::from(
+            "effect 'oops(e) -> Never\neffect 'ask(q) -> Int\n@handle 'oops { e in\n\t0\n}\n@handle 'ask { q in\n\tcontinue 1\n}\nfunc go() '[oops, ask] -> Int {\n\t'ask(\"?\")\n}\ngo()",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn unique_annotation_parses_and_renders() {
+        let t = check_with_core(Source::from("func pass(x: *String) -> *String {\n\tx\n}"));
         assert_no_errors(&t);
         let resolved = &t.phase.resolved_names;
         let _names =
@@ -3480,5 +3515,4 @@ mod with_core {
         assert_eq!(catalog.grade_of(Symbol::Int), Grade::Copy);
         assert_eq!(catalog.grade_of(Symbol::String), Grade::Affine);
     }
-
 }

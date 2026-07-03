@@ -352,7 +352,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                 if binders.contains(&symbol) {
                     inner.drop_stack.push(crate::lower::DropBinding {
                         symbol,
-                        key_path: crate::lower::OwnershipKeyPath::root(symbol),
+                        key_path: crate::lower::Place::root(symbol),
                         ty,
                         dynamic_flags: vec![],
                     });

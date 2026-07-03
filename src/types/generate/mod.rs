@@ -73,7 +73,7 @@ use crate::types::error::TypeError;
 use crate::types::output::{ExistentialPack, MemberResolution, TypeOutput};
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
-    Perm, EffTail, EffectRow, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
+    EffTail, EffectRow, Perm, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
 };
 use crate::types::variant::VariantInstantiation;
 

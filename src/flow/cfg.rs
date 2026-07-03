@@ -49,7 +49,14 @@ pub(crate) fn check_bodies(
         // COMBINED main body below carries the recording.
         let mut top = mir::build_nodes(checker.types, &file.roots);
         let liveness = Liveness::analyze(&file.roots);
-        check_body(checker, &mut top, liveness, &[], None, BodyRole::TopLevelErrors);
+        check_body(
+            checker,
+            &mut top,
+            liveness,
+            &[],
+            None,
+            BodyRole::TopLevelErrors,
+        );
 
         // Every function-like body under the roots, in pre-order —
         // mirroring `build_module_bodies`' enumeration.
@@ -146,7 +153,14 @@ impl BodyWalk<'_, '_> {
         };
         // Bodies swap in fresh liveness like `check_func`.
         let liveness = Liveness::analyze(&func.body.body);
-        check_body(self.checker, stored, liveness, &func.params, func_ty, BodyRole::Stored);
+        check_body(
+            self.checker,
+            stored,
+            liveness,
+            &func.params,
+            func_ty,
+            BodyRole::Stored,
+        );
     }
 }
 
@@ -201,6 +215,10 @@ fn check_body(
             };
             let mut state = entry.clone();
             transfer_block(checker, body, index, &mut state, true);
+            // Terminator edge effects (scrutinee consumption, arm-binder
+            // seeding) record their facts here too; the edge states are
+            // already converged and are discarded.
+            successor_states(checker, body, index, &state);
         }
         checker.recording = false;
 
@@ -225,6 +243,9 @@ fn check_body(
             };
             let mut state = entry.clone();
             transfer_block(checker, body, index, &mut state, false);
+            // Terminator edge effects report their errors here (each block
+            // is visited once, so nothing double-reports).
+            successor_states(checker, body, index, &state);
         }
         checker.report_errors = false;
     }
@@ -363,12 +384,10 @@ fn transfer_statement(
         mir::Statement::DeclBody { body } => {
             transfer_decl_body(checker, body, state);
         }
-        mir::Statement::DropCandidate {
-            target,
-            reason,
-            ..
-        } => {
-            return Some(classify_candidate(checker, target, *reason, state, annotate));
+        mir::Statement::DropCandidate { target, reason, .. } => {
+            return Some(classify_candidate(
+                checker, target, *reason, state, annotate,
+            ));
         }
     }
     None

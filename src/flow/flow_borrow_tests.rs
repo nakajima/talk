@@ -6,12 +6,15 @@ use crate::compiling::driver::{Driver, DriverConfig, Source, Typed};
 use crate::diagnostic::AnyDiagnostic;
 
 fn flow_driver(source: &str) -> Driver<Typed> {
-    Driver::new(vec![Source::from(source)], DriverConfig::new("FlowBorrowTest"))
-        .parse()
-        .expect("parse failed")
-        .resolve_names()
-        .expect("name resolution failed")
-        .type_check()
+    Driver::new(
+        vec![Source::from(source)],
+        DriverConfig::new("FlowBorrowTest"),
+    )
+    .parse()
+    .expect("parse failed")
+    .resolve_names()
+    .expect("name resolution failed")
+    .type_check()
 }
 
 fn flow_errors(source: &str) -> Vec<String> {
@@ -72,9 +75,7 @@ fn allows_global_iterator_over_global_array() {
     // A borrow-wrapping global is fine when its loans are rooted in other
     // globals: both live for the whole program, and reassignment of the
     // owner is rejected program-wide (see the test below).
-    assert_no_errors(
-        "let numbers = [1, 2, 3]\nlet it = numbers.iter()\nprint(it.next())",
-    );
+    assert_no_errors("let numbers = [1, 2, 3]\nlet it = numbers.iter()\nprint(it.next())");
 }
 
 #[test]
@@ -90,18 +91,12 @@ fn rejects_function_assigning_a_globally_borrowed_global() {
 
 #[test]
 fn rejects_borrow_typed_struct_field() {
-    assert_error_contains(
-        "struct Holder {\n\tlet r: &String\n}",
-        "cannot be stored",
-    );
+    assert_error_contains("struct Holder {\n\tlet r: &String\n}", "cannot be stored");
 }
 
 #[test]
 fn rejects_borrow_typed_enum_payload() {
-    assert_error_contains(
-        "enum Holder {\n\tcase r(&String)\n}",
-        "cannot be stored",
-    );
+    assert_error_contains("enum Holder {\n\tcase r(&String)\n}", "cannot be stored");
 }
 
 #[test]
@@ -461,6 +456,16 @@ fn allows_owner_move_after_borrow_last_use() {
 fn rejects_owner_move_while_borrow_has_later_use() {
     assert_error_contains(
         "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.slice(0, 1)\n\tlet moved = s\n\tsub.length\n}",
+        "Cannot move 's' while it is borrowed as 'sub'",
+    );
+}
+
+#[test]
+fn rejects_match_scrutinee_move_while_borrowed() {
+    // Scrutinee consumption happens at the Switch terminator: the check
+    // must run in the error pass too, not only the silent fixpoint.
+    assert_error_contains(
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.slice(0, 1)\n\tlet n = match s {\n\t\t_ -> 1\n\t}\n\tsub.length + n\n}",
         "Cannot move 's' while it is borrowed as 'sub'",
     );
 }
