@@ -286,7 +286,8 @@ impl MoveChecker<'_> {
     /// Use of a borrow whose owner has moved or been reassigned.
     pub(crate) fn check_invalidated_use(
         &mut self,
-        expr: &hir::Expr,
+        node: NodeID,
+        ty: &Ty,
         place: &Place,
         state: &MoveState,
     ) {
@@ -294,9 +295,9 @@ impl MoveChecker<'_> {
             let error = OwnershipError::UseAfterInvalidatedBorrow {
                 name: self.render(borrower),
                 owner: self.render(owner),
-                ty: expr.ty.render_mono(),
+                ty: ty.render_mono(),
             };
-            self.error(error, expr.id);
+            self.error(error, node);
         }
     }
 
@@ -338,7 +339,9 @@ impl MoveChecker<'_> {
                 args,
                 ..
             } => self.call_provenance(callee, args, state),
-            ExprKind::Tuple(items) | ExprKind::LiteralArray(items) => {
+            ExprKind::Tuple(items)
+            | ExprKind::LiteralArray(items)
+            | ExprKind::Con { args: items, .. } => {
                 let mut provenance = Provenance::default();
                 for item in items {
                     if self.grades.contains_borrowed(&item.ty) {
@@ -361,13 +364,14 @@ impl MoveChecker<'_> {
                 }
                 provenance
             }
-            ExprKind::As(inner, _) => self.expr_provenance(inner, state),
             // A literal is static data: a borrow of it outlives everything.
-            ExprKind::LiteralString(_)
-            | ExprKind::LiteralInt(_)
-            | ExprKind::LiteralFloat(_)
-            | ExprKind::LiteralTrue
-            | ExprKind::LiteralFalse => Provenance::direct(Origin::Static, None, Perm::Shared),
+            ExprKind::Lit(_) => Provenance::direct(Origin::Static, None, Perm::Shared),
+            // A call-result temp: recorded at its Call statement.
+            ExprKind::Temp(temp) => state
+                .temp_provenances
+                .get(temp)
+                .cloned()
+                .unwrap_or_else(|| Provenance::unknown(Perm::Shared)),
             _ => Provenance::unknown(Perm::Shared),
         }
     }
@@ -594,7 +598,7 @@ impl MoveChecker<'_> {
         }
     }
 
-    fn call_provenance(
+    pub(crate) fn call_provenance(
         &mut self,
         callee: &hir::Expr,
         args: &[hir::CallArg],
@@ -602,9 +606,7 @@ impl MoveChecker<'_> {
     ) -> Provenance {
         // Method call: a borrowed self parameter means the result borrows
         // from the receiver.
-        if let ExprKind::Member(Some(receiver), _) = &callee.kind
-            && self.place(callee).is_none()
-        {
+        if let ExprKind::Member(Some(receiver), _) = &callee.kind {
             let self_is_borrow = self
                 .member_callable_params(callee)
                 .as_ref()

@@ -13,7 +13,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::hir::{self, ExprKind};
 use crate::lower::mir;
 use crate::node_id::NodeID;
-use crate::types::TypeOutput;
 
 use super::drops::{DropReason, DropSchedule};
 use super::place::{Place, place_for_expr};
@@ -72,31 +71,25 @@ impl<'a> Annotator<'a> {
 /// every drop candidate gets its elaboration (joined from the schedules —
 /// the standalone-body fallback; the CFG engine writes per-point
 /// elaborations itself and uses [`annotate_flags_and_moves`]).
-pub(crate) fn annotate_body(types: &TypeOutput, body: &mut mir::Body, results: &FlowResults) {
-    annotate(types, body, results, true);
+pub(crate) fn annotate_body(body: &mut mir::Body, results: &FlowResults) {
+    annotate(body, results, true);
 }
 
 /// Flags, schedules-on-embedded-nodes, and move sets only — candidate
 /// elaborations stay as written (the CFG engine's per-point results).
-pub(crate) fn annotate_flags_and_moves(
-    types: &TypeOutput,
-    body: &mut mir::Body,
-    results: &FlowResults,
-) {
-    annotate(types, body, results, false);
+pub(crate) fn annotate_flags_and_moves(body: &mut mir::Body, results: &FlowResults) {
+    annotate(body, results, false);
 }
 
-fn annotate(
-    types: &TypeOutput,
-    body: &mut mir::Body,
-    results: &FlowResults,
-    elaborate_candidates: bool,
-) {
+fn annotate(body: &mut mir::Body, results: &FlowResults, elaborate_candidates: bool) {
     let mut annotator = Annotator::new(results);
     for block in &mut body.blocks {
         for statement in &mut block.statements {
+            if let mir::Statement::Read { node, consumes, .. } = &mut statement.kind {
+                *consumes = results.consumed.contains(node);
+            }
             drive_embedded(&mut statement.kind, &mut annotator);
-            statement.ownership.moves = statement_moves(types, &statement.kind);
+            statement.ownership.moves = statement_moves(&statement.kind);
             if elaborate_candidates
                 && let mir::Statement::DropCandidate {
                     target,
@@ -156,8 +149,8 @@ fn candidate_elaboration(
 /// tree they were cloned from).
 fn drive_embedded(statement: &mut mir::Statement, annotator: &mut Annotator) {
     match statement {
-        mir::Statement::Read { expr }
-        | mir::Statement::ConsumeValue { expr }
+        mir::Statement::Read { .. } => {}
+        mir::Statement::ConsumeValue { expr }
         | mir::Statement::ReturnValue { expr, .. }
         | mir::Statement::ContinueValue { expr } => expr.drive_mut(annotator),
         mir::Statement::Bind { lhs, rhs, .. } => {
@@ -175,10 +168,13 @@ fn drive_embedded(statement: &mut mir::Statement, annotator: &mut Annotator) {
             ..
         } => expr.drive_mut(annotator),
         mir::Statement::Call {
+            expr,
             callee,
             args,
             trailing_block,
+            ..
         } => {
+            expr.drive_mut(annotator);
             callee.drive_mut(annotator);
             for arg in args {
                 arg.drive_mut(annotator);
@@ -205,6 +201,7 @@ fn drive_embedded(statement: &mut mir::Statement, annotator: &mut Annotator) {
 
 fn drive_terminator(terminator: &mut mir::Terminator, annotator: &mut Annotator) {
     match terminator {
+        mir::Terminator::Handler { .. } => {}
         mir::Terminator::Branch { condition, .. } => condition.drive_mut(annotator),
         mir::Terminator::Switch {
             scrutinee,
@@ -237,13 +234,17 @@ fn drive_terminator(terminator: &mut mir::Terminator, annotator: &mut Annotator)
 /// Lowering clears these places' drop flags after the statement. The same
 /// expression may be embedded in more than one statement; flag-clearing is
 /// idempotent, so the duplication is harmless.
-fn statement_moves(types: &TypeOutput, statement: &mir::Statement) -> Vec<Place> {
+fn statement_moves(statement: &mir::Statement) -> Vec<Place> {
     let mut exprs: Vec<&hir::Expr> = vec![];
     match statement {
         mir::Statement::ConsumeValue { expr, .. }
         | mir::Statement::ReturnValue { expr, .. }
-        | mir::Statement::ContinueValue { expr, .. }
-        | mir::Statement::Read { expr } => exprs.push(expr),
+        | mir::Statement::ContinueValue { expr, .. } => exprs.push(expr),
+        mir::Statement::Read {
+            place: Some(place),
+            consumes: true,
+            ..
+        } => return vec![place.clone()],
         mir::Statement::Bind { rhs: Some(rhs), .. } => exprs.push(rhs),
         mir::Statement::Assign { rhs, .. } => exprs.push(rhs),
         mir::Statement::Call { callee, args, .. } => {
@@ -264,7 +265,7 @@ fn statement_moves(types: &TypeOutput, statement: &mir::Statement) -> Vec<Place>
     }
     let mut moves = vec![];
     for expr in exprs {
-        collect_consumed_places(types, expr, &mut moves);
+        collect_consumed_places(expr, &mut moves);
     }
     moves
 }
@@ -275,28 +276,29 @@ fn statement_moves(types: &TypeOutput, statement: &mir::Statement) -> Vec<Place>
 /// recursion. Nested control flow, calls, and function bodies are NOT
 /// descended: their moves ride their own statements, keeping drop-flag
 /// clearing per-path precise.
-fn collect_consumed_places(types: &TypeOutput, expr: &hir::Expr, out: &mut Vec<Place>) {
+fn collect_consumed_places(expr: &hir::Expr, out: &mut Vec<Place>) {
     if expr.ownership.consumes
-        && let Some(key_path) = place_for_expr(types, expr)
+        && let Some(key_path) = place_for_expr(expr)
     {
         out.push(key_path);
         return;
     }
     match &expr.kind {
-        ExprKind::Tuple(items) | ExprKind::LiteralArray(items) => {
+        ExprKind::Tuple(items)
+        | ExprKind::LiteralArray(items)
+        | ExprKind::Con { args: items, .. } => {
             for item in items {
-                collect_consumed_places(types, item, out);
+                collect_consumed_places(item, out);
             }
         }
         ExprKind::RecordLiteral { fields, spread } => {
             for field in fields {
-                collect_consumed_places(types, &field.value, out);
+                collect_consumed_places(&field.value, out);
             }
             if let Some(spread) = spread {
-                collect_consumed_places(types, spread, out);
+                collect_consumed_places(spread, out);
             }
         }
-        ExprKind::As(inner, _) => collect_consumed_places(types, inner, out),
         _ => {}
     }
 }
@@ -335,11 +337,7 @@ impl CollectedSchedules {
 
 /// Annotate a MIR body from the annotations already present on the HIR
 /// subtree it was built from (the standalone-body fallback).
-pub(crate) fn annotate_body_from_hir(
-    types: &TypeOutput,
-    body: &mut mir::Body,
-    collected: &CollectedSchedules,
-) {
+pub(crate) fn annotate_body_from_hir(body: &mut mir::Body, collected: &CollectedSchedules) {
     let empty = FxHashSet::default();
     let results = FlowResults {
         block_drops: &collected.block_drops,
@@ -347,7 +345,7 @@ pub(crate) fn annotate_body_from_hir(
         consumed: &empty,
         auto_clones: &empty,
     };
-    annotate_body(types, body, &results);
+    annotate_body(body, &results);
 }
 
 #[cfg(test)]

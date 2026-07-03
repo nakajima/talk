@@ -191,6 +191,16 @@ impl Prepass {
                 }
                 self.bump(expr.id);
             }
+            ExprKind::Proj(receiver, ..) => {
+                self.walk_expr(receiver);
+                self.bump(expr.id);
+            }
+            ExprKind::Con { args, .. } => {
+                for arg in args {
+                    self.walk_expr(arg);
+                }
+                self.bump(expr.id);
+            }
             ExprKind::Call {
                 callee,
                 args,
@@ -227,18 +237,8 @@ impl Prepass {
                 }
                 self.bump(expr.id);
             }
-            ExprKind::As(inner, _) => {
-                self.walk_expr(inner);
-                self.bump(expr.id);
-            }
             ExprKind::Block(block) => {
                 self.walk_nodes(&block.body);
-                self.bump(expr.id);
-            }
-            ExprKind::If(cond, then_block, else_block) => {
-                self.walk_expr(cond);
-                self.walk_nodes(&then_block.body);
-                self.walk_nodes(&else_block.body);
                 self.bump(expr.id);
             }
             ExprKind::Match(scrutinee, arms) => {
@@ -262,13 +262,7 @@ impl Prepass {
                 }
                 self.bump(expr.id);
             }
-            ExprKind::Constructor(_)
-            | ExprKind::RowVariable(_)
-            | ExprKind::LiteralInt(_)
-            | ExprKind::LiteralFloat(_)
-            | ExprKind::LiteralTrue
-            | ExprKind::LiteralFalse
-            | ExprKind::LiteralString(_) => {
+            ExprKind::Constructor(_) | ExprKind::Lit(_) | ExprKind::Temp(_) => {
                 self.bump(expr.id);
             }
         }
@@ -297,7 +291,7 @@ impl Prepass {
     }
 
     fn walk_member_receivers(&mut self, expr: &hir::Expr) {
-        if let ExprKind::Member(Some(receiver), _) = &expr.kind {
+        if let ExprKind::Member(Some(receiver), _) | ExprKind::Proj(receiver, ..) = &expr.kind {
             self.walk_member_receivers(receiver);
         }
     }
@@ -306,7 +300,7 @@ impl Prepass {
 fn assignment_root(lhs: &hir::Expr) -> Option<(Symbol, bool)> {
     match &lhs.kind {
         ExprKind::Variable(name) => name.symbol().ok().map(|symbol| (symbol, false)),
-        ExprKind::Member(Some(receiver), _) => {
+        ExprKind::Member(Some(receiver), _) | ExprKind::Proj(receiver, ..) => {
             let (root, _) = assignment_root(receiver)?;
             Some((root, true))
         }

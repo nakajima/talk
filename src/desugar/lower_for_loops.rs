@@ -59,10 +59,29 @@ impl LowerForLoops {
         let StmtKind::For {
             pattern,
             iterable,
-            body,
+            mut body,
         } = stmt.kind.clone()
         else {
             return;
+        };
+
+        // A body block declaring its own argument (`for x in xs { x in … }`)
+        // binds the element through THAT argument: use it as the arm's
+        // pattern and strip it, so the body's uses, the pattern binder, and
+        // the drop bookkeeping all share one binding. (Left as a block arg,
+        // the body would bind a second symbol the per-iteration match
+        // rebinding doesn't cover.)
+        let pattern = match body.args.first() {
+            Some(arg) => {
+                let arg_pattern = Pattern {
+                    id: self.next_id(),
+                    span: arg.span,
+                    kind: PatternKind::Bind(arg.name.clone()),
+                };
+                body.args.clear();
+                arg_pattern
+            }
+            None => pattern,
         };
 
         let iter_name = format!("__for_iter_{}", stmt.id.1);
@@ -220,7 +239,7 @@ impl LowerForLoops {
 #[cfg(test)]
 mod tests {
     use crate::{
-        name_resolution::transforms::lower_for_loops::LowerForLoops, parser_tests::tests::parse,
+        desugar::lower_for_loops::LowerForLoops, parser_tests::tests::parse,
     };
 
     #[test]

@@ -140,17 +140,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.check_block_value(block, expected, ctx);
                 self.artifacts.node_types.insert(expr.id, expected.clone());
             }
-            ExprKind::If(condition, then_block, else_block) => {
-                let cond_ty = self.infer_expr(condition, ctx);
-                self.emit_eq(
-                    Ty::Nominal(Symbol::Bool, vec![]),
-                    cond_ty,
-                    condition.id,
-                    CtReason::Condition,
-                );
-                self.check_block_value(then_block, expected, ctx);
-                self.check_block_value(else_block, expected, ctx);
-                self.artifacts.node_types.insert(expr.id, expected.clone());
+            ExprKind::If(..) => {
+                unreachable!("if expressions are desugared to match before type checking")
             }
             ExprKind::Match(scrutinee, arms) => {
                 self.check_match_expr(scrutinee, arms, expected, ctx);
@@ -367,8 +358,22 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // equalities are givens, arm-local unification variables are
         // touchable, and outer variables stay untouchable.
         let scrutinee_ty = self.infer_expr(scrutinee, ctx);
+        // Patterns match through a borrow. When the scrutinee's type is
+        // still unresolved (an iterator's element type, say), a deferred
+        // PatternView constraint strips it once its head is known — pinning
+        // the patterns to the owned enum here would clash with a borrow
+        // arriving later from a conformance solution.
         let pattern_scrutinee_ty = match self.store.shallow(&scrutinee_ty) {
             Ty::Borrow(_, inner) => *inner,
+            Ty::Var(id) => {
+                let view = Ty::Var(self.store.fresh_ty(self.level, scrutinee.id));
+                self.wanteds.push(Constraint::PatternView {
+                    scrutinee: Ty::Var(id),
+                    view: view.clone(),
+                    origin: CtOrigin::new(scrutinee.id, CtReason::Pattern),
+                });
+                view
+            }
             other => other,
         };
         for arm in arms {
@@ -517,17 +522,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
             ExprKind::Block(block) => self.infer_block_value(block, ctx),
 
-            ExprKind::If(condition, then_block, else_block) => {
-                let cond_ty = self.infer_expr(condition, ctx);
-                self.emit_eq(
-                    Ty::Nominal(Symbol::Bool, vec![]),
-                    cond_ty,
-                    condition.id,
-                    CtReason::Condition,
-                );
-                let then_ty = self.infer_block_value(then_block, ctx);
-                let else_ty = self.infer_block_value(else_block, ctx);
-                self.join(then_ty, else_ty, expr.id)
+            ExprKind::If(..) => {
+                unreachable!("if expressions are desugared to match before type checking")
             }
 
             ExprKind::Match(scrutinee, arms) => {
@@ -734,10 +730,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 // Operators are desugared to method calls during name
                 // resolution; reaching one here is a transform bug.
                 self.unsupported(expr.id, "raw operator expression");
-                Ty::Error
-            }
-            ExprKind::RowVariable(_) => {
-                self.unsupported(expr.id, "row variables in expressions");
                 Ty::Error
             }
             ExprKind::Incomplete(crate::node_kinds::incomplete_expr::IncompleteExpr::Member(

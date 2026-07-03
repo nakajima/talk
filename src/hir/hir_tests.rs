@@ -49,9 +49,10 @@ fn collect_expr(e: &hir::Expr, ids: &mut Vec<NodeID>) {
     use hir::ExprKind as K;
     match &e.kind {
         K::InlineIR(ir) => ir.binds.iter().for_each(|b| collect_expr(b, ids)),
-        K::As(inner, _) => collect_expr(inner, ids),
         K::CallEffect { args, .. } => args.iter().for_each(|a| collect_expr(&a.value, ids)),
-        K::LiteralArray(xs) | K::Tuple(xs) => xs.iter().for_each(|x| collect_expr(x, ids)),
+        K::LiteralArray(xs) | K::Tuple(xs) | K::Con { args: xs, .. } => {
+            xs.iter().for_each(|x| collect_expr(x, ids))
+        }
         K::Block(b) => collect_block(b, ids),
         K::Call {
             callee,
@@ -70,12 +71,8 @@ fn collect_expr(e: &hir::Expr, ids: &mut Vec<NodeID>) {
                 collect_expr(r, ids);
             }
         }
+        K::Proj(recv, ..) => collect_expr(recv, ids),
         K::Func(f) => collect_block(&f.body, ids),
-        K::If(c, t, e2) => {
-            collect_expr(c, ids);
-            collect_block(t, ids);
-            collect_block(e2, ids);
-        }
         K::Match(s, arms) => {
             collect_expr(s, ids);
             arms.iter().for_each(|a| collect_block(&a.body, ids));
@@ -86,14 +83,7 @@ fn collect_expr(e: &hir::Expr, ids: &mut Vec<NodeID>) {
                 collect_expr(s, ids);
             }
         }
-        K::LiteralInt(_)
-        | K::LiteralFloat(_)
-        | K::LiteralTrue
-        | K::LiteralFalse
-        | K::LiteralString(_)
-        | K::Variable(_)
-        | K::Constructor(_)
-        | K::RowVariable(_) => {}
+        K::Lit(_) | K::Variable(_) | K::Constructor(_) | K::Temp(_) => {}
     }
 }
 

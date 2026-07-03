@@ -454,7 +454,8 @@ impl Driver<Parsed> {
     pub fn resolve_names(mut self) -> Result<Driver<NameResolved>, CompileError> {
         let mut resolver = NameResolver::new(self.config.modules.clone(), self.config.module_id);
 
-        let (paths, asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
+        let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
+        crate::desugar::desugar(&mut asts);
         let (asts, resolved) = resolver.resolve(asts);
         let asts = paths.into_iter().zip(asts).collect();
         self.phase.diagnostics.extend(resolver.phase.diagnostics);

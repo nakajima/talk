@@ -564,7 +564,6 @@ impl<'a> Higlighter<'a> {
                         result.extend(self.tokens_from_expr(&field.value, ast));
                     }
                 }
-                ExprKind::RowVariable(..) => (),
                 ExprKind::InlineIR(instr) => {
                     result.push(self.make_span(Kind::KEYWORD, instr.instr_name_span))
                 }

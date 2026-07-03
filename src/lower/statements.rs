@@ -65,7 +65,7 @@ impl<'a> Lowering<'a> {
             None => {
                 let mut body = build(unit.types, ctx.owner, block);
                 let collected = crate::flow::mir_annotate::CollectedSchedules::of_block(block);
-                crate::flow::mir_annotate::annotate_body_from_hir(unit.types, &mut body, &collected);
+                crate::flow::mir_annotate::annotate_body_from_hir(&mut body, &collected);
                 std::sync::Arc::new(body)
             }
         };
@@ -99,7 +99,7 @@ impl<'a> Lowering<'a> {
                     .push("lowering: assignment to a non-cell binding".into());
                 None
             }
-            ExprKind::Member(Some(receiver), label) => {
+            ExprKind::Member(Some(receiver), label) | ExprKind::Proj(receiver, label, _) => {
                 let head = Self::borrow_erased_ty(self.checker_ty(receiver, ctx));
                 // Nearest-to-leaf `'heap` receiver: the write is an in-place
                 // ObjectSet on the handle — nothing above it is rebuilt or
@@ -921,7 +921,9 @@ impl<'a> Lowering<'a> {
         fn is_place(expr: &Expr) -> bool {
             match &expr.kind {
                 ExprKind::Variable(_) => true,
-                ExprKind::Member(Some(receiver), _) => is_place(receiver),
+                ExprKind::Member(Some(receiver), _) | ExprKind::Proj(receiver, ..) => {
+                    is_place(receiver)
+                }
                 _ => false,
             }
         }

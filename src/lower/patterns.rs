@@ -121,12 +121,14 @@ struct ArmTarget {
 /// Compile a `match` whose scrutinee is already lowered to the pure value
 /// `value` (checker type `scrutinee_ty`), delivering each arm's value to
 /// `k`. Returns the ⊥-typed decision tree.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn compile_match(
     lowering: &mut Lowering<'_>,
     value: ExprId,
     scrutinee_ty: CheckTy,
     arms: &[MatchArm],
     scaffold_arms: Option<ScaffoldArms>,
+    scrutinee_borrowed: bool,
     ctx: &Ctx,
     k: ExprId,
 ) -> ExprId {
@@ -168,6 +170,7 @@ pub(super) fn compile_match(
         k,
         arms,
         scaffold_arms,
+        scrutinee_borrowed,
         targets,
         trap: None,
     }
@@ -184,6 +187,9 @@ struct MatchCompiler<'l, 'a, 'p> {
     /// is embedded there: arm bodies lower from these instead of standalone
     /// bodies.
     scaffold_arms: Option<ScaffoldArms>,
+    /// A borrowed scrutinee keeps ownership of its payloads: arm binders
+    /// are pure aliases and never drop.
+    scrutinee_borrowed: bool,
     targets: Vec<ArmTarget>,
     /// The shared no-row-matched target (bodyless, so both engines trap) —
     /// reachable only if a non-exhaustive match slips past the checker.
@@ -335,19 +341,22 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             );
         }
         let body_block = &self.arms[arm].body;
-        // Arm payload binders that need release drop at arm-scope exit;
-        // seed the drop stack so the arm blocks' candidates resolve.
-        let pattern_types = self.lowering.units[self.ctx.unit].types;
-        for (_, symbol, ty) in
-            crate::lower::mir::arm_release_binders(pattern_types, &self.arms[arm].pattern)
-        {
-            if binders.contains(&symbol) {
-                inner.drop_stack.push(crate::lower::DropBinding {
-                    symbol,
-                    key_path: crate::lower::OwnershipKeyPath::root(symbol),
-                    ty,
-                    dynamic_flags: vec![],
-                });
+        // Arm payload binders that take ownership (owned scrutinee) drop at
+        // arm-scope exit; seed the drop stack so the arm blocks' candidates
+        // resolve. A borrowed scrutinee keeps its payloads: binders alias.
+        if !self.scrutinee_borrowed {
+            let pattern_types = self.lowering.units[self.ctx.unit].types;
+            for (_, symbol, ty) in
+                crate::lower::mir::arm_release_binders(pattern_types, &self.arms[arm].pattern)
+            {
+                if binders.contains(&symbol) {
+                    inner.drop_stack.push(crate::lower::DropBinding {
+                        symbol,
+                        key_path: crate::lower::OwnershipKeyPath::root(symbol),
+                        ty,
+                        dynamic_flags: vec![],
+                    });
+                }
             }
         }
         let k = self.k;

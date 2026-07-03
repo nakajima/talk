@@ -14,7 +14,6 @@ use crate::{
         module::{ModuleEnvironment, ModuleId},
     },
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
-    formatter,
     label::Label,
     name::Name,
     name_resolution::scc_graph::Level,
@@ -23,10 +22,6 @@ use crate::{
         decl_declarer::DeclDeclarer,
         scc_graph::SCCGraph,
         symbol::{Symbol, Symbols},
-        transforms::{
-            lower_for_loops::LowerForLoops, lower_funcs_to_lets::LowerFuncsToLets,
-            lower_operators::LowerOperators, prepend_self_to_methods::PrependSelfToMethods,
-        },
     },
     node::Node,
     node_id::{FileID, NodeID},
@@ -268,21 +263,6 @@ impl NameResolver {
         // Create per-file scopes with builtins for module isolation
         for ast in &asts {
             self.init_file_scope(ast.file_id, ast.skip_core_prelude);
-        }
-
-        // First pass: run transforms and declare all types
-        for ast in asts.iter_mut() {
-            LowerForLoops::run(ast);
-            LowerFuncsToLets::run(ast);
-            LowerOperators::run(ast);
-            PrependSelfToMethods::run(ast);
-        }
-
-        if std::env::var("SHOW_TRANSFORM").is_ok() {
-            for ast in asts.iter() {
-                println!("{:?}", ast.path);
-                println!("{}", formatter::format(ast, 80));
-            }
         }
 
         // Predeclare module-scope nominals across all ASTs first, so `extend` resolution

@@ -6,6 +6,7 @@
 //! panic loudly if they somehow do.
 
 use crate::hir;
+use crate::name_resolution::symbol::Symbol;
 use crate::node::Node;
 use crate::node_kinds::{decl, expr, pattern, stmt};
 use crate::parsing::ast::{AST, NameResolved};
@@ -44,9 +45,92 @@ impl HirLowerer<'_> {
     // ----- Expressions -----------------------------------------------------
 
     fn expr(&self, e: &expr::Expr) -> hir::Expr {
+        // Coercion erasure: `inner as T` did its work in the checker; the
+        // value is the inner expression. Likewise a parenthesized
+        // expression, which parses as a 1-tuple. The outer node's
+        // annotations describe the same value, so they overlay the inner's
+        // — the ascribed type, an existential pack, a clone coercion —
+        // under the outer node's id and span (the position the checker
+        // annotated).
+        match &e.kind {
+            expr::ExprKind::As(inner, _) => return self.graft(e, inner),
+            expr::ExprKind::Tuple(items) if items.len() == 1 => {
+                return self.graft(e, &items[0]);
+            }
+            // Variant construction: the checker resolves `.some(x)` at the
+            // call node (checking mode) and `Optional.some(x)` at the
+            // member callee node; either way the resolution is the variant
+            // symbol. The constructor instantiation (GADT evidence) lives
+            // at the resolution node, so it overlays the call node's.
+            expr::ExprKind::Call { callee, args, .. } => {
+                if let Some((site, enum_symbol, tag, variant_symbol)) = [callee.id, e.id]
+                    .into_iter()
+                    .find_map(|id| self.variant_resolution(id))
+                {
+                    let mut built = self.plain_expr(e);
+                    built.kind = hir::ExprKind::Con {
+                        enum_symbol,
+                        tag,
+                        variant_symbol,
+                        args: args.iter().map(|a| self.expr(&a.value)).collect(),
+                    };
+                    if let Some(instantiation) = self.types.instantiations.get(&site) {
+                        built.instantiation = Some(instantiation.clone());
+                    }
+                    return built;
+                }
+            }
+            // A payload-less variant named bare (`.none`, `Optional.none`)
+            // is a constructed value. Payload-carrying variants named bare
+            // are function values and stay `Member`.
+            expr::ExprKind::Member(..) => {
+                if let Some((_, enum_symbol, tag, variant_symbol)) = self.variant_resolution(e.id)
+                    && self
+                        .types
+                        .catalog
+                        .enums
+                        .get(&enum_symbol)
+                        .and_then(|info| info.variants.get_index(tag as usize))
+                        .is_some_and(|(_, v)| v.argument_types().is_empty())
+                {
+                    let mut built = self.plain_expr(e);
+                    built.kind = hir::ExprKind::Con {
+                        enum_symbol,
+                        tag,
+                        variant_symbol,
+                        args: vec![],
+                    };
+                    return built;
+                }
+            }
+            _ => {}
+        }
+        self.plain_expr(e)
+    }
+
+    /// The enum variant a node's member resolution names, if any:
+    /// (resolution node, enum, tag, variant symbol).
+    fn variant_resolution(
+        &self,
+        id: crate::node_id::NodeID,
+    ) -> Option<(crate::node_id::NodeID, Symbol, u16, Symbol)> {
+        let crate::types::output::MemberResolution::Direct(symbol) =
+            self.types.member_resolutions.get(&id)?
+        else {
+            return None;
+        };
+        for (enum_symbol, info) in &self.types.catalog.enums {
+            if let Some(index) = info.variants.values().position(|v| v.symbol == *symbol) {
+                return Some((id, *enum_symbol, index as u16, *symbol));
+            }
+        }
+        None
+    }
+
+    fn plain_expr(&self, e: &expr::Expr) -> hir::Expr {
         hir::Expr {
             id: e.id,
-            kind: self.expr_kind(&e.kind),
+            kind: self.expr_kind(e),
             span: e.span,
             ownership: hir::ExprOwnership {
                 consumes: false,
@@ -72,15 +156,33 @@ impl HirLowerer<'_> {
         Box::new(self.expr(e))
     }
 
-    fn expr_kind(&self, k: &expr::ExprKind) -> hir::ExprKind {
-        match k {
+    /// Build `inner` in place of the erased wrapper `e`, overlaying the
+    /// wrapper's annotations (they describe the same value).
+    fn graft(&self, e: &expr::Expr, inner: &expr::Expr) -> hir::Expr {
+        let mut built = self.expr(inner);
+        built.id = e.id;
+        built.span = e.span;
+        built.ownership.auto_clone |= self.types.coerce_clones.contains(&e.id);
+        if let Some(ty) = self.types.node_types.get(&e.id) {
+            built.ty = ty.clone();
+        }
+        if let Some(pack) = self.types.existential_packs.get(&e.id) {
+            built.existential_pack = Some(pack.clone());
+        }
+        built
+    }
+
+    fn expr_kind(&self, e: &expr::Expr) -> hir::ExprKind {
+        match &e.kind {
             expr::ExprKind::InlineIR(ir) => hir::ExprKind::InlineIR(hir::InlineIRInstruction {
                 id: ir.id,
                 span: ir.span,
                 binds: ir.binds.iter().map(|b| self.expr(b)).collect(),
                 kind: ir.kind.clone(),
             }),
-            expr::ExprKind::As(inner, ty) => hir::ExprKind::As(self.boxed(inner), ty.clone()),
+            expr::ExprKind::As(..) => {
+                unreachable!("As is erased in expr(); expr_kind never sees it")
+            }
             expr::ExprKind::CallEffect {
                 effect_name,
                 type_args,
@@ -94,11 +196,13 @@ impl HirLowerer<'_> {
             expr::ExprKind::LiteralArray(items) => {
                 hir::ExprKind::LiteralArray(items.iter().map(|i| self.expr(i)).collect())
             }
-            expr::ExprKind::LiteralInt(s) => hir::ExprKind::LiteralInt(s.clone()),
-            expr::ExprKind::LiteralFloat(s) => hir::ExprKind::LiteralFloat(s.clone()),
-            expr::ExprKind::LiteralTrue => hir::ExprKind::LiteralTrue,
-            expr::ExprKind::LiteralFalse => hir::ExprKind::LiteralFalse,
-            expr::ExprKind::LiteralString(s) => hir::ExprKind::LiteralString(s.clone()),
+            expr::ExprKind::LiteralInt(s) => hir::ExprKind::Lit(hir::Literal::Int(s.clone())),
+            expr::ExprKind::LiteralFloat(s) => hir::ExprKind::Lit(hir::Literal::Float(s.clone())),
+            expr::ExprKind::LiteralTrue => hir::ExprKind::Lit(hir::Literal::Bool(true)),
+            expr::ExprKind::LiteralFalse => hir::ExprKind::Lit(hir::Literal::Bool(false)),
+            expr::ExprKind::LiteralString(s) => {
+                hir::ExprKind::Lit(hir::Literal::String(s.clone()))
+            }
             expr::ExprKind::Tuple(items) => {
                 hir::ExprKind::Tuple(items.iter().map(|i| self.expr(i)).collect())
             }
@@ -115,13 +219,24 @@ impl HirLowerer<'_> {
                 trailing_block: trailing_block.as_ref().map(|b| self.block(b)),
             },
             expr::ExprKind::Member(recv, label, _span) => {
-                hir::ExprKind::Member(recv.as_ref().map(|r| self.boxed(r)), label.clone())
+                // Field read vs method/variant, decided once here: a member
+                // that resolves to a stored field is a projection.
+                if let Some(receiver) = recv
+                    && let Some(field) = crate::types::output::stored_field_symbol(
+                        self.types,
+                        self.types.member_resolutions.get(&e.id),
+                    )
+                {
+                    hir::ExprKind::Proj(self.boxed(receiver), label.clone(), field)
+                } else {
+                    hir::ExprKind::Member(recv.as_ref().map(|r| self.boxed(r)), label.clone())
+                }
             }
             expr::ExprKind::Func(func) => hir::ExprKind::Func(self.func(func)),
             expr::ExprKind::Variable(name) => hir::ExprKind::Variable(name.clone()),
             expr::ExprKind::Constructor(name) => hir::ExprKind::Constructor(name.clone()),
-            expr::ExprKind::If(cond, then, els) => {
-                hir::ExprKind::If(self.boxed(cond), self.block(then), self.block(els))
+            expr::ExprKind::If(..) => {
+                unreachable!("if expressions are desugared to match before HIR")
             }
             expr::ExprKind::Match(scrut, arms) => hir::ExprKind::Match(
                 self.boxed(scrut),
@@ -131,7 +246,6 @@ impl HirLowerer<'_> {
                 fields: fields.iter().map(|f| self.record_field(f)).collect(),
                 spread: spread.as_ref().map(|s| self.boxed(s)),
             },
-            expr::ExprKind::RowVariable(name) => hir::ExprKind::RowVariable(name.clone()),
             expr::ExprKind::Unary(..) | expr::ExprKind::Binary(..) => {
                 unreachable!("Unary/Binary should be desugared by LowerOperators before HIR")
             }

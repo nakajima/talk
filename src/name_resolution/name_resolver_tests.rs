@@ -121,7 +121,8 @@ pub mod tests {
         let parsed = parse(code);
         let modules = ModuleEnvironment::default();
         let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
-        let parseds = vec![parsed];
+        let mut parseds = vec![parsed];
+        crate::desugar::desugar(&mut parseds);
         let (asts, resolved) = name_resolver.resolve(parseds);
         (asts[0].clone(), resolved)
     }
@@ -1802,6 +1803,7 @@ pub mod tests {
             parseds.push(ast);
         }
 
+        crate::desugar::desugar(&mut parseds);
         name_resolver.resolve(parseds)
     }
 
@@ -1937,7 +1939,9 @@ public let a = 2
         let code = "let x: Optional<Int> = Optional.some(42)";
         let parsed = parse(code);
         let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
-        let (_, resolved) = name_resolver.resolve(vec![parsed]);
+        let mut parseds = vec![parsed];
+        crate::desugar::desugar(&mut parseds);
+        let (_, resolved) = name_resolver.resolve(parseds);
 
         assert!(
             resolved.diagnostics.is_empty(),
@@ -1959,7 +1963,9 @@ public let a = 2
             modules.import_core(core_module);
             let parsed = parse(code);
             let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
-            let (_, resolved) = name_resolver.resolve(vec![parsed]);
+            let mut parseds = vec![parsed];
+            crate::desugar::desugar(&mut parseds);
+            let (_, resolved) = name_resolver.resolve(parseds);
             let file_scope = resolved.scopes.get(&NodeID(FileID(0), 0)).unwrap();
             assert!(
                 file_scope.types.contains_key("Optional"),
@@ -1975,7 +1981,9 @@ public let a = 2
             let mut parsed = parse(code);
             parsed.skip_core_prelude = true;
             let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
-            let (_, resolved) = name_resolver.resolve(vec![parsed]);
+            let mut parseds = vec![parsed];
+            crate::desugar::desugar(&mut parseds);
+            let (_, resolved) = name_resolver.resolve(parseds);
             let file_scope = resolved.scopes.get(&NodeID(FileID(0), 0)).unwrap();
             assert!(
                 !file_scope.types.contains_key("Optional"),

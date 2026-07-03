@@ -2032,6 +2032,18 @@ pub mod tests {
     }
 
     #[test]
+    fn inferred_match_result_is_concrete_within_its_binding_group() {
+        // An inferred match joins its non-refining arms eagerly (like `if`),
+        // so a later unannotated variant match in the same binding group
+        // already knows the enum. With a deferred fresh-var result, `x`
+        // stays unresolved and `.red` has no enum to resolve against.
+        let t = check(
+            "// no-core\nenum Color {\n\tcase red\n\tcase green\n}\nlet x = match 1 {\n\t1 -> Color.red,\n\t_ -> Color.green\n}\nmatch x {\n\t.red -> 1,\n\t.green -> 2\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
     fn mutable_self_can_call_shared_self_method() {
         let t = check(
             "// no-core\nstruct Counter {\n\tlet n: Int\n\tfunc peek() -> Int { self.n }\n\tmut func bump() -> Int { self.peek() }\n}",

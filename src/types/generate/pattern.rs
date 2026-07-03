@@ -74,6 +74,15 @@ impl PatternRefinement {
                 member: member.substitute(&tys, &effs, &rows),
                 origin,
             },
+            Constraint::PatternView {
+                scrutinee,
+                view,
+                origin,
+            } => Constraint::PatternView {
+                scrutinee: scrutinee.substitute(&tys, &effs, &rows),
+                view: view.substitute(&tys, &effs, &rows),
+                origin,
+            },
             Constraint::Implic(implication) => Constraint::Implic(implication),
         }
     }

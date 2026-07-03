@@ -268,10 +268,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 .as_ref()
                 .is_some_and(|receiver| Self::expr_breaks_current_loop(receiver)),
             ExprKind::Func(_) => false,
-            ExprKind::If(condition, then_block, else_block) => {
-                Self::expr_breaks_current_loop(condition)
-                    || Self::block_breaks_current_loop(then_block)
-                    || Self::block_breaks_current_loop(else_block)
+            ExprKind::If(..) => {
+                unreachable!("if expressions are desugared to match before type checking")
             }
             ExprKind::Match(scrutinee, arms) => {
                 Self::expr_breaks_current_loop(scrutinee)
@@ -298,8 +296,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             | ExprKind::LiteralFalse
             | ExprKind::LiteralString(_)
             | ExprKind::Variable(_)
-            | ExprKind::Constructor(_)
-            | ExprKind::RowVariable(_) => false,
+            | ExprKind::Constructor(_) => false,
         }
     }
 }

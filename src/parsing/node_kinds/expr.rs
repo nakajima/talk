@@ -86,8 +86,6 @@ pub enum ExprKind {
         spread: Option<Box<Expr>>,
     }, // List of RecordField expressions
 
-    // Row variable in type context: ..R
-    RowVariable(#[drive(skip)] Name),
 }
 
 impl ExprKind {
@@ -104,8 +102,7 @@ impl ExprKind {
             | ExprKind::Member(..)
             | ExprKind::As(..)
             | ExprKind::InlineIR(..)
-            | ExprKind::CallEffect { .. }
-            | ExprKind::RowVariable(..) => false,
+            | ExprKind::CallEffect { .. } => false,
 
             ExprKind::Func(..) => true,
             ExprKind::LiteralArray(items) => items.iter().all(|e| e.kind.is_syntactic_value()),

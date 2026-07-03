@@ -96,6 +96,16 @@ pub enum Constraint {
         member: Ty,
         origin: CtOrigin,
     },
+    /// The type a match's patterns check against: `scrutinee` with a
+    /// top-level borrow stripped — patterns match through borrows
+    /// (the runtime erases them; binders alias the borrowed payloads).
+    /// Defers until the scrutinee's head resolves (e.g. an iterator
+    /// element type solved by a conformance).
+    PatternView {
+        scrutinee: Ty,
+        view: Ty,
+        origin: CtOrigin,
+    },
     Implic(Box<Implication>),
 }
 

@@ -6,6 +6,8 @@ enum MirRestBinding {
     Bind(Symbol, bool),
     Discard,
     Deliver,
+    /// Bind the incoming value as a MIR temp for the rest's `Temp` reads.
+    Temp(u32),
 }
 
 struct PendingDrop {
@@ -90,49 +92,6 @@ impl<'a> Lowering<'a> {
         done
     }
 
-    /// Lower an expression-position `if` from its scaffold blocks in the
-    /// body being lowered, delivering the arm values to `k` (arm tails are
-    /// `ReturnValue { Continuation }` statements; a `break`/`continue`/
-    /// `return` inside an arm is a real CFG edge here). `None` when the
-    /// construct has no scaffold in this body (an expression from another
-    /// body, e.g. an inlined global): the caller builds a standalone body.
-    pub(super) fn lower_if_from_scaffold(
-        &mut self,
-        expr: &Expr,
-        cond: &Expr,
-        ctx: &Ctx,
-        k: ExprId,
-    ) -> Option<ExprId> {
-        let scaffold = self.scaffold_ctx.last()?;
-        let body = std::sync::Arc::clone(&scaffold.body);
-        let loops = scaffold.loops.clone();
-        let &branch_block = body.scaffolds.get(&expr.id)?;
-        let mir::Terminator::Branch {
-            then_block,
-            else_block,
-            ..
-        } = body.blocks[branch_block.0].terminator
-        else {
-            return None;
-        };
-        let cursor = MirCursor {
-            body: &body,
-            block: branch_block,
-            index: 0,
-            loops: &loops,
-            deliver_at: None,
-        };
-        let join = Self::switch_join_target(cursor, &[then_block, else_block], None);
-        let cursor = MirCursor {
-            deliver_at: join,
-            ..cursor
-        };
-        let mut cache = MirBlockCache::default();
-        let then_body = self.lower_mir_block(cursor.at_block(then_block), ctx, k, &mut cache);
-        let else_body = self.lower_mir_block(cursor.at_block(else_block), ctx, k, &mut cache);
-        Some(self.branch(cond, then_body, else_body, ctx))
-    }
-
     /// The scaffold arm blocks of an expression-position match in the body
     /// being lowered, for the pattern compiler's arm bodies.
     pub(super) fn match_scaffold_arms(&self, expr: &Expr) -> Option<ScaffoldArms> {
@@ -155,6 +114,42 @@ impl<'a> Lowering<'a> {
             blocks: arms.clone(),
             join,
         })
+    }
+
+    /// Lower a callee-invoked sub-body (a handler body, keyed by its
+    /// handling statement's id, or a trailing block, keyed by the block's
+    /// own id) from its scaffold blocks — the `Handler` terminator's
+    /// `body_block` — delivering the body's tail value to `k` (the
+    /// closure's return continuation); `continue v` statements lower as
+    /// resume applications via `ctx.resume_k`. `None` when the construct
+    /// has no scaffold in the body being lowered (a standalone-body
+    /// fallback: the embedded block lowers tree-style).
+    pub(super) fn lower_sub_body_from_scaffold(
+        &mut self,
+        key: crate::node_id::NodeID,
+        ctx: &Ctx,
+        k: ExprId,
+    ) -> Option<ExprId> {
+        let scaffold = self.scaffold_ctx.last()?;
+        let &handling_block = scaffold.body.scaffolds.get(&key)?;
+        let mir::Terminator::Handler { body_block, join } =
+            scaffold.body.blocks[handling_block.0].terminator
+        else {
+            return None;
+        };
+        let body = std::sync::Arc::clone(&scaffold.body);
+        let cursor = MirCursor {
+            body: &body,
+            block: body_block,
+            index: 0,
+            // The capability is its own function: enclosing loops are not
+            // jump targets from inside it (matching the tree path's
+            // closure rebase).
+            loops: &[],
+            deliver_at: Some(join),
+        };
+        let mut cache = MirBlockCache::default();
+        Some(self.lower_mir_statements(cursor, ctx, k, &mut cache))
     }
 
     /// Lower one scaffold arm block with the match's value continuation:
@@ -234,9 +229,47 @@ impl<'a> Lowering<'a> {
             mir::Statement::StorageDead { symbol, .. } => {
                 self.lower_mir_storage_dead(*symbol, cursor, ctx, k, cache)
             }
-            mir::Statement::Call { .. } | mir::Statement::Function { .. } => {
+            mir::Statement::Function { .. } => {
                 let rest_body = rest(self, ctx, k);
                 self.clear_moved_drop_flags_then(ctx, statement, rest_body)
+            }
+            mir::Statement::Call {
+                expr,
+                temp,
+                result_ty,
+                ..
+            } => {
+                // The call evaluates HERE; its value binds the temp the
+                // consuming statement reads. Abortable calls split the
+                // rest instead (they need the statement spine).
+                if let Some(done) = self.try_mir_effect_split(
+                    expr,
+                    MirRestBinding::Temp(*temp),
+                    cursor,
+                    ctx,
+                    k,
+                    cache,
+                ) {
+                    return done;
+                }
+                let result_ty = result_ty
+                    .clone()
+                    .substitute(&ctx.theta, &Default::default(), &Default::default());
+                let result_ty = self.normalize_check_ty(result_ty, ctx.unit);
+                let value_ty = self.map_ty(&result_ty);
+                let bot = self.p.ty_bot();
+                let kf = self.p.func("call_temp", value_ty, bot);
+                let param = self.p.var(kf);
+                let mut tctx = ctx.clone();
+                tctx.temps.insert(*temp, param);
+                let rest_body = self.lower_mir_statements(cursor.advance(), &tctx, k, cache);
+                let rest_body = self.clear_moved_drop_flags_then(&tctx, statement, rest_body);
+                self.p.set_body(kf, rest_body);
+                let kref = self.p.func_ref(kf);
+                // Raw evaluation: the pack / auto-clone the checker put on
+                // this node applies where its Temp is read (the consuming
+                // statement), exactly as for match temps — not twice.
+                self.lower_expr_unpacked(expr, ctx, kref)
             }
             mir::Statement::Handling {
                 stmt,
@@ -827,7 +860,7 @@ impl<'a> Lowering<'a> {
         let after_ref = self.p.func_ref(after);
         let target_key_path = target
             .and_then(|target| Self::ownership_key_path_from_mir(cursor.body, target))
-            .or_else(|| crate::flow::place_for_expr(self.units[ctx.unit].types, lhs));
+            .or_else(|| crate::flow::place_for_expr(lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
         let setter = self.p.func("set", rhs_ty, bot);
@@ -916,7 +949,7 @@ impl<'a> Lowering<'a> {
         let after_ref = self.p.func_ref(after);
         let target_key_path = target
             .and_then(|target| Self::ownership_key_path_from_mir(cursor.body, target))
-            .or_else(|| crate::flow::place_for_expr(self.units[ctx.unit].types, lhs));
+            .or_else(|| crate::flow::place_for_expr(lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
         let setter = self.p.func("object_set", rhs_ty, bot);
@@ -1131,9 +1164,11 @@ impl<'a> Lowering<'a> {
                 inner.env.insert(symbol, Binding::Value(value));
             }
         }
+        let handling_id = stmt.id;
         let handler_body_expr = self.with_cells(&celled, &mut inner, |this, inner| {
             let handler_k = inner.ret_k;
-            this.lower_block(handler_block, &[], inner, handler_k)
+            this.lower_sub_body_from_scaffold(handling_id, inner, handler_k)
+                .unwrap_or_else(|| this.lower_block(handler_block, &[], inner, handler_k))
         });
         self.p.set_body(cap, handler_body_expr);
 
@@ -1323,6 +1358,11 @@ impl<'a> Lowering<'a> {
                 let rest_body = self.lower_mir_statements(cursor.advance(), &inner, inner_k, cache);
                 self.clear_moved_drop_flags_then(&inner, cursor.statement(), rest_body)
             }
+            MirRestBinding::Temp(temp) => {
+                inner.temps.insert(temp, value);
+                let rest_body = self.lower_mir_statements(cursor.advance(), &inner, inner_k, cache);
+                self.clear_moved_drop_flags_then(&inner, cursor.statement(), rest_body)
+            }
             MirRestBinding::Deliver => {
                 let deliver = self.p.app(inner_k, value);
                 self.clear_moved_drop_flags_then(&inner, cursor.statement(), deliver)
@@ -1351,6 +1391,12 @@ impl<'a> Lowering<'a> {
             }
             mir::Terminator::Break => self.lower_mir_break(cursor, ctx, k),
             mir::Terminator::Continue => self.lower_mir_continue(cursor, ctx, k),
+            // The handler body's blocks are scaffolding — the capability
+            // closure lowered them from the `Handling` statement; the walk
+            // continues at the join.
+            mir::Terminator::Handler { join, .. } => {
+                self.lower_mir_block(cursor.at_block(*join), ctx, k, cache)
+            }
             mir::Terminator::Jump(target) => {
                 if cursor.deliver_at == Some(*target) {
                     let void = self.p.void();
@@ -1384,19 +1430,7 @@ impl<'a> Lowering<'a> {
                 condition,
                 then_block,
                 else_block,
-                in_expression,
             } => {
-                // Expression-position branches are analysis scaffolding:
-                // evaluation rides the enclosing statement's embedded copy
-                // of the `if` (in the join block), exactly like a Switch's
-                // arms. Lower the join only; with no join (every arm
-                // diverges), the arm blocks carry the real content.
-                if *in_expression
-                    && let Some(join) =
-                        Self::switch_join_target(cursor, &[*then_block, *else_block], None)
-                {
-                    return self.lower_mir_block(cursor.at_block(join), ctx, k, cache);
-                }
                 let then_body = self.lower_mir_block(cursor.at_block(*then_block), ctx, k, cache);
                 let else_body = self.lower_mir_block(cursor.at_block(*else_block), ctx, k, cache);
                 self.branch(condition, then_body, else_body, ctx)
@@ -1406,16 +1440,40 @@ impl<'a> Lowering<'a> {
                 match_arms: Some(arms),
                 arms: arm_blocks,
                 default,
+                result,
             } => {
-                if let Some(join) = Self::switch_join_target(cursor, arm_blocks, *default) {
-                    self.lower_mir_block(cursor.at_block(join), ctx, k, cache)
-                } else {
-                    let scaffold_arms = ScaffoldArms {
-                        blocks: arm_blocks.clone(),
-                        join: None,
-                    };
-                    self.lower_match(scrutinee, arms, Some(scaffold_arms), ctx, k)
-                }
+                // The arms are real blocks: compile the decision tree with
+                // a value-carrying join continuation — arm tails deliver
+                // the match's value, the join binds it as the temp the
+                // consuming statement (in the join block) reads. No join
+                // (every arm diverges): `k_arm` is never applied.
+                let join = Self::switch_join_target(cursor, arm_blocks, *default);
+                let k_arm = match (join, result) {
+                    (Some(join_block), Some((temp, result_ty))) => {
+                        // The stored type is the checker's raw (possibly
+                        // generic) type: θ-substitute per instantiation.
+                        let result_ty = result_ty
+                            .clone()
+                            .substitute(&ctx.theta, &Default::default(), &Default::default());
+                        let result_ty = self.normalize_check_ty(result_ty, ctx.unit);
+                        let value_ty = self.map_ty(&result_ty);
+                        let bot = self.p.ty_bot();
+                        let jf = self.p.func("match_join", value_ty, bot);
+                        let param = self.p.var(jf);
+                        let mut jctx = ctx.clone();
+                        jctx.temps.insert(*temp, param);
+                        let body =
+                            self.lower_mir_block(cursor.at_block(join_block), &jctx, k, cache);
+                        self.p.set_body(jf, body);
+                        self.p.func_ref(jf)
+                    }
+                    _ => k,
+                };
+                let scaffold_arms = ScaffoldArms {
+                    blocks: arm_blocks.clone(),
+                    join,
+                };
+                self.lower_match(scrutinee, arms, Some(scaffold_arms), ctx, k_arm)
             }
             mir::Terminator::Switch { .. } => self.dead_end("mir_switch_without_patterns"),
             mir::Terminator::Loop {

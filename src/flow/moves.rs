@@ -54,17 +54,16 @@ pub(crate) struct MoveState {
     /// Closure values and their capture summaries (for escape checks and
     /// non-copy classification).
     pub(crate) closure_captures: FxHashMap<Place, super::captures::CaptureSummary>,
+    /// Provenance of call-result temporaries, recorded at the Call
+    /// statement (a method's borrowed result reaches its receiver's
+    /// owners) and read where the consuming statement's `Temp` binds.
+    pub(crate) temp_provenances: FxHashMap<u32, Provenance>,
 }
 
 impl MoveState {
     /// CFG-join: may-sets union, must-sets intersect (the legacy
-    /// `MoveState`/`DropState` merge semantics in one place).
-    pub(crate) fn merge_from(&mut self, other: &MoveState) {
-        self.join_from(other);
-    }
-
-    /// `merge_from`, reporting whether anything changed — the worklist's
-    /// fixpoint test.
+    /// `MoveState`/`DropState` merge semantics in one place), reporting
+    /// whether anything changed — the worklist's fixpoint test.
     pub(crate) fn join_from(&mut self, other: &MoveState) -> bool {
         let mut changed = false;
         for (place, fact) in &other.moved {
@@ -119,6 +118,12 @@ impl MoveState {
         for (place, summary) in &other.closure_captures {
             if !self.closure_captures.contains_key(place) {
                 self.closure_captures.insert(place.clone(), summary.clone());
+                changed = true;
+            }
+        }
+        for (temp, provenance) in &other.temp_provenances {
+            if !self.temp_provenances.contains_key(temp) {
+                self.temp_provenances.insert(*temp, provenance.clone());
                 changed = true;
             }
         }
@@ -212,18 +217,13 @@ pub(crate) struct BodyContext {
 
 /// One scope's tracked locals, in declaration order.
 struct ScopeFrame {
-    block_id: NodeID,
     locals: Vec<ScopeLocal>,
 }
 
 #[derive(Clone)]
 struct ScopeLocal {
     symbol: crate::name_resolution::symbol::Symbol,
-    binder: NodeID,
     ty: Ty,
-    /// A pure alias of a value that outlives this scope (a match-arm
-    /// payload binder): no ledger events of its own.
-    alias: bool,
 }
 
 pub(crate) struct MoveChecker<'a> {
@@ -274,11 +274,6 @@ pub(crate) struct MoveChecker<'a> {
     /// auto-clone flags, drop schedules): true for the tree walk, false for
     /// every CFG-engine walk, whose repeated visits would duplicate them.
     pub(crate) recording: bool,
-    /// CFG-boundary mode: nested `if`/`match`/block expressions are opaque
-    /// to the expression walkers — their effects already flowed through the
-    /// enclosing body's blocks. Cleared inside statement-embedded blocks
-    /// (handler bodies, trailing blocks), which have no blocks of their own.
-    pub(crate) cfg_exprs: bool,
 }
 
 impl<'a> MoveChecker<'a> {
@@ -305,7 +300,6 @@ impl<'a> MoveChecker<'a> {
             fn_depth: 0,
             report_errors: true,
             recording: true,
-            cfg_exprs: false,
         }
     }
 
@@ -351,9 +345,7 @@ impl<'a> MoveChecker<'a> {
                 if self.grades.needs_drop(&ty) && !self.grades.contains_object(&ty) {
                     self.pending_locals.push(ScopeLocal {
                         symbol,
-                        binder: param.id,
                         ty: ty.clone(),
-                        alias: false,
                     });
                     // Parameters arrive initialized (else the exit drop
                     // classifies Dead).
@@ -391,39 +383,6 @@ impl<'a> MoveChecker<'a> {
         }
     }
 
-    /// Function declarations reachable from a node list: their bodies are
-    /// independent (fresh state); their capture lists act on `state`.
-    fn check_decl(&mut self, decl: &hir::Decl, state: &mut MoveState) {
-        match &decl.kind {
-            hir::DeclKind::Func(func) => {
-                self.check_closure(func, state, EscapeContext::Bound);
-            }
-            // Method and init bodies are checked from the store by the
-            // CFG engine; encountering their declarations here (inside a
-            // statement-embedded block) has no parent-state effect.
-            hir::DeclKind::Method { .. } | hir::DeclKind::Init { .. } => {}
-            hir::DeclKind::Struct { body, .. }
-            | hir::DeclKind::Enum { body, .. }
-            | hir::DeclKind::Extend { body, .. }
-            | hir::DeclKind::Protocol { body, .. } => {
-                for member in &body.decls {
-                    self.check_decl(member, state);
-                }
-            }
-            hir::DeclKind::Let {
-                lhs,
-                rhs,
-                type_annotation,
-            } => self.check_let(lhs, type_annotation.as_ref(), rhs.as_ref(), state),
-            hir::DeclKind::Property {
-                default_value: Some(value),
-                ..
-            } => {
-                self.consume_expr(value, state);
-            }
-            _ => {}
-        }
-    }
 
     pub(crate) fn check_let(
         &mut self,
@@ -511,9 +470,7 @@ impl<'a> MoveChecker<'a> {
             if let Some(frame) = self.scopes.last_mut() {
                 frame.locals.push(ScopeLocal {
                     symbol: binder,
-                    binder: id,
                     ty: ty.clone(),
-                    alias: false,
                 });
             }
             let place = Place::root(binder);
@@ -529,59 +486,6 @@ impl<'a> MoveChecker<'a> {
 
     // ----- Drop scheduling ----------------------------------------------------
 
-    /// Schedule one drop of a scope local at the current state, reporting
-    /// the linear must-consume error when a linear value would be dropped.
-    fn schedule_drop(
-        &mut self,
-        local: &ScopeLocal,
-        reason: DropReason,
-        state: &MoveState,
-        out: &mut Vec<DropSchedule>,
-    ) {
-        // "Needs release": owned values drop; values carrying `'heap`
-        // handles release their regions. Either way the binding gets a
-        // scope-exit schedule (lowering picks the operation by type).
-        if !self.grades.needs_drop(&local.ty) && !self.grades.contains_object(&local.ty) {
-            return;
-        }
-        // A pattern binder over a handle-only payload is a pure alias of
-        // the scrutinee's value (which outlives the arm): no ledger event.
-        if local.alias && !self.grades.needs_drop(&local.ty) {
-            return;
-        }
-        let place = Place::root(local.symbol);
-        let kind = classify(&place, state);
-        // A by-value parameter received the caller's move: linearity was
-        // discharged at the call; dropping the param here is the intended
-        // end of the value (e.g. a `consuming func`'s self).
-        let is_param = matches!(
-            local.symbol,
-            crate::name_resolution::symbol::Symbol::ParamLocal(_)
-        );
-        if !is_param && kind != DropElaboration::Dead && self.ty_is_linear(&local.ty) {
-            let error = OwnershipError::LinearNotConsumed {
-                name: render_place(&place, self.types),
-                ty: local.ty.render_mono(),
-            };
-            self.error(error, local.binder);
-        }
-        if self.recording {
-            self.facts.drops.push(super::FlowDropFact {
-                node: local.binder,
-                place: render_place(&place, self.types),
-                ty: local.ty.render_mono(),
-                kind,
-                reason,
-            });
-        }
-        out.push(DropSchedule {
-            place,
-            ty: local.ty.clone(),
-            kind,
-            reason,
-            node: local.binder,
-        });
-    }
 
     pub(crate) fn ty_is_linear(&self, ty: &Ty) -> bool {
         use crate::types::catalog::Grade;
@@ -589,35 +493,9 @@ impl<'a> MoveChecker<'a> {
             if self.types.catalog.grade_of(*symbol) == Grade::Linear)
     }
 
-    /// Early exit (`return`/`break`/`continue`): every enclosing scope's
-    /// locals drop, innermost scope first, reverse declaration order within
-    /// each (matching the MIR builder's `emit_early_exit_drops`).
-    fn schedule_early_exit_drops(&mut self, stmt_id: NodeID, state: &MoveState) {
-        let locals: Vec<ScopeLocal> = self
-            .scopes
-            .iter()
-            .rev()
-            .flat_map(|scope| scope.locals.iter().rev().cloned())
-            .collect();
-        let mut schedules = vec![];
-        for local in &locals {
-            self.schedule_drop(local, DropReason::EarlyExit, state, &mut schedules);
-        }
-        if self.recording {
-            self.stmt_drops.insert(stmt_id, schedules);
-        }
-    }
 
     // ----- Statement/node walk ----------------------------------------------
 
-    fn prune_after(&mut self, node: &hir::Node, state: &mut MoveState) {
-        let id = match node {
-            hir::Node::Decl(decl) => decl.id,
-            hir::Node::Stmt(stmt) => stmt.id,
-            hir::Node::Expr(expr) => expr.id,
-        };
-        state.prune_dead_loans(&self.liveness, id);
-    }
 
     // ----- CFG-engine support (flow::cfg) --------------------------------------
 
@@ -656,10 +534,9 @@ impl<'a> MoveChecker<'a> {
 
     /// Open the body's root scope frame, adopting any pending locals the
     /// param seeding registered.
-    pub(crate) fn push_body_frame(&mut self, block_id: NodeID) {
+    pub(crate) fn push_body_frame(&mut self) {
         let pending = std::mem::take(&mut self.pending_locals);
         self.scopes.push(ScopeFrame {
-            block_id,
             locals: pending,
         });
     }
@@ -673,7 +550,6 @@ impl<'a> MoveChecker<'a> {
     /// registration; `let` binders arrive here too, harmlessly twice).
     pub(crate) fn register_scope_local(
         &mut self,
-        id: NodeID,
         symbol: crate::name_resolution::symbol::Symbol,
         ty: Ty,
     ) {
@@ -683,150 +559,9 @@ impl<'a> MoveChecker<'a> {
         if frame.locals.iter().any(|local| local.symbol == symbol) {
             return;
         }
-        frame.locals.push(ScopeLocal {
-            symbol,
-            binder: id,
-            ty,
-            alias: false,
-        });
+        frame.locals.push(ScopeLocal { symbol, ty });
     }
 
-    /// Walk a block's nodes in order. Statements after a `return`/`break`/
-    /// `continue` are unreachable and skipped (no fallthrough edge).
-    fn walk_block_nodes(&mut self, nodes: &[hir::Node], state: &mut MoveState) -> Diverges {
-        for node in nodes {
-            let diverges = self.walk_node(node, state);
-            self.prune_after(node, state);
-            if diverges == Diverges::Yes {
-                return Diverges::Yes;
-            }
-        }
-        Diverges::No
-    }
-
-    fn walk_node(&mut self, node: &hir::Node, state: &mut MoveState) -> Diverges {
-        match node {
-            hir::Node::Decl(decl) => {
-                self.check_decl(decl, state);
-                Diverges::No
-            }
-            hir::Node::Stmt(stmt) => self.walk_stmt(stmt, state),
-            // Every expression node's value is consumed: a trailing
-            // expression feeds the block's value, an interior one is
-            // discarded (and dropped) — both are consume sites.
-            hir::Node::Expr(expr) => {
-                self.consume_expr(expr, state);
-                Diverges::No
-            }
-        }
-    }
-
-    fn walk_stmt(&mut self, stmt: &hir::Stmt, state: &mut MoveState) -> Diverges {
-        match &stmt.kind {
-            hir::StmtKind::Expr(expr) => {
-                self.consume_expr(expr, state);
-                Diverges::No
-            }
-            hir::StmtKind::If(cond, then_block, else_block) => {
-                self.walk_expr(cond, state);
-                let mut then_state = state.clone();
-                let then_diverges = self.walk_block(then_block, &mut then_state);
-                let mut else_state = state.clone();
-                let else_diverges = match else_block {
-                    Some(else_block) => self.walk_block(else_block, &mut else_state),
-                    None => Diverges::No,
-                };
-                // Only paths that fall through reach the join.
-                let mut merged = false;
-                if then_diverges == Diverges::No {
-                    state.merge_from(&then_state);
-                    merged = true;
-                }
-                if else_diverges == Diverges::No {
-                    state.merge_from(&else_state);
-                    merged = true;
-                }
-                if merged || else_block.is_none() {
-                    Diverges::No
-                } else {
-                    Diverges::Yes
-                }
-            }
-            hir::StmtKind::Return(value) => {
-                if let Some(value) = value {
-                    self.check_return_value(value, state);
-                }
-                self.schedule_early_exit_drops(stmt.id, state);
-                Diverges::Yes
-            }
-            hir::StmtKind::Break => {
-                self.schedule_early_exit_drops(stmt.id, state);
-                Diverges::Yes
-            }
-            hir::StmtKind::Continue(value) => {
-                if let Some(value) = value {
-                    self.consume_expr(value, state);
-                }
-                self.schedule_early_exit_drops(stmt.id, state);
-                Diverges::Yes
-            }
-            hir::StmtKind::Assignment(lhs, rhs) => {
-                self.check_assignment(stmt.id, lhs, rhs, state);
-                Diverges::No
-            }
-            hir::StmtKind::Loop(cond, body) => {
-                // Two passes: the first surfaces the body's effects for the
-                // back edge, the second reports with loop-carried state.
-                // Errors dedup, so double-reporting is harmless.
-                for _ in 0..2 {
-                    if let Some(cond) = cond {
-                        self.walk_expr(cond, state);
-                    }
-                    let mut body_state = state.clone();
-                    self.walk_block(body, &mut body_state);
-                    state.merge_from(&body_state);
-                }
-                Diverges::No
-            }
-            hir::StmtKind::Handling { body, .. } => {
-                // A handler body runs zero or more times; its effects
-                // propagate to the parent (legacy nested-body exit merge).
-                let mut body_state = state.clone();
-                self.walk_block(body, &mut body_state);
-                state.merge_from(&body_state);
-                Diverges::No
-            }
-        }
-    }
-
-    /// Walk a block as a scope: track its locals and, on the fallthrough
-    /// exit, schedule their drops in reverse declaration order.
-    pub(crate) fn walk_block(&mut self, block: &hir::Block, state: &mut MoveState) -> Diverges {
-        let outer_cfg_exprs = std::mem::replace(&mut self.cfg_exprs, false);
-        let pending = std::mem::take(&mut self.pending_locals);
-        self.scopes.push(ScopeFrame {
-            block_id: block.id,
-            locals: pending,
-        });
-        let diverges = self.walk_block_nodes(&block.body, state);
-        let Some(frame) = self.scopes.pop() else {
-            unreachable!("scope frame pushed above")
-        };
-        if diverges == Diverges::No {
-            let mut schedules = vec![];
-            for local in frame.locals.iter().rev().cloned().collect::<Vec<_>>() {
-                self.schedule_drop(&local, DropReason::ScopeExit, state, &mut schedules);
-            }
-            if self.recording {
-                self.block_drops.insert(frame.block_id, schedules);
-            }
-        }
-        for local in &frame.locals {
-            state.finish_local(&Place::root(local.symbol));
-        }
-        self.cfg_exprs = outer_cfg_exprs;
-        diverges
-    }
 
     pub(crate) fn check_assignment(
         &mut self,
@@ -921,10 +656,10 @@ impl<'a> MoveChecker<'a> {
         lhs: &hir::Expr,
         state: &MoveState,
     ) -> Option<(crate::name_resolution::symbol::Symbol, Ty)> {
-        let ExprKind::Member(receiver, _) = &lhs.kind else {
-            return None;
+        let receiver = match &lhs.kind {
+            ExprKind::Member(Some(receiver), _) | ExprKind::Proj(receiver, ..) => receiver,
+            _ => return None,
         };
-        let receiver = receiver.as_ref()?;
         let mut current = receiver.as_ref();
         loop {
             match &current.kind {
@@ -937,7 +672,7 @@ impl<'a> MoveChecker<'a> {
                     }
                     return None;
                 }
-                ExprKind::Member(Some(inner), _) => {
+                ExprKind::Member(Some(inner), _) | ExprKind::Proj(inner, ..) => {
                     if matches!(current.ty, Ty::Borrow(perm, _) if !perm.is_exclusive()) {
                         let root = self.place(current).map(|place| place.root)?;
                         return Some((root, current.ty.clone()));
@@ -957,15 +692,13 @@ impl<'a> MoveChecker<'a> {
     /// own).
     pub(crate) fn consume_expr(&mut self, expr: &hir::Expr, state: &mut MoveState) {
         self.check_object_boundaries(expr);
-        // Under CFG boundaries a call's effects (receiver borrows, argument
-        // consumption) rode its own Call/Perform statement; its result is an
-        // rvalue with no place effects.
-        if self.cfg_exprs
-            && matches!(
-                expr.kind,
-                ExprKind::Call { .. } | ExprKind::CallEffect { .. }
-            )
-        {
+        // A call's effects (receiver borrows, argument consumption) rode
+        // its own Call/Perform statement; its result is an rvalue with no
+        // place effects.
+        if matches!(
+            expr.kind,
+            ExprKind::Call { .. } | ExprKind::CallEffect { .. }
+        ) {
             return;
         }
         // A closure value consumed by its context escapes the frame.
@@ -981,7 +714,9 @@ impl<'a> MoveChecker<'a> {
             return;
         }
         match &expr.kind {
-            ExprKind::Tuple(items) | ExprKind::LiteralArray(items) => {
+            ExprKind::Tuple(items)
+            | ExprKind::LiteralArray(items)
+            | ExprKind::Con { args: items, .. } => {
                 for item in items {
                     self.consume_expr(item, state);
                 }
@@ -994,37 +729,9 @@ impl<'a> MoveChecker<'a> {
                     self.consume_expr(spread, state);
                 }
             }
-            ExprKind::As(inner, _) => self.consume_expr(inner, state),
-            // Under CFG boundaries these are opaque: their effects (and the
-            // arms' value consumption) already rode the enclosing body's
-            // blocks.
-            ExprKind::Block(block) => {
-                if !self.cfg_exprs {
-                    self.walk_block(block, state);
-                }
-            }
-            ExprKind::If(cond, then_block, else_block) => {
-                if self.cfg_exprs {
-                    return;
-                }
-                self.walk_expr(cond, state);
-                let mut then_state = state.clone();
-                let then_diverges = self.walk_block(then_block, &mut then_state);
-                let mut else_state = state.clone();
-                let else_diverges = self.walk_block(else_block, &mut else_state);
-                if then_diverges == Diverges::No {
-                    state.merge_from(&then_state);
-                }
-                if else_diverges == Diverges::No {
-                    state.merge_from(&else_state);
-                }
-            }
-            ExprKind::Match(scrutinee, arms) => {
-                if self.cfg_exprs {
-                    return;
-                }
-                self.walk_match(scrutinee, arms, state, true);
-            }
+            // Opaque: their effects (and the arms' value consumption)
+            // already rode the enclosing body's blocks.
+            ExprKind::Block(_) | ExprKind::Match(..) => {}
             _ => self.walk_expr(expr, state),
         }
     }
@@ -1034,34 +741,20 @@ impl<'a> MoveChecker<'a> {
     pub(crate) fn walk_expr(&mut self, expr: &hir::Expr, state: &mut MoveState) {
         self.check_object_boundaries(expr);
         if let Some(place) = self.place(expr) {
-            self.check_use(expr, &place, false, state);
+            self.check_use(expr.id, &expr.ty, &place, false, state);
             return;
         }
         match &expr.kind {
-            // Under CFG boundaries these are opaque — the Call/Perform
-            // statement transfer applies their effects directly.
-            ExprKind::Call {
-                callee,
-                args,
-                trailing_block,
-                ..
-            } => {
-                if self.cfg_exprs {
-                    return;
-                }
-                self.check_call(callee, args, trailing_block.as_ref(), state);
+            // Opaque — the Call/Perform statement transfer applies their
+            // effects directly.
+            ExprKind::Call { .. } | ExprKind::CallEffect { .. } => {}
+            ExprKind::Member(Some(receiver), _) | ExprKind::Proj(receiver, ..) => {
+                self.walk_expr(receiver, state)
             }
-            ExprKind::CallEffect { args, .. } => {
-                if self.cfg_exprs {
-                    return;
-                }
-                for arg in args {
-                    self.consume_expr(&arg.value, state);
-                }
-            }
-            ExprKind::Member(Some(receiver), _) => self.walk_expr(receiver, state),
             ExprKind::Member(None, _) | ExprKind::Variable(_) | ExprKind::Constructor(_) => {}
-            ExprKind::Tuple(items) | ExprKind::LiteralArray(items) => {
+            ExprKind::Tuple(items)
+            | ExprKind::LiteralArray(items)
+            | ExprKind::Con { args: items, .. } => {
                 for item in items {
                     self.consume_expr(item, state);
                 }
@@ -1074,34 +767,7 @@ impl<'a> MoveChecker<'a> {
                     self.consume_expr(spread, state);
                 }
             }
-            ExprKind::As(inner, _) => self.walk_expr(inner, state),
-            ExprKind::Block(block) => {
-                if !self.cfg_exprs {
-                    self.walk_block(block, state);
-                }
-            }
-            ExprKind::If(cond, then_block, else_block) => {
-                if self.cfg_exprs {
-                    return;
-                }
-                self.walk_expr(cond, state);
-                let mut then_state = state.clone();
-                let then_diverges = self.walk_block(then_block, &mut then_state);
-                let mut else_state = state.clone();
-                let else_diverges = self.walk_block(else_block, &mut else_state);
-                if then_diverges == Diverges::No {
-                    state.merge_from(&then_state);
-                }
-                if else_diverges == Diverges::No {
-                    state.merge_from(&else_state);
-                }
-            }
-            ExprKind::Match(scrutinee, arms) => {
-                if self.cfg_exprs {
-                    return;
-                }
-                self.walk_match(scrutinee, arms, state, false);
-            }
+            ExprKind::Block(_) | ExprKind::Match(..) => {}
             ExprKind::Func(func) => {
                 self.check_closure(func, state, EscapeContext::Bound);
             }
@@ -1110,83 +776,15 @@ impl<'a> MoveChecker<'a> {
                     self.walk_expr(bind, state);
                 }
             }
-            ExprKind::LiteralInt(_)
-            | ExprKind::LiteralFloat(_)
-            | ExprKind::LiteralTrue
-            | ExprKind::LiteralFalse
-            | ExprKind::LiteralString(_)
-            | ExprKind::RowVariable(_) => {}
+            ExprKind::Lit(_) | ExprKind::Temp(_) => {}
         }
     }
 
-    /// A match: the scrutinee's provenance flows into arm binders whose type
-    /// contains a borrow (each arm re-borrows the scrutinee's owners).
-    fn walk_match(
-        &mut self,
-        scrutinee: &hir::Expr,
-        arms: &[hir::MatchArm],
-        state: &mut MoveState,
-        consume_scrutinee: bool,
-    ) {
-        let scrutinee_provenance = if self.grades.contains_borrowed(&scrutinee.ty) {
-            Some(self.expr_provenance(scrutinee, state))
-        } else {
-            None
-        };
-        if consume_scrutinee {
-            self.consume_expr(scrutinee, state);
-        } else {
-            self.walk_expr(scrutinee, state);
-        }
-        let entry = state.clone();
-        for arm in arms {
-            let mut arm_state = entry.clone();
-            if let Some(provenance) = &scrutinee_provenance {
-                for (binder_id, binder) in arm.pattern.collect_binders() {
-                    let binder_ty = self
-                        .types
-                        .node_types
-                        .get(&binder_id)
-                        .cloned()
-                        .unwrap_or(Ty::Error);
-                    if self.grades.contains_borrowed(&binder_ty) {
-                        self.install_provenance(
-                            binder_id,
-                            Place::root(binder),
-                            &binder_ty,
-                            provenance.clone(),
-                            &mut arm_state,
-                        );
-                    }
-                }
-            }
-            for (binder_id, binder) in arm.pattern.collect_binders() {
-                let binder_ty = self
-                    .types
-                    .local_tys
-                    .get(&binder)
-                    .or_else(|| self.types.node_types.get(&binder_id))
-                    .cloned()
-                    .unwrap_or(Ty::Error);
-                self.pending_locals.push(ScopeLocal {
-                    symbol: binder,
-                    binder: binder_id,
-                    ty: binder_ty,
-                    alias: true,
-                });
-                arm_state.restore(&Place::root(binder));
-            }
-            if self.walk_block(&arm.body, &mut arm_state) == Diverges::No {
-                state.merge_from(&arm_state);
-            }
-        }
-    }
 
     pub(crate) fn check_call(
         &mut self,
         callee: &hir::Expr,
         args: &[hir::CallArg],
-        trailing_block: Option<&hir::Block>,
         state: &mut MoveState,
     ) {
         // Receiver: a borrowed self parameter (from the method's scheme, which
@@ -1194,37 +792,40 @@ impl<'a> MoveChecker<'a> {
         // member that is a stored field being *called* is a closure-typed
         // field, not a method — its receiver reads.
         let mut value_params: Option<Vec<Ty>> = None;
-        if let ExprKind::Member(Some(receiver), _) = &callee.kind {
+        if let ExprKind::Proj(receiver, ..) = &callee.kind {
+            // A closure-typed stored field being called: the read is the
+            // projection's own; a non-place receiver evaluates as a value.
             if self.place(callee).is_some() {
                 self.walk_expr(callee, state);
             } else {
-                let method_params = self.member_callable_params(callee);
-                let self_param = method_params.as_ref().and_then(|params| params.first());
-                match self_param {
-                    Some(Ty::Borrow(perm, inner)) => {
-                        let is_object = self.grades.is_object(inner);
-                        let perm = *perm;
-                        self.walk_expr(receiver, state);
-                        if !is_object && let Some(receiver_place) = self.place(receiver) {
-                            let owner = state.loan_owner_for(&receiver_place);
-                            let perm = state.rebased_perm(&receiver_place, perm);
-                            self.check_borrow_conflicts(
-                                receiver.id,
-                                &owner,
-                                perm,
-                                Some(&receiver_place),
-                                state,
-                            );
-                            if perm.is_exclusive() {
-                                state.invalidate_borrows_of(&owner);
-                            }
+                self.consume_expr(receiver, state);
+            }
+        } else if let ExprKind::Member(Some(receiver), _) = &callee.kind {
+            let method_params = self.member_callable_params(callee);
+            let self_param = method_params.as_ref().and_then(|params| params.first());
+            match self_param {
+                Some(Ty::Borrow(perm, inner)) => {
+                    let is_object = self.grades.is_object(inner);
+                    let perm = *perm;
+                    self.walk_expr(receiver, state);
+                    if !is_object && let Some(receiver_place) = self.place(receiver) {
+                        let owner = state.loan_owner_for(&receiver_place);
+                        let perm = state.rebased_perm(&receiver_place, perm);
+                        self.check_borrow_conflicts(
+                            receiver.id,
+                            &owner,
+                            perm,
+                            Some(&receiver_place),
+                            state,
+                        );
+                        if perm.is_exclusive() {
+                            state.invalidate_borrows_of(&owner);
                         }
                     }
-                    _ => self.consume_expr(receiver, state),
                 }
-                value_params =
-                    method_params.map(|params| params.get(1..).unwrap_or(&[]).to_vec());
+                _ => self.consume_expr(receiver, state),
             }
+            value_params = method_params.map(|params| params.get(1..).unwrap_or(&[]).to_vec());
         } else {
             self.walk_expr(callee, state);
         }
@@ -1264,13 +865,6 @@ impl<'a> MoveChecker<'a> {
             }
         }
 
-        if let Some(block) = trailing_block {
-            // A trailing block body runs inside the callee; its effects
-            // propagate to the parent (legacy nested-body exit merge).
-            let mut body_state = state.clone();
-            self.walk_block(block, &mut body_state);
-            state.merge_from(&body_state);
-        }
     }
 
     /// The full self-first parameter list of a member call's method, from
@@ -1290,7 +884,9 @@ impl<'a> MoveChecker<'a> {
                 .get(witness)
                 .and_then(|scheme| func_params(&scheme.ty))
                 .or_else(|| {
-                    let ExprKind::Member(_, label) = &callee.kind else {
+                    let (ExprKind::Member(_, label) | ExprKind::Proj(_, label, _)) =
+                        &callee.kind
+                    else {
                         return None;
                     };
                     self.types
@@ -1355,25 +951,36 @@ impl<'a> MoveChecker<'a> {
     /// v1 ledger boundaries: `'heap` values cannot enter existentials or
     /// raw-storage containers (both are invisible to the region scans).
     pub(crate) fn check_object_boundaries(&mut self, expr: &hir::Expr) {
-        if let Some(pack) = &expr.existential_pack
+        self.check_boundaries(expr.id, &expr.ty, expr.existential_pack.as_ref());
+    }
+
+    /// The object-boundary rules on operand data: a `'heap` handle may not
+    /// pack into an existential or ride a raw-storage container.
+    pub(crate) fn check_boundaries(
+        &mut self,
+        node: NodeID,
+        ty: &Ty,
+        pack: Option<&crate::types::output::ExistentialPack>,
+    ) {
+        if let Some(pack) = pack
             && self.grades.contains_object(&pack.payload)
         {
             let error = OwnershipError::ObjectInExistential {
                 ty: pack.payload.render_mono(),
             };
-            self.error(error, expr.id);
+            self.error(error, node);
         }
-        if let Ty::Nominal(symbol, args) = &expr.ty
+        if let Ty::Nominal(symbol, args) = ty
             && !args.is_empty()
             && self.raw_storage_backed(*symbol)
         {
             for arg in args {
                 if self.grades.contains_object(arg) {
                     let error = OwnershipError::ObjectInRawStorage {
-                        container: expr.ty.render_mono(),
+                        container: ty.render_mono(),
                         ty: arg.render_mono(),
                     };
-                    self.error(error, expr.id);
+                    self.error(error, node);
                     break;
                 }
             }
@@ -1407,29 +1014,30 @@ impl<'a> MoveChecker<'a> {
     /// The place an expression names, if it is one: a variable, or a chain
     /// of stored-field accesses off one.
     pub(crate) fn place(&self, expr: &hir::Expr) -> Option<Place> {
-        super::place::place_for_expr(self.types, expr)
+        super::place::place_for_expr(expr)
     }
 
-    fn check_use(
+    pub(crate) fn check_use(
         &mut self,
-        expr: &hir::Expr,
+        node: NodeID,
+        ty: &Ty,
         place: &Place,
         use_is_owned: bool,
         state: &MoveState,
     ) {
-        self.check_invalidated_use(expr, place, state);
+        self.check_invalidated_use(node, ty, place, state);
         if let Some((moved, (_, ty))) = state.moved_for_use(place, use_is_owned) {
             let error = OwnershipError::UseAfterMove {
                 name: render_place(moved, self.types),
                 ty: ty.render_mono(),
             };
-            self.error(error, expr.id);
+            self.error(error, node);
         }
         // A read of a mutably-borrowed owner conflicts (NLL: while the loan
         // is live). The borrower reading through itself is fine.
         if !use_is_owned {
             let owner = state.loan_owner_for(place);
-            self.check_borrow_conflicts(expr.id, &owner, Perm::Shared, Some(place), state);
+            self.check_borrow_conflicts(node, &owner, Perm::Shared, Some(place), state);
         }
     }
 
@@ -1439,7 +1047,7 @@ impl<'a> MoveChecker<'a> {
             .closure_captures
             .get(&place)
             .is_some_and(|summary| !summary.is_copyable());
-        self.check_use(expr, &place, owned || noncopy_closure, state);
+        self.check_use(expr.id, &expr.ty, &place, owned || noncopy_closure, state);
         if !self.grades.is_copy(&expr.ty) && self.check_move_out_of_borrowed(expr, &place, state) {
             // Tier 2: the extraction clones (lowering retains the buffers),
             // so the owner stays live — a read, not a move.
@@ -1459,12 +1067,6 @@ impl<'a> MoveChecker<'a> {
             state.note_move(place, expr.id, expr.ty.clone());
         }
     }
-}
-
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub(crate) enum Diverges {
-    No,
-    Yes,
 }
 
 /// Where a closure value flows, for the escape checks.

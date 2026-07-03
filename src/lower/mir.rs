@@ -9,11 +9,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     node_kinds::{func::CaptureSpec, type_annotation::TypeAnnotation},
-    types::{
-        TypeOutput,
-        output::stored_field_symbol,
-        ty::Ty,
-    },
+    types::{TypeOutput, ty::Ty},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -160,8 +156,20 @@ pub(crate) enum Statement {
         id: NodeID,
         symbol: Symbol,
     },
+    /// A place read, operand form: flow-only (lowering skips it — the
+    /// evaluation rides the consuming statement's expression). One per
+    /// node of a non-place chain (boundary checks only, `place: None`);
+    /// a place-shaped read carries its place and stops the chain.
     Read {
-        expr: Expr,
+        node: NodeID,
+        ty: Ty,
+        place: Option<crate::flow::place::Place>,
+        /// Set by the annotate pass when this node's value is consumed by
+        /// its consuming statement (the use is checked there, as an owned
+        /// use); default-false is load-bearing — per-file error bodies
+        /// check without an annotate pass.
+        consumes: bool,
+        pack: Option<crate::types::output::ExistentialPack>,
     },
     ConsumeValue {
         expr: Expr,
@@ -193,9 +201,14 @@ pub(crate) enum Statement {
         source: NodeID,
     },
     Call {
+        /// The whole call expression: lowering evaluates it HERE, binding
+        /// the result to `temp` for the consuming statement's `Temp` read.
+        expr: Expr,
         callee: Expr,
         args: Vec<CallArg>,
         trailing_block: Option<Block>,
+        temp: u32,
+        result_ty: Ty,
     },
     Perform {
         /// The whole `CallEffect` expression: the flow checker consumes its
@@ -271,23 +284,42 @@ pub(crate) enum Terminator {
         condition: Expr,
         then_block: BlockId,
         else_block: BlockId,
-        /// An expression-position `if`: the arm blocks are analysis
-        /// scaffolding (the value — and evaluation — rides the expression
-        /// embedded in the enclosing statement, like a `Switch`'s arms).
-        /// Statement-position branches own their arm content.
-        in_expression: bool,
     },
     Switch {
         scrutinee: Expr,
         match_arms: Option<Vec<MatchArm>>,
         arms: Vec<BlockId>,
         default: Option<BlockId>,
+        /// The construct's value as an operand: arm tails deliver to the
+        /// join continuation, which binds this temp for the join block's
+        /// statements (where the source expression's node now reads
+        /// `ExprKind::Temp`).
+        result: Option<(u32, Ty)>,
     },
     Loop {
         condition: Option<Expr>,
         body_block: BlockId,
         exit_block: BlockId,
     },
+    /// An effect-handling scope: the handler body's blocks are analysis
+    /// scaffolding in the enclosing body (the body may run zero or more
+    /// times — the two edges are the tree walk's clone+merge); evaluation
+    /// rides the `Handling` statement's capability closure, which lowering
+    /// builds from these same blocks.
+    Handler {
+        body_block: BlockId,
+        join: BlockId,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HandlerTargets {
+    /// The handling construct's join block: `continue v` (a resume) ends
+    /// the handler-body path here — never at an enclosing loop's header.
+    join: BlockId,
+    /// `scope_stack.len()` at handler entry, for the resume path's
+    /// target-relative early-exit drops.
+    scope_depth: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -300,6 +332,20 @@ struct LoopTargets {
     scope_depth: usize,
 }
 
+#[derive(derive_visitor::VisitorMut)]
+#[visitor(Expr(enter))]
+struct TempSubstituter<'a> {
+    subs: &'a FxHashMap<NodeID, u32>,
+}
+
+impl TempSubstituter<'_> {
+    fn enter_expr(&mut self, expr: &mut Expr) {
+        if let Some(&temp) = self.subs.get(&expr.id) {
+            expr.kind = ExprKind::Temp(temp);
+        }
+    }
+}
+
 struct Builder<'types> {
     types: &'types TypeOutput,
     grades: crate::flow::grades::GradeView<'types>,
@@ -309,6 +355,11 @@ struct Builder<'types> {
     local_by_symbol: FxHashMap<Symbol, Local>,
     scope_stack: Vec<ScopeFrame>,
     loop_stack: Vec<LoopTargets>,
+    handler_stack: Vec<HandlerTargets>,
+    /// Temporaries minted for flattened constructs, and the source nodes
+    /// they replace in later statement/terminator embeddings.
+    next_temp: u32,
+    temp_subs: FxHashMap<NodeID, u32>,
     /// Whether this body's root-scope tail is the function's return value
     /// (true for function/top-level bodies; false for standalone match-arm
     /// bodies, whose tail delivers to the match join).
@@ -529,6 +580,9 @@ impl<'types> Builder<'types> {
             local_by_symbol: FxHashMap::default(),
             scope_stack: vec![],
             loop_stack: vec![],
+            handler_stack: vec![],
+            next_temp: 0,
+            temp_subs: FxHashMap::default(),
             root_tail_is_return: true,
             scaffolds: FxHashMap::default(),
         }
@@ -630,13 +684,10 @@ impl<'types> Builder<'types> {
                 let symbol = name.symbol().ok()?;
                 Some(KeyPath::root(self.local_for_symbol(symbol)))
             }
-            ExprKind::Member(Some(receiver), ..) => {
-                let field = stored_field_symbol(self.types, expr.member_resolution.as_ref())?;
-                Some(
-                    self.key_path_for_expr(receiver)?
-                        .project(KeyPathComponent::Field(field)),
-                )
-            }
+            ExprKind::Proj(receiver, _, field) => Some(
+                self.key_path_for_expr(receiver)?
+                    .project(KeyPathComponent::Field(*field)),
+            ),
             _ => None,
         }
     }
@@ -894,6 +945,8 @@ impl<'types> Builder<'types> {
                 current
             }
             StmtKind::Continue(Some(expr)) => {
+                // `continue v` is a RESUME: the handler-body path ends at
+                // the handling construct's join, never at a loop header.
                 let current = self.lower_expr(expr, current);
                 self.push_statement(
                     current,
@@ -901,6 +954,11 @@ impl<'types> Builder<'types> {
                         expr: expr.clone(),
                     },
                 );
+                if let Some(handler) = self.handler_stack.last().copied() {
+                    self.emit_early_exit_drops(current, stmt.id, handler.scope_depth);
+                    self.terminate_if_open(current, Terminator::Jump(handler.join));
+                    return current;
+                }
                 self.emit_early_exit_drops(current, stmt.id, self.loop_scope_depth());
                 let terminator = self
                     .loop_stack
@@ -962,7 +1020,6 @@ impl<'types> Builder<'types> {
                 current,
                 !consume_expr_value,
                 tail_exits,
-                None,
             ),
             StmtKind::Loop(condition, body) => self.lower_loop(condition.as_ref(), body, current),
             StmtKind::Handling {
@@ -976,7 +1033,29 @@ impl<'types> Builder<'types> {
                         body: Box::new(body.clone()),
                     },
                 );
-                current
+                // The handler body gets real CFG blocks (scaffolding: the
+                // capability closure's content lowers from them; the two
+                // edges are the may-execute clone+merge for the checker).
+                self.scaffolds.insert(stmt.id, current);
+                let body_id = self.new_block();
+                let join_id = self.new_block();
+                self.terminate_if_open(
+                    current,
+                    Terminator::Handler {
+                        body_block: body_id,
+                        join: join_id,
+                    },
+                );
+                self.handler_stack.push(HandlerTargets {
+                    join: join_id,
+                    scope_depth: self.scope_stack.len(),
+                });
+                let body_exit = self.lower_scope(body_id, body.id, |builder, body_id| {
+                    builder.lower_nodes(&body.body, body_id, true, false)
+                });
+                self.handler_stack.pop();
+                self.terminate_if_open(body_exit, Terminator::Jump(join_id));
+                join_id
             }
         }
     }
@@ -984,13 +1063,14 @@ impl<'types> Builder<'types> {
     fn lower_expr(&mut self, expr: &Expr, current: BlockId) -> BlockId {
         match &expr.kind {
             ExprKind::Variable(_) => {
-                self.push_statement(current, Statement::Read { expr: expr.clone() });
+                self.push_reads(expr, current);
                 current
             }
-            ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
+            ExprKind::LiteralArray(items)
+            | ExprKind::Tuple(items)
+            | ExprKind::Con { args: items, .. } => {
                 self.lower_exprs(items, current)
             }
-            ExprKind::As(inner, _) => self.lower_expr(inner, current),
             ExprKind::Block(block) => self.lower_scope(current, block.id, |builder, current| {
                 builder.lower_nodes(&block.body, current, true, false)
             }),
@@ -1004,14 +1084,50 @@ impl<'types> Builder<'types> {
                 for arg in args {
                     current = self.lower_expr(&arg.value, current);
                 }
+                let temp = self.next_temp;
+                self.next_temp += 1;
+                // The temp holds the RAW result: a pack coercion on this
+                // node applies at the Temp read, so the pre-pack payload
+                // type is the value's type here.
+                let result_ty = expr
+                    .existential_pack
+                    .as_ref()
+                    .map(|pack| pack.payload.clone())
+                    .or_else(|| self.types.node_types.get(&expr.id).cloned())
+                    .unwrap_or(Ty::Error);
                 self.push_statement(
                     current,
                     Statement::Call {
+                        expr: expr.clone(),
                         callee: (**callee).clone(),
                         args: args.clone(),
                         trailing_block: trailing_block.clone(),
+                        temp,
+                        result_ty,
                     },
                 );
+                // Later embeddings of this call read its temp.
+                self.temp_subs.insert(expr.id, temp);
+                // A trailing block runs inside the callee, zero or more
+                // times: scaffold blocks with may-execute edges, keyed by
+                // the block's own id (the closure lowerer's handle).
+                if let Some(block) = trailing_block {
+                    self.scaffolds.insert(block.id, current);
+                    let body_id = self.new_block();
+                    let join_id = self.new_block();
+                    self.terminate_if_open(
+                        current,
+                        Terminator::Handler {
+                            body_block: body_id,
+                            join: join_id,
+                        },
+                    );
+                    let body_exit = self.lower_scope(body_id, block.id, |builder, body_id| {
+                        builder.lower_nodes(&block.body, body_id, true, false)
+                    });
+                    self.terminate_if_open(body_exit, Terminator::Jump(join_id));
+                    return join_id;
+                }
                 current
             }
             ExprKind::CallEffect { args, .. } => {
@@ -1022,14 +1138,11 @@ impl<'types> Builder<'types> {
                 self.push_statement(current, Statement::Perform { expr: expr.clone() });
                 current
             }
-            ExprKind::Member(Some(receiver), ..) => {
-                if stored_field_symbol(self.types, expr.member_resolution.as_ref()).is_some() {
-                    self.push_statement(current, Statement::Read { expr: expr.clone() });
-                    current
-                } else {
-                    self.lower_expr(receiver, current)
-                }
+            ExprKind::Proj(..) => {
+                self.push_reads(expr, current);
+                current
             }
+            ExprKind::Member(Some(receiver), ..) => self.lower_expr(receiver, current),
             ExprKind::Func(func) => {
                 self.push_statement(
                     current,
@@ -1044,23 +1157,6 @@ impl<'types> Builder<'types> {
                 );
                 current
             }
-            ExprKind::If(condition, then_block, else_block) => {
-                // An expression-position `if` builds real blocks — a
-                // `break`/`continue`/move inside an arm must be a CFG edge,
-                // not text flattened into the current block. Lowering
-                // lowers the arms from these blocks when the consuming
-                // statement's expression reaches this construct; the arm
-                // tails deliver its value through the continuation.
-                self.lower_if(
-                    condition,
-                    then_block,
-                    Some(else_block),
-                    current,
-                    true,
-                    false,
-                    Some(expr.id),
-                )
-            }
             ExprKind::Match(scrutinee, arms) => self.lower_match(expr.id, scrutinee, arms, current),
             ExprKind::RecordLiteral { fields, spread } => {
                 let mut current = current;
@@ -1073,13 +1169,9 @@ impl<'types> Builder<'types> {
                 current
             }
             ExprKind::InlineIR(_)
-            | ExprKind::LiteralInt(_)
-            | ExprKind::LiteralFloat(_)
-            | ExprKind::LiteralTrue
-            | ExprKind::LiteralFalse
-            | ExprKind::LiteralString(_)
+            | ExprKind::Lit(_)
             | ExprKind::Constructor(_)
-            | ExprKind::RowVariable(_)
+            | ExprKind::Temp(_)
             | ExprKind::Member(None, ..) => current,
         }
     }
@@ -1094,9 +1186,7 @@ impl<'types> Builder<'types> {
     fn lower_assignment_lhs(&mut self, expr: &Expr, current: BlockId) {
         match &expr.kind {
             ExprKind::Variable(_) => {}
-            ExprKind::Member(Some(receiver), ..)
-                if stored_field_symbol(self.types, expr.member_resolution.as_ref()).is_some() =>
-            {
+            ExprKind::Proj(receiver, ..) => {
                 self.lower_assignment_root(receiver, current);
             }
             _ => {
@@ -1119,14 +1209,15 @@ impl<'types> Builder<'types> {
                     );
                 }
             }
-            ExprKind::Member(Some(receiver), ..) => self.lower_assignment_root(receiver, current),
+            ExprKind::Member(Some(receiver), ..) | ExprKind::Proj(receiver, ..) => {
+                self.lower_assignment_root(receiver, current)
+            }
             _ => {
                 self.lower_expr(expr, current);
             }
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn lower_if(
         &mut self,
         condition: &Expr,
@@ -1135,22 +1226,17 @@ impl<'types> Builder<'types> {
         current: BlockId,
         mark_tail_exprs: bool,
         tail_exits: bool,
-        scaffold: Option<NodeID>,
     ) -> BlockId {
         let current = self.lower_expr(condition, current);
         let then_id = self.new_block();
         let else_id = self.new_block();
         let join_id = self.new_block();
-        if let Some(expr_id) = scaffold {
-            self.scaffolds.insert(expr_id, current);
-        }
         self.terminate_if_open(
             current,
             Terminator::Branch {
                 condition: condition.clone(),
                 then_block: then_id,
                 else_block: else_id,
-                in_expression: scaffold.is_some(),
             },
         );
 
@@ -1223,13 +1309,28 @@ impl<'types> Builder<'types> {
         let join_id = self.new_block();
         let arm_blocks: Vec<_> = arms.iter().map(|_| self.new_block()).collect();
         self.scaffolds.insert(expr_id, current);
+        // The match's value flows arm-tail → join continuation → this
+        // temp, which the consuming statement (in the join block) reads.
+        let temp = self.next_temp;
+        self.next_temp += 1;
+        self.temp_subs.insert(expr_id, temp);
+        let result_ty = self
+            .types
+            .existential_packs
+            .get(&expr_id)
+            .map(|pack| pack.payload.clone())
+            .or_else(|| self.types.node_types.get(&expr_id).cloned())
+            .unwrap_or(Ty::Error);
+        let mut scrutinee_sub = scrutinee.clone();
+        self.substitute_temps_expr(&mut scrutinee_sub);
         self.terminate_if_open(
             current,
             Terminator::Switch {
-                scrutinee: scrutinee.clone(),
+                scrutinee: scrutinee_sub,
                 match_arms: Some(arms.to_vec()),
                 arms: arm_blocks.clone(),
                 default: None,
+                result: Some((temp, result_ty)),
             },
         );
 
@@ -1254,10 +1355,93 @@ impl<'types> Builder<'types> {
         }
     }
 
+    /// Emit `Read` statements for a place-shaped expression: one carrying
+    /// the place when the whole chain is one; otherwise one boundary-only
+    /// read per chain node down to the first place-shaped suffix or the
+    /// opaque base (whose interior rides its own statements) — the shape
+    /// of the old expression walk.
+    fn push_reads(&mut self, expr: &Expr, current: BlockId) {
+        let mut e = expr;
+        loop {
+            let place = crate::flow::place_for_expr(e);
+            let is_place = place.is_some();
+            self.push_statement(
+                current,
+                Statement::Read {
+                    node: e.id,
+                    ty: e.ty.clone(),
+                    place,
+                    consumes: false,
+                    pack: e.existential_pack.clone(),
+                },
+            );
+            if is_place {
+                return;
+            }
+            match &e.kind {
+                ExprKind::Proj(receiver, ..) | ExprKind::Member(Some(receiver), ..) => {
+                    e = receiver;
+                }
+                _ => return,
+            }
+        }
+    }
+
     fn push_statement(&mut self, block: BlockId, statement: Statement) {
+        let mut statement = statement;
+        self.substitute_temps(&mut statement);
         self.blocks[block.0].statements.push(LocatedStatement {
             kind: statement,
             ownership: StatementOwnership::default(),
+        });
+    }
+
+    /// Rewrite embedded expressions so nodes standing for flattened
+    /// constructs read their temps. Handler/trailing/function payload
+    /// copies are left alone: they are the standalone-body fallback's
+    /// input, which rebuilds from the unflattened tree.
+    fn substitute_temps(&self, statement: &mut Statement) {
+        if self.temp_subs.is_empty() {
+            return;
+        }
+        let mut subs = TempSubstituter {
+            subs: &self.temp_subs,
+        };
+        use derive_visitor::DriveMut;
+        match statement {
+            Statement::ConsumeValue { expr }
+            | Statement::ReturnValue { expr, .. }
+            | Statement::ContinueValue { expr }
+            | Statement::Perform { expr } => expr.drive_mut(&mut subs),
+            Statement::Bind { rhs: Some(rhs), .. } => rhs.drive_mut(&mut subs),
+            Statement::Assign { lhs, rhs, .. } => {
+                lhs.drive_mut(&mut subs);
+                rhs.drive_mut(&mut subs);
+            }
+            Statement::DropCandidate {
+                target: DropTarget::Expr(expr),
+                ..
+            } => expr.drive_mut(&mut subs),
+            Statement::Call {
+                expr, callee, args, ..
+            } => {
+                expr.drive_mut(&mut subs);
+                callee.drive_mut(&mut subs);
+                for arg in args.iter_mut() {
+                    arg.value.drive_mut(&mut subs);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn substitute_temps_expr(&self, expr: &mut Expr) {
+        if self.temp_subs.is_empty() {
+            return;
+        }
+        use derive_visitor::DriveMut;
+        expr.drive_mut(&mut TempSubstituter {
+            subs: &self.temp_subs,
         });
     }
 
@@ -1520,7 +1704,7 @@ fn render_statement(statement: &Statement) -> String {
             }
             None => format!("drop_candidate <unresolved> {:?}", reason),
         },
-        Statement::Call { .. } => "call".into(),
+        Statement::Call { temp, .. } => format!("call -> t{temp}"),
         Statement::Perform { .. } => "perform".into(),
         Statement::ReturnValue { .. } => "return_value".into(),
         Statement::ContinueValue { .. } => "continue_value".into(),
@@ -1544,6 +1728,9 @@ fn render_terminator(terminator: &Terminator) -> String {
             else_block,
             ..
         } => format!("branch bb{} bb{}", then_block.0, else_block.0),
+        Terminator::Handler { body_block, join } => {
+            format!("handler bb{} join bb{}", body_block.0, join.0)
+        }
         Terminator::Switch { arms, default, .. } => {
             let arms = arms
                 .iter()
@@ -1690,9 +1877,11 @@ mod tests {
     }
 
     #[test]
-    fn expression_position_if_builds_scaffold_branch_blocks() {
+    fn expression_position_if_builds_scaffold_switch_blocks() {
         // A `break`/`continue`/move inside an expression-position arm must
         // be a CFG edge — the arms cannot flatten into the current block.
+        // Expression-`if` desugars to a boolean `match`, so the scaffold
+        // materializes as a `Switch` registered for the embedded expression.
         with_first_func_mir(
             "
             func f(c) {
@@ -1702,15 +1891,12 @@ mod tests {
             ",
             |body| {
                 assert!(
-                    body.blocks.iter().any(|block| matches!(
-                        block.terminator,
-                        Terminator::Branch {
-                            in_expression: true,
-                            ..
-                        }
-                    )),
+                    body.blocks
+                        .iter()
+                        .any(|block| matches!(block.terminator, Terminator::Switch { .. })),
                     "{body:#?}"
                 );
+                assert!(!body.scaffolds.is_empty(), "{body:#?}");
             },
         );
     }

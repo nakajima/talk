@@ -95,6 +95,20 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_runs_as_expressions() {
+        // `as` erases at HIR build: the inner expression grafts under the
+        // As node's annotations (ascribed type; existential pack when the
+        // ascription packs).
+        assert_eq!(run_on_both_engines("let n = (1 as Int)\nn + 2"), Value::I64(3));
+        assert_eq!(
+            run_on_both_engines(
+                "// no-core\nprotocol Number {\n\tfunc value() -> Int\n}\nextend Int: Number {\n\tfunc value() -> Int { self }\n}\nlet x = (41 as any Number)\nx.value()"
+            ),
+            Value::I64(41)
+        );
+    }
+
+    #[test]
     fn vm_runs_existential_return_and_generic_bound_dispatch() {
         assert_eq!(
             run_on_both_engines(

@@ -118,11 +118,7 @@ impl<'s> Solver<'s> {
                     Ty::Nominal(symbol, _) if self.catalog.grade_of(symbol) == Grade::Copy
                 ) =>
             {
-                worklist.push(Constraint::Eq(
-                    (**inner).clone(),
-                    other.clone(),
-                    origin.clone(),
-                ));
+                worklist.push(Constraint::Eq((**inner).clone(), other.clone(), origin));
             }
 
             (Ty::Var(x), Ty::Var(y)) if self.store.find(x.0) == self.store.find(y.0) => {}

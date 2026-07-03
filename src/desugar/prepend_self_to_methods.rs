@@ -103,7 +103,7 @@ impl PrependSelfToMethods {
 pub mod tests {
     use crate::{
         annotation, any_block, any_body, any_decl, assert_eq_diff,
-        name_resolution::transforms::prepend_self_to_methods::PrependSelfToMethods,
+        desugar::prepend_self_to_methods::PrependSelfToMethods,
         node_id::NodeID,
         node_kinds::{
             decl::{DeclKind, ReceiverMode},

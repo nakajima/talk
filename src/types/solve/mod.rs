@@ -119,9 +119,10 @@ impl<'s> Solver<'s> {
                         if a == b {
                             continue;
                         }
-                        if stuck_projection(self.store, &a) || stuck_projection(self.store, &b) {
-                            stuck.push(guarded.unwrap_or(Constraint::Eq(a, b, origin)));
-                        } else if !self.unify(&a, &b, origin, &mut queue) {
+                        if stuck_projection(self.store, &a)
+                            || stuck_projection(self.store, &b)
+                            || !self.unify(&a, &b, origin, &mut queue)
+                        {
                             stuck.push(guarded.unwrap_or(Constraint::Eq(a, b, origin)));
                         }
                     }
@@ -152,6 +153,21 @@ impl<'s> Solver<'s> {
                             stuck.push(unsolved);
                         }
                     }
+                    Constraint::PatternView {
+                        scrutinee,
+                        view,
+                        origin,
+                    } => match self.store.shallow(&scrutinee) {
+                        Ty::Var(_) => stuck.push(Constraint::PatternView {
+                            scrutinee,
+                            view,
+                            origin,
+                        }),
+                        Ty::Borrow(_, inner) => {
+                            queue.push(Constraint::Eq(*inner, view, origin));
+                        }
+                        other => queue.push(Constraint::Eq(other, view, origin)),
+                    },
                     Constraint::Implic(implication) => {
                         let residual = self.solve_implication(*implication);
                         queue.extend(residual);
@@ -227,6 +243,19 @@ impl<'s> Solver<'s> {
                         receiver,
                         label,
                         member,
+                        origin,
+                    });
+                }
+                Constraint::PatternView {
+                    scrutinee,
+                    view,
+                    origin,
+                } => {
+                    // Float like HasMember: a later group may resolve the
+                    // scrutinee's head.
+                    residual.push(Constraint::PatternView {
+                        scrutinee,
+                        view,
                         origin,
                     });
                 }

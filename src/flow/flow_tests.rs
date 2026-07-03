@@ -272,7 +272,7 @@ fn trailing_block_body_move_propagates_to_parent() {
 
 // ----- Drop schedules (HIR annotations) --------------------------------------
 
-use crate::flow::drops::{DropElaboration, DropReason, DropSchedule};
+use crate::flow::drops::{DropElaboration, DropReason};
 use crate::hir;
 
 /// The named function's body block in the checked HIR. Top-level `func`
@@ -1000,6 +1000,85 @@ fn enum_payload_conditional_drop() {
 }
 
 #[test]
+fn move_inside_handler_body_is_may_moved_after() {
+    // Handler bodies are CFG blocks with may-execute edges: a value moved
+    // inside one is may-moved at the handling construct's join, exactly as
+    // the old tree walk's clone+merge concluded.
+    assert_error_contains(
+        "func take(s: String) -> Int {\n\ts.length\n}\neffect 'oops(error) -> Never\nfunc check() -> Int {\n\tlet s = \"a\" + \"b\"\n\t@handle 'oops { err in\n\t\ttake(s)\n\t\t0\n\t}\n\ts.length\n}",
+        "Use of moved value",
+    );
+}
+
+#[test]
+fn handler_body_locals_balance_allocations() {
+    // Handler-body locals drop from scaffold-CFG candidates now (the tree
+    // walk's recorded schedules are gone): an allocated-and-dropped local
+    // inside the handler leaks nothing. The abort makes the handler's
+    // value the handled scope's value.
+    let (value, _, live_allocations) = run_heap_eval(
+        "effect 'oops(error) -> Never\n@handle 'oops { err in\n\tlet local = \"x\" + \"y\"\n\tlocal.length\n}\nfunc boom() 'oops -> Int {\n\t'oops(\"bang\")\n}\nboom()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
+    assert_eq!(live_allocations, 0, "handler-body locals free exactly once");
+}
+
+#[test]
+fn move_inside_trailing_block_is_may_moved_after() {
+    // Trailing blocks are CFG blocks with may-execute edges, like handler
+    // bodies: a move inside one is may-moved after the call.
+    assert_error_contains(
+        "func take(s: String) -> Int {\n\ts.length\n}\nfunc run(f: () -> Int) -> Int {\n\tf()\n}\nfunc check() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = run {\n\t\ttake(s)\n\t}\n\ts.length\n}",
+        "Use of moved value",
+    );
+}
+
+#[test]
+fn trailing_block_locals_balance_allocations() {
+    // Trailing-block locals drop from scaffold-CFG candidates (the tree
+    // walk's recorded schedules are gone).
+    let (value, _, live_allocations) = run_heap_eval(
+        "func run(f: () -> Int) -> Int {\n\tf()\n}\nfunc check() -> Int {\n\trun {\n\t\tlet local = \"x\" + \"y\"\n\t\tlocal.length\n\t}\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
+    assert_eq!(live_allocations, 0, "trailing-block locals free exactly once");
+}
+
+#[test]
+fn variant_construction_shapes_balance_allocations() {
+    // The three `Con` classification shapes — leading-dot call, enum-named
+    // call, payload-less leading dot — construct, match, and free cleanly.
+    let (value, _, live_allocations) = run_heap_eval(
+        "func check() -> Int {\n\tlet a: String? = .some(\"x\" + \"y\")\n\tlet b = Optional.some(\"p\" + \"q\")\n\tlet c: String? = .none\n\tlet n = match a {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0\n\t}\n\tlet m = match b {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0\n\t}\n\tn + m\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(4));
+    assert_eq!(live_allocations, 0, "constructed payloads free exactly once");
+}
+
+#[test]
+fn stored_field_projection_chain_balances_allocations() {
+    // Field reads are `Proj` nodes from HIR build on — a projection chain
+    // through nested structs neither moves the owner nor leaks the leaf.
+    let (value, _, live_allocations) = run_heap_eval(
+        "struct Name {\n\tlet text: String\n}\nstruct User {\n\tlet name: Name\n}\nfunc check() -> Int {\n\tlet u = User(name: Name(text: \"ada\" + \" lovelace\"))\n\tu.name.text.length\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(12));
+    assert_eq!(live_allocations, 0, "projection reads leak nothing");
+}
+
+#[test]
+fn expression_if_arm_values_balance_allocations() {
+    // Expression-`if` desugars to a boolean match: the taken arm's value
+    // transfers out through the join and frees with its binding; the
+    // untaken arm's value never exists.
+    let (value, _, live_allocations) = run_heap_eval(
+        "func check(flag: Bool) -> Int {\n\tlet s = if (flag) {\n\t\t\"hello\" + \" world\"\n\t} else {\n\t\t\"bye\" + \" now\"\n\t}\n\ts.length\n}\ncheck(true) + check(false)",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(18));
+    assert_eq!(live_allocations, 0, "expr-if arm values free exactly once");
+}
+
+#[test]
 fn consumed_by_value_param_drops_in_callee() {
     let (value, _, live_allocations) = run_heap_eval(
         "func take(name: String) -> Int {\n\tname.length\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
@@ -1207,3 +1286,42 @@ fn live_loop_local_drops_on_break_path() {
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(7));
     assert_eq!(live_allocations, 0, "the loop-local drops on the break path too");
 }
+
+/// A `for` body declaring its own block argument (`{ e in … }`) binds the
+/// element through that argument: matching on it inside the loop is one
+/// binding rebound per iteration, not a use of last iteration's move. (The
+/// desugar used to keep the block arg as a second, never-reseeded symbol.)
+#[test]
+fn for_loop_block_arg_matched_in_body_is_accepted() {
+    assert_no_errors(
+        "enum E {\n\tcase a(String)\n\tcase b(Int)\n}\n\nstruct Cursor {\n\tlet i: Int\n\n\tinit() {\n\t\tself.i = 0\n\t}\n\n\textend Self: Iterator {\n\t\tmut func next() -> E? {\n\t\t\tself.i = self.i + 1\n\t\t\tif (self.i < 3) {\n\t\t\t\tOptional.some(E.a(\"x\" + \"y\"))\n\t\t\t} else {\n\t\t\t\tOptional.none\n\t\t\t}\n\t\t}\n\t}\n}\n\nstruct Src {\n\tlet n: Int\n\n\textend Self: Iterable {\n\t\tfunc iter() -> Cursor {\n\t\t\tCursor()\n\t\t}\n\t}\n}\n\nfunc check() -> Int {\n\tfor e in Src(n: 1) { e in\n\t\tmatch e {\n\t\t\t.a(s) -> print(s),\n\t\t\t.b(n) -> print(n)\n\t\t}\n\t}\n\t0\n}",
+    );
+}
+
+/// Matching variant patterns on a BORROWED enum: the owner keeps the value;
+/// payload binders alias it. Nothing double-frees, nothing leaks.
+#[test]
+fn match_on_borrowed_enum_neither_leaks_nor_double_frees() {
+    let (value, _, live_allocations) = run_heap_eval(
+        "enum E {\n\tcase a(String)\n\tcase b(Int)\n}\nfunc f(e: &E) -> Int {\n\tmatch e {\n\t\t.a(s) -> s.length,\n\t\t.b(n) -> n\n\t}\n}\nfunc check() -> Int {\n\tlet e = E.a(\"hello\" + \" world\")\n\tlet first = f(e)\n\tlet second = f(e)\n\tfirst + second\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(22));
+    assert_eq!(live_allocations, 0, "borrowed match aliases; owner drops once");
+}
+
+/// Iterating an array of enums and matching each element — the borrowed
+/// element's variant patterns and payload uses, end to end. Runs on the
+/// allocation-tracking evaluator, so a double free of any aliased payload
+/// panics the test. (Element buffers themselves are not asserted: arrays
+/// free their raw storage without deep-dropping elements — a pre-existing
+/// container-drop gap independent of matching.)
+#[test]
+fn for_over_enum_array_with_match_runs() {
+    let (value, _, _) = run_heap_eval(
+        "enum E {\n\tcase a(String)\n\tcase b(Int)\n}\nfunc check() -> Int {\n\tlet items = [E.a(\"hello\" + \" world\"), E.b(31)]\n\tlet total = 0\n\tfor e in items {\n\t\tmatch e {\n\t\t\t.a(s) -> {\n\t\t\t\ttotal = total + s.length\n\t\t\t},\n\t\t\t.b(n) -> {\n\t\t\t\ttotal = total + n\n\t\t\t}\n\t\t}\n\t}\n\ttotal\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(42));
+}
+
+
+

@@ -109,7 +109,7 @@ pub mod tests {
     use crate::{
         any_block, any_body, any_decl, any_expr, assert_eq_diff,
         name::Name,
-        name_resolution::transforms::lower_funcs_to_lets::LowerFuncsToLets,
+        desugar::lower_funcs_to_lets::LowerFuncsToLets,
         node_id::{FileID, NodeID},
         node_kinds::{
             decl::{DeclKind, ReceiverMode},

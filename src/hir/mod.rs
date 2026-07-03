@@ -104,10 +104,19 @@ impl std::fmt::Debug for Expr {
     }
 }
 
+/// A literal constant — one atom form instead of five expression forms.
+/// Numeric text stays as written (the checker typed it; lowering parses it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Literal {
+    Int(String),
+    Float(String),
+    Bool(bool),
+    String(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum ExprKind {
     InlineIR(InlineIRInstruction),
-    As(Box<Expr>, #[drive(skip)] TypeAnnotation),
     CallEffect {
         #[drive(skip)]
         effect_name: Name,
@@ -116,11 +125,7 @@ pub enum ExprKind {
         args: Vec<CallArg>,
     },
     LiteralArray(Vec<Expr>),
-    LiteralInt(#[drive(skip)] String),
-    LiteralFloat(#[drive(skip)] String),
-    LiteralTrue,
-    LiteralFalse,
-    LiteralString(#[drive(skip)] String),
+    Lit(#[drive(skip)] Literal),
     Tuple(Vec<Expr>),
     Block(Block),
     Call {
@@ -131,16 +136,48 @@ pub enum ExprKind {
         trailing_block: Option<Block>,
     },
     Member(Option<Box<Expr>>, #[drive(skip)] Label),
+    /// An enum-variant construction (`.some(x)`, `Optional.some(x)`,
+    /// payload-less `.none`), split from `Call`/`Member` at build time by
+    /// the checker's member resolution against the enum catalog. Payloads
+    /// are in source order; the node's baked `instantiation` is the
+    /// constructor's (for GADT evidence). A payload-carrying variant used
+    /// bare (as a function value) stays a `Member`.
+    Con {
+        #[drive(skip)]
+        enum_symbol: crate::name_resolution::symbol::Symbol,
+        #[drive(skip)]
+        tag: u16,
+        #[drive(skip)]
+        variant_symbol: crate::name_resolution::symbol::Symbol,
+        args: Vec<Expr>,
+    },
+    /// A stored-field read (`x.f` where `f` is a struct field), split from
+    /// `Member` at build time by the checker's member resolution — the same
+    /// judgment (`stored_field_symbol`) the place computation uses, so
+    /// "what is a place" is structural from here on. `Member` keeps method
+    /// references and leading-dot variant forms.
+    Proj(
+        Box<Expr>,
+        #[drive(skip)] Label,
+        #[drive(skip)] crate::name_resolution::symbol::Symbol,
+    ),
     Func(Func),
     Variable(#[drive(skip)] Name),
     Constructor(#[drive(skip)] Name),
-    If(Box<Expr>, Block, Block),
     Match(Box<Expr>, Vec<MatchArm>),
+    /// A reference to a MIR-statement-produced temporary — the operand
+    /// bridge. The builder substitutes one where a flattened construct
+    /// (an expression-position match, whose arms deliver the value to the
+    /// construct's join) stood in a consuming statement's expression.
+    /// An atom: no place, no transfer effects (its value's consumption
+    /// happened at the arm tails); lowering resolves it from the join
+    /// continuation's parameter. Never appears in the HIR tree itself —
+    /// only in builder-emitted statement copies.
+    Temp(#[drive(skip)] u32),
     RecordLiteral {
         fields: Vec<RecordField>,
         spread: Option<Box<Expr>>,
     },
-    RowVariable(#[drive(skip)] Name),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]

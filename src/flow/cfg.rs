@@ -40,9 +40,8 @@ pub(crate) fn check_bodies(
     hir: &IndexMap<Source, HirFile>,
     bodies: &mut crate::lower::mir::ModuleBodies,
 ) {
-    let saved = (checker.report_errors, checker.recording, checker.cfg_exprs);
+    let saved = (checker.report_errors, checker.recording);
     checker.recording = false;
-    checker.cfg_exprs = true;
 
     for file in hir.values() {
         // The file's top level checks as its own body (fresh state, the
@@ -78,7 +77,7 @@ pub(crate) fn check_bodies(
     );
     bodies.set_top_level(main_body);
 
-    (checker.report_errors, checker.recording, checker.cfg_exprs) = saved;
+    (checker.report_errors, checker.recording) = saved;
 }
 
 /// What a body's check produces: stored bodies do everything; the per-file
@@ -166,7 +165,7 @@ fn check_body(
     if !params.is_empty() {
         checker.seed_params(params, func_ty.as_ref(), &mut entry_state);
     }
-    checker.push_body_frame(NodeID::SYNTHESIZED);
+    checker.push_body_frame();
 
     // ----- Fixpoint: silent transfer until block-entry states converge.
     checker.report_errors = false;
@@ -213,7 +212,7 @@ fn check_body(
             consumed: &checker.consumed,
             auto_clones: &checker.auto_clones,
         };
-        super::mir_annotate::annotate_flags_and_moves(checker.types, body, &results);
+        super::mir_annotate::annotate_flags_and_moves(body, &results);
     }
 
     if role != BodyRole::MainRecording {
@@ -266,7 +265,7 @@ fn transfer_statement(
         mir::Statement::ScopeEnter { .. } | mir::Statement::ScopeExit { .. } => {}
         mir::Statement::StorageLive { id, symbol } => {
             let ty = local_ty(checker, *id, *symbol);
-            checker.register_scope_local(*id, *symbol, ty);
+            checker.register_scope_local(*symbol, ty);
         }
         mir::Statement::StorageDead { symbol, .. } => {
             state.finish_local(&Place::root(*symbol));
@@ -275,12 +274,21 @@ fn transfer_statement(
         // no loan pruning until the node's consuming statement, or a loan
         // could die between a receiver read and the value use of the same
         // node (the tree prunes per node, after the whole statement).
-        mir::Statement::Read { expr } => {
+        mir::Statement::Read {
+            node,
+            ty,
+            place,
+            consumes,
+            pack,
+        } => {
             // A place this node CONSUMES is checked once, as an owned use,
             // by its consuming statement — a shared-use check here would
             // report spurious borrow conflicts on the move.
-            if !expr.ownership.consumes {
-                checker.walk_expr(expr, state);
+            if !consumes {
+                checker.check_boundaries(*node, ty, pack.as_ref());
+                if let Some(place) = place {
+                    checker.check_use(*node, ty, place, false, state);
+                }
             }
         }
         mir::Statement::ConsumeValue { expr } => {
@@ -317,11 +325,19 @@ fn transfer_statement(
         }
         mir::Statement::AssignmentRootUse { .. } => {}
         mir::Statement::Call {
+            expr: _,
+            temp,
+            result_ty: _,
             callee,
             args,
             trailing_block,
         } => {
-            checker.check_call(callee, args, trailing_block.as_ref(), state);
+            let _ = trailing_block;
+            // The result's provenance (a borrowed method result reaches
+            // its receiver's owners) is read where the temp binds.
+            let provenance = checker.call_provenance(callee, args, state);
+            checker.check_call(callee, args, state);
+            state.temp_provenances.insert(*temp, provenance);
         }
         mir::Statement::Perform { expr } => {
             // The effect's arguments are consumed by the perform (their
@@ -340,14 +356,10 @@ fn transfer_statement(
                 checker.check_closure(func, state, super::moves::EscapeContext::Bound);
             }
         }
-        mir::Statement::Handling { body, .. } => {
-            // A handler body runs zero or more times; its effects propagate
-            // to the parent (the tree walk's nested-body exit merge). It has
-            // no CFG blocks of its own: `walk_block` walks it tree-style.
-            let mut body_state = state.clone();
-            checker.walk_block(body, &mut body_state);
-            state.merge_from(&body_state);
-        }
+        // The handler body has its own CFG blocks (the `Handler`
+        // terminator's edges carry the may-execute semantics); the
+        // statement's embedded copy is lowering's fallback payload only.
+        mir::Statement::Handling { .. } => {}
         mir::Statement::DeclBody { body } => {
             transfer_decl_body(checker, body, state);
         }
@@ -488,11 +500,18 @@ fn successor_states(
             (body_block.0, exit_state.clone()),
             (exit_block.0, exit_state.clone()),
         ],
+        // A handler body runs zero or more times; the two edges are the
+        // tree walk's clone+merge (zero-or-one approximation, matching it).
+        mir::Terminator::Handler { body_block, join } => vec![
+            (body_block.0, exit_state.clone()),
+            (join.0, exit_state.clone()),
+        ],
         mir::Terminator::Switch {
             scrutinee,
             match_arms,
             arms,
             default,
+            ..
         } => {
             // The scrutinee's evaluation rode this block's statements; its
             // consumption (when the match consumes it) happens here, after
@@ -514,6 +533,7 @@ fn successor_states(
                 {
                     seed_arm_binders(
                         checker,
+                        scrutinee,
                         arm,
                         scrutinee_provenance.as_ref(),
                         &mut arm_state,
@@ -530,13 +550,22 @@ fn successor_states(
 }
 
 /// Mirror `walk_match`'s per-arm seeding: borrow-typed binders re-borrow
-/// the scrutinee's owners; every binder starts initialized.
+/// the scrutinee's owners; every binder starts initialized. A BORROWED
+/// scrutinee additionally marks every payload binder as a borrowed root
+/// with the scrutinee's provenance — the owner keeps the payloads, so
+/// extracting one routes through the tier-2 clone / move-out-of-borrow
+/// machinery instead of moving.
 fn seed_arm_binders(
     checker: &mut MoveChecker,
+    scrutinee: &hir::Expr,
     arm: &hir::MatchArm,
     scrutinee_provenance: Option<&super::loans::Provenance>,
     state: &mut MoveState,
 ) {
+    let borrowed_scrutinee_perm = match &scrutinee.ty {
+        Ty::Borrow(perm, _) => Some(*perm),
+        _ => None,
+    };
     if let Some(provenance) = scrutinee_provenance {
         for (binder_id, binder) in arm.pattern.collect_binders() {
             let binder_ty = checker
@@ -545,7 +574,7 @@ fn seed_arm_binders(
                 .get(&binder_id)
                 .cloned()
                 .unwrap_or(Ty::Error);
-            if checker.grades.contains_borrowed(&binder_ty) {
+            if checker.grades.contains_borrowed(&binder_ty) || borrowed_scrutinee_perm.is_some() {
                 checker.install_provenance(
                     binder_id,
                     Place::root(binder),
@@ -558,5 +587,11 @@ fn seed_arm_binders(
     }
     for (_, binder) in arm.pattern.collect_binders() {
         state.restore(&Place::root(binder));
+        if let Some(perm) = borrowed_scrutinee_perm {
+            state.borrowed_roots.insert(binder, perm);
+            if !perm.is_exclusive() {
+                state.shared_borrow_roots.insert(binder);
+            }
+        }
     }
 }

@@ -3,7 +3,6 @@ pub mod decl_declarer;
 pub mod name_resolver;
 pub mod scc_graph;
 pub mod symbol;
-pub mod transforms;
 
 #[cfg(test)]
 pub mod dependency_resolving_tests;

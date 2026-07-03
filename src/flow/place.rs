@@ -9,18 +9,11 @@ use crate::name_resolution::symbol::Symbol;
 /// stored-field accesses off one), if any. The single definition of "what
 /// place does this expression touch" — the flow checker and MIR lowering
 /// must agree on it for drop schedules to join up.
-pub fn place_for_expr(
-    types: &crate::types::TypeOutput,
-    expr: &crate::hir::Expr,
-) -> Option<Place> {
+pub fn place_for_expr(expr: &crate::hir::Expr) -> Option<Place> {
     match &expr.kind {
         crate::hir::ExprKind::Variable(name) => name.symbol().ok().map(Place::root),
-        crate::hir::ExprKind::Member(Some(receiver), _) => {
-            let field = crate::types::output::stored_field_symbol(
-                types,
-                expr.member_resolution.as_ref(),
-            )?;
-            Some(place_for_expr(types, receiver)?.child(field))
+        crate::hir::ExprKind::Proj(receiver, _, field) => {
+            Some(place_for_expr(receiver)?.child(*field))
         }
         _ => None,
     }

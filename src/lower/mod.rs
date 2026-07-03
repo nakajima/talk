@@ -209,6 +209,13 @@ struct Ctx {
     /// GADT-local evidence: hidden type parameter + protocol bound →
     /// runtime witness table extracted from the constructor payload.
     local_evidence: FxHashMap<(Symbol, Symbol), EvidenceBinding>,
+    /// MIR temporaries in scope: a flattened construct's value, bound by
+    /// its join continuation (`ExprKind::Temp` resolves here). NOT part of
+    /// `mir_key`: a temp's read is adjacent to its definition (same block)
+    /// or inside its construct's single-lowered join closure, so cached
+    /// blocks never read a temp bound differently elsewhere — while
+    /// branch-local (dead) temps must not split the join cache.
+    temps: FxHashMap<u32, ExprId>,
     /// The current function's return continuation (a Fn(R, ⊥) value).
     ret_k: ExprId,
     /// The continuation currently representing normal fallthrough to the
@@ -706,24 +713,18 @@ impl<'a> Lowering<'a> {
     fn diagnose_unsupported_handlers_in_expr(&mut self, unit: usize, expr: &Expr) {
         match &expr.kind {
             ExprKind::Block(block) => self.diagnose_unsupported_handlers_in_block(unit, block),
-            ExprKind::If(condition, then_block, else_block) => {
-                self.diagnose_unsupported_handlers_in_expr(unit, condition);
-                self.diagnose_unsupported_handlers_in_block(unit, then_block);
-                self.diagnose_unsupported_handlers_in_block(unit, else_block);
-            }
             ExprKind::Match(scrutinee, arms) => {
                 self.diagnose_unsupported_handlers_in_expr(unit, scrutinee);
                 for arm in arms {
                     self.diagnose_unsupported_handlers_in_block(unit, &arm.body);
                 }
             }
-            ExprKind::Tuple(items) | ExprKind::LiteralArray(items) => {
+            ExprKind::Tuple(items)
+            | ExprKind::LiteralArray(items)
+            | ExprKind::Con { args: items, .. } => {
                 for item in items {
                     self.diagnose_unsupported_handlers_in_expr(unit, item);
                 }
-            }
-            ExprKind::As(inner, _) => {
-                self.diagnose_unsupported_handlers_in_expr(unit, inner);
             }
             ExprKind::Call {
                 callee,
@@ -744,7 +745,7 @@ impl<'a> Lowering<'a> {
                     self.diagnose_unsupported_handlers_in_expr(unit, &arg.value);
                 }
             }
-            ExprKind::Member(Some(receiver), ..) => {
+            ExprKind::Member(Some(receiver), ..) | ExprKind::Proj(receiver, ..) => {
                 self.diagnose_unsupported_handlers_in_expr(unit, receiver);
             }
             ExprKind::Func(func) => self.diagnose_unsupported_handlers_in_block(unit, &func.body),
@@ -945,6 +946,7 @@ impl<'a> Lowering<'a> {
             theta,
             env,
             local_evidence: FxHashMap::default(),
+            temps: FxHashMap::default(),
             ret_k,
             tail_k: ret_k,
             raw_ret_k: ret_k,
@@ -1166,7 +1168,9 @@ impl<'a> Lowering<'a> {
                 let ExprKind::Call { callee, .. } = &expr.kind else {
                     return;
                 };
-                let ExprKind::Member(Some(receiver), ..) = &callee.kind else {
+                let (ExprKind::Member(Some(receiver), ..) | ExprKind::Proj(receiver, ..)) =
+                    &callee.kind
+                else {
                     return;
                 };
                 let Some(symbol) = receiver_root_symbol(receiver) else {
@@ -1320,39 +1324,34 @@ impl<'a> Lowering<'a> {
                 args,
                 trailing_block,
                 ..
+            } => self.lower_call(expr, callee, args, trailing_block.as_ref(), ctx, k),
+            // Variant construction with impure payloads: chain the
+            // arguments, then build the value (no function is called).
+            ExprKind::Con {
+                enum_symbol,
+                tag,
+                variant_symbol,
+                args,
             } => {
-                // Variant construction with impure payloads: chain the
-                // arguments, then build the value (no function is called).
-                if let Some((enum_symbol, tag, variant_symbol, site)) =
-                    self.variant_target(expr, callee)
-                {
-                    let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
-                    return self.lower_args(&arg_exprs, ctx, vec![], &mut |this, values| {
-                        let value = this.variant_new_for_expr(
-                            site.clone(),
-                            enum_symbol,
-                            tag,
-                            variant_symbol,
-                            &values,
-                            ctx,
-                        );
-                        let body = this.p.app(k, value);
-                        this.embed_acquires_then(&arg_exprs, &values, ctx, body)
-                    });
-                }
-                self.lower_call(expr, callee, args, trailing_block.as_ref(), ctx, k)
-            }
-            ExprKind::If(cond, then_block, else_block) => {
-                if let Some(done) = self.lower_if_from_scaffold(expr, cond, ctx, k) {
-                    return done;
-                }
-                let then_body = self.lower_block(then_block, &[], ctx, k);
-                let else_body = self.lower_block(else_block, &[], ctx, k);
-                self.branch(cond, then_body, else_body, ctx)
+                let site = VariantSite {
+                    node: expr.id,
+                    instantiation: expr.instantiation.clone(),
+                };
+                let arg_exprs: Vec<&Expr> = args.iter().collect();
+                self.lower_args(&arg_exprs, ctx, vec![], &mut |this, values| {
+                    let value = this.variant_new_for_expr(
+                        site.clone(),
+                        *enum_symbol,
+                        *tag,
+                        *variant_symbol,
+                        &values,
+                        ctx,
+                    );
+                    let body = this.p.app(k, value);
+                    this.embed_acquires_then(&arg_exprs, &values, ctx, body)
+                })
             }
             ExprKind::Block(block) => self.lower_block(block, &[], ctx, k),
-            // A parenthesized expression parses as a 1-tuple.
-            ExprKind::Tuple(items) if items.len() == 1 => self.lower_expr(&items[0], ctx, k),
             // A tuple literal with impure items: chain them left to right.
             ExprKind::Tuple(items) => {
                 let item_exprs: Vec<&Expr> = items.iter().collect();
@@ -1363,8 +1362,9 @@ impl<'a> Lowering<'a> {
                 })
             }
             // Field read on an impure receiver: bind the receiver through
-            // a continuation, then GetField.
-            ExprKind::Member(Some(receiver), label) => {
+            // a continuation, then GetField. (`Member` still covers
+            // anonymous-record fields, which have no catalog symbol.)
+            ExprKind::Member(Some(receiver), label) | ExprKind::Proj(receiver, label, _) => {
                 let receiver_ty = self.expr_lambda_ty(receiver, ctx);
                 let bot = self.p.ty_bot();
                 let cont = self.p.func("recv", receiver_ty, bot);
@@ -1510,40 +1510,53 @@ impl<'a> Lowering<'a> {
         k: ExprId,
     ) -> ExprId {
         let scrutinee_check_ty = self.checker_ty(scrutinee, ctx);
+        let scrutinee_borrowed = matches!(scrutinee_check_ty, CheckTy::Borrow(..));
         let pattern_scrutinee_ty = Self::borrow_erased_ty(scrutinee_check_ty.clone());
+        // Ledger rule D analog: an rvalue scrutinee's carried +1 dies with
+        // the match — release once the match delivers. (A call-result temp
+        // is pure to read but still an rvalue.)
+        let release_rvalue = self.rhs_is_rvalue(scrutinee, ctx)
+            && self.contains_object_type(&scrutinee_check_ty);
+        let release_wrapped = |this: &mut Self, value: ExprId, k: ExprId| {
+            if !release_rvalue {
+                return Some(k);
+            }
+            let bot = this.p.ty_bot();
+            let TyKind::Fn(result_ty, _) = *this.p.ty_kind(this.p.expr_ty(k)) else {
+                return None;
+            };
+            let relk = this.p.func("release_scrutinee", result_ty, bot);
+            let result = this.p.var(relk);
+            let deliver = this.p.app(k, result);
+            let void_ty = this.p.ty_void();
+            let release = this.p.primop(Op::RegionRelease, &[value], void_ty);
+            let body = this.sequence_void_effect(release, deliver);
+            this.p.set_body(relk, body);
+            Some(this.p.func_ref(relk))
+        };
         match self.try_pure(scrutinee, ctx) {
-            Some(value) => patterns::compile_match(
-                self,
-                value,
-                pattern_scrutinee_ty,
-                arms,
-                scaffold_arms,
-                ctx,
-                k,
-            ),
+            Some(value) => {
+                let Some(k) = release_wrapped(self, value, k) else {
+                    return self.dead_end("match_continuation_not_a_function");
+                };
+                patterns::compile_match(
+                    self,
+                    value,
+                    pattern_scrutinee_ty,
+                    arms,
+                    scaffold_arms,
+                    scrutinee_borrowed,
+                    ctx,
+                    k,
+                )
+            }
             None => {
                 let scrutinee_ty = self.expr_lambda_ty(scrutinee, ctx);
                 let bot = self.p.ty_bot();
                 let cont = self.p.func("scrut", scrutinee_ty, bot);
                 let value = self.p.var(cont);
-                // Ledger rule D analog: an rvalue scrutinee's carried +1
-                // dies with the match — release once the match delivers.
-                let k = if self.rhs_is_rvalue(scrutinee, ctx)
-                    && self.contains_object_type(&scrutinee_check_ty)
-                {
-                    let TyKind::Fn(result_ty, _) = *self.p.ty_kind(self.p.expr_ty(k)) else {
-                        return self.dead_end("match_continuation_not_a_function");
-                    };
-                    let relk = self.p.func("release_scrutinee", result_ty, bot);
-                    let result = self.p.var(relk);
-                    let deliver = self.p.app(k, result);
-                    let void_ty = self.p.ty_void();
-                    let release = self.p.primop(Op::RegionRelease, &[value], void_ty);
-                    let body = self.sequence_void_effect(release, deliver);
-                    self.p.set_body(relk, body);
-                    self.p.func_ref(relk)
-                } else {
-                    k
+                let Some(k) = release_wrapped(self, value, k) else {
+                    return self.dead_end("match_continuation_not_a_function");
                 };
                 let body = patterns::compile_match(
                     self,
@@ -1551,6 +1564,7 @@ impl<'a> Lowering<'a> {
                     pattern_scrutinee_ty,
                     arms,
                     scaffold_arms,
+                    scrutinee_borrowed,
                     ctx,
                     k,
                 );
@@ -1584,13 +1598,12 @@ impl<'a> Lowering<'a> {
 
     fn try_pure_unpacked(&mut self, expr: &Expr, ctx: &Ctx) -> Option<ExprId> {
         match &expr.kind {
-            ExprKind::LiteralInt(text) => Some(self.p.int(text.parse().ok()?)),
-            ExprKind::LiteralFloat(text) => Some(self.p.float(text.parse().ok()?)),
-            ExprKind::LiteralTrue => Some(self.p.bool(true)),
-            ExprKind::LiteralFalse => Some(self.p.bool(false)),
+            ExprKind::Lit(hir::Literal::Int(text)) => Some(self.p.int(text.parse().ok()?)),
+            ExprKind::Lit(hir::Literal::Float(text)) => Some(self.p.float(text.parse().ok()?)),
+            ExprKind::Lit(hir::Literal::Bool(value)) => Some(self.p.bool(*value)),
             // A string literal is a String record over interned static
             // bytes: {storage, length, capacity}.
-            ExprKind::LiteralString(text) => {
+            ExprKind::Lit(hir::Literal::String(text)) => {
                 let bytes = crate::parsing::lexing::unescape(text).into_bytes();
                 let offset = self.intern_static(&bytes);
                 let CheckTy::Nominal(string_symbol, _) =
@@ -1615,10 +1628,11 @@ impl<'a> Lowering<'a> {
             // Field read on a pure receiver: GetField (records are pure
             // values). A member that resolves to a payload-less enum case
             // (`.none`, `Optional.none`) is a variant value instead.
+            ExprKind::Proj(receiver, ..) => {
+                let receiver_value = self.try_pure(receiver, ctx)?;
+                self.field_read(expr, receiver, receiver_value, ctx)
+            }
             ExprKind::Member(receiver, _) => {
-                if let Some(value) = self.try_variant_value(expr, ctx) {
-                    return Some(value);
-                }
                 let receiver = receiver.as_deref()?;
                 let receiver_value = self.try_pure(receiver, ctx)?;
                 self.field_read(expr, receiver, receiver_value, ctx)
@@ -1627,21 +1641,28 @@ impl<'a> Lowering<'a> {
             // `Maybe.definitely(x)`): pure, exactly like RecordNew — unless
             // a payload embeds a `'heap` place read (the impure path emits
             // the ledger acquire).
-            ExprKind::Call { callee, args, .. } => {
-                let (enum_symbol, tag, variant_symbol, site) = self.variant_target(expr, callee)?;
-                let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
+            ExprKind::Con {
+                enum_symbol,
+                tag,
+                variant_symbol,
+                args,
+            } => {
+                let arg_exprs: Vec<&Expr> = args.iter().collect();
                 if self.embeds_object_place_read(&arg_exprs, ctx) {
                     return None;
                 }
                 let mut payloads = Vec::with_capacity(args.len());
                 for arg in args {
-                    payloads.push(self.try_pure(&arg.value, ctx)?);
+                    payloads.push(self.try_pure(arg, ctx)?);
                 }
                 Some(self.variant_new_for_expr(
-                    site,
-                    enum_symbol,
-                    tag,
-                    variant_symbol,
+                    VariantSite {
+                        node: expr.id,
+                        instantiation: expr.instantiation.clone(),
+                    },
+                    *enum_symbol,
+                    *tag,
+                    *variant_symbol,
                     &payloads,
                     ctx,
                 ))
@@ -1665,6 +1686,7 @@ impl<'a> Lowering<'a> {
                 let items: Vec<ExprId> = order.iter().map(|&i| values[i]).collect();
                 Some(self.p.tuple(&items))
             }
+            ExprKind::Temp(temp) => ctx.temps.get(temp).copied(),
             ExprKind::Variable(name) => {
                 let symbol = name.symbol().ok()?;
                 if let Some(&binding) = ctx.env.get(&symbol) {
@@ -1710,6 +1732,7 @@ impl<'a> Lowering<'a> {
                         theta: Theta::default(),
                         env: FxHashMap::default(),
                         local_evidence: FxHashMap::default(),
+            temps: FxHashMap::default(),
                         ret_k: ctx.ret_k,
                         tail_k: ctx.ret_k,
                         raw_ret_k: ctx.raw_ret_k,
@@ -1735,7 +1758,6 @@ impl<'a> Lowering<'a> {
             // The unit literal `()`.
             ExprKind::Tuple(items) if items.is_empty() => Some(self.p.void()),
             ExprKind::InlineIR(instruction) => self.splice(instruction, ctx),
-            ExprKind::Tuple(items) if items.len() == 1 => self.try_pure(&items[0], ctx),
             // A tuple literal over pure items (unless a `'heap` place read
             // embeds — the impure path emits the ledger acquire).
             ExprKind::Tuple(items) => {
@@ -2270,7 +2292,7 @@ impl<'a> Lowering<'a> {
         let head = Self::borrow_erased_ty(self.checker_ty(receiver, ctx));
         if let CheckTy::Record(row) = &head
             && row.tail.is_none()
-            && let ExprKind::Member(_, label) = &expr.kind
+            && let ExprKind::Member(_, label) | ExprKind::Proj(_, label, _) = &expr.kind
             && let Some(index) = row
                 .fields
                 .iter()
@@ -2317,7 +2339,9 @@ impl<'a> Lowering<'a> {
     /// through a record field (`self.route_handler0.invoke()`), as
     /// opposed to a method call? Field callees dispatch indirectly.
     fn is_field_value_callee(&mut self, callee: &Expr, ctx: &Ctx) -> bool {
-        let ExprKind::Member(Some(receiver), label) = &callee.kind else {
+        let (ExprKind::Member(Some(receiver), label) | ExprKind::Proj(receiver, label, _)) =
+            &callee.kind
+        else {
             return false;
         };
         let head = Self::borrow_erased_ty(self.checker_ty(receiver, ctx));
@@ -2378,46 +2402,6 @@ impl<'a> Lowering<'a> {
                 .values()
                 .any(|info| info.inits.contains(&symbol))
         })
-    }
-
-    /// The enum and declaration-index tag of a variant symbol, when
-    /// `symbol` names an enum case. Tags are declaration order — the same
-    /// numbering `GetTag`/`Switch` dispatch on at runtime.
-    fn variant_of(&self, symbol: Symbol) -> Option<(Symbol, u16)> {
-        for unit in &self.units {
-            for (enum_symbol, info) in &unit.types.catalog.enums {
-                if let Some(index) = info.variants.values().position(|v| v.symbol == symbol) {
-                    return Some((*enum_symbol, index as u16));
-                }
-            }
-        }
-        None
-    }
-
-    /// Does this call construct an enum variant? The checker resolves
-    /// `.some(x)` at the call node (checking mode) and `Optional.some(x)`
-    /// at the member callee node; either way the resolution is the variant
-    /// symbol.
-    fn variant_target(
-        &self,
-        expr: &Expr,
-        callee: &Expr,
-    ) -> Option<(Symbol, u16, Symbol, VariantSite)> {
-        let (site, symbol) =
-            [callee, expr]
-                .into_iter()
-                .find_map(|e| match &e.member_resolution {
-                    Some(crate::types::output::MemberResolution::Direct(s)) => Some((
-                        VariantSite {
-                            node: e.id,
-                            instantiation: e.instantiation.clone(),
-                        },
-                        *s,
-                    )),
-                    _ => None,
-                })?;
-        let (enum_symbol, tag) = self.variant_of(symbol)?;
-        Some((enum_symbol, tag, symbol, site))
     }
 
     /// Construct a variant value: source payloads followed by hidden runtime
@@ -2531,40 +2515,6 @@ impl<'a> Lowering<'a> {
         let ty = self.p.ty(TyKind::Variant(enum_symbol));
         self.p
             .primop(Op::VariantNew(enum_symbol, tag), payloads, ty)
-    }
-
-    /// A bare member that *is* a payload-less variant (`.none`,
-    /// `Optional.none`): a pure value.
-    fn try_variant_value(&mut self, expr: &Expr, ctx: &Ctx) -> Option<ExprId> {
-        let resolution = expr.member_resolution.as_ref()?;
-        let crate::types::output::MemberResolution::Direct(symbol) = resolution else {
-            return None;
-        };
-        let (enum_symbol, tag) = self.variant_of(*symbol)?;
-        // A payload-carrying variant used bare is a function value (M6
-        // closures); only payload-less cases are values here.
-        let has_payloads = self.units.iter().any(|u| {
-            u.types
-                .catalog
-                .enums
-                .get(&enum_symbol)
-                .and_then(|info| info.variants.get_index(tag as usize))
-                .is_some_and(|(_, v)| !v.argument_types().is_empty())
-        });
-        if has_payloads {
-            return None;
-        }
-        Some(self.variant_new_for_expr(
-            VariantSite {
-                node: expr.id,
-                instantiation: expr.instantiation.clone(),
-            },
-            enum_symbol,
-            tag,
-            *symbol,
-            &[],
-            ctx,
-        ))
     }
 
     /// For a record literal: row position → source field index, from the
@@ -2739,9 +2689,11 @@ impl<'a> Lowering<'a> {
         inner.resume_k = None;
         inner.top_level = false;
         inner.local_handlers = FxHashSet::default();
+        let block_id = block.id;
         let body = self.with_cells(&celled, &mut inner, |this, inner| {
             let ret_k = inner.ret_k;
-            this.lower_block(block, &[], inner, ret_k)
+            this.lower_sub_body_from_scaffold(block_id, inner, ret_k)
+                .unwrap_or_else(|| this.lower_block(block, &[], inner, ret_k))
         });
         self.p.set_body(label, body);
         self.p.func_ref(label)
@@ -3542,32 +3494,18 @@ impl<'a> Lowering<'a> {
         // Payload-bearing variants parse as calls (`.read(...)`), while
         // payload-less variants parse as member values (`.cwd_len`).
         let operation = args.first().and_then(|request| match &request.value.kind {
-            ExprKind::Call {
-                callee,
+            ExprKind::Con {
+                enum_symbol,
+                tag,
                 args: payloads,
                 ..
             } => {
-                let (enum_symbol, tag, _, _) = self.variant_target(&request.value, callee)?;
                 let name = self
-                    .enum_info(enum_symbol)?
+                    .enum_info(*enum_symbol)?
                     .variants
-                    .get_index(tag as usize)
+                    .get_index(*tag as usize)
                     .map(|(name, _)| name.clone())?;
-                let payloads = payloads.iter().map(|arg| &arg.value).collect();
-                Some((name, payloads))
-            }
-            ExprKind::Member(_, _) => {
-                let symbol = match request.value.member_resolution {
-                    Some(crate::types::output::MemberResolution::Direct(symbol)) => symbol,
-                    _ => return None,
-                };
-                let (enum_symbol, tag) = self.variant_of(symbol)?;
-                let name = self
-                    .enum_info(enum_symbol)?
-                    .variants
-                    .get_index(tag as usize)
-                    .map(|(name, _)| name.clone())?;
-                Some((name, vec![]))
+                Some((name, payloads.iter().collect::<Vec<&Expr>>()))
             }
             _ => None,
         });
@@ -4128,6 +4066,7 @@ impl<'a> Lowering<'a> {
             theta: Theta::default(),
             env: FxHashMap::default(),
             local_evidence: FxHashMap::default(),
+            temps: FxHashMap::default(),
             ret_k,
             tail_k: ret_k,
             raw_ret_k: ret_k,
@@ -4236,6 +4175,7 @@ impl<'a> Lowering<'a> {
             theta: Theta::default(),
             env: FxHashMap::default(),
             local_evidence: FxHashMap::default(),
+            temps: FxHashMap::default(),
             ret_k,
             tail_k: ret_k,
             raw_ret_k: ret_k,
@@ -4296,7 +4236,9 @@ fn block_value_ty(lowering: &mut Lowering, block: &Block, ctx: &Ctx) -> TyId {
 fn receiver_root_symbol(expr: &Expr) -> Option<Symbol> {
     match &expr.kind {
         ExprKind::Variable(name) => name.symbol().ok(),
-        ExprKind::Member(Some(receiver), ..) => receiver_root_symbol(receiver),
+        ExprKind::Member(Some(receiver), ..) | ExprKind::Proj(receiver, ..) => {
+            receiver_root_symbol(receiver)
+        }
         _ => None,
     }
 }
