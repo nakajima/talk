@@ -203,6 +203,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.emit_eq(expected_inner, (*found_inner).clone(), node, reason);
             }
             Ty::Borrow(..) => self.emit_eq(expected, found, node, reason),
+            Ty::Var(_) if reason == CtReason::Apply => {
+                self.wanteds.push(Constraint::ApplyBorrow {
+                    expected_perm: expected_kind,
+                    expected_inner,
+                    found,
+                    origin: CtOrigin::new(node, reason),
+                });
+            }
             _ => self.emit_eq(expected_inner, found, node, reason),
         }
     }
@@ -690,8 +698,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     ));
                 }
                 let tail = self.store.fresh_eff(self.level, expr.id);
+                let entry = EffectEntry {
+                    effect: symbol,
+                    args: sig.generics.iter().map(|g| tys[g].clone()).collect(),
+                };
                 let performed = EffectRow {
-                    effects: [symbol].into(),
+                    effects: vec![entry],
                     tail: Some(EffTail::Var(tail)),
                 };
                 self.emit_eff_eq(performed, ctx.eff.clone(), expr.id);

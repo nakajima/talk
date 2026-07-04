@@ -53,12 +53,13 @@ impl<'a> Lowering<'a> {
         inner.ret_k = self.p.extract(self_var, func.params.len() as u32);
         inner.tail_k = inner.ret_k;
         inner.raw_ret_k = inner.ret_k;
-        // A function value's call sites are indirect: they cannot thread
-        // capabilities, so performs inside are rejected (and it cannot
-        // resume an enclosing handler).
+        // A function value keeps the capabilities of its creation site —
+        // its call sites are indirect and cannot thread them, so capture
+        // is lexical (Effekt-style; ADR 0011 departure (d)). It cannot
+        // resume an enclosing handler, though: the resumption does not
+        // cross the closure boundary.
         inner.resume_k = None;
         inner.top_level = false;
-        inner.caps = FxHashMap::default();
         let body_block = &func.body;
         let body = self.with_cells(&prologue, &mut inner, |this, inner| {
             let ret_k = inner.ret_k;

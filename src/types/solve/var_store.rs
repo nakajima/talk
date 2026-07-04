@@ -158,12 +158,19 @@ impl VarStore {
 
     pub fn zonk_eff(&mut self, eff: &EffectRow) -> EffectRow {
         let (effects, tail) = self.flatten_eff(eff);
+        let effects = effects
+            .into_iter()
+            .map(|entry| EffectEntry {
+                effect: entry.effect,
+                args: entry.args.iter().map(|ty| self.zonk_ty(ty)).collect(),
+            })
+            .collect();
         let tail = match tail {
             FlatTail::None => None,
             FlatTail::Var(v) => Some(EffTail::Var(EffVar(v))),
             FlatTail::Param(sym) => Some(EffTail::Param(sym)),
         };
-        EffectRow { effects, tail }
+        EffectRow::new(effects, tail)
     }
 
     pub fn zonk_row(&mut self, row: &Row) -> Row {
@@ -182,7 +189,7 @@ impl VarStore {
 
     /// Collapse an effect row to (label set, final tail), following solved
     /// tail variables.
-    pub(super) fn flatten_eff(&mut self, eff: &EffectRow) -> (BTreeSet<Symbol>, FlatTail) {
+    pub(super) fn flatten_eff(&mut self, eff: &EffectRow) -> (Vec<EffectEntry>, FlatTail) {
         let mut effects = eff.effects.clone();
         let mut tail = eff.tail.clone();
         loop {
@@ -277,7 +284,16 @@ impl VarStore {
 
     pub fn render_eff(&mut self, eff: &EffectRow) -> String {
         let (effects, tail) = self.flatten_eff(eff);
-        let mut labels: Vec<String> = effects.iter().map(|sym| format!("'{sym}")).collect();
+        let mut labels: Vec<String> = effects
+            .iter()
+            .map(|entry| {
+                let zonked = EffectEntry {
+                    effect: entry.effect,
+                    args: entry.args.iter().map(|ty| self.zonk_ty(ty)).collect(),
+                };
+                crate::types::ty::render_entry(&zonked, &Default::default())
+            })
+            .collect();
         if !matches!(tail, FlatTail::None) {
             labels.push("..".into());
         }
@@ -334,7 +350,18 @@ impl TyFold for PermDefaulter<'_> {
     }
 
     fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {
-        self.store.zonk_eff(eff)
+        let zonked = self.store.zonk_eff(eff);
+        EffectRow::new(
+            zonked
+                .effects
+                .iter()
+                .map(|entry| EffectEntry {
+                    effect: entry.effect,
+                    args: entry.args.iter().map(|ty| self.fold_ty(ty)).collect(),
+                })
+                .collect(),
+            zonked.tail,
+        )
     }
 
     fn fold_row(&mut self, row: &Row) -> Row {

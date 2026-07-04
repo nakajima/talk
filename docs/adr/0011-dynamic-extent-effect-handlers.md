@@ -35,7 +35,8 @@ Effects are **dynamic-extent**, compiled in capability-passing style:
   installing function (`Ctx::with_handled_effect`; the block walkers in
   `generate/func.rs`). Top-level ambient rows are **closed** over the
   core effects ('io, 'async, 'alloc — the runtime's implicit handler,
-  identified by `ModuleId::Core`) plus prescanned top-level `@handle`s;
+  identified by `ModuleId::Core`) plus the top-level `@handle`s
+  installed before the computation's source position;
   a user effect reaching a closed row is `TypeError::UnhandledEffect` at
   the node where it tried to flow in. The zonked scheme rows are the
   single source of routing truth — no per-node tables.
@@ -54,9 +55,13 @@ Effects are **dynamic-extent**, compiled in capability-passing style:
   (a Never effect passes a dead placeholder). Abort = the handler body
   finishing into the captured delimiter; the frames between the perform
   and the handled scope simply never resume. Nearest handler wins by
-  construction (`ctx.caps` insertion order). Trailing blocks keep the
-  caps of their creation site (Effekt-style lexical capture); function
-  literals clear them and reject performs.
+  construction (`ctx.caps` insertion order). Function values — trailing
+  blocks and function literals alike — keep the caps of their creation
+  site (Effekt-style lexical capture, pinned by
+  `vm_matches_evaluator_on_closure_capability_capture_is_lexical`), and
+  a *named* effectful function taken as a value eta-expands into a
+  plain-shaped wrapper closure over the caps in scope at the conversion
+  site (`eta_expand_effectful_value`).
 
 - **VM.** The bytecode machine gained the minimal M9 slice —
   `Value::Cont` (frame index + identity), `Insn::MakeCont` (reify the
@@ -96,12 +101,32 @@ splitter (`try_mir_effect_split`, `rest_mir_closure`), `HandlerCap` /
   the perform and the delimiter — unchanged from the slot design;
   abort-heavy corpus programs sit in the container-leak fence until
   Track B lands.
-- Residual v1 fences, all clean diagnostics: effectful functions as
-  *values* (eta-expansion capturing caps is the follow-up), performs
-  inside function literals, generic-effect handlers, a top-level `let`
-  calling an effectful function before its `@handle` lowers to "perform
-  before its handler is installed" (typing accepts it via the prescan —
-  a documented order wart).
+- Top-level ambient rows are position-aware: a computation (statement or
+  `let` rhs, by its group's earliest binder) sees only the `@handle`s
+  installed before it in source order — use-before-install is
+  `UnhandledEffect` at typing, matching what the runtime would have
+  installed. `ambient_row_before` in `generate/groups.rs`.
+- Capability capture is lexical while rows type call-site discharge: a
+  closure created under handler A and called under a same-effect handler
+  B routes to A. Coherent whenever creation and call share an extent
+  (the HOF pattern); the principled reconciliation is tunneling (Zhang &
+  Myers, POPL 2019) — out of scope.
+- **Generic-effect handlers are implemented**
+  (docs/generic-effects-plan.md, same day): effect rows carry
+  instantiations as inert entries (`EffectEntry { effect, args }`,
+  duplicate labels allowed, no cross-entry argument unification);
+  `@handle` is a label-scoped elimination constraint (`HandleEffect`,
+  processed at solve quiescence in data-flow order) discharging every
+  occurrence of its label; and the lowerer holds each `@handle` as a
+  `HandlerTemplate`, materializing one capability closure per demanded
+  instantiation with the effect's generics bound in θ — the
+  generic-function specialization machinery applied to a handler block.
+  Capability parameters and `ctx.caps` key by (label, instantiation);
+  handler bodies stay generic (rigid effect params), specialized per
+  materialization. This also supersedes departure (b): same-effect
+  nesting needs no positional story — an inner handler's filter takes
+  every occurrence of its label, matching nearest-capability-wins
+  exactly.
 - One-shot is enforced dynamically by frame identity (multi-shot resume
   is out of scope; cells make it semantically fraught).
 

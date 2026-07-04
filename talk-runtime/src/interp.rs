@@ -136,7 +136,11 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                 regs,
                 env,
                 dest: FINALIZER_DEST,
-                id: { let id = next_frame_id; next_frame_id += 1; id },
+                id: {
+                    let id = next_frame_id;
+                    next_frame_id += 1;
+                    id
+                },
             });
             finalizer_frames += 1;
             continue;
@@ -179,7 +183,11 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                     regs,
                     env: empty_env.clone(),
                     dest,
-                    id: { let id = next_frame_id; next_frame_id += 1; id },
+                    id: {
+                        let id = next_frame_id;
+                        next_frame_id += 1;
+                        id
+                    },
                 });
             }
             Insn::CallIndirect {
@@ -214,7 +222,11 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                     regs,
                     env,
                     dest,
-                    id: { let id = next_frame_id; next_frame_id += 1; id },
+                    id: {
+                        let id = next_frame_id;
+                        next_frame_id += 1;
+                        id
+                    },
                 });
             }
             Insn::Ret { src } => {
@@ -241,8 +253,7 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
             }
             Insn::MakeCont { dest } => {
                 let id = frames[frame_index].id;
-                frames[frame_index].regs[dest as usize] =
-                    Value::Cont(frame_index as u32, id);
+                frames[frame_index].regs[dest as usize] = Value::Cont(frame_index as u32, id);
             }
             Insn::CallCont { callee, src } => {
                 let cont = frames[frame_index].regs[callee as usize].clone();

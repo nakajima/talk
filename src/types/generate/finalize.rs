@@ -198,8 +198,4 @@ impl TyFold for Normalizer<'_> {
             _ => rebuilt,
         }
     }
-
-    fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {
-        eff.clone()
-    }
 }

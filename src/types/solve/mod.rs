@@ -36,7 +36,6 @@
 //! scheme's qualified context (THIH section 11.6's split between deferred and
 //! retained predicates). Nothing is stored.
 
-use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -50,8 +49,8 @@ use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
 use crate::types::output::MemberResolution;
 use crate::types::ty::{
-    EffTail, EffVar, EffectRow, Perm, PermVar, Predicate, Row, RowTail, RowVar, Scheme,
-    SchemeParam, Ty, TyFold, TyVar, match_pattern,
+    EffTail, EffVar, EffectEntry, EffectRow, Perm, PermVar, Predicate, Row, RowTail, RowVar,
+    Scheme, SchemeParam, Ty, TyFold, TyVar, match_pattern,
 };
 
 /// The per-binding-group solver. Borrows the checker's tables; owns nothing.
@@ -98,10 +97,15 @@ impl<'s> Solver<'s> {
     pub fn solve(&mut self, wanteds: Vec<Constraint>) -> Vec<Constraint> {
         let mut queue = wanteds;
         let mut stuck: Vec<Constraint> = vec![];
+        // Handler-extent boundaries wait until everything else quiesces:
+        // only then has the extent's row content surfaced (LIFO, so an
+        // inner handler filters before the outer one it feeds).
+        let mut handler_boundaries: Vec<Constraint> = vec![];
         loop {
             let generation = self.store.generation();
             while let Some(constraint) = queue.pop() {
                 match constraint {
+                    Constraint::HandleEffect { .. } => handler_boundaries.push(constraint),
                     Constraint::Eq(a, b, origin) => {
                         let original_a = normalize_ty(self.store, self.catalog, &a);
                         let original_b = normalize_ty(self.store, self.catalog, &b);
@@ -131,6 +135,19 @@ impl<'s> Solver<'s> {
                             stuck.push(Constraint::EffEq(a, b, origin));
                         }
                     }
+                    Constraint::ApplyBorrow {
+                        expected_perm,
+                        expected_inner,
+                        found,
+                        origin,
+                    } => self.solve_apply_borrow(
+                        expected_perm,
+                        expected_inner,
+                        found,
+                        origin,
+                        &mut queue,
+                        &mut stuck,
+                    ),
                     Constraint::Conforms {
                         ty,
                         protocol,
@@ -175,7 +192,11 @@ impl<'s> Solver<'s> {
                 }
             }
             if stuck.is_empty() {
-                return vec![];
+                if handler_boundaries.is_empty() {
+                    return vec![];
+                }
+                self.process_handler_boundaries(&mut handler_boundaries, &mut stuck);
+                continue;
             }
             if self.store.generation() != generation {
                 queue = std::mem::take(&mut stuck);
@@ -183,6 +204,14 @@ impl<'s> Solver<'s> {
             }
             if self.improve(&mut stuck, &mut queue) {
                 queue.extend(std::mem::take(&mut stuck));
+                continue;
+            }
+            if !handler_boundaries.is_empty() {
+                self.process_handler_boundaries(&mut handler_boundaries, &mut stuck);
+                queue.extend(std::mem::take(&mut stuck));
+                continue;
+            }
+            if self.default_apply_borrows(&mut stuck, &mut queue) {
                 continue;
             }
             break;
@@ -227,6 +256,12 @@ impl<'s> Solver<'s> {
                     // effect mismatch.
                     residual.push(Constraint::EffEq(a, b, origin));
                 }
+                boundary @ Constraint::HandleEffect { .. } => {
+                    // A handler boundary whose tails were untouchable here:
+                    // float it to the scope (or the final solve) that owns
+                    // them.
+                    residual.push(boundary);
+                }
                 Constraint::HasMember {
                     receiver,
                     label,
@@ -259,10 +294,100 @@ impl<'s> Solver<'s> {
                         origin,
                     });
                 }
+                Constraint::ApplyBorrow {
+                    expected_perm,
+                    expected_inner,
+                    found,
+                    origin,
+                } => {
+                    residual.push(Constraint::ApplyBorrow {
+                        expected_perm,
+                        expected_inner,
+                        found,
+                        origin,
+                    });
+                }
                 _ => {}
             }
         }
         residual
+    }
+
+    fn solve_apply_borrow(
+        &mut self,
+        expected_perm: Perm,
+        expected_inner: Ty,
+        found: Ty,
+        origin: CtOrigin,
+        queue: &mut Vec<Constraint>,
+        stuck: &mut Vec<Constraint>,
+    ) {
+        let expected_inner = normalize_ty(self.store, self.catalog, &expected_inner);
+        let found = normalize_ty(self.store, self.catalog, &found);
+        if stuck_projection(self.store, &expected_inner) || stuck_projection(self.store, &found) {
+            stuck.push(Constraint::ApplyBorrow {
+                expected_perm,
+                expected_inner,
+                found,
+                origin,
+            });
+            return;
+        }
+
+        match self.store.shallow(&found) {
+            Ty::Var(_) => stuck.push(Constraint::ApplyBorrow {
+                expected_perm,
+                expected_inner,
+                found,
+                origin,
+            }),
+            Ty::Borrow(found_perm, found_inner) => {
+                let expected_perm = self.store.shallow_perm(expected_perm);
+                let found_perm = self.store.shallow_perm(found_perm);
+                if expected_perm == found_perm
+                    || (expected_perm == Perm::Shared && found_perm == Perm::Exclusive)
+                {
+                    queue.push(Constraint::Eq(
+                        expected_inner,
+                        (*found_inner).clone(),
+                        origin,
+                    ));
+                } else {
+                    queue.push(Constraint::Eq(
+                        Ty::Borrow(expected_perm, Box::new(expected_inner)),
+                        found,
+                        origin,
+                    ));
+                }
+            }
+            Ty::Error => {}
+            _ => queue.push(Constraint::Eq(expected_inner, found, origin)),
+        }
+    }
+
+    fn default_apply_borrows(
+        &mut self,
+        stuck: &mut Vec<Constraint>,
+        queue: &mut Vec<Constraint>,
+    ) -> bool {
+        let mut remaining = Vec::with_capacity(stuck.len());
+        let mut defaulted = false;
+        for constraint in stuck.drain(..) {
+            match constraint {
+                Constraint::ApplyBorrow {
+                    expected_inner,
+                    found,
+                    origin,
+                    ..
+                } if matches!(self.store.shallow(&found), Ty::Var(_)) => {
+                    queue.push(Constraint::Eq(expected_inner, found, origin));
+                    defaulted = true;
+                }
+                other => remaining.push(other),
+            }
+        }
+        *stuck = remaining;
+        defaulted
     }
 
     pub(super) fn eq_residual_guard(
@@ -288,6 +413,89 @@ mod pattern;
 mod tests;
 mod unify;
 mod var_store;
+
+impl<'s> Solver<'s> {
+    /// The root tail variable a row currently flattens to, if any — the
+    /// identity used to order handler boundaries by data flow.
+    fn row_tail_root(&mut self, row: &EffectRow) -> Option<u32> {
+        match self.store.flatten_eff(row).1 {
+            FlatTail::Var(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Discharge handler-extent boundaries once the group's solve has
+    /// quiesced: every occurrence of the covered labels in the extent's
+    /// row is eliminated (label-scoped handling — one `@handle` covers
+    /// every instantiation of its effect); the remaining occurrences and
+    /// the residual tail flow to the outer row. Boundaries are processed
+    /// innermost-first by data flow: one whose extent row is fed by
+    /// another pending boundary's outer row must wait for it, or entries
+    /// would slip past its filter.
+    fn process_handler_boundaries(
+        &mut self,
+        boundaries: &mut Vec<Constraint>,
+        stuck: &mut Vec<Constraint>,
+    ) {
+        while !boundaries.is_empty() {
+            let outer_roots: Vec<Option<u32>> = boundaries
+                .iter()
+                .map(|boundary| match boundary {
+                    Constraint::HandleEffect { outer, .. } => {
+                        let outer = outer.clone();
+                        self.row_tail_root(&outer)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let index = boundaries
+                .iter()
+                .enumerate()
+                .position(|(i, boundary)| match boundary {
+                    Constraint::HandleEffect { inner, .. } => {
+                        let inner = inner.clone();
+                        let inner_root = self.row_tail_root(&inner);
+                        inner_root.is_none()
+                            || !outer_roots
+                                .iter()
+                                .enumerate()
+                                .any(|(j, root)| j != i && *root == inner_root)
+                    }
+                    _ => true,
+                })
+                .unwrap_or(0);
+            let boundary = boundaries.remove(index);
+            let Constraint::HandleEffect {
+                inner,
+                effects,
+                outer,
+                origin,
+            } = boundary
+            else {
+                unreachable!("handler_boundaries holds only HandleEffect");
+            };
+            let (entries, tail) = self.store.flatten_eff(&inner);
+            let rest: Vec<EffectEntry> = entries
+                .into_iter()
+                .filter(|entry| !effects.contains(&entry.effect))
+                .collect();
+            let tail = match tail {
+                FlatTail::None => None,
+                FlatTail::Var(v) => Some(EffTail::Var(EffVar(v))),
+                FlatTail::Param(sym) => Some(EffTail::Param(sym)),
+            };
+            let rest_row = EffectRow::new(rest, tail);
+            if !self.unify_eff(&rest_row, &outer, origin) {
+                stuck.push(Constraint::HandleEffect {
+                    inner,
+                    effects,
+                    outer,
+                    origin,
+                });
+            }
+        }
+    }
+}
 
 pub use generalize::Generalizer;
 pub use normalize::normalize_ty;

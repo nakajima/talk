@@ -320,6 +320,14 @@ impl<'s> Solver<'s> {
                         worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin));
                     }
                 }
+                Ty::Var(_) => {
+                    worklist.push(Constraint::ApplyBorrow {
+                        expected_perm,
+                        expected_inner: (*expected_inner).clone(),
+                        found: found.clone(),
+                        origin,
+                    });
+                }
                 _ => {
                     worklist.push(Constraint::Eq(
                         (*expected_inner).clone(),
@@ -653,23 +661,65 @@ impl<'s> Solver<'s> {
         true
     }
 
-    /// Effect-row unification: Leijen's scoped-label row rewriting,
-    /// specialized to the Koka-style effect-label set Talk uses. The leftover
-    /// labels of each side flow into the other side's tail via a fresh shared
-    /// tail. Effect binding never fails, so the skeleton's abort path is unused.
-    pub(super) fn unify_eff(&mut self, a: &EffectRow, b: &EffectRow, origin: CtOrigin) -> bool {
-        let (sa, ta) = self.store.flatten_eff(a);
-        let (sb, tb) = self.store.flatten_eff(b);
+    /// Multiset difference of two flattened entry lists: structurally
+    /// equal occurrences (label AND instantiation, zonked) cancel; the
+    /// rest are each side's leftovers. Entries never unify their
+    /// instantiation arguments against each other — occurrences are inert
+    /// until a handler's label filter discharges them or a closed row
+    /// rejects them (docs/generic-effects-plan.md).
+    fn diff_effect_entries(
+        &mut self,
+        ea: Vec<EffectEntry>,
+        eb: Vec<EffectEntry>,
+    ) -> (Vec<EffectEntry>, Vec<EffectEntry>) {
+        let zonk = |solver: &mut Self, entries: Vec<EffectEntry>| -> Vec<EffectEntry> {
+            entries
+                .into_iter()
+                .map(|entry| EffectEntry {
+                    effect: entry.effect,
+                    args: entry
+                        .args
+                        .iter()
+                        .map(|ty| solver.store.zonk_ty(ty))
+                        .collect(),
+                })
+                .collect()
+        };
+        let ea = zonk(self, ea);
+        let eb = zonk(self, eb);
+        let mut remaining_b: Vec<Option<EffectEntry>> = eb.into_iter().map(Some).collect();
+        let mut only_a: Vec<EffectEntry> = vec![];
+        for entry in ea {
+            match remaining_b
+                .iter_mut()
+                .find(|slot| slot.as_ref() == Some(&entry))
+            {
+                Some(slot) => {
+                    slot.take();
+                }
+                None => only_a.push(entry),
+            }
+        }
+        let only_b: Vec<EffectEntry> = remaining_b.into_iter().flatten().collect();
+        (only_a, only_b)
+    }
 
-        let only_a: BTreeSet<Symbol> = sa.difference(&sb).cloned().collect();
-        let only_b: BTreeSet<Symbol> = sb.difference(&sa).cloned().collect();
+    /// Effect-row unification over inert entry multisets: structurally
+    /// equal occurrences cancel; each side's leftovers flow into the other
+    /// side's tail via a fresh shared tail (Leijen-style row rewriting;
+    /// entries with empty argument vectors behave exactly like the old
+    /// label set).
+    pub(super) fn unify_eff(&mut self, a: &EffectRow, b: &EffectRow, origin: CtOrigin) -> bool {
+        let (ea, ta) = self.store.flatten_eff(a);
+        let (eb, tb) = self.store.flatten_eff(b);
+        let (only_a, only_b) = self.diff_effect_entries(ea, eb);
 
         self.unify_row_like(
             only_a,
             only_b,
             ta,
             tb,
-            |effects| effects.is_empty(),
+            |effects: &Vec<EffectEntry>| effects.is_empty(),
             |solver, level| solver.store.fresh_eff(level, origin.node).0,
             |solver, var, effects, spec| {
                 let tail = match spec {
@@ -679,22 +729,26 @@ impl<'s> Solver<'s> {
                 };
                 solver
                     .store
-                    .bind(var, VarValue::Eff(EffectRow { effects, tail }));
+                    .bind(var, VarValue::Eff(EffectRow::new(effects, tail)));
                 true
             },
             |solver| {
-                // Effects with nowhere to go — spilling into a CLOSED row —
-                // are unhandled: no handler stands between the perform and
-                // the top level. Anything else is an ordinary row mismatch.
-                let (sa, ta) = solver.store.flatten_eff(a);
-                let (sb, tb) = solver.store.flatten_eff(b);
-                let mut unhandled = BTreeSet::new();
+                // Occurrences with nowhere to go — spilling into a CLOSED
+                // row — are unhandled: no handler stands between the
+                // perform and the top level. Anything else is an ordinary
+                // row mismatch.
+                let (ea, ta) = solver.store.flatten_eff(a);
+                let (eb, tb) = solver.store.flatten_eff(b);
+                let (extra_a, extra_b) = solver.diff_effect_entries(ea, eb);
+                let mut unhandled: Vec<Symbol> = vec![];
                 if matches!(ta, FlatTail::None) {
-                    unhandled.extend(sb.difference(&sa).cloned());
+                    unhandled.extend(extra_b.iter().map(|entry| entry.effect));
                 }
                 if matches!(tb, FlatTail::None) {
-                    unhandled.extend(sa.difference(&sb).cloned());
+                    unhandled.extend(extra_a.iter().map(|entry| entry.effect));
                 }
+                unhandled.sort();
+                unhandled.dedup();
                 if unhandled.is_empty() {
                     let expected = solver.store.render_eff(a);
                     let found = solver.store.render_eff(b);

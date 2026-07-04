@@ -1,0 +1,12 @@
+effect 'ask<T>(prompt: T) -> T
+
+func echo(n: Int) -> Int {
+	'ask(n) + 1
+}
+
+func run() -> Int {
+	@handle 'ask { v in continue v }
+	echo(41)
+}
+
+print(run())

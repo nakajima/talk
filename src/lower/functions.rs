@@ -34,20 +34,24 @@ impl<'a> Lowering<'a> {
             }
         }
         // Capability parameters sit between the source parameters and the
-        // return continuation, one per user effect in the latent row —
-        // the same order `demand` appended them.
-        let cap_effects = self.effect_caps_of(symbol);
+        // return continuation, one per user-effect instantiation in the
+        // latent row — the same order `demand` appended them.
+        let cap_entries = self.cap_entries_of(symbol, &theta);
         let mut caps = FxHashMap::default();
-        for (i, effect) in cap_effects.iter().enumerate() {
+        for (i, entry) in cap_entries.iter().enumerate() {
             let extract = self.p.extract(self_var, (source_params.len() + i) as u32);
-            caps.insert(*effect, extract);
+            caps.insert(entry.clone(), extract);
         }
         let ret_k = self
             .p
-            .extract(self_var, (source_params.len() + cap_effects.len()) as u32);
+            .extract(self_var, (source_params.len() + cap_entries.len()) as u32);
         let mut param_names: Vec<String> =
             source_params.iter().map(|p| p.name.name_str()).collect();
-        param_names.extend(cap_effects.iter().map(|effect| format!("cap_{effect}")));
+        param_names.extend(
+            cap_entries
+                .iter()
+                .map(|(effect, _)| format!("cap_{effect}")),
+        );
         param_names.push("k".into());
         let name_refs: Vec<&str> = param_names.iter().map(String::as_str).collect();
         self.p.name_params(label, &name_refs);
@@ -65,6 +69,7 @@ impl<'a> Lowering<'a> {
             resume_k: None,
             top_level: false,
             caps,
+            cap_templates: FxHashMap::default(),
             params,
             loops: vec![],
             drop_stack: vec![],

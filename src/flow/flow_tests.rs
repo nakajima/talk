@@ -1201,7 +1201,10 @@ fn perform_argument_stays_owned_by_the_performer() {
         "effect 'log(msg) -> Int\n@handle 'log { msg in\n\tcontinue msg.length\n}\nfunc f(flag: Bool) 'log -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet n = 0\n\tif flag {\n\t\tn = 'log(s)\n\t}\n\tn\n}\nf(true) + f(false)",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
-    assert_eq!(live_allocations, 0, "the payload frees exactly once, at f's exit");
+    assert_eq!(
+        live_allocations, 0,
+        "the payload frees exactly once, at f's exit"
+    );
 }
 
 // ----- Ledger completeness (pre-merge hardening) -----------------------------------

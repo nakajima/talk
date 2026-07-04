@@ -119,11 +119,16 @@ impl<'a> Lowering<'a> {
 
     // ----- Effect capabilities (dynamic-extent handlers) ------------------
 
-    /// The user effects in a symbol's latent row — the capability
-    /// parameters its specialization takes, in the row's (sorted) order.
-    /// Core effects ('io, 'async, 'alloc) are the runtime's and route to
-    /// primops, not capabilities.
-    pub(super) fn effect_caps_of(&self, symbol: Symbol) -> Vec<Symbol> {
+    /// The capability parameters a symbol's specialization takes: one per
+    /// user-effect OCCURRENCE in its latent row, θ-substituted, deduped,
+    /// in a canonical (label, instantiation) order shared by `demand`,
+    /// `lower_function`, and every call site. Core effects ('io, 'async,
+    /// 'alloc) are the runtime's and route to primops, not capabilities.
+    pub(super) fn cap_entries_of(
+        &self,
+        symbol: Symbol,
+        theta: &Theta,
+    ) -> Vec<(Symbol, Vec<CheckTy>)> {
         let row = self
             .units
             .iter()
@@ -135,29 +140,70 @@ impl<'a> Lowering<'a> {
         let Some(row) = row else {
             return vec![];
         };
-        row.effects
+        let mut entries: Vec<(Symbol, Vec<CheckTy>)> = row
+            .effects
             .iter()
-            .copied()
-            .filter(|effect| {
-                effect.external_module_id() != Some(crate::compiling::module::ModuleId::Core)
+            .filter(|entry| {
+                entry.effect.external_module_id() != Some(crate::compiling::module::ModuleId::Core)
             })
-            .collect()
+            .map(|entry| {
+                let args = entry
+                    .args
+                    .iter()
+                    .map(|ty| ty.substitute(theta, &Default::default(), &Default::default()))
+                    .collect();
+                (entry.effect, args)
+            })
+            .collect();
+        entries.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+        entries.dedup();
+        entries
     }
 
-    /// The capability domain for an effect: its payload types plus the
-    /// resumption continuation — `(payloads…, Fn(ret, ⊥))`. Built from the
-    /// finalized catalog signature, so the `@handle` capability closure
-    /// and every demanded cap parameter agree on the type.
-    pub(super) fn cap_dom_items(&mut self, effect: Symbol) -> Option<Vec<TyId>> {
+    /// The effect's declared signature with its generics bound at `args`.
+    pub(super) fn effect_sig_at(
+        &mut self,
+        effect: Symbol,
+        args: &[CheckTy],
+    ) -> Option<crate::types::catalog::EffectSig> {
         let sig = self
             .units
             .iter()
             .find_map(|u| u.types.catalog.effects.get(&effect).cloned())?;
-        if !sig.generics.is_empty() {
-            self.diagnostics
-                .push("lowering: handlers for generic effects (not yet supported)".into());
+        if sig.generics.len() != args.len() {
+            self.diagnostics.push(format!(
+                "lowering: '{effect} expects {} type arguments, got {}",
+                sig.generics.len(),
+                args.len()
+            ));
             return None;
         }
+        let theta: Theta = sig.generics.iter().copied().zip(args.iter().cloned()).collect();
+        Some(crate::types::catalog::EffectSig {
+            generics: vec![],
+            predicates: vec![],
+            params: sig
+                .params
+                .iter()
+                .map(|ty| ty.substitute(&theta, &Default::default(), &Default::default()))
+                .collect(),
+            ret: sig
+                .ret
+                .substitute(&theta, &Default::default(), &Default::default()),
+        })
+    }
+
+    /// The capability domain for an effect instantiation: its payload
+    /// types plus the resumption continuation — `(payloads…, Fn(ret, ⊥))`.
+    /// Built from the finalized catalog signature, so a materialized
+    /// capability closure and every demanded cap parameter agree on the
+    /// type.
+    pub(super) fn cap_dom_items(
+        &mut self,
+        effect: Symbol,
+        args: &[CheckTy],
+    ) -> Option<Vec<TyId>> {
+        let sig = self.effect_sig_at(effect, args)?;
         let mut items = Vec::with_capacity(sig.params.len() + 1);
         for param in &sig.params {
             if matches!(param, CheckTy::Var(_)) {
@@ -176,8 +222,8 @@ impl<'a> Lowering<'a> {
     }
 
     /// The capability's λ_G type: `Fn((payloads…, resume), ⊥)`.
-    pub(super) fn cap_ty(&mut self, effect: Symbol) -> Option<TyId> {
-        let items = self.cap_dom_items(effect)?;
+    pub(super) fn cap_ty(&mut self, effect: Symbol, args: &[CheckTy]) -> Option<TyId> {
+        let items = self.cap_dom_items(effect, args)?;
         let dom = self.p.ty_tuple(&items);
         let bot = self.p.ty_bot();
         Some(self.p.ty_fn(dom, bot))
@@ -229,20 +275,7 @@ impl<'a> Lowering<'a> {
 
     pub(super) fn diagnose_unsupported_handlers_in_stmt(&mut self, unit: usize, stmt: &Stmt) {
         match &stmt.kind {
-            StmtKind::Handling {
-                effect_name, body, ..
-            } => {
-                if let Some(symbol) = effect_name.symbol().ok()
-                    && self.units[unit]
-                        .types
-                        .catalog
-                        .effects
-                        .get(&symbol)
-                        .is_some_and(|sig| !sig.generics.is_empty())
-                {
-                    self.diagnostics
-                        .push("lowering: handlers for generic effects (not yet supported)".into());
-                }
+            StmtKind::Handling { body, .. } => {
                 self.diagnose_unsupported_handlers_in_block(unit, body);
             }
             StmtKind::Expr(expr)
@@ -363,12 +396,12 @@ impl<'a> Lowering<'a> {
         };
         let bot = self.p.ty_bot();
         let mut dom_items = param_tys;
-        // One capability parameter per user effect in the latent row
-        // (capability-passing style — Schuster, Brachthäuser & Ostermann,
-        // ICFP 2020; the sorted row is a monomorphized evidence vector —
-        // Xie & Leijen, ICFP 2021), then the return continuation.
-        for effect in self.effect_caps_of(symbol) {
-            if let Some(cap_ty) = self.cap_ty(effect) {
+        // One capability parameter per user-effect instantiation in the
+        // latent row (capability-passing style — Schuster, Brachthäuser &
+        // Ostermann, ICFP 2020; the sorted row is a monomorphized evidence
+        // vector — Xie & Leijen, ICFP 2021), then the return continuation.
+        for (effect, args) in self.cap_entries_of(symbol, &theta) {
+            if let Some(cap_ty) = self.cap_ty(effect, &args) {
                 dom_items.push(cap_ty);
             }
         }

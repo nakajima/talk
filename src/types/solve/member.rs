@@ -560,6 +560,14 @@ impl<'s> Solver<'s> {
                     ));
                 }
                 Ty::Borrow(..) => queue.push(Constraint::Eq(expected, found, origin)),
+                Ty::Var(_) if origin.reason == CtReason::Apply => {
+                    queue.push(Constraint::ApplyBorrow {
+                        expected_perm: expected_kind,
+                        expected_inner: (*expected_inner).clone(),
+                        found,
+                        origin,
+                    });
+                }
                 _ => queue.push(Constraint::Eq((*expected_inner).clone(), found, origin)),
             },
             _ => queue.push(Constraint::Eq(expected, found, origin)),

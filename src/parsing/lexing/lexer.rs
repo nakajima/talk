@@ -715,6 +715,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_out_of_range_unicode_escape_in_string() {
+        let mut lexer = Lexer::new(r#""\u{110000}""#);
+        assert_eq!(lexer.next(), Err(LexerError::InvalidUnicodeEscape));
+    }
+
+    #[test]
+    fn rejects_surrogate_unicode_escape_in_string() {
+        let mut lexer = Lexer::new(r#""\u{D800}""#);
+        assert_eq!(lexer.next(), Err(LexerError::InvalidUnicodeEscape));
+    }
+
+    #[test]
     fn keywords() {
         let mut lexer = Lexer::new("func");
         assert_eq!(lexer.next().unwrap().kind, Func);

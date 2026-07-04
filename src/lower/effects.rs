@@ -119,6 +119,180 @@ impl<'a> Lowering<'a> {
         })
     }
 
+    /// The effect-generic instantiation of one perform site, from the
+    /// node's baked instantiation, θ-substituted for the current
+    /// specialization.
+    pub(super) fn perform_instantiation(
+        &mut self,
+        effect: Symbol,
+        expr: &Expr,
+        ctx: &Ctx,
+    ) -> Option<Vec<CheckTy>> {
+        let sig = self
+            .units
+            .iter()
+            .find_map(|u| u.types.catalog.effects.get(&effect).cloned())?;
+        if sig.generics.is_empty() {
+            return Some(vec![]);
+        }
+        let instantiation = expr.instantiation.as_ref()?;
+        sig.generics
+            .iter()
+            .map(|generic| {
+                instantiation
+                    .iter()
+                    .find(|(symbol, _)| symbol == generic)
+                    .map(|(_, ty)| {
+                        ty.substitute(&ctx.theta, &Default::default(), &Default::default())
+                    })
+            })
+            .collect()
+    }
+
+    /// The capability for (effect, instantiation) in this scope: an exact
+    /// capability parameter, or a closure materialized from the nearest
+    /// `@handle` template for the label.
+    pub(super) fn resolve_cap(
+        &mut self,
+        ctx: &Ctx,
+        effect: Symbol,
+        args: &[CheckTy],
+    ) -> Option<ExprId> {
+        if let Some(&cap) = ctx.caps.get(&(effect, args.to_vec())) {
+            return Some(cap);
+        }
+        let &template = ctx.cap_templates.get(&effect)?;
+        self.materialize_cap(template, args)
+    }
+
+    /// Materialize one capability closure from a handler template at a
+    /// concrete instantiation, memoized: the handler body lowers with the
+    /// effect's generics bound in θ — the generic-function specialization
+    /// machinery applied to a handler block.
+    pub(super) fn materialize_cap(&mut self, index: usize, args: &[CheckTy]) -> Option<ExprId> {
+        let key = (index, args.to_vec());
+        if let Some(&cap) = self.materialized_caps.get(&key) {
+            return Some(cap);
+        }
+        let template = &self.handler_templates[index];
+        let effect = template.effect;
+        let handling_id = template.handling_id;
+        let scaffold = std::sync::Arc::clone(&template.scaffold);
+        let handler_block = template.handler_block.clone();
+        let install_ctx = template.install_ctx.clone();
+
+        let sig = self.effect_sig_at(effect, args)?;
+        let dom_items = self.cap_dom_items(effect, args)?;
+        if handler_block.args.len() + 1 > dom_items.len() {
+            self.diagnostics.push(
+                "lowering: handler block takes more arguments than the effect declares".into(),
+            );
+            return None;
+        }
+        let bot = self.p.ty_bot();
+        let resumable = !sig.ret.is_never();
+        let dom = self.p.ty_tuple(&dom_items);
+        let cap = self.p.func("handler", dom, bot);
+        self.escaping.insert(cap);
+        let cap_ref = self.p.func_ref(cap);
+        // Memoize before lowering the body: a handler body performing its
+        // own effect resolves to this same capability.
+        self.materialized_caps.insert(key, cap_ref);
+
+        let cap_var = self.p.var(cap);
+        // The delimiter: the handled scope's own return continuation,
+        // captured by the capability closure. An abort applies it
+        // directly; the frames between a perform and this scope simply
+        // never resume.
+        let mut inner = self.rebase_into_closure(&install_ctx, install_ctx.raw_ret_k);
+        inner.owner = None;
+        let generics = self
+            .units
+            .iter()
+            .find_map(|u| u.types.catalog.effects.get(&effect).map(|s| s.generics.clone()))
+            .unwrap_or_default();
+        for (generic, arg) in generics.iter().zip(args) {
+            inner.theta.insert(*generic, arg.clone());
+        }
+        if resumable {
+            inner.resume_k = Some(self.p.extract(cap_var, (dom_items.len() - 1) as u32));
+        }
+        let mut celled: Vec<(Symbol, ExprId)> = vec![];
+        for (i, arg) in handler_block.args.iter().enumerate() {
+            let value = self.p.extract(cap_var, i as u32);
+            let Ok(symbol) = arg.name.symbol() else {
+                continue;
+            };
+            if inner.cellable.contains(&symbol) {
+                celled.push((symbol, value));
+            } else {
+                inner.env.insert(symbol, Binding::Value(value));
+            }
+        }
+        // The handler body lowers from ITS OWN scaffold (the installing
+        // frame's MIR body), whatever body is currently being lowered.
+        self.scaffold_ctx.push(ScaffoldCtx {
+            body: scaffold,
+            loops: vec![],
+        });
+        let handler_body_expr = self.with_cells(&celled, &mut inner, |this, inner| {
+            let handler_k = inner.ret_k;
+            this.lower_sub_body_from_scaffold(handling_id, inner, handler_k)
+                .unwrap_or_else(|| this.lower_block(&handler_block, &[], inner, handler_k))
+        });
+        self.scaffold_ctx.pop();
+        self.p.set_body(cap, handler_body_expr);
+        Some(cap_ref)
+    }
+
+    /// A named effectful function taken as a VALUE: its specialization
+    /// wants capability parameters, but value call sites cannot thread
+    /// them. Eta-expand instead — a plain-shaped wrapper closure that
+    /// captures the capabilities in scope HERE (lexical capture, exactly
+    /// like a function literal's — ADR 0011) and forwards them.
+    pub(super) fn eta_expand_effectful_value(
+        &mut self,
+        symbol: Symbol,
+        label: Label,
+        cap_entries: &[(Symbol, Vec<CheckTy>)],
+        ctx: &Ctx,
+    ) -> Option<ExprId> {
+        let mut caps = Vec::with_capacity(cap_entries.len());
+        for (effect, args) in cap_entries {
+            let Some(cap) = self.resolve_cap(ctx, *effect, args) else {
+                self.diagnostics.push(format!(
+                    "lowering: taking {symbol} as a value needs a handler for '{effect} in scope"
+                ));
+                return None;
+            };
+            caps.push(cap);
+        }
+        // The wrapper's shape is the value's own CPS type: the
+        // specialization's domain with the capability slice cut out.
+        let spec_items = match self.p.ty_kind(self.p.dom(label)) {
+            TyKind::Tuple(items) => items.to_vec(),
+            _ => return None,
+        };
+        let n_source = spec_items.len() - 1 - cap_entries.len();
+        let mut wrap_items: Vec<TyId> = spec_items[..n_source].to_vec();
+        wrap_items.push(spec_items[spec_items.len() - 1]);
+        let bot = self.p.ty_bot();
+        let wrap_dom = self.p.ty_tuple(&wrap_items);
+        let wrapper = self.p.func("as_value", wrap_dom, bot);
+        self.escaping.insert(wrapper);
+        let wvar = self.p.var(wrapper);
+        let mut call_items: Vec<ExprId> = (0..n_source)
+            .map(|i| self.p.extract(wvar, i as u32))
+            .collect();
+        call_items.extend(caps.iter().copied());
+        call_items.push(self.p.extract(wvar, n_source as u32));
+        let tuple = self.p.tuple(&call_items);
+        let spec_ref = self.p.func_ref(label);
+        let body = self.p.app(spec_ref, tuple);
+        self.p.set_body(wrapper, body);
+        Some(self.p.func_ref(wrapper))
+    }
+
     // ----- Lexical effect handlers ------------------------------------------
 
     /// Clone a context for code that moves into an escaping closure: `rk`,
@@ -142,28 +316,33 @@ impl<'a> Lowering<'a> {
         self.p.func_ref(dead)
     }
 
-    /// A perform whose capability is a value in scope: call it with the
-    /// payloads and our own continuation as the resumption (`continue v`
-    /// in the handler applies it — in machine terms, the capability
-    /// returning). An abort handler instead finishes into its captured
-    /// delimiter; the resumption is simply never invoked and nothing
-    /// after the perform runs.
+    /// A perform whose capability is in scope (a parameter, or
+    /// materialized from a template at this perform's instantiation):
+    /// call it with the payloads and our own continuation as the
+    /// resumption (`continue v` in the handler applies it — in machine
+    /// terms, the capability returning). An abort handler instead
+    /// finishes into its captured delimiter; the resumption is simply
+    /// never invoked and nothing after the perform runs.
     pub(super) fn lower_capped_perform(
         &mut self,
-        cap: ExprId,
-        effect_name: &crate::name::Name,
+        effect: Symbol,
+        expr: &Expr,
         args: &[hir::CallArg],
         ctx: &Ctx,
         k: ExprId,
     ) -> ExprId {
-        let sig = effect_name.symbol().ok().and_then(|symbol| {
-            self.units
-                .iter()
-                .find_map(|u| u.types.catalog.effects.get(&symbol).cloned())
-        });
-        let Some(sig) = sig else {
+        let Some(instantiation) = self.perform_instantiation(effect, expr, ctx) else {
             self.diagnostics
-                .push("lowering: perform of an undeclared effect".into());
+                .push(format!("lowering: perform of '{effect} without its instantiation"));
+            return self.dead_end("missing_perform_instantiation");
+        };
+        let Some(cap) = self.resolve_cap(ctx, effect, &instantiation) else {
+            self.diagnostics.push(format!(
+                "lowering: perform of '{effect} with no capability in scope"
+            ));
+            return self.dead_end("capability_not_in_scope");
+        };
+        let Some(sig) = self.effect_sig_at(effect, &instantiation) else {
             return self.dead_end("undeclared_effect");
         };
         let resume_k = if sig.ret.is_never() {
@@ -179,5 +358,4 @@ impl<'a> Lowering<'a> {
             this.p.app(cap, tuple)
         })
     }
-
 }

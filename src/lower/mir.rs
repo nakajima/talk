@@ -1,12 +1,12 @@
 use rustc_hash::FxHashMap;
 
 use crate::{
+    flow::{Place, place_for_expr},
     hir::{
         Block, CallArg, Decl, DeclKind, Expr, ExprKind, MatchArm, Node, Parameter, Pattern,
         PatternKind, Stmt, StmtKind,
     },
     name::Name,
-    flow::{Place, place_for_expr},
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     node_kinds::{func::CaptureSpec, type_annotation::TypeAnnotation},

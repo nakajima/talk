@@ -284,7 +284,10 @@ impl Display for TypeError {
                 )
             }
             TypeError::UnhandledEffect { effect } => {
-                write!(f, "No handler for '{effect}: the effect reaches the top level unhandled")
+                write!(
+                    f,
+                    "No handler for '{effect}: the effect reaches the top level unhandled"
+                )
             }
             TypeError::NonExhaustiveMatch { missing } => {
                 if missing.iter().all(|m| m == "_") {

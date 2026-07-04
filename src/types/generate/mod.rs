@@ -73,7 +73,7 @@ use crate::types::error::TypeError;
 use crate::types::output::{ExistentialPack, MemberResolution, TypeOutput};
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
-    EffTail, EffectRow, Perm, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
+    EffTail, EffectEntry, EffectRow, Perm, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
 };
 use crate::types::variant::VariantInstantiation;
 
@@ -246,12 +246,15 @@ struct BindingGroupChecker<'s, 'a> {
     type_aliases: &'s FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'s mut Vec<Symbol>,
     level: Level,
-    /// The effects a top-level computation may perform: the core effects
-    /// the runtime handles implicitly ('io, 'async, 'alloc) plus any
-    /// covered by a top-level `@handle`. Top-level ambient rows close over
-    /// exactly this set, so a user effect with no handler anywhere on the
-    /// way up is a type error at the node where it tries to flow in.
+    /// The effects a top-level computation may always perform: the core
+    /// effects the runtime handles implicitly ('io, 'async, 'alloc).
+    /// Top-level ambient rows close over this set plus the top-level
+    /// `@handle`s installed BEFORE the computation (`handler_positions`),
+    /// so a user effect with no handler on the way up — or only a later
+    /// one — is a type error at the node where it tries to flow in.
     ambient_effects: std::collections::BTreeSet<Symbol>,
+    /// Top-level `@handle`s in source order: (statement id, effect).
+    handler_positions: Vec<(NodeID, Symbol)>,
 }
 
 /// What a statement contributes to its block's value (block value = last
@@ -347,16 +350,6 @@ impl Ctx {
             ..self.clone()
         }
     }
-
-    /// The rest of a block after `@handle 'e`: the ambient row gains `e`,
-    /// so effect rows flowing in from calls and performs discharge it here
-    /// instead of escaping — the handler delimits the dynamic extent of
-    /// everything sequenced after it.
-    fn with_handled_effect(&self, effect: Symbol) -> Self {
-        let mut inner = self.clone();
-        inner.eff.effects.insert(effect);
-        inner
-    }
 }
 
 impl<'a> TypecheckSession<'a> {
@@ -403,6 +396,7 @@ impl<'a> TypecheckSession<'a> {
                 alias_stack: &mut self.alias_stack,
                 level: self.level,
                 ambient_effects: Default::default(),
+                handler_positions: Default::default(),
             };
             groups.check(collected);
             self.level = groups.level;

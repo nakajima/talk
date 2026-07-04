@@ -104,6 +104,31 @@ fn multi_effect_handlers() {
     run_program("multi_effect_handlers");
 }
 
+#[test]
+fn generic_state() {
+    // A generic effect performed in an unannotated callee under a caller
+    // handler: the capability materializes from the handler template at
+    // Int (docs/generic-effects-plan.md).
+    run_program("generic_state");
+}
+
+#[test]
+fn generic_two_instantiations() {
+    // One handler covers several instantiations in one extent — a
+    // generic function specialized at Int AND Bool, plus a direct
+    // perform — each with its own materialized capability.
+    run_program("generic_two_instantiations");
+}
+
+#[test]
+fn effectful_closures() {
+    // Function values carry capabilities from their creation site
+    // (lexical capture, ADR 0011): a literal performing under a handler
+    // works through a HOF, and a named effectful function taken as a
+    // value eta-expands over the capabilities in scope.
+    run_program("effectful_closures");
+}
+
 /// Every `.tlk` in the corpus directory has a test — a new program without
 /// one fails here instead of silently going unexercised.
 #[test]
@@ -118,6 +143,9 @@ fn every_corpus_program_is_exercised() {
         "nested_handlers",
         "resume_across_frames",
         "multi_effect_handlers",
+        "effectful_closures",
+        "generic_state",
+        "generic_two_instantiations",
     ];
     for entry in std::fs::read_dir("tests/programs").expect("corpus dir") {
         let path = entry.expect("entry").path();

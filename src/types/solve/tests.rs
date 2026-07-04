@@ -216,7 +216,7 @@ fn implication_floats_untouchable_effect_equalities() {
     let outer = h.store.fresh_eff(Level(1), NodeID::ANY);
     let expected = EffectRow::open(outer);
     let found = EffectRow {
-        effects: [effect(1)].into(),
+        effects: vec![EffectEntry::label(effect(1))],
         tail: None,
     };
     let residual = h.solve(vec![Constraint::Implic(Box::new(Implication {
@@ -230,7 +230,7 @@ fn implication_floats_untouchable_effect_equalities() {
     assert!(h.errors.is_empty(), "{:?}", h.errors);
     assert!(residual.is_empty(), "{:?}", residual);
     let (effects, tail) = h.store.flatten_eff(&expected);
-    assert_eq!(effects, [effect(1)].into());
+    assert_eq!(effects, vec![EffectEntry::label(effect(1))]);
     assert_eq!(tail, FlatTail::None);
 }
 
@@ -370,18 +370,25 @@ fn effect_rows_merge_through_open_tails() {
     let t1 = h.store.fresh_eff(Level(1), NodeID::ANY);
     let t2 = h.store.fresh_eff(Level(1), NodeID::ANY);
     let a = EffectRow {
-        effects: [effect(1)].into(),
+        effects: vec![EffectEntry::label(effect(1))],
         tail: Some(EffTail::Var(t1)),
     };
     let b = EffectRow {
-        effects: [effect(2)].into(),
+        effects: vec![EffectEntry::label(effect(2))],
         tail: Some(EffTail::Var(t2)),
     };
     h.solve(vec![Constraint::EffEq(a.clone(), b.clone(), origin())]);
     assert!(h.errors.is_empty(), "{:?}", h.errors);
-    let (za, ta) = h.store.flatten_eff(&a);
-    let (zb, tb) = h.store.flatten_eff(&b);
-    assert_eq!(za, [effect(1), effect(2)].into());
+    // Flattening preserves occurrence order; compare canonically (labels
+    // sorted) since 'a and 'b arrive from different directions.
+    let (mut za, ta) = h.store.flatten_eff(&a);
+    let (mut zb, tb) = h.store.flatten_eff(&b);
+    za.sort_by_key(|entry| entry.effect);
+    zb.sort_by_key(|entry| entry.effect);
+    assert_eq!(
+        za,
+        vec![EffectEntry::label(effect(1)), EffectEntry::label(effect(2))]
+    );
     assert_eq!(zb, za);
     assert_eq!(ta, tb, "both rows share the fresh tail");
 }
@@ -390,7 +397,7 @@ fn effect_rows_merge_through_open_tails() {
 fn closed_effect_row_rejects_extra_labels() {
     let mut h = Harness::new();
     let open = EffectRow {
-        effects: [effect(1)].into(),
+        effects: vec![EffectEntry::label(effect(1))],
         tail: None,
     };
     let closed = EffectRow::pure();

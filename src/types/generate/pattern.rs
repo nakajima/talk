@@ -54,6 +54,7 @@ impl PatternRefinement {
                 origin,
             ),
             Constraint::EffEq(a, b, origin) => Constraint::EffEq(a, b, origin),
+            handle @ Constraint::HandleEffect { .. } => handle,
             Constraint::Conforms {
                 ty,
                 protocol,
@@ -72,6 +73,17 @@ impl PatternRefinement {
                 receiver: receiver.substitute(&tys, &effs, &rows),
                 label,
                 member: member.substitute(&tys, &effs, &rows),
+                origin,
+            },
+            Constraint::ApplyBorrow {
+                expected_perm,
+                expected_inner,
+                found,
+                origin,
+            } => Constraint::ApplyBorrow {
+                expected_perm,
+                expected_inner: expected_inner.substitute(&tys, &effs, &rows),
+                found: found.substitute(&tys, &effs, &rows),
                 origin,
             },
             Constraint::PatternView {

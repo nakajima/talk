@@ -1099,6 +1099,36 @@ pub mod tests {
                 false,
                 false,
             ),
+            (
+                "effects::top_level_call_before_handler_errors",
+                "\n            effect 'e() -> Never\n\n            func f() {\n                'e()\n            }\n\n            f()\n            @handle 'e { () }\n        ",
+                false,
+                false,
+            ),
+            (
+                "effects::top_level_let_before_handler_errors",
+                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            let x = f()\n            @handle 'e { continue 1 }\n            x\n        ",
+                false,
+                false,
+            ),
+            (
+                "effects::one_handler_covers_two_instantiations",
+                "\n            effect 'state<T>(value: T) -> T\n\n            func g() '[] {\n                @handle 'state { v in continue v }\n                'state(1)\n                'state(true)\n                ()\n            }\n        ",
+                true,
+                false,
+            ),
+            (
+                "effects::inner_handler_absorbs_all_occurrences",
+                "\n            effect 'e() -> Never\n\n            func leaf() {\n                'e()\n            }\n\n            func mid() '[] {\n                @handle 'e { () }\n                leaf()\n            }\n\n            func top() '[] {\n                @handle 'e { () }\n                mid()\n            }\n        ",
+                true,
+                false,
+            ),
+            (
+                "effects::top_level_let_after_handler_is_clean",
+                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            @handle 'e { continue 1 }\n            let x = f()\n            x\n        ",
+                true,
+                false,
+            ),
         ];
         let mut failures = String::new();
         for (name, source, expect_clean, with_core) in cases {
@@ -1931,6 +1961,31 @@ pub mod tests {
     }
 
     #[test]
+    fn for_loop_element_can_satisfy_borrow_callback() {
+        let t = Driver::new(
+            vec![Source::from(
+                "enum Entry {\n\tcase doc(String)\n}\nfunc each(entries: Array<Entry>, fn: (&Entry) -> ()) {\n\tfor entry in entries {\n\t\tfn(entry)\n\t}\n}",
+            )],
+            DriverConfig::new("TypesTest"),
+        )
+        .parse()
+        .expect("parse failed")
+        .resolve_names()
+        .expect("name resolution failed")
+        .type_check();
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn delayed_auto_borrow_defaults_unresolved_argument_to_owned() {
+        let t = check(
+            "// no-core\nstruct S {}\nfunc take(s: &S) {}\nfunc f(x) -> S {\n\ttake(x)\n\tx\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "f"), "(S) -> S");
+    }
+
+    #[test]
     fn borrowed_return_does_not_satisfy_owned_argument() {
         let t = check(
             "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(s: String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = take(id(s))",
@@ -2164,6 +2219,37 @@ pub mod tests {
             ),
             "the perform site teaches the unannotated parameter Int: {:?}",
             sig.params
+        );
+    }
+
+    #[test]
+    fn generic_effect_row_carries_instantiation() {
+        // Effect rows carry the instantiation, not just the label
+        // (docs/generic-effects-plan.md): a perform of a generic effect
+        // puts the concrete arguments in the row entry.
+        let t =
+            check("// no-core\neffect 'state<T>(value: T) -> T\nfunc f() {\n\t'state(42)\n\t()\n}");
+        assert_clean(&t);
+        let f = ty_of(&t, "f");
+        assert!(
+            f.contains("'state<Int>"),
+            "the row entry carries the instantiation: {f}"
+        );
+    }
+
+    #[test]
+    fn two_instantiations_coexist_in_a_row() {
+        // Duplicate labels at different instantiations coexist (scoped
+        // labels): one function may perform 'state<Int> and
+        // 'state<Bool> with no handler in scope.
+        let t = check(
+            "// no-core\neffect 'state<T>(value: T) -> T\nfunc f() {\n\t'state(42)\n\t'state(true)\n\t()\n}",
+        );
+        assert_clean(&t);
+        let f = ty_of(&t, "f");
+        assert!(
+            f.contains("'state<Bool>") && f.contains("'state<Int>"),
+            "both instantiations ride the row: {f}"
         );
     }
 

@@ -73,7 +73,9 @@ impl<'s> Solver<'s> {
             | Constraint::EffEq(_, _, origin)
             | Constraint::Conforms { origin, .. }
             | Constraint::HasMember { origin, .. }
-            | Constraint::PatternView { origin, .. } => Some(*origin),
+            | Constraint::ApplyBorrow { origin, .. }
+            | Constraint::PatternView { origin, .. }
+            | Constraint::HandleEffect { origin, .. } => Some(*origin),
             Constraint::Implic(_) => None,
         }
     }
@@ -113,12 +115,22 @@ impl<'s> Solver<'s> {
             Constraint::EffEq(a, b, _) => self
                 .eff_mentions_params(a, params)
                 .or_else(|| self.eff_mentions_params(b, params)),
+            Constraint::HandleEffect { inner, outer, .. } => self
+                .eff_mentions_params(inner, params)
+                .or_else(|| self.eff_mentions_params(outer, params)),
             Constraint::Conforms { ty, .. } => self.ty_mentions_params(ty, params),
             Constraint::HasMember {
                 receiver, member, ..
             } => self
                 .ty_mentions_params(receiver, params)
                 .or_else(|| self.ty_mentions_params(member, params)),
+            Constraint::ApplyBorrow {
+                expected_inner,
+                found,
+                ..
+            } => self
+                .ty_mentions_params(expected_inner, params)
+                .or_else(|| self.ty_mentions_params(found, params)),
             Constraint::PatternView {
                 scrutinee, view, ..
             } => self

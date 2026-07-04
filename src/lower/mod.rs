@@ -131,7 +131,30 @@ pub struct Lowering<'a> {
     /// resolves expression-position constructs' scaffold blocks against the
     /// innermost entry.
     scaffold_ctx: Vec<ScaffoldCtx>,
+    /// Installed `@handle`s awaiting instantiation (indexed by
+    /// `Ctx::cap_templates`); capability closures materialize from them
+    /// per demanded instantiation, memoized in `materialized_caps`.
+    handler_templates: Vec<HandlerTemplate>,
+    materialized_caps: FxHashMap<(usize, Vec<CheckTy>), ExprId>,
     pub diagnostics: Vec<String>,
+}
+
+/// A lowered `@handle`, held as a template: the capability closure is
+/// materialized per effect instantiation demanded inside its extent,
+/// specializing the handler body with the effect's generics bound —
+/// the generic-function θ machinery applied to a handler block
+/// (docs/generic-effects-plan.md).
+struct HandlerTemplate {
+    effect: Symbol,
+    /// The `Handling` statement's id — the scaffold key for the handler
+    /// body's blocks in `scaffold`.
+    handling_id: crate::node_id::NodeID,
+    scaffold: std::sync::Arc<mir::Body>,
+    /// The handler block itself (argument names; standalone fallback).
+    handler_block: Block,
+    /// The installing frame's context: the delimiter (`raw_ret_k`) and
+    /// environment the materialized closure captures.
+    install_ctx: Ctx,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -218,12 +241,16 @@ struct Ctx {
     /// Lowering main's top-level statements: cellable lets register in
     /// `top_level_cells` so functions can capture them.
     top_level: bool,
-    /// Capabilities in scope, by effect: installed by `@handle` for the
-    /// rest of its block. A perform whose effect has a capability here
-    /// calls it directly with its payloads (and its own continuation as
-    /// the resumption, when the effect can resume) — nearest handler wins
-    /// by construction. Cleared in function values.
-    caps: FxHashMap<Symbol, ExprId>,
+    /// Capability VALUES in scope, keyed by (effect, instantiation): our
+    /// own capability parameters. A perform or call needing one of these
+    /// exact instantiations uses the value directly.
+    caps: FxHashMap<(Symbol, Vec<CheckTy>), ExprId>,
+    /// Capability TEMPLATES in scope, by effect label: installed by
+    /// `@handle` for the rest of its block. A needed instantiation not
+    /// present in `caps` materializes a capability closure from the
+    /// nearest template (label-scoped: one `@handle` covers every
+    /// instantiation of its effect — docs/generic-effects-plan.md).
+    cap_templates: FxHashMap<Symbol, usize>,
     /// The current λ_G function's parameter extracts (for %n in @_ir).
     params: Vec<ExprId>,
     /// Enclosing loops with the drop-stack depth active at loop entry.
@@ -255,7 +282,8 @@ struct MirCtxKey {
     raw_ret_k: ExprId,
     resume_k: Option<ExprId>,
     top_level: bool,
-    caps: Vec<(Symbol, ExprId)>,
+    caps: Vec<((Symbol, Vec<CheckTy>), ExprId)>,
+    cap_templates: Vec<(Symbol, usize)>,
     params: Vec<ExprId>,
     loops: Vec<LoopBinding>,
     drop_stack: Vec<DropBinding>,
@@ -318,8 +346,18 @@ impl Ctx {
             .map(|(key, evidence)| (*key, *evidence))
             .collect();
         local_evidence.sort_by_key(|((ty, protocol), _)| (*ty, *protocol));
-        let mut caps: Vec<_> = self.caps.iter().map(|(s, c)| (*s, *c)).collect();
-        caps.sort_by_key(|(symbol, _)| *symbol);
+        let mut caps: Vec<_> = self
+            .caps
+            .iter()
+            .map(|(key, cap)| (key.clone(), *cap))
+            .collect();
+        caps.sort_by(|(a, _), (b, _)| format!("{a:?}").cmp(&format!("{b:?}")));
+        let mut cap_templates: Vec<_> = self
+            .cap_templates
+            .iter()
+            .map(|(symbol, index)| (*symbol, *index))
+            .collect();
+        cap_templates.sort();
         let mut drop_flags: Vec<_> = self
             .drop_flags
             .iter()
@@ -341,6 +379,7 @@ impl Ctx {
             resume_k: self.resume_k,
             top_level: self.top_level,
             caps,
+            cap_templates,
             params: self.params.clone(),
             loops: self.loops.clone(),
             drop_stack: self.drop_stack.clone(),
@@ -381,6 +420,8 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
         top_level_cells: FxHashMap::default(),
         mir_bodies: FxHashMap::default(),
         scaffold_ctx: vec![],
+        handler_templates: vec![],
+        materialized_caps: FxHashMap::default(),
         diagnostics: vec![],
     };
     for unit in &lowering.units {
@@ -577,14 +618,13 @@ impl<'a> Lowering<'a> {
                 effect_name, args, ..
             } => {
                 // A capability in scope wins: the nearest `@handle` for
-                // this effect (or our own capability parameter) put one
-                // on the context.
-                if let Some(&cap) = effect_name
-                    .symbol()
-                    .ok()
-                    .and_then(|effect| ctx.caps.get(&effect))
+                // this effect's label (or one of our own capability
+                // parameters) put one on the context.
+                if let Some(effect) = effect_name.symbol().ok()
+                    && (ctx.cap_templates.contains_key(&effect)
+                        || ctx.caps.keys().any(|(label, _)| *label == effect))
                 {
-                    return self.lower_capped_perform(cap, effect_name, args, ctx, k);
+                    return self.lower_capped_perform(effect, expr, args, ctx, k);
                 }
                 self.lower_perform(expr, effect_name, args, ctx, k)
             }
@@ -762,6 +802,7 @@ impl<'a> Lowering<'a> {
             resume_k: None,
             top_level: true,
             caps: FxHashMap::default(),
+            cap_templates: FxHashMap::default(),
             params: vec![],
             loops: vec![],
             drop_stack: vec![],
@@ -822,10 +863,9 @@ impl<'a> Lowering<'a> {
         nodes: Vec<Node>,
     ) -> (Label, TyId) {
         let entry_label = self.demand(symbol, Theta::default());
-        if !self.effect_caps_of(symbol).is_empty() {
-            self.diagnostics.push(
-                "lowering: main performing an unhandled effect (not yet supported)".into(),
-            );
+        if !self.cap_entries_of(symbol, &Theta::default()).is_empty() {
+            self.diagnostics
+                .push("lowering: main performing an unhandled effect (not yet supported)".into());
         }
         let result_ty = match self.signature_of(symbol, &Theta::default()) {
             Some(CheckTy::Func(params, ret, _)) => {
@@ -868,6 +908,7 @@ impl<'a> Lowering<'a> {
             resume_k: None,
             top_level: true,
             caps: FxHashMap::default(),
+            cap_templates: FxHashMap::default(),
             params: vec![],
             loops: vec![],
             drop_stack: vec![],

@@ -236,7 +236,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             }) = node
                 && let Ok(effect) = effect_name.symbol()
             {
-                scoped = Some(ctx.with_handled_effect(effect));
+                scoped = Some(self.enter_handler_extent(ctx, effect, node.node_id()));
             }
             if last.reports_unreachable() {
                 if let Some(next) = block.body.get(index + 1) {
@@ -299,7 +299,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }) = node
                     && let Ok(effect) = effect_name.symbol()
                 {
-                    scoped = Some(ctx.with_handled_effect(effect));
+                    scoped = Some(self.enter_handler_extent(ctx, effect, node.node_id()));
                 }
                 continue;
             }
@@ -336,6 +336,22 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 _ => self.emit_eq(expected.clone(), Ty::unit(), node.node_id(), reason),
             }
         }
+    }
+
+    /// Enter a handler's extent: the rest of the scope checks under a
+    /// fresh ambient row, connected to the current one by a label filter
+    /// (`HandleEffect`) — the `@handle` discharges every occurrence of its
+    /// effect, whatever the instantiation (label-scoped elimination —
+    /// docs/generic-effects-plan.md).
+    fn enter_handler_extent(&mut self, ctx: &Ctx, effect: Symbol, node: NodeID) -> Ctx {
+        let inner = EffectRow::open(self.store.fresh_eff(self.level, node));
+        self.wanteds.push(Constraint::HandleEffect {
+            inner: inner.clone(),
+            effects: vec![effect],
+            outer: ctx.eff.clone(),
+            origin: CtOrigin::new(node, CtReason::Effect),
+        });
+        ctx.with_ret_eff(ctx.ret.clone(), inner)
     }
 
     fn unreachable_code(&mut self, node: NodeID) {

@@ -859,6 +859,18 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_closure_capability_capture_is_lexical() {
+        // A function value captures the capabilities of its CREATION
+        // site, not its call site (Effekt-style lexical capture — ADR
+        // 0011's documented departure (d)): `f` keeps routing to the
+        // first handler even though a second one covers the call.
+        let (value, _) = run_on_both_engines_io(
+            "effect 'boost() -> Int\nfunc run() -> Int {\n\t@handle 'boost { continue 100 }\n\tlet f = func() -> Int { 'boost() }\n\t@handle 'boost { continue 200 }\n\tf() + 'boost()\n}\nrun()",
+        );
+        assert_eq!(value, Value::I64(300));
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_handler_that_chooses_to_abort() {
         // The same handler aborting: its value (-1) becomes the scope's
         // value and the performer's rest (v * 10) never runs.

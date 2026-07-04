@@ -516,11 +516,7 @@ impl<'a> Lowering<'a> {
         })
     }
 
-    pub(super) fn drop_flag_keys_for_symbol(
-        &self,
-        body: &mir::Body,
-        symbol: Symbol,
-    ) -> Vec<Place> {
+    pub(super) fn drop_flag_keys_for_symbol(&self, body: &mir::Body, symbol: Symbol) -> Vec<Place> {
         let mut keys = Vec::new();
         let root = Place::root(symbol);
         let mut needs_root_flag = false;
@@ -603,9 +599,7 @@ impl<'a> Lowering<'a> {
                     else {
                         continue;
                     };
-                    let key_path = key_path
-                        .clone()
-                        .unwrap_or_else(|| drop.key_path.clone());
+                    let key_path = key_path.clone().unwrap_or_else(|| drop.key_path.clone());
                     let elaboration = self.drop_elaboration_at(statement, Some(&key_path));
                     drops.push(PendingDrop {
                         symbol: drop.symbol,
@@ -745,16 +739,11 @@ impl<'a> Lowering<'a> {
         if *target_symbol != symbol {
             return None;
         }
-        let key_path = key_path
-            .clone()
-            .unwrap_or_else(|| Place::root(symbol));
+        let key_path = key_path.clone().unwrap_or_else(|| Place::root(symbol));
         self.drop_elaboration_at(previous, Some(&key_path))
     }
 
-    fn moved_key_paths_at_statement(
-        &self,
-        statement: &mir::LocatedStatement,
-    ) -> Vec<Place> {
+    fn moved_key_paths_at_statement(&self, statement: &mir::LocatedStatement) -> Vec<Place> {
         let mut moved = Vec::new();
         for source in &statement.ownership.moves {
             Self::push_unique_drop_flag_key(&mut moved, source.clone());
@@ -840,9 +829,7 @@ impl<'a> Lowering<'a> {
         let after_body = self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         self.p.set_body(after, after_body);
         let after_ref = self.p.func_ref(after);
-        let target_key_path = target
-            .cloned()
-            .or_else(|| crate::flow::place_for_expr(lhs));
+        let target_key_path = target.cloned().or_else(|| crate::flow::place_for_expr(lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
         let setter = self.p.func("set", rhs_ty, bot);
@@ -929,9 +916,7 @@ impl<'a> Lowering<'a> {
         let after_body = self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         self.p.set_body(after, after_body);
         let after_ref = self.p.func_ref(after);
-        let target_key_path = target
-            .cloned()
-            .or_else(|| crate::flow::place_for_expr(lhs));
+        let target_key_path = target.cloned().or_else(|| crate::flow::place_for_expr(lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
         let setter = self.p.func("object_set", rhs_ty, bot);
@@ -1056,80 +1041,44 @@ impl<'a> Lowering<'a> {
                 .push("lowering: @handle inside a nested block (not yet supported)".into());
             return self.dead_end("nested_handle");
         }
-        let sig = effect_name.symbol().ok().and_then(|s| {
-            self.units
-                .iter()
-                .find_map(|u| u.types.catalog.effects.get(&s).cloned())
-        });
-        let Some(sig) = sig else {
+        let Some(effect) = effect_name.symbol().ok() else {
+            return self.dead_end("unresolved_effect_name");
+        };
+        if self
+            .units
+            .iter()
+            .find_map(|u| u.types.catalog.effects.get(&effect))
+            .is_none()
+        {
             self.diagnostics
                 .push("lowering: @handle of an undeclared effect".into());
             return self.dead_end("undeclared_effect");
         };
-        if !sig.generics.is_empty() {
+        // Register a capability TEMPLATE for the rest of the extent: the
+        // closure materializes lazily, once per instantiation demanded
+        // inside it, specializing the handler body with the effect's
+        // generics bound (docs/generic-effects-plan.md). The template
+        // captures this frame's context — the delimiter (`raw_ret_k`) the
+        // materialized capability closes over.
+        let scaffold = self
+            .scaffold_ctx
+            .last()
+            .map(|scaffold| std::sync::Arc::clone(&scaffold.body));
+        let Some(scaffold) = scaffold else {
             self.diagnostics
-                .push("lowering: handlers for generic effects (not yet supported)".into());
-            return self.dead_end("generic_effect_handler");
-        }
-
-        let Some(effect) = effect_name.symbol().ok() else {
-            return self.dead_end("unresolved_effect_name");
+                .push("lowering: @handle outside a MIR body (lowerer bug)".into());
+            return self.dead_end("handler_without_scaffold");
         };
-        // The capability's domain — payloads plus the resumption
-        // continuation — comes from the shared helper, so the closure
-        // built here has exactly the type `demand` gives cap parameters.
-        // The resumption is the perform site's own continuation, and the
-        // λ_G calling convention's return slot, so `continue v` is just
-        // the capability returning. A Never-returning effect's resumption
-        // is dead (the checker rejects `continue` there); performs pass a
-        // bodyless placeholder.
-        let Some(dom_items) = self.cap_dom_items(effect) else {
-            return self.dead_end("unknown_effect_parameter");
-        };
-        if handler_block.args.len() + 1 > dom_items.len() {
-            self.diagnostics.push(
-                "lowering: handler block takes more arguments than the effect declares".into(),
-            );
-            return self.dead_end("handler_arity");
-        }
-        let bot = self.p.ty_bot();
-        let resumable = !sig.ret.is_never();
-        let dom = self.p.ty_tuple(&dom_items);
-        let cap = self.p.func("handler", dom, bot);
-        self.escaping.insert(cap);
-        let cap_var = self.p.var(cap);
-        // The delimiter: the handled scope's own return continuation,
-        // captured by the capability closure. An abort applies it directly;
-        // the frames between a perform and this scope simply never resume.
-        let rk = ctx.raw_ret_k;
-        let mut inner = self.rebase_into_closure(ctx, rk);
-        inner.owner = None;
-        if resumable {
-            inner.resume_k = Some(self.p.extract(cap_var, (dom_items.len() - 1) as u32));
-        }
-        let mut celled: Vec<(Symbol, ExprId)> = vec![];
-        for (i, arg) in handler_block.args.iter().enumerate() {
-            let value = self.p.extract(cap_var, i as u32);
-            let Ok(symbol) = arg.name.symbol() else {
-                continue;
-            };
-            if inner.cellable.contains(&symbol) {
-                celled.push((symbol, value));
-            } else {
-                inner.env.insert(symbol, Binding::Value(value));
-            }
-        }
-        let handling_id = stmt.id;
-        let handler_body_expr = self.with_cells(&celled, &mut inner, |this, inner| {
-            let handler_k = inner.ret_k;
-            this.lower_sub_body_from_scaffold(handling_id, inner, handler_k)
-                .unwrap_or_else(|| this.lower_block(handler_block, &[], inner, handler_k))
+        let index = self.handler_templates.len();
+        self.handler_templates.push(HandlerTemplate {
+            effect,
+            handling_id: stmt.id,
+            scaffold,
+            handler_block: (*handler_block).clone(),
+            install_ctx: ctx.clone(),
         });
-        self.p.set_body(cap, handler_body_expr);
-
-        let cap_ref = self.p.func_ref(cap);
         let mut scope_ctx = ctx.clone();
-        scope_ctx.caps.insert(effect, cap_ref);
+        scope_ctx.cap_templates.insert(effect, index);
         self.lower_mir_statements(cursor.advance(), &scope_ctx, k, cache)
     }
 
@@ -1373,9 +1322,7 @@ impl<'a> Lowering<'a> {
                     .iter()
                     .rev()
                     .find(|drop| drop.symbol == *symbol)?;
-                let key_path = key_path
-                    .clone()
-                    .unwrap_or_else(|| drop.key_path.clone());
+                let key_path = key_path.clone().unwrap_or_else(|| drop.key_path.clone());
                 let elaboration = self.drop_elaboration_at(statement, Some(&key_path));
                 Some(PendingDrop {
                     symbol: drop.symbol,
