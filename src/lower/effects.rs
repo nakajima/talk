@@ -209,7 +209,13 @@ impl<'a> Lowering<'a> {
         let generics = self
             .units
             .iter()
-            .find_map(|u| u.types.catalog.effects.get(&effect).map(|s| s.generics.clone()))
+            .find_map(|u| {
+                u.types
+                    .catalog
+                    .effects
+                    .get(&effect)
+                    .map(|s| s.generics.clone())
+            })
             .unwrap_or_default();
         for (generic, arg) in generics.iter().zip(args) {
             inner.theta.insert(*generic, arg.clone());
@@ -332,8 +338,9 @@ impl<'a> Lowering<'a> {
         k: ExprId,
     ) -> ExprId {
         let Some(instantiation) = self.perform_instantiation(effect, expr, ctx) else {
-            self.diagnostics
-                .push(format!("lowering: perform of '{effect} without its instantiation"));
+            self.diagnostics.push(format!(
+                "lowering: perform of '{effect} without its instantiation"
+            ));
             return self.dead_end("missing_perform_instantiation");
         };
         let Some(cap) = self.resolve_cap(ctx, effect, &instantiation) else {

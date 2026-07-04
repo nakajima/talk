@@ -91,8 +91,30 @@ async fn main() {
             #[arg(value_enum)]
             shell: Shell,
         },
+        /// Install editor support files.
+        Setup {
+            #[command(subcommand)]
+            target: SetupTarget,
+        },
         /// Language? Server. Protocol!
         Lsp(LspArgs),
+    }
+
+    #[derive(Subcommand, Debug)]
+    enum SetupTarget {
+        /// Install plain Neovim runtime support files.
+        #[command(name = "nvim")]
+        Nvim(NvimSetupArgs),
+    }
+
+    #[derive(Debug, Args)]
+    struct NvimSetupArgs {
+        /// Overwrite existing TalkTalk runtime files if they differ.
+        #[arg(long)]
+        force: bool,
+        /// Install into this runtime root instead of Neovim's data/site dir.
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        target_dir: Option<std::path::PathBuf>,
     }
 
     #[derive(Debug, Args)]
@@ -234,6 +256,18 @@ async fn main() {
         }
         Commands::Lsp(_) => {
             talk::lsp::server::start().await;
+        }
+        Commands::Setup { target } => {
+            let result = match target {
+                SetupTarget::Nvim(args) => {
+                    NvimRuntimeInstaller::new(args.target_dir.as_deref(), args.force)
+                        .and_then(|installer| installer.install())
+                }
+            };
+            if let Err(err) = result {
+                eprintln!("error: {err:#}");
+                std::process::exit(1);
+            }
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
@@ -451,6 +485,7 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
     talk bytecode file        print raw bytecode module
     talk html/debug/parse     development views
     talk lsp --stdio          language server
+    talk setup nvim           install Neovim runtime support files
     talk completions SHELL    shell completion script
     talk llm                  print this reference
 
@@ -523,6 +558,176 @@ Ownership checking is source-near: `&T` borrows, `&mut T` is exclusive, `consumi
 
 Pipeline: parse -> name resolution/imports -> OutsideIn-style type checking with qualified predicates, protocols, associated types, existentials, and GADT refinements -> lambda-G CPS-like graph IR -> scheduling -> register bytecode VM. Useful inspection commands: `talk check`, `talk hover`, `talk lower`, `talk ir`, and `talk bytecode`.
 "#;
+
+#[cfg(feature = "cli")]
+const NVIM_RUNTIME_RAW_BASE: &str =
+    "https://raw.githubusercontent.com/nakajima/talk/main/dev/editors/nvim";
+
+#[cfg(feature = "cli")]
+const NVIM_RUNTIME_FILES: &[&str] = &[
+    "ftdetect/talktalk.lua",
+    "ftplugin/talktalk.lua",
+    "indent/talktalk.vim",
+    "syntax/talktalk.vim",
+];
+
+#[cfg(feature = "cli")]
+struct NvimRuntimeInstaller {
+    target_root: std::path::PathBuf,
+    force: bool,
+}
+
+#[cfg(feature = "cli")]
+impl NvimRuntimeInstaller {
+    fn new(target_dir: Option<&std::path::Path>, force: bool) -> anyhow::Result<Self> {
+        let target_root = match target_dir {
+            Some(path) => path.to_path_buf(),
+            None => Self::default_target_root()?,
+        };
+
+        Ok(Self { target_root, force })
+    }
+
+    fn install(&self) -> anyhow::Result<()> {
+        use anyhow::Context as _;
+
+        println!("Installing TalkTalk Neovim runtime files from github.com/nakajima/talk");
+        println!("Target runtime root: {}", self.target_root.display());
+
+        let mut downloads = Vec::with_capacity(NVIM_RUNTIME_FILES.len());
+        for relative_path in NVIM_RUNTIME_FILES {
+            let contents = Self::download_file(relative_path)?;
+            downloads.push((*relative_path, contents));
+        }
+
+        for (relative_path, contents) in &downloads {
+            let target = self.target_root.join(*relative_path);
+            if target.exists() && !self.force {
+                let existing = std::fs::read(&target)
+                    .with_context(|| format!("failed to read {}", target.display()))?;
+                if existing.as_slice() != contents.as_slice() {
+                    anyhow::bail!(
+                        "{} already exists and differs; rerun with --force to overwrite",
+                        target.display()
+                    );
+                }
+            }
+        }
+
+        for (relative_path, contents) in downloads {
+            let target = self.target_root.join(relative_path);
+            if target.exists() && !self.force {
+                println!("up to date: {}", target.display());
+                continue;
+            }
+
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            std::fs::write(&target, contents)
+                .with_context(|| format!("failed to write {}", target.display()))?;
+            println!("installed: {}", target.display());
+        }
+
+        Ok(())
+    }
+
+    fn default_target_root() -> anyhow::Result<std::path::PathBuf> {
+        if let Some(data_dir) = Self::nvim_data_dir() {
+            return Ok(data_dir.join("site"));
+        }
+
+        Self::fallback_data_site_dir()
+    }
+
+    fn nvim_data_dir() -> Option<std::path::PathBuf> {
+        let output = std::process::Command::new("nvim")
+            .args([
+                "--headless",
+                "-u",
+                "NONE",
+                "-i",
+                "NONE",
+                "--noplugin",
+                "+lua io.write(vim.fn.stdpath('data'))",
+                "+qa!",
+            ])
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8(output.stdout).ok()?;
+        let path = stdout.trim();
+        if path.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(path))
+        }
+    }
+
+    fn fallback_data_site_dir() -> anyhow::Result<std::path::PathBuf> {
+        let appname = std::env::var_os("NVIM_APPNAME")
+            .filter(|value| !value.as_os_str().is_empty())
+            .unwrap_or_else(|| "nvim".into());
+
+        let data_home = match std::env::var_os("XDG_DATA_HOME")
+            .filter(|value| !value.as_os_str().is_empty())
+        {
+            Some(path) => std::path::PathBuf::from(path),
+            None => {
+                let home = std::env::var_os("HOME").ok_or_else(|| {
+                    anyhow::anyhow!("could not find Neovim data dir; set HOME or pass --target-dir")
+                })?;
+                std::path::PathBuf::from(home).join(".local/share")
+            }
+        };
+
+        Ok(data_home.join(appname).join("site"))
+    }
+
+    fn download_file(relative_path: &str) -> anyhow::Result<Vec<u8>> {
+        let url = format!("{NVIM_RUNTIME_RAW_BASE}/{relative_path}");
+        Self::download_url(&url)
+    }
+
+    fn download_url(url: &str) -> anyhow::Result<Vec<u8>> {
+        let attempts = [
+            ("curl", vec!["-fsSL", url]),
+            ("wget", vec!["-qO-", url]),
+            ("fetch", vec!["-qo", "-", url]),
+        ];
+        let mut failures = Vec::new();
+
+        for (program, args) in attempts {
+            match std::process::Command::new(program).args(args).output() {
+                Ok(output) if output.status.success() => return Ok(output.stdout),
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    if stderr.is_empty() {
+                        failures.push(format!("{program} exited with {}", output.status));
+                    } else {
+                        failures.push(format!("{program} exited with {}: {stderr}", output.status));
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => failures.push(format!("{program}: {err}")),
+            }
+        }
+
+        if failures.is_empty() {
+            anyhow::bail!("could not download {url}; install curl, wget, or fetch");
+        }
+
+        anyhow::bail!(
+            "could not download {url}; install curl, wget, or fetch; attempts failed: {}",
+            failures.join("; ")
+        );
+    }
+}
 
 #[cfg(feature = "cli")]
 fn build_static_executable(

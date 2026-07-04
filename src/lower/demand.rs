@@ -178,7 +178,12 @@ impl<'a> Lowering<'a> {
             ));
             return None;
         }
-        let theta: Theta = sig.generics.iter().copied().zip(args.iter().cloned()).collect();
+        let theta: Theta = sig
+            .generics
+            .iter()
+            .copied()
+            .zip(args.iter().cloned())
+            .collect();
         Some(crate::types::catalog::EffectSig {
             generics: vec![],
             predicates: vec![],
@@ -198,11 +203,7 @@ impl<'a> Lowering<'a> {
     /// Built from the finalized catalog signature, so a materialized
     /// capability closure and every demanded cap parameter agree on the
     /// type.
-    pub(super) fn cap_dom_items(
-        &mut self,
-        effect: Symbol,
-        args: &[CheckTy],
-    ) -> Option<Vec<TyId>> {
+    pub(super) fn cap_dom_items(&mut self, effect: Symbol, args: &[CheckTy]) -> Option<Vec<TyId>> {
         let sig = self.effect_sig_at(effect, args)?;
         let mut items = Vec::with_capacity(sig.params.len() + 1);
         for param in &sig.params {

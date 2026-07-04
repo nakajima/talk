@@ -131,6 +131,7 @@ fn member_completion_receiver(ast: &AST<NameResolved>, dot_offset: u32) -> Optio
                 kind: crate::node_kinds::stmt::StmtKind::Expr(expr),
                 ..
             }) => expr,
+            Node::CallArg(arg) => arg.value,
             _ => continue,
         };
         match &expr.kind {
@@ -511,8 +512,19 @@ mod tests {
     }
 
     fn analyze(code: &str) -> Analyzed {
+        analyze_with_driver(code, Driver::new_bare)
+    }
+
+    fn analyze_with_stdlib(code: &str) -> Analyzed {
+        analyze_with_driver(code, Driver::new)
+    }
+
+    fn analyze_with_driver(
+        code: &str,
+        driver: impl FnOnce(Vec<Source>, DriverConfig) -> Driver,
+    ) -> Analyzed {
         let source = Source::in_memory(PathBuf::from("test.tlk"), code.to_string());
-        let driver = Driver::new_bare(
+        let driver = driver(
             vec![source],
             DriverConfig::new("Test")
                 .lenient_parsing()
@@ -590,6 +602,34 @@ mod tests {
         assert!(
             items.iter().any(|i| i.label == "age"),
             "expected age in {items:?}"
+        );
+    }
+
+    #[test]
+    fn completes_members_after_dot_in_loop_condition_before_body() {
+        let code = "struct String {\n\tlet byte_count: Int\n}\nfunc starts_with(needle: &String) {\n\tlet i = 0\n\tloop i < needle. {\n\t}\n}\n";
+        let analyzed = analyze(code);
+        let byte_offset = byte_offset_for(code, "needle.", 0) + 7;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "byte_count"
+                && i.kind == Some(crate::analysis::CompletionItemKind::Field)),
+            "expected byte_count field in {items:?}"
+        );
+    }
+
+    #[test]
+    fn completes_members_for_borrowed_core_string_with_unknown_current_member() {
+        let code = "extend String {\n\tfunc starts_with(needle: &String) -> Bool {\n\t\tif self.storage.get(0) != needle.byte_at(0) { return false }\n\t\ttrue\n\t}\n}\n";
+        let analyzed = analyze_with_stdlib(code);
+        let byte_offset = byte_offset_for(code, "needle.", 0) + 7;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "byte_count"
+                && i.kind == Some(crate::analysis::CompletionItemKind::Field)),
+            "expected byte_count field in {items:?}"
         );
     }
 

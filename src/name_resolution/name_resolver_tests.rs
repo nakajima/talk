@@ -229,9 +229,7 @@ pub mod tests {
 
     #[test]
     fn same_scope_redeclaration_is_an_error() {
-        let resolved = resolve_err(
-            "func f(x: Int) -> Int {\n\tlet y = x\n\tlet y = x\n\ty\n}",
-        );
+        let resolved = resolve_err("func f(x: Int) -> Int {\n\tlet y = x\n\tlet y = x\n\ty\n}");
         assert_eq!(
             1,
             resolved.1.diagnostics.len(),

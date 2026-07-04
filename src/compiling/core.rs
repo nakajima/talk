@@ -65,7 +65,10 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
         ("Convert.tlk", include_str!("../../core/Convert.tlk")),
         ("String.tlk", include_str!("../../core/String.tlk")),
         ("Memory.tlk", include_str!("../../core/Memory.tlk")),
-        ("UnicodeData.tlk", include_str!("../../core/UnicodeData.tlk")),
+        (
+            "UnicodeData.tlk",
+            include_str!("../../core/UnicodeData.tlk"),
+        ),
         ("Unicode.tlk", include_str!("../../core/Unicode.tlk")),
         ("Array.tlk", include_str!("../../core/Array.tlk")),
         ("Dict.tlk", include_str!("../../core/Dict.tlk")),

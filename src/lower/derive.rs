@@ -210,7 +210,8 @@ impl<'a> Lowering<'a> {
             }
             Piece::Show(value, ty) => {
                 // s ← show(value); acc ← acc + s; continue.
-                let (show, _, _) = self.resolve_witness(protocol, requirement, "show".into(), ty)?;
+                let (show, _, _) =
+                    self.resolve_witness(protocol, requirement, "show".into(), ty)?;
                 let add = self.string_add()?;
                 let joined = self.p.func("show_acc", string_ty, bot);
                 let joined_var = self.p.var(joined);

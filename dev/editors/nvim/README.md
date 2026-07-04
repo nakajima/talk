@@ -11,7 +11,15 @@ Plain Neovim runtime support for `.tlk` files. This does not configure LSP.
 
 ## Install
 
-Add this directory to Neovim's runtime path.
+The `talk` CLI can download and install these runtime files into Neovim's data/site runtime directory:
+
+```sh
+talk setup nvim
+```
+
+Use `talk setup nvim --force` to overwrite older TalkTalk runtime files if they differ.
+
+For development, add this directory to Neovim's runtime path instead.
 
 Using a plugin manager that accepts local directories:
 

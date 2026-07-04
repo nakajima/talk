@@ -271,6 +271,7 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                 // — one-shot delimited abort (Hieb, Dybvig & Bruggeman,
                 // PLDI 1990's stack slice, restricted to downward use).
                 while frames.len() > target + 1 {
+                    #[allow(clippy::expect_used)]
                     let discarded = frames.pop().expect("frames above target");
                     if discarded.dest == FINALIZER_DEST {
                         finalizer_frames = finalizer_frames.saturating_sub(1);
