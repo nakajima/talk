@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (2026-07-04) — Neovim setup
+
+- **`talk setup nvim` installs the Neovim runtime files.** The CLI
+  downloads the bundled `ftdetect`, `ftplugin`, `indent`, and `syntax`
+  files from the repository into Neovim's `stdpath('data')/site` runtime
+  root, with an XDG/`NVIM_APPNAME` fallback when Neovim is unavailable.
+  `--force` overwrites differing TalkTalk runtime files, and
+  `--target-dir` installs into an explicit runtime root. The Neovim README
+  now points users at this command; adding the runtime directory to
+  `runtimepath` remains the development setup.
+- **Member completion is less fragile while typing incomplete code.**
+  Completion now keeps the dotted receiver when the dot appears in a call
+  argument or before a loop body is parsed, and borrowed core `String`
+  completions still surface fields even when the member currently being
+  typed does not resolve yet.
+
 ## Unreleased (2026-07-03) — Unicode characters
 
 Strings now work in user-perceived characters. A `Character` is an
