@@ -73,7 +73,7 @@ use crate::types::error::TypeError;
 use crate::types::output::{ExistentialPack, MemberResolution, TypeOutput};
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
-    EffTail, EffectRow, Perm, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
+    EffTail, EffectEntry, EffectRow, Perm, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
 };
 use crate::types::variant::VariantInstantiation;
 
@@ -246,6 +246,15 @@ struct BindingGroupChecker<'s, 'a> {
     type_aliases: &'s FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'s mut Vec<Symbol>,
     level: Level,
+    /// The effects a top-level computation may always perform: the core
+    /// effects the runtime handles implicitly ('io, 'async, 'alloc).
+    /// Top-level ambient rows close over this set plus the top-level
+    /// `@handle`s installed BEFORE the computation (`handler_positions`),
+    /// so a user effect with no handler on the way up — or only a later
+    /// one — is a type error at the node where it tries to flow in.
+    ambient_effects: std::collections::BTreeSet<Symbol>,
+    /// Top-level `@handle`s in source order: (statement id, effect).
+    handler_positions: Vec<(NodeID, Symbol)>,
 }
 
 /// What a statement contributes to its block's value (block value = last
@@ -386,6 +395,8 @@ impl<'a> TypecheckSession<'a> {
                 type_aliases: &self.type_aliases,
                 alias_stack: &mut self.alias_stack,
                 level: self.level,
+                ambient_effects: Default::default(),
+                handler_positions: Default::default(),
             };
             groups.check(collected);
             self.level = groups.level;

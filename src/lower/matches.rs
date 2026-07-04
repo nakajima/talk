@@ -222,16 +222,13 @@ impl<'a> Lowering<'a> {
                 // A function-typed global used as a value: demand its
                 // specialization (instantiation recorded at this node).
                 if self.sources.contains_key(&symbol) {
-                    if self.abort_shape(symbol) {
-                        self.diagnostics.push(
-                            "lowering: an abort-capable function used as a value (not yet supported)"
-                                .into(),
-                        );
-                        return None;
-                    }
                     let theta = self.instantiation_at(expr.instantiation.as_ref(), ctx);
-                    let label = self.demand(symbol, theta);
-                    return Some(self.p.func_ref(label));
+                    let label = self.demand(symbol, theta.clone());
+                    let cap_entries = self.cap_entries_of(symbol, &theta);
+                    if cap_entries.is_empty() {
+                        return Some(self.p.func_ref(label));
+                    }
+                    return self.eta_expand_effectful_value(symbol, label, &cap_entries, ctx);
                 }
                 // A constant global (`public let STDOUT_FD: Int = 0`):
                 // inline its literal value (whole-program constant
@@ -247,11 +244,10 @@ impl<'a> Lowering<'a> {
                         ret_k: ctx.ret_k,
                         tail_k: ctx.ret_k,
                         raw_ret_k: ctx.raw_ret_k,
-                        normal_k: None,
-                        abort_ok: false,
                         resume_k: None,
                         top_level: false,
-                        local_handlers: FxHashSet::default(),
+                        caps: FxHashMap::default(),
+                        cap_templates: FxHashMap::default(),
                         params: vec![],
                         loops: vec![],
                         drop_stack: vec![],
@@ -609,7 +605,7 @@ impl<'a> Lowering<'a> {
         let ret_k = self.p.extract(self_var, params.len() as u32);
         args.push(ret_k);
         let arg_tuple = self.p.tuple(&args);
-        let Some((target, _)) =
+        let Some((target, _, _)) =
             self.resolve_witness(owner, requirement.symbol, label.to_string(), payload_ty)
         else {
             self.diagnostics.push(format!(

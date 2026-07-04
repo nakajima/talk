@@ -35,24 +35,34 @@ impl<'a> Lowering<'a> {
 
         // Resolve the target specialization.
         let target = self.resolve_callee(expr, callee, args, ctx);
-        let Some((label, symbol, prefix)) = target else {
+        let Some((label, symbol, prefix, callee_theta)) = target else {
             return self.dead_end("unresolved_callee");
         };
+        // The capabilities this callee's row demands, from our own scope
+        // (our own cap parameters, or materialized from an installed
+        // `@handle` template at the callee's instantiations).
+        let cap_entries = self.cap_entries_of(symbol, &callee_theta);
+        let mut cap_values = Vec::with_capacity(cap_entries.len());
+        for (effect, args) in &cap_entries {
+            let Some(cap) = self.resolve_cap(ctx, *effect, args) else {
+                self.diagnostics.push(format!(
+                    "lowering: call needs a handler for '{effect} that is not installed yet"
+                ));
+                return self.dead_end("capability_not_in_scope");
+            };
+            cap_values.push(cap);
+        }
         let trailing_value = trailing_block.map(|b| {
-            let bot = self.p.ty_bot();
-            let callee_ty = self.p.ty_fn(self.p.dom(label), bot);
-            let expected = self.final_param_ty(callee_ty);
+            // The trailing block's declared parameter type: the domain item
+            // before the callee's capability parameters and continuation.
+            let expected = match self.p.ty_kind(self.p.dom(label)) {
+                TyKind::Tuple(items) if items.len() >= 2 + cap_entries.len() => {
+                    Some(items[items.len() - 2 - cap_entries.len()])
+                }
+                _ => None,
+            };
             self.lower_block_closure(b, expected, ctx)
         });
-        // Abort-capable calls are handled by the MIR statement-spine
-        // splitter; reaching one here means it sits in an expression
-        // position the abort linkage cannot thread through yet.
-        if self.abort_shape(symbol) {
-            self.diagnostics.push(
-                "lowering: a call that can abort in expression position (not yet supported)".into(),
-            );
-            return self.dead_end("abort_call_in_expression");
-        }
 
         let mut arg_exprs: Vec<&Expr> = vec![];
         let mut done: Vec<ExprId> = vec![];
@@ -92,6 +102,7 @@ impl<'a> Lowering<'a> {
             if let Some(trailing) = trailing_value {
                 tuple_items.push(trailing);
             }
+            tuple_items.extend(cap_values.iter().copied());
             tuple_items.push(k);
             let arg_tuple = this.p.tuple(&tuple_items);
             this.p.app(func_ref, arg_tuple)
@@ -345,7 +356,7 @@ impl<'a> Lowering<'a> {
         callee: &'e Expr,
         args: &[hir::CallArg],
         ctx: &Ctx,
-    ) -> Option<(Label, Symbol, Prefix<'e>)> {
+    ) -> Option<(Label, Symbol, Prefix<'e>, Theta)> {
         match &callee.kind {
             ExprKind::Variable(name) => {
                 let symbol = name.symbol().ok()?;
@@ -355,7 +366,8 @@ impl<'a> Lowering<'a> {
                     return None;
                 }
                 let theta = self.call_theta(symbol, callee.instantiation.as_ref(), ctx);
-                Some((self.demand(symbol, theta), symbol, Prefix::None))
+                let label = self.demand(symbol, theta.clone());
+                Some((label, symbol, Prefix::None, theta))
             }
             // `Person(args…)`: construction is a call to the (explicit or
             // memberwise-synthesized) initializer with a blank record as
@@ -373,7 +385,8 @@ impl<'a> Lowering<'a> {
                 let blank = self.blank_record(struct_symbol)?;
                 let mut theta = self.call_theta(init, expr.instantiation.as_ref(), ctx);
                 self.owner_theta(init, &constructed, &mut theta);
-                Some((self.demand(init, theta), init, Prefix::Value(blank)))
+                let label = self.demand(init, theta.clone());
+                Some((label, init, Prefix::Value(blank), theta))
             }
             // Protocol-static (operators) or instance member calls: resolve
             // through member_resolutions + the conformance table.
@@ -398,16 +411,17 @@ impl<'a> Lowering<'a> {
                         witness,
                     }) => {
                         let head_ty = head_ty?;
-                        let (target, target_symbol) =
+                        let (target, target_symbol, witness_theta) =
                             self.resolve_witness(protocol, witness, label.to_string(), &head_ty)?;
-                        Some((target, target_symbol, prefix))
+                        Some((target, target_symbol, prefix, witness_theta))
                     }
                     Some(crate::types::output::MemberResolution::Direct(member)) => {
                         let mut theta = self.call_theta(member, callee.instantiation.as_ref(), ctx);
                         if let Some(head) = &head_ty {
                             self.owner_theta(member, head, &mut theta);
                         }
-                        Some((self.demand(member, theta), member, prefix))
+                        let target = self.demand(member, theta.clone());
+                        Some((target, member, prefix, theta))
                     }
                     None => {
                         // No resolution at this node: the member use rode
@@ -436,7 +450,8 @@ impl<'a> Lowering<'a> {
                                 let mut theta =
                                     self.call_theta(member, callee.instantiation.as_ref(), ctx);
                                 self.owner_theta(member, &head, &mut theta);
-                                return Some((self.demand(member, theta), member, prefix));
+                                let target = self.demand(member, theta.clone());
+                                return Some((target, member, prefix, theta));
                             }
                             let protocols: Vec<Symbol> = catalog
                                 .member_owners
@@ -465,13 +480,10 @@ impl<'a> Lowering<'a> {
                                 };
                                 let witness = requirement.symbol;
                                 let head = head_ty.clone()?;
-                                if let Some((target, target_symbol)) = self.resolve_witness(
-                                    protocol,
-                                    witness,
-                                    label_str.clone(),
-                                    &head,
-                                ) {
-                                    return Some((target, target_symbol, prefix));
+                                if let Some((target, target_symbol, witness_theta)) = self
+                                    .resolve_witness(protocol, witness, label_str.clone(), &head)
+                                {
+                                    return Some((target, target_symbol, prefix, witness_theta));
                                 }
                             }
                         }
@@ -653,7 +665,7 @@ impl<'a> Lowering<'a> {
         requirement_or_witness: Symbol,
         label: String,
         head: &CheckTy,
-    ) -> Option<(Label, Symbol)> {
+    ) -> Option<(Label, Symbol, Theta)> {
         let head_for_witness = match head {
             CheckTy::Nominal(..) => head,
             CheckTy::Borrow(_, inner) => inner,
@@ -678,7 +690,8 @@ impl<'a> Lowering<'a> {
                 crate::types::solve::bind_param_pattern(pattern, actual, &mut row_theta);
             }
             if let Some(&witness) = conformance.witnesses.get(&label) {
-                return Some((self.demand(witness, row_theta), witness));
+                let target = self.demand(witness, row_theta.clone());
+                return Some((target, witness, row_theta));
             }
             // Default body: specialize at Self := head, with the
             // conformance's associated bindings (substituted through the
@@ -689,10 +702,8 @@ impl<'a> Lowering<'a> {
                 let bound = ty.substitute(&row_theta, &Default::default(), &Default::default());
                 theta.insert(*assoc, bound);
             }
-            return Some((
-                self.demand(requirement_or_witness, theta),
-                requirement_or_witness,
-            ));
+            let target = self.demand(requirement_or_witness, theta.clone());
+            return Some((target, requirement_or_witness, theta));
         }
         // No explicit row: an auto-derived protocol (today: Showable)
         // synthesizes its witness in λ_G — the checker discharged the
@@ -706,7 +717,7 @@ impl<'a> Lowering<'a> {
             && let Some(synth) =
                 self.demand_derived_show(protocol, requirement_or_witness, head_for_witness)
         {
-            return Some((synth, requirement_or_witness));
+            return Some((synth, requirement_or_witness, Theta::default()));
         }
         self.diagnostics.push(format!(
             "lowering: no conformance ({head_symbol}, {protocol}) for '{label}'"

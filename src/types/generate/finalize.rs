@@ -91,11 +91,15 @@ impl<'a> TypecheckSession<'a> {
             }
             instantiations.insert(node, finalized);
         }
-        let mut handler_payload_tys = FxHashMap::default();
-        for (handler, tys) in std::mem::take(&mut self.artifacts.handler_payload_tys) {
-            let tys = tys.iter().map(|ty| self.final_ty(ty)).collect();
-            handler_payload_tys.insert(handler, tys);
+        // Effect signatures: perform/handler sites taught unannotated
+        // parameters their types during solving — bake them in, so the
+        // lowerer builds capability types from the catalog alone.
+        let mut effects = std::mem::take(&mut self.catalog.effects);
+        for sig in effects.values_mut() {
+            sig.params = sig.params.iter().map(|ty| self.final_ty(ty)).collect();
+            sig.ret = self.final_ty(&sig.ret);
         }
+        self.catalog.effects = effects;
         let mut existential_packs = FxHashMap::default();
         for (node, pack) in std::mem::take(&mut self.artifacts.existential_packs) {
             existential_packs.insert(
@@ -124,10 +128,6 @@ impl<'a> TypecheckSession<'a> {
                 coerce_clones: self.artifacts.coerce_clones,
                 local_tys,
                 existential_packs,
-                performs_into: self.artifacts.performs_into,
-                binder_refs: self.artifacts.binder_refs,
-                handler_payload_tys,
-                handlers_defined: self.artifacts.handlers_defined,
                 display_names: self.artifacts.display_names,
             },
             diagnostics,
@@ -197,9 +197,5 @@ impl TyFold for Normalizer<'_> {
             Ty::Proj(..) => normalize_ty(self.store, self.catalog, &rebuilt),
             _ => rebuilt,
         }
-    }
-
-    fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {
-        eff.clone()
     }
 }

@@ -228,12 +228,9 @@ impl<'a> Lowering<'a> {
                 temp,
                 result_ty,
             } => {
-                // The perform evaluates HERE (resumable ones split the
-                // rest; the value binds the temp either way). A
-                // Never-returning perform aborts: the rest is unreachable.
-                if let Some(done) = self.try_mir_effect_split(expr, *temp, cursor, ctx, k, cache) {
-                    return done;
-                }
+                // The perform evaluates HERE (a resumable one's temp
+                // continuation IS its resumption). A Never-returning
+                // perform aborts: the rest is unreachable.
                 let result_ty = result_ty.clone().substitute(
                     &ctx.theta,
                     &Default::default(),
@@ -261,11 +258,8 @@ impl<'a> Lowering<'a> {
                 ..
             } => {
                 // The call evaluates HERE; its value binds the temp the
-                // consuming statement reads. Abortable calls split the
-                // rest instead (they need the statement spine).
-                if let Some(done) = self.try_mir_effect_split(expr, *temp, cursor, ctx, k, cache) {
-                    return done;
-                }
+                // consuming statement reads. A callee's abort never
+                // resumes this continuation — nothing to split.
                 let result_ty = result_ty.clone().substitute(
                     &ctx.theta,
                     &Default::default(),
@@ -347,8 +341,7 @@ impl<'a> Lowering<'a> {
                 let bot = self.p.ty_bot();
                 let send = self.p.func("resume_value", value_ty, bot);
                 let value = self.p.var(send);
-                let pair = self.p.tuple(&[value, ctx.raw_ret_k]);
-                let mut resume_body = self.p.app(resume_k, pair);
+                let mut resume_body = self.p.app(resume_k, value);
                 // Only the handler-scope suffix dies here: the MIR builder
                 // emitted EarlyExit candidates from the handler's scope
                 // depth. Enclosing-function locals stay live across the
@@ -523,11 +516,7 @@ impl<'a> Lowering<'a> {
         })
     }
 
-    pub(super) fn drop_flag_keys_for_symbol(
-        &self,
-        body: &mir::Body,
-        symbol: Symbol,
-    ) -> Vec<Place> {
+    pub(super) fn drop_flag_keys_for_symbol(&self, body: &mir::Body, symbol: Symbol) -> Vec<Place> {
         let mut keys = Vec::new();
         let root = Place::root(symbol);
         let mut needs_root_flag = false;
@@ -610,9 +599,7 @@ impl<'a> Lowering<'a> {
                     else {
                         continue;
                     };
-                    let key_path = key_path
-                        .clone()
-                        .unwrap_or_else(|| drop.key_path.clone());
+                    let key_path = key_path.clone().unwrap_or_else(|| drop.key_path.clone());
                     let elaboration = self.drop_elaboration_at(statement, Some(&key_path));
                     drops.push(PendingDrop {
                         symbol: drop.symbol,
@@ -752,16 +739,11 @@ impl<'a> Lowering<'a> {
         if *target_symbol != symbol {
             return None;
         }
-        let key_path = key_path
-            .clone()
-            .unwrap_or_else(|| Place::root(symbol));
+        let key_path = key_path.clone().unwrap_or_else(|| Place::root(symbol));
         self.drop_elaboration_at(previous, Some(&key_path))
     }
 
-    fn moved_key_paths_at_statement(
-        &self,
-        statement: &mir::LocatedStatement,
-    ) -> Vec<Place> {
+    fn moved_key_paths_at_statement(&self, statement: &mir::LocatedStatement) -> Vec<Place> {
         let mut moved = Vec::new();
         for source in &statement.ownership.moves {
             Self::push_unique_drop_flag_key(&mut moved, source.clone());
@@ -847,9 +829,7 @@ impl<'a> Lowering<'a> {
         let after_body = self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         self.p.set_body(after, after_body);
         let after_ref = self.p.func_ref(after);
-        let target_key_path = target
-            .cloned()
-            .or_else(|| crate::flow::place_for_expr(lhs));
+        let target_key_path = target.cloned().or_else(|| crate::flow::place_for_expr(lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
         let setter = self.p.func("set", rhs_ty, bot);
@@ -936,9 +916,7 @@ impl<'a> Lowering<'a> {
         let after_body = self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         self.p.set_body(after, after_body);
         let after_ref = self.p.func_ref(after);
-        let target_key_path = target
-            .cloned()
-            .or_else(|| crate::flow::place_for_expr(lhs));
+        let target_key_path = target.cloned().or_else(|| crate::flow::place_for_expr(lhs));
 
         let rhs_ty = self.expr_lambda_ty(rhs, ctx);
         let setter = self.p.func("object_set", rhs_ty, bot);
@@ -1063,255 +1041,45 @@ impl<'a> Lowering<'a> {
                 .push("lowering: @handle inside a nested block (not yet supported)".into());
             return self.dead_end("nested_handle");
         }
-        let handler_sym = self.units[ctx.unit]
-            .resolved
-            .effect_handler_definitions
-            .get(&stmt.id)
-            .copied();
-        let Some(handler_sym) = handler_sym else {
-            self.diagnostics
-                .push("lowering: @handle without a resolved handler".into());
-            return self.dead_end("unresolved_handler");
+        let Some(effect) = effect_name.symbol().ok() else {
+            return self.dead_end("unresolved_effect_name");
         };
-        let sig = effect_name.symbol().ok().and_then(|s| {
-            self.units
-                .iter()
-                .find_map(|u| u.types.catalog.effects.get(&s).cloned())
-        });
-        let Some(sig) = sig else {
+        if self
+            .units
+            .iter()
+            .find_map(|u| u.types.catalog.effects.get(&effect))
+            .is_none()
+        {
             self.diagnostics
                 .push("lowering: @handle of an undeclared effect".into());
             return self.dead_end("undeclared_effect");
         };
-        if !sig.generics.is_empty() {
+        // Register a capability TEMPLATE for the rest of the extent: the
+        // closure materializes lazily, once per instantiation demanded
+        // inside it, specializing the handler body with the effect's
+        // generics bound (docs/generic-effects-plan.md). The template
+        // captures this frame's context — the delimiter (`raw_ret_k`) the
+        // materialized capability closes over.
+        let scaffold = self
+            .scaffold_ctx
+            .last()
+            .map(|scaffold| std::sync::Arc::clone(&scaffold.body));
+        let Some(scaffold) = scaffold else {
             self.diagnostics
-                .push("lowering: handlers for generic effects (not yet supported)".into());
-            return self.dead_end("generic_effect_handler");
-        }
-
-        let handler_tys = self
-            .units
-            .iter()
-            .find_map(|u| u.types.handler_payload_tys.get(&handler_sym).cloned());
-        let mut payload_tys = Vec::with_capacity(sig.params.len());
-        for (i, param) in sig.params.iter().enumerate() {
-            let ty = handler_tys
-                .as_ref()
-                .and_then(|tys| tys.get(i))
-                .unwrap_or(param);
-            if matches!(ty, CheckTy::Var(_)) {
-                self.diagnostics.push(
-                    "lowering: effect parameter type unknown (annotate the effect declaration)"
-                        .into(),
-                );
-                return self.dead_end("unknown_effect_parameter");
-            }
-            payload_tys.push(self.map_ty(ty));
-        }
-        if handler_block.args.len() > payload_tys.len() {
-            self.diagnostics.push(
-                "lowering: handler block takes more arguments than the effect declares".into(),
-            );
-            return self.dead_end("handler_arity");
-        }
-
-        let slot_ty = self.p.expr_ty(ctx.raw_ret_k);
-        let bot = self.p.ty_bot();
-        let resume_pair_ty = (!sig.ret.is_never()).then(|| {
-            let resume_value_ty = self.map_ty(&sig.ret);
-            self.p.ty_tuple(&[resume_value_ty, slot_ty])
-        });
-        let mut dom_items = payload_tys;
-        if let Some(pair_ty) = resume_pair_ty {
-            dom_items.push(self.p.ty_fn(pair_ty, bot));
-        }
-        dom_items.push(slot_ty);
-        let dom = self.p.ty_tuple(&dom_items);
-        let cap = self.p.func("handler", dom, bot);
-        self.escaping.insert(cap);
-        let cap_var = self.p.var(cap);
-        let rk = self.p.extract(cap_var, (dom_items.len() - 1) as u32);
-        let mut inner = self.rebase_into_closure(ctx, rk);
-        inner.owner = None;
-        if resume_pair_ty.is_some() {
-            inner.resume_k = Some(self.p.extract(cap_var, (dom_items.len() - 2) as u32));
-        }
-        let mut celled: Vec<(Symbol, ExprId)> = vec![];
-        for (i, arg) in handler_block.args.iter().enumerate() {
-            let value = self.p.extract(cap_var, i as u32);
-            let Ok(symbol) = arg.name.symbol() else {
-                continue;
-            };
-            if inner.cellable.contains(&symbol) {
-                celled.push((symbol, value));
-            } else {
-                inner.env.insert(symbol, Binding::Value(value));
-            }
-        }
-        let handling_id = stmt.id;
-        let handler_body_expr = self.with_cells(&celled, &mut inner, |this, inner| {
-            let handler_k = inner.ret_k;
-            this.lower_sub_body_from_scaffold(handling_id, inner, handler_k)
-                .unwrap_or_else(|| this.lower_block(handler_block, &[], inner, handler_k))
-        });
-        self.p.set_body(cap, handler_body_expr);
-
-        let scope_result_ty = match *self.p.ty_kind(slot_ty) {
-            TyKind::Fn(carried, _) => carried,
-            _ => self.p.ty_void(),
+                .push("lowering: @handle outside a MIR body (lowerer bug)".into());
+            return self.dead_end("handler_without_scaffold");
         };
-        let cap_ref = self.p.func_ref(cap);
-        self.handler_caps.insert(
-            handler_sym,
-            HandlerCap {
-                cap: cap_ref,
-                scope_result_ty,
-                resume_pair_ty,
-            },
-        );
-
+        let index = self.handler_templates.len();
+        self.handler_templates.push(HandlerTemplate {
+            effect,
+            handling_id: stmt.id,
+            scaffold,
+            handler_block: (*handler_block).clone(),
+            install_ctx: ctx.clone(),
+        });
         let mut scope_ctx = ctx.clone();
-        scope_ctx.local_handlers.insert(handler_sym);
+        scope_ctx.cap_templates.insert(effect, index);
         self.lower_mir_statements(cursor.advance(), &scope_ctx, k, cache)
-    }
-
-    fn try_mir_effect_split(
-        &mut self,
-        expr: &Expr,
-        temp: u32,
-        cursor: MirCursor,
-        ctx: &Ctx,
-        k: ExprId,
-        cache: &mut MirBlockCache,
-    ) -> Option<ExprId> {
-        if let ExprKind::CallEffect { args, .. } = &expr.kind
-            && let Some(&handler_sym) = self.units[ctx.unit].resolved.effect_handlers.get(&expr.id)
-            && let Some(cap) = self.handler_caps.get(&handler_sym).copied()
-            && let Some(pair_ty) = cap.resume_pair_ty
-        {
-            let handler_reachable = ctx.abort_ok || ctx.local_handlers.contains(&handler_sym);
-            if !handler_reachable || k != ctx.tail_k {
-                self.diagnostics.push(
-                    "lowering: a resumable perform outside the enclosing function's statement spine (not yet supported)"
-                        .into(),
-                );
-                return Some(self.dead_end("resumable_perform_off_spine"));
-            }
-            let resume_ref =
-                self.rest_mir_closure("after_perform", pair_ty, temp, cursor, ctx, cache);
-            let slot = ctx.raw_ret_k;
-            let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
-            return Some(
-                self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
-                    values.push(resume_ref);
-                    values.push(slot);
-                    let tuple = this.p.tuple(&values);
-                    this.p.app(cap.cap, tuple)
-                }),
-            );
-        }
-
-        self.abortable_callee(expr, ctx)?;
-        if !ctx.abort_ok || k != ctx.tail_k {
-            self.diagnostics.push(
-                "lowering: a call that can abort outside the enclosing function's statement spine (not yet supported)"
-                    .into(),
-            );
-            return Some(self.dead_end("abort_call_off_spine"));
-        }
-        let ExprKind::Call {
-            callee,
-            args,
-            trailing_block,
-            ..
-        } = &expr.kind
-        else {
-            return Some(self.dead_end("abort_call_shape"));
-        };
-        if trailing_block.is_some() {
-            self.diagnostics.push(
-                "lowering: trailing block on a call that can abort (not yet supported)".into(),
-            );
-            return Some(self.dead_end("abort_call_trailing_block"));
-        }
-        let target = self.resolve_callee(expr, callee, args, ctx);
-        let Some((label, _, prefix)) = target else {
-            return Some(self.dead_end("abort_call_unresolved"));
-        };
-        if !matches!(prefix, Prefix::None) {
-            self.diagnostics
-                .push("lowering: method or init calls that can abort (not yet supported)".into());
-            return Some(self.dead_end("abort_call_method"));
-        }
-
-        let dom_ty = self.p.dom(label);
-        let normal_k_ty = match self.p.ty_kind(dom_ty) {
-            TyKind::Tuple(items) if items.len() >= 2 => items[items.len() - 2],
-            _ => {
-                self.diagnostics
-                    .push("lowering: abort-capable callee without a normal-return slot".into());
-                return Some(self.dead_end("abort_callee_shape"));
-            }
-        };
-        let pair_ty = match *self.p.ty_kind(normal_k_ty) {
-            TyKind::Fn(pair, _) => pair,
-            _ => {
-                self.diagnostics
-                    .push("lowering: abort-capable callee without a paired normal return".into());
-                return Some(self.dead_end("abort_callee_shape"));
-            }
-        };
-        let callee_slot_ty = match self.p.ty_kind(pair_ty) {
-            TyKind::Tuple(items) if items.len() == 2 => items[1],
-            _ => {
-                self.diagnostics
-                    .push("lowering: abort-capable callee without a paired normal return".into());
-                return Some(self.dead_end("abort_callee_shape"));
-            }
-        };
-        if callee_slot_ty != self.p.expr_ty(ctx.raw_ret_k) {
-            self.diagnostics.push(
-                "lowering: abort linkage type mismatch (handler scope and call scope carry different value types)"
-                    .into(),
-            );
-        }
-
-        let rest_ref = self.rest_mir_closure("after_abortable", pair_ty, temp, cursor, ctx, cache);
-        let slot = ctx.raw_ret_k;
-        let func_ref = self.p.func_ref(label);
-        let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
-        Some(
-            self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
-                values.push(rest_ref);
-                values.push(slot);
-                let tuple = this.p.tuple(&values);
-                this.p.app(func_ref, tuple)
-            }),
-        )
-    }
-
-    fn rest_mir_closure(
-        &mut self,
-        name: &str,
-        pair_ty: TyId,
-        temp: u32,
-        cursor: MirCursor,
-        ctx: &Ctx,
-        cache: &mut MirBlockCache,
-    ) -> ExprId {
-        let bot = self.p.ty_bot();
-        let rest_k = self.p.func(name, pair_ty, bot);
-        self.escaping.insert(rest_k);
-        let rest_var = self.p.var(rest_k);
-        let value = self.p.extract(rest_var, 0);
-        let rk = self.p.extract(rest_var, 1);
-        let mut inner = self.rebase_into_closure(ctx, rk);
-        let inner_k = inner.ret_k;
-        inner.temps.insert(temp, value);
-        let rest_body = self.lower_mir_statements(cursor.advance(), &inner, inner_k, cache);
-        let body_expr = self.clear_moved_drop_flags_then(&inner, cursor.statement(), rest_body);
-        self.p.set_body(rest_k, body_expr);
-        self.p.func_ref(rest_k)
     }
 
     fn lower_mir_terminator(
@@ -1554,9 +1322,7 @@ impl<'a> Lowering<'a> {
                     .iter()
                     .rev()
                     .find(|drop| drop.symbol == *symbol)?;
-                let key_path = key_path
-                    .clone()
-                    .unwrap_or_else(|| drop.key_path.clone());
+                let key_path = key_path.clone().unwrap_or_else(|| drop.key_path.clone());
                 let elaboration = self.drop_elaboration_at(statement, Some(&key_path));
                 Some(PendingDrop {
                     symbol: drop.symbol,

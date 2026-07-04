@@ -1,0 +1,14 @@
+effect 'ask() -> Int
+
+func total() -> Int {
+	let a = 'ask()
+	let b = 'ask()
+	a + b
+}
+
+func with_answers() -> Int {
+	@handle 'ask { continue 21 }
+	total()
+}
+
+print(with_answers())

@@ -118,17 +118,6 @@ pub struct Lowering<'a> {
     /// environment (unknown occurrences — the closure-conversion criterion
     /// of flat closures, Cardelli 1984).
     escaping: FxHashSet<Label>,
-    /// Functions whose bodies (transitively, through direct calls) perform
-    /// an effect routed to a lexical handler: symbol → the handler symbols
-    /// they can abort to. Their specializations take an extra explicit
-    /// normal-return continuation parameter, reserving the machine-return
-    /// slot for abort propagation (capability-passing CPS for lexical
-    /// handlers — Schuster, Brachthäuser & Ostermann, ICFP 2020; Schuster
-    /// et al., PLDI 2022).
-    abortable: FxHashMap<Symbol, Vec<Symbol>>,
-    /// Installed handlers: handler symbol → its capability closure and
-    /// the value type its scope's Ret chain carries.
-    handler_caps: FxHashMap<Symbol, HandlerCap>,
     /// Cells of mutable top-level bindings: functions that read or assign
     /// them reference the cell directly (a free variable of main; the
     /// closure machinery carries it, exactly like handler capabilities).
@@ -142,21 +131,30 @@ pub struct Lowering<'a> {
     /// resolves expression-position constructs' scaffold blocks against the
     /// innermost entry.
     scaffold_ctx: Vec<ScaffoldCtx>,
+    /// Installed `@handle`s awaiting instantiation (indexed by
+    /// `Ctx::cap_templates`); capability closures materialize from them
+    /// per demanded instantiation, memoized in `materialized_caps`.
+    handler_templates: Vec<HandlerTemplate>,
+    materialized_caps: FxHashMap<(usize, Vec<CheckTy>), ExprId>,
     pub diagnostics: Vec<String>,
 }
 
-/// A lowered `@handle`: the capability closure performs call into, and the
-/// value type the handled scope's Ret chain carries (what the capability
-/// ultimately delivers — abort as unwinding, Hillerström, Lindley, Atkey &
-/// Sivaramakrishnan, FSCD 2017 §4.5).
-#[derive(Clone, Copy)]
-struct HandlerCap {
-    cap: ExprId,
-    scope_result_ty: TyId,
-    /// For a resuming handler (effect return ≠ Never): the domain of
-    /// the resumption closure the perform passes — `[effect return,
-    /// slot]`. None for abort handlers.
-    resume_pair_ty: Option<TyId>,
+/// A lowered `@handle`, held as a template: the capability closure is
+/// materialized per effect instantiation demanded inside its extent,
+/// specializing the handler body with the effect's generics bound —
+/// the generic-function θ machinery applied to a handler block
+/// (docs/generic-effects-plan.md).
+struct HandlerTemplate {
+    effect: Symbol,
+    /// The `Handling` statement's id — the scaffold key for the handler
+    /// body's blocks in `scaffold`.
+    handling_id: crate::node_id::NodeID,
+    scaffold: std::sync::Arc<mir::Body>,
+    /// The handler block itself (argument names; standalone fallback).
+    handler_block: Block,
+    /// The installing frame's context: the delimiter (`raw_ret_k`) and
+    /// environment the materialized closure captures.
+    install_ctx: Ctx,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -231,21 +229,11 @@ struct Ctx {
     /// function tail. This may be a drop wrapper around `ret_k`.
     tail_k: ExprId,
     /// The current λ_G function's own machine-return slot, untouched by
-    /// the init/inout/normal-return wrappers layered onto `ret_k`. Routed
-    /// performs and calls that can abort pass it as the callee's return
-    /// linkage, so an abort propagates back as a plain Ret chain running
-    /// no user code in between (capability-passing CPS — Schuster et al.,
-    /// PLDI 2022).
+    /// the init/inout wrappers layered onto `ret_k`. A `@handle` installed
+    /// here captures it as its capability's delimiter: an aborting handler
+    /// finishes into it directly, running no user code in the frames
+    /// between the perform and this scope (ADR 0011).
     raw_ret_k: ExprId,
-    /// In an abort-capable function: the explicit normal-return
-    /// continuation parameter. Results go here (paired with the return
-    /// slot); the machine return itself is reserved for aborts.
-    normal_k: Option<ExprId>,
-    /// Whether a routed perform may lower here: true in main, in
-    /// abort-capable specializations, and in the handler/rest closures
-    /// they spawn; false inside plain function values, whose call sites
-    /// cannot thread the abort linkage.
-    abort_ok: bool,
     /// Inside a resuming handler's capability closure: its resumption
     /// parameter. `continue v` tail-transfers into it. Cleared in
     /// nested function values (they cannot resume).
@@ -253,10 +241,16 @@ struct Ctx {
     /// Lowering main's top-level statements: cellable lets register in
     /// `top_level_cells` so functions can capture them.
     top_level: bool,
-    /// Handlers installed within the current function context: performs
-    /// routed to them never escape this frame, so they are safe even in
-    /// plain-shaped functions. Cleared in function values.
-    local_handlers: FxHashSet<Symbol>,
+    /// Capability VALUES in scope, keyed by (effect, instantiation): our
+    /// own capability parameters. A perform or call needing one of these
+    /// exact instantiations uses the value directly.
+    caps: FxHashMap<(Symbol, Vec<CheckTy>), ExprId>,
+    /// Capability TEMPLATES in scope, by effect label: installed by
+    /// `@handle` for the rest of its block. A needed instantiation not
+    /// present in `caps` materializes a capability closure from the
+    /// nearest template (label-scoped: one `@handle` covers every
+    /// instantiation of its effect — docs/generic-effects-plan.md).
+    cap_templates: FxHashMap<Symbol, usize>,
     /// The current λ_G function's parameter extracts (for %n in @_ir).
     params: Vec<ExprId>,
     /// Enclosing loops with the drop-stack depth active at loop entry.
@@ -286,11 +280,10 @@ struct MirCtxKey {
     ret_k: ExprId,
     tail_k: ExprId,
     raw_ret_k: ExprId,
-    normal_k: Option<ExprId>,
-    abort_ok: bool,
     resume_k: Option<ExprId>,
     top_level: bool,
-    local_handlers: Vec<Symbol>,
+    caps: Vec<((Symbol, Vec<CheckTy>), ExprId)>,
+    cap_templates: Vec<(Symbol, usize)>,
     params: Vec<ExprId>,
     loops: Vec<LoopBinding>,
     drop_stack: Vec<DropBinding>,
@@ -353,8 +346,18 @@ impl Ctx {
             .map(|(key, evidence)| (*key, *evidence))
             .collect();
         local_evidence.sort_by_key(|((ty, protocol), _)| (*ty, *protocol));
-        let mut local_handlers: Vec<_> = self.local_handlers.iter().copied().collect();
-        local_handlers.sort();
+        let mut caps: Vec<_> = self
+            .caps
+            .iter()
+            .map(|(key, cap)| (key.clone(), *cap))
+            .collect();
+        caps.sort_by(|(a, _), (b, _)| format!("{a:?}").cmp(&format!("{b:?}")));
+        let mut cap_templates: Vec<_> = self
+            .cap_templates
+            .iter()
+            .map(|(symbol, index)| (*symbol, *index))
+            .collect();
+        cap_templates.sort();
         let mut drop_flags: Vec<_> = self
             .drop_flags
             .iter()
@@ -373,11 +376,10 @@ impl Ctx {
             ret_k: self.ret_k,
             tail_k: self.tail_k,
             raw_ret_k: self.raw_ret_k,
-            normal_k: self.normal_k,
-            abort_ok: self.abort_ok,
             resume_k: self.resume_k,
             top_level: self.top_level,
-            local_handlers,
+            caps,
+            cap_templates,
             params: self.params.clone(),
             loops: self.loops.clone(),
             drop_stack: self.drop_stack.clone(),
@@ -415,11 +417,11 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
         finalizer_thunks: FxHashMap::default(),
         queue: vec![],
         escaping: FxHashSet::default(),
-        abortable: FxHashMap::default(),
-        handler_caps: FxHashMap::default(),
         top_level_cells: FxHashMap::default(),
         mir_bodies: FxHashMap::default(),
         scaffold_ctx: vec![],
+        handler_templates: vec![],
+        materialized_caps: FxHashMap::default(),
         diagnostics: vec![],
     };
     for unit in &lowering.units {
@@ -431,7 +433,6 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
         }
     }
     lowering.index_sources();
-    lowering.collect_abortable();
     lowering.diagnose_unsupported_handlers();
     let (main, result_ty) = lowering.lower_main();
     lowering.drain_queue();
@@ -616,12 +617,14 @@ impl<'a> Lowering<'a> {
             ExprKind::CallEffect {
                 effect_name, args, ..
             } => {
-                // Routed first: the resolver bound this perform to a
-                // lexical handler — call its capability (M7).
-                if let Some(&handler_sym) =
-                    self.units[ctx.unit].resolved.effect_handlers.get(&expr.id)
+                // A capability in scope wins: the nearest `@handle` for
+                // this effect's label (or one of our own capability
+                // parameters) put one on the context.
+                if let Some(effect) = effect_name.symbol().ok()
+                    && (ctx.cap_templates.contains_key(&effect)
+                        || ctx.caps.keys().any(|(label, _)| *label == effect))
                 {
-                    return self.lower_routed_perform(handler_sym, args, ctx, k);
+                    return self.lower_capped_perform(effect, expr, args, ctx, k);
                 }
                 self.lower_perform(expr, effect_name, args, ctx, k)
             }
@@ -796,12 +799,10 @@ impl<'a> Lowering<'a> {
             ret_k,
             tail_k: ret_k,
             raw_ret_k: ret_k,
-            normal_k: None,
-            // Performs directly in main abort straight to its return.
-            abort_ok: true,
             resume_k: None,
             top_level: true,
-            local_handlers: FxHashSet::default(),
+            caps: FxHashMap::default(),
+            cap_templates: FxHashMap::default(),
             params: vec![],
             loops: vec![],
             drop_stack: vec![],
@@ -862,10 +863,9 @@ impl<'a> Lowering<'a> {
         nodes: Vec<Node>,
     ) -> (Label, TyId) {
         let entry_label = self.demand(symbol, Theta::default());
-        if self.abort_shape(symbol) {
-            self.diagnostics.push(
-                "lowering: main performing into a lexical handler (not yet supported)".into(),
-            );
+        if !self.cap_entries_of(symbol, &Theta::default()).is_empty() {
+            self.diagnostics
+                .push("lowering: main performing an unhandled effect (not yet supported)".into());
         }
         let result_ty = match self.signature_of(symbol, &Theta::default()) {
             Some(CheckTy::Func(params, ret, _)) => {
@@ -905,11 +905,10 @@ impl<'a> Lowering<'a> {
             ret_k,
             tail_k: ret_k,
             raw_ret_k: ret_k,
-            normal_k: None,
-            abort_ok: true,
             resume_k: None,
             top_level: true,
-            local_handlers: FxHashSet::default(),
+            caps: FxHashMap::default(),
+            cap_templates: FxHashMap::default(),
             params: vec![],
             loops: vec![],
             drop_stack: vec![],

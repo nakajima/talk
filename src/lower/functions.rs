@@ -33,13 +33,26 @@ impl<'a> Lowering<'a> {
                 }
             }
         }
-        let ret_k = self.p.extract(self_var, source_params.len() as u32);
+        // Capability parameters sit between the source parameters and the
+        // return continuation, one per user-effect instantiation in the
+        // latent row — the same order `demand` appended them.
+        let cap_entries = self.cap_entries_of(symbol, &theta);
+        let mut caps = FxHashMap::default();
+        for (i, entry) in cap_entries.iter().enumerate() {
+            let extract = self.p.extract(self_var, (source_params.len() + i) as u32);
+            caps.insert(entry.clone(), extract);
+        }
+        let ret_k = self
+            .p
+            .extract(self_var, (source_params.len() + cap_entries.len()) as u32);
         let mut param_names: Vec<String> =
             source_params.iter().map(|p| p.name.name_str()).collect();
+        param_names.extend(
+            cap_entries
+                .iter()
+                .map(|(effect, _)| format!("cap_{effect}")),
+        );
         param_names.push("k".into());
-        if self.abort_shape(symbol) {
-            param_names.push("slot".into());
-        }
         let name_refs: Vec<&str> = param_names.iter().map(String::as_str).collect();
         self.p.name_params(label, &name_refs);
 
@@ -53,11 +66,10 @@ impl<'a> Lowering<'a> {
             ret_k,
             tail_k: ret_k,
             raw_ret_k: ret_k,
-            normal_k: None,
-            abort_ok: false,
             resume_k: None,
             top_level: false,
-            local_handlers: FxHashSet::default(),
+            caps,
+            cap_templates: FxHashMap::default(),
             params,
             loops: vec![],
             drop_stack: vec![],
@@ -65,25 +77,6 @@ impl<'a> Lowering<'a> {
             initializing_self: None,
             cellable,
         };
-        // Abort-capable shape: results pair with our own return slot and
-        // go to the explicit normal-return continuation; the machine
-        // return is reserved for abort propagation (see Ctx::raw_ret_k).
-        if self.abort_shape(symbol) {
-            let normal_k = ret_k;
-            let slot = self.p.extract(self_var, (source_params.len() + 1) as u32);
-            let result_ty = self.normal_result_ty(normal_k);
-            let bot = self.p.ty_bot();
-            let wrap = self.p.func("ret_normal", result_ty, bot);
-            let value = self.p.var(wrap);
-            let pair = self.p.tuple(&[value, slot]);
-            let wrap_body = self.p.app(normal_k, pair);
-            self.p.set_body(wrap, wrap_body);
-            ctx.ret_k = self.p.func_ref(wrap);
-            ctx.tail_k = ctx.ret_k;
-            ctx.raw_ret_k = slot;
-            ctx.normal_k = Some(normal_k);
-            ctx.abort_ok = true;
-        }
         // Mutated parameters are assignment-converted: box each into a cell
         // bound through a continuation before the body runs.
         let mut prologue: Vec<(Symbol, ExprId)> = vec![];

@@ -53,14 +53,13 @@ impl<'a> Lowering<'a> {
         inner.ret_k = self.p.extract(self_var, func.params.len() as u32);
         inner.tail_k = inner.ret_k;
         inner.raw_ret_k = inner.ret_k;
-        inner.normal_k = None;
-        // A function value's call sites are indirect: they cannot thread
-        // the abort linkage, so routed performs are rejected inside (and
-        // it cannot resume an enclosing handler).
-        inner.abort_ok = false;
+        // A function value keeps the capabilities of its creation site —
+        // its call sites are indirect and cannot thread them, so capture
+        // is lexical (Effekt-style; ADR 0011 departure (d)). It cannot
+        // resume an enclosing handler, though: the resumption does not
+        // cross the closure boundary.
         inner.resume_k = None;
         inner.top_level = false;
-        inner.local_handlers = FxHashSet::default();
         let body_block = &func.body;
         let body = self.with_cells(&prologue, &mut inner, |this, inner| {
             let ret_k = inner.ret_k;
@@ -143,11 +142,8 @@ impl<'a> Lowering<'a> {
         inner.ret_k = self.p.extract(self_var, n_params as u32);
         inner.tail_k = inner.ret_k;
         inner.raw_ret_k = inner.ret_k;
-        inner.normal_k = None;
-        inner.abort_ok = false;
         inner.resume_k = None;
         inner.top_level = false;
-        inner.local_handlers = FxHashSet::default();
         let block_id = block.id;
         let body = self.with_cells(&celled, &mut inner, |this, inner| {
             let ret_k = inner.ret_k;

@@ -9,11 +9,12 @@
 //! Records are row types in the scoped-labels style (Leijen, *Extensible
 //! Records with Scoped Labels*, TFP 2005) with Talk choosing no lacks
 //! predicates. Effect rows follow Leijen, *Koka: Programming with
-//! Row-Polymorphic Effect Types* (MSR-TR-2013-79), restricted to label-only
-//! entries: an effect's operation signature lives in the catalog, never in
-//! the row.
+//! Row-Polymorphic Effect Types* (MSR-TR-2013-79): entries carry the
+//! effect label plus its instantiation arguments (duplicates allowed and
+//! inert — see docs/generic-effects-plan.md); an effect's operation
+//! signature lives in the catalog, never in the row.
 
-use std::{collections::BTreeSet, ops::ControlFlow};
+use std::ops::ControlFlow;
 
 use rustc_hash::FxHashMap;
 
@@ -118,20 +119,47 @@ impl Row {
     }
 }
 
-/// An effect row: a set of effect symbols plus an optional tail.
-/// Operation signatures live in the catalog, not here (Leijen's Koka effect
-/// labels, without the duplicate-label refinement: labels are a set).
+/// One effect occurrence in a row: its label plus the type arguments of
+/// this occurrence (`'state<Int>`; empty for non-generic effects).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct EffectEntry {
+    pub effect: Symbol,
+    pub args: Vec<Ty>,
+}
+
+impl EffectEntry {
+    pub fn label(effect: Symbol) -> Self {
+        EffectEntry {
+            effect,
+            args: vec![],
+        }
+    }
+}
+
+/// An effect row: effect entries plus an optional tail. Operation
+/// signatures live in the catalog, not here. Duplicate labels are allowed
+/// — the same effect may occur at several instantiations — and unification
+/// pairs same-label occurrences in order (scoped labels: Leijen, TFP 2005;
+/// Koka's effect rows). Entries are kept stable-sorted by label, the
+/// canonical form Eq/Hash rely on; relative order within a label is
+/// occurrence order.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct EffectRow {
-    pub effects: BTreeSet<Symbol>,
+    pub effects: Vec<EffectEntry>,
     pub tail: Option<EffTail>,
 }
 
 impl EffectRow {
+    /// The canonical constructor: stable-sorts entries by label.
+    pub fn new(mut effects: Vec<EffectEntry>, tail: Option<EffTail>) -> Self {
+        effects.sort_by_key(|entry| entry.effect);
+        EffectRow { effects, tail }
+    }
+
     /// The pure, closed row `<>`.
     pub fn pure() -> Self {
         EffectRow {
-            effects: BTreeSet::new(),
+            effects: vec![],
             tail: None,
         }
     }
@@ -140,7 +168,7 @@ impl EffectRow {
     /// inference, so its effects can still grow.
     pub fn open(tail: EffVar) -> Self {
         EffectRow {
-            effects: BTreeSet::new(),
+            effects: vec![],
             tail: Some(EffTail::Var(tail)),
         }
     }
@@ -436,10 +464,16 @@ pub(crate) trait TyFold {
     }
 
     fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {
-        EffectRow {
-            effects: eff.effects.iter().map(|s| self.fold_symbol(*s)).collect(),
-            tail: self.fold_eff_tail(&eff.tail),
-        }
+        EffectRow::new(
+            eff.effects
+                .iter()
+                .map(|entry| EffectEntry {
+                    effect: self.fold_symbol(entry.effect),
+                    args: entry.args.iter().map(|ty| self.fold_ty(ty)).collect(),
+                })
+                .collect(),
+            self.fold_eff_tail(&eff.tail),
+        )
     }
 
     fn fold_eff_tail(&mut self, tail: &Option<EffTail>) -> Option<EffTail> {
@@ -549,9 +583,13 @@ impl TyFold for SymbolImporter {
 
 /// Prepare a type for export: a leftover unification variable degrades to
 /// `Error` (the store does not travel), and a leftover row/effect var tail
-/// becomes a rigid param keyed by the owning binder.
+/// becomes a rigid param keyed by the owning binder. The minted flags let
+/// `Scheme::sanitize_for_export` register those params for instantiation
+/// to freshen (an owner-keyed tail means "any effects", not a rigid row).
 struct ExportSanitizer {
     owner: Symbol,
+    minted_eff: bool,
+    minted_row: bool,
 }
 
 impl TyFold for ExportSanitizer {
@@ -570,14 +608,20 @@ impl TyFold for ExportSanitizer {
 
     fn fold_eff_tail(&mut self, tail: &Option<EffTail>) -> Option<EffTail> {
         match tail {
-            Some(EffTail::Var(_)) => Some(EffTail::Param(self.owner)),
+            Some(EffTail::Var(_)) => {
+                self.minted_eff = true;
+                Some(EffTail::Param(self.owner))
+            }
             other => other.clone(),
         }
     }
 
     fn fold_row_tail(&mut self, tail: &Option<RowTail>) -> Option<RowTail> {
         match tail {
-            Some(RowTail::Var(_)) => Some(RowTail::Param(self.owner)),
+            Some(RowTail::Var(_)) => {
+                self.minted_row = true;
+                Some(RowTail::Param(self.owner))
+            }
             other => other.clone(),
         }
     }
@@ -720,7 +764,36 @@ impl Ty {
     /// tails become rigid params keyed by the owning binder (an unknown but
     /// fixed row — unifiable as a rigid tail on the importing side).
     pub fn sanitize_for_export(&self, owner: Symbol) -> Ty {
-        ExportSanitizer { owner }.fold_ty(self)
+        ExportSanitizer {
+            owner,
+            minted_eff: false,
+            minted_row: false,
+        }
+        .fold_ty(self)
+    }
+}
+
+impl Scheme {
+    /// Export form of a whole scheme: sanitize the type, and register any
+    /// owner-keyed row/effect param the sanitizer mints so instantiation
+    /// freshens it on the importing side — a leftover tail variable means
+    /// "whatever effects the caller allows", not a rigid row (the same
+    /// convention as the catalog's annotation-derived signatures).
+    pub fn sanitize_for_export(&self, owner: Symbol) -> Scheme {
+        let mut sanitizer = ExportSanitizer {
+            owner,
+            minted_eff: false,
+            minted_row: false,
+        };
+        let ty = sanitizer.fold_ty(&self.ty);
+        let mut scheme = Scheme { ty, ..self.clone() };
+        if sanitizer.minted_eff && !scheme.eff_params.contains(&owner) {
+            scheme.eff_params.push(owner);
+        }
+        if sanitizer.minted_row && !scheme.row_params.contains(&owner) {
+            scheme.row_params.push(owner);
+        }
+        scheme
     }
 }
 
@@ -1057,8 +1130,25 @@ fn render_predicate(predicate: &Predicate, param_names: &FxHashMap<Symbol, Strin
     }
 }
 
+pub(crate) fn render_entry(entry: &EffectEntry, param_names: &FxHashMap<Symbol, String>) -> String {
+    if entry.args.is_empty() {
+        return format!("'{}", entry.effect);
+    }
+    let args: Vec<String> = entry
+        .args
+        .iter()
+        .map(|ty| render_ty(ty, param_names))
+        .collect();
+    format!("'{}<{}>", entry.effect, args.join(", "))
+}
+
 fn render_full_effect_row(eff: &EffectRow) -> String {
-    let mut labels: Vec<String> = eff.effects.iter().map(|sym| format!("'{sym}")).collect();
+    let names = FxHashMap::default();
+    let mut labels: Vec<String> = eff
+        .effects
+        .iter()
+        .map(|entry| render_entry(entry, &names))
+        .collect();
     match &eff.tail {
         Some(EffTail::Var(v)) => labels.push(format!("..?e{}", v.0)),
         Some(EffTail::Param(sym)) => labels.push(format!("..{sym}")),
@@ -1073,7 +1163,12 @@ fn render_effect_row(eff: &EffectRow) -> String {
     if eff.effects.is_empty() {
         return String::new();
     }
-    let labels: Vec<String> = eff.effects.iter().map(|sym| format!("'{sym}")).collect();
+    let names = FxHashMap::default();
+    let labels: Vec<String> = eff
+        .effects
+        .iter()
+        .map(|entry| render_entry(entry, &names))
+        .collect();
     format!(" ! <{}>", labels.join(", "))
 }
 
@@ -1218,7 +1313,7 @@ mod traversal_tests {
             ],
             Box::new(Ty::Tuple(vec![Ty::Error])),
             EffectRow {
-                effects: [Symbol::Int].into_iter().collect(),
+                effects: vec![EffectEntry::label(Symbol::Int)],
                 tail: Some(EffTail::Var(EffVar(3))),
             },
         );

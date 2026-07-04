@@ -95,10 +95,7 @@ mod tests {
         let second = typed_modules(&env);
         assert!(!first.is_empty(), "stdlib has modules");
         assert!(
-            first
-                .iter()
-                .zip(&second)
-                .all(|(a, b)| Arc::ptr_eq(a, b)),
+            first.iter().zip(&second).all(|(a, b)| Arc::ptr_eq(a, b)),
             "repeated calls must return the cached artifacts"
         );
     }

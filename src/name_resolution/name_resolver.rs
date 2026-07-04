@@ -138,9 +138,6 @@ pub struct ResolvedNames {
     pub scopes: FxHashMap<NodeID, Scope>,
     pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
-    pub effect_handlers: FxHashMap<NodeID, Symbol>,
-    pub effect_handler_definitions: FxHashMap<NodeID, Symbol>,
-    pub handler_symbols: FxHashSet<Symbol>,
     pub scc_graph: SCCGraph,
     pub unbound_nodes: Vec<NodeID>,
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
@@ -813,71 +810,6 @@ impl NameResolver {
         found
     }
 
-    fn lookup_handler_in_scope(&mut self, effect: Symbol, scope_id: NodeID) -> Option<Symbol> {
-        let handler = self
-            .scopes
-            .get(&scope_id)
-            .and_then(|scope| scope.handlers.get(&effect).copied());
-
-        if let Some((handler, _)) = handler {
-            return Some(handler);
-        }
-
-        let parent = self.scopes.get(&scope_id).and_then(|scope| scope.parent_id);
-        if let Some(parent) = parent
-            && let Some(resolved) = self.lookup_handler_in_scope(effect, parent)
-            && parent != scope_id
-        {
-            let Some(current_scope_binder) = self.nearest_capture_binder_from(Some(scope_id), None)
-            else {
-                return Some(resolved);
-            };
-
-            if current_scope_binder == resolved {
-                return Some(resolved);
-            }
-
-            let resolved_owner = self.nearest_capture_binder_from(Some(parent), None);
-            if resolved_owner == Some(current_scope_binder) {
-                return Some(resolved);
-            }
-
-            if !matches!(
-                resolved,
-                Symbol::DeclaredLocal(..) | Symbol::ParamLocal(..) | Symbol::Global(..)
-            ) {
-                return Some(resolved);
-            }
-
-            let scope = self
-                .scopes
-                .get(&scope_id)
-                .unwrap_or_else(|| unreachable!("scope not found: {scope_id:?}"));
-            let parent_binder =
-                self.nearest_capture_binder_from(Some(parent), Some(current_scope_binder));
-            let capture_level = resolved_owner
-                .and_then(|owner| self.capture_binder_level(owner))
-                .unwrap_or(scope.level);
-
-            let capture = Capture {
-                symbol: resolved,
-                parent_binder,
-                level: capture_level,
-            };
-
-            self.phase
-                .captures
-                .entry(current_scope_binder)
-                .or_default()
-                .insert(capture);
-            self.phase.captured.insert(resolved);
-
-            return Some(resolved);
-        }
-
-        None
-    }
-
     pub(super) fn lookup(
         &mut self,
         name: &Name,
@@ -1365,10 +1297,6 @@ impl NameResolver {
 
                 let handler_sym =
                     Symbol::Synthesized(self.symbols.next_synthesized(self.current_module_id));
-                self.phase
-                    .effect_handler_definitions
-                    .insert(stmt.id, handler_sym);
-                self.phase.handler_symbols.insert(handler_sym);
                 self.phase.symbols_to_node.insert(handler_sym, stmt.id);
                 self.phase.symbol_names.insert(
                     handler_sym,
@@ -1498,14 +1426,6 @@ impl NameResolver {
                 };
 
                 *effect_name = resolved_name;
-
-                if let Ok(effect_sym) = effect_name.symbol()
-                    && let Some(scope_id) = self.current_scope_id
-                    && let Some(handler_sym) = self.lookup_handler_in_scope(effect_sym, scope_id)
-                {
-                    self.phase.effect_handlers.insert(expr.id, handler_sym);
-                    self.track_dependency(handler_sym, expr.id);
-                }
             }
         );
     }

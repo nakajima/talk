@@ -199,6 +199,14 @@ fn effects() {
 }
 
 #[test]
+fn throwsies() {
+    // A handler installed in a caller catches a perform in an unannotated
+    // callee (dynamic extent): the handler prints the payload, then the
+    // rest of the handled scope — and of the performer — never runs.
+    expect_stdout("Throwsies", &["Throwsies.tlk"]);
+}
+
+#[test]
 fn match_bind() {
     // No printing: the assertion is the program value, on both engines.
     let mut driver = lowered(&["MatchBind.tlk"]);

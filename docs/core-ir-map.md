@@ -2,6 +2,17 @@
 
 Status: in progress (2026-07-03)
 
+> **Effects note (2026-07-03, post-C5):** ADR 0011 replaced the M7 abort
+> machinery this map's older entries mention. There is no abort-capable
+> calling convention, no `try_mir_effect_split`, no `HandlerCap` /
+> `handler_caps`, and no statement-spine restriction anymore: functions
+> take capability parameters for the user effects in their rows, the
+> `@handle` capability captures its scope's return continuation as the
+> delimiter (VM: one-shot `MakeCont`/`CallCont`), `continue v` is the
+> capability returning, and a perform's own continuation is the
+> resumption — valid in any expression position. Handler bodies still
+> lower from scaffold blocks exactly as described below.
+
 Strategy: **HIR becomes Core in place.** There is no parallel tree and no
 big-bang `build_core` — each step removes or splits one HIR form via
 type-directed elaboration in `hir/build.rs`, then deletes the dead arms in

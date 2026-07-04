@@ -96,10 +96,11 @@ pub mod tests {
     }
 
     #[test]
-    fn generic_effect_handlers_are_diagnosed() {
-        // The checker accepts generic effects (instantiated per perform);
-        // the backend needs per-instantiation capabilities and rejects
-        // them loudly until it has them.
+    fn generic_effect_handlers_lower() {
+        // A generic effect's handler: the capability materializes from the
+        // handler template at the perform's instantiation
+        // (docs/generic-effects-plan.md), so this runs instead of hitting
+        // the old "not yet supported" fence.
         let driver = Driver::new(
             vec![Source::from(
                 "effect 'state<T>(value: T) -> T\n@handle 'state { v in\n\tcontinue v\n}\nlet r = 'state(42)\nprint(r)",
@@ -117,16 +118,14 @@ pub mod tests {
             "type errors: {:?}",
             typed.diagnostics()
         );
-        let lowered = typed.lower();
+        let mut lowered = typed.lower();
         assert!(
-            lowered
-                .phase
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("generic effect")),
-            "expected a generic-effect diagnostic, got {:?}",
+            lowered.phase.diagnostics.is_empty(),
+            "lowering: {:?}",
             lowered.phase.diagnostics
         );
+        let (_, out) = lowered.eval_with_output().expect("evaluator");
+        assert_eq!(out, "42\n");
     }
 
     #[test]

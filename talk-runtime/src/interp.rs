@@ -40,6 +40,11 @@ pub enum Value {
     /// A `'heap` object handle: index into the machine's object arena.
     /// Copies alias; the region, not the handle, owns the storage.
     Object(u32),
+    /// A reified one-shot return continuation (`MakeCont`): the index and
+    /// identity of the frame it returns from. `CallCont` unwinds to that
+    /// frame and returns from it; the identity check makes an escaped
+    /// continuation a clean trap instead of a smashed stack.
+    Cont(u32, u64),
 }
 
 struct Frame {
@@ -51,6 +56,9 @@ struct Frame {
     env: Rc<Vec<Value>>,
     /// Register in the *caller's* frame that receives this frame's Ret.
     dest: u16,
+    /// This frame's identity for reified continuations: unique across the
+    /// whole run, so a `Cont` outliving its frame can be detected.
+    id: u64,
 }
 
 /// Far above any reasonable program, far below host memory: frames are
@@ -79,13 +87,16 @@ pub fn run_displayed(
 fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Machine<'io>), String> {
     let entry = chunk(module, module.entry)?;
     let empty_env: Rc<Vec<Value>> = Rc::new(vec![]);
+    let mut next_frame_id: u64 = 0;
     let mut frames = vec![Frame {
         chunk: module.entry,
         pc: 0,
         regs: vec![Value::Void; entry.n_regs as usize],
         env: empty_env.clone(),
         dest: 0,
+        id: next_frame_id,
     }];
+    next_frame_id += 1;
     let mut machine = Machine {
         slots: vec![],
         mem: module.statics.clone(),
@@ -125,6 +136,11 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                 regs,
                 env,
                 dest: FINALIZER_DEST,
+                id: {
+                    let id = next_frame_id;
+                    next_frame_id += 1;
+                    id
+                },
             });
             finalizer_frames += 1;
             continue;
@@ -167,6 +183,11 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                     regs,
                     env: empty_env.clone(),
                     dest,
+                    id: {
+                        let id = next_frame_id;
+                        next_frame_id += 1;
+                        id
+                    },
                 });
             }
             Insn::CallIndirect {
@@ -201,6 +222,11 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                     regs,
                     env,
                     dest,
+                    id: {
+                        let id = next_frame_id;
+                        next_frame_id += 1;
+                        id
+                    },
                 });
             }
             Insn::Ret { src } => {
@@ -224,6 +250,41 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                     .get(message as usize)
                     .cloned()
                     .unwrap_or_else(|| "vm: trap".into()));
+            }
+            Insn::MakeCont { dest } => {
+                let id = frames[frame_index].id;
+                frames[frame_index].regs[dest as usize] = Value::Cont(frame_index as u32, id);
+            }
+            Insn::CallCont { callee, src } => {
+                let cont = frames[frame_index].regs[callee as usize].clone();
+                let value = frames[frame_index].regs[src as usize].clone();
+                let Value::Cont(target, id) = cont else {
+                    return Err("vm: continuation call on a non-continuation".into());
+                };
+                let target = target as usize;
+                if frames.get(target).is_none_or(|frame| frame.id != id) {
+                    return Err(
+                        "vm: continuation is no longer live (its scope already exited)".into(),
+                    );
+                }
+                // Unwind to the continuation's frame, then return from it
+                // — one-shot delimited abort (Hieb, Dybvig & Bruggeman,
+                // PLDI 1990's stack slice, restricted to downward use).
+                while frames.len() > target + 1 {
+                    let discarded = frames.pop().expect("frames above target");
+                    if discarded.dest == FINALIZER_DEST {
+                        finalizer_frames = finalizer_frames.saturating_sub(1);
+                    }
+                }
+                let dest = frames[target].dest;
+                frames.pop();
+                match frames.last_mut() {
+                    Some(_) if dest == FINALIZER_DEST => {
+                        finalizer_frames = finalizer_frames.saturating_sub(1);
+                    }
+                    Some(caller) => caller.regs[dest as usize] = value,
+                    None => return Ok((value, machine)),
+                }
             }
             local => exec_local(module, &mut frames[frame_index], &mut machine, local)?,
         }
@@ -326,6 +387,7 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> Result<
         Value::Existential(_, payload, _) => render_value(machine, names, payload),
         Value::Closure(..) => Ok("<func>".to_string()),
         Value::Cell(_) => Ok("<cell>".to_string()),
+        Value::Cont(..) => Ok("<continuation>".to_string()),
         // Shallow: structural rendering would cycle through the graph.
         Value::Object(object) => Ok(format!("<object #{object}>")),
     }
@@ -1132,7 +1194,12 @@ fn exec_local(
                 .unwrap_or(default);
             frame.pc = target as usize;
         }
-        Insn::Call { .. } | Insn::CallIndirect { .. } | Insn::Ret { .. } | Insn::Trap { .. } => {
+        Insn::Call { .. }
+        | Insn::CallIndirect { .. }
+        | Insn::Ret { .. }
+        | Insn::Trap { .. }
+        | Insn::MakeCont { .. }
+        | Insn::CallCont { .. } => {
             return Err("vm: non-local instruction in exec_local".into());
         }
     }
@@ -1187,7 +1254,8 @@ fn scan_handles(value: &Value, out: &mut Vec<u32>) {
         | Value::Byte(_)
         | Value::Void
         | Value::Ptr(_)
-        | Value::Cell(_) => {}
+        | Value::Cell(_)
+        | Value::Cont(..) => {}
     }
 }
 

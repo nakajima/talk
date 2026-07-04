@@ -10,6 +10,28 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             protocol_defaults,
         } = collected;
 
+        // The closed base of every top-level ambient row: the core
+        // effects (the runtime's implicit handler). Top-level `@handle`s
+        // widen it positionally — a computation sees only the handlers
+        // installed before it in source order, matching what the runtime
+        // will actually have installed when it runs.
+        self.ambient_effects = self
+            .catalog
+            .effects
+            .keys()
+            .filter(|symbol| symbol.external_module_id() == Some(ModuleId::Core))
+            .copied()
+            .collect();
+        self.handler_positions = stmts
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                StmtKind::Handling { effect_name, .. } => {
+                    effect_name.symbol().ok().map(|effect| (stmt.id, effect))
+                }
+                _ => None,
+            })
+            .collect();
+
         for binders in binding_groups(&decls) {
             self.check_group(&binders, &decls);
         }
@@ -23,12 +45,17 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         }
 
         self.level = GROUP_LEVEL;
-        let top_eff = EffectRow::open(self.store.fresh_eff(OUTER_LEVEL, NodeID::SYNTHESIZED));
         let top_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
-        let top_ctx = Ctx::root().with_ret_eff(top_ret.clone(), top_eff);
         for decl in destructuring_lets {
-            self.body().check_local_decl(decl, &top_ctx);
+            let eff = self.ambient_row_before(decl.id);
+            let ctx = Ctx::root().with_ret_eff(top_ret.clone(), eff);
+            self.body().check_local_decl(decl, &ctx);
         }
+        // Statements check under a progressively narrowed extent: each
+        // `@handle` opens a fresh ambient row for the statements after it,
+        // filtered into the previous one — the same label-scoped boundary
+        // the block walkers give it inside functions.
+        let mut top_ctx = Ctx::root().with_ret_eff(top_ret.clone(), self.closed_base());
         let mut last = StmtValue::Unit;
         let mut top_level_handler: Option<NodeID> = None;
         for stmt in stmts {
@@ -36,6 +63,18 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 top_level_handler = Some(stmt.id);
             }
             last = self.body().infer_stmt(stmt, &top_ctx);
+            if let StmtKind::Handling { effect_name, .. } = &stmt.kind
+                && let Ok(effect) = effect_name.symbol()
+            {
+                let inner = EffectRow::open(self.store.fresh_eff(OUTER_LEVEL, stmt.id));
+                self.wanteds.push(Constraint::HandleEffect {
+                    inner: inner.clone(),
+                    effects: vec![effect],
+                    outer: top_ctx.eff.clone(),
+                    origin: CtOrigin::new(stmt.id, CtReason::Effect),
+                });
+                top_ctx = top_ctx.with_ret_eff(top_ret.clone(), inner);
+            }
         }
         // A top-level handler can abort the rest of the program, so the
         // top-level scope's result (`top_ret`, which the Handling arm
@@ -56,6 +95,65 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         let residuals = self.run_solver(wanteds);
         self.report_unresolved_residuals(residuals);
         self.solve_deferred();
+    }
+
+    /// The closed top-level base row: the effects the runtime handles
+    /// implicitly, and nothing else. An occurrence spilling into it is an
+    /// `UnhandledEffect` at the node where it tried to flow in.
+    pub(super) fn closed_base(&self) -> EffectRow {
+        EffectRow::new(
+            self.ambient_effects
+                .iter()
+                .map(|&effect| EffectEntry::label(effect))
+                .collect(),
+            None,
+        )
+    }
+
+    /// The ambient row for top-level computation positioned at `pos`: a
+    /// fresh row whose occurrences of the labels handled by `@handle`s
+    /// BEFORE that point are discharged, the rest spilling into the
+    /// closed base — a `let` running before a handler cannot use it (its
+    /// rhs runs in source order at runtime).
+    pub(super) fn ambient_row_before(&mut self, pos: NodeID) -> EffectRow {
+        let mut labels: Vec<Symbol> = self
+            .handler_positions
+            .iter()
+            .filter(|(id, _)| *id < pos)
+            .map(|(_, effect)| *effect)
+            .collect();
+        labels.sort();
+        labels.dedup();
+        self.filtered_ambient(labels, pos)
+    }
+
+    /// The position-blind ambient row (every top-level handler): for
+    /// bodies with no top-level execution order of their own (extend
+    /// members, protocol defaults).
+    pub(super) fn ambient_row(&mut self) -> EffectRow {
+        let mut labels: Vec<Symbol> = self
+            .handler_positions
+            .iter()
+            .map(|(_, effect)| *effect)
+            .collect();
+        labels.sort();
+        labels.dedup();
+        self.filtered_ambient(labels, NodeID::SYNTHESIZED)
+    }
+
+    fn filtered_ambient(&mut self, labels: Vec<Symbol>, node: NodeID) -> EffectRow {
+        let base = self.closed_base();
+        if labels.is_empty() {
+            return base;
+        }
+        let inner = EffectRow::open(self.store.fresh_eff(OUTER_LEVEL, node));
+        self.wanteds.push(Constraint::HandleEffect {
+            inner: inner.clone(),
+            effects: labels,
+            outer: base,
+            origin: CtOrigin::new(node, CtReason::Effect),
+        });
+        inner
     }
 
     pub(super) fn run_solver(&mut self, wanteds: Vec<Constraint>) -> Vec<Constraint> {
@@ -149,6 +247,20 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         .errors
                         .push((TypeError::Mismatch { expected, found }, origin.node));
                 }
+                Constraint::ApplyBorrow {
+                    expected_perm,
+                    expected_inner,
+                    found,
+                    origin,
+                } => {
+                    let expected = self
+                        .store
+                        .render(&Ty::Borrow(expected_perm, Box::new(expected_inner)));
+                    let found = self.store.render(&found);
+                    self.diagnostics
+                        .errors
+                        .push((TypeError::Mismatch { expected, found }, origin.node));
+                }
                 _ => {}
             }
         }
@@ -203,9 +315,21 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         }
 
         // The ambient effect row for top-level right-hand-side computation
-        // is not part of any binder's type: it lives at the outer level so
-        // it can never be quantified.
-        let group_eff = EffectRow::open(self.store.fresh_eff(OUTER_LEVEL, NodeID::SYNTHESIZED));
+        // is not part of any binder's type: it is the closed top-level
+        // set as of the group's earliest binder — a `let` running before
+        // a top-level `@handle` cannot use it (its rhs runs in source
+        // order at runtime; group checking is otherwise order-blind).
+        let group_pos = binders
+            .iter()
+            .filter_map(|binder| match &decls[binder] {
+                TopEntry::Let { decl, .. } => Some(decl.id),
+                _ => None,
+            })
+            .min();
+        let group_eff = match group_pos {
+            Some(pos) => self.ambient_row_before(pos),
+            None => self.closed_base(),
+        };
         let group_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
         let group_ctx = Ctx::root().with_ret_eff(group_ret, group_eff);
 
@@ -317,11 +441,11 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 .collect();
             let ty = self.mono[&binder].clone();
             if let Ty::Func(_, _, eff) = self.store.zonk_ty(&ty) {
-                for effect in &eff.effects {
-                    if !declared.contains(effect) {
+                for entry in &eff.effects {
+                    if !declared.contains(&entry.effect) {
                         self.diagnostics.errors.push((
                             TypeError::UndeclaredEffect {
-                                effect: effect.to_string(),
+                                effect: entry.effect.to_string(),
                             },
                             func.id,
                         ));
@@ -408,6 +532,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         self.deferred.push(residual)
                     }
                 }
+                Constraint::ApplyBorrow { .. } => self.deferred.push(residual),
                 _ => {}
             }
         }

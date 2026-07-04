@@ -683,10 +683,12 @@ impl Driver<Typed> {
             .schemes
             .into_iter()
             .filter(|(symbol, _)| own(symbol))
-            .map(|(symbol, scheme)| {
-                let ty = scheme.ty.sanitize_for_export(symbol);
-                (symbol, crate::types::ty::Scheme { ty, ..scheme })
-            })
+            // Scheme-level sanitize: a leftover row/effect tail variable
+            // becomes an owner-keyed param AND registers in
+            // eff_params/row_params, so instantiation freshens it on the
+            // importing side (a rigid tail would reject every ambient row
+            // it meets — the http.run regression).
+            .map(|(symbol, scheme)| (symbol, scheme.sanitize_for_export(symbol)))
             .collect();
         let symbol_names = self
             .phase

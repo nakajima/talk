@@ -102,6 +102,12 @@ pub enum TypeError {
     UndeclaredEffect {
         effect: String,
     },
+    /// A user-declared effect flowed into a closed ambient row: nothing
+    /// between the perform and the top level installs a handler for it
+    /// (the runtime implicitly handles only the core effects).
+    UnhandledEffect {
+        effect: String,
+    },
     /// Some value of the scrutinee's type reaches no arm (the usefulness
     /// check of Maranget, *Warnings for pattern matching*, JFP 2007 —
     /// see src/types/exhaustiveness.rs). Carries example values rendered
@@ -275,6 +281,12 @@ impl Display for TypeError {
                 write!(
                     f,
                     "Performs '{effect}, which the function's effect annotation does not declare"
+                )
+            }
+            TypeError::UnhandledEffect { effect } => {
+                write!(
+                    f,
+                    "No handler for '{effect}: the effect reaches the top level unhandled"
                 )
             }
             TypeError::NonExhaustiveMatch { missing } => {

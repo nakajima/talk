@@ -129,7 +129,7 @@ impl<'s> Generalizer<'s> {
                 self.store.bind(
                     v.0,
                     VarValue::Eff(EffectRow {
-                        effects: BTreeSet::new(),
+                        effects: vec![],
                         tail: Some(EffTail::Param(param)),
                     }),
                 );
@@ -144,10 +144,15 @@ impl<'s> Generalizer<'s> {
             }
             other => other,
         };
-        EffectRow {
-            effects: zonked.effects,
-            tail,
-        }
+        let effects = zonked
+            .effects
+            .iter()
+            .map(|entry| EffectEntry {
+                effect: entry.effect,
+                args: entry.args.iter().map(|ty| self.quantify_ty(ty)).collect(),
+            })
+            .collect();
+        EffectRow::new(effects, tail)
     }
 }
 

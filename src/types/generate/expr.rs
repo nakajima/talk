@@ -203,6 +203,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.emit_eq(expected_inner, (*found_inner).clone(), node, reason);
             }
             Ty::Borrow(..) => self.emit_eq(expected, found, node, reason),
+            Ty::Var(_) if reason == CtReason::Apply => {
+                self.wanteds.push(Constraint::ApplyBorrow {
+                    expected_perm: expected_kind,
+                    expected_inner,
+                    found,
+                    origin: CtOrigin::new(node, reason),
+                });
+            }
             _ => self.emit_eq(expected_inner, found, node, reason),
         }
     }
@@ -518,7 +526,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 Ty::Record(Row::closed(fields))
             }
 
-            ExprKind::Variable(name) => self.lookup(name, expr.id, ctx),
+            ExprKind::Variable(name) => self.lookup(name, expr.id),
 
             ExprKind::Block(block) => self.infer_block_value(block, ctx),
 
@@ -588,7 +596,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     // type for it (it has no value type, like a type name used as a
                     // value, so `Ty::Error`). Keeps `node_types` total over expressions.
                     self.artifacts.node_types.insert(receiver.id, Ty::Error);
-                    return match self.resolve_type_member(symbol, label, expr.id, ctx) {
+                    return match self.resolve_type_member(symbol, label, expr.id) {
                         Some(ty) => ty,
                         None => {
                             self.diagnostics.errors.push((
@@ -632,8 +640,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 // Performing an operation: arguments check against the
                 // declared signature, the effect joins the ambient row
                 // (Plotkin & Pretnar 2009 operations; row growth per Koka).
-                // Lexically routed handlers discharge here; closed effect
-                // annotations are checked after the group solve.
+                // Discharge happens at the handler's extent — a `@handle`
+                // widening the ambient row for the rest of its block — not
+                // at the perform site; closed effect annotations are
+                // checked after the group solve.
                 let Ok(symbol) = effect_name.symbol() else {
                     return Ty::Error;
                 };
@@ -687,33 +697,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         expr.id,
                     ));
                 }
-                // A perform the resolver routed to a lexical handler is
-                // discharged right there: it never escapes into the
-                // function's latent row (handler discharge in the row-typed
-                // algebraic-effects reading). The discharge is still
-                // recorded in the capability tables: the lowerer needs to
-                // know which functions can abort, and the row no longer
-                // says (effects as capabilities — Brachthäuser et al.,
-                // OOPSLA 2020).
-                match self.resolved.effect_handlers.get(&expr.id) {
-                    Some(&handler) => {
-                        if let Some(binder) = ctx.binder {
-                            self.artifacts
-                                .performs_into
-                                .entry(binder)
-                                .or_default()
-                                .insert(handler);
-                        }
-                    }
-                    None => {
-                        let tail = self.store.fresh_eff(self.level, expr.id);
-                        let performed = EffectRow {
-                            effects: [symbol].into(),
-                            tail: Some(EffTail::Var(tail)),
-                        };
-                        self.emit_eff_eq(performed, ctx.eff.clone(), expr.id);
-                    }
-                }
+                let tail = self.store.fresh_eff(self.level, expr.id);
+                let entry = EffectEntry {
+                    effect: symbol,
+                    args: sig.generics.iter().map(|g| tys[g].clone()).collect(),
+                };
+                let performed = EffectRow {
+                    effects: vec![entry],
+                    tail: Some(EffTail::Var(tail)),
+                };
+                self.emit_eff_eq(performed, ctx.eff.clone(), expr.id);
                 instantiate(&sig.ret)
             }
             ExprKind::InlineIR(instruction) => {

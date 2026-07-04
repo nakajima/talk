@@ -320,6 +320,15 @@ impl<'a> ChunkBuilder<'a> {
                         self.code.push(Insn::Ret { src });
                         Ok(())
                     }
+                    // A computed callee applied to a bare (non-tuple)
+                    // value: a continuation value — an effect handler's
+                    // captured delimiter. Unwind to its frame and deliver.
+                    _ if !matches!(self.p.expr(a).kind, ExprKind::Tuple(_)) => {
+                        let callee = self.eval(f)?;
+                        let src = self.eval(a)?;
+                        self.code.push(Insn::CallCont { callee, src });
+                        Ok(())
+                    }
                     // A computed callee: a closure value in a register
                     // (CallIndirect — retires the M2 trap).
                     _ => {
@@ -485,12 +494,16 @@ impl<'a> ChunkBuilder<'a> {
             return Ok(dest);
         }
         // The chunk function itself: materialize its parameter tuple (the
-        // closure body extracts params from it; its ret-continuation slot
-        // is deliberately absent — capturing a return continuation is M9).
+        // closure body extracts params from it), with the ret-continuation
+        // slot reified as a one-shot continuation value at its usual index
+        // — an effect handler's delimiter (the minimal M9 slice).
         if label == self.func {
+            let cont = self.fresh();
+            self.code.push(Insn::MakeCont { dest: cont });
             let args_start = self.module.arg_pool.len() as u32;
-            let args_len = self.arity;
+            let args_len = self.arity + 1;
             self.module.arg_pool.extend(0..self.arity);
+            self.module.arg_pool.push(cont);
             let dest = self.fresh();
             self.code.push(Insn::TupleNew {
                 dest,

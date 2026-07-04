@@ -1,0 +1,19 @@
+effect 'ask<T>(value: T) -> T
+
+func probe<T>(x: T) -> T {
+	'ask(x)
+}
+
+func run() -> Int {
+	@handle 'ask { v in continue v }
+	let n = probe(21)
+	let b = probe(true)
+	let direct = 'ask(n + n)
+	if b {
+		direct
+	} else {
+		0
+	}
+}
+
+print(run())

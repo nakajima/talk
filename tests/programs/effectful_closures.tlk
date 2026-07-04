@@ -1,0 +1,26 @@
+effect 'boost() -> Int
+
+func apply_twice(fn: () -> Int) -> Int {
+	fn() + fn()
+}
+
+func closure_case() -> Int {
+	@handle 'boost { continue 10 }
+	let doubler = func() -> Int {
+		'boost() * 2
+	}
+	apply_twice(doubler)
+}
+
+func loud() -> Int {
+	'boost() + 1
+}
+
+func named_case() -> Int {
+	@handle 'boost { continue 5 }
+	let f = loud
+	f()
+}
+
+print(closure_case())
+print(named_case())

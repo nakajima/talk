@@ -21,7 +21,7 @@
 use crate::label::Label;
 use crate::name_resolution::scc_graph::Level;
 use crate::node_id::NodeID;
-use crate::types::ty::{EffectRow, Predicate, Ty};
+use crate::types::ty::{EffectRow, Perm, Predicate, Ty};
 
 /// Why a constraint exists — the blame half of GHC's CtOrigin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +96,16 @@ pub enum Constraint {
         member: Ty,
         origin: CtOrigin,
     },
+    /// Application-position auto-borrow whose argument type is not known yet.
+    /// If `found` later resolves to a borrow, it is checked directly against
+    /// the expected borrow; if it remains owned, it defaults to the usual
+    /// owned-argument auto-borrow.
+    ApplyBorrow {
+        expected_perm: Perm,
+        expected_inner: Ty,
+        found: Ty,
+        origin: CtOrigin,
+    },
     /// The type a match's patterns check against: `scrutinee` with a
     /// top-level borrow stripped — patterns match through borrows
     /// (the runtime erases them; binders alias the borrowed payloads).
@@ -104,6 +114,18 @@ pub enum Constraint {
     PatternView {
         scrutinee: Ty,
         view: Ty,
+        origin: CtOrigin,
+    },
+    /// A handler extent's row boundary (label-scoped elimination —
+    /// docs/generic-effects-plan.md): every occurrence of `effects`'
+    /// labels in `inner` is discharged by the covering `@handle`s; the
+    /// remaining occurrences and `inner`'s residual tail flow to `outer`.
+    /// Processed after the group's solve quiesces, when the extent's row
+    /// content has surfaced.
+    HandleEffect {
+        inner: EffectRow,
+        effects: Vec<crate::name_resolution::symbol::Symbol>,
+        outer: EffectRow,
         origin: CtOrigin,
     },
     Implic(Box<Implication>),

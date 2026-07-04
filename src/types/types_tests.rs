@@ -1075,6 +1075,60 @@ pub mod tests {
                 true,
                 false,
             ),
+            (
+                "effects::call_under_handler_discharges_callee_row",
+                "\n            effect 'e() -> Never\n\n            func f() {\n                'e()\n            }\n\n            func g() '[] {\n                @handle 'e { () }\n                f()\n            }\n        ",
+                true,
+                false,
+            ),
+            (
+                "effects::perform_before_handler_escapes",
+                "\n            effect 'e() -> Never\n\n            func g() '[] {\n                'e()\n                @handle 'e { () }\n            }\n        ",
+                false,
+                false,
+            ),
+            (
+                "effects::unhandled_user_effect_at_top_level_errors",
+                "\n            effect 'e() -> Never\n            'e()\n        ",
+                false,
+                false,
+            ),
+            (
+                "effects::unhandled_effect_through_call_errors",
+                "\n            effect 'e() -> Never\n\n            func f() {\n                'e()\n            }\n\n            f()\n        ",
+                false,
+                false,
+            ),
+            (
+                "effects::top_level_call_before_handler_errors",
+                "\n            effect 'e() -> Never\n\n            func f() {\n                'e()\n            }\n\n            f()\n            @handle 'e { () }\n        ",
+                false,
+                false,
+            ),
+            (
+                "effects::top_level_let_before_handler_errors",
+                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            let x = f()\n            @handle 'e { continue 1 }\n            x\n        ",
+                false,
+                false,
+            ),
+            (
+                "effects::one_handler_covers_two_instantiations",
+                "\n            effect 'state<T>(value: T) -> T\n\n            func g() '[] {\n                @handle 'state { v in continue v }\n                'state(1)\n                'state(true)\n                ()\n            }\n        ",
+                true,
+                false,
+            ),
+            (
+                "effects::inner_handler_absorbs_all_occurrences",
+                "\n            effect 'e() -> Never\n\n            func leaf() {\n                'e()\n            }\n\n            func mid() '[] {\n                @handle 'e { () }\n                leaf()\n            }\n\n            func top() '[] {\n                @handle 'e { () }\n                mid()\n            }\n        ",
+                true,
+                false,
+            ),
+            (
+                "effects::top_level_let_after_handler_is_clean",
+                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            @handle 'e { continue 1 }\n            let x = f()\n            x\n        ",
+                true,
+                false,
+            ),
         ];
         let mut failures = String::new();
         for (name, source, expect_clean, with_core) in cases {
@@ -1907,6 +1961,31 @@ pub mod tests {
     }
 
     #[test]
+    fn for_loop_element_can_satisfy_borrow_callback() {
+        let t = Driver::new(
+            vec![Source::from(
+                "enum Entry {\n\tcase doc(String)\n}\nfunc each(entries: Array<Entry>, fn: (&Entry) -> ()) {\n\tfor entry in entries {\n\t\tfn(entry)\n\t}\n}",
+            )],
+            DriverConfig::new("TypesTest"),
+        )
+        .parse()
+        .expect("parse failed")
+        .resolve_names()
+        .expect("name resolution failed")
+        .type_check();
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn delayed_auto_borrow_defaults_unresolved_argument_to_owned() {
+        let t = check(
+            "// no-core\nstruct S {}\nfunc take(s: &S) {}\nfunc f(x) -> S {\n\ttake(x)\n\tx\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "f"), "(S) -> S");
+    }
+
+    #[test]
     fn borrowed_return_does_not_satisfy_owned_argument() {
         let t = check(
             "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(s: String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = take(id(s))",
@@ -2091,67 +2170,108 @@ pub mod tests {
     // ----- Milestone 5: effects -----------------------------------------
 
     #[test]
-    fn lexically_handled_effects_do_not_escape() {
-        // The resolver routes each perform to its lexical handler; a handled
-        // perform never reaches the function's latent row (the row-typed
-        // algebraic-effects reading).
+    fn performed_effects_stay_in_the_row_until_a_handler_extent() {
+        // Dynamic-extent semantics: a perform always joins the function's
+        // latent row; discharge happens where a call meets a handler's
+        // extent (here, the prescanned top-level `@handle`), not at the
+        // perform site.
         let t = check(
             "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nsafe()",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "safe"), "() -> Int");
+        let safe = ty_of(&t, "safe");
+        assert!(
+            safe.contains("'oops"),
+            "safe's row carries the effect it performs: {safe}"
+        );
     }
 
     #[test]
-    fn capability_tables_record_discharged_performs() {
-        // The discharge erases the effect from the row (the test above),
-        // so the lowerer's abort analysis reads the capability tables
-        // instead: performs_into written at the discharge, binder_refs at
-        // name lookup, handler payload types zonked from what the perform
-        // sites taught the unannotated parameter.
+    fn effect_rows_propagate_through_callers_and_payloads_zonk() {
+        // The effect propagates through `outer`'s row (it calls `safe`
+        // with no handler of its own), and the perform site teaches the
+        // unannotated effect parameter its type — read from the finalized
+        // catalog signature, which the lowerer builds capability types
+        // from.
         let t = check(
             "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}\nouter()",
         );
         assert_clean(&t);
-        let resolved = &t.phase.resolved_names;
+        let safe = ty_of(&t, "safe");
+        assert!(safe.contains("'oops"), "safe performs 'oops: {safe}");
+        let outer = ty_of(&t, "outer");
+        assert!(
+            outer.contains("'oops"),
+            "outer's row inherits the callee's unhandled effect: {outer}"
+        );
         let types = &t.phase.types;
-        let symbol_of = |name: &str| {
-            let mut candidates: Vec<_> = resolved
-                .symbol_names
-                .iter()
-                .filter(|(sym, n)| n.as_str() == name && types.schemes.contains_key(sym))
-                .map(|(sym, _)| *sym)
-                .collect();
-            candidates.sort();
-            *candidates.first().expect(name)
-        };
-        let handler = *resolved
-            .handler_symbols
+        let (_, sig) = types
+            .catalog
+            .effects
             .iter()
             .next()
-            .expect("a handler symbol");
-
-        let safe = symbol_of("safe");
-        assert!(
-            types.performs_into[&safe].contains(&handler),
-            "safe's routed perform should be recorded: {:?}",
-            types.performs_into
-        );
-        let outer = symbol_of("outer");
-        assert!(
-            types.binder_refs[&outer].contains(&safe),
-            "outer's reference to safe should be recorded: {:?}",
-            types.binder_refs.get(&outer)
-        );
-        let payloads = &types.handler_payload_tys[&handler];
-        assert_eq!(payloads.len(), 1);
+            .expect("the declared effect");
         assert!(
             matches!(
-                &payloads[0],
+                &sig.params[0],
                 crate::types::ty::Ty::Nominal(sym, _)
                     if *sym == crate::name_resolution::symbol::Symbol::Int
             ),
-            "the perform site teaches the unannotated parameter Int: {payloads:?}"
+            "the perform site teaches the unannotated parameter Int: {:?}",
+            sig.params
+        );
+    }
+
+    #[test]
+    fn generic_effect_row_carries_instantiation() {
+        // Effect rows carry the instantiation, not just the label
+        // (docs/generic-effects-plan.md): a perform of a generic effect
+        // puts the concrete arguments in the row entry.
+        let t =
+            check("// no-core\neffect 'state<T>(value: T) -> T\nfunc f() {\n\t'state(42)\n\t()\n}");
+        assert_clean(&t);
+        let f = ty_of(&t, "f");
+        assert!(
+            f.contains("'state<Int>"),
+            "the row entry carries the instantiation: {f}"
+        );
+    }
+
+    #[test]
+    fn two_instantiations_coexist_in_a_row() {
+        // Duplicate labels at different instantiations coexist (scoped
+        // labels): one function may perform 'state<Int> and
+        // 'state<Bool> with no handler in scope.
+        let t = check(
+            "// no-core\neffect 'state<T>(value: T) -> T\nfunc f() {\n\t'state(42)\n\t'state(true)\n\t()\n}",
+        );
+        assert_clean(&t);
+        let f = ty_of(&t, "f");
+        assert!(
+            f.contains("'state<Bool>") && f.contains("'state<Int>"),
+            "both instantiations ride the row: {f}"
+        );
+    }
+
+    #[test]
+    fn dynamic_extent_handler_discharges_at_call_site() {
+        // A handler installed in a caller covers a perform in an
+        // unannotated callee: the effect stays in the callee's inferred
+        // row and is discharged where the call meets the handler's
+        // extent, never escaping the caller.
+        let t = check(
+            "// no-core\neffect 'throw(ret) -> ()\nfunc this_is_fine() {\n\t@handle 'throw { err in () }\n\tthis_is_not_fine()\n}\nfunc this_is_not_fine() {\n\t'throw(1)\n\t()\n}\nthis_is_fine()",
+        );
+        assert_clean(&t);
+        let callee = ty_of(&t, "this_is_not_fine");
+        assert!(
+            callee.contains("'throw"),
+            "the callee's inferred row carries the effect: {callee}"
+        );
+        let caller = ty_of(&t, "this_is_fine");
+        assert!(
+            !caller.contains("'throw"),
+            "the caller discharges the effect at its handler: {caller}"
         );
     }
 

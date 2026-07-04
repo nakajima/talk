@@ -1,0 +1,22 @@
+effect 'ask() -> Int
+effect 'quit(message: String) -> Never
+
+func work(n: Int) -> Int {
+	let bonus = 'ask()
+	if n > 9 {
+		'quit("too big")
+	}
+	n + bonus
+}
+
+func attempt(n: Int) -> Int {
+	@handle 'quit { message in
+		print(message)
+		0 - 1
+	}
+	@handle 'ask { continue 5 }
+	work(n)
+}
+
+print(attempt(3))
+print(attempt(30))

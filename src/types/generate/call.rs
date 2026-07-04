@@ -150,7 +150,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .insert(callee.id, MemberResolution::Direct(init));
 
         let substitution = param_subst(&info.params, &theta);
-        let signature = self.lookup_symbol_ty(init, expr.id, ctx).substitute(
+        let signature = self.lookup_symbol_ty(init, expr.id).substitute(
             &substitution,
             &Default::default(),
             &Default::default(),
@@ -249,7 +249,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         symbol: Symbol,
         label: &Label,
         node: NodeID,
-        ctx: &Ctx,
     ) -> Option<Ty> {
         let label_str = label.to_string();
 
@@ -332,7 +331,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.record_instantiation(node, &info.params, &theta);
             }
             let substitution = param_subst(&info.params, &theta);
-            let signature = self.lookup_symbol_ty(method, node, ctx).substitute(
+            let signature = self.lookup_symbol_ty(method, node).substitute(
                 &substitution,
                 &Default::default(),
                 &Default::default(),

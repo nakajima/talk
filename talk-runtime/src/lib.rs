@@ -256,6 +256,21 @@ pub enum Insn {
         dest: u16,
         src: u16,
     },
+    /// Reify the current frame's return continuation as a one-shot
+    /// first-class value (the minimal M9 slice: effect-handler
+    /// delimiters). Invoking it behaves as if this frame executed `Ret`.
+    MakeCont {
+        dest: u16,
+    },
+    /// Invoke a reified continuation with a value: unwind every frame
+    /// above the continuation's frame, then return from that frame with
+    /// the value. Traps if the frame is gone — continuations are
+    /// one-shot, and a handler that escapes its scope finds a dead
+    /// delimiter.
+    CallCont {
+        callee: u16,
+        src: u16,
+    },
     Trap {
         message: u32,
     },
@@ -501,6 +516,8 @@ impl Module {
             Insn::ObjectSet { obj, src, index } => format!("object_set r{obj}[{index}] <- r{src}"),
             Insn::RegionAcquire { dest, src } => format!("region_acquire r{dest} <- r{src}"),
             Insn::RegionRelease { dest, src } => format!("region_release r{dest} <- r{src}"),
+            Insn::MakeCont { dest } => format!("make_cont r{dest}"),
+            Insn::CallCont { callee, src } => format!("call_cont r{callee} <- r{src}"),
         }
     }
 }
