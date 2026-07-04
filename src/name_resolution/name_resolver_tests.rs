@@ -178,6 +178,79 @@ pub mod tests {
         );
     }
 
+    /// The ids of every resolved `Variable` named `needle`, in source
+    /// order, scraped from the AST's debug rendering.
+    fn local_variable_uses(rendered: &str, needle: &str) -> Vec<u32> {
+        let pattern = "Variable(Resolved(@DeclaredLocal(DeclaredLocalId(";
+        rendered
+            .match_indices(pattern)
+            .filter_map(|(at, _)| {
+                let rest = &rendered[at + pattern.len()..];
+                let close = rest.find(')')?;
+                let id = rest[..close].parse::<u32>().ok()?;
+                let suffix = &rest[close..];
+                suffix
+                    .starts_with(&format!(")), \"{needle}\""))
+                    .then_some(id)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sibling_blocks_declare_same_named_lets_independently() {
+        // Each branch's `y` is its own binding; the uses must resolve to
+        // their own block's declaration, not whichever declared last.
+        let (ast, _) = resolve(
+            "func f(a: Bool, x: Int) -> Int {\n\tlet out = 0\n\tif a {\n\t\tlet y = x\n\t\tout = y\n\t}\n\tif a {\n\t\tlet y = x\n\t\tout = y\n\t}\n\tout\n}",
+        );
+        let rendered = format!("{ast:?}");
+        let y_uses = local_variable_uses(&rendered, "y");
+        assert_eq!(y_uses.len(), 2, "two y uses: {rendered}");
+        assert_ne!(
+            y_uses[0], y_uses[1],
+            "each use must reference its own block's y"
+        );
+    }
+
+    #[test]
+    fn nested_shadowing_resolves_innermost_first() {
+        let (ast, _) = resolve(
+            "func f(a: Bool, x: Int) -> Int {\n\tlet y = x\n\tlet inner = 0\n\tif a {\n\t\tlet y = x\n\t\tinner = y\n\t}\n\ty\n}",
+        );
+        let rendered = format!("{ast:?}");
+        let y_uses = local_variable_uses(&rendered, "y");
+        // In order: the inner block's use, then the tail's outer use.
+        assert_eq!(y_uses.len(), 2, "{rendered}");
+        assert_ne!(
+            y_uses[0], y_uses[1],
+            "inner use shadows, outer use sees the outer y: {y_uses:?}"
+        );
+    }
+
+    #[test]
+    fn same_scope_redeclaration_is_an_error() {
+        let resolved = resolve_err(
+            "func f(x: Int) -> Int {\n\tlet y = x\n\tlet y = x\n\ty\n}",
+        );
+        assert_eq!(
+            1,
+            resolved.1.diagnostics.len(),
+            "expected a duplicate-declaration error: {:?}",
+            resolved.1.diagnostics
+        );
+        assert!(
+            matches!(
+                &resolved.1.diagnostics[0],
+                AnyDiagnostic::NameResolution(Diagnostic::<NameResolverError> {
+                    kind: NameResolverError::DuplicateDeclaration(name),
+                    ..
+                }) if name == "y"
+            ),
+            "{:?}",
+            resolved.1.diagnostics
+        );
+    }
+
     #[test]
     fn block_scoping_prevents_let_leak() {
         let resolved = resolve_err(

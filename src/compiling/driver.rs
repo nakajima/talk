@@ -661,22 +661,44 @@ impl Driver<Typed> {
     /// Build a module carrying its type payload: every binder's scheme
     /// (sanitized for export — solver variables don't travel) plus this
     /// module's slice of the type catalog.
+    ///
+    /// Only symbols this module minted (Current-tagged) are exported. The
+    /// checker's scheme map also holds every imported module's schemes,
+    /// and re-exporting those is corrupting: `Module::import_as` retags
+    /// every key to the importer's id for this module, so a foreign
+    /// symbol and an own symbol sharing a local id would collapse onto
+    /// one key, with hash order deciding which scheme survives.
     pub fn module<T: Into<String>>(self, name: T) -> Module {
+        // Own symbols carry no module tag (Current) or the id this
+        // compile ran under (core compiles as ModuleId::Core).
+        let compiled_as = self.config.module_id;
+        let own = move |symbol: &Symbol| match symbol.module_id() {
+            None => true,
+            Some(id) => id == compiled_as,
+        };
         let exports = self.phase.resolved_names.exports();
         let schemes = self
             .phase
             .types
             .schemes
             .into_iter()
+            .filter(|(symbol, _)| own(symbol))
             .map(|(symbol, scheme)| {
                 let ty = scheme.ty.sanitize_for_export(symbol);
                 (symbol, crate::types::ty::Scheme { ty, ..scheme })
             })
             .collect();
+        let symbol_names = self
+            .phase
+            .resolved_names
+            .symbol_names
+            .into_iter()
+            .filter(|(symbol, _)| own(symbol))
+            .collect();
         Module {
             id: StableModuleId::generate(&exports),
             name: name.into(),
-            symbol_names: self.phase.resolved_names.symbol_names,
+            symbol_names,
             exports,
             types: ModuleTypes {
                 schemes,
@@ -897,6 +919,44 @@ pub mod tests {
     use super::*;
     use crate::compiling::module::ModuleId;
     use std::path::PathBuf;
+
+    #[test]
+    fn typed_module_exports_only_its_own_schemes() {
+        // A library's exported schemes must be keyed by its own binders
+        // only. Re-exporting the merged core schemes is corrupting:
+        // `Module::import_as` retags every key to the importer's id, so a
+        // core symbol and one of the module's own symbols with the same
+        // local id collapse onto one key — and hash order then decides
+        // which scheme survives (the fs `Directory.entries` ->
+        // `(&Float, Float) -> Float` bug).
+        let typed = Driver::new(
+            vec![Source::from(
+                "public struct Tiny {\n\tlet x: Int\n\n\tfunc double() -> Int {\n\t\tself.x + self.x\n\t}\n}",
+            )],
+            DriverConfig::new("TinyLib"),
+        )
+        .parse()
+        .unwrap()
+        .resolve_names()
+        .unwrap()
+        .type_check();
+        assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+        let module = typed.module("Tiny");
+        let foreign: Vec<_> = module
+            .types
+            .schemes
+            .keys()
+            .filter(|symbol| symbol.external_module_id().is_some())
+            .collect();
+        assert!(
+            foreign.is_empty(),
+            "exported schemes include foreign symbols: {foreign:?}"
+        );
+        assert!(
+            !module.types.schemes.is_empty(),
+            "the module's own schemes are exported"
+        );
+    }
 
     #[test]
     fn synthesized_error_blocks_no_file() {

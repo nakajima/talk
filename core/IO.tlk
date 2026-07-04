@@ -90,8 +90,8 @@ public func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {
 // a NUL terminator (allocations are zero-filled, so the terminator comes
 // free) and open through the C-string path.
 public func open_path(path: String, flags: Int, mode: Int) 'io -> Int {
-	let buf = _alloc<Byte>(path.length + 1)
-	_copy(path.storage.base, buf, path.length)
+	let buf = _alloc<Byte>(path.byte_count + 1)
+	_copy(path.storage.base, buf, path.byte_count)
 	_io_open(buf, flags, mode)
 }
 
@@ -169,7 +169,7 @@ public func is_error(result: Int) -> Bool {
 }
 
 public func write_string(fd: Int, s: String) -> Int {
-	@_ir(fd, s.storage.base, s.length) { %? = io_write $0 $1 $2 }
+	@_ir(fd, s.storage.base, s.byte_count) { %? = io_write $0 $1 $2 }
 }
 
 public func print_raw(s: String) -> Int {
@@ -177,9 +177,9 @@ public func print_raw(s: String) -> Int {
 }
 
 func _print_line(s: String) -> () {
-	@_ir(STDOUT_FD, s.storage.base, s.length) { %? = io_write $0 $1 $2 }
+	@_ir(STDOUT_FD, s.storage.base, s.byte_count) { %? = io_write $0 $1 $2 }
 	let nl = "\n"
-	@_ir(STDOUT_FD, nl.storage.base, nl.length) { %? = io_write $0 $1 $2 }
+	@_ir(STDOUT_FD, nl.storage.base, nl.byte_count) { %? = io_write $0 $1 $2 }
 	()
 }
 

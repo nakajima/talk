@@ -179,12 +179,11 @@ macro_rules! some {
 
 #[derive(VisitorMut)]
 #[visitor(
-    Stmt(enter, exit),
     FuncSignature,
     MatchArm(enter, exit),
     Func,
     Decl(enter, exit),
-    Block(enter)
+    Block(enter, exit)
 )]
 pub struct DeclDeclarer<'a> {
     pub(super) resolver: &'a mut NameResolver,
@@ -514,40 +513,6 @@ impl<'a> DeclDeclarer<'a> {
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    // Block expr decls
-    ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self, stmt))]
-    fn enter_stmt(&mut self, stmt: &mut Stmt) {
-        match &mut stmt.kind {
-            StmtKind::Expr(Expr {
-                kind: ExprKind::Block(block),
-                ..
-            }) => {
-                self.start_scope(None, block.id, false, false);
-            }
-            StmtKind::Loop(_, block) => {
-                self.start_scope(None, block.id, false, false);
-            }
-            _ => {}
-        }
-    }
-
-    fn exit_stmt(&mut self, stmt: &mut Stmt) {
-        match &stmt.kind {
-            StmtKind::Expr(Expr {
-                kind: ExprKind::Block(..),
-                ..
-            }) => {
-                self.end_scope();
-            }
-            StmtKind::Loop(_, _) => {
-                self.end_scope();
-            }
-            _ => {}
-        }
-    }
-
-    ///////////////////////////////////////////////////////////////////////////
     // Block scoping
     ///////////////////////////////////////////////////////////////////////////
     #[instrument(level = tracing::Level::TRACE, skip(self, arm))]
@@ -560,12 +525,20 @@ impl<'a> DeclDeclarer<'a> {
         self.end_scope();
     }
 
+    // Every block is a scope of its own: same-named `let`s in sibling
+    // blocks stay distinct bindings, and a nested `let` shadows the outer
+    // one instead of overwriting it in a shared name map.
     fn enter_block(&mut self, block: &mut Block) {
+        self.start_scope(None, block.id, false, false);
         for arg in &mut block.args {
             arg.name = self
                 .resolver
                 .declare(&arg.name, some!(ParamLocal), arg.id, arg.name_span);
         }
+    }
+
+    fn exit_block(&mut self, _block: &mut Block) {
+        self.end_scope();
     }
 
     ///////////////////////////////////////////////////////////////////////////

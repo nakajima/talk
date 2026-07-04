@@ -205,6 +205,35 @@ pub mod tests {
     }
 
     #[test]
+    fn surfaces_lexer_error_with_position() {
+        use crate::{lexer::LexerError, parser_error::ParserError};
+        let lexer = Lexer::new("let s = \"\\u{D800}\"");
+        let parser = Parser::new("-", FileID(0), lexer);
+        let err = parser.parse().unwrap_err();
+        assert!(matches!(
+            err,
+            ParserError::Lexer {
+                error: LexerError::InvalidUnicodeEscape,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn lexer_error_does_not_silently_truncate_parse() {
+        use crate::{lexer::LexerError, parser_error::ParserError};
+        let lexer = Lexer::new("123\n\"\\q\"\n456");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(matches!(
+            parser.parse(),
+            Err(ParserError::Lexer {
+                error: LexerError::InvalidEscape('q'),
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn handles_semicolons() {
         let parsed = parse("123 ; 456");
         assert!(matches!(

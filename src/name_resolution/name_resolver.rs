@@ -26,6 +26,7 @@ use crate::{
     node::Node,
     node_id::{FileID, NodeID},
     node_kinds::{
+        block::Block,
         decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, Visibility},
         expr::{Expr, ExprKind},
         func::Func,
@@ -50,6 +51,7 @@ pub enum NameResolverError {
     SymbolNotFoundInModule(String),
     SymbolNotPublic(String),
     DuplicateExport(String),
+    DuplicateDeclaration(String),
 }
 
 impl Error for NameResolverError {}
@@ -75,6 +77,12 @@ impl Display for NameResolverError {
             }
             Self::DuplicateExport(name) => {
                 write!(f, "Duplicate export: '{name}'")
+            }
+            Self::DuplicateDeclaration(name) => {
+                write!(
+                    f,
+                    "'{name}' is already declared in this scope; shadowing needs its own block"
+                )
             }
         }
     }
@@ -181,7 +189,8 @@ pub type ScopeId = Index;
     Decl(enter, exit),
     Expr(enter, exit),
     TypeAnnotation(enter),
-    Pattern(enter)
+    Pattern(enter),
+    Block(enter, exit)
 )]
 pub struct NameResolver {
     pub symbols: Symbols,
@@ -1009,6 +1018,33 @@ impl NameResolver {
         let scope_id = self.current_scope_id.expect("no scope to declare in");
         let name_str = name.name_str();
 
+        // A local name declares once per scope: the scope map is
+        // name-keyed, so a second declaration would silently orphan the
+        // first (every later use would resolve to the newest binder).
+        // Blocks are scopes of their own, so this only rejects
+        // redeclaration within one block.
+        if !at_module_scope
+            && matches!(
+                kind,
+                Symbol::DeclaredLocal(..) | Symbol::PatternBindLocal(..)
+            )
+            && self
+                .scopes
+                .get(&scope_id)
+                .and_then(|scope| scope.types.get(&name_str))
+                .is_some_and(|existing| {
+                    matches!(
+                        existing,
+                        Symbol::DeclaredLocal(..) | Symbol::PatternBindLocal(..)
+                    )
+                })
+        {
+            self.diagnostic(
+                node_id,
+                NameResolverError::DuplicateDeclaration(name_str.clone()),
+            );
+        }
+
         // Check if this is a nominal type or effect that was already predeclared
         // If so, return the existing symbol to avoid duplicate creation
         if matches!(
@@ -1277,15 +1313,30 @@ impl NameResolver {
     ///////////////////////////////////////////////////////////////////////////
     // Block expr decls
     ///////////////////////////////////////////////////////////////////////////
-    fn enter_stmt(&mut self, stmt: &mut Stmt) {
-        if let StmtKind::Expr(Expr {
-            kind: ExprKind::Block(block),
-            ..
-        }) = &mut stmt.kind
-        {
-            self.enter_scope(block.id, None);
+    // Mirrors the declarer: every block re-enters the scope declared for
+    // it, so lookups see the block's own bindings before enclosing ones.
+    // Blocks synthesized between the passes (e.g. generated inits) have no
+    // declared scope yet; give them an empty one under the current parent.
+    fn enter_block(&mut self, block: &mut Block) {
+        if !self.scopes.contains_key(&block.id) {
+            let parent_id = self.current_scope_id;
+            let (level, depth) = self
+                .current_scope()
+                .map(|scope| (scope.level, scope.depth + 1))
+                .unwrap_or((self.current_level, 1));
+            self.scopes.insert(
+                block.id,
+                Scope::new(None, level, block.id, parent_id, depth, false),
+            );
         }
+        self.enter_scope(block.id, None);
+    }
 
+    fn exit_block(&mut self, block: &mut Block) {
+        self.exit_scope(block.id);
+    }
+
+    fn enter_stmt(&mut self, stmt: &mut Stmt) {
         on!(
             &mut stmt.kind,
             StmtKind::Handling {
@@ -1342,15 +1393,7 @@ impl NameResolver {
         }
     }
 
-    fn exit_stmt(&mut self, stmt: &mut Stmt) {
-        if let StmtKind::Expr(Expr {
-            kind: ExprKind::Block(..),
-            ..
-        }) = &mut stmt.kind
-        {
-            self.exit_scope(stmt.id);
-        }
-    }
+    fn exit_stmt(&mut self, _stmt: &mut Stmt) {}
 
     fn track_assignment_mutation(&mut self, expr: &mut Expr) {
         let Some((name, id, span)) = Self::assignment_base_name(expr) else {
@@ -1409,7 +1452,8 @@ impl NameResolver {
                 InlineIRInstructionKind::IoWrite { .. }
                 | InlineIRInstructionKind::Trunc { .. }
                 | InlineIRInstructionKind::IsUnique { .. }
-                | InlineIRInstructionKind::IntToFloat { .. } => (),
+                | InlineIRInstructionKind::IntToFloat { .. }
+                | InlineIRInstructionKind::ByteToInt { .. } => (),
             }
         });
 

@@ -418,6 +418,10 @@ impl Evaluator {
                 EvalValue::I64(x) => Ok(EvalValue::F64(x as f64)),
                 _ => Err(EvalError::Unsupported("itof on non-int".into())),
             },
+            Op::BToI => match self.eval_sub(p, args[0])? {
+                EvalValue::Byte(x) => Ok(EvalValue::I64(x as i64)),
+                _ => Err(EvalError::Unsupported("btoi on non-byte".into())),
+            },
             Op::CellNew => {
                 let init = self.eval_sub(p, args[0])?;
                 let init_ty = p.expr(args[0]).ty;

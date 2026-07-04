@@ -79,3 +79,9 @@ extend ByteStorage: CheapClone {}
 public func _byte_storage(capacity: Int) 'alloc -> ByteStorage {
 	ByteStorage(base: _alloc<Byte>(capacity))
 }
+
+extend Byte {
+	func _toInt() -> Int {
+		@_ir { %? = btoi %0 }
+	}
+}

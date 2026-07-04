@@ -54,6 +54,7 @@ impl<'a> Lowering<'a> {
             K::Trunc { val, .. } => (Op::Trunc, vec![operand(self, val)?]),
             K::IsUnique { ptr, .. } => (Op::IsUnique, vec![operand(self, ptr)?]),
             K::IntToFloat { val, .. } => (Op::IToF, vec![operand(self, val)?]),
+            K::ByteToInt { val, .. } => (Op::BToI, vec![operand(self, val)?]),
             K::Alloc { ty, count, .. } => {
                 // `alloc T count`: count elements of T, sized by
                 // TyKind::mem_size (Op::Alloc itself counts bytes). An
@@ -138,7 +139,7 @@ impl<'a> Lowering<'a> {
         };
         let result_ty = match op {
             Op::Cmp(_) | Op::IsUnique => self.p.ty_bool(),
-            Op::Trunc => self.p.ty_i64(),
+            Op::Trunc | Op::BToI => self.p.ty_i64(),
             Op::IToF => self.p.ty_f64(),
             Op::Alloc => self.p.ty_ptr(),
             Op::Copy | Op::Store | Op::Free => self.p.ty_void(),

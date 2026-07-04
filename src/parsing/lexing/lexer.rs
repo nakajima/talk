@@ -281,8 +281,15 @@ impl<'a> Lexer<'a> {
                         // Unicode escape: \u{1F600}
                         'u' => {
                             self.expect_char('{')?;
-                            let _digits = self.take_hex_digits(1..=6)?;
+                            let digits = self.take_hex_digits(1..=6)?;
                             self.expect_char('}')?;
+                            let valid = u32::from_str_radix(&digits, 16)
+                                .ok()
+                                .and_then(char::from_u32)
+                                .is_some();
+                            if !valid {
+                                return Err(LexerError::InvalidUnicodeEscape);
+                            }
                         }
 
                         '\n' => {
@@ -435,6 +442,10 @@ impl<'a> Lexer<'a> {
         }
 
         if is_float { Float } else { Int }
+    }
+
+    pub fn line_col(&self) -> (u32, u32) {
+        (self.line, self.col)
     }
 
     fn make(&mut self, kind: TokenKind) -> Result<Token, LexerError> {
@@ -712,6 +723,18 @@ mod tests {
         // Raw lexeme still has escape sequence
         assert_eq!(tok.lexeme(source), r#""smile: \u{1F600}""#);
         assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn rejects_out_of_range_unicode_escape_in_string() {
+        let mut lexer = Lexer::new(r#""\u{110000}""#);
+        assert_eq!(lexer.next(), Err(LexerError::InvalidUnicodeEscape));
+    }
+
+    #[test]
+    fn rejects_surrogate_unicode_escape_in_string() {
+        let mut lexer = Lexer::new(r#""\u{D800}""#);
+        assert_eq!(lexer.next(), Err(LexerError::InvalidUnicodeEscape));
     }
 
     #[test]

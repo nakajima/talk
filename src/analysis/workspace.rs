@@ -487,7 +487,7 @@ mod tests {
 
     #[test]
     fn ownership_diagnostics_survive_into_the_workspace() {
-        let text = "let s = \"a\" + \"b\"\nlet t = s\ns.length\n";
+        let text = "let s = \"a\" + \"b\"\nlet t = s\ns.byte_count\n";
         let docs = vec![DocumentInput {
             id: "test.tlk".to_string(),
             path: "test.tlk".to_string(),

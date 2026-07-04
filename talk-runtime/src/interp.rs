@@ -760,6 +760,12 @@ fn exec_local(
             };
             frame.regs[dest as usize] = Value::F64(v as f64);
         }
+        Insn::BToI { dest, src } => {
+            let Value::Byte(v) = frame.regs[src as usize] else {
+                return Err("vm: btoi of a non-byte".into());
+            };
+            frame.regs[dest as usize] = Value::I64(v as i64);
+        }
         Insn::CellNew { dest, init } => {
             machine.slots.push(frame.regs[init as usize].clone());
             frame.regs[dest as usize] = Value::Cell(machine.slots.len() - 1);

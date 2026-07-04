@@ -44,7 +44,7 @@ fn assert_error_contains(source: &str, needle: &str) {
 #[test]
 fn rejects_use_after_simple_owned_move() {
     assert_error_contains(
-        "let s = \"hello\" + \" world\"\nlet t = s\ns.length",
+        "let s = \"hello\" + \" world\"\nlet t = s\ns.byte_count",
         "Use of moved value 's'",
     );
 }
@@ -57,13 +57,13 @@ fn allows_copy_value_reuse_after_assignment() {
 #[test]
 fn allows_reassignment_after_owned_move() {
     assert_no_errors(
-        "let s = \"hello\" + \" world\"\nlet t = s\ns = \"new\" + \" value\"\ns.length",
+        "let s = \"hello\" + \" world\"\nlet t = s\ns = \"new\" + \" value\"\ns.byte_count",
     );
 }
 
 #[test]
 fn rejects_use_before_initializer() {
-    assert_error_contains("let s: String\ns.length", "Use of moved value 's'");
+    assert_error_contains("let s: String\ns.byte_count", "Use of moved value 's'");
 }
 
 // ----- Call arguments / receivers -------------------------------------------
@@ -71,14 +71,14 @@ fn rejects_use_before_initializer() {
 #[test]
 fn borrowed_call_argument_does_not_move_owned_value() {
     assert_no_errors(
-        "func borrow(s: &String) -> Int {\n\ts.length\n}\nlet s = \"hello\" + \" world\"\nlet n = borrow(s)\ns.length + n",
+        "func borrow(s: &String) -> Int {\n\ts.byte_count\n}\nlet s = \"hello\" + \" world\"\nlet n = borrow(s)\ns.byte_count + n",
     );
 }
 
 #[test]
 fn by_value_call_argument_moves_owned_value() {
     assert_error_contains(
-        "func take(s: String) -> Int {\n\ts.length\n}\nlet s = \"hello\" + \" world\"\nlet n = take(s)\ns.length + n",
+        "func take(s: String) -> Int {\n\ts.byte_count\n}\nlet s = \"hello\" + \" world\"\nlet n = take(s)\ns.byte_count + n",
         "Use of moved value 's'",
     );
 }
@@ -86,7 +86,7 @@ fn by_value_call_argument_moves_owned_value() {
 #[test]
 fn repeated_owned_call_operand_is_rejected() {
     assert_error_contains(
-        "func take(a: String, b: String) -> Int {\n\ta.length + b.length\n}\nlet s = \"hello\" + \" world\"\ntake(s, s)",
+        "func take(a: String, b: String) -> Int {\n\ta.byte_count + b.byte_count\n}\nlet s = \"hello\" + \" world\"\ntake(s, s)",
         "Use of moved value 's'",
     );
 }
@@ -94,7 +94,7 @@ fn repeated_owned_call_operand_is_rejected() {
 #[test]
 fn constructor_argument_moves_owned_value() {
     assert_error_contains(
-        "struct Box {\n\tlet value: String\n}\nlet s = \"hello\" + \" world\"\nlet box = Box(value: s)\ns.length",
+        "struct Box {\n\tlet value: String\n}\nlet s = \"hello\" + \" world\"\nlet box = Box(value: s)\ns.byte_count",
         "Use of moved value 's'",
     );
 }
@@ -102,14 +102,14 @@ fn constructor_argument_moves_owned_value() {
 #[test]
 fn default_method_receiver_does_not_move_owned_receiver() {
     assert_no_errors(
-        "struct Box {\n\tlet value: String\n\tfunc len() -> Int {\n\t\tself.value.length\n\t}\n}\nlet box = Box(value: \"hello\" + \" world\")\nlet n = box.len()\nbox.value.length + n",
+        "struct Box {\n\tlet value: String\n\tfunc len() -> Int {\n\t\tself.value.byte_count\n\t}\n}\nlet box = Box(value: \"hello\" + \" world\")\nlet n = box.len()\nbox.value.byte_count + n",
     );
 }
 
 #[test]
 fn explicit_consuming_method_receiver_moves_owned_receiver() {
     assert_error_contains(
-        "struct Box {\n\tlet value: String\n\tconsuming func consume() -> Int {\n\t\tself.value.length\n\t}\n}\nlet box = Box(value: \"hello\" + \" world\")\nlet n = box.consume()\nbox.value.length + n",
+        "struct Box {\n\tlet value: String\n\tconsuming func consume() -> Int {\n\t\tself.value.byte_count\n\t}\n}\nlet box = Box(value: \"hello\" + \" world\")\nlet n = box.consume()\nbox.value.byte_count + n",
         "Use of moved value 'box'",
     );
 }
@@ -117,7 +117,7 @@ fn explicit_consuming_method_receiver_moves_owned_receiver() {
 #[test]
 fn by_value_method_argument_moves_owned_value() {
     assert_error_contains(
-        "struct Sink {\n\tlet id: Int\n\tfunc take(value: String) -> Int {\n\t\tvalue.length\n\t}\n}\nlet sink = Sink(id: 1)\nlet s = \"hello\" + \" world\"\nlet n = sink.take(s)\ns.length + n",
+        "struct Sink {\n\tlet id: Int\n\tfunc take(value: String) -> Int {\n\t\tvalue.byte_count\n\t}\n}\nlet sink = Sink(id: 1)\nlet s = \"hello\" + \" world\"\nlet n = sink.take(s)\ns.byte_count + n",
         "Use of moved value 's'",
     );
 }
@@ -125,7 +125,7 @@ fn by_value_method_argument_moves_owned_value() {
 #[test]
 fn borrowed_method_argument_does_not_move_owned_value() {
     assert_no_errors(
-        "struct Sink {\n\tlet id: Int\n\tfunc take(value: &String) -> Int {\n\t\tvalue.length\n\t}\n}\nlet sink = Sink(id: 1)\nlet s = \"hello\" + \" world\"\nlet n = sink.take(s)\ns.length + n",
+        "struct Sink {\n\tlet id: Int\n\tfunc take(value: &String) -> Int {\n\t\tvalue.byte_count\n\t}\n}\nlet sink = Sink(id: 1)\nlet s = \"hello\" + \" world\"\nlet n = sink.take(s)\ns.byte_count + n",
     );
 }
 
@@ -134,7 +134,7 @@ fn borrowed_method_argument_does_not_move_owned_value() {
 #[test]
 fn tuple_literal_moves_owned_element() {
     assert_error_contains(
-        "let s = \"hello\" + \" world\"\nlet pair = (s, 1)\ns.length",
+        "let s = \"hello\" + \" world\"\nlet pair = (s, 1)\ns.byte_count",
         "Use of moved value 's'",
     );
 }
@@ -142,7 +142,7 @@ fn tuple_literal_moves_owned_element() {
 #[test]
 fn array_literal_moves_owned_element() {
     assert_error_contains(
-        "let s = \"hello\" + \" world\"\nlet array = [s]\ns.length",
+        "let s = \"hello\" + \" world\"\nlet array = [s]\ns.byte_count",
         "Use of moved value 's'",
     );
 }
@@ -150,7 +150,7 @@ fn array_literal_moves_owned_element() {
 #[test]
 fn record_literal_moves_owned_field_value() {
     assert_error_contains(
-        "let s = \"hello\" + \" world\"\nlet record = { value: s }\ns.length",
+        "let s = \"hello\" + \" world\"\nlet record = { value: s }\ns.byte_count",
         "Use of moved value 's'",
     );
 }
@@ -168,7 +168,7 @@ fn repeated_owned_tuple_operand_is_rejected() {
 #[test]
 fn rejects_use_after_struct_with_owned_field_move() {
     assert_error_contains(
-        "struct Person {\n\tlet name: String\n}\nlet person = Person(name: \"Pat\" + \"!\")\nlet moved = person\nperson.name.length",
+        "struct Person {\n\tlet name: String\n}\nlet person = Person(name: \"Pat\" + \"!\")\nlet moved = person\nperson.name.byte_count",
         "Use of moved value 'person'",
     );
 }
@@ -191,7 +191,7 @@ fn rejects_whole_struct_use_after_owned_field_move() {
 #[test]
 fn field_assignment_restores_moved_field() {
     assert_no_errors(
-        "struct Person {\n\tlet name: String\n\tlet age: Int\n}\nlet person = Person(name: \"Pat\" + \"!\", age: 40)\nlet name = person.name\nperson.name = \"Sue\" + \"!\"\nperson.name.length + person.age",
+        "struct Person {\n\tlet name: String\n\tlet age: Int\n}\nlet person = Person(name: \"Pat\" + \"!\", age: 40)\nlet name = person.name\nperson.name = \"Sue\" + \"!\"\nperson.name.byte_count + person.age",
     );
 }
 
@@ -207,7 +207,7 @@ fn allows_reuse_after_copy_struct_assignment() {
 #[test]
 fn rejects_use_after_generic_struct_instantiated_with_owned_field_move() {
     assert_error_contains(
-        "struct Box<Item> {\n\tlet value: Item\n}\nlet box = Box(value: \"hello\" + \" world\")\nlet moved = box\nbox.value.length",
+        "struct Box<Item> {\n\tlet value: Item\n}\nlet box = Box(value: \"hello\" + \" world\")\nlet moved = box\nbox.value.byte_count",
         "Use of moved value 'box'",
     );
 }
@@ -224,7 +224,7 @@ fn allows_reuse_after_generic_struct_instantiated_with_copy_field_assignment() {
 #[test]
 fn match_arm_move_then_use_is_rejected() {
     assert_error_contains(
-        "enum E {\n\tcase a\n\tcase b\n}\nfunc bad(e: E) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tmatch e {\n\t\t.a -> {\n\t\t\tlet moved = s\n\t\t\ts.length\n\t\t},\n\t\t.b -> 0\n\t}\n}",
+        "enum E {\n\tcase a\n\tcase b\n}\nfunc bad(e: E) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tmatch e {\n\t\t.a -> {\n\t\t\tlet moved = s\n\t\t\ts.byte_count\n\t\t},\n\t\t.b -> 0\n\t}\n}",
         "Use of moved value 's'",
     );
 }
@@ -232,14 +232,14 @@ fn match_arm_move_then_use_is_rejected() {
 #[test]
 fn match_arm_move_does_not_poison_sibling_arm() {
     assert_no_errors(
-        "enum E {\n\tcase a\n\tcase b\n}\nfunc ok(e: E) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tmatch e {\n\t\t.a -> {\n\t\t\tlet moved = s\n\t\t\t0\n\t\t},\n\t\t.b -> s.length\n\t}\n}",
+        "enum E {\n\tcase a\n\tcase b\n}\nfunc ok(e: E) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tmatch e {\n\t\t.a -> {\n\t\t\tlet moved = s\n\t\t\t0\n\t\t},\n\t\t.b -> s.byte_count\n\t}\n}",
     );
 }
 
 #[test]
 fn branch_move_then_use_after_join_is_rejected() {
     assert_error_contains(
-        "let s = \"hello\" + \" world\"\nlet flag = true\nif flag {\n\tlet t = s\n\t1\n} else {\n\t2\n}\ns.length",
+        "let s = \"hello\" + \" world\"\nlet flag = true\nif flag {\n\tlet t = s\n\t1\n} else {\n\t2\n}\ns.byte_count",
         "Use of moved value 's'",
     );
 }
@@ -247,7 +247,7 @@ fn branch_move_then_use_after_join_is_rejected() {
 #[test]
 fn rejects_loop_carried_move_reuse() {
     assert_error_contains(
-        "func take(s: String) -> Int {\n\ts.length\n}\nlet s = \"hello\" + \" world\"\nlet i = 0\nloop i < 2 {\n\tlet n = take(s)\n\ti = i + 1\n}",
+        "func take(s: String) -> Int {\n\ts.byte_count\n}\nlet s = \"hello\" + \" world\"\nlet i = 0\nloop i < 2 {\n\tlet n = take(s)\n\ti = i + 1\n}",
         "Use of moved value 's'",
     );
 }
@@ -257,7 +257,7 @@ fn rejects_loop_carried_move_reuse() {
 #[test]
 fn nested_function_capture_move_propagates_to_parent() {
     assert_error_contains(
-        "let s = \"hello\" + \" world\"\nfunc inner[consuming s]() -> Int {\n\ts.length\n}\ns.length",
+        "let s = \"hello\" + \" world\"\nfunc inner[consuming s]() -> Int {\n\ts.byte_count\n}\ns.byte_count",
         "Use of moved value 's'",
     );
 }
@@ -265,7 +265,7 @@ fn nested_function_capture_move_propagates_to_parent() {
 #[test]
 fn trailing_block_body_move_propagates_to_parent() {
     assert_error_contains(
-        "func run(f: () -> Int) -> Int {\n\t0\n}\nlet s = \"hello\" + \" world\"\nlet n = run() {\n\tlet moved = s\n\t0\n}\ns.length + n",
+        "func run(f: () -> Int) -> Int {\n\t0\n}\nlet s = \"hello\" + \" world\"\nlet n = run() {\n\tlet moved = s\n\t0\n}\ns.byte_count + n",
         "Use of moved value 's'",
     );
 }
@@ -424,7 +424,7 @@ fn field_move_makes_scope_drop_open() {
 #[test]
 fn early_exit_schedules_enclosing_scope_drops() {
     let driver = flow_driver(
-        "func make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\treturn 1\n\t}\n\ts.length\n}",
+        "func make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\treturn 1\n\t}\n\ts.byte_count\n}",
     );
     let body = stored_body(&driver, "make");
     let early: Vec<_> = candidate_drops(&driver, &body)
@@ -441,7 +441,7 @@ fn early_exit_schedules_enclosing_scope_drops() {
 #[test]
 fn assignment_schedules_replace_drop() {
     let driver = flow_driver(
-        "func make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ts = \"new\" + \" value\"\n\ts.length\n}",
+        "func make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ts = \"new\" + \" value\"\n\ts.byte_count\n}",
     );
     let body = stored_body(&driver, "make");
     let replace: Vec<_> = candidate_drops(&driver, &body)
@@ -461,7 +461,7 @@ fn assignment_schedules_replace_drop() {
 #[test]
 fn consumed_expressions_are_annotated() {
     let driver = flow_driver(
-        "func take(s: String) -> Int {\n\ts.length\n}\nfunc make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}",
+        "func take(s: String) -> Int {\n\ts.byte_count\n}\nfunc make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}",
     );
     let body = func_body(&driver, "make");
     let mut consuming_uses = 0;
@@ -520,7 +520,7 @@ fn linear_value_moved_in_one_branch_only_is_rejected() {
 /// pipeline holds together under the flag.
 #[test]
 fn vm_and_evaluator_agree_under_flow_checker() {
-    let source = "func shout(s: String) -> Int {\n\ts.length\n}\nfunc make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\tlet t = s\n\t\tshout(t)\n\t} else {\n\t\t2\n\t}\n}\nmake(true)";
+    let source = "func shout(s: String) -> Int {\n\ts.byte_count\n}\nfunc make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\tlet t = s\n\t\tshout(t)\n\t} else {\n\t\t2\n\t}\n}\nmake(true)";
     let typed = Driver::new(vec![Source::from(source)], DriverConfig::new("FlowVmTest"))
         .parse()
         .expect("parse")
@@ -696,7 +696,7 @@ fn heap_binding_gets_release_schedule() {
 fn value_borrow_conflicts_still_fire() {
     // Regression: the object exemption must not weaken value checking.
     assert_error_contains(
-        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet borrow: &mut String = s\n\tlet n = s.length\n\tborrow.length + n\n}\n0",
+        "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet borrow: &mut String = s\n\tlet n = s.byte_count\n\tborrow.byte_count + n\n}\n0",
         "already mutable borrowed",
     );
 }
@@ -815,7 +815,7 @@ fn heap_deinit_runs_at_region_teardown() {
 #[test]
 fn heap_string_fields_release_buffers() {
     let (_, live_objects, live_allocations) = run_heap_eval(
-        "struct Named 'heap {\n\tlet name: String\n}\nfunc check() -> Int {\n\tlet n = Named(name: \"hello\" + \" world\")\n\tn.name.length\n}\ncheck()",
+        "struct Named 'heap {\n\tlet name: String\n}\nfunc check() -> Int {\n\tlet n = Named(name: \"hello\" + \" world\")\n\tn.name.byte_count\n}\ncheck()",
     );
     assert_eq!(live_objects, 0);
     assert_eq!(live_allocations, 0, "finalizer frees the owned buffer");
@@ -933,7 +933,7 @@ fn dict_leaks_nothing() {
 #[test]
 fn http_router_grows_past_four_routes() {
     // The old router hardcoded 4 slots; the heap chain has no cap.
-    let source = "func check() -> Int {\n\tlet server = HTTP.Server()\n\tserver.get(\"/\", func() -> String { \"home\" })\n\tserver.get(\"/a\", func() -> String { \"aaa\" })\n\tserver.get(\"/b\", func() -> String { \"bbb\" })\n\tserver.get(\"/c\", func() -> String { \"ccc\" })\n\tserver.get(\"/d\", func() -> String { \"ddd\" })\n\tserver.get(\"/e\", func() -> String { \"eee\" })\n\tlet wire = server.handle(\"GET /d HTTP/1.1\")\n\twire.find(\"ddd\")\n}\ncheck()";
+    let source = "func check() -> Int {\n\tlet server = HTTP.Server()\n\tserver.get(\"/\", func() -> String { \"home\" })\n\tserver.get(\"/a\", func() -> String { \"aaa\" })\n\tserver.get(\"/b\", func() -> String { \"bbb\" })\n\tserver.get(\"/c\", func() -> String { \"ccc\" })\n\tserver.get(\"/d\", func() -> String { \"ddd\" })\n\tserver.get(\"/e\", func() -> String { \"eee\" })\n\tlet wire = server.handle(\"GET /d HTTP/1.1\")\n\tmatch wire.find(\"ddd\") {\n\t\t.some(i) -> i,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()";
     let value = run_heap_vm(source);
     let crate::vm::interp::Value::I64(position) = value else {
         panic!("unexpected result: {value:?}");
@@ -943,7 +943,7 @@ fn http_router_grows_past_four_routes() {
 
 #[test]
 fn http_router_misses_cleanly() {
-    let source = "func check() -> Int {\n\tlet server = HTTP.Server()\n\tserver.get(\"/\", func() -> String { \"home\" })\n\tlet wire = server.handle(\"GET /nope HTTP/1.1\")\n\twire.find(\"404\")\n}\ncheck()";
+    let source = "func check() -> Int {\n\tlet server = HTTP.Server()\n\tserver.get(\"/\", func() -> String { \"home\" })\n\tlet wire = server.handle(\"GET /nope HTTP/1.1\")\n\tmatch wire.find(\"404\") {\n\t\t.some(i) -> i,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()";
     let value = run_heap_vm(source);
     let crate::vm::interp::Value::I64(position) = value else {
         panic!("unexpected result: {value:?}");
@@ -956,7 +956,7 @@ fn dict_with_string_values_shares_buffers_safely() {
     // The generic body extracts node.value with Value = String: the
     // instantiation must retain the buffer (tier-2 decided at lowering).
     let (value, live_objects, live_allocations) = run_heap_eval(
-        "func check() -> Int {\n\tlet d = Dict<String>()\n\td.insert(\"greet\", \"hello\" + \" world\")\n\tlet got: String? = d.get(\"greet\")\n\tmatch got {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()",
+        "func check() -> Int {\n\tlet d = Dict<String>()\n\td.insert(\"greet\", \"hello\" + \" world\")\n\tlet got: String? = d.get(\"greet\")\n\tmatch got {\n\t\t.some(s) -> s.byte_count,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
     assert_eq!(live_objects, 0);
@@ -969,7 +969,7 @@ fn dict_with_string_values_shares_buffers_safely() {
 #[test]
 fn dict_with_string_values_runs_on_vm() {
     let value = run_heap_vm(
-        "func check() -> Int {\n\tlet d = Dict<String>()\n\td.insert(\"greet\", \"hello\" + \" world\")\n\tlet got: String? = d.get(\"greet\")\n\tmatch got {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()",
+        "func check() -> Int {\n\tlet d = Dict<String>()\n\td.insert(\"greet\", \"hello\" + \" world\")\n\tlet got: String? = d.get(\"greet\")\n\tmatch got {\n\t\t.some(s) -> s.byte_count,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()",
     );
     assert_eq!(value, crate::vm::interp::Value::I64(11), "no double free");
 }
@@ -978,7 +978,7 @@ fn dict_with_string_values_runs_on_vm() {
 fn generic_heap_extraction_clones_per_instantiation() {
     // The generic body can't know Value's grade; lowering decides at the
     // instantiation: String retains its buffer, Int does nothing.
-    let source = "struct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: \"hello\" + \" world\")\n\tlet s = extract(h)\n\tlet i = Holder(value: 41)\n\tlet n = extract(i)\n\ts.length + n\n}\ncheck()";
+    let source = "struct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: \"hello\" + \" world\")\n\tlet s = extract(h)\n\tlet i = Holder(value: 41)\n\tlet n = extract(i)\n\ts.byte_count + n\n}\ncheck()";
     let (value, live_objects, live_allocations) = run_heap_eval(source);
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(52));
     assert_eq!(live_objects, 0);
@@ -994,7 +994,7 @@ fn generic_heap_extraction_retains_cheap_clone_enum_payloads() {
     // does: extracting a CheapClone enum whose payload owns a buffer has
     // to bump that buffer's rc, or the copy and the object's teardown
     // both free it.
-    let source = "enum Wrapped {\n\tcase tagged(String)\n}\nextend Wrapped: CheapClone {}\nstruct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: Wrapped.tagged(\"hello\" + \" world\"))\n\tlet w = extract(h)\n\tmatch w {\n\t\t.tagged(s) -> s.length\n\t}\n}\ncheck()";
+    let source = "enum Wrapped {\n\tcase tagged(String)\n}\nextend Wrapped: CheapClone {}\nstruct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: Wrapped.tagged(\"hello\" + \" world\"))\n\tlet w = extract(h)\n\tmatch w {\n\t\t.tagged(s) -> s.byte_count\n\t}\n}\ncheck()";
     let (value, live_objects, live_allocations) = run_heap_eval(source);
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
     assert_eq!(live_objects, 0);
@@ -1039,7 +1039,7 @@ fn enum_payload_drops_at_scope_exit() {
 #[test]
 fn enum_payload_extraction_transfers_ownership() {
     let (value, _, live_allocations) = run_heap_eval(
-        "func check() -> Int {\n\tlet o = Optional.some(\"hello\" + \" world\")\n\tlet n = match o {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0\n\t}\n\tn\n}\ncheck()",
+        "func check() -> Int {\n\tlet o = Optional.some(\"hello\" + \" world\")\n\tlet n = match o {\n\t\t.some(s) -> s.byte_count,\n\t\t.none -> 0\n\t}\n\tn\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
     assert_eq!(live_allocations, 0, "payload freed exactly once");
@@ -1087,7 +1087,7 @@ fn move_inside_handler_body_is_may_moved_after() {
     // inside one is may-moved at the handling construct's join, exactly as
     // the old tree walk's clone+merge concluded.
     assert_error_contains(
-        "func take(s: String) -> Int {\n\ts.length\n}\neffect 'oops(error) -> Never\nfunc check() -> Int {\n\tlet s = \"a\" + \"b\"\n\t@handle 'oops { err in\n\t\ttake(s)\n\t\t0\n\t}\n\ts.length\n}",
+        "func take(s: String) -> Int {\n\ts.byte_count\n}\neffect 'oops(error) -> Never\nfunc check() -> Int {\n\tlet s = \"a\" + \"b\"\n\t@handle 'oops { err in\n\t\ttake(s)\n\t\t0\n\t}\n\ts.byte_count\n}",
         "Use of moved value",
     );
 }
@@ -1099,7 +1099,7 @@ fn handler_body_locals_balance_allocations() {
     // inside the handler leaks nothing. The abort makes the handler's
     // value the handled scope's value.
     let (value, _, live_allocations) = run_heap_eval(
-        "effect 'oops(error) -> Never\n@handle 'oops { err in\n\tlet local = \"x\" + \"y\"\n\tlocal.length\n}\nfunc boom() 'oops -> Int {\n\t'oops(\"bang\")\n}\nboom()",
+        "effect 'oops(error) -> Never\n@handle 'oops { err in\n\tlet local = \"x\" + \"y\"\n\tlocal.byte_count\n}\nfunc boom() 'oops -> Int {\n\t'oops(\"bang\")\n}\nboom()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
     assert_eq!(live_allocations, 0, "handler-body locals free exactly once");
@@ -1110,7 +1110,7 @@ fn move_inside_trailing_block_is_may_moved_after() {
     // Trailing blocks are CFG blocks with may-execute edges, like handler
     // bodies: a move inside one is may-moved after the call.
     assert_error_contains(
-        "func take(s: String) -> Int {\n\ts.length\n}\nfunc run(f: () -> Int) -> Int {\n\tf()\n}\nfunc check() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = run {\n\t\ttake(s)\n\t}\n\ts.length\n}",
+        "func take(s: String) -> Int {\n\ts.byte_count\n}\nfunc run(f: () -> Int) -> Int {\n\tf()\n}\nfunc check() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = run {\n\t\ttake(s)\n\t}\n\ts.byte_count\n}",
         "Use of moved value",
     );
 }
@@ -1120,7 +1120,7 @@ fn trailing_block_locals_balance_allocations() {
     // Trailing-block locals drop from scaffold-CFG candidates (the tree
     // walk's recorded schedules are gone).
     let (value, _, live_allocations) = run_heap_eval(
-        "func run(f: () -> Int) -> Int {\n\tf()\n}\nfunc check() -> Int {\n\trun {\n\t\tlet local = \"x\" + \"y\"\n\t\tlocal.length\n\t}\n}\ncheck()",
+        "func run(f: () -> Int) -> Int {\n\tf()\n}\nfunc check() -> Int {\n\trun {\n\t\tlet local = \"x\" + \"y\"\n\t\tlocal.byte_count\n\t}\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
     assert_eq!(
@@ -1134,7 +1134,7 @@ fn variant_construction_shapes_balance_allocations() {
     // The three `Con` classification shapes — leading-dot call, enum-named
     // call, payload-less leading dot — construct, match, and free cleanly.
     let (value, _, live_allocations) = run_heap_eval(
-        "func check() -> Int {\n\tlet a: String? = .some(\"x\" + \"y\")\n\tlet b = Optional.some(\"p\" + \"q\")\n\tlet c: String? = .none\n\tlet n = match a {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0\n\t}\n\tlet m = match b {\n\t\t.some(s) -> s.length,\n\t\t.none -> 0\n\t}\n\tn + m\n}\ncheck()",
+        "func check() -> Int {\n\tlet a: String? = .some(\"x\" + \"y\")\n\tlet b = Optional.some(\"p\" + \"q\")\n\tlet c: String? = .none\n\tlet n = match a {\n\t\t.some(s) -> s.byte_count,\n\t\t.none -> 0\n\t}\n\tlet m = match b {\n\t\t.some(s) -> s.byte_count,\n\t\t.none -> 0\n\t}\n\tn + m\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(4));
     assert_eq!(
@@ -1148,7 +1148,7 @@ fn stored_field_projection_chain_balances_allocations() {
     // Field reads are `Proj` nodes from HIR build on — a projection chain
     // through nested structs neither moves the owner nor leaks the leaf.
     let (value, _, live_allocations) = run_heap_eval(
-        "struct Name {\n\tlet text: String\n}\nstruct User {\n\tlet name: Name\n}\nfunc check() -> Int {\n\tlet u = User(name: Name(text: \"ada\" + \" lovelace\"))\n\tu.name.text.length\n}\ncheck()",
+        "struct Name {\n\tlet text: String\n}\nstruct User {\n\tlet name: Name\n}\nfunc check() -> Int {\n\tlet u = User(name: Name(text: \"ada\" + \" lovelace\"))\n\tu.name.text.byte_count\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(12));
     assert_eq!(live_allocations, 0, "projection reads leak nothing");
@@ -1160,7 +1160,7 @@ fn expression_if_arm_values_balance_allocations() {
     // transfers out through the join and frees with its binding; the
     // untaken arm's value never exists.
     let (value, _, live_allocations) = run_heap_eval(
-        "func check(flag: Bool) -> Int {\n\tlet s = if (flag) {\n\t\t\"hello\" + \" world\"\n\t} else {\n\t\t\"bye\" + \" now\"\n\t}\n\ts.length\n}\ncheck(true) + check(false)",
+        "func check(flag: Bool) -> Int {\n\tlet s = if (flag) {\n\t\t\"hello\" + \" world\"\n\t} else {\n\t\t\"bye\" + \" now\"\n\t}\n\ts.byte_count\n}\ncheck(true) + check(false)",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(18));
     assert_eq!(live_allocations, 0, "expr-if arm values free exactly once");
@@ -1169,7 +1169,7 @@ fn expression_if_arm_values_balance_allocations() {
 #[test]
 fn consumed_by_value_param_drops_in_callee() {
     let (value, _, live_allocations) = run_heap_eval(
-        "func take(name: String) -> Int {\n\tname.length\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
+        "func take(name: String) -> Int {\n\tname.byte_count\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
     assert_eq!(
@@ -1184,7 +1184,7 @@ fn maybe_moved_param_drops_exactly_once() {
     // the flag must guard it (moved path: the callee already dropped it;
     // unmoved path: the exit drop runs).
     let (value, _, live_allocations) = run_heap_eval(
-        "func take(name: String) -> Int {\n\tname.length\n}\nfunc f(s: String, flag: Bool) -> Int {\n\tlet n = 0\n\tif flag {\n\t\tn = take(s)\n\t}\n\tn\n}\nf(\"hello\" + \" world\", true) + f(\"bye\" + \" now\", false)",
+        "func take(name: String) -> Int {\n\tname.byte_count\n}\nfunc f(s: String, flag: Bool) -> Int {\n\tlet n = 0\n\tif flag {\n\t\tn = take(s)\n\t}\n\tn\n}\nf(\"hello\" + \" world\", true) + f(\"bye\" + \" now\", false)",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
     assert_eq!(live_allocations, 0, "each param buffer frees exactly once");
@@ -1198,7 +1198,7 @@ fn perform_argument_stays_owned_by_the_performer() {
     // Call, the Perform statement must NOT clear the drop flag — doing
     // so would leak the buffer on the performed path.
     let (value, _, live_allocations) = run_heap_eval(
-        "effect 'log(msg) -> Int\n@handle 'log { msg in\n\tcontinue msg.length\n}\nfunc f(flag: Bool) 'log -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet n = 0\n\tif flag {\n\t\tn = 'log(s)\n\t}\n\tn\n}\nf(true) + f(false)",
+        "effect 'log(msg) -> Int\n@handle 'log { msg in\n\tcontinue msg.byte_count\n}\nfunc f(flag: Bool) 'log -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet n = 0\n\tif flag {\n\t\tn = 'log(s)\n\t}\n\tn\n}\nf(true) + f(false)",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
     assert_eq!(live_allocations, 0, "the payload frees exactly once, at f's exit");
@@ -1296,7 +1296,7 @@ fn rejects_auto_derived_showable_on_heap_struct() {
 #[test]
 fn cross_file_global_move_drops_once() {
     let file_a = "public let shared = \"hello\" + \" world\"";
-    let file_b = "use { shared } from ./a.tlk\nlet taken = shared\ntaken.length";
+    let file_b = "use { shared } from ./a.tlk\nlet taken = shared\ntaken.byte_count";
     let typed = Driver::new(
         vec![
             Source::in_memory("a.tlk".into(), file_a),
@@ -1367,7 +1367,7 @@ fn linear_consumed_after_a_loop_with_break_is_accepted() {
 #[test]
 fn move_reassigned_in_every_branch_is_accepted() {
     assert_no_errors(
-        "func consume(s: String) -> Int {\n\ts.length\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = consume(s)\n\tif flag {\n\t\ts = \"c\" + \"d\"\n\t} else {\n\t\ts = \"e\" + \"f\"\n\t}\n\tconsume(s) + n\n}",
+        "func consume(s: String) -> Int {\n\ts.byte_count\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = consume(s)\n\tif flag {\n\t\ts = \"c\" + \"d\"\n\t} else {\n\t\ts = \"e\" + \"f\"\n\t}\n\tconsume(s) + n\n}",
     );
 }
 
@@ -1379,7 +1379,7 @@ fn move_reassigned_in_every_branch_is_accepted() {
 #[test]
 fn move_on_conditional_continue_path_is_use_after_move_on_reentry() {
     assert_error_contains(
-        "func consume(s: String) -> Int {\n\ts.length\n}\nfunc f() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet i = 0\n\tlet n = 0\n\tloop i < 2 {\n\t\ti = i + 1\n\t\tif i == 1 {\n\t\t\tn = consume(s)\n\t\t\tcontinue\n\t\t}\n\t}\n\tn\n}\nf()",
+        "func consume(s: String) -> Int {\n\ts.byte_count\n}\nfunc f() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet i = 0\n\tlet n = 0\n\tloop i < 2 {\n\t\ti = i + 1\n\t\tif i == 1 {\n\t\t\tn = consume(s)\n\t\t\tcontinue\n\t\t}\n\t}\n\tn\n}\nf()",
         "Use of moved value 's'",
     );
 }
@@ -1392,7 +1392,7 @@ fn move_on_conditional_continue_path_is_use_after_move_on_reentry() {
 #[test]
 fn move_on_conditional_break_path_drops_once() {
     let (value, _, live_allocations) = run_heap_eval(
-        "func consume(s: String) -> Int {\n\ts.length\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = 0\n\tloop {\n\t\tif flag {\n\t\t\tn = consume(s)\n\t\t\tbreak\n\t\t}\n\t\tbreak\n\t}\n\tn\n}\nf(true) + f(false)",
+        "func consume(s: String) -> Int {\n\ts.byte_count\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = 0\n\tloop {\n\t\tif flag {\n\t\t\tn = consume(s)\n\t\t\tbreak\n\t\t}\n\t\tbreak\n\t}\n\tn\n}\nf(true) + f(false)",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
     assert_eq!(live_allocations, 0, "the moved value drops exactly once");
@@ -1404,7 +1404,7 @@ fn move_on_conditional_break_path_drops_once() {
 #[test]
 fn live_loop_local_drops_on_break_path() {
     let (value, _, live_allocations) = run_heap_eval(
-        "func f() -> Int {\n\tlet i = 0\n\tloop i < 3 {\n\t\ti = i + 1\n\t\tlet s = \"a\" + \"b\"\n\t\tif i == 2 {\n\t\t\tbreak\n\t\t}\n\t\tlet n = s.length\n\t}\n\t7\n}\nf()",
+        "func f() -> Int {\n\tlet i = 0\n\tloop i < 3 {\n\t\ti = i + 1\n\t\tlet s = \"a\" + \"b\"\n\t\tif i == 2 {\n\t\t\tbreak\n\t\t}\n\t\tlet n = s.byte_count\n\t}\n\t7\n}\nf()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(7));
     assert_eq!(
@@ -1429,7 +1429,7 @@ fn for_loop_block_arg_matched_in_body_is_accepted() {
 #[test]
 fn match_on_borrowed_enum_neither_leaks_nor_double_frees() {
     let (value, _, live_allocations) = run_heap_eval(
-        "enum E {\n\tcase a(String)\n\tcase b(Int)\n}\nfunc f(e: &E) -> Int {\n\tmatch e {\n\t\t.a(s) -> s.length,\n\t\t.b(n) -> n\n\t}\n}\nfunc check() -> Int {\n\tlet e = E.a(\"hello\" + \" world\")\n\tlet first = f(e)\n\tlet second = f(e)\n\tfirst + second\n}\ncheck()",
+        "enum E {\n\tcase a(String)\n\tcase b(Int)\n}\nfunc f(e: &E) -> Int {\n\tmatch e {\n\t\t.a(s) -> s.byte_count,\n\t\t.b(n) -> n\n\t}\n}\nfunc check() -> Int {\n\tlet e = E.a(\"hello\" + \" world\")\n\tlet first = f(e)\n\tlet second = f(e)\n\tfirst + second\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(22));
     assert_eq!(
@@ -1447,7 +1447,7 @@ fn match_on_borrowed_enum_neither_leaks_nor_double_frees() {
 #[test]
 fn for_over_enum_array_with_match_runs() {
     let (value, _, _) = run_heap_eval(
-        "enum E {\n\tcase a(String)\n\tcase b(Int)\n}\nfunc check() -> Int {\n\tlet items = [E.a(\"hello\" + \" world\"), E.b(31)]\n\tlet total = 0\n\tfor e in items {\n\t\tmatch e {\n\t\t\t.a(s) -> {\n\t\t\t\ttotal = total + s.length\n\t\t\t},\n\t\t\t.b(n) -> {\n\t\t\t\ttotal = total + n\n\t\t\t}\n\t\t}\n\t}\n\ttotal\n}\ncheck()",
+        "enum E {\n\tcase a(String)\n\tcase b(Int)\n}\nfunc check() -> Int {\n\tlet items = [E.a(\"hello\" + \" world\"), E.b(31)]\n\tlet total = 0\n\tfor e in items {\n\t\tmatch e {\n\t\t\t.a(s) -> {\n\t\t\t\ttotal = total + s.byte_count\n\t\t\t},\n\t\t\t.b(n) -> {\n\t\t\t\ttotal = total + n\n\t\t\t}\n\t\t}\n\t}\n\ttotal\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(42));
 }

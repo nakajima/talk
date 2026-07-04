@@ -1,5 +1,104 @@
 # Changelog
 
+## Unreleased (2026-07-03) — Unicode characters
+
+Strings now work in user-perceived characters. A `Character` is an
+extended grapheme cluster (UAX #29, Unicode 17.0.0) — the Swift model —
+so combining marks, emoji ZWJ sequences, flags, and Indic conjuncts each
+count as one. The byte-level API didn't go away; it moved behind an
+explicit view. Design and trade-offs:
+docs/adr/0012-unicode-character-model.md.
+
+### Characters
+
+- **Strings iterate by character.** `String` and `Substring` are
+  `Iterable` over `Character`, a borrowed view of one cluster's bytes —
+  iteration allocates nothing. `count()` counts characters, documented
+  O(n).
+
+  ```talk
+  print("héllo 👋🏽".count())      // 7
+  print("👨‍👩‍👧‍👦".count())          // 1 — four scalars, three ZWJs, one character
+  print("🇺🇳🇺🇳".count())           // 2 — four regional indicators, two flags
+
+  for ch in "héllo" {
+  	print(ch)                   // h é l l o, one per line
+  }
+  ```
+
+- **No integer character indexing.** There is no `s[i]` and no
+  `char_at`: nothing hides a linear scan or invites split characters.
+  Positional work is iteration, `find`, and slicing at byte offsets you
+  got from the API itself.
+- **Ill-formed UTF-8 is safe to iterate.** Invalid bytes decode as
+  U+FFFD error units (maximal subparts, §3.9.6 — the `from_utf8_lossy`
+  policy) for classification only; each `Character` still views the raw
+  bytes, so concatenating a string's characters reproduces it exactly.
+- **Equality stays byte equality.** NFC `"é"` and NFD `"é"` compare
+  unequal — canonical equivalence needs normalization tables talk does
+  not carry. Documented at the top of `core/String.tlk`.
+
+### The `utf8()` view
+
+- **Byte access is explicit now.** `s.utf8()` returns a borrowed
+  `UTF8View` with `count()`, `at(index)`, and `slice(start, byte_count)`
+  — byte offsets, which may split characters; that is the point of
+  asking for bytes. `byte_at`/`slice` are gone from `String` and
+  `Substring`, and the `length` field is renamed `byte_count` so nothing
+  character-shaped reads like a character count.
+
+  ```talk
+  let s = "café"
+  print(s.count())           // 4
+  print(s.utf8().count())    // 5
+  ```
+
+- **`find`/`find_from` return `Int?`** instead of a `-1` sentinel. The
+  offset is a UTF-8 byte offset, valid as `utf8().slice` input
+  (byte-wise search is exact for UTF-8: a needle only matches at
+  character boundaries of itself).
+
+### Self-hosted Unicode
+
+- The UTF-8 decoder, the full UAX #29 break engine (GB3–GB999,
+  including GB9c Indic conjuncts, GB11 emoji ZWJ sequences, GB12/13
+  regional-indicator pairs), and the `Character` layer are all talk
+  source (`core/Unicode.tlk`). The runtime still knows only bytes.
+- Break categories live in a generated table (`core/UnicodeData.tlk`):
+  a sorted boundary list packed into one 7-bit-clean string literal
+  (~8.7 KB of interned static data, binary-searched in place).
+  Regeneration is `cargo run --bin gen_unicode` over UCD files vendored
+  in `dev/ucd/` — upgrading Unicode is a data refresh, reviewed as a
+  diff.
+- All 766 official GraphemeBreakTest-17.0.0 cases pass
+  (`tests/unicode.rs`), alongside a semantic corpus run differentially
+  on both engines.
+- One compiler addition made the self-hosting possible: the `btoi` IR
+  op (`Byte._toInt()`) — talk source previously couldn't do arithmetic
+  on bytes.
+
+### Fixed along the way
+
+- **Invalid `\u{...}` escapes are hard errors.** Out-of-range and
+  surrogate code points were silently dropped from string literals;
+  they now fail at the lexer with a position, and lexer errors surface
+  as real diagnostics instead of silently truncating the parse.
+- **`let` shadowing works.** Blocks are now scopes in name resolution:
+  same-named `let`s in sibling blocks are independent bindings and a
+  nested `let` shadows the outer one. Previously every use in a
+  function silently resolved to its last same-named declaration — a
+  miscompile. Redeclaring a name within a single block is a resolution
+  error for now (proper sequential rebinding is planned).
+- **Expression-position `match` can deliver borrowed values.** The
+  borrow checker now tracks provenance through a match's join, so
+  returning a `Substring` chosen by a `match` works instead of
+  reporting an unknown borrow.
+- **Module exports carry only their own schemes.** A module re-exported
+  every imported scheme under re-tagged symbol ids, letting a core
+  symbol and a module-local symbol collide — stdlib member calls could
+  resolve against unrelated core signatures depending on nothing more
+  than symbol counts.
+
 ## Unreleased (2026-07-03)
 
 Talk's memory story is rebuilt end to end. Ownership lives in the type

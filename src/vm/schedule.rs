@@ -677,11 +677,12 @@ impl<'a> ChunkBuilder<'a> {
                 self.memo.insert(e, dest);
                 Ok(dest)
             }
-            Op::Trunc | Op::IToF => {
+            Op::Trunc | Op::IToF | Op::BToI => {
                 let src = self.eval(args[0])?;
                 let dest = self.fresh();
                 self.code.push(match op {
                     Op::Trunc => Insn::Trunc { dest, src },
+                    Op::BToI => Insn::BToI { dest, src },
                     _ => Insn::IToF { dest, src },
                 });
                 self.memo.insert(e, dest);

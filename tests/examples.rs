@@ -80,6 +80,11 @@ fn hello_world() {
 }
 
 #[test]
+fn graphemes() {
+    expect_stdout("Graphemes", &["Graphemes.tlk"]);
+}
+
+#[test]
 fn strings() {
     expect_stdout_expecting_container_element_leak("Strings", &["Strings.tlk"]);
 }

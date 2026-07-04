@@ -179,6 +179,7 @@ impl Encoder {
             }
             Insn::Trunc { dest, src } => self.reg2(7, dest, src),
             Insn::IToF { dest, src } => self.reg2(8, dest, src),
+            Insn::BToI { dest, src } => self.reg2(46, dest, src),
             Insn::CellNew { dest, init } => self.reg2(9, dest, init),
             Insn::CellGet { dest, cell } => self.reg2(10, dest, cell),
             Insn::CellSet { cell, src } => self.reg2(11, cell, src),
@@ -813,6 +814,10 @@ impl<'a> Decoder<'a> {
                 dest: self.u16()?,
                 src: self.u16()?,
             }),
+            46 => Ok(Insn::BToI {
+                dest: self.u16()?,
+                src: self.u16()?,
+            }),
             _ => Err(DecodeError::InvalidTag("instruction", tag)),
         }
     }
@@ -1048,6 +1053,7 @@ impl Insn {
             Insn::Move { dest, src }
             | Insn::Trunc { dest, src }
             | Insn::IToF { dest, src }
+            | Insn::BToI { dest, src }
             | Insn::Extract { dest, src, .. }
             | Insn::GetPayload { dest, src, .. }
             | Insn::ExistentialWitness { dest, src, .. }

@@ -142,6 +142,8 @@ pub enum InlineIRInstructionKind {
     IsUnique { dest: Register, ptr: Value },
     #[doc = "$dest = itof $val"]
     IntToFloat { dest: Register, val: Value },
+    #[doc = "$dest = btoi $val"]
+    ByteToInt { dest: Register, val: Value },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
@@ -360,6 +362,9 @@ impl Display for InlineIRInstruction {
             }
             InlineIRInstructionKind::IntToFloat { dest, val } => {
                 write!(f, "{dest} = itof {}", val)
+            }
+            InlineIRInstructionKind::ByteToInt { dest, val } => {
+                write!(f, "{dest} = btoi {}", val)
             }
         }
     }

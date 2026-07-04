@@ -1,0 +1,42 @@
+// Extended grapheme clusters: count, iteration, and byte structure.
+
+// Combining mark (NFD e + U+0301) is one character.
+print("e\u{301}".count())
+// Precomposed é: five characters.
+print("héllo".count())
+// Thumbs up + skin-tone modifier (GB9 Extend).
+print("\u{1F44D}\u{1F3FD}".count())
+// Family emoji: four people joined by ZWJs (GB11).
+print("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}".count())
+// One flag: two regional indicators pair (GB12).
+print("\u{1F1FA}\u{1F1F3}".count())
+// Two flags: four regional indicators are two pairs (GB12/GB13).
+print("\u{1F1FA}\u{1F1F3}\u{1F1FA}\u{1F1F3}".count())
+// Devanagari conjunct क्ष: consonant + virama + consonant (GB9c).
+print("\u{915}\u{94D}\u{937}".count())
+// CRLF is one character (GB3).
+print("\r\n".count())
+// Empty string.
+print("".count())
+// Decomposed Hangul jamo L+V+T compose (GB6/GB7).
+print("\u{1100}\u{1161}\u{11A8}".count())
+
+// Iteration yields borrowed views; concatenating them reproduces the
+// string.
+let s = "a\u{301}bc"
+let out = ""
+for ch in s {
+	out = out + ch.to_string() + "|"
+}
+print(out)
+
+// Per-cluster byte counts through iteration.
+let total = 0
+for member in "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}x" {
+	total = total + member.utf8_count()
+}
+print(total)
+
+// Substrings iterate too: everything after the first two bytes of
+// "héllo" (h + two-byte é).
+print("héllo".utf8().slice(3, 3).count())

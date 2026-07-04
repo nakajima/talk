@@ -117,6 +117,8 @@ pub enum Op {
     Cmp(CmpOp),
     Trunc,
     IToF,
+    /// Byte → Int zero-extension.
+    BToI,
     Alloc,
     Free,
     /// Add one reference to a heap buffer (a copy-on-write clone).

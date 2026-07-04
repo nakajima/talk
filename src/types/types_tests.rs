@@ -139,7 +139,7 @@ pub mod tests {
             ),
             (
                 "types::types_string_slice",
-                "\"hello\".slice(1, 3)",
+                "\"hello\".utf8().slice(1, 3)",
                 true,
                 true,
             ),

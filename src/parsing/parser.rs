@@ -3,7 +3,7 @@ use std::str::FromStr;
 use crate::ast::{AST, NewAST, Parsed};
 use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
 use crate::label::Label;
-use crate::lexer::Lexer;
+use crate::lexer::{Lexer, LexerError};
 use crate::name::Name;
 use crate::node::Node;
 use crate::node_id::{FileID, NodeID};
@@ -105,6 +105,7 @@ pub struct Parser<'a> {
     file_id: FileID,
     diagnostics: Vec<AnyDiagnostic>,
     context_stack: Vec<ParseContext>,
+    lexer_error: Option<(LexerError, u32, u32)>,
 }
 
 #[allow(clippy::expect_used)]
@@ -122,6 +123,7 @@ impl<'a> Parser<'a> {
             file_id,
             diagnostics: Default::default(),
             context_stack: vec![ParseContext::TopLevel],
+            lexer_error: None,
             ast: AST::<NewAST> {
                 path: path.into(),
                 roots: Default::default(),
@@ -168,10 +170,21 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            let root = self.next_root(&current.kind)?;
+            let root = match self.next_root(&current.kind) {
+                Ok(root) => root,
+                // Errors caused by a failed lex report the lex failure,
+                // not the downstream missing-token symptom.
+                Err(error) => return Err(self.take_lexer_error().unwrap_or(error)),
+            };
             self.ast.roots.push(root);
 
             self.skip_semicolons_and_newlines();
+        }
+
+        // A lexer error can end the token stream between roots; without
+        // this check the parse would silently truncate the file.
+        if let Some(error) = self.take_lexer_error() {
+            return Err(error);
         }
 
         let ast = AST::<Parsed> {
@@ -1561,6 +1574,16 @@ impl<'a> Parser<'a> {
                         binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::IntToFloat { dest, val },
+                    })
+                }
+                "btoi" => {
+                    let val = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::ByteToInt { dest, val },
                     })
                 }
                 _ => {
@@ -3285,8 +3308,27 @@ impl<'a> Parser<'a> {
 
         tracing::trace!("advance {:?}", self.next);
         self.current = self.next.take();
-        self.next = self.lexer.next().ok();
+        // A lexer error ends the token stream; the stored error is
+        // surfaced by parse_with_comments instead of being swallowed.
+        self.next = if self.lexer_error.is_some() {
+            None
+        } else {
+            match self.lexer.next() {
+                Ok(token) => Some(token),
+                Err(error) => {
+                    let (line, col) = self.lexer.line_col();
+                    self.lexer_error = Some((error, line, col));
+                    None
+                }
+            }
+        };
         self.previous.clone()
+    }
+
+    fn take_lexer_error(&mut self) -> Option<ParserError> {
+        self.lexer_error
+            .take()
+            .map(|(error, line, col)| ParserError::Lexer { error, line, col })
     }
 
     fn add_expr(&mut self, expr_kind: ExprKind, loc: LocToken) -> Result<Expr, ParserError> {

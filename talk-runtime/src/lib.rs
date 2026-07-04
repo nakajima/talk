@@ -79,6 +79,10 @@ pub enum Insn {
         dest: u16,
         src: u16,
     },
+    BToI {
+        dest: u16,
+        src: u16,
+    },
     CellNew {
         dest: u16,
         init: u16,
@@ -358,6 +362,7 @@ impl Module {
             }
             Insn::Trunc { dest, src } => format!("trunc r{dest} <- r{src}"),
             Insn::IToF { dest, src } => format!("itof r{dest} <- r{src}"),
+            Insn::BToI { dest, src } => format!("btoi r{dest} <- r{src}"),
             Insn::CellNew { dest, init } => format!("cell_new r{dest} <- r{init}"),
             Insn::CellGet { dest, cell } => format!("cell_get r{dest} <- r{cell}"),
             Insn::CellSet { cell, src } => format!("cell_set r{cell} <- r{src}"),

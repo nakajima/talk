@@ -321,7 +321,20 @@ fn transfer_statement(
                 mir::ValueDestination::Return | mir::ValueDestination::TailReturn => {
                     checker.check_return_value(expr, state);
                 }
-                mir::ValueDestination::Continuation => checker.consume_expr(expr, state),
+                mir::ValueDestination::Continuation(temp) => {
+                    // The join block reads this construct's value as a
+                    // `Temp`: record the delivered value's provenance so a
+                    // borrowed match/if result reaches whatever its arm
+                    // tails reach (states merging at the join union the
+                    // arms' entries).
+                    if let Some(temp) = temp
+                        && checker.grades.contains_borrowed(&expr.ty)
+                    {
+                        let provenance = checker.expr_provenance(expr, state);
+                        state.temp_provenances.insert(*temp, provenance);
+                    }
+                    checker.consume_expr(expr, state);
+                }
             }
             checker.prune_at(state, expr.id);
         }

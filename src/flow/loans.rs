@@ -36,7 +36,7 @@ impl Origin {
 }
 
 /// One provenance loan: a borrowed value reaches `owner` (when known).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProvLoan {
     pub(crate) origin: Origin,
     pub(crate) owner: Option<Place>,
@@ -67,6 +67,19 @@ impl Provenance {
     pub(crate) fn union(mut self, other: Provenance) -> Provenance {
         self.loans.extend(other.loans);
         self
+    }
+
+    /// Deduplicating in-place union; reports whether anything was added
+    /// (the state-merge fixpoint test).
+    pub(crate) fn union_with(&mut self, other: &Provenance) -> bool {
+        let mut changed = false;
+        for loan in &other.loans {
+            if !self.loans.contains(loan) {
+                self.loans.push(loan.clone());
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// The same reach at a different permission: a `&mut`-annotated binding
@@ -107,7 +120,7 @@ impl MoveState {
     }
 
     /// The owner a use of `place` actually touches: a borrowed root's path
-    /// rebases onto its real owner (`borrow.length` conflicts on `s`).
+    /// rebases onto its real owner (`borrow.byte_count` conflicts on `s`).
     pub(crate) fn loan_owner_for(&self, place: &Place) -> Place {
         if let Some(provenance) = self
             .provenances
@@ -353,6 +366,23 @@ impl MoveChecker<'_> {
             }
             // A literal is static data: a borrow of it outlives everything.
             ExprKind::Lit(_) => Provenance::direct(Origin::Static, None, Perm::Shared),
+            // An expression-position match delivers one arm's tail value:
+            // its borrows reach whatever any value-delivering arm reaches.
+            // (Arms whose block ends in a statement — e.g. a `return` —
+            // never deliver the join value and contribute nothing.)
+            ExprKind::Match(_, arms) => {
+                let mut provenance = Provenance::default();
+                for arm in arms {
+                    if let Some(tail) = block_tail_expr(&arm.body) {
+                        provenance = provenance.union(self.expr_provenance(tail, state));
+                    }
+                }
+                provenance
+            }
+            ExprKind::Block(block) => match block_tail_expr(block) {
+                Some(tail) => self.expr_provenance(tail, state),
+                None => Provenance::unknown(Perm::Shared),
+            },
             // A call-result temp: recorded at its Call statement.
             ExprKind::Temp(temp) => state
                 .temp_provenances
@@ -515,13 +545,8 @@ impl MoveChecker<'_> {
     }
 
     fn return_reach_of(&mut self, func: &hir::Func, func_ty: Option<&Ty>) -> Vec<usize> {
-        let tail = match func.body.body.last() {
-            Some(hir::Node::Expr(tail)) => tail,
-            Some(hir::Node::Stmt(hir::Stmt {
-                kind: hir::StmtKind::Expr(tail),
-                ..
-            })) => tail,
-            _ => return vec![],
+        let Some(tail) = block_tail_expr(&func.body) else {
+            return vec![];
         };
         if !self.grades.contains_borrowed(&tail.ty) {
             return vec![];
@@ -872,6 +897,18 @@ fn stores_borrow(ty: &Ty) -> bool {
 
 fn callee_param_tys(callee: &hir::Expr) -> Option<Vec<Ty>> {
     super::moves::func_params(&callee.ty)
+}
+
+/// The expression a block delivers as its value, if it ends in one.
+fn block_tail_expr(block: &hir::Block) -> Option<&hir::Expr> {
+    match block.body.last() {
+        Some(hir::Node::Expr(tail)) => Some(tail),
+        Some(hir::Node::Stmt(hir::Stmt {
+            kind: hir::StmtKind::Expr(tail),
+            ..
+        })) => Some(tail),
+        _ => None,
+    }
 }
 
 pub(crate) fn perm_name(perm: Perm) -> &'static str {

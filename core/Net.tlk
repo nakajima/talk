@@ -53,7 +53,7 @@ public struct TcpStream {
 	}
 
 	public func write_string(s: String) -> Int {
-		_io_write(self.fd, s.storage.base, s.length)
+		_io_write(self.fd, s.storage.base, s.byte_count)
 	}
 
 	public func close() -> Int {

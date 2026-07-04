@@ -1,5 +1,5 @@
 func take(s: String) -> Int {
-	s.length
+	s.byte_count
 }
 
 func search(flag: Bool) -> Int {
@@ -12,7 +12,7 @@ func search(flag: Bool) -> Int {
 			total = total + take(local)
 			continue
 		}
-		total = total + local.length
+		total = total + local.byte_count
 	}
 	total
 }

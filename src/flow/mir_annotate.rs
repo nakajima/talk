@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn stored_bodies_carry_per_point_candidate_elaborations() {
         let bodies = annotated_bodies(
-            "func take(name: String) -> Int {\n\tname.length\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
+            "func take(name: String) -> Int {\n\tname.byte_count\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
         );
         assert_eq!(bodies.len(), 2, "take and check");
         // take: the owned by-value parameter is live at exit → Static.
@@ -430,7 +430,7 @@ mod tests {
     fn driver_stores_annotated_bodies_at_type_check() {
         let typed = crate::compiling::driver::Driver::new(
             vec![crate::compiling::driver::Source::from(
-                "func take(name: String) -> Int {\n\tname.length\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
+                "func take(name: String) -> Int {\n\tname.byte_count\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
             )],
             crate::compiling::driver::DriverConfig::new("AnnotateTest"),
         )
@@ -477,7 +477,7 @@ mod tests {
     #[test]
     fn annotation_records_statement_moves() {
         let bodies = annotated_bodies(
-            "func take(name: String) -> Int {\n\tname.length\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
+            "func take(name: String) -> Int {\n\tname.byte_count\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
         );
         let moved: Vec<_> = bodies[1]
             .blocks

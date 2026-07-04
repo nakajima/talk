@@ -306,7 +306,7 @@ impl<'a> Lowering<'a> {
                 expr, destination, ..
             } => {
                 let target = match destination {
-                    mir::ValueDestination::Continuation | mir::ValueDestination::TailReturn => {
+                    mir::ValueDestination::Continuation(_) | mir::ValueDestination::TailReturn => {
                         self.wrap_cont_with_following_drops(ctx, cursor, k)
                     }
                     mir::ValueDestination::Return => {

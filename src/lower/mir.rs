@@ -190,8 +190,9 @@ pub(crate) enum Statement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ValueDestination {
     /// A nested tail delivery (branch arm, block value): the value flows on
-    /// within the function.
-    Continuation,
+    /// within the function, into the enclosing construct's join temp when
+    /// one exists (the flow checker records the temp's provenance there).
+    Continuation(Option<u32>),
     /// The body's own tail expression: the function's return value.
     /// Lowering treats it exactly like `Continuation` (CPS delivers to the
     /// same continuation); the flow checker provenance-checks it as a
@@ -305,6 +306,10 @@ struct Builder<'types> {
     /// they replace in later statement/terminator embeddings.
     next_temp: u32,
     temp_subs: FxHashMap<NodeID, u32>,
+    /// The join temps of the value-producing constructs currently being
+    /// lowered, innermost last: an arm tail's `Continuation` delivery
+    /// names the enclosing construct's temp.
+    continuation_temps: Vec<u32>,
     /// Whether this body's root-scope tail is the function's return value
     /// (true for function/top-level bodies; false for standalone match-arm
     /// bodies, whose tail delivers to the match join).
@@ -524,6 +529,7 @@ impl<'types> Builder<'types> {
             handler_stack: vec![],
             next_temp: 0,
             temp_subs: FxHashMap::default(),
+            continuation_temps: vec![],
             root_tail_is_return: true,
             scaffolds: FxHashMap::default(),
         }
@@ -620,7 +626,7 @@ impl<'types> Builder<'types> {
                 let destination = if self.scope_stack.len() == 1 && self.root_tail_is_return {
                     ValueDestination::TailReturn
                 } else {
-                    ValueDestination::Continuation
+                    ValueDestination::Continuation(self.continuation_temps.last().copied())
                 };
                 self.push_statement(
                     current,
@@ -1236,6 +1242,7 @@ impl<'types> Builder<'types> {
             },
         );
 
+        self.continuation_temps.push(temp);
         for (arm, arm_id) in arms.iter().zip(arm_blocks) {
             let arm_exit = self.lower_scope(arm_id, arm.body.id, |builder, arm_id| {
                 builder.lower_pattern_binders(&arm.pattern, arm_id);
@@ -1243,6 +1250,7 @@ impl<'types> Builder<'types> {
             });
             self.terminate_if_open(arm_exit, Terminator::Jump(join_id));
         }
+        self.continuation_temps.pop();
 
         join_id
     }
@@ -1990,7 +1998,9 @@ mod tests {
         with_first_func_mir(source, |body| {
             let destinations = destinations(body);
             assert!(
-                destinations.contains(&ValueDestination::Continuation),
+                destinations
+                    .iter()
+                    .any(|d| matches!(d, ValueDestination::Continuation(_))),
                 "{body:#?}"
             );
             assert!(

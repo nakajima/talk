@@ -283,7 +283,7 @@ pub mod tests {
     #[test]
     fn conditional_owned_drop_uses_runtime_drop_flag() {
         let ir = lowered_ir(
-            "func maybe(flag: Bool) -> Int {\n\tlet s = \"hi\" + \"!\"\n\tif flag {\n\t\tlet t = s\n\t\tt.length\n\t} else {\n\t\t2\n\t}\n\t0\n}\nmaybe(false)",
+            "func maybe(flag: Bool) -> Int {\n\tlet s = \"hi\" + \"!\"\n\tif flag {\n\t\tlet t = s\n\t\tt.byte_count\n\t} else {\n\t\t2\n\t}\n\t0\n}\nmaybe(false)",
         );
         assert!(ir.contains("cell_new(true)"), "{ir}");
         assert!(has_drop_flag_set(&ir, false), "{ir}");
@@ -293,7 +293,7 @@ pub mod tests {
     #[test]
     fn open_field_move_drop_uses_field_drop_flag() {
         let ir = lowered_ir(
-            "struct Person {\n\tlet name: String\n\tlet title: String\n\tlet age: Int\n}\nfunc f() -> Int {\n\tlet person = Person(name: \"Pat\" + \"\", title: \"Dr\" + \"\", age: 41)\n\tlet name = person.name\n\tname.length + person.title.length + person.age\n}\nf()",
+            "struct Person {\n\tlet name: String\n\tlet title: String\n\tlet age: Int\n}\nfunc f() -> Int {\n\tlet person = Person(name: \"Pat\" + \"\", title: \"Dr\" + \"\", age: 41)\n\tlet name = person.name\n\tname.byte_count + person.title.byte_count + person.age\n}\nf()",
         );
         assert!(ir.contains("cell_new(true)"), "{ir}");
         assert!(has_drop_flag_set(&ir, false), "{ir}");
@@ -304,7 +304,7 @@ pub mod tests {
     #[test]
     fn field_assignment_reinitializes_drop_flag() {
         let ir = lowered_ir(
-            "struct Person {\n\tlet name: String\n\tlet title: String\n}\nfunc f() -> Int {\n\tlet person = Person(name: \"Pat\" + \"\", title: \"Dr\" + \"\")\n\tlet old = person.name\n\tperson.name = \"Sue\" + \"\"\n\told.length + person.name.length + person.title.length\n}\nf()",
+            "struct Person {\n\tlet name: String\n\tlet title: String\n}\nfunc f() -> Int {\n\tlet person = Person(name: \"Pat\" + \"\", title: \"Dr\" + \"\")\n\tlet old = person.name\n\tperson.name = \"Sue\" + \"\"\n\told.byte_count + person.name.byte_count + person.title.byte_count\n}\nf()",
         );
         assert!(has_drop_flag_set(&ir, false), "{ir}");
         assert!(has_drop_flag_set(&ir, true), "{ir}");

@@ -1,0 +1,359 @@
+// no-core
+// UTF-8 and Unicode segmentation support for String's Character layer.
+//
+// `_utf8_decode` returns one packed Int: scalar * 8 + size, where size is
+// the number of bytes consumed (1-4). Packing avoids a per-scalar record
+// allocation on the hot iteration path.
+//
+// Ill-formed input consumes a maximal subpart (Unicode 17.0 §3.9.6, the
+// same policy as Rust's from_utf8_lossy and WHATWG): a truncated-but-valid
+// prefix is one error unit, a lone continuation or invalid lead is one
+// byte. Error units decode as U+FFFD for classification, but callers keep
+// viewing the raw bytes — iteration over any byte string is lossless.
+use { Add, Comparable, Divide, Equatable, Multiply, Subtract } from ./Operators.tlk
+use { ByteStorage } from ./Memory.tlk
+use { String, Substring } from ./String.tlk
+use { Borrowed } from ./Ownership.tlk
+use { Optional } from ./Optional.tlk
+use { Iterable, Iterator } from ./Iterable.tlk
+use { Showable } from ./Showable.tlk
+use { _GC_CONTROL, _GC_CR, _GC_EXTEND, _GC_EXTEND_INCB_EXTEND, _GC_EXTEND_INCB_LINKER, _GC_EXT_PICT, _GC_HANGUL_L, _GC_HANGUL_LV, _GC_HANGUL_LVT, _GC_HANGUL_T, _GC_HANGUL_V, _GC_INCB_CONSONANT, _GC_LF, _GC_OTHER, _GC_PREPEND, _GC_REGIONAL_INDICATOR, _GC_SPACINGMARK, _GC_ZWJ, _gcb_table } from ./UnicodeData.tlk
+
+// talk has no bitwise operators; UTF-8's masks and shifts are powers of
+// two, so / and * and - do the same work.
+func _is_continuation(b: Int) -> Bool {
+	if b < 128 { return false }
+	b < 192
+}
+
+public func _utf8_decode(storage: &ByteStorage, offset: Int, end: Int) -> Int {
+	let replacement: Int = 65533
+	let b0: Int = storage.get(offset)._toInt()
+
+	// 0xxxxxxx: ASCII.
+	if b0 < 128 { return b0 * 8 + 1 }
+
+	// Continuation bytes and the overlong leads C0/C1 cannot start a
+	// character.
+	if b0 < 194 { return replacement * 8 + 1 }
+
+	// 110xxxxx 10xxxxxx: leads C2..DF.
+	if b0 < 224 {
+		if end <= offset + 1 { return replacement * 8 + 1 }
+		let b1: Int = storage.get(offset + 1)._toInt()
+		if _is_continuation(b1) == false { return replacement * 8 + 1 }
+		let scalar: Int = (b0 - 192) * 64 + (b1 - 128)
+		return scalar * 8 + 2
+	}
+
+	// 1110xxxx 10xxxxxx 10xxxxxx: leads E0..EF. E0 narrows the first
+	// continuation to A0..BF (no overlongs); ED narrows it to 80..9F
+	// (no surrogates).
+	if b0 < 240 {
+		if end <= offset + 1 { return replacement * 8 + 1 }
+		let b1: Int = storage.get(offset + 1)._toInt()
+		let lo: Int = if b0 == 224 { 160 } else {
+			128
+		}
+		let hi: Int = if b0 == 237 { 159 } else {
+			191
+		}
+		if b1 < lo { return replacement * 8 + 1 }
+		if hi < b1 { return replacement * 8 + 1 }
+		if end <= offset + 2 { return replacement * 8 + 2 }
+		let b2: Int = storage.get(offset + 2)._toInt()
+		if _is_continuation(b2) == false { return replacement * 8 + 2 }
+		let scalar: Int = (b0 - 224) * 4096 + (b1 - 128) * 64 + (b2 - 128)
+		return scalar * 8 + 3
+	}
+
+	// 11110xxx + 3 continuations: leads F0..F4. F0 narrows the first
+	// continuation to 90..BF (no overlongs); F4 narrows it to 80..8F
+	// (nothing above U+10FFFF).
+	if b0 < 245 {
+		if end <= offset + 1 { return replacement * 8 + 1 }
+		let b1: Int = storage.get(offset + 1)._toInt()
+		let lo: Int = if b0 == 240 { 144 } else {
+			128
+		}
+		let hi: Int = if b0 == 244 { 143 } else {
+			191
+		}
+		if b1 < lo { return replacement * 8 + 1 }
+		if hi < b1 { return replacement * 8 + 1 }
+		if end <= offset + 2 { return replacement * 8 + 2 }
+		let b2: Int = storage.get(offset + 2)._toInt()
+		if _is_continuation(b2) == false { return replacement * 8 + 2 }
+		if end <= offset + 3 { return replacement * 8 + 3 }
+		let b3: Int = storage.get(offset + 3)._toInt()
+		if _is_continuation(b3) == false { return replacement * 8 + 3 }
+		let scalar: Int = (b0 - 240) * 262144 + (b1 - 128) * 4096 + (b2 - 128) * 64 + (b3 - 128)
+		return scalar * 8 + 4
+	}
+
+	// F5..FF: never valid leads.
+	replacement * 8 + 1
+}
+
+// One table entry (four big-endian base-128 septets; see gen_unicode).
+func _entry_value(storage: &ByteStorage, index: Int) -> Int {
+	let base: Int = index * 4
+	let v0: Int = storage.get(base)._toInt()
+	let v1: Int = storage.get(base + 1)._toInt()
+	let v2: Int = storage.get(base + 2)._toInt()
+	let v3: Int = storage.get(base + 3)._toInt()
+	((v0 * 128 + v1) * 128 + v2) * 128 + v3
+}
+
+// The scalar's grapheme-cluster-break category (a _GC_* constant), via
+// binary search over the generated boundary list. O(log n) with ~12
+// probes; ASCII short-circuits.
+public func _grapheme_category(scalar: Int) -> Int {
+	if scalar == 13 { return _GC_CR }
+	if scalar == 10 { return _GC_LF }
+	if scalar < 32 { return _GC_CONTROL }
+	if scalar < 127 { return _GC_OTHER }
+
+	let table: String = _gcb_table()
+	let entry_count: Int = table.byte_count / 4
+	// The last entry whose start <= scalar.
+	let lo: Int = 0
+	let hi: Int = entry_count - 1
+	loop lo < hi {
+		let mid: Int = (lo + hi + 1) / 2
+		let mid_start: Int = _entry_value(table.storage, mid) / 32
+		if scalar < mid_start { hi = mid - 1 } else {
+			lo = mid
+		}
+	}
+	let v: Int = _entry_value(table.storage, lo)
+	v - (v / 32) * 32
+}
+
+func _packed_scalar(packed: Int) -> Int {
+	packed / 8
+}
+
+func _packed_size(packed: Int) -> Int {
+	packed - (packed / 8) * 8
+}
+
+// Whether `cat` extends the current cluster under GB9 (Extend and ZWJ,
+// including the InCB refinements of Extend).
+func _extends_cluster(cat: Int) -> Bool {
+	if cat == _GC_EXTEND { return true }
+	if cat == _GC_EXTEND_INCB_LINKER { return true }
+	if cat == _GC_EXTEND_INCB_EXTEND { return true }
+	cat == _GC_ZWJ
+}
+
+// Whether a scalar of category `cat` joins the cluster whose previous
+// scalar had category `prev`, given the cluster-local rule state (UAX #29
+// GB4-GB999; GB3 is handled by the caller's CR fast path).
+func _joins(prev: Int, cat: Int, emoji: Int, incb: Int, ri_run: Int) -> Bool {
+	// GB4/GB5: controls always split.
+	if cat == _GC_CONTROL { return false }
+	if cat == _GC_CR { return false }
+	if cat == _GC_LF { return false }
+	// GB9/GB9a: extending marks, ZWJ, and spacing marks join.
+	if _extends_cluster(cat) { return true }
+	if cat == _GC_SPACINGMARK { return true }
+	// GB9b: anything joins after a prepend.
+	if prev == _GC_PREPEND { return true }
+	// GB6/GB7/GB8: Hangul jamo composition.
+	if prev == _GC_HANGUL_L {
+		if cat == _GC_HANGUL_L { return true }
+		if cat == _GC_HANGUL_V { return true }
+		if cat == _GC_HANGUL_LV { return true }
+		if cat == _GC_HANGUL_LVT { return true }
+	}
+	let after_vowel: Bool = prev == _GC_HANGUL_LV || prev == _GC_HANGUL_V
+	if after_vowel {
+		if cat == _GC_HANGUL_V { return true }
+		if cat == _GC_HANGUL_T { return true }
+	}
+	let after_trailer: Bool = prev == _GC_HANGUL_LVT || prev == _GC_HANGUL_T
+	if after_trailer {
+		if cat == _GC_HANGUL_T { return true }
+	}
+	// GB9c: a consonant joins when a linker (through InCB extends) sits
+	// between it and the previous consonant.
+	let conjunct: Bool = cat == _GC_INCB_CONSONANT && incb == 2
+	if conjunct { return true }
+	// GB11: emoji ZWJ sequences continue after ExtPict Extend* ZWJ.
+	let emoji_zwj: Bool = cat == _GC_EXT_PICT && emoji == 2
+	if emoji_zwj { return true }
+	// GB12/GB13: a regional indicator pairs with an odd-length run.
+	let ri_pair: Bool = cat == _GC_REGIONAL_INDICATOR && prev == _GC_REGIONAL_INDICATOR
+	if ri_pair { return (ri_run - (ri_run / 2) * 2) == 1 }
+	false
+}
+
+// The byte offset just past the extended grapheme cluster starting at
+// `offset`, which must itself be a cluster boundary. Because scans start
+// at true boundaries, all UAX #29 rule state (GB11's emoji sequence,
+// GB9c's conjunct chain, GB12/13's regional-indicator parity) is local to
+// this one scan — the iterator carries none.
+public func _next_boundary(storage: &ByteStorage, offset: Int, end: Int) -> Int {
+	let head: Int = _utf8_decode(storage, offset, end)
+	let head_cat: Int = _grapheme_category(_packed_scalar(head))
+	let pos: Int = offset + _packed_size(head)
+
+	// GB3/GB4: CR joins only a following LF; controls stand alone.
+	if head_cat == _GC_CR {
+		if pos < end {
+			let after_cr: Int = _utf8_decode(storage, pos, end)
+			if _packed_scalar(after_cr) == 10 { return pos + _packed_size(after_cr) }
+		}
+		return pos
+	}
+	if head_cat == _GC_CONTROL { return pos }
+	if head_cat == _GC_LF { return pos }
+
+	let prev: Int = head_cat
+	// GB11 state: 0 none, 1 ExtPict (+ extends), 2 ExtPict + extends + ZWJ.
+	let emoji: Int = 0
+	if head_cat == _GC_EXT_PICT { emoji = 1 }
+	// GB9c state: 0 none, 1 consonant (+ InCB extends), 2 consonant + linker.
+	let incb: Int = 0
+	if head_cat == _GC_INCB_CONSONANT { incb = 1 }
+	// GB12/13 state: length of the trailing regional-indicator run.
+	let ri_run: Int = 0
+	if head_cat == _GC_REGIONAL_INDICATOR { ri_run = 1 }
+
+	loop pos < end {
+		let next_packed: Int = _utf8_decode(storage, pos, end)
+		let cat: Int = _grapheme_category(_packed_scalar(next_packed))
+		if _joins(prev, cat, emoji, incb, ri_run) == false { return pos }
+
+		if cat == _GC_EXT_PICT { emoji = 1 } else {
+			let emoji_extends: Bool = emoji == 1 && _extends_cluster(cat)
+			if emoji_extends {
+				if cat == _GC_ZWJ { emoji = 2 }
+			} else {
+				emoji = 0
+			}
+		}
+		if cat == _GC_INCB_CONSONANT { incb = 1 } else {
+			let links: Bool = incb >= 1 && cat == _GC_EXTEND_INCB_LINKER
+			let carries: Bool = incb >= 1 && (cat == _GC_EXTEND_INCB_EXTEND || cat == _GC_ZWJ)
+			if links { incb = 2 } else {
+				if carries == false { incb = 0 }
+			}
+		}
+		if cat == _GC_REGIONAL_INDICATOR {
+			if prev == _GC_REGIONAL_INDICATOR { ri_run = ri_run + 1 } else {
+				ri_run = 1
+			}
+		} else {
+			ri_run = 0
+		}
+		prev = cat
+		pos = pos + _packed_size(next_packed)
+	}
+	pos
+}
+
+// One user-perceived character: a borrowed view of a cluster's bytes.
+public struct Character {
+	let storage: ByteStorage
+	let start: Int
+	let byte_count: Int
+
+	func utf8_count() -> Int {
+		self.byte_count
+	}
+
+	func as_substring() -> Substring {
+		Substring(self.storage, self.start, self.byte_count)
+	}
+
+	func to_string() -> String {
+		self.as_substring().to_string()
+	}
+}
+
+extend Character: Borrowed {}
+
+// Byte equality of the cluster — same semantic as String equality, so
+// canonically equivalent characters in different normal forms differ.
+extend Character: Equatable {
+	func equals(rhs: Character) -> Bool {
+		if self.byte_count != rhs.byte_count { return false }
+		let idx = 0
+		loop idx < self.byte_count {
+			let lhs_byte: Byte = self.storage.get(self.start + idx)
+			let rhs_byte: Byte = rhs.storage.get(rhs.start + idx)
+			let same: Bool = @_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
+			if same == false { return false }
+			idx = idx + 1
+		}
+		true
+	}
+}
+
+extend Character: Showable {
+	func show() -> String {
+		self.to_string()
+	}
+}
+
+public struct CharacterIterator {
+	let storage: ByteStorage
+	let offset: Int
+	let end: Int
+}
+
+extend CharacterIterator: Borrowed {}
+
+extend CharacterIterator: Iterator<Character> {
+	mut func next() -> Character? {
+		if self.end <= self.offset { return Optional.none }
+		let next_offset: Int = _next_boundary(self.storage, self.offset, self.end)
+
+		let ch = Character(
+			storage: self.storage,
+			start: self.offset,
+			byte_count: next_offset - self.offset
+		)
+		self.offset = next_offset
+		Optional.some(ch)
+	}
+}
+
+extend String: Iterable {
+	func iter() -> CharacterIterator {
+		CharacterIterator(storage: self.storage, offset: 0, end: self.byte_count)
+	}
+}
+
+extend Substring: Iterable {
+	func iter() -> CharacterIterator {
+		CharacterIterator(
+			storage: self.storage,
+			offset: self.start,
+			end: self.start + self.byte_count
+		)
+	}
+}
+
+extend Substring {
+	// O(n): counts extended grapheme clusters by scanning boundaries.
+	func count() -> Int {
+		let n = 0
+		let scan = self.start
+		let stop: Int = self.start + self.byte_count
+		loop scan < stop {
+			scan = _next_boundary(self.storage, scan, stop)
+			n = n + 1
+		}
+		n
+	}
+}
+
+extend String {
+	// O(n): counts extended grapheme clusters by scanning boundaries.
+	func count() -> Int {
+		self.as_substring().count()
+	}
+}

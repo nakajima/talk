@@ -42,8 +42,8 @@ public struct Directory {
 
 	func entries() -> Array<DirectoryEntry> {
 		let path_string = self.path.to_string()
-		let path_buf = _alloc<Byte>(path_string.length + 1)
-		_copy(path_string.storage.base, path_buf, path_string.length)
+		let path_buf = _alloc<Byte>(path_string.byte_count + 1)
+		_copy(path_string.storage.base, path_buf, path_string.byte_count)
 
 		let real_count = _io_dir_count(path_buf)
 		if real_count < 0 { return [] }

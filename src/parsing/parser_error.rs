@@ -1,8 +1,13 @@
-use crate::{parser::BlockContext, token::Token, token_kind::TokenKind};
+use crate::{lexer::LexerError, parser::BlockContext, token::Token, token_kind::TokenKind};
 use std::{error::Error, fmt::Display};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ParserError {
+    Lexer {
+        error: LexerError,
+        line: u32,
+        col: u32,
+    },
     UnexpectedToken {
         expected: String,
         actual: String,
@@ -29,6 +34,15 @@ pub enum ParserError {
 impl Display for ParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Lexer { error, line, col } => {
+                write!(
+                    f,
+                    "Lex error at line {}, column {}: {}",
+                    line + 1,
+                    col,
+                    error.message()
+                )
+            }
             Self::UnexpectedEndOfInput(expected) => {
                 if let Some(expected) = expected {
                     write!(f, "Unexpected end of input. Expected {expected:?}")

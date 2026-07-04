@@ -123,9 +123,14 @@ impl MoveState {
             }
         }
         for (temp, provenance) in &other.temp_provenances {
-            if !self.temp_provenances.contains_key(temp) {
-                self.temp_provenances.insert(*temp, provenance.clone());
-                changed = true;
+            match self.temp_provenances.get_mut(temp) {
+                // Arms deliver to the same join temp: the temp's reach is
+                // the union over delivering paths.
+                Some(existing) => changed |= existing.union_with(provenance),
+                None => {
+                    self.temp_provenances.insert(*temp, provenance.clone());
+                    changed = true;
+                }
             }
         }
         changed

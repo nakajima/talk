@@ -577,7 +577,7 @@ pub mod tests {
         // The loop-local was moved into consume(); the break path must not
         // free it a second time.
         let (_, out) = run_on_both_engines_io(
-            "func consume(x: String) -> Int {\n\tx.length\n}\nfunc f() -> Int {\n\tloop {\n\t\tlet s = \"a\" + \"b\"\n\t\tlet n = consume(s)\n\t\tbreak\n\t}\n\t0\n}\nprint(f())",
+            "func consume(x: String) -> Int {\n\tx.byte_count\n}\nfunc f() -> Int {\n\tloop {\n\t\tlet s = \"a\" + \"b\"\n\t\tlet n = consume(s)\n\t\tbreak\n\t}\n\t0\n}\nprint(f())",
         );
         assert_eq!(out, "0\n");
     }
@@ -625,7 +625,7 @@ pub mod tests {
         // The moved-on-one-path local needs a drop flag that both arms of
         // the expression-position if maintain correctly.
         let (_, out) = run_on_both_engines_io(
-            "func consume(x: String) -> Int {\n\tx.length\n}\nfunc f(n: Int) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet x = if n > 0 { consume(s) } else { 0 }\n\tx\n}\nprint(f(1))\nprint(f(0))",
+            "func consume(x: String) -> Int {\n\tx.byte_count\n}\nfunc f(n: Int) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet x = if n > 0 { consume(s) } else { 0 }\n\tx\n}\nprint(f(1))\nprint(f(0))",
         );
         assert_eq!(out, "2\n0\n");
     }
@@ -881,7 +881,7 @@ pub mod tests {
         // `s` belongs to `f`, stays live across the resume, and is dropped
         // exactly once at f's exit.
         let (_, out) = run_on_both_engines_io(
-            "effect 'ask(prompt) -> Int\nfunc f() -> Int {\n\tlet s = \"hello\" + \" world\"\n\t@handle 'ask { p in\n\t\tcontinue 41\n\t}\n\tlet answer = 'ask(\"q\")\n\tanswer + s.length\n}\nprint(f())",
+            "effect 'ask(prompt) -> Int\nfunc f() -> Int {\n\tlet s = \"hello\" + \" world\"\n\t@handle 'ask { p in\n\t\tcontinue 41\n\t}\n\tlet answer = 'ask(\"q\")\n\tanswer + s.byte_count\n}\nprint(f())",
         );
         assert_eq!(out, "52\n");
     }
@@ -904,7 +904,7 @@ pub mod tests {
         // open mints a simulated fd; writes append; reads start at the
         // beginning — so a write then read round-trips the bytes.
         let (value, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let path = _alloc<Byte>(1)\nlet fd = _io_open(path, 65, 384)\nlet hello = \"hello io\"\n_io_write(fd, hello.storage.base, hello.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
+            "let path = _alloc<Byte>(1)\nlet fd = _io_open(path, 65, 384)\nlet hello = \"hello io\"\n_io_write(fd, hello.storage.base, hello.byte_count)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
         );
         assert_eq!(out, "hello io");
         assert_eq!(value, Value::I64(0));
@@ -915,7 +915,7 @@ pub mod tests {
         // open_path takes a Talk String (copied with a NUL terminator
         // into fresh memory); the simulated fd then round-trips bytes.
         let (value, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let fd = open_path(\"scratch.txt\", 65, 384)\nlet data = \"file data\"\n_io_write(fd, data.storage.base, data.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
+            "let fd = open_path(\"scratch.txt\", 65, 384)\nlet data = \"file data\"\n_io_write(fd, data.storage.base, data.byte_count)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
         );
         assert_eq!(out, "file data");
         assert_eq!(value, Value::I64(0));
@@ -926,7 +926,7 @@ pub mod tests {
         // CaptureIO sockets are buffers: what a test writes to a
         // connection it can read back — the scripted-client loop.
         let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let sock = _io_socket(AF_INET, SOCK_STREAM, 0)\n_io_connect(sock, LOCALHOST, 9900)\nlet msg = \"ping\"\n_io_write(sock, msg.storage.base, msg.length)\nlet buf = _alloc<Byte>(8)\nlet n = _io_read(sock, buf, 8)\n_io_write(STDOUT_FD, buf, n)",
+            "let sock = _io_socket(AF_INET, SOCK_STREAM, 0)\n_io_connect(sock, LOCALHOST, 9900)\nlet msg = \"ping\"\n_io_write(sock, msg.storage.base, msg.byte_count)\nlet buf = _alloc<Byte>(8)\nlet n = _io_read(sock, buf, 8)\n_io_write(STDOUT_FD, buf, n)",
         );
         assert_eq!(out, "ping");
     }
@@ -936,7 +936,7 @@ pub mod tests {
         // The ChatServer slice: bind/listen succeed, accept mints a
         // client fd, and the greeting written to it reads back.
         let (value, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet b = _io_bind(server, INADDR_ANY, 9900)\nlet l = _io_listen(server, 128)\nlet client = _io_accept(server)\nlet hi = \"hi client\"\n_io_write(client, hi.storage.base, hi.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(client, buf, 16)\n_io_write(STDOUT_FD, buf, n)\nb + l",
+            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet b = _io_bind(server, INADDR_ANY, 9900)\nlet l = _io_listen(server, 128)\nlet client = _io_accept(server)\nlet hi = \"hi client\"\n_io_write(client, hi.storage.base, hi.byte_count)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(client, buf, 16)\n_io_write(STDOUT_FD, buf, n)\nb + l",
         );
         assert_eq!(out, "hi client");
         assert_eq!(value, Value::I64(0));
@@ -1141,31 +1141,31 @@ pub mod tests {
             run_on_both_engines_io_expecting_container_element_leak("\"hello\" == \"world\"");
         assert_eq!(value, Value::Bool(false));
         let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "print(\"hello\".slice(1, 3).to_string())",
+            "print(\"hello\".utf8().slice(1, 3).to_string())",
         );
         assert_eq!(out, "ell\n");
         let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "print(\"hello\".as_substring().slice(1, 3).to_string())",
+            "print(\"hello\".as_substring().utf8().slice(1, 3).to_string())",
         );
         assert_eq!(out, "ell\n");
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
-            "\"hello world\".find(\"world\")",
+        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+            "match \"hello world\".find(\"world\") {\n\t.some(i) -> print(i),\n\t.none -> print(0 - 1)\n}",
         );
-        assert_eq!(value, Value::I64(6));
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
-            "\"hello world\".find(\"missing\")",
+        assert_eq!(out, "6\n");
+        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+            "match \"hello world\".find(\"missing\") {\n\t.some(i) -> print(i),\n\t.none -> print(0 - 1)\n}",
         );
-        assert_eq!(value, Value::I64(0 - 1));
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
-            "\"banana\".find_from(\"na\", 3)",
+        assert_eq!(out, "-1\n");
+        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+            "match \"banana\".find_from(\"na\", 3) {\n\t.some(i) -> print(i),\n\t.none -> print(0 - 1)\n}",
         );
-        assert_eq!(value, Value::I64(4));
+        assert_eq!(out, "4\n");
     }
 
     #[test]
     fn vm_matches_evaluator_on_pure_method_calls_not_clobbering_receivers() {
         let (_, out) = run_on_both_engines_io(
-            "let raw = \"GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\"\nlet idx = raw.find(\" \")\nprint(raw.length)\nprint(idx)\nprint(raw.length - (idx + 1))",
+            "let raw = \"GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\"\nmatch raw.find(\" \") {\n\t.some(idx) -> {\n\t\tprint(raw.byte_count)\n\t\tprint(idx)\n\t\tprint(raw.byte_count - (idx + 1))\n\t},\n\t.none -> print(0 - 1)\n}",
         );
         assert_eq!(out, "35\n3\n31\n");
     }
@@ -1238,6 +1238,140 @@ pub mod tests {
             "func itof(i: Int) -> Float {\n\t@_ir(i) { %? = itof $0 }\n}\nitof(42)",
         );
         assert_eq!(value, Value::F64(42.0));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_btoi_splice() {
+        let (value, _) = run_on_both_engines_io(
+            "func first_byte(s: String) -> Int {\n\tlet b: Byte = s.utf8().at(0)\n\t@_ir(b) { %? = btoi $0 }\n}\nfirst_byte(\"A\")",
+        );
+        assert_eq!(value, Value::I64(65));
+        // The core wrapper: Byte._toInt(), including a multi-byte lead byte.
+        let (value, _) = run_on_both_engines_io("\"é\".utf8().at(0)._toInt()");
+        assert_eq!(value, Value::I64(0xC3));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_utf8_view() {
+        // Byte-level access lives behind the explicit utf8() view.
+        let (value, _) = run_on_both_engines_io("\"café\".utf8().count()");
+        assert_eq!(value, Value::I64(5));
+        let (value, _) = run_on_both_engines_io("\"café\".utf8().at(4)._toInt()");
+        assert_eq!(value, Value::I64(0xA9));
+        let (value, _) = run_on_both_engines_io(
+            "let s = \"hello world\"\nlet sub: Substring = s.utf8().slice(6, 5)\nsub.byte_count",
+        );
+        assert_eq!(value, Value::I64(5));
+    }
+
+    #[test]
+    fn string_find_returns_optional() {
+        let (_, out) = run_on_both_engines_io(
+            "match \"hello world\".find(\"world\") {\n\t.some(i) -> print_raw(i.show()),\n\t.none -> print_raw(\"none\")\n}",
+        );
+        assert_eq!(out, "6");
+        let (_, out) = run_on_both_engines_io(
+            "match \"hello\".find(\"zzz\") {\n\t.some(i) -> print_raw(i.show()),\n\t.none -> print_raw(\"none\")\n}",
+        );
+        assert_eq!(out, "none");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_utf8_decode() {
+        // _utf8_decode packs scalar * 8 + bytes_consumed. Valid scalars at
+        // every encoded length, including the boundary scalars around the
+        // surrogate gap and the top of the scalar range.
+        let cases: &[(&str, i64)] = &[
+            ("\"A\"", 65 * 8 + 1),
+            ("\"é\"", 0xE9 * 8 + 2),
+            ("\"€\"", 0x20AC * 8 + 3),
+            ("\"😀\"", 0x1F600 * 8 + 4),
+            ("\"\\u{7FF}\"", 0x7FF * 8 + 2),
+            ("\"\\u{800}\"", 0x800 * 8 + 3),
+            ("\"\\u{D7FF}\"", 0xD7FF * 8 + 3),
+            ("\"\\u{E000}\"", 0xE000 * 8 + 3),
+            ("\"\\u{FFFF}\"", 0xFFFF * 8 + 3),
+            ("\"\\u{10000}\"", 0x10000 * 8 + 4),
+            ("\"\\u{10FFFF}\"", 0x10FFFF * 8 + 4),
+        ];
+        for (lit, expected) in cases {
+            let src = format!("let s = {lit}\n_utf8_decode(s.storage, 0, s.byte_count)");
+            let (value, _) = run_on_both_engines_io(Box::leak(src.into_boxed_str()));
+            assert_eq!(value, Value::I64(*expected), "{lit}");
+        }
+        // Ill-formed input decodes as U+FFFD error units consuming the
+        // maximal subpart (Unicode §3.9.6). Byte views sliced out of valid
+        // strings give lone leads, lone continuations, and truncations.
+        // (Surrogate/overlong byte sequences are not constructible from
+        // talk literals; those range checks are exercised from the valid
+        // side by the boundary cases above.)
+        let fffd = 0xFFFDi64 * 8;
+        let invalid: &[(&str, &str, usize, usize, i64)] = &[
+            ("lone 2-byte lead", "\"é\"", 0, 1, fffd + 1),
+            ("lone continuation", "\"é\"", 1, 1, fffd + 1),
+            ("3-byte truncated to 1", "\"€\"", 0, 1, fffd + 1),
+            ("3-byte truncated to 2", "\"€\"", 0, 2, fffd + 2),
+            ("4-byte truncated to 3", "\"😀\"", 0, 3, fffd + 3),
+            ("continuation as lead", "\"😀\"", 2, 2, fffd + 1),
+        ];
+        for (label, lit, start, len, expected) in invalid {
+            let src = format!(
+                "let s = {lit}\nlet sub: Substring = s.utf8().slice({start}, {len})\n_utf8_decode(sub.storage, sub.start, sub.start + sub.byte_count)"
+            );
+            let (value, _) = run_on_both_engines_io(Box::leak(src.into_boxed_str()));
+            assert_eq!(value, Value::I64(*expected), "{label}");
+        }
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_grapheme_category_lookup() {
+        // Spot checks across the generated break table: ASCII fast paths,
+        // combining marks, ZWJ, regional indicators, Indic conjuncts,
+        // emoji, Hangul, and the ends of the table. Each case sets its own
+        // bit so a failure names the case.
+        let (value, _) = run_on_both_engines_io(concat!(
+            "let failures = 0\n",
+            "if _grapheme_category(97) != _GC_OTHER { failures = failures + 1 }\n",
+            "if _grapheme_category(13) != _GC_CR { failures = failures + 2 }\n",
+            "if _grapheme_category(10) != _GC_LF { failures = failures + 4 }\n",
+            "if _grapheme_category(0) != _GC_CONTROL { failures = failures + 8 }\n",
+            "if _grapheme_category(127) != _GC_CONTROL { failures = failures + 16 }\n",
+            // U+0301 combining acute: GCB Extend and InCB Extend.
+            "if _grapheme_category(769) != _GC_EXTEND_INCB_EXTEND { failures = failures + 32 }\n",
+            // U+200D zero-width joiner.
+            "if _grapheme_category(8205) != _GC_ZWJ { failures = failures + 64 }\n",
+            // U+1F1FA regional indicator U.
+            "if _grapheme_category(127482) != _GC_REGIONAL_INDICATOR { failures = failures + 128 }\n",
+            // U+094D Devanagari virama: InCB Linker.
+            "if _grapheme_category(2381) != _GC_EXTEND_INCB_LINKER { failures = failures + 256 }\n",
+            // U+0915 Devanagari KA: InCB Consonant.
+            "if _grapheme_category(2325) != _GC_INCB_CONSONANT { failures = failures + 512 }\n",
+            // U+1F600 emoji.
+            "if _grapheme_category(128512) != _GC_EXT_PICT { failures = failures + 1024 }\n",
+            // Hangul L / LV / LVT.
+            "if _grapheme_category(4352) != _GC_HANGUL_L { failures = failures + 2048 }\n",
+            "if _grapheme_category(44032) != _GC_HANGUL_LV { failures = failures + 4096 }\n",
+            "if _grapheme_category(44033) != _GC_HANGUL_LVT { failures = failures + 8192 }\n",
+            // Top of the scalar range: unassigned plane-16 code points.
+            "if _grapheme_category(1114111) != _GC_OTHER { failures = failures + 16384 }\n",
+            "failures",
+        ));
+        assert_eq!(value, Value::I64(0));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_shadowed_locals() {
+        // Same-named lets in sibling blocks are independent bindings.
+        let (value, _) = run_on_both_engines_io(
+            "func f(x: Int) -> Int {\n\tlet out = 0\n\tif x < 10 {\n\t\tlet y = x * 2\n\t\tout = y\n\t}\n\tif x < 20 {\n\t\tlet y = x * 3\n\t\tout = y\n\t}\n\tout\n}\nf(15)",
+        );
+        assert_eq!(value, Value::I64(45));
+        // Nested shadowing: the inner binding wins inside its block, the
+        // outer binding survives after it.
+        let (value, _) = run_on_both_engines_io(
+            "func g(x: Int) -> Int {\n\tlet y = 1\n\tlet inner = 0\n\tif x < 20 {\n\t\tlet y = x * 3\n\t\tinner = y\n\t}\n\tinner + y\n}\ng(5)",
+        );
+        assert_eq!(value, Value::I64(16));
     }
 
     #[test]
@@ -1320,7 +1454,7 @@ pub mod tests {
         // Two separate writes (prefix + buffer) read back through a loop
         // — the chat client's segment-splitting pattern.
         let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let fd = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet msg = \"hello\"\n_io_write(fd, msg.storage.base, msg.length)\nlet buf = _alloc<Byte>(1024)\nlet n = _io_read(fd, buf, 1024)\nlet echo = \"echo: \"\n_io_write(fd, echo.storage.base, echo.length)\n_io_write(fd, buf, n)\nlet rbuf = _alloc<Byte>(1024)\nloop {\n\tlet chunk = _io_read(fd, rbuf, 1024)\n\tif chunk <= 0 { break }\n\t_io_write(STDOUT_FD, rbuf, chunk)\n}",
+            "let fd = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet msg = \"hello\"\n_io_write(fd, msg.storage.base, msg.byte_count)\nlet buf = _alloc<Byte>(1024)\nlet n = _io_read(fd, buf, 1024)\nlet echo = \"echo: \"\n_io_write(fd, echo.storage.base, echo.byte_count)\n_io_write(fd, buf, n)\nlet rbuf = _alloc<Byte>(1024)\nloop {\n\tlet chunk = _io_read(fd, rbuf, 1024)\n\tif chunk <= 0 { break }\n\t_io_write(STDOUT_FD, rbuf, chunk)\n}",
         );
         assert_eq!(out, "echo: hello");
     }
@@ -1329,7 +1463,7 @@ pub mod tests {
     fn vm_matches_evaluator_on_echo_loop_over_two_connections() {
         // The ChatServer loop body twice over: greeting, read-back, echo.
         let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet i = 0\nloop {\n\tif i >= 2 { break }\n\tlet client = _io_accept(server)\n\tlet msg = \"hello\"\n\t_io_write(client, msg.storage.base, msg.length)\n\tlet buf = _alloc<Byte>(1024)\n\tlet n = _io_read(client, buf, 1024)\n\t_io_write(STDOUT_FD, buf, n)\n\t_io_close(client)\n\ti = i + 1\n}",
+            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet i = 0\nloop {\n\tif i >= 2 { break }\n\tlet client = _io_accept(server)\n\tlet msg = \"hello\"\n\t_io_write(client, msg.storage.base, msg.byte_count)\n\tlet buf = _alloc<Byte>(1024)\n\tlet n = _io_read(client, buf, 1024)\n\t_io_write(STDOUT_FD, buf, n)\n\t_io_close(client)\n\ti = i + 1\n}",
         );
         assert_eq!(out, "hellohello");
     }

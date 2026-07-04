@@ -108,7 +108,14 @@ impl<'a> Lowering<'a> {
             // A string literal is a String record over interned static
             // bytes: {storage, length, capacity}.
             ExprKind::Lit(hir::Literal::String(text)) => {
-                let bytes = crate::parsing::lexing::unescape(text).into_bytes();
+                // The lexer rejects invalid escapes, so this only fails on
+                // literals that never went through it.
+                let Ok(unescaped) = crate::parsing::lexing::unescape(text) else {
+                    self.diagnostics
+                        .push("lowering: string literal with invalid escape".into());
+                    return None;
+                };
+                let bytes = unescaped.into_bytes();
                 let offset = self.intern_static(&bytes);
                 let CheckTy::Nominal(string_symbol, _) =
                     Self::borrow_erased_ty(self.checker_ty(expr, ctx))

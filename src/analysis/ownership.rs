@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn inlay_hints_include_silent_clones() {
-        let source = "struct Person {\n\tlet name: String\n}\nfunc f(person: &Person) -> String {\n\tperson.name\n}\nlet p = Person(name: \"a\" + \"b\")\nf(p).length";
+        let source = "struct Person {\n\tlet name: String\n}\nfunc f(person: &Person) -> String {\n\tperson.name\n}\nlet p = Person(name: \"a\" + \"b\")\nf(p).byte_count";
         let workspace = workspace(source);
         assert!(
             workspace
@@ -340,9 +340,9 @@ mod tests {
 
     #[test]
     fn hover_details_include_owned_classification() {
-        let source = "let s = \"a\" + \"b\"\ns.length";
+        let source = "let s = \"a\" + \"b\"\ns.byte_count";
         let workspace = workspace(source);
-        let offset = source.find("s.length").expect("s use") as u32;
+        let offset = source.find("s.byte_count").expect("s use") as u32;
         let hover =
             crate::analysis::hover_at(&workspace, &"<test>".to_string(), offset).expect("hover");
         assert!(

@@ -5,7 +5,7 @@ use { _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM } from 
 use { From, Into } from ./Convert.tlk
 use { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
 use { Showable } from ./Showable.tlk
-use { String, Substring } from ./String.tlk
+use { String, Substring, UTF8View } from ./String.tlk
 use { Optional } from ./Optional.tlk
 
 public struct Request {
@@ -88,25 +88,30 @@ public struct HttpServer 'heap {
 	}
 
 	func extract_method(raw_request: &String) -> Substring {
-		let first_space: Int = raw_request.find(" ")
-		if first_space < 0 { return "".as_substring() }
-
-		raw_request.slice(0, first_space)
+		let bytes: UTF8View = raw_request.utf8()
+		match raw_request.find(" ") {
+			.some(first_space) -> bytes.slice(0, first_space),
+			.none -> "".as_substring()
+		}
 	}
 
 	func extract_path(raw_request: &String) -> Substring {
-		let first_space: Int = raw_request.find(" ")
-		if first_space < 0 { return "".as_substring() }
+		let bytes: UTF8View = raw_request.utf8()
+		match raw_request.find(" ") {
+			.some(first_space) -> {
+				let rest_start: Int = first_space + 1
+				let rest_len: Int = raw_request.byte_count - rest_start
+				if rest_len <= 0 { return "".as_substring() }
 
-		let rest_start: Int = first_space + 1
-		let rest_len: Int = raw_request.length - rest_start
-		if rest_len <= 0 { return "".as_substring() }
-
-		let rest: Substring = raw_request.slice(rest_start, rest_len)
-		let second_space: Int = rest.find(" ")
-		if second_space < 0 { return rest }
-
-		rest.slice(0, second_space)
+				let rest: Substring = bytes.slice(rest_start, rest_len)
+				let rest_bytes: UTF8View = rest.utf8()
+				match rest.find(" ") {
+					.some(second_space) -> rest_bytes.slice(0, second_space),
+					.none -> rest
+				}
+			},
+			.none -> "".as_substring()
+		}
 	}
 
 	func dispatch(path: Substring) -> Response {
@@ -125,7 +130,7 @@ public struct HttpServer 'heap {
 		let status_line: String = status_line_c.add("\r\n")
 		let content_type = "Content-Type: text/plain; charset=utf-8\r\n"
 		let content_length_a: String = "Content-Length: ".add(
-			response.body.length.show()
+			response.body.byte_count.show()
 		)
 		let content_length: String = content_length_a.add("\r\n")
 		let connection = "Connection: close\r\n"
@@ -168,7 +173,7 @@ public struct HttpServer 'heap {
 
 			let raw_request = String(buf, n, max_request_size)
 			let wire = self.handle(raw_request)
-			_io_write(client_fd, wire.storage.base, wire.length)
+			_io_write(client_fd, wire.storage.base, wire.byte_count)
 			_io_close(client_fd)
 		}
 	}

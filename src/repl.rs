@@ -362,8 +362,8 @@ fn value_names(types: &crate::types::TypeOutput) -> crate::vm::interp::ValueName
             .unwrap_or_else(|| symbol.to_string());
         let fields: Vec<&str> = info.fields.keys().map(|name| name.as_str()).collect();
         if display == "String"
-            && (fields == ["base", "length", "capacity"]
-                || fields == ["storage", "length", "capacity"])
+            && (fields == ["base", "byte_count", "capacity"]
+                || fields == ["storage", "byte_count", "capacity"])
         {
             names.string_struct = Some(crate::vm::runtime_symbol(*symbol));
         }

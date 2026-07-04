@@ -19,11 +19,11 @@ public struct OS {
 	}
 
 	public static func getenv(name: String) -> String? {
-		let len = _io_getenv_len(name.storage.base, name.length)
+		let len = _io_getenv_len(name.storage.base, name.byte_count)
 		if len < 0 { return Optional.none }
 
 		let buf = _alloc<Byte>(len)
-		let copied = _io_getenv_copy(name.storage.base, name.length, buf)
+		let copied = _io_getenv_copy(name.storage.base, name.byte_count, buf)
 		if copied < 0 { return Optional.none }
 
 		Optional.some(String(buf, copied, copied))

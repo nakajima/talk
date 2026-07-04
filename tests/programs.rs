@@ -12,6 +12,7 @@ const EXPECTS_CONTAINER_ELEMENT_LEAK: &[&str] = &[
     "string_building",
     "conditional_moves",
     "handlers",
+    "graphemes",
 ];
 
 fn run_program(name: &str) {
@@ -74,6 +75,11 @@ fn heap_graph() {
     run_program("heap_graph");
 }
 
+#[test]
+fn graphemes() {
+    run_program("graphemes");
+}
+
 /// Every `.tlk` in the corpus directory has a test — a new program without
 /// one fails here instead of silently going unexercised.
 #[test]
@@ -84,6 +90,7 @@ fn every_corpus_program_is_exercised() {
         "conditional_moves",
         "handlers",
         "heap_graph",
+        "graphemes",
     ];
     for entry in std::fs::read_dir("tests/programs").expect("corpus dir") {
         let path = entry.expect("entry").path();
