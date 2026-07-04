@@ -606,6 +606,34 @@ mod tests {
     }
 
     #[test]
+    fn completes_members_after_dot_in_if_condition_before_body() {
+        let code = "struct String {\n\tlet byte_count: Int\n}\nfunc starts_with(needle: &String) {\n\tif needle. {\n\t}\n}\n";
+        let analyzed = analyze(code);
+        let byte_offset = byte_offset_for(code, "needle.", 0) + 7;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "byte_count"
+                && i.kind == Some(crate::analysis::CompletionItemKind::Field)),
+            "expected byte_count field in {items:?}"
+        );
+    }
+
+    #[test]
+    fn completes_members_after_dot_in_unclosed_if_condition() {
+        let code = "struct String {\n\tlet byte_count: Int\n}\nfunc starts_with(needle: &String) {\n\tif needle.\n}\n";
+        let analyzed = analyze(code);
+        let byte_offset = byte_offset_for(code, "needle.", 0) + 7;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "byte_count"
+                && i.kind == Some(crate::analysis::CompletionItemKind::Field)),
+            "expected byte_count field in {items:?}"
+        );
+    }
+
+    #[test]
     fn completes_members_after_dot_in_loop_condition_before_body() {
         let code = "struct String {\n\tlet byte_count: Int\n}\nfunc starts_with(needle: &String) {\n\tlet i = 0\n\tloop i < needle. {\n\t}\n}\n";
         let analyzed = analyze(code);
@@ -617,6 +645,38 @@ mod tests {
                 && i.kind == Some(crate::analysis::CompletionItemKind::Field)),
             "expected byte_count field in {items:?}"
         );
+    }
+
+    #[test]
+    fn completes_members_after_dot_in_recovered_expression_delimiters() {
+        let cases = [
+            "match needle.\n",
+            "match 0 {\n\t\t_ -> needle.\n",
+            "sink(needle.\n",
+            "sink(needle.,\n",
+            "'sink_effect(needle.\n",
+            "let x = [needle.\n",
+            "let x = [needle.,\n",
+            "let x = { value: needle.\n",
+            "let x = { ...needle.\n",
+            "let x = (needle.\n",
+            "let x = if needle.\n",
+        ];
+
+        for body in cases {
+            let code = format!(
+                "effect 'sink_effect(value: Int) -> Int\nstruct String {{\n\tlet byte_count: Int\n}}\nfunc sink(value: Int) {{}}\nfunc starts_with(needle: &String) {{\n\t{body}}}\n"
+            );
+            let analyzed = analyze(&code);
+            let byte_offset = byte_offset_for(&code, "needle.", 0) + 7;
+            let completion = completion(&analyzed);
+            let items = super::complete(&code, &completion, byte_offset);
+            assert!(
+                items.iter().any(|i| i.label == "byte_count"
+                    && i.kind == Some(crate::analysis::CompletionItemKind::Field)),
+                "{body}: expected byte_count field in {items:?}"
+            );
+        }
     }
 
     #[test]

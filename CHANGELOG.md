@@ -11,8 +11,11 @@
   now points users at this command; adding the runtime directory to
   `runtimepath` remains the development setup.
 - **Member completion is less fragile while typing incomplete code.**
-  Completion now keeps the dotted receiver when the dot appears in a call
-  argument or before a loop body is parsed, and borrowed core `String`
+  Completion now keeps the dotted receiver when the dot appears in
+  partially typed control-flow conditions, call and effect arguments,
+  arrays, tuples, records, record spreads, match scrutinees, and match
+  arm bodies. Parser recovery preserves those incomplete expressions long
+  enough for the LSP to type the receiver, and borrowed core `String`
   completions still surface fields even when the member currently being
   typed does not resolve yet.
 

@@ -1080,8 +1080,12 @@ impl<'a> Parser<'a> {
 
         let cond = self.expr_with_precedence(Precedence::Or)?;
         let body = self.block(BlockContext::If, true)?;
-        self.consume(TokenKind::Else)?;
-        let alt = self.block(BlockContext::If, true)?;
+        let alt = if self.did_match(TokenKind::Else)? {
+            self.block(BlockContext::If, true)?
+        } else {
+            self.record_diagnostic(self.expected_token_error(TokenKind::Else));
+            self.empty_recovered_block()
+        };
 
         self.save_meta(tok, |id, span| {
             Expr {
@@ -1694,7 +1698,15 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::LeftBracket)?;
         let mut items = vec![];
-        while !self.did_match(TokenKind::RightBracket)? {
+        loop {
+            self.skip_newlines();
+            if self.did_match(TokenKind::RightBracket)? {
+                break;
+            }
+            if self.at_delimiter_recovery_boundary() {
+                self.record_diagnostic(self.expected_token_error(TokenKind::RightBracket));
+                break;
+            }
             items.push(self.expr()?.as_expr());
             self.consume(TokenKind::Comma).ok();
         }
@@ -1716,11 +1728,27 @@ impl<'a> Parser<'a> {
         let scrutinee = self.expr()?;
         self.pop_context();
 
-        self.consume(TokenKind::LeftBrace)?;
+        if let Err(err) = self.consume(TokenKind::LeftBrace) {
+            self.record_diagnostic(err);
+            return self.save_meta(tok, |id, span| {
+                Node::Expr(Expr {
+                    id,
+                    span,
+                    kind: ExprKind::Match(Box::new(scrutinee.as_expr()), vec![]),
+                })
+            });
+        }
 
         let mut arms = vec![];
-        while !self.did_match(TokenKind::RightBrace)? {
+        loop {
             self.skip_newlines();
+            if self.did_match(TokenKind::RightBrace)? {
+                break;
+            }
+            if self.peek_is(TokenKind::EOF) {
+                self.record_diagnostic(self.expected_token_error(TokenKind::RightBrace));
+                break;
+            }
             let arm_tok = self.push_source_location();
             let pattern = self.parse_pattern()?;
             self.consume(TokenKind::Arrow)?;
@@ -2229,15 +2257,34 @@ impl<'a> Parser<'a> {
             return Ok(self.add_expr(ExprKind::Tuple(vec![child]), tok)?.into());
         }
 
+        if self.at_delimiter_recovery_boundary() {
+            self.record_diagnostic(self.expected_token_error(TokenKind::RightParen));
+            return Ok(self.add_expr(ExprKind::Tuple(vec![child]), tok)?.into());
+        }
+
         self.consume(TokenKind::Comma)?;
 
         let mut items = vec![child];
-        while {
+        let mut recovered_closer = false;
+        loop {
+            self.skip_newlines();
+            if self.did_match(TokenKind::RightParen)? {
+                return Ok(self.add_expr(ExprKind::Tuple(items), tok)?.into());
+            }
+            if self.at_delimiter_recovery_boundary() {
+                self.record_diagnostic(self.expected_token_error(TokenKind::RightParen));
+                recovered_closer = true;
+                break;
+            }
             items.push(self.expr_with_precedence(Precedence::Assignment)?.as_expr());
-            self.did_match(TokenKind::Comma)?
-        } {}
+            if !self.did_match(TokenKind::Comma)? {
+                break;
+            }
+        }
 
-        self.consume(TokenKind::RightParen)?;
+        if !recovered_closer {
+            self.consume_or_recover_closer(TokenKind::RightParen)?;
+        }
 
         Ok(self.add_expr(ExprKind::Tuple(items), tok)?.into())
     }
@@ -2341,9 +2388,12 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::LeftParen)?;
         let args = if self.did_match(TokenKind::RightParen)? {
             vec![]
+        } else if self.at_delimiter_recovery_boundary() {
+            self.record_diagnostic(self.expected_token_error(TokenKind::RightParen));
+            vec![]
         } else {
             let args = self.arguments()?;
-            self.consume(TokenKind::RightParen)?;
+            self.consume_or_recover_closer_after_newline(TokenKind::RightParen)?;
             args
         };
         self.save_meta(tok, |id, span| {
@@ -2441,9 +2491,12 @@ impl<'a> Parser<'a> {
 
         let args = if self.did_match(TokenKind::RightParen)? {
             vec![]
+        } else if self.at_delimiter_recovery_boundary() {
+            self.record_diagnostic(self.expected_token_error(TokenKind::RightParen));
+            vec![]
         } else {
             let args = self.arguments()?;
-            self.consume(TokenKind::RightParen)?;
+            self.consume_or_recover_closer_after_newline(TokenKind::RightParen)?;
             args
         };
 
@@ -2487,7 +2540,7 @@ impl<'a> Parser<'a> {
             // calls that way); newlines inside an argument list are
             // insignificant, and a trailing comma before `)` is fine.
             self.skip_newlines();
-            if self.peek_is(TokenKind::RightParen) {
+            if self.peek_is(TokenKind::RightParen) || self.at_delimiter_recovery_boundary() {
                 return Ok(args);
             }
             let tok = self.push_source_location();
@@ -2883,15 +2936,31 @@ impl<'a> Parser<'a> {
             });
         };
 
-        if consumes_left_brace {
-            self.consume(TokenKind::LeftBrace)?;
+        if consumes_left_brace && let Err(err) = self.consume(TokenKind::LeftBrace) {
+            if matches!(context, BlockContext::If | BlockContext::Loop) {
+                self.record_diagnostic(err);
+                return self.save_meta(tok, |id, span| Block {
+                    id,
+                    span,
+                    args: vec![],
+                    body: vec![],
+                });
+            }
+            return Err(err);
         }
 
         let args = self.block_args()?;
 
         self.skip_semicolons_and_newlines();
         let mut body = vec![];
-        while !self.did_match(TokenKind::RightBrace)? {
+        loop {
+            if self.did_match(TokenKind::RightBrace)? {
+                break;
+            }
+            if self.peek_is(TokenKind::EOF) {
+                self.record_diagnostic(self.expected_token_error(TokenKind::RightBrace));
+                break;
+            }
             if context == BlockContext::Enum {
                 // Special handling for multiple cases on one line
                 if self.peek_is(TokenKind::Case) {
@@ -3070,8 +3139,15 @@ impl<'a> Parser<'a> {
         let mut fields: Vec<RecordField> = vec![];
         let mut spread = None;
 
-        while !self.did_match(TokenKind::RightBrace)? {
+        loop {
+            if self.did_match(TokenKind::RightBrace)? {
+                break;
+            }
             self.skip_newlines();
+            if self.at_delimiter_recovery_boundary() {
+                self.record_diagnostic(self.expected_token_error(TokenKind::RightBrace));
+                break;
+            }
 
             if self.peek_is(TokenKind::DotDotDot) {
                 // Spread syntax: ...expr
@@ -3081,7 +3157,7 @@ impl<'a> Parser<'a> {
                 spread = Some(Box::new(expr.try_into()?));
 
                 // Spread must be the last thing in the record
-                self.consume(TokenKind::RightBrace)?;
+                self.consume_or_recover_closer_after_newline(TokenKind::RightBrace)?;
                 break;
             } else {
                 // Regular field: label: expr
@@ -3100,11 +3176,14 @@ impl<'a> Parser<'a> {
                 })?);
             }
 
-            // Handle comma
-            if !self.peek_is(TokenKind::RightBrace) {
-                self.consume(TokenKind::Comma)?;
+            self.skip_newlines();
+            if self.peek_is(TokenKind::RightBrace) {
+                self.consume(TokenKind::Comma).ok();
+            } else if self.at_delimiter_recovery_boundary() || self.previous_token_was_newline() {
+                self.record_diagnostic(self.expected_token_error(TokenKind::RightBrace));
+                break;
             } else {
-                self.consume(TokenKind::Comma).ok(); // Optional trailing comma
+                self.consume(TokenKind::Comma)?;
             }
             self.skip_newlines();
         }
@@ -3253,6 +3332,74 @@ impl<'a> Parser<'a> {
         };
 
         Ok(false)
+    }
+
+    fn consume_or_recover_closer(&mut self, expected: TokenKind) -> Result<bool, ParserError> {
+        self.skip_newlines();
+        if self.peek_is(expected) {
+            self.advance();
+            return Ok(true);
+        }
+
+        let err = self.expected_token_error(expected);
+        if self.at_delimiter_recovery_boundary() {
+            self.record_diagnostic(err);
+            Ok(false)
+        } else {
+            Err(err)
+        }
+    }
+
+    fn consume_or_recover_closer_after_newline(
+        &mut self,
+        expected: TokenKind,
+    ) -> Result<bool, ParserError> {
+        self.skip_newlines();
+        if self.peek_is(expected) {
+            self.advance();
+            return Ok(true);
+        }
+
+        let err = self.expected_token_error(expected);
+        if self.at_delimiter_recovery_boundary() || self.previous_token_was_newline() {
+            self.record_diagnostic(err);
+            Ok(false)
+        } else {
+            Err(err)
+        }
+    }
+
+    fn expected_token_error(&self, expected: TokenKind) -> ParserError {
+        ParserError::UnexpectedToken {
+            expected: format!("{expected:?}"),
+            actual: format!("{:?}", self.current),
+            token: self.current.clone(),
+        }
+    }
+
+    fn at_delimiter_recovery_boundary(&self) -> bool {
+        matches!(
+            self.current.as_ref().map(|token| token.kind),
+            Some(TokenKind::RightBrace)
+                | Some(TokenKind::RightParen)
+                | Some(TokenKind::RightBracket)
+                | Some(TokenKind::EOF)
+        )
+    }
+
+    fn previous_token_was_newline(&self) -> bool {
+        self.previous
+            .as_ref()
+            .is_some_and(|token| token.kind == TokenKind::Newline)
+    }
+
+    fn empty_recovered_block(&mut self) -> Block {
+        Block {
+            id: self.next_id(),
+            span: Span::SYNTHESIZED,
+            args: vec![],
+            body: vec![],
+        }
     }
 
     pub(super) fn peek_is(&self, expected: TokenKind) -> bool {
