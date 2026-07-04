@@ -6,7 +6,9 @@ Talk's memory story is rebuilt end to end. Ownership lives in the type
 system — permissions and grades, with a small flow pass for the
 flow-sensitive questions — and `'heap` structs add mutable aliased
 structures with all management inferred. No lifetime annotations, no
-manual frees.
+manual frees. Effect handlers grew up alongside it: dynamic extent,
+inferred effect rows, unhandled-effect errors, and generic effects,
+compiled capability-passing with zero-cost tail resumes.
 
 ### Ownership and borrowing
 
@@ -103,7 +105,53 @@ classification is otherwise derived from a type's structure and grade.
 - **LSP**: hover on `'heap` types shows `heap — reference semantics,
   region-allocated`.
 
-### v1 limits (compile errors)
+### Effect handlers (dynamic extent)
+
+Effects went from lexically-routed sketch to the real thing: handlers
+reach through calls, effects are inferred, and generic effects work end
+to end. Compiled capability-passing style (ADR 0011); no runtime handler
+search.
+
+- **Handlers cover their dynamic extent.** `@handle 'throw { err in
+  print(err) }` covers everything sequenced after it — including
+  performs inside functions it calls, however deep. A handler body that
+  finishes **aborts** the handled scope with its value; `continue v`
+  **resumes** the perform with `v` — in any expression position, across
+  call frames (one-shot). Nearest handler wins; an inner same-effect
+  handler covers the whole label (an outer one never fires for it).
+- **Effects are inferred.** An unannotated function's latent effects ride
+  its row (rendered `! <'throw>`); explicit annotations (`func f()
+  'throw -> ()`, `'[]`) stay as checked bounds. `examples/Throwsies.tlk`
+  — handler in the caller, unannotated performer — runs as written.
+- **Unhandled effects are compile errors.** A user effect reaching the
+  top level reports `No handler for 'e` at the node where it escapes —
+  position-aware, so calling an effectful function *before* its
+  top-level `@handle` is the same error. Only the core effects (`'io`,
+  `'async`, `'alloc`) are implicitly handled by the runtime.
+- **Generic effects.** `effect 'state<T>(value: T) -> T` handles like
+  anything else: rows carry instantiations (`! <'state<Int>>`), and one
+  `@handle 'state` covers *every* instantiation flowing through its
+  extent — the handler body is generic over `T` (declared bounds like
+  `T: Showable` apply), and each instantiation gets its own specialized
+  capability behind the scenes.
+- **Function values capture their handlers.** Function literals and
+  trailing blocks keep the capabilities of their creation site (so an
+  effectful closure passed to a higher-order function works), and a
+  named effectful function used as a value wraps itself over the
+  handlers in scope.
+- **VM support: one-shot continuations.** Aborts unwind by reified
+  continuation (`MakeCont`/`CallCont`) instead of a threaded calling
+  convention; a handler that escapes its scope and then aborts traps
+  cleanly ("continuation is no longer live") — an escaped *resuming*
+  handler still works.
+
+Effects v1 limits: a perform inside a function literal routes to the
+handlers at the literal's **creation** site, not its call site (they
+coincide in the usual HOF pattern); no masking past an inner same-effect
+handler; resume is one-shot; and an abort skips the drops of the frames
+it unwinds (the same teardown fence tracked under Testing).
+
+### `'heap` v1 limits (compile errors)
 
 - A heap reference captured by an escaping closure.
 - A heap struct packed as `any P`.
@@ -162,9 +210,22 @@ core-IR plan, C1–C6):
 - **MIR statements are evaluation units.** Matches lower through
   value-carrying join points, and calls/performs evaluate at their own
   statements with results flowing through temporaries — expression trees
-  embedded in statements are straight-line and pure. Abortable calls and
-  resumable performs split the continuation at their own statement, so
-  the old "statement spine" restriction is local.
+  embedded in statements are straight-line and pure. (The former
+  statement-spine splitter for abortable calls is gone entirely — in
+  CPS every expression has a continuation, so performs need no special
+  position.)
+- **Effects compile capability-passing (ADR 0011).** Functions take one
+  capability parameter per user-effect instantiation in their inferred
+  row (the zonked scheme rows are the single routing truth — the
+  resolver's lexical handler routing, the checker's four capability side
+  tables, and the whole abort-capable calling convention are deleted).
+  `@handle` holds a capability *template*; closures materialize per
+  instantiation with the effect's generics bound in θ — the
+  generic-function specialization machinery applied to a handler block.
+  Effect rows carry instantiations as inert entries (duplicate labels
+  allowed, arguments never unified across entries); `@handle` is a
+  label-scoped elimination constraint processed at solve quiescence
+  (docs/generic-effects-plan.md).
 - **`lower/` is decomposed by concern** (demand/monomorphization,
   functions, matches, values, closures, calls, effects, splices, θ).
 
@@ -181,5 +242,8 @@ core-IR plan, C1–C6):
   an element-release loop at last release).
 - **A real-program corpus** (`tests/programs/`): small, complete,
   idiomatic programs (iterate-and-match, string building, conditional
-  moves in loops, effect handlers, `'heap` graphs) checked and run on
-  both engines with stdout equality under the balance policy.
+  moves in loops, `'heap` graphs, and an effects battery — caller-locals
+  handlers, nested same-effect handlers, cross-frame resume,
+  multi-effect threading, effectful closures, generic effects at one and
+  several instantiations) checked and run on both engines with stdout
+  equality under the balance policy.
