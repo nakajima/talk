@@ -12,6 +12,8 @@ const EXPECTS_CONTAINER_ELEMENT_LEAK: &[&str] = &[
     "string_building",
     "conditional_moves",
     "handlers",
+    "caller_locals_handler",
+    "multi_effect_handlers",
 ];
 
 fn run_program(name: &str) {
@@ -74,6 +76,34 @@ fn heap_graph() {
     run_program("heap_graph");
 }
 
+#[test]
+fn caller_locals_handler() {
+    // The handler body captures a caller local: the capability is a real
+    // closure over the installing frame, passed down to the performer.
+    run_program("caller_locals_handler");
+}
+
+#[test]
+fn nested_handlers() {
+    // Two frames in a call chain each install a handler for the same
+    // effect: the nearest dynamic extent wins.
+    run_program("nested_handlers");
+}
+
+#[test]
+fn resume_across_frames() {
+    // A resuming handler in a caller: the callee's performs resume with
+    // the handler's value, twice, across the call boundary.
+    run_program("resume_across_frames");
+}
+
+#[test]
+fn multi_effect_handlers() {
+    // One function performs two effects (one resuming, one aborting),
+    // both handled by its caller — two capabilities threaded per call.
+    run_program("multi_effect_handlers");
+}
+
 /// Every `.tlk` in the corpus directory has a test — a new program without
 /// one fails here instead of silently going unexercised.
 #[test]
@@ -84,6 +114,10 @@ fn every_corpus_program_is_exercised() {
         "conditional_moves",
         "handlers",
         "heap_graph",
+        "caller_locals_handler",
+        "nested_handlers",
+        "resume_across_frames",
+        "multi_effect_handlers",
     ];
     for entry in std::fs::read_dir("tests/programs").expect("corpus dir") {
         let path = entry.expect("entry").path();

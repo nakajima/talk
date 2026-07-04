@@ -197,7 +197,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let mut last = StmtValue::Unit;
         let mut is_empty = true;
         let final_index = block.body.len().saturating_sub(1);
+        // `@handle 'e` delimits the rest of its block: statements after it
+        // check under an ambient row extended with `e`.
+        let mut scoped: Option<Ctx> = None;
         for (index, node) in block.body.iter().enumerate() {
+            let ctx = scoped.as_ref().unwrap_or(ctx);
             is_empty = false;
             last = match node {
                 Node::Decl(decl) => {
@@ -226,6 +230,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 Node::Expr(expr) => StmtValue::Value(self.infer_expr(expr, ctx)),
                 _ => StmtValue::Unit,
             };
+            if let Node::Stmt(Stmt {
+                kind: StmtKind::Handling { effect_name, .. },
+                ..
+            }) = node
+                && let Ok(effect) = effect_name.symbol()
+            {
+                scoped = Some(ctx.with_handled_effect(effect));
+            }
             if last.reports_unreachable() {
                 if let Some(next) = block.body.get(index + 1) {
                     self.unreachable_code(next.node_id());
@@ -259,7 +271,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             self.emit_eq(expected.clone(), Ty::unit(), block.id, reason);
             return;
         }
+        // `@handle 'e` delimits the rest of its block: statements after it
+        // check under an ambient row extended with `e`.
+        let mut scoped: Option<Ctx> = None;
         for (index, node) in block.body.iter().enumerate() {
+            let ctx = scoped.as_ref().unwrap_or(ctx);
             if index != final_index {
                 match node {
                     Node::Decl(decl) => self.check_local_decl(decl, ctx),
@@ -276,6 +292,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         self.infer_expr(expr, ctx);
                     }
                     _ => {}
+                }
+                if let Node::Stmt(Stmt {
+                    kind: StmtKind::Handling { effect_name, .. },
+                    ..
+                }) = node
+                    && let Ok(effect) = effect_name.symbol()
+                {
+                    scoped = Some(ctx.with_handled_effect(effect));
                 }
                 continue;
             }

@@ -38,21 +38,30 @@ impl<'a> Lowering<'a> {
         let Some((label, symbol, prefix)) = target else {
             return self.dead_end("unresolved_callee");
         };
+        // The capabilities this callee's row demands, from our own scope
+        // (our own cap parameters, or a locally installed `@handle`).
+        let cap_effects = self.effect_caps_of(symbol);
+        let mut cap_values = Vec::with_capacity(cap_effects.len());
+        for effect in &cap_effects {
+            let Some(&cap) = ctx.caps.get(effect) else {
+                self.diagnostics.push(format!(
+                    "lowering: call needs a handler for '{effect} that is not installed yet"
+                ));
+                return self.dead_end("capability_not_in_scope");
+            };
+            cap_values.push(cap);
+        }
         let trailing_value = trailing_block.map(|b| {
-            let bot = self.p.ty_bot();
-            let callee_ty = self.p.ty_fn(self.p.dom(label), bot);
-            let expected = self.final_param_ty(callee_ty);
+            // The trailing block's declared parameter type: the domain item
+            // before the callee's capability parameters and continuation.
+            let expected = match self.p.ty_kind(self.p.dom(label)) {
+                TyKind::Tuple(items) if items.len() >= 2 + cap_effects.len() => {
+                    Some(items[items.len() - 2 - cap_effects.len()])
+                }
+                _ => None,
+            };
             self.lower_block_closure(b, expected, ctx)
         });
-        // Abort-capable calls are handled by the MIR statement-spine
-        // splitter; reaching one here means it sits in an expression
-        // position the abort linkage cannot thread through yet.
-        if self.abort_shape(symbol) {
-            self.diagnostics.push(
-                "lowering: a call that can abort in expression position (not yet supported)".into(),
-            );
-            return self.dead_end("abort_call_in_expression");
-        }
 
         let mut arg_exprs: Vec<&Expr> = vec![];
         let mut done: Vec<ExprId> = vec![];
@@ -92,6 +101,7 @@ impl<'a> Lowering<'a> {
             if let Some(trailing) = trailing_value {
                 tuple_items.push(trailing);
             }
+            tuple_items.extend(cap_values.iter().copied());
             tuple_items.push(k);
             let arg_tuple = this.p.tuple(&tuple_items);
             this.p.app(func_ref, arg_tuple)

@@ -246,6 +246,12 @@ struct BindingGroupChecker<'s, 'a> {
     type_aliases: &'s FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'s mut Vec<Symbol>,
     level: Level,
+    /// The effects a top-level computation may perform: the core effects
+    /// the runtime handles implicitly ('io, 'async, 'alloc) plus any
+    /// covered by a top-level `@handle`. Top-level ambient rows close over
+    /// exactly this set, so a user effect with no handler anywhere on the
+    /// way up is a type error at the node where it tries to flow in.
+    ambient_effects: std::collections::BTreeSet<Symbol>,
 }
 
 /// What a statement contributes to its block's value (block value = last
@@ -341,6 +347,16 @@ impl Ctx {
             ..self.clone()
         }
     }
+
+    /// The rest of a block after `@handle 'e`: the ambient row gains `e`,
+    /// so effect rows flowing in from calls and performs discharge it here
+    /// instead of escaping — the handler delimits the dynamic extent of
+    /// everything sequenced after it.
+    fn with_handled_effect(&self, effect: Symbol) -> Self {
+        let mut inner = self.clone();
+        inner.eff.effects.insert(effect);
+        inner
+    }
 }
 
 impl<'a> TypecheckSession<'a> {
@@ -386,6 +402,7 @@ impl<'a> TypecheckSession<'a> {
                 type_aliases: &self.type_aliases,
                 alias_stack: &mut self.alias_stack,
                 level: self.level,
+                ambient_effects: Default::default(),
             };
             groups.check(collected);
             self.level = groups.level;

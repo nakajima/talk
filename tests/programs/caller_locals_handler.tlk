@@ -1,0 +1,18 @@
+effect 'fail(message: String) -> Never
+
+func risky(n: Int) {
+	if n > 2 {
+		'fail("too big")
+	}
+	print("ok")
+}
+
+func attempt(n: Int) {
+	let prefix = "caught: "
+	@handle 'fail { message in print(prefix + message) }
+	risky(n)
+	print("after risky")
+}
+
+attempt(1)
+attempt(5)

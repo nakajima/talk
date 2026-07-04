@@ -3,27 +3,15 @@ use super::*;
 impl<'s, 'a> BodyChecker<'s, 'a> {
     // ----- Names, annotations, helpers ----------------------------------
 
-    pub(super) fn lookup(&mut self, name: &Name, node: NodeID, ctx: &Ctx) -> Ty {
+    pub(super) fn lookup(&mut self, name: &Name, node: NodeID) -> Ty {
         let Ok(symbol) = name.symbol() else {
             // The name resolver already diagnosed this; poison quietly.
             return Ty::Error;
         };
-        self.lookup_symbol_ty(symbol, node, ctx)
+        self.lookup_symbol_ty(symbol, node)
     }
 
-    pub(super) fn lookup_symbol_ty(&mut self, symbol: Symbol, node: NodeID, ctx: &Ctx) -> Ty {
-        // A reference edge for the capability tables. Locals land here
-        // too; they are harmless noise (the consumer only chases
-        // abort-capable targets, and symbols are never reused).
-        if let Some(binder) = ctx.binder
-            && binder != symbol
-        {
-            self.artifacts
-                .binder_refs
-                .entry(binder)
-                .or_default()
-                .insert(symbol);
-        }
+    pub(super) fn lookup_symbol_ty(&mut self, symbol: Symbol, node: NodeID) -> Ty {
         if let Some(ty) = self.mono.get(&symbol) {
             return ty.clone();
         }

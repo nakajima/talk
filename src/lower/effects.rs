@@ -18,9 +18,12 @@ impl<'a> Lowering<'a> {
         self.p.app(dead_ref, void)
     }
 
-    /// One unhandled perform: `'io(.sleep(ms))` and friends. The request
-    /// must be a syntactic variant construction so the operation routes
-    /// statically; its payloads become the primop's operands.
+    /// One unhandled perform: `'io(.sleep(ms))` and friends. Only the core
+    /// effects reach here (the runtime is their implicit handler); a user
+    /// effect without a capability in scope beat its handler's install
+    /// order. The request must be a syntactic variant construction so the
+    /// operation routes statically; its payloads become the primop's
+    /// operands.
     pub(super) fn lower_perform(
         &mut self,
         expr: &Expr,
@@ -29,9 +32,16 @@ impl<'a> Lowering<'a> {
         ctx: &Ctx,
         k: ExprId,
     ) -> ExprId {
-        let ret_ty = effect_name
-            .symbol()
-            .ok()
+        let effect = effect_name.symbol().ok();
+        if let Some(effect) = effect
+            && effect.external_module_id() != Some(crate::compiling::module::ModuleId::Core)
+        {
+            self.diagnostics.push(format!(
+                "lowering: perform of '{effect} before its handler is installed"
+            ));
+            return self.dead_end("perform_before_handler");
+        }
+        let ret_ty = effect
             .and_then(|symbol| {
                 self.units
                     .iter()
@@ -109,105 +119,65 @@ impl<'a> Lowering<'a> {
         })
     }
 
-    // ----- Lexical effect handlers (M7: aborts) -----------------------------
-
-    /// The result type carried by an abort-capable function's
-    /// normal-return continuation (`Fn([result, slot], ⊥)` → result).
-    pub(super) fn normal_result_ty(&mut self, normal_k: ExprId) -> TyId {
-        let normal_k_ty = self.p.expr_ty(normal_k);
-        if let TyKind::Fn(pair_ty, _) = *self.p.ty_kind(normal_k_ty)
-            && let TyKind::Tuple(items) = self.p.ty_kind(pair_ty)
-            && items.len() == 2
-        {
-            return items[0];
-        }
-        self.diagnostics
-            .push("lowering: abort-capable function without a paired normal return".into());
-        self.p.ty_void()
-    }
+    // ----- Lexical effect handlers ------------------------------------------
 
     /// Clone a context for code that moves into an escaping closure: `rk`,
-    /// the closure's own return slot, replaces the function's return
-    /// linkage, and normal completions are re-pointed at it — directly, or
-    /// through the enclosing abort-capable function's normal-return
-    /// parameter (which the closure captures as an ordinary value).
+    /// the closure's own return linkage, replaces the function's.
     pub(super) fn rebase_into_closure(&mut self, ctx: &Ctx, rk: ExprId) -> Ctx {
         let mut inner = ctx.clone();
         inner.loops = vec![];
         inner.raw_ret_k = rk;
-        inner.ret_k = match ctx.normal_k {
-            None => rk,
-            Some(normal_k) => {
-                let result_ty = self.normal_result_ty(normal_k);
-                let bot = self.p.ty_bot();
-                let wrap = self.p.func("ret_normal", result_ty, bot);
-                let value = self.p.var(wrap);
-                let pair = self.p.tuple(&[value, rk]);
-                let body = self.p.app(normal_k, pair);
-                self.p.set_body(wrap, body);
-                self.p.func_ref(wrap)
-            }
-        };
-        inner.tail_k = inner.ret_k;
+        inner.ret_k = rk;
+        inner.tail_k = rk;
         inner
     }
 
-    /// A perform routed to a lexical handler: call the capability with
-    /// the payloads and our own return slot. The handler's value rides
-    /// the Ret chain back through every frame between here and the
-    /// handled scope's caller; nothing after the perform is emitted on
-    /// this path (the effect returns Never).
-    pub(super) fn lower_routed_perform(
+    /// The dead resumption a Never-effect perform passes: the capability's
+    /// calling convention still wants a final continuation, but the
+    /// handler can never invoke it (the checker rejects `continue` for a
+    /// Never effect). Bodyless, so reaching it is an honest trap.
+    fn dead_resume_k(&mut self, resume_value_ty: TyId) -> ExprId {
+        let bot = self.p.ty_bot();
+        let dead = self.p.func("unreachable_resume", resume_value_ty, bot);
+        self.p.func_ref(dead)
+    }
+
+    /// A perform whose capability is a value in scope: call it with the
+    /// payloads and our own continuation as the resumption (`continue v`
+    /// in the handler applies it — in machine terms, the capability
+    /// returning). An abort handler instead finishes into its captured
+    /// delimiter; the resumption is simply never invoked and nothing
+    /// after the perform runs.
+    pub(super) fn lower_capped_perform(
         &mut self,
-        handler_sym: Symbol,
+        cap: ExprId,
+        effect_name: &crate::name::Name,
         args: &[hir::CallArg],
         ctx: &Ctx,
         k: ExprId,
     ) -> ExprId {
-        if !ctx.abort_ok && !ctx.local_handlers.contains(&handler_sym) {
+        let sig = effect_name.symbol().ok().and_then(|symbol| {
+            self.units
+                .iter()
+                .find_map(|u| u.types.catalog.effects.get(&symbol).cloned())
+        });
+        let Some(sig) = sig else {
             self.diagnostics
-                .push("lowering: perform inside a function value (not yet supported)".into());
-            let _ = k;
-            return self.dead_end("perform_in_function_value");
-        }
-        let Some(cap) = self.handler_caps.get(&handler_sym).copied() else {
-            self.diagnostics.push(
-                "lowering: perform reached before its handler was installed (not yet supported)"
-                    .into(),
-            );
-            return self.dead_end("perform_before_handler");
+                .push("lowering: perform of an undeclared effect".into());
+            return self.dead_end("undeclared_effect");
         };
-        // Resumable performs are handled by the MIR statement-spine
-        // splitter, where the rest of the block can become the
-        // resumption; reaching one here means it sits in an expression
-        // position the split cannot reach yet.
-        if cap.resume_pair_ty.is_some() {
-            self.diagnostics.push(
-                "lowering: a resumable perform in expression position (not yet supported)".into(),
-            );
-            return self.dead_end("resumable_perform_in_expression");
-        }
-        let slot = ctx.raw_ret_k;
+        let resume_k = if sig.ret.is_never() {
+            let resume_value_ty = self.map_ty(&sig.ret);
+            self.dead_resume_k(resume_value_ty)
+        } else {
+            k
+        };
         let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
         self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
-            values.push(slot);
+            values.push(resume_k);
             let tuple = this.p.tuple(&values);
-            this.p.app(cap.cap, tuple)
+            this.p.app(cap, tuple)
         })
     }
 
-    /// Is this expression a direct call to an abort-capable function?
-    pub(super) fn abortable_callee(&self, expr: &Expr, ctx: &Ctx) -> Option<Symbol> {
-        let ExprKind::Call { callee, .. } = &expr.kind else {
-            return None;
-        };
-        let ExprKind::Variable(name) = &callee.kind else {
-            return None;
-        };
-        let symbol = name.symbol().ok()?;
-        if ctx.env.contains_key(&symbol) {
-            return None;
-        }
-        self.abort_shape(symbol).then_some(symbol)
-    }
 }

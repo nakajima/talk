@@ -112,22 +112,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         self.mono.insert(symbol, param.clone());
                     }
                 }
-                // The payload types this handler receives — zonked at
-                // finalize, once the perform sites have taught the
-                // unannotated parameters their types — for the lowerer's
-                // capability closure.
-                if let Some(&handler) = self.resolved.effect_handler_definitions.get(&stmt.id) {
-                    self.artifacts
-                        .handler_payload_tys
-                        .insert(handler, params.clone());
-                    if let Some(binder) = ctx.binder {
-                        self.artifacts
-                            .handlers_defined
-                            .entry(binder)
-                            .or_default()
-                            .insert(handler);
-                    }
-                }
                 // `continue v` inside this block resumes the perform: v
                 // checks against the effect's return type.
                 let resume_ty = sig.map(|sig| sig.ret).unwrap_or(Ty::Error);

@@ -683,11 +683,33 @@ impl<'s> Solver<'s> {
                 true
             },
             |solver| {
-                let expected = solver.store.render_eff(a);
-                let found = solver.store.render_eff(b);
-                solver
-                    .errors
-                    .push((TypeError::Mismatch { expected, found }, origin.node));
+                // Effects with nowhere to go — spilling into a CLOSED row —
+                // are unhandled: no handler stands between the perform and
+                // the top level. Anything else is an ordinary row mismatch.
+                let (sa, ta) = solver.store.flatten_eff(a);
+                let (sb, tb) = solver.store.flatten_eff(b);
+                let mut unhandled = BTreeSet::new();
+                if matches!(ta, FlatTail::None) {
+                    unhandled.extend(sb.difference(&sa).cloned());
+                }
+                if matches!(tb, FlatTail::None) {
+                    unhandled.extend(sa.difference(&sb).cloned());
+                }
+                if unhandled.is_empty() {
+                    let expected = solver.store.render_eff(a);
+                    let found = solver.store.render_eff(b);
+                    solver
+                        .errors
+                        .push((TypeError::Mismatch { expected, found }, origin.node));
+                }
+                for effect in unhandled {
+                    solver.errors.push((
+                        TypeError::UnhandledEffect {
+                            effect: effect.to_string(),
+                        },
+                        origin.node,
+                    ));
+                }
             },
         )
     }

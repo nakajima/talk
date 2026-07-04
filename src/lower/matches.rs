@@ -215,9 +215,9 @@ impl<'a> Lowering<'a> {
                 // A function-typed global used as a value: demand its
                 // specialization (instantiation recorded at this node).
                 if self.sources.contains_key(&symbol) {
-                    if self.abort_shape(symbol) {
+                    if !self.effect_caps_of(symbol).is_empty() {
                         self.diagnostics.push(
-                            "lowering: an abort-capable function used as a value (not yet supported)"
+                            "lowering: an effectful function used as a value (not yet supported)"
                                 .into(),
                         );
                         return None;
@@ -240,11 +240,9 @@ impl<'a> Lowering<'a> {
                         ret_k: ctx.ret_k,
                         tail_k: ctx.ret_k,
                         raw_ret_k: ctx.raw_ret_k,
-                        normal_k: None,
-                        abort_ok: false,
                         resume_k: None,
                         top_level: false,
-                        local_handlers: FxHashSet::default(),
+                        caps: FxHashMap::default(),
                         params: vec![],
                         loops: vec![],
                         drop_stack: vec![],

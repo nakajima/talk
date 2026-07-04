@@ -668,10 +668,7 @@ impl Driver<Typed> {
             .types
             .schemes
             .into_iter()
-            .map(|(symbol, scheme)| {
-                let ty = scheme.ty.sanitize_for_export(symbol);
-                (symbol, crate::types::ty::Scheme { ty, ..scheme })
-            })
+            .map(|(symbol, scheme)| (symbol, scheme.sanitize_for_export(symbol)))
             .collect();
         Module {
             id: StableModuleId::generate(&exports),

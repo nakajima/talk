@@ -117,71 +117,70 @@ impl<'a> Lowering<'a> {
             )
     }
 
-    // ----- Abort-capable functions (lexical effect handlers) --------------
+    // ----- Effect capabilities (dynamic-extent handlers) ------------------
 
-    /// The transitive closure of the checker's capability tables: a
-    /// binder is abort-capable if its body performs into a lexical
-    /// handler (`performs_into`) or references an abort-capable binder
-    /// (`binder_refs`) — its callers must thread the abort linkage (see
-    /// `Ctx::raw_ret_k`). The reference edges are a conservative
-    /// superset of calls; a spurious mark only costs a function the
-    /// abort-capable calling convention, never correctness.
-    pub(super) fn collect_abortable(&mut self) {
-        // A handler defined inside the binder itself contains its aborts:
-        // they never escape the function, so neither the binder nor its
-        // callers need the abort-capable convention for them.
-        let mut contained: FxHashMap<Symbol, FxHashSet<Symbol>> = FxHashMap::default();
-        for unit in &self.units {
-            for (&binder, handlers) in &unit.types.handlers_defined {
-                contained.entry(binder).or_default().extend(handlers);
-            }
-        }
-        let escapes =
-            |binder: Symbol, handler: Symbol, contained: &FxHashMap<Symbol, FxHashSet<Symbol>>| {
-                !contained
-                    .get(&binder)
-                    .is_some_and(|defined| defined.contains(&handler))
-            };
+    /// The user effects in a symbol's latent row — the capability
+    /// parameters its specialization takes, in the row's (sorted) order.
+    /// Core effects ('io, 'async, 'alloc) are the runtime's and route to
+    /// primops, not capabilities.
+    pub(super) fn effect_caps_of(&self, symbol: Symbol) -> Vec<Symbol> {
+        let row = self
+            .units
+            .iter()
+            .find_map(|u| u.types.schemes.get(&symbol).map(|s| &s.ty))
+            .and_then(|ty| match ty {
+                CheckTy::Func(_, _, eff) => Some(eff),
+                _ => None,
+            });
+        let Some(row) = row else {
+            return vec![];
+        };
+        row.effects
+            .iter()
+            .copied()
+            .filter(|effect| {
+                effect.external_module_id() != Some(crate::compiling::module::ModuleId::Core)
+            })
+            .collect()
+    }
 
-        let mut reached: FxHashMap<Symbol, Vec<Symbol>> = FxHashMap::default();
-        for unit in &self.units {
-            for (&binder, handlers) in &unit.types.performs_into {
-                let owned = reached.entry(binder).or_default();
-                for &handler in handlers {
-                    if escapes(binder, handler, &contained) && !owned.contains(&handler) {
-                        owned.push(handler);
-                    }
-                }
-            }
+    /// The capability domain for an effect: its payload types plus the
+    /// resumption continuation — `(payloads…, Fn(ret, ⊥))`. Built from the
+    /// finalized catalog signature, so the `@handle` capability closure
+    /// and every demanded cap parameter agree on the type.
+    pub(super) fn cap_dom_items(&mut self, effect: Symbol) -> Option<Vec<TyId>> {
+        let sig = self
+            .units
+            .iter()
+            .find_map(|u| u.types.catalog.effects.get(&effect).cloned())?;
+        if !sig.generics.is_empty() {
+            self.diagnostics
+                .push("lowering: handlers for generic effects (not yet supported)".into());
+            return None;
         }
-        loop {
-            let mut changed = false;
-            for unit in &self.units {
-                for (&binder, refs) in &unit.types.binder_refs {
-                    for target in refs {
-                        let Some(handlers) = reached.get(target).cloned() else {
-                            continue;
-                        };
-                        let owned = reached.entry(binder).or_default();
-                        for handler in handlers {
-                            if escapes(binder, handler, &contained) && !owned.contains(&handler) {
-                                owned.push(handler);
-                                changed = true;
-                            }
-                        }
-                    }
-                }
+        let mut items = Vec::with_capacity(sig.params.len() + 1);
+        for param in &sig.params {
+            if matches!(param, CheckTy::Var(_)) {
+                self.diagnostics.push(
+                    "lowering: effect parameter type unknown (annotate the effect declaration)"
+                        .into(),
+                );
+                return None;
             }
-            if !changed {
-                break;
-            }
+            items.push(self.map_ty(param));
         }
-        reached.retain(|_, handlers| !handlers.is_empty());
-        // Deterministic handler order (abort_scope_ty takes the first).
-        for handlers in reached.values_mut() {
-            handlers.sort();
-        }
-        self.abortable = reached;
+        let bot = self.p.ty_bot();
+        let resume_value_ty = self.map_ty(&sig.ret);
+        items.push(self.p.ty_fn(resume_value_ty, bot));
+        Some(items)
+    }
+
+    /// The capability's λ_G type: `Fn((payloads…, resume), ⊥)`.
+    pub(super) fn cap_ty(&mut self, effect: Symbol) -> Option<TyId> {
+        let items = self.cap_dom_items(effect)?;
+        let dom = self.p.ty_tuple(&items);
+        let bot = self.p.ty_bot();
+        Some(self.p.ty_fn(dom, bot))
     }
 
     pub(super) fn diagnose_unsupported_handlers(&mut self) {
@@ -322,16 +321,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// Does this symbol's specialization take the abort-capable shape
-    /// (normal-return continuation parameter + return slot reserved for
-    /// aborts)? Inits and inout methods are excluded for now — their ret
-    /// wrappers and the abort linkage have not been reconciled.
-    pub(super) fn abort_shape(&self, symbol: Symbol) -> bool {
-        self.abortable.contains_key(&symbol)
-            && !self.is_init(symbol)
-            && !self.mutating.contains(&symbol)
-    }
-
     // ----- Worklist (lazy monomorphization) -------------------------------
 
     /// Demand the specialization of `symbol` at θ; returns its λ_G label.
@@ -374,24 +363,16 @@ impl<'a> Lowering<'a> {
         };
         let bot = self.p.ty_bot();
         let mut dom_items = param_tys;
-        if self.abort_shape(symbol) {
-            // The abort-capable shape: …params, normal-return continuation
-            // (taking [result, return slot]), then the return slot itself,
-            // reserved for abort propagation (capability-passing CPS —
-            // Schuster et al., PLDI 2022).
-            let scope_ty = self.abort_scope_ty(symbol, ret_payload);
-            let slot_ty = self.p.ty_fn(scope_ty, bot);
-            let pair_ty = self.p.ty_tuple(&[ret_payload, slot_ty]);
-            dom_items.push(self.p.ty_fn(pair_ty, bot));
-            dom_items.push(slot_ty);
-        } else {
-            if self.abortable.contains_key(&symbol) {
-                self.diagnostics.push(format!(
-                    "lowering: {symbol} is an init or inout method that can abort (not yet supported)"
-                ));
+        // One capability parameter per user effect in the latent row
+        // (capability-passing style — Schuster, Brachthäuser & Ostermann,
+        // ICFP 2020; the sorted row is a monomorphized evidence vector —
+        // Xie & Leijen, ICFP 2021), then the return continuation.
+        for effect in self.effect_caps_of(symbol) {
+            if let Some(cap_ty) = self.cap_ty(effect) {
+                dom_items.push(cap_ty);
             }
-            dom_items.push(self.p.ty_fn(ret_payload, bot));
         }
+        dom_items.push(self.p.ty_fn(ret_payload, bot));
         let dom = self.p.ty_tuple(&dom_items);
 
         let name = self.spec_name(symbol, &theta);
@@ -399,26 +380,6 @@ impl<'a> Lowering<'a> {
         self.done.insert(key, label);
         self.queue.push((symbol, theta, label));
         label
-    }
-
-    /// The value type an abort-capable function's Ret chain carries: the
-    /// result type of the scope owning the handler its performs route to.
-    /// Falls back to the function's own result type (with a diagnostic)
-    /// when the handler is unknown — the program is already rejected.
-    pub(super) fn abort_scope_ty(&mut self, symbol: Symbol, fallback: TyId) -> TyId {
-        let handlers = self.abortable.get(&symbol).cloned().unwrap_or_default();
-        if handlers.len() > 1 {
-            self.diagnostics.push(format!(
-                "lowering: {symbol} performs into more than one handler (not yet supported)"
-            ));
-        }
-        let Some(cap) = handlers.first().and_then(|h| self.handler_caps.get(h)) else {
-            self.diagnostics.push(format!(
-                "lowering: {symbol} can abort but is demanded before its handler is installed (not yet supported)"
-            ));
-            return fallback;
-        };
-        cap.scope_result_ty
     }
 
     pub(super) fn drain_queue(&mut self) {

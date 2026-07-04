@@ -549,9 +549,13 @@ impl TyFold for SymbolImporter {
 
 /// Prepare a type for export: a leftover unification variable degrades to
 /// `Error` (the store does not travel), and a leftover row/effect var tail
-/// becomes a rigid param keyed by the owning binder.
+/// becomes a rigid param keyed by the owning binder. The minted flags let
+/// `Scheme::sanitize_for_export` register those params for instantiation
+/// to freshen (an owner-keyed tail means "any effects", not a rigid row).
 struct ExportSanitizer {
     owner: Symbol,
+    minted_eff: bool,
+    minted_row: bool,
 }
 
 impl TyFold for ExportSanitizer {
@@ -570,14 +574,20 @@ impl TyFold for ExportSanitizer {
 
     fn fold_eff_tail(&mut self, tail: &Option<EffTail>) -> Option<EffTail> {
         match tail {
-            Some(EffTail::Var(_)) => Some(EffTail::Param(self.owner)),
+            Some(EffTail::Var(_)) => {
+                self.minted_eff = true;
+                Some(EffTail::Param(self.owner))
+            }
             other => other.clone(),
         }
     }
 
     fn fold_row_tail(&mut self, tail: &Option<RowTail>) -> Option<RowTail> {
         match tail {
-            Some(RowTail::Var(_)) => Some(RowTail::Param(self.owner)),
+            Some(RowTail::Var(_)) => {
+                self.minted_row = true;
+                Some(RowTail::Param(self.owner))
+            }
             other => other.clone(),
         }
     }
@@ -720,7 +730,39 @@ impl Ty {
     /// tails become rigid params keyed by the owning binder (an unknown but
     /// fixed row — unifiable as a rigid tail on the importing side).
     pub fn sanitize_for_export(&self, owner: Symbol) -> Ty {
-        ExportSanitizer { owner }.fold_ty(self)
+        ExportSanitizer {
+            owner,
+            minted_eff: false,
+            minted_row: false,
+        }
+        .fold_ty(self)
+    }
+}
+
+impl Scheme {
+    /// Export form of a whole scheme: sanitize the type, and register any
+    /// owner-keyed row/effect param the sanitizer mints so instantiation
+    /// freshens it on the importing side — a leftover tail variable means
+    /// "whatever effects the caller allows", not a rigid row (the same
+    /// convention as the catalog's annotation-derived signatures).
+    pub fn sanitize_for_export(&self, owner: Symbol) -> Scheme {
+        let mut sanitizer = ExportSanitizer {
+            owner,
+            minted_eff: false,
+            minted_row: false,
+        };
+        let ty = sanitizer.fold_ty(&self.ty);
+        let mut scheme = Scheme {
+            ty,
+            ..self.clone()
+        };
+        if sanitizer.minted_eff && !scheme.eff_params.contains(&owner) {
+            scheme.eff_params.push(owner);
+        }
+        if sanitizer.minted_row && !scheme.row_params.contains(&owner) {
+            scheme.row_params.push(owner);
+        }
+        scheme
     }
 }
 

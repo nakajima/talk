@@ -3,7 +3,7 @@
 //! the dictionary-or-monomorphization surface of Wadler & Blott, POPL 1989);
 //! it never asks the checker questions.
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
@@ -67,25 +67,6 @@ pub struct TypeOutput {
     /// Lowering turns these into payload-plus-witness-table packages.
     pub existential_packs: FxHashMap<NodeID, ExistentialPack>,
     /// Capability flow for the lowerer's abort analysis (lexical effect
-    /// handlers compile capability-passing — Brachthäuser, Schuster &
-    /// Ostermann, "Effects as Capabilities", OOPSLA 2020; Schuster et
-    /// al., PLDI 2022): which lexical handlers each binder's body
-    /// performs into, recorded as the checker discharges the routed
-    /// perform from the row.
-    pub performs_into: FxHashMap<Symbol, FxHashSet<Symbol>>,
-    /// Named symbols each binder's body references — a conservative
-    /// superset of its calls, the edges for the abort analysis's
-    /// transitive closure. A spurious edge only costs a callee the
-    /// abort-capable calling convention, never correctness.
-    pub binder_refs: FxHashMap<Symbol, FxHashSet<Symbol>>,
-    /// Each `@handle`'s payload types, zonked (unannotated effect
-    /// parameters are inferred from the perform sites that unified with
-    /// them): handler symbol → parameter types.
-    pub handler_payload_tys: FxHashMap<Symbol, Vec<Ty>>,
-    /// Handlers defined inside each binder's body — a perform routed to
-    /// a handler in the same function never escapes it, so the abort
-    /// analysis subtracts these per binder.
-    pub handlers_defined: FxHashMap<Symbol, FxHashSet<Symbol>>,
     /// Imported + local symbol names, merged — what diagnostics rendered
     /// with during checking, so hover and the REPL show the same names.
     pub display_names: FxHashMap<Symbol, String>,

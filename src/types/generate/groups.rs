@@ -10,6 +10,26 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             protocol_defaults,
         } = collected;
 
+        // The closed set every top-level ambient row carries: core effects
+        // (the runtime's implicit handler) plus effects a top-level
+        // `@handle` covers. Prescanned because top-level `let`s are
+        // group-checked before the statement walk; the lowerer still
+        // diagnoses a perform that beats its handler's install order.
+        self.ambient_effects = self
+            .catalog
+            .effects
+            .keys()
+            .filter(|symbol| symbol.external_module_id() == Some(ModuleId::Core))
+            .copied()
+            .collect();
+        for stmt in &stmts {
+            if let StmtKind::Handling { effect_name, .. } = &stmt.kind
+                && let Ok(effect) = effect_name.symbol()
+            {
+                self.ambient_effects.insert(effect);
+            }
+        }
+
         for binders in binding_groups(&decls) {
             self.check_group(&binders, &decls);
         }
@@ -23,7 +43,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         }
 
         self.level = GROUP_LEVEL;
-        let top_eff = EffectRow::open(self.store.fresh_eff(OUTER_LEVEL, NodeID::SYNTHESIZED));
+        let top_eff = self.ambient_row();
         let top_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
         let top_ctx = Ctx::root().with_ret_eff(top_ret.clone(), top_eff);
         for decl in destructuring_lets {
@@ -56,6 +76,16 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         let residuals = self.run_solver(wanteds);
         self.report_unresolved_residuals(residuals);
         self.solve_deferred();
+    }
+
+    /// The ambient row for computation at the top of the program: closed
+    /// over the implicitly-handled and top-level-handled effects, so an
+    /// effect with no handler errors at the node where it tries to flow in.
+    pub(super) fn ambient_row(&self) -> EffectRow {
+        EffectRow {
+            effects: self.ambient_effects.clone(),
+            tail: None,
+        }
     }
 
     pub(super) fn run_solver(&mut self, wanteds: Vec<Constraint>) -> Vec<Constraint> {
@@ -203,9 +233,9 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         }
 
         // The ambient effect row for top-level right-hand-side computation
-        // is not part of any binder's type: it lives at the outer level so
-        // it can never be quantified.
-        let group_eff = EffectRow::open(self.store.fresh_eff(OUTER_LEVEL, NodeID::SYNTHESIZED));
+        // is not part of any binder's type: it is the closed top-level set,
+        // so nothing about it can be quantified or grown.
+        let group_eff = self.ambient_row();
         let group_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
         let group_ctx = Ctx::root().with_ret_eff(group_ret, group_eff);
 

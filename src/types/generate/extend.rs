@@ -11,7 +11,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         self.level = GROUP_LEVEL;
         debug_assert!(self.wanteds.is_empty());
 
-        let group_eff = EffectRow::open(self.store.fresh_eff(OUTER_LEVEL, NodeID::SYNTHESIZED));
+        let group_eff = self.ambient_row();
         let group_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
         let group_ctx = Ctx::root().with_ret_eff(group_ret, group_eff);
         self.self_types.push(work.self_ty.clone());
@@ -168,7 +168,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             .entry(protocol)
             .or_insert_with(|| vec![protocol]);
 
-        let group_eff = EffectRow::open(self.store.fresh_eff(OUTER_LEVEL, NodeID::SYNTHESIZED));
+        let group_eff = self.ambient_row();
         let group_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
         let group_ctx = Ctx::root().with_ret_eff(group_ret, group_eff);
         self.self_types.push(Ty::Param(protocol));

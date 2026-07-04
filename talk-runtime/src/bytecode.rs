@@ -150,6 +150,7 @@ impl Encoder {
             Value::Closure(..) => return Err(EncodeError::UnsupportedConstant("closure")),
             Value::Cell(..) => return Err(EncodeError::UnsupportedConstant("cell")),
             Value::Object(..) => return Err(EncodeError::UnsupportedConstant("object")),
+            Value::Cont(..) => return Err(EncodeError::UnsupportedConstant("continuation")),
         }
         Ok(())
     }
@@ -287,6 +288,11 @@ impl Encoder {
             Insn::ObjectSet { obj, src, index } => self.reg3(43, obj, src, index),
             Insn::RegionAcquire { dest, src } => self.reg2(44, dest, src),
             Insn::RegionRelease { dest, src } => self.reg2(45, dest, src),
+            Insn::MakeCont { dest } => {
+                self.u8(46);
+                self.u16(dest);
+            }
+            Insn::CallCont { callee, src } => self.reg2(47, callee, src),
             Insn::Load { dest, ptr, kind } => {
                 self.u8(25);
                 self.u16(dest);
@@ -813,6 +819,11 @@ impl<'a> Decoder<'a> {
                 dest: self.u16()?,
                 src: self.u16()?,
             }),
+            46 => Ok(Insn::MakeCont { dest: self.u16()? }),
+            47 => Ok(Insn::CallCont {
+                callee: self.u16()?,
+                src: self.u16()?,
+            }),
             _ => Err(DecodeError::InvalidTag("instruction", tag)),
         }
     }
@@ -1060,9 +1071,11 @@ impl Insn {
             | Insn::IsUnique { dest, ptr: src }
             | Insn::RegionAcquire { dest, src }
             | Insn::RegionRelease { dest, src }
+            | Insn::CallCont { callee: dest, src }
             | Insn::EnvGet { dest, index: src } => {
                 Register::new(n_regs).check_many(&[dest, src])?
             }
+            Insn::MakeCont { dest } => Register::new(n_regs).check(dest)?,
             Insn::Add { dest, a, b }
             | Insn::Sub { dest, a, b }
             | Insn::Mul { dest, a, b }

@@ -846,6 +846,19 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_resumable_perform_in_expression_position() {
+        // The performs sit inside a larger expression and an if condition
+        // — positions the old statement-spine splitter could not reach.
+        // In CPS every expression has a continuation, so the resumption
+        // is just the perform's own.
+        let (value, out) = run_on_both_engines_io(
+            "effect 'ask(prompt) -> Int\n@handle 'ask { p in\n\tcontinue 21\n}\nfunc go() 'ask -> Int {\n\tif 'ask(\"q\") > 10 {\n\t\t'ask(\"a\") + 'ask(\"b\")\n\t} else {\n\t\t0\n\t}\n}\nlet r = go()\nprint(r)\nr",
+        );
+        assert_eq!(out, "42\n");
+        assert_eq!(value, Value::I64(42));
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_handler_that_chooses_to_abort() {
         // The same handler aborting: its value (-1) becomes the scope's
         // value and the performer's rest (v * 10) never runs.

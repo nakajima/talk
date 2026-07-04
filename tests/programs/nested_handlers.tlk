@@ -1,0 +1,22 @@
+effect 'signal(n: Int) -> Never
+
+func emit(n: Int) {
+	'signal(n)
+	print("emit after")
+}
+
+func inner_scope() {
+	@handle 'signal { n in print("inner caught") }
+	emit(1)
+	print("inner after")
+}
+
+func outer_scope() {
+	@handle 'signal { n in print("outer caught") }
+	inner_scope()
+	emit(2)
+	print("outer after")
+}
+
+outer_scope()
+print("done")
