@@ -199,6 +199,8 @@ struct TypecheckSession<'a> {
 
 struct CatalogBuilder<'s, 'a> {
     resolved: &'a ResolvedNames,
+    symbols: &'s mut Symbols,
+    module_id: ModuleId,
     store: &'s mut VarStore,
     catalog: &'s mut TypeCatalog,
     diagnostics: &'s mut DiagnosticSink,
@@ -365,6 +367,8 @@ impl<'a> TypecheckSession<'a> {
         let collected = {
             let mut builder = CatalogBuilder {
                 resolved: self.resolved,
+                symbols: &mut *self.symbols,
+                module_id: self.module_id,
                 store: &mut self.store,
                 catalog: &mut self.catalog,
                 diagnostics: &mut self.diagnostics,

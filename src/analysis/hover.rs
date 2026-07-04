@@ -6,7 +6,7 @@
 use crate::analysis::workspace::Workspace;
 use crate::analysis::{DocumentId, TextRange, node_ids_at_offset};
 use crate::node::Node;
-use crate::node_kinds::expr::ExprKind;
+use crate::node_kinds::{expr::ExprKind, pattern::PatternKind};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hover {
@@ -83,27 +83,15 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
             if let ExprKind::Variable(name) | ExprKind::Constructor(name) = &expr.kind
                 && let Ok(symbol) = name.symbol()
             {
-                if let Some(scheme) = workspace.types.schemes.get(&symbol) {
-                    return Some(Hover {
-                        contents: with_ownership_details(
-                            workspace,
-                            expr.id,
-                            format!("{}: {}", name.name_str(), scheme.render()),
-                            Some(&scheme.ty),
-                        ),
-                        range: TextRange::new(expr.span.start, expr.span.end),
-                    });
-                }
-                if let Some(ty) = workspace.types.node_types.get(&expr.id) {
-                    return Some(Hover {
-                        contents: with_ownership_details(
-                            workspace,
-                            expr.id,
-                            format!("{}: {}", name.name_str(), ty.render_mono()),
-                            Some(ty),
-                        ),
-                        range: TextRange::new(expr.span.start, expr.span.end),
-                    });
+                if let Some(hover) = hover_for_symbol(
+                    workspace,
+                    expr.id,
+                    symbol,
+                    &name.name_str(),
+                    TextRange::new(expr.span.start, expr.span.end),
+                    workspace.types.node_types.get(&expr.id),
+                ) {
+                    return Some(hover);
                 }
             }
             let ty = workspace.types.node_types.get(&expr.id)?;
@@ -125,50 +113,108 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
                 range: TextRange::new(func.name_span.start, func.name_span.end),
             })
         }
-        // A variant pattern shows its case signature (the checker records
-        // the resolution while checking the pattern).
-        Node::Pattern(pattern)
-            if matches!(
-                pattern.kind,
-                crate::node_kinds::pattern::PatternKind::Variant { .. }
-            ) =>
-        {
-            let resolution = workspace.types.member_resolutions.get(&pattern.id)?;
-            let crate::types::output::MemberResolution::Direct(symbol) = resolution else {
-                return None;
-            };
-            let (enum_name, case, payloads) =
-                workspace
-                    .types
-                    .catalog
-                    .enums
-                    .iter()
-                    .find_map(|(owner, info)| {
-                        info.variants.iter().find_map(|(case, variant)| {
-                            (variant.symbol == *symbol).then(|| {
-                                let owner = workspace
-                                    .types
-                                    .display_names
-                                    .get(owner)
-                                    .cloned()
-                                    .unwrap_or_else(|| owner.to_string());
-                                (owner, case.clone(), variant.argument_types().to_vec())
+        Node::Parameter(param) => hover_for_name(
+            workspace,
+            param.id,
+            &param.name,
+            TextRange::new(param.name_span.start, param.name_span.end),
+            None,
+        ),
+        Node::Pattern(pattern) => match &pattern.kind {
+            PatternKind::Bind(name) => hover_for_name(
+                workspace,
+                pattern.id,
+                name,
+                TextRange::new(pattern.span.start, pattern.span.end),
+                None,
+            ),
+            PatternKind::Variant { .. } => {
+                let resolution = workspace.types.member_resolutions.get(&pattern.id)?;
+                let crate::types::output::MemberResolution::Direct(symbol) = resolution else {
+                    return None;
+                };
+                let (enum_name, case, payloads) =
+                    workspace
+                        .types
+                        .catalog
+                        .enums
+                        .iter()
+                        .find_map(|(owner, info)| {
+                            info.variants.iter().find_map(|(case, variant)| {
+                                (variant.symbol == *symbol).then(|| {
+                                    let owner = workspace
+                                        .types
+                                        .display_names
+                                        .get(owner)
+                                        .cloned()
+                                        .unwrap_or_else(|| owner.to_string());
+                                    (owner, case.clone(), variant.argument_types().to_vec())
+                                })
                             })
-                        })
-                    })?;
-            let contents = if payloads.is_empty() {
-                format!("{enum_name}.{case}")
-            } else {
-                let payloads: Vec<String> = payloads.iter().map(|ty| ty.render_mono()).collect();
-                format!("{enum_name}.{case}({})", payloads.join(", "))
-            };
-            Some(Hover {
-                contents: with_ownership_details(workspace, pattern.id, contents, None),
-                range: TextRange::new(pattern.span.start, pattern.span.end),
-            })
-        }
+                        })?;
+                let contents = if payloads.is_empty() {
+                    format!("{enum_name}.{case}")
+                } else {
+                    let payloads: Vec<String> =
+                        payloads.iter().map(|ty| ty.render_mono()).collect();
+                    format!("{enum_name}.{case}({})", payloads.join(", "))
+                };
+                Some(Hover {
+                    contents: with_ownership_details(workspace, pattern.id, contents, None),
+                    range: TextRange::new(pattern.span.start, pattern.span.end),
+                })
+            }
+            _ => None,
+        },
         _ => None,
     }
+}
+
+fn hover_for_name(
+    workspace: &Workspace,
+    node: crate::node_id::NodeID,
+    name: &crate::name::Name,
+    range: TextRange,
+    fallback_ty: Option<&crate::types::ty::Ty>,
+) -> Option<Hover> {
+    let symbol = name.symbol().ok()?;
+    let name = name.name_str();
+    hover_for_symbol(workspace, node, symbol, &name, range, fallback_ty)
+}
+
+fn hover_for_symbol(
+    workspace: &Workspace,
+    node: crate::node_id::NodeID,
+    symbol: crate::name_resolution::symbol::Symbol,
+    name: &str,
+    range: TextRange,
+    fallback_ty: Option<&crate::types::ty::Ty>,
+) -> Option<Hover> {
+    if let Some(scheme) = workspace.types.schemes.get(&symbol) {
+        return Some(Hover {
+            contents: with_ownership_details(
+                workspace,
+                node,
+                format!("{name}: {}", scheme.render()),
+                Some(&scheme.ty),
+            ),
+            range,
+        });
+    }
+
+    if let Some(ty) = workspace.types.local_tys.get(&symbol).or(fallback_ty) {
+        return Some(Hover {
+            contents: with_ownership_details(
+                workspace,
+                node,
+                format!("{name}: {}", ty.render_mono()),
+                Some(ty),
+            ),
+            range,
+        });
+    }
+
+    None
 }
 
 fn with_ownership_details(
@@ -258,6 +304,13 @@ mod tests {
         let source = "let a = 21\na";
         let hover = hover(source, "21").expect("hover");
         assert_eq!(hover.contents, "Int");
+    }
+
+    #[test]
+    fn hover_on_a_let_binding_target_shows_its_type() {
+        let source = "let foo = 123\nfoo";
+        let hover = hover(source, "foo").expect("hover");
+        assert_eq!(hover.contents, "foo: Int");
     }
 
     #[test]

@@ -193,6 +193,11 @@ impl<'e> Elaborator<'e> {
             .unwrap_or_default();
         for protocol in bounds {
             if let Some((owner, assoc)) = self.catalog.associated_type_in(protocol, label) {
+                // Inside the owning protocol's own context, `Self.A` is
+                // the assoc param itself, not a projection to reduce.
+                if base == Ty::Param(owner) {
+                    return Ty::Param(assoc);
+                }
                 return Ty::Proj(Box::new(base), owner, assoc);
             }
         }

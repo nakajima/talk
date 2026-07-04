@@ -2676,6 +2676,197 @@ pub mod tests {
     }
 
     #[test]
+    fn exported_catalog_carries_no_unification_variables() {
+        // Catalog types cross module boundaries, where this module's
+        // store ids mean nothing: a leaked var reads foreign slots on the
+        // importing side (silent mis-unification, or the "effect var
+        // bound to non-effect value" panic).
+        fn ty_has_vars(ty: &crate::types::ty::Ty) -> bool {
+            use crate::types::ty::{EffTail, RowTail, Ty};
+            match ty {
+                Ty::Var(_) => true,
+                Ty::Nominal(_, args) | Ty::Tuple(args) => args.iter().any(ty_has_vars),
+                Ty::Borrow(_, inner) | Ty::Unique(inner) => ty_has_vars(inner),
+                Ty::Func(params, ret, eff) => {
+                    params.iter().any(ty_has_vars)
+                        || ty_has_vars(ret)
+                        || matches!(eff.tail, Some(EffTail::Var(_)))
+                        || eff
+                            .effects
+                            .iter()
+                            .any(|entry| entry.args.iter().any(ty_has_vars))
+                }
+                Ty::Record(row) => {
+                    row.fields.iter().any(|(_, t)| ty_has_vars(t))
+                        || matches!(row.tail, Some(RowTail::Var(_)))
+                }
+                Ty::Any { assoc, .. } => assoc.iter().any(|(_, t)| ty_has_vars(t)),
+                Ty::Proj(base, ..) => ty_has_vars(base),
+                Ty::Param(_) | Ty::Error => false,
+            }
+        }
+
+        let t = check(
+            "// no-core\nstruct Holder {\n\tlet f: (Int) -> Int\n}\nprotocol P {\n\tfunc run(fn: (Int) -> Int) -> Int\n}\neffect 'act(fn: (Int) -> Int) -> Int\nenum Cmd {\n\tcase go((Int) -> Int)\n}",
+        );
+        let module = t.module("VarFree");
+        let catalog = &module.types.catalog;
+        for (symbol, info) in &catalog.structs {
+            for (label, (_, field_ty)) in &info.fields {
+                assert!(
+                    !ty_has_vars(field_ty),
+                    "field {symbol}.{label} leaks vars: {field_ty:?}"
+                );
+            }
+        }
+        for (symbol, info) in &catalog.protocols {
+            for (label, requirement) in &info.requirements {
+                assert!(
+                    !ty_has_vars(&requirement.sig),
+                    "requirement {symbol}.{label} leaks vars: {:?}",
+                    requirement.sig
+                );
+            }
+        }
+        for (symbol, member_map) in &catalog.extend_members {
+            for (label, member) in member_map {
+                assert!(
+                    !ty_has_vars(&member.sig),
+                    "extend member {symbol}.{label} leaks vars: {:?}",
+                    member.sig
+                );
+            }
+        }
+        for (symbol, sig) in &catalog.effects {
+            for ty in sig.params.iter().chain(std::iter::once(&sig.ret)) {
+                assert!(!ty_has_vars(ty), "effect {symbol} leaks vars: {ty:?}");
+            }
+        }
+        for (symbol, info) in &catalog.enums {
+            for (label, variant) in &info.variants {
+                assert!(
+                    !ty_has_vars(&variant.constructor_scheme.ty),
+                    "variant {symbol}.{label} leaks vars: {:?}",
+                    variant.constructor_scheme.ty
+                );
+            }
+        }
+        for ((head, protocol), conformance) in &catalog.conformances {
+            for (assoc, ty) in &conformance.assoc {
+                assert!(
+                    !ty_has_vars(ty),
+                    "conformance ({head}, {protocol}) assoc {assoc} leaks vars: {ty:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn self_qualified_associated_type_matches_bare_in_protocol_body() {
+        // `Self.A` inside the protocol's own context names the assoc
+        // param directly — it must unify with what `self.get()` returns.
+        let t = check(
+            "// no-core\nprotocol Q {\n\tassociated A\n\tfunc get() -> A\n\tfunc also() -> Self.A {\n\t\tself.get()\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    // ----- Protocol extensions -------------------------------------------
+    // `extend P { ... }` methods join P as defaulted requirements: checked
+    // generically over Self like in-body defaults, witnessable by
+    // conforming extends.
+
+    #[test]
+    fn protocol_extension_defaults_are_checked() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nextend P {\n\tfunc doubled() -> Int {\n\t\tself.base()\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_extension_default_type_errors_are_reported() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nextend P {\n\tfunc doubled() -> Int {\n\t\t1.5\n\t}\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+    }
+
+    #[test]
+    fn protocol_extension_methods_callable_on_conforming_types() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nextend P {\n\tfunc doubled() -> Int {\n\t\tself.base()\n\t}\n}\nstruct S {}\nextend S: P {\n\tfunc base() -> Int { 1 }\n}\nfunc useP<T: P>(x: T) -> Int { x.doubled() }\nlet genericValue = useP(S())\nlet directValue = S().doubled()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "genericValue"), "Int");
+        assert_eq!(ty_of(&t, "directValue"), "Int");
+    }
+
+    #[test]
+    fn protocol_extension_registers_regardless_of_decl_order() {
+        // The conforming extend appears before the protocol extension:
+        // the extension's requirements must still be visible to it.
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nstruct S {}\nextend S: P {\n\tfunc base() -> Int { 1 }\n}\nextend P {\n\tfunc doubled() -> Int {\n\t\tself.base()\n\t}\n}\nlet v = S().doubled()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "v"), "Int");
+    }
+
+    #[test]
+    fn protocol_extension_uses_self_associated_types() {
+        let t = check(
+            "// no-core\nprotocol Q {\n\tassociated A\n\tfunc get() -> A\n}\nextend Q {\n\tfunc also() -> Self.A {\n\t\tself.get()\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_extension_mut_method_calls_mut_requirement() {
+        let t = check(
+            "// no-core\nprotocol I {\n\tassociated E\n\tmut func next() -> E\n}\nextend I {\n\tmut func twice() -> Self.E {\n\t\tself.next()\n\t\tself.next()\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_extension_method_with_where_clause() {
+        let t = check(
+            "// no-core\nprotocol Eq2 {\n\tfunc same(rhs: &Self) -> Bool\n}\nprotocol I {\n\tassociated E\n\tmut func next() -> E\n}\nextend I {\n\tmut func matches(needle: &Self.E) -> Bool where E: Eq2 {\n\t\tself.next().same(needle)\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_extension_where_clause_binds_associated_types() {
+        // `E: Eq3<E>` adds a TypeEq given (E.R = E) that the default
+        // body's `same` call needs to typecheck.
+        let t = check(
+            "// no-core\nprotocol Eq3 {\n\tassociated R\n\tfunc same(rhs: R) -> Bool\n}\nprotocol I {\n\tassociated E\n\tmut func next() -> E\n}\nextend I {\n\tmut func found(needle: E) -> Bool where E: Eq3<E> {\n\t\tneedle.same(rhs: self.next())\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_extension_declaring_conformance_is_unsupported() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nprotocol R {\n\tfunc r() -> Int\n}\nextend P: R {\n\tfunc r() -> Int { 1 }\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+    }
+
+    #[test]
+    fn protocol_extension_redeclaring_requirement_is_unsupported() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nextend P {\n\tfunc base() -> Int { 1 }\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+    }
+
+    #[test]
     fn logical_operators_type_as_bool() {
         // `a || b` desugars to an if/else whose blocks hold bare
         // `Node::Expr`s (not statements) — the block walker must value them.
@@ -3496,6 +3687,44 @@ mod with_core {
             .map(|(sym, _)| *sym)
             .expect("x scheme");
         assert_eq!(typed.phase.types.schemes[&symbol].render(), "Int");
+    }
+
+    #[test]
+    fn borrow_shaped_equatable_witness_conforms() {
+        // ADR 0014: comparison requirements take `rhs: &RHS`, so a
+        // non-Copy conforming type witnesses with the borrow spelled out.
+        let typed = check_with_core(Source::from(
+            "struct Pt {\n\tlet x: Int\n}\nextend Pt: Equatable {\n\tfunc equals(rhs: &Pt) -> Bool {\n\t\tself.x == rhs.x\n\t}\n}\nlet hit = Pt(x: 1) == Pt(x: 1)",
+        ));
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn chained_map_with_closure_checks() {
+        // `map`'s closure param is a higher-order signature: its latent
+        // effect row must be an eff param freshened per use, not a raw
+        // store var leaked through the exported catalog (a foreign-store
+        // id panics or silently couples unrelated constraints).
+        let typed = check_with_core(Source::from(
+            "let xs = [10, 20, 30]\nlet m = xs.iter().map() { x in x }",
+        ));
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn chained_iterator_index_terminates() {
+        // Dispatching a requirement whose where clause binds an assoc type
+        // (`index`'s `Equatable<Element>`) at Element = &Int produces the
+        // given `Int ~ &Int` — a self-referential rewrite (the target
+        // contains the source) that must not diverge in the given-rewrite
+        // fixpoint. Termination is the assertion; the diagnostics are
+        // whatever the borrow story currently yields.
+        let typed = check_with_core(Source::from(
+            "let xs = [10, 20, 30]\nlet r = xs.iter().index(20)",
+        ));
+        let _ = type_errors(&typed);
     }
 
     // === Grades: Copy / Affine / Linear (substructural core) ===

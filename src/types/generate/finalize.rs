@@ -91,15 +91,63 @@ impl<'a> TypecheckSession<'a> {
             }
             instantiations.insert(node, finalized);
         }
-        // Effect signatures: perform/handler sites taught unannotated
-        // parameters their types during solving — bake them in, so the
-        // lowerer builds capability types from the catalog alone.
+        // Catalog types outlive this module's solver store (importers'
+        // stores don't share its ids): bake in everything solving
+        // inferred, then degrade genuine leftovers per the export
+        // sanitizer — a raw variable crossing the boundary reads foreign
+        // store slots (mis-unification, or the flatten_eff panic).
         let mut effects = std::mem::take(&mut self.catalog.effects);
-        for sig in effects.values_mut() {
-            sig.params = sig.params.iter().map(|ty| self.final_ty(ty)).collect();
-            sig.ret = self.final_ty(&sig.ret);
+        for (symbol, sig) in effects.iter_mut() {
+            sig.params = sig
+                .params
+                .iter()
+                .map(|ty| self.final_ty(ty).sanitize_for_export(*symbol))
+                .collect();
+            sig.ret = self.final_ty(&sig.ret).sanitize_for_export(*symbol);
         }
         self.catalog.effects = effects;
+        let mut structs = std::mem::take(&mut self.catalog.structs);
+        for (symbol, info) in structs.iter_mut() {
+            for (_, field_ty) in info.fields.values_mut() {
+                *field_ty = self.final_ty(field_ty).sanitize_for_export(*symbol);
+            }
+        }
+        self.catalog.structs = structs;
+        let mut enums = std::mem::take(&mut self.catalog.enums);
+        for (symbol, info) in enums.iter_mut() {
+            for variant in info.variants.values_mut() {
+                let ty = self.final_ty(&variant.constructor_scheme.ty);
+                variant.constructor_scheme = Scheme {
+                    ty,
+                    ..variant.constructor_scheme.clone()
+                }
+                .sanitize_for_export(*symbol);
+            }
+        }
+        self.catalog.enums = enums;
+        let mut protocols = std::mem::take(&mut self.catalog.protocols);
+        for info in protocols.values_mut() {
+            for requirement in info.requirements.values_mut() {
+                requirement.sig = self
+                    .final_ty(&requirement.sig)
+                    .sanitize_for_export(requirement.symbol);
+            }
+        }
+        self.catalog.protocols = protocols;
+        let mut extend_members = std::mem::take(&mut self.catalog.extend_members);
+        for members in extend_members.values_mut() {
+            for member in members.values_mut() {
+                member.sig = self.final_ty(&member.sig).sanitize_for_export(member.symbol);
+            }
+        }
+        self.catalog.extend_members = extend_members;
+        let mut conformances = std::mem::take(&mut self.catalog.conformances);
+        for ((head, _), conformance) in conformances.iter_mut() {
+            for ty in conformance.assoc.values_mut() {
+                *ty = self.final_ty(ty).sanitize_for_export(*head);
+            }
+        }
+        self.catalog.conformances = conformances;
         let mut existential_packs = FxHashMap::default();
         for (node, pack) in std::mem::take(&mut self.artifacts.existential_packs) {
             existential_packs.insert(

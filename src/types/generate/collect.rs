@@ -68,6 +68,14 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         self.register_catalog_type_aliases();
         self.collect_explicit_conformance_claims(&top_decls, &struct_decls);
 
+        // Protocol extensions register before conforming extends so their
+        // defaulted requirements are witnessable regardless of decl order.
+        for decl in &top_decls {
+            if let Some(protocol) = self.protocol_extension_head(decl) {
+                self.register_protocol_extension(protocol, decl, &mut protocol_defaults);
+            }
+        }
+
         for decl in &top_decls {
             match &decl.kind {
                 DeclKind::Let {
@@ -99,7 +107,9 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 }
                 DeclKind::Let { .. } => destructuring_lets.push(decl),
                 DeclKind::Extend { .. } => {
-                    if let Some(work) = self.register_extend(decl, None) {
+                    if self.protocol_extension_head(decl).is_none()
+                        && let Some(work) = self.register_extend(decl, None)
+                    {
                         extends.push(work);
                     }
                 }
@@ -771,11 +781,15 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             effects: Default::default(),
             tail: Some(EffTail::Param(symbol)),
         };
+        let (sig, eff_params) =
+            self.quantify_signature_eff_vars(Ty::Func(params, Box::new(ret), eff));
         Some(Requirement {
             symbol,
-            sig: Ty::Func(params, Box::new(ret), eff),
+            sig,
             predicates,
             has_default,
+            eff_params,
+            generics: generic_symbols(&signature.generics),
         })
     }
 
@@ -799,12 +813,135 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             effects: Default::default(),
             tail: Some(EffTail::Param(symbol)),
         };
+        let (sig, eff_params) =
+            self.quantify_signature_eff_vars(Ty::Func(params, Box::new(ret), eff));
         Some(Requirement {
             symbol,
-            sig: Ty::Func(params, Box::new(ret), eff),
+            sig,
             predicates,
             has_default: true,
+            eff_params,
+            generics: generic_symbols(&func.generics),
         })
+    }
+
+    /// Replace leftover inner effect-row variables in a catalog-bound
+    /// signature (a closure-typed parameter's latent row) with fresh rigid
+    /// params, returned for the requirement's `eff_params`. Catalog types
+    /// outlive this module's solver store, so a raw variable would be read
+    /// as a foreign id by importers; consumers freshen the params per use.
+    fn quantify_signature_eff_vars(&mut self, sig: Ty) -> (Ty, Vec<Symbol>) {
+        struct EffVarParams<'x> {
+            symbols: &'x mut Symbols,
+            module_id: ModuleId,
+            minted: Vec<Symbol>,
+        }
+        impl crate::types::ty::TyFold for EffVarParams<'_> {
+            fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {
+                let entries = eff
+                    .effects
+                    .iter()
+                    .map(|entry| EffectEntry {
+                        effect: entry.effect,
+                        args: entry.args.iter().map(|ty| self.fold_ty(ty)).collect(),
+                    })
+                    .collect();
+                let tail = match &eff.tail {
+                    Some(EffTail::Var(_)) => {
+                        let param = Symbol::TypeParameter(
+                            self.symbols.next_type_parameter(self.module_id),
+                        );
+                        self.minted.push(param);
+                        Some(EffTail::Param(param))
+                    }
+                    other => other.clone(),
+                };
+                EffectRow::new(entries, tail)
+            }
+        }
+        let mut folder = EffVarParams {
+            symbols: self.symbols,
+            module_id: self.module_id,
+            minted: vec![],
+        };
+        use crate::types::ty::TyFold;
+        let sig = folder.fold_ty(&sig);
+        (sig, folder.minted)
+    }
+
+    /// A top-level `extend` whose head names a protocol (rather than a
+    /// nominal type getting witnesses or inherent members).
+    pub(super) fn protocol_extension_head(&self, decl: &Decl) -> Option<Symbol> {
+        let DeclKind::Extend { name, .. } = &decl.kind else {
+            return None;
+        };
+        let head = name.symbol().ok()?;
+        self.catalog.protocols.contains_key(&head).then_some(head)
+    }
+
+    /// Register `extend SomeProtocol { ... }`: each method joins the
+    /// protocol as a defaulted requirement — checked generically over
+    /// Self like an in-body default, witnessable by conforming extends.
+    pub(super) fn register_protocol_extension(
+        &mut self,
+        protocol: Symbol,
+        decl: &'a Decl,
+        protocol_defaults: &mut Vec<(Symbol, Symbol, &'a Func)>,
+    ) {
+        let DeclKind::Extend {
+            conformances,
+            generics,
+            where_clause,
+            body,
+            ..
+        } = &decl.kind
+        else {
+            return;
+        };
+        if !conformances.is_empty() {
+            self.unsupported(decl.id, "declaring conformances on a protocol extension");
+            return;
+        }
+        if !generics.is_empty() {
+            self.unsupported(decl.id, "generic protocol extensions");
+            return;
+        }
+        self.self_types.push(Ty::Param(protocol));
+        self.register_where_bounds(where_clause.as_ref());
+        let extension_predicates = self.declared_predicates(&[], where_clause.as_ref());
+        for member in &body.decls {
+            let DeclKind::Method { func, .. } = &member.kind else {
+                self.unsupported(member.id, decl_kind_name(&member.kind));
+                continue;
+            };
+            let label = func.name.name_str();
+            if self
+                .catalog
+                .protocols
+                .get(&protocol)
+                .is_some_and(|info| info.requirements.contains_key(&label))
+            {
+                self.unsupported(
+                    member.id,
+                    "redeclaring an existing protocol member in a protocol extension",
+                );
+                continue;
+            }
+            let Some(mut requirement) = self.lower_default_requirement(func) else {
+                continue;
+            };
+            for predicate in &extension_predicates {
+                if !requirement.predicates.contains(predicate) {
+                    requirement.predicates.push(predicate.clone());
+                }
+            }
+            protocol_defaults.push((protocol, requirement.symbol, func));
+            if let Some(info) = self.catalog.protocols.get_mut(&protocol) {
+                info.requirements.insert(label.clone(), requirement);
+            }
+            self.catalog.add_owner(&label, MemberOwner::Protocol(protocol));
+        }
+        self.self_types.pop();
     }
 
     pub(super) fn register_effect(

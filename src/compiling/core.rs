@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use indexmap::IndexMap;
 use lazy_static::lazy_static;
@@ -21,6 +21,8 @@ pub struct LibraryTyped {
     pub types: TypeOutput,
     pub resolved_names: ResolvedNames,
 }
+
+const TALK_CORE_PATH_ENV: &str = "TALK_CORE_PATH";
 
 lazy_static! {
     static ref CORE: (Arc<Module>, Arc<LibraryTyped>) = _compile();
@@ -83,16 +85,33 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
+fn compilation_sources() -> Vec<Source> {
+    if let Some(core_path) = std::env::var_os(TALK_CORE_PATH_ENV).filter(|path| !path.is_empty()) {
+        let core_dir = PathBuf::from(core_path);
+        assert!(
+            core_dir.is_dir(),
+            "{TALK_CORE_PATH_ENV} must point to a directory: {}",
+            core_dir.display()
+        );
+
+        return CORE_SOURCE_NAMES
+            .iter()
+            .map(|name| Source::from(core_dir.join(name)))
+            .collect();
+    }
+
+    core_sources()
+        .into_iter()
+        .map(|(name, content)| Source::in_memory(name.into(), content))
+        .collect()
+}
+
 fn _compile() -> (Arc<Module>, Arc<LibraryTyped>) {
     let _s = tracing::trace_span!("compile_prelude", prelude = true).entered();
     let mut config = DriverConfig::new("Core");
     config.module_id = ModuleId::Core;
     config.mode = CompilationMode::Library;
-    let sources = core_sources()
-        .into_iter()
-        .map(|(name, content)| Source::in_memory(name.into(), content))
-        .collect();
-    let driver = Driver::new_bare(sources, config);
+    let driver = Driver::new_bare(compilation_sources(), config);
 
     #[allow(clippy::unwrap_used)]
     let typed = driver

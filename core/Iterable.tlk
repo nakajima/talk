@@ -1,7 +1,7 @@
 // no-core
 use { Optional } from ./Optional.tlk
 use { Array } from ./Array.tlk
-use { Add, Comparable } from ./Operators.tlk
+use { Add, Subtract, Comparable, Equatable } from ./Operators.tlk
 
 public protocol Iterator {
 	associated Element
@@ -9,6 +9,30 @@ public protocol Iterator {
 
 	func map<U>(fn: (&Self.Element) -> U) -> Map<Self, U> {
 		Map(inner: self, fn: fn)
+	}
+
+	consuming func skip(count: Int) -> Self {
+		let i = 0
+		loop i < count {
+			self.next()
+			i = i + 1
+		}
+		self
+	}
+}
+
+extend Iterator {
+	mut func index(needle: &Element) -> Int? where Element: Equatable<Element> {
+		let i = 0
+		loop {
+			if let .some(candidate) = self.next() {
+				if needle == candidate { return .some(i) }
+			} else {
+				return .none
+			}
+
+			i = i + 1
+		}
 	}
 }
 
@@ -41,10 +65,10 @@ public struct ArrayIterator<Element> {
 			if self.current < self.array.count {
 				let result = self.array.get(self.current)
 				self.current = self.current + 1
-				Optional.some(result)
-			} else {
-				Optional.none
+				return .some(result)
 			}
+
+			.none
 		}
 	}
 }
@@ -52,5 +76,32 @@ public struct ArrayIterator<Element> {
 extend Array<Element>: Iterable {
 	func iter() -> ArrayIterator<Element> {
 		ArrayIterator<Element>(array: self)
+	}
+}
+
+public protocol IndexIterable: Iterable {
+	associated Element
+	func count() -> Int
+	func get(i: Int) -> &Element?
+
+	func iter() -> IndexIterator<Self> {
+		IndexIterator(inner: self, position: 0)
+	}
+}
+
+struct IndexIterator<T: IndexIterable> {
+	let inner: &T
+	let position: Int
+}
+
+extend IndexIterator<T: IndexIterable>: Iterator {
+	mut func next() -> T.Element? {
+		if self.position > self.inner.count() - 1 { return Optional.none }
+		if let .some(value) = self.inner.get(self.position) {
+			self.position = self.position + 1
+			return .some(value)
+		}
+
+		.none
 	}
 }

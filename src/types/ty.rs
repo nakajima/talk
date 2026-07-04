@@ -827,6 +827,11 @@ pub(crate) fn match_pattern(
         (Ty::Borrow(left_kind, left_inner), Ty::Borrow(right_kind, right_inner)) => {
             left_kind == right_kind && match_pattern(left_inner, right_inner, bindings)
         }
+        // A borrow in the pattern is transparent against a non-borrow
+        // actual: a witness may spell `T` where the requirement says `&T`
+        // (borrow erasure, ADR 0014). One-sided — a param pattern binding
+        // TO a borrow (`Element = &Int`) stays intact via `match_param`.
+        (Ty::Borrow(_, left_inner), right) => match_pattern(left_inner, right, bindings),
         (Ty::Unique(left_inner), Ty::Unique(right_inner)) => {
             match_pattern(left_inner, right_inner, bindings)
         }
@@ -1199,6 +1204,33 @@ fn render_nominal_head(sym: &Symbol) -> String {
 #[cfg(test)]
 mod traversal_tests {
     use super::*;
+
+    #[test]
+    fn match_pattern_peels_pattern_side_borrows() {
+        // `&RHS` against `Int` binds RHS = Int: a witness may spell the
+        // operand by value where the requirement borrows it (ADR 0014).
+        let mut bindings = FxHashMap::default();
+        assert!(match_pattern(
+            &Ty::Borrow(Perm::Shared, Box::new(Ty::Param(Symbol::Bool))),
+            &Ty::Nominal(Symbol::Int, vec![]),
+            &mut bindings,
+        ));
+        assert_eq!(
+            bindings.get(&Symbol::Bool),
+            Some(&Ty::Nominal(Symbol::Int, vec![]))
+        );
+
+        // The other direction stays a whole-borrow bind: `Element`
+        // against `&Int` binds Element = &Int (ArrayIterator's shape).
+        let mut bindings = FxHashMap::default();
+        let borrowed_int = Ty::Borrow(Perm::Shared, Box::new(Ty::Nominal(Symbol::Int, vec![])));
+        assert!(match_pattern(
+            &Ty::Param(Symbol::Bool),
+            &borrowed_int,
+            &mut bindings,
+        ));
+        assert_eq!(bindings.get(&Symbol::Bool), Some(&borrowed_int));
+    }
 
     #[test]
     fn match_pattern_binds_params_nested_in_record_any_and_proj() {

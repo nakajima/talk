@@ -606,7 +606,13 @@ impl<'a> Lowering<'a> {
         args.push(ret_k);
         let arg_tuple = self.p.tuple(&args);
         let Some((target, _, _)) =
-            self.resolve_witness(owner, requirement.symbol, label.to_string(), payload_ty)
+            self.resolve_witness(
+                owner,
+                requirement.symbol,
+                label.to_string(),
+                payload_ty,
+                &Theta::default(),
+            )
         else {
             self.diagnostics.push(format!(
                 "lowering: cannot build existential witness for {label} at {:?}",

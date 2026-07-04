@@ -58,6 +58,14 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
 
                 let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
                 tys.insert(owner, work.self_ty.clone());
+                // Method-level generics unify against the witness's own
+                // rigid generics through fresh variables.
+                for generic in &requirement.generics {
+                    tys.insert(
+                        *generic,
+                        Ty::Var(self.store.fresh_ty(self.level, member.id)),
+                    );
+                }
                 for assoc in assoc_symbols {
                     let binding = match bindings.get(&assoc) {
                         Some(bound) => bound.clone(),
@@ -78,6 +86,12 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     requirement.symbol,
                     EffTail::Var(self.store.fresh_eff(self.level, member.id)),
                 );
+                for param in &requirement.eff_params {
+                    effs.insert(
+                        *param,
+                        EffTail::Var(self.store.fresh_eff(self.level, member.id)),
+                    );
+                }
                 let expected = requirement.sig.substitute(&tys, &effs, &Default::default());
                 let wanted = Constraint::Eq(
                     expected,
@@ -172,24 +186,54 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         let group_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
         let group_ctx = Ctx::root().with_ret_eff(group_ret, group_eff);
         self.self_types.push(Ty::Param(protocol));
+        let wanted_start = self.wanteds.len();
 
         let inferred = self
             .body()
             .infer_func(func, &group_ctx.with_binder(requirement_symbol));
-        let expected = self
+        let requirement = self
             .catalog
             .protocols
             .get(&protocol)
             .and_then(|info| info.requirements.get(&func.name.name_str()))
-            .map(|requirement| requirement.sig.clone());
-        if let Some(expected) = expected {
+            .cloned();
+        if let Some(requirement) = &requirement {
+            let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
+            for generic in &requirement.generics {
+                tys.insert(
+                    *generic,
+                    Ty::Var(self.store.fresh_ty(self.level, func.id)),
+                );
+            }
             let mut effs = FxHashMap::default();
             effs.insert(
                 requirement_symbol,
                 EffTail::Var(self.store.fresh_eff(self.level, func.id)),
             );
-            let expected = expected.substitute(&Default::default(), &effs, &Default::default());
+            for param in &requirement.eff_params {
+                effs.insert(
+                    *param,
+                    EffTail::Var(self.store.fresh_eff(self.level, func.id)),
+                );
+            }
+            let expected = requirement.sig.substitute(&tys, &effs, &Default::default());
             self.emit_eq(expected, inferred, func.id, CtReason::Annotation);
+        }
+
+        // The requirement's declared predicates are givens for the body
+        // (they are already over Self = the protocol's own param).
+        let givens = requirement.map(|r| r.predicates).unwrap_or_default();
+        if !givens.is_empty() {
+            let wanteds = self.wanteds.split_off(wanted_start);
+            if !wanteds.is_empty() {
+                self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                    level: self.level,
+                    givens,
+                    wanteds,
+                    local_params: vec![],
+                    touchable_level: None,
+                })));
+            }
         }
 
         self.self_types.pop();

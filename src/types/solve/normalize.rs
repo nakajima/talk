@@ -18,6 +18,11 @@ pub fn normalize_ty(store: &mut VarStore, catalog: &TypeCatalog, ty: &Ty) -> Ty 
             {
                 return normalize_ty(store, catalog, &reduced);
             }
+            // A projection off the protocol's own Self param is the assoc
+            // param itself: within P's context, `Self.A` ≡ `A`.
+            if projection_base == Ty::Param(protocol) {
+                return Ty::Param(assoc);
+            }
             Ty::Proj(Box::new(base), protocol, assoc)
         }
         Ty::Any { protocol, assoc } => Ty::Any {

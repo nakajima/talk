@@ -81,6 +81,16 @@ pub struct Requirement {
     pub sig: Ty,
     pub predicates: Vec<Predicate>,
     pub has_default: bool,
+    /// Rigid params standing in for the sig's inner effect rows (a
+    /// closure-typed parameter's latent row). Catalog types outlive the
+    /// defining module's solver store, so these are params — every
+    /// consumer freshens them per use, like `Scheme::eff_params`.
+    #[serde(default)]
+    pub eff_params: Vec<Symbol>,
+    /// The requirement's own method-level generics (`func map<U>(...)`),
+    /// freshened per use alongside `eff_params`.
+    #[serde(default)]
+    pub generics: Vec<Symbol>,
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -340,6 +350,16 @@ impl TypeCatalog {
                                                 .map(|predicate| predicate.import_symbols(target))
                                                 .collect(),
                                             has_default: r.has_default,
+                                            eff_params: r
+                                                .eff_params
+                                                .iter()
+                                                .map(|s| imp(*s, target))
+                                                .collect(),
+                                            generics: r
+                                                .generics
+                                                .iter()
+                                                .map(|s| imp(*s, target))
+                                                .collect(),
                                         },
                                     )
                                 })

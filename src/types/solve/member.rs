@@ -484,11 +484,28 @@ impl<'s> Solver<'s> {
             }
         }
         tys.insert(protocol, lookup_receiver.clone());
+        // Method-level generics (`func map<U>`) instantiate fresh per use,
+        // recorded for the lowerer's per-call-site θ like any scheme param.
+        for generic in &requirement.generics {
+            let var = Ty::Var(self.store.fresh_ty(self.level, origin.node));
+            self.instantiations
+                .entry(origin.node)
+                .or_default()
+                .push((*generic, var.clone()));
+            tys.insert(*generic, var);
+        }
         let mut effs = FxHashMap::default();
         effs.insert(
             requirement.symbol,
             EffTail::Var(self.store.fresh_eff(self.level, origin.node)),
         );
+        // Inner rows (closure-typed params) freshen independently per use.
+        for param in &requirement.eff_params {
+            effs.insert(
+                *param,
+                EffTail::Var(self.store.fresh_eff(self.level, origin.node)),
+            );
+        }
         let signature = requirement.sig.substitute(&tys, &effs, &Default::default());
 
         let mut local_wanteds = vec![];

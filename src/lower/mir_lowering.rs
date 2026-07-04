@@ -1206,7 +1206,16 @@ impl<'a> Lowering<'a> {
                     exit_block: *exit_block,
                     exit: exit_ref,
                 });
-                let exit_body = self.lower_mir_block(cursor.at_block(*exit_block), ctx, k, cache);
+                // An unconditional loop with no break never reaches its
+                // exit block; lowering it anyway would deliver () to a
+                // continuation expecting the function's value.
+                let exit_body = if condition.is_some()
+                    || Self::loop_exit_reachable(cursor.body, *exit_block)
+                {
+                    self.lower_mir_block(cursor.at_block(*exit_block), ctx, k, cache)
+                } else {
+                    self.dead_end("loop_exit_unreachable")
+                };
                 self.p.set_body(exit, exit_body);
 
                 let mut loop_ctx = ctx.clone();
@@ -1243,6 +1252,39 @@ impl<'a> Lowering<'a> {
                 self.p.app(header_ref, void)
             }
         }
+    }
+
+    /// Whether any terminator in the body transfers control INTO `exit`.
+    /// The defining `Loop { exit_block }` field is not an inbound edge —
+    /// an unconditional loop reaches its exit only through breaks (which
+    /// are `Jump`s here). Bare `Break`s (scaffold paths that resolve
+    /// against `ctx.loops` later) count conservatively.
+    fn loop_exit_reachable(body: &mir::Body, exit: mir::BlockId) -> bool {
+        body.blocks.iter().any(|block| match block.terminator {
+            mir::Terminator::Jump(target) => target == exit,
+            mir::Terminator::Break => true,
+            mir::Terminator::Branch {
+                then_block,
+                else_block,
+                ..
+            } => then_block == exit || else_block == exit,
+            mir::Terminator::Switch {
+                ref arms,
+                default,
+                join,
+                ..
+            } => arms.contains(&exit) || default == Some(exit) || join == exit,
+            mir::Terminator::Handler { body_block, join } => body_block == exit || join == exit,
+            mir::Terminator::Loop {
+                ref condition,
+                body_block,
+                exit_block,
+            } => body_block == exit || (condition.is_some() && exit_block == exit),
+            mir::Terminator::Unset
+            | mir::Terminator::Return
+            | mir::Terminator::ReturnVoid
+            | mir::Terminator::Continue => false,
+        })
     }
 
     fn switch_join_target(

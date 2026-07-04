@@ -1130,6 +1130,89 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_protocol_extension_defaults() {
+        // `extend Greeter` methods are defaulted requirements: Cat takes
+        // the extension body, Dog's own witness overrides it.
+        let (_, out) = run_on_both_engines_io(
+            "protocol Greeter {\n\tfunc volume() -> Int\n}\nextend Greeter {\n\tfunc greet() -> Int {\n\t\tself.volume()\n\t}\n}\nstruct Cat {}\nextend Cat: Greeter {\n\tfunc volume() -> Int { 3 }\n}\nstruct Dog {}\nextend Dog: Greeter {\n\tfunc volume() -> Int { 7 }\n\tfunc greet() -> Int { 11 }\n}\nprint(Cat().greet())\nprint(Dog().greet())",
+        );
+        assert_eq!(out, "3\n11\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_return_only_loop_tail() {
+        // An unconditional loop that only exits via `return`: the loop's
+        // MIR exit block is unreachable, so the function tail after it
+        // must not deliver () to the return continuation.
+        let (_, out) = run_on_both_engines_io(
+            "func firstOver(limit: Int) -> Int {\n\tlet i = 0\n\tloop {\n\t\tif i > limit { return i }\n\t\ti = i + 1\n\t}\n}\nprint(firstOver(3))",
+        );
+        assert_eq!(out, "4\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_iterator_index_with_borrowed_elements() {
+        // Array iterators yield &Element; `index` compares them against a
+        // by-value needle through borrow-transparent conformance plus the
+        // Copy / copy-out-of-borrow coercions. The chained receiver is an
+        // rvalue (its iterator state dies with the call).
+        let (_, out) = run_on_both_engines_io(
+            "let xs = [10, 20, 30]\nmatch xs.iter().index(20) {\n\t.some(i) -> print(i),\n\t.none -> print(\"not found\")\n}\nmatch xs.iter().index(99) {\n\t.some(i) -> print(i),\n\t.none -> print(\"not found\")\n}",
+        );
+        assert_eq!(out, "1\nnot found\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_generic_requirement_with_trailing_closure() {
+        // `map<U>` is a generic requirement: its U instantiation must
+        // reach the lowerer's θ so the trailing closure's param type is
+        // concrete, not erased.
+        let (_, out) = run_on_both_engines_io(
+            "let xs = [10, 20, 30]\nlet m = xs.iter().map() { x in x }\nprint(\"ok\")",
+        );
+        assert_eq!(out, "ok\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_index_with_borrowed_struct_witness() {
+        // ADR 0014: a plain struct's borrow-shaped equals witness compares
+        // borrowed elements without copy-out coercions.
+        let (_, out) = run_on_both_engines_io(
+            "struct Pt {\n\tlet x: Int\n}\nextend Pt: Equatable {\n\tfunc equals(rhs: &Pt) -> Bool {\n\t\tself.x == rhs.x\n\t}\n}\nlet xs = [Pt(x: 1), Pt(x: 2), Pt(x: 3)]\nmatch xs.iter().index(Pt(x: 2)) {\n\t.some(i) -> print(i),\n\t.none -> print(\"not found\")\n}",
+        );
+        assert_eq!(out, "1\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_mut_method_on_rvalue_receiver() {
+        // A mutating call on an rvalue receiver: the updated Self has no
+        // home and dies with the call; the result still comes through.
+        let (_, out) = run_on_both_engines_io(
+            "struct Counter {\n\tlet n: Int\n\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\nfunc make() -> Counter { Counter(n: 41) }\nprint(make().bump())",
+        );
+        assert_eq!(out, "42\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_mut_protocol_defaults() {
+        // A mut default body calls a mut requirement through self: both
+        // the nested call and the default's own return use the inout
+        // convention (requirement symbols must be in the mutating set).
+        let (_, out) = run_on_both_engines_io(
+            "protocol Bumper {\n\tmut func bump() -> Int\n\n\tmut func twice() -> Int {\n\t\tself.bump()\n\t\tself.bump()\n\t}\n}\nstruct Counter2 {\n\tlet n: Int\n}\nextend Counter2: Bumper {\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\nlet c = Counter2(n: 0)\nprint(c.twice())",
+        );
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_mut_protocol_extension_defaults() {
+        let (_, out) = run_on_both_engines_io(
+            "protocol Bumper {\n\tmut func bump() -> Int\n}\nextend Bumper {\n\tmut func twice() -> Int {\n\t\tself.bump()\n\t\tself.bump()\n\t}\n}\nstruct Counter2 {\n\tlet n: Int\n}\nextend Counter2: Bumper {\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\nlet c = Counter2(n: 0)\nprint(c.twice())",
+        );
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_handlers_in_two_functions() {
         // Each function's @handle mints its own capability for the same
         // effect.

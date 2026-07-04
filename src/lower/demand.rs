@@ -62,6 +62,23 @@ impl<'a> Lowering<'a> {
                     self.index_callable(unit, symbol, &func.params, &func.body, false);
                 }
             }
+            // A mut requirement has no body to index, but its symbol still
+            // names a callable with the inout convention: protocol dispatch
+            // (e.g. `self.bump()` in a default body) must treat the call as
+            // mutating so the receiver gets a cell and Self writes back.
+            DeclKind::MethodRequirement { signature, .. } => {
+                if let Ok(symbol) = signature.name.symbol()
+                    && signature.params.first().is_some_and(|param| {
+                        param.name.name_str() == "self"
+                            && matches!(
+                                param.type_annotation.as_ref().map(|a| &a.kind),
+                                Some(TypeAnnotationKind::Borrow { mutable: true, .. })
+                            )
+                    })
+                {
+                    self.mutating.insert(symbol);
+                }
+            }
             DeclKind::Init { name, params, body } => {
                 if let Ok(symbol) = name.symbol() {
                     self.index_callable(unit, symbol, params, body, true);
@@ -431,7 +448,11 @@ impl<'a> Lowering<'a> {
             .iter()
             .find_map(|u| u.types.schemes.get(&symbol).map(|s| s.ty.clone()))
             .or_else(|| self.requirement_sigs.get(&symbol).cloned())?;
-        Some(raw.substitute(theta, &Default::default(), &Default::default()))
+        let substituted = raw.substitute(theta, &Default::default(), &Default::default());
+        // θ can expose reducible projections (`ArrayIterator<Int>.Element`
+        // in a field or requirement signature): reduce them through the
+        // conformance table before anything maps this type to λ_G.
+        Some(self.normalize_check_ty(substituted, self.entry))
     }
 
     /// A specialization's display name: the source name plus the concrete
