@@ -470,7 +470,7 @@ impl<'a> Lowering<'a> {
                 let index = self.units[self.entry]
                     .types
                     .catalog
-                    .requirements_for_conformance(protocol)
+                    .requirements_for_conformance(&protocol)
                     .len() as u32;
                 let void_ty = self.p.ty_void();
                 let bot = self.p.ty_bot();
@@ -657,7 +657,7 @@ impl<'a> Lowering<'a> {
             unit.types
                 .catalog
                 .conformances
-                .get(&(symbol, Symbol::Deinit))
+                .get(&(symbol, ProtocolRef::bare(Symbol::Deinit)))
                 .and_then(|conformance| conformance.witnesses.get("deinit"))
                 .copied()
         })
@@ -705,7 +705,7 @@ impl<'a> Lowering<'a> {
             unit.types
                 .catalog
                 .conformances
-                .get(&(symbol, Symbol::Deinit))
+                .get(&(symbol, ProtocolRef::bare(Symbol::Deinit)))
         }) {
             for (pattern, actual) in conformance.self_args.iter().zip(args) {
                 crate::types::solve::bind_param_pattern(pattern, actual, &mut theta);
@@ -1070,7 +1070,7 @@ impl<'a> Lowering<'a> {
             unit.types
                 .catalog
                 .conformances
-                .contains_key(&(symbol, Symbol::Borrowed))
+                .contains_key(&(symbol, ProtocolRef::bare(Symbol::Borrowed)))
         })
     }
 

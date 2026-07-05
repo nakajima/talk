@@ -151,8 +151,11 @@ pub enum DeclKind {
         name: Name, // TypeRepr name: Option
         #[drive(skip)]
         name_span: Span,
+        /// Row-level params from `extend<T> Head ...`.
+        row_generics: Vec<GenericDecl>,
         conformances: Vec<TypeAnnotation>,
-        generics: Vec<GenericDecl>, // Generics TypeParams <T>
+        /// Head application params from `extend Head<T> ...`.
+        generics: Vec<GenericDecl>,
         where_clause: Option<WhereClause>,
         body: Body,
     },

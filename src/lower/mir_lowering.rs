@@ -240,8 +240,7 @@ impl<'a> Lowering<'a> {
                 ..
             } => {
                 let rest_body = rest(self, ctx, k);
-                let Some(mir::DropElaboration::Static) =
-                    self.drop_elaboration_at(statement, None)
+                let Some(mir::DropElaboration::Static) = self.drop_elaboration_at(statement, None)
                 else {
                     return rest_body;
                 };

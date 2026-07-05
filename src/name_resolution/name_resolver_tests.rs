@@ -1340,6 +1340,7 @@ pub mod tests {
             any_decl!(DeclKind::Extend {
                 name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
                 name_span: Span::ANY,
+                row_generics: vec![],
                 conformances: vec![],
                 generics: vec![],
                 where_clause: None,
@@ -1363,6 +1364,7 @@ pub mod tests {
             any_decl!(DeclKind::Extend {
                 name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
                 name_span: Span::ANY,
+                row_generics: vec![],
                 conformances: vec![],
                 generics: vec![],
                 where_clause: None,

@@ -8,12 +8,10 @@ macro_rules! impl_bounds_for {
                     let Ok(symbol) = generic.name.symbol() else {
                         continue;
                     };
-                    for protocol in generic
-                        .conformances
-                        .iter()
-                        .filter_map(Self::annotation_symbol)
-                    {
-                        self.register_param_bound(symbol, protocol);
+                    for conformance in &generic.conformances {
+                        if let Some((protocol, _)) = self.lower_protocol_ref(conformance) {
+                            self.register_param_bound(symbol, protocol);
+                        }
                     }
                 }
             }
@@ -39,25 +37,62 @@ macro_rules! impl_bounds_for {
                     else {
                         continue;
                     };
-                    for protocol in protocols.iter().filter_map(Self::annotation_symbol) {
-                        self.register_param_bound(param, protocol);
+                    for protocol in protocols {
+                        if let Some((protocol, _)) = self.lower_protocol_ref(protocol) {
+                            self.register_param_bound(param, protocol);
+                        }
                     }
                 }
             }
 
-            pub(super) fn annotation_symbol(annotation: &TypeAnnotation) -> Option<Symbol> {
-                match &annotation.kind {
-                    TypeAnnotationKind::Nominal { name, .. }
-                    | TypeAnnotationKind::SelfType(name) => name.symbol().ok(),
-                    _ => None,
-                }
-            }
-
-            pub(super) fn register_param_bound(&mut self, param: Symbol, protocol: Symbol) {
+            pub(super) fn register_param_bound(&mut self, param: Symbol, protocol: ProtocolRef) {
                 let bounds = self.catalog.param_bounds.entry(param).or_default();
                 if !bounds.contains(&protocol) {
                     bounds.push(protocol);
                 }
+            }
+
+            pub(super) fn lower_protocol_ref(
+                &mut self,
+                annotation: &TypeAnnotation,
+            ) -> Option<(ProtocolRef, Vec<TypeAnnotation>)> {
+                let (protocol, generics) = match &annotation.kind {
+                    TypeAnnotationKind::Nominal { name, generics, .. } => {
+                        (name.symbol().ok()?, generics.as_slice())
+                    }
+                    TypeAnnotationKind::SelfType(name) => (name.symbol().ok()?, [].as_slice()),
+                    _ => {
+                        self.unsupported(
+                            annotation.id,
+                            "non-nominal protocol names in where clauses",
+                        );
+                        return None;
+                    }
+                };
+                let param_count = self
+                    .catalog
+                    .protocols
+                    .get(&protocol)
+                    .map(|info| info.params.len())
+                    .unwrap_or(0);
+                if generics.len() == param_count {
+                    let args = generics
+                        .iter()
+                        .map(|generic| self.lower_annotation(generic))
+                        .collect();
+                    return Some((ProtocolRef { protocol, args }, vec![]));
+                }
+                if param_count == 0 {
+                    return Some((ProtocolRef::bare(protocol), generics.to_vec()));
+                }
+                self.diagnostics.errors.push((
+                    TypeError::ArityMismatch {
+                        expected: param_count,
+                        found: generics.len(),
+                    },
+                    annotation.id,
+                ));
+                Some((ProtocolRef::bare(protocol), vec![]))
             }
 
             pub(super) fn declared_predicates(
@@ -169,34 +204,17 @@ macro_rules! impl_bounds_for {
                 ty: Ty,
                 protocol_annotation: &TypeAnnotation,
             ) -> Vec<Predicate> {
-                let (protocol, assoc_args) = match &protocol_annotation.kind {
-                    TypeAnnotationKind::Nominal { name, generics, .. } => {
-                        let Ok(protocol) = name.symbol() else {
-                            return vec![];
-                        };
-                        (protocol, generics.as_slice())
-                    }
-                    TypeAnnotationKind::SelfType(name) => {
-                        let Ok(protocol) = name.symbol() else {
-                            return vec![];
-                        };
-                        (protocol, [].as_slice())
-                    }
-                    _ => {
-                        self.unsupported(
-                            protocol_annotation.id,
-                            "non-nominal protocol names in where clauses",
-                        );
-                        return vec![];
-                    }
+                let Some((protocol, assoc_args)) = self.lower_protocol_ref(protocol_annotation)
+                else {
+                    return vec![];
                 };
 
                 let mut predicates = vec![Predicate::Conforms {
                     ty: ty.clone(),
-                    protocol,
+                    protocol: protocol.clone(),
                 }];
                 self.protocol_refinement_predicates(
-                    protocol,
+                    protocol.clone(),
                     ty.clone(),
                     &mut FxHashSet::default(),
                     &mut predicates,
@@ -205,12 +223,7 @@ macro_rules! impl_bounds_for {
                     return predicates;
                 }
 
-                let assoc_symbols: Vec<Symbol> = self
-                    .catalog
-                    .protocols
-                    .get(&protocol)
-                    .map(|info| info.assoc.values().copied().collect())
-                    .unwrap_or_default();
+                let assoc_symbols = self.catalog.declared_associated_types_in_ref(&protocol);
                 if assoc_args.len() != assoc_symbols.len() {
                     self.diagnostics.errors.push((
                         TypeError::ArityMismatch {
@@ -221,10 +234,10 @@ macro_rules! impl_bounds_for {
                     ));
                     return predicates;
                 }
-                for (assoc, arg) in assoc_symbols.into_iter().zip(assoc_args) {
+                for ((_, owner, assoc), arg) in assoc_symbols.into_iter().zip(assoc_args) {
                     predicates.push(Predicate::TypeEq(
-                        Ty::Proj(Box::new(ty.clone()), protocol, assoc),
-                        self.lower_annotation(arg),
+                        Ty::Proj(Box::new(ty.clone()), owner, assoc),
+                        self.lower_annotation(&arg),
                     ));
                 }
                 predicates
@@ -232,21 +245,32 @@ macro_rules! impl_bounds_for {
 
             pub(super) fn protocol_refinement_predicates(
                 &mut self,
-                protocol: Symbol,
+                protocol: ProtocolRef,
                 ty: Ty,
-                seen: &mut FxHashSet<Symbol>,
+                seen: &mut FxHashSet<ProtocolRef>,
                 out: &mut Vec<Predicate>,
             ) {
-                if !seen.insert(protocol) {
+                if !seen.insert(protocol.clone()) {
                     return;
                 }
-                let Some(info) = self.catalog.protocols.get(&protocol).cloned() else {
+                let Some(info) = self.catalog.protocols.get(&protocol.protocol).cloned() else {
                     return;
                 };
                 let mut substitution = FxHashMap::default();
-                substitution.insert(protocol, ty.clone());
+                substitution.insert(protocol.protocol, ty.clone());
+                for (param, arg) in info
+                    .params
+                    .iter()
+                    .copied()
+                    .zip(protocol.args.iter().cloned())
+                {
+                    substitution.insert(param, arg);
+                }
                 for assoc in info.assoc.values() {
-                    substitution.insert(*assoc, Ty::Proj(Box::new(ty.clone()), protocol, *assoc));
+                    substitution.insert(
+                        *assoc,
+                        Ty::Proj(Box::new(ty.clone()), protocol.clone(), *assoc),
+                    );
                 }
                 for predicate in info.predicates {
                     let predicate = predicate.substitute(
@@ -258,7 +282,12 @@ macro_rules! impl_bounds_for {
                         out.push(predicate);
                     }
                 }
-                for super_protocol in info.supers {
+                for super_protocol in self
+                    .catalog
+                    .protocol_and_supers(&protocol)
+                    .into_iter()
+                    .skip(1)
+                {
                     self.protocol_refinement_predicates(super_protocol, ty.clone(), seen, out);
                 }
             }

@@ -45,7 +45,6 @@ use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
 use crate::label::Label;
 use crate::name::Name;
 use crate::name_resolution::name_resolver::ResolvedNames;
-use crate::types::Level;
 use crate::name_resolution::symbol::{Symbol, Symbols};
 use crate::node::Node;
 use crate::node_id::NodeID;
@@ -64,16 +63,18 @@ use crate::node_kinds::{
     type_annotation::{AnyAssocBinding, TypeAnnotation, TypeAnnotationKind},
     where_clause::{WhereClause, WherePredicateKind},
 };
+use crate::types::Level;
 use crate::types::catalog::{
-    Conformance, Enum, MemberOwner, ProtocolInfo, Requirement, StructInfo, TypeAliasInfo,
-    TypeCatalog, Variant,
+    Conformance, Enum, MemberOwner, ProtocolApplication, ProtocolInfo, Requirement, StructInfo,
+    TypeAliasInfo, TypeCatalog, Variant,
 };
 use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
 use crate::types::output::{ExistentialPack, MemberResolution, TypeOutput};
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
-    EffTail, EffectEntry, EffectRow, Perm, Predicate, Row, RowTail, Scheme, SchemeParam, Ty, TyFold,
+    EffTail, EffectEntry, EffectRow, Perm, Predicate, ProtocolRef, Row, RowTail, Scheme,
+    SchemeParam, Ty, TyFold,
 };
 use crate::types::variant::VariantInstantiation;
 
@@ -125,7 +126,7 @@ struct ExtendWork<'a> {
     self_ty: Ty,
     context: Vec<Predicate>,
     decl: &'a Decl,
-    protocols: Vec<Symbol>,
+    protocols: Vec<ProtocolRef>,
 }
 
 #[derive(Clone)]
@@ -207,7 +208,7 @@ struct CatalogBuilder<'s, 'a> {
     diagnostics: &'s mut DiagnosticSink,
     type_aliases: &'s mut FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'s mut Vec<Symbol>,
-    explicit_conformances: FxHashSet<(Symbol, Symbol)>,
+    explicit_conformances: FxHashSet<(Symbol, ProtocolRef)>,
     /// Explicit claims on the substructural marker protocols (Copy,
     /// CheapClone, Deinit) with their blame nodes, validated once the whole
     /// catalog is collected.

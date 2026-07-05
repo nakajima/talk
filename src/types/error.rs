@@ -55,6 +55,11 @@ pub enum TypeError {
         protocol: String,
         requirement: String,
     },
+    OverlappingConformance {
+        ty: String,
+        protocol: String,
+        existing: String,
+    },
     AmbiguousTypeParameter {
         param: String,
     },
@@ -212,6 +217,16 @@ impl Display for TypeError {
                 requirement,
             } => {
                 write!(f, "Missing '{requirement}' required by {protocol}")
+            }
+            TypeError::OverlappingConformance {
+                ty,
+                protocol,
+                existing,
+            } => {
+                write!(
+                    f,
+                    "Overlapping conformance for {ty}: {protocol} overlaps existing {existing}"
+                )
             }
             TypeError::AmbiguousTypeParameter { param } => {
                 write!(

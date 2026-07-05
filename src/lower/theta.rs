@@ -167,7 +167,7 @@ impl<'a> Lowering<'a> {
                 let mapped: Vec<TyId> = field_tys.iter().map(|t| self.map_ty(t)).collect();
                 self.p.ty_tuple(&mapped)
             }
-            CheckTy::Any { protocol, .. } => self.p.ty(TyKind::Existential(*protocol)),
+            CheckTy::Any { protocol, .. } => self.p.ty(TyKind::Existential(protocol.protocol)),
             CheckTy::Param(_) => self.p.ty(TyKind::Erased),
             // A residual solver variable on an error-free program is
             // unconstrained — its instantiation cannot matter, so default

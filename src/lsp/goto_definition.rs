@@ -140,47 +140,88 @@ fn goto_definition_from_import(
 
     // Check if cursor is on the import path - navigate to the file
     if span_contains(import.path_span, byte_offset) {
-        let target_path = resolve_import_path(uri, &import.path)?;
-        let target_uri = Url::from_file_path(&target_path).ok()?;
-        return Some(Location {
-            uri: target_uri,
-            range: Range {
-                start: Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: Position {
-                    line: 0,
-                    character: 0,
-                },
-            },
-        });
+        return match &import.path {
+            crate::node_kinds::decl::ImportPath::Relative(_) => {
+                let target_path = resolve_import_path(uri, &import.path)?;
+                let target_uri = Url::from_file_path(&target_path).ok()?;
+                Some(Location {
+                    uri: target_uri,
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                    },
+                })
+            }
+            crate::node_kinds::decl::ImportPath::Package(package) => {
+                let stdlib = module.stdlib_workspace_for_package(package)?;
+                module_start_location(&stdlib)
+            }
+        };
     }
 
     // Check if cursor is on an imported symbol - navigate to its definition
     if let ImportedSymbols::Named(symbols) = &import.symbols {
         for imported in symbols {
             if span_contains(imported.span, byte_offset) {
-                // Find the target file and look up the symbol there
-                let target_path = resolve_import_path(uri, &import.path)?;
-                let target_uri = Url::from_file_path(&target_path).ok()?;
-                let target_doc_id = document_id_for_uri(&target_uri);
-                let target_file_id = *module.document_to_file_id.get(&target_doc_id)?;
-                let target_scope_id = crate::node_id::NodeID(target_file_id, 0);
+                match &import.path {
+                    crate::node_kinds::decl::ImportPath::Relative(_) => {
+                        // Find the target file and look up the symbol there
+                        let target_path = resolve_import_path(uri, &import.path)?;
+                        let target_uri = Url::from_file_path(&target_path).ok()?;
+                        let target_doc_id = document_id_for_uri(&target_uri);
+                        let target_file_id = *module.document_to_file_id.get(&target_doc_id)?;
+                        let target_scope_id = crate::node_id::NodeID(target_file_id, 0);
 
-                // Look up the symbol in the target file's scope
-                let target_scope = module.resolved_names.scopes.get(&target_scope_id)?;
-                let symbol = target_scope
-                    .types
-                    .get(&imported.name)
-                    .or_else(|| target_scope.values.get(&imported.name))?;
+                        // Look up the symbol in the target file's scope
+                        let target_scope = module.resolved_names.scopes.get(&target_scope_id)?;
+                        let symbol = target_scope
+                            .types
+                            .get(&imported.name)
+                            .or_else(|| target_scope.values.get(&imported.name))?;
 
-                return definition_location_in_module(module, *symbol);
+                        return definition_location_in_module(module, *symbol);
+                    }
+                    crate::node_kinds::decl::ImportPath::Package(package) => {
+                        let stdlib = module.stdlib_workspace_for_package(package)?;
+                        let target_scope_id = crate::node_id::NodeID(crate::node_id::FileID(0), 0);
+                        let target_scope = stdlib.resolved_names.scopes.get(&target_scope_id)?;
+                        let symbol = target_scope
+                            .types
+                            .get(&imported.name)
+                            .or_else(|| target_scope.values.get(&imported.name))?;
+
+                        return definition_location_in_module(&stdlib, *symbol);
+                    }
+                }
             }
         }
     }
 
     None
+}
+
+fn module_start_location(module: &AnalysisWorkspace) -> Option<Location> {
+    let doc_id = module.file_id_to_document.first()?;
+    let uri = url_from_document_id(doc_id)?;
+    Some(Location {
+        uri,
+        range: Range {
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 0,
+            },
+        },
+    })
 }
 
 /// Resolve an import path relative to the importing file's URI.
@@ -294,7 +335,7 @@ fn goto_definition_symbol_from_type_annotation(
         TypeAnnotationKind::Nominal {
             name, name_span, ..
         } => {
-            if !span_contains(*name_span, byte_offset) {
+            if !nominal_name_span_contains(name, *name_span, byte_offset) {
                 return None;
             }
             name.symbol().ok()
@@ -362,6 +403,24 @@ fn goto_definition_symbol_from_decl(
     }
 }
 
+fn nominal_name_span_contains(
+    name: &crate::name::Name,
+    name_span: crate::span::Span,
+    byte_offset: u32,
+) -> bool {
+    if span_contains(name_span, byte_offset) {
+        return true;
+    }
+
+    let name = name.name_str();
+    if !name.contains("::") || name.starts_with('.') {
+        return false;
+    }
+
+    let qualified_end = name_span.start.saturating_add(name.len() as u32);
+    name_span.start <= byte_offset && byte_offset <= qualified_end
+}
+
 fn effect_symbol_at_offset(
     effects: &crate::node_kinds::func::EffectSet,
     byte_offset: u32,
@@ -399,6 +458,9 @@ pub(crate) fn definition_location_for_symbol(
         if module_id == ModuleId::Core {
             let core = core?;
             return definition_location_in_module(core, symbol);
+        }
+        if let Some(stdlib) = module.stdlib_workspace_for_module_id(module_id) {
+            return definition_location_in_module(&stdlib, symbol);
         }
         // Cross-file import within the same workspace: normalize to Current
         return definition_location_in_module(module, symbol.current());
@@ -454,18 +516,53 @@ pub(crate) fn definition_location_in_module(
         .get(file_id.0 as usize)
         .and_then(|a| a.as_ref())?;
 
-    let (start, end) = if let Some(meta) = ast.meta.get(&def_node) {
+    let (start, end) = if let Some(span) = definition_name_span(ast, def_node) {
+        span
+    } else if let Some(meta) = ast.meta.get(&def_node) {
         match meta.identifiers.first() {
             Some(tok) => (tok.start, tok.end),
             None => (meta.start.start, meta.end.end),
         }
     } else {
-        // Synthetic nodes (e.g. from lower_funcs_to_lets) lack meta — use node span
+        // Synthetic nodes (e.g. from lower_funcs_to_lets) lack meta - use node span
         node_span(ast, def_node)?
     };
     let range = byte_span_to_range_utf16(text, start, end)?;
 
     Some(Location { uri, range })
+}
+
+fn definition_name_span(
+    ast: &crate::ast::AST<crate::ast::NameResolved>,
+    node_id: crate::node_id::NodeID,
+) -> Option<(u32, u32)> {
+    let node = ast.find(node_id)?;
+    match node {
+        crate::node::Node::Decl(decl) => definition_decl_name_span(&decl),
+        crate::node::Node::Func(func) => Some((func.name_span.start, func.name_span.end)),
+        crate::node::Node::Parameter(param) => Some((param.name_span.start, param.name_span.end)),
+        crate::node::Node::GenericDecl(generic) => {
+            Some((generic.name_span.start, generic.name_span.end))
+        }
+        _ => None,
+    }
+}
+
+fn definition_decl_name_span(decl: &crate::node_kinds::decl::Decl) -> Option<(u32, u32)> {
+    use crate::node_kinds::decl::DeclKind;
+
+    match &decl.kind {
+        DeclKind::Struct { name_span, .. }
+        | DeclKind::Protocol { name_span, .. }
+        | DeclKind::Extend { name_span, .. }
+        | DeclKind::Enum { name_span, .. }
+        | DeclKind::Property { name_span, .. }
+        | DeclKind::Effect { name_span, .. }
+        | DeclKind::EnumVariant { name_span, .. } => Some((name_span.start, name_span.end)),
+        DeclKind::TypeAlias(_, name_span, _) => Some((name_span.start, name_span.end)),
+        DeclKind::Init { .. } => Some((decl.span.start, decl.span.end)),
+        _ => None,
+    }
 }
 
 fn node_span(

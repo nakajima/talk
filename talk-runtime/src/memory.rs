@@ -105,7 +105,6 @@ impl Allocations {
         self.records.iter().filter(|record| record.live).count()
     }
 
-
     pub fn check_access(
         &self,
         mem_len: usize,

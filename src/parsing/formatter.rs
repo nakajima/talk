@@ -571,12 +571,20 @@ impl<'a> Formatter<'a> {
             DeclKind::Func(func) => self.format_func(func),
             DeclKind::Extend {
                 name,
+                row_generics,
                 conformances,
                 generics,
                 where_clause,
                 body,
                 ..
-            } => self.format_extend(name, generics, conformances, where_clause.as_ref(), body),
+            } => self.format_extend(
+                name,
+                row_generics,
+                generics,
+                conformances,
+                where_clause.as_ref(),
+                body,
+            ),
             DeclKind::Enum {
                 name,
                 generics,
@@ -1303,29 +1311,36 @@ impl<'a> Formatter<'a> {
         concat_space(result, self.format_body(body))
     }
 
+    fn format_generic_decl_list(&self, generics: &[GenericDecl]) -> Doc {
+        let generic_docs: Vec<_> = generics
+            .iter()
+            .map(|generic| self.format_generic_decl(generic))
+            .collect();
+        concat(
+            text("<"),
+            concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
+        )
+    }
+
     fn format_extend(
         &self,
         name: &Name,
+        row_generics: &[GenericDecl],
         generics: &[GenericDecl],
         conformances: &[TypeAnnotation],
         where_clause: Option<&WhereClause>,
         body: &Body,
     ) -> Doc {
-        let mut result = concat_space(text("extend"), self.format_name(name));
+        let mut result = text("extend");
+
+        if !row_generics.is_empty() {
+            result = concat(result, self.format_generic_decl_list(row_generics));
+        }
+
+        result = concat_space(result, self.format_name(name));
 
         if !generics.is_empty() {
-            let generic_docs: Vec<_> = generics
-                .iter()
-                .map(|g| self.format_generic_decl(g))
-                .collect();
-
-            result = concat(
-                result,
-                concat(
-                    text("<"),
-                    concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
-                ),
-            );
+            result = concat(result, self.format_generic_decl_list(generics));
         }
 
         if !conformances.is_empty() {

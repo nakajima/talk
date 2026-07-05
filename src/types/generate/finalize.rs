@@ -91,6 +91,23 @@ impl<'a> TypecheckSession<'a> {
             }
             instantiations.insert(node, finalized);
         }
+        let mut member_resolutions = FxHashMap::default();
+        for (node, resolution) in std::mem::take(&mut self.artifacts.member_resolutions) {
+            let resolution = match resolution {
+                MemberResolution::Direct(symbol) => MemberResolution::Direct(symbol),
+                MemberResolution::ViaConformance { protocol, witness } => {
+                    let protocol = ProtocolRef {
+                        protocol: protocol.protocol,
+                        args: protocol.args.iter().map(|arg| self.final_ty(arg)).collect(),
+                    };
+                    MemberResolution::ViaConformance {
+                        protocol: self.catalog.canonical_protocol_ref(protocol),
+                        witness,
+                    }
+                }
+            };
+            member_resolutions.insert(node, resolution);
+        }
         // Catalog types outlive this module's solver store (importers'
         // stores don't share its ids): bake in everything solving
         // inferred, then degrade genuine leftovers per the export
@@ -145,7 +162,7 @@ impl<'a> TypecheckSession<'a> {
                 node_types,
                 schemes,
                 instantiations,
-                member_resolutions: self.artifacts.member_resolutions,
+                member_resolutions,
                 coerce_clones: self.artifacts.coerce_clones,
                 local_tys,
                 existential_packs,

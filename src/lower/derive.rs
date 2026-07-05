@@ -214,7 +214,7 @@ impl<'a> Lowering<'a> {
             Piece::Show(value, ty) => {
                 // s ← show(value); acc ← acc + s; continue.
                 let (show, _, _) = self.resolve_witness(
-                    protocol,
+                    crate::types::ty::ProtocolRef::bare(protocol),
                     requirement,
                     "show".into(),
                     ty,

@@ -181,17 +181,15 @@ impl<'s> Solver<'s> {
             // so a bare head ADOPTS the full head's eff suffix — the type
             // args still unify pairwise.
             (Ty::Nominal(s1, args1), Ty::Nominal(s2, args2))
-                if s1 == s2
-                    && args1.len() != args2.len()
-                    && {
-                        let (short, long) = if args1.len() < args2.len() {
-                            (args1, args2)
-                        } else {
-                            (args2, args1)
-                        };
-                        long[short.len()..].iter().all(|a| matches!(a, Ty::Eff(_)))
-                            && !short.iter().any(|a| matches!(a, Ty::Eff(_)))
-                    } =>
+                if s1 == s2 && args1.len() != args2.len() && {
+                    let (short, long) = if args1.len() < args2.len() {
+                        (args1, args2)
+                    } else {
+                        (args2, args1)
+                    };
+                    long[short.len()..].iter().all(|a| matches!(a, Ty::Eff(_)))
+                        && !short.iter().any(|a| matches!(a, Ty::Eff(_)))
+                } =>
             {
                 let nested = origin.nested();
                 let (short, long) = if args1.len() < args2.len() {

@@ -19,8 +19,8 @@
 //! outlives a group — that discipline is the whole point.
 
 use crate::label::Label;
-use crate::types::Level;
 use crate::node_id::NodeID;
+use crate::types::Level;
 use crate::types::ty::{EffectRow, Perm, Predicate, Ty};
 
 /// Why a constraint exists — the blame half of GHC's CtOrigin.
@@ -87,7 +87,7 @@ pub enum Constraint {
     /// with the conformance's (Chakravarty et al., ICFP 2005).
     Conforms {
         ty: Ty,
-        protocol: crate::name_resolution::symbol::Symbol,
+        protocol: crate::types::ty::ProtocolRef,
         origin: CtOrigin,
     },
     HasMember {

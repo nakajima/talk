@@ -182,14 +182,14 @@ impl<'s> Solver<'s> {
         }
     }
 
-    pub(super) fn given_protocols_for(&mut self, ty: &Ty) -> Vec<Symbol> {
+    pub(super) fn given_protocols_for(&mut self, ty: &Ty) -> Vec<ProtocolRef> {
         let ty = normalize_ty(self.store, self.catalog, ty);
         let ty = self.rewrite_ty_from_givens(ty);
-        let conformances: Vec<(Ty, Symbol)> = self
+        let conformances: Vec<(Ty, ProtocolRef)> = self
             .givens
             .iter()
             .filter_map(|given| match given {
-                Predicate::Conforms { ty, protocol } => Some((ty.clone(), *protocol)),
+                Predicate::Conforms { ty, protocol } => Some((ty.clone(), protocol.clone())),
                 _ => None,
             })
             .collect();
@@ -204,12 +204,12 @@ impl<'s> Solver<'s> {
         protocols
     }
 
-    pub(super) fn given_conformance_satisfies(&mut self, ty: &Ty, protocol: Symbol) -> bool {
-        let conformances: Vec<(Ty, Symbol)> = self
+    pub(super) fn given_conformance_satisfies(&mut self, ty: &Ty, protocol: &ProtocolRef) -> bool {
+        let conformances: Vec<(Ty, ProtocolRef)> = self
             .givens
             .iter()
             .filter_map(|given| match given {
-                Predicate::Conforms { ty, protocol } => Some((ty.clone(), *protocol)),
+                Predicate::Conforms { ty, protocol } => Some((ty.clone(), protocol.clone())),
                 _ => None,
             })
             .collect();

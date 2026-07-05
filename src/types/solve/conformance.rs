@@ -7,13 +7,25 @@ impl<'s> Solver<'s> {
     pub(super) fn try_conforms(
         &mut self,
         ty: Ty,
-        protocol: Symbol,
+        protocol: ProtocolRef,
         origin: CtOrigin,
         queue: &mut Vec<Constraint>,
     ) -> Option<Constraint> {
         let normalized = normalize_ty(self.store, self.catalog, &ty);
         let normalized = self.rewrite_ty_from_givens(normalized);
-        if self.given_conformance_satisfies(&normalized, protocol) {
+        let protocol = ProtocolRef {
+            protocol: protocol.protocol,
+            args: protocol
+                .args
+                .iter()
+                .map(|arg| {
+                    let arg = normalize_ty(self.store, self.catalog, arg);
+                    let arg = self.rewrite_ty_from_givens(arg);
+                    self.catalog.canonical_conformance_arg(arg)
+                })
+                .collect(),
+        };
+        if self.given_conformance_satisfies(&normalized, &protocol) {
             return None;
         }
         match normalized.clone() {
@@ -27,7 +39,7 @@ impl<'s> Solver<'s> {
             Ty::Any {
                 protocol: existential_protocol,
                 ..
-            } => self.conforms_via_bounds(&ty, protocol, origin, &[existential_protocol]),
+            } => self.conforms_via_bounds(&ty, protocol, origin, &[existential_protocol], queue),
             Ty::Param(param) => {
                 let bounds = self
                     .catalog
@@ -35,7 +47,7 @@ impl<'s> Solver<'s> {
                     .get(&param)
                     .cloned()
                     .unwrap_or_default();
-                self.conforms_via_bounds(&ty, protocol, origin, &bounds)
+                self.conforms_via_bounds(&ty, protocol, origin, &bounds, queue)
             }
             // An irreducible projection conforms through the bounds declared
             // on the associated type (`associated T: Iterator`).
@@ -53,24 +65,22 @@ impl<'s> Solver<'s> {
                     .get(&assoc_symbol)
                     .cloned()
                     .unwrap_or_default();
-                self.conforms_via_bounds(&ty, protocol, origin, &bounds)
+                self.conforms_via_bounds(&ty, protocol, origin, &bounds, queue)
             }
             Ty::Nominal(symbol, args) => {
-                match self.catalog.conformances.get(&(symbol, protocol)) {
-                    Some(conformance) => {
-                        let conformance = conformance.clone();
-                        // Bind the row's rigid params against the actual
-                        // head arguments, then discharge the instance
-                        // context as new wanteds (Hall/Hammond/Peyton
-                        // Jones/Wadler, *Type Classes in Haskell*).
-                        // Associated types are ordinary projections
-                        // normalized by `normalize_ty` (Chakravarty/Keller/
-                        // Peyton Jones, *Associated Type Synonyms*).
-                        let mut substitution: FxHashMap<Symbol, Ty> = FxHashMap::default();
-                        for (pattern, actual) in conformance.self_args.iter().zip(&args) {
-                            bind_param_pattern(pattern, actual, &mut substitution);
-                        }
-                        for predicate in &conformance.context {
+                if protocol.has_unification_vars() {
+                    return Some(Constraint::Conforms {
+                        ty,
+                        protocol,
+                        origin,
+                    });
+                }
+                let matches = self.catalog.matching_conformances(symbol, &args, &protocol);
+                match matches.as_slice() {
+                    [matched] => {
+                        let context = matched.conformance.context.clone();
+                        let substitution = matched.substitution.clone();
+                        for predicate in &context {
                             queue.push(
                                 predicate
                                     .substitute(
@@ -83,12 +93,15 @@ impl<'s> Solver<'s> {
                         }
                         None
                     }
-                    None => {
-                        if self.try_derive(symbol, &args, protocol, origin, queue) {
+                    [] => {
+                        if protocol.args.is_empty()
+                            && self.try_derive(symbol, &args, protocol.protocol, origin, queue)
+                        {
                             return None;
                         }
                         self.not_conforming(&ty, protocol, origin)
                     }
+                    _ => self.not_conforming(&ty, protocol, origin),
                 }
             }
             other => self.not_conforming(&other, protocol, origin),
@@ -102,21 +115,38 @@ impl<'s> Solver<'s> {
     pub(super) fn conforms_via_bounds(
         &mut self,
         ty: &Ty,
-        protocol: Symbol,
+        protocol: ProtocolRef,
         origin: CtOrigin,
-        bounds: &[Symbol],
+        bounds: &[ProtocolRef],
+        queue: &mut Vec<Constraint>,
     ) -> Option<Constraint> {
-        if self.catalog.bounds_satisfy(bounds, protocol) {
-            None
-        } else {
-            self.not_conforming(ty, protocol, origin)
+        let candidates: Vec<_> = bounds
+            .iter()
+            .flat_map(|bound| self.catalog.protocol_and_supers(bound))
+            .filter(|candidate| {
+                candidate.protocol == protocol.protocol
+                    && candidate.args.len() == protocol.args.len()
+            })
+            .collect();
+        if candidates.iter().any(|candidate| candidate == &protocol) {
+            return None;
+        }
+        match candidates.as_slice() {
+            [candidate] => {
+                for (expected, actual) in protocol.args.iter().zip(&candidate.args) {
+                    queue.push(Constraint::Eq(expected.clone(), actual.clone(), origin));
+                }
+                None
+            }
+            [] if self.catalog.bounds_satisfy(bounds, &protocol) => None,
+            _ => self.not_conforming(ty, protocol, origin),
         }
     }
 
     pub(super) fn not_conforming(
         &mut self,
         ty: &Ty,
-        protocol: Symbol,
+        protocol: ProtocolRef,
         origin: CtOrigin,
     ) -> Option<Constraint> {
         let rendered = self.store.render(ty);
@@ -132,7 +162,7 @@ impl<'s> Solver<'s> {
 
     /// Auto-derived conformance (today: Showable) for structs and enums
     /// without an explicit row. The derived instance's context is
-    /// structural — every field/payload conforms — checked coinductively so
+    /// structural: every field/payload conforms, checked coinductively so
     /// recursive nominals terminate.
     pub(super) fn try_derive(
         &mut self,
@@ -145,15 +175,13 @@ impl<'s> Solver<'s> {
         if !self.catalog.derivable.contains(&protocol) {
             return false;
         }
-        // A `'heap` struct's derived instance would walk the object graph
-        // structurally — cyclic graphs would never terminate at runtime.
-        // Require an explicit conformance instead.
         if self.catalog.is_heap(symbol) {
             return false;
         }
         if !self.derived_seen.insert((symbol, protocol)) {
             return true;
         }
+        let protocol_ref = ProtocolRef::bare(protocol);
         if let Some(info) = self.catalog.structs.get(&symbol) {
             let substitution: FxHashMap<Symbol, Ty> = info
                 .params
@@ -166,7 +194,7 @@ impl<'s> Solver<'s> {
                     field_ty.substitute(&substitution, &Default::default(), &Default::default());
                 queue.push(Constraint::Conforms {
                     ty: field_ty,
-                    protocol,
+                    protocol: protocol_ref.clone(),
                     origin,
                 });
             }
@@ -190,7 +218,7 @@ impl<'s> Solver<'s> {
                 for payload in instantiation.argument_types {
                     queue.push(Constraint::Conforms {
                         ty: payload,
-                        protocol,
+                        protocol: protocol_ref.clone(),
                         origin,
                     });
                 }

@@ -1,10 +1,13 @@
 use rustc_hash::FxHashMap;
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use crate::analysis::{Diagnostic, DiagnosticSeverity, DocumentId, DocumentInput, TextRange};
 use crate::ast::{AST, NameResolved};
-use crate::compiling::driver::{Driver, DriverConfig, Source};
-use crate::compiling::module::ModuleId;
+use crate::compiling::driver::{CompilationMode, Driver, DriverConfig, Source};
+use crate::compiling::module::{ModuleEnvironment, ModuleId};
 use crate::diagnostic::AnyDiagnostic;
 use crate::name_resolution::symbol::set_symbol_names;
 use crate::node_id::FileID;
@@ -24,6 +27,7 @@ pub struct Workspace {
     /// Move, borrow, and drop facts from the flow checker (editor product).
     pub flow: crate::flow::FlowFacts,
     pub diagnostics: FxHashMap<DocumentId, Vec<Diagnostic>>,
+    pub stdlib_module_ids: FxHashMap<ModuleId, String>,
 }
 
 impl Workspace {
@@ -79,6 +83,16 @@ impl Workspace {
         } else {
             Driver::new(sources, config)
         };
+        let stdlib_module_ids = crate::compiling::stdlib::stdlib_sources()
+            .into_iter()
+            .filter_map(|(name, _)| {
+                driver
+                    .config
+                    .modules
+                    .get_module_id_by_name(name)
+                    .map(|module_id| (module_id, name.to_string()))
+            })
+            .collect();
         let parsed = driver.parse().ok()?;
         let resolved = parsed.resolve_names().ok()?;
         // The editor keeps the source-faithful surface AST (type annotations,
@@ -143,6 +157,7 @@ impl Workspace {
             types,
             flow,
             diagnostics,
+            stdlib_module_ids,
         })
     }
 
@@ -291,7 +306,90 @@ impl Workspace {
             types: Default::default(),
             flow: Default::default(),
             diagnostics: FxHashMap::default(),
+            stdlib_module_ids: FxHashMap::default(),
         })
+    }
+
+    pub fn stdlib_workspace_for_module_id(&self, module_id: ModuleId) -> Option<Self> {
+        let name = self.stdlib_module_ids.get(&module_id)?;
+        Self::stdlib_module(name, module_id)
+    }
+
+    pub fn stdlib_workspace_for_package(&self, package: &str) -> Option<Self> {
+        let module_id = self
+            .stdlib_module_ids
+            .iter()
+            .find_map(|(module_id, name)| (name == package).then_some(*module_id))?;
+        Self::stdlib_module(package, module_id)
+    }
+
+    fn stdlib_module(name: &str, module_id: ModuleId) -> Option<Self> {
+        let (_, bundled_text) = crate::compiling::stdlib::stdlib_sources()
+            .into_iter()
+            .find(|(source_name, _)| *source_name == name)?;
+        let (path, text) = Self::stdlib_document(name, bundled_text);
+        let document_id = path.to_string_lossy().into_owned();
+
+        let mut modules = ModuleEnvironment::default();
+        modules.import_core(crate::compiling::core::compile());
+
+        let mut config = DriverConfig::new(name).preserve_comments(true);
+        config.module_id = module_id;
+        config.mode = CompilationMode::Library;
+        config.modules = Rc::new(modules);
+
+        let driver = Driver::new_bare(vec![Source::in_memory(path, text.clone())], config);
+        let resolved = driver.parse().ok()?.resolve_names().ok()?;
+        let asts_by_source = resolved.phase.asts;
+        let resolved_names = resolved.phase.resolved_names;
+
+        let file_id_to_document = vec![document_id.clone()];
+        let document_to_file_id = [(document_id, FileID(0))].into_iter().collect();
+        let mut asts: Vec<Option<AST<NameResolved>>> = vec![None];
+        for ast in asts_by_source.values() {
+            let idx = ast.file_id.0 as usize;
+            if idx < asts.len() {
+                asts[idx] = Some(ast.clone());
+            }
+        }
+
+        Some(Self {
+            versions: FxHashMap::default(),
+            file_id_to_document,
+            document_to_file_id,
+            texts: vec![text],
+            asts,
+            resolved_names,
+            types: Default::default(),
+            flow: Default::default(),
+            diagnostics: FxHashMap::default(),
+            stdlib_module_ids: FxHashMap::default(),
+        })
+    }
+
+    fn stdlib_document(name: &str, bundled_text: &str) -> (PathBuf, String) {
+        let filename = format!("{name}.tlk");
+        let candidates = [
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("stdlib")
+                .join(&filename),
+            PathBuf::from("stdlib").join(&filename),
+        ];
+        for candidate in candidates {
+            if candidate.is_file()
+                && let Ok(path) = candidate.canonicalize()
+            {
+                let text =
+                    std::fs::read_to_string(&path).unwrap_or_else(|_| bundled_text.to_string());
+                return (path, text);
+            }
+        }
+
+        let dir = std::env::temp_dir().join("talk-stdlib");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("{name}.tlk"));
+        let _ = std::fs::write(&path, bundled_text);
+        (path, bundled_text.to_string())
     }
 
     pub fn document_index(&self, id: &DocumentId) -> Option<usize> {

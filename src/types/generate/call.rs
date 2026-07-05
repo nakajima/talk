@@ -157,7 +157,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let eff_tails: FxHashMap<Symbol, EffTail> = info
             .eff_params
             .iter()
-            .map(|&param| (param, EffTail::Var(self.store.fresh_eff(self.level, expr.id))))
+            .map(|&param| {
+                (
+                    param,
+                    EffTail::Var(self.store.fresh_eff(self.level, expr.id)),
+                )
+            })
             .collect();
         let mut head_args = theta.clone();
         head_args.extend(info.eff_params.iter().map(|param| {
@@ -287,6 +292,46 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     // Value-receiver member access is a HasMember predicate solved in
     // solve/. Only TYPE members (Constructor receivers) resolve here.
 
+    fn fresh_protocol_ref(&mut self, protocol: Symbol, node: NodeID) -> Option<ProtocolRef> {
+        let params = self.catalog.protocols.get(&protocol)?.params.clone();
+        Some(ProtocolRef {
+            protocol,
+            args: params
+                .iter()
+                .map(|_| Ty::Var(self.store.fresh_ty(self.level, node)))
+                .collect(),
+        })
+    }
+
+    fn freshen_scheme_type_params(
+        &mut self,
+        node: NodeID,
+        scheme: &Scheme,
+        tys: &mut FxHashMap<Symbol, Ty>,
+    ) {
+        for param in &scheme.params {
+            let var = Ty::Var(self.store.fresh_ty(self.level, node));
+            self.artifacts
+                .instantiations
+                .entry(node)
+                .or_default()
+                .push((param.symbol, var.clone()));
+            tys.insert(param.symbol, var);
+        }
+    }
+
+    fn freshen_scheme_effect_params(
+        &mut self,
+        node: NodeID,
+        scheme: &Scheme,
+    ) -> FxHashMap<Symbol, EffTail> {
+        scheme
+            .eff_params
+            .iter()
+            .map(|param| (*param, EffTail::Var(self.store.fresh_eff(self.level, node))))
+            .collect()
+    }
+
     /// Resolve `Type.label`: enum variants (constructors, or bare values for
     /// payload-less cases), protocol requirements (the protocol-static form
     /// operators desugar to: `Add.add(lhs, rhs)`), and static methods.
@@ -328,38 +373,20 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // self-prepended signature is returned; Self is a fresh variable
         // constrained to conform, pinned by the first argument.
         if self.catalog.protocols.contains_key(&symbol) {
-            let (owner, requirement) = self.catalog.requirement_in(symbol, &label_str)?;
+            let protocol_ref = self.fresh_protocol_ref(symbol, node)?;
+            let (owner, requirement) =
+                self.catalog.requirement_in_ref(&protocol_ref, &label_str)?;
             let requirement = requirement.clone();
-            // The requirement's type is its scheme: freshen method-level
-            // generics (recorded for the lowerer's θ) and every effect
-            // row per use, like any scheme instantiation.
+            // The requirement's type is its scheme: bind Self, protocol
+            // inputs, and associated projections for the owning protocol
+            // application, then freshen method-level generics/effects like
+            // any ordinary scheme instantiation.
             let scheme = self.schemes.get(&requirement.symbol)?.clone();
-            let assoc_symbols: Vec<Symbol> = self
-                .catalog
-                .protocols
-                .get(&owner)
-                .map(|i| i.assoc.values().copied().collect())
-                .unwrap_or_default();
-
             let self_var = Ty::Var(self.store.fresh_ty(self.level, node));
-            let mut tys: FxHashMap<Symbol, Ty> = assoc_symbols
-                .iter()
-                .map(|a| (*a, Ty::Proj(Box::new(self_var.clone()), owner, *a)))
-                .collect();
-            tys.insert(owner, self_var.clone());
-            for param in &scheme.params {
-                let var = Ty::Var(self.store.fresh_ty(self.level, node));
-                self.artifacts
-                    .instantiations
-                    .entry(node)
-                    .or_default()
-                    .push((param.symbol, var.clone()));
-                tys.insert(param.symbol, var);
-            }
-            let mut effs = FxHashMap::default();
-            for param in &scheme.eff_params {
-                effs.insert(*param, EffTail::Var(self.store.fresh_eff(self.level, node)));
-            }
+            let app = ProtocolApplication::new(self_var.clone(), owner.clone());
+            let mut tys = app.substitution(self.catalog);
+            self.freshen_scheme_type_params(node, &scheme, &mut tys);
+            let effs = self.freshen_scheme_effect_params(node, &scheme);
             for predicate in &scheme.predicates {
                 self.wanteds.push(
                     predicate
@@ -371,7 +398,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
             self.wanteds.push(Constraint::Conforms {
                 ty: self_var,
-                protocol: owner,
+                protocol: owner.clone(),
                 origin: CtOrigin::new(node, CtReason::Apply),
             });
             self.artifacts.member_resolutions.insert(

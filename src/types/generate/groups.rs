@@ -506,7 +506,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     let predicates = var_predicates.entry(root).or_default();
                     let conformance = Predicate::Conforms {
                         ty: receiver.clone(),
-                        protocol: *protocol,
+                        protocol: protocol.clone(),
                     };
                     if !predicates.contains(&conformance) {
                         predicates.push(conformance);

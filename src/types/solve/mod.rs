@@ -41,16 +41,16 @@ use std::ops::ControlFlow;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::label::Label;
-use crate::types::Level;
 use crate::name_resolution::symbol::{Symbol, Symbols};
 use crate::node_id::NodeID;
-use crate::types::catalog::{MemberOwner, Requirement, TypeCatalog};
+use crate::types::Level;
+use crate::types::catalog::{MemberOwner, ProtocolApplication, Requirement, TypeCatalog};
 use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
 use crate::types::output::MemberResolution;
 use crate::types::ty::{
-    EffTail, EffVar, EffectEntry, EffectRow, Perm, PermVar, Predicate, Row, RowTail, RowVar,
-    Scheme, SchemeParam, Ty, TyFold, TyVar, match_pattern,
+    EffTail, EffVar, EffectEntry, EffectRow, Perm, PermVar, Predicate, ProtocolRef, Row, RowTail,
+    RowVar, Scheme, SchemeParam, Ty, TyFold, TyVar, match_pattern,
 };
 
 /// The per-binding-group solver. Borrows the checker's tables; owns nothing.
@@ -238,7 +238,12 @@ impl<'s> Solver<'s> {
                     protocol,
                     origin,
                 } => {
-                    if matches!(self.store.shallow(&ty), Ty::Var(_)) {
+                    if matches!(self.store.shallow(&ty), Ty::Var(_))
+                        || protocol.args.iter().any(|arg| {
+                            let arg = self.store.shallow(arg);
+                            matches!(arg, Ty::Var(_))
+                        })
+                    {
                         residual.push(Constraint::Conforms {
                             ty,
                             protocol,

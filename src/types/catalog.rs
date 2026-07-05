@@ -9,10 +9,10 @@
 //! results override that default without reshaping callers.
 
 use indexmap::IndexMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::name_resolution::symbol::Symbol;
-use crate::types::ty::{Predicate, Scheme, Ty};
+use crate::types::ty::{Predicate, ProtocolRef, Scheme, Ty, match_key_pattern, match_pattern};
 
 /// The usage grade of a declaration over the substructural lattice:
 /// `Copy` values duplicate freely, `Affine` values (the default) move and may
@@ -92,15 +92,76 @@ pub struct Requirement {
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ProtocolInfo {
+    /// Protocol input parameters, in source order.
+    pub params: Vec<Symbol>,
     /// Associated types by source name (name-keyed so a sub-protocol's
     /// same-named `associated` refines its super's, Swift-style).
     pub assoc: IndexMap<String, Symbol>,
-    /// Super-protocols (`protocol Comparable: Equatable`): a bound on P
-    /// satisfies its supers transitively.
-    pub supers: Vec<Symbol>,
+    /// Super-protocol applications (`protocol Comparable<R>: Equatable<R>`):
+    /// a bound on P satisfies its supers transitively.
+    pub supers: Vec<ProtocolRef>,
     /// Protocol refinements over `Self = Ty::Param(protocol symbol)`.
     pub predicates: Vec<Predicate>,
     pub requirements: IndexMap<String, Requirement>,
+}
+
+/// A selected protocol application: `self_ty` witnesses the full protocol
+/// reference `protocol`. This is the single model for binding protocol `Self`,
+/// protocol input parameters, and associated projections when a requirement is
+/// instantiated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProtocolApplication {
+    pub self_ty: Ty,
+    pub protocol: ProtocolRef,
+}
+
+impl ProtocolApplication {
+    pub fn new(self_ty: Ty, protocol: ProtocolRef) -> Self {
+        Self { self_ty, protocol }
+    }
+
+    pub fn assoc_projection(&self, assoc: Symbol) -> Ty {
+        Ty::Proj(Box::new(self.self_ty.clone()), self.protocol.clone(), assoc)
+    }
+
+    pub fn substitution(&self, catalog: &TypeCatalog) -> FxHashMap<Symbol, Ty> {
+        let mut tys = FxHashMap::default();
+        tys.insert(self.protocol.protocol, self.self_ty.clone());
+
+        let Some(info) = catalog.protocols.get(&self.protocol.protocol) else {
+            return tys;
+        };
+
+        for (param, arg) in info
+            .params
+            .iter()
+            .copied()
+            .zip(self.protocol.args.iter().cloned())
+        {
+            tys.insert(param, arg);
+        }
+
+        for (name, assoc) in &info.assoc {
+            let binding = match &self.self_ty {
+                Ty::Param(self_protocol @ Symbol::Protocol(_)) => catalog
+                    .protocols
+                    .get(self_protocol)
+                    .and_then(|receiver_info| receiver_info.assoc.get(name).copied())
+                    .map(Ty::Param)
+                    .unwrap_or_else(|| self.assoc_projection(*assoc)),
+                Ty::Any {
+                    assoc: overrides, ..
+                } => overrides
+                    .iter()
+                    .find_map(|(symbol, ty)| (symbol == assoc).then(|| ty.clone()))
+                    .unwrap_or_else(|| self.assoc_projection(*assoc)),
+                _ => self.assoc_projection(*assoc),
+            };
+            tys.insert(*assoc, binding);
+        }
+
+        tys
+    }
 }
 
 /// One `extend Head: Protocol` row: requirement label → witness symbol, and
@@ -115,6 +176,7 @@ pub struct ProtocolInfo {
 pub struct Conformance {
     pub params: Vec<Symbol>,
     pub self_args: Vec<Ty>,
+    pub protocol_args: Vec<Ty>,
     pub context: Vec<Predicate>,
     pub witnesses: FxHashMap<String, Symbol>,
     pub assoc: FxHashMap<Symbol, Ty>,
@@ -169,13 +231,13 @@ pub struct TypeCatalog {
     pub structs: FxHashMap<Symbol, StructInfo>,
     pub enums: FxHashMap<Symbol, Enum>,
     pub protocols: FxHashMap<Symbol, ProtocolInfo>,
-    pub conformances: FxHashMap<(Symbol, Symbol), Conformance>,
-    /// Type head → protocols it conforms to (for member search by head).
-    pub conformances_by_head: FxHashMap<Symbol, Vec<Symbol>>,
+    pub conformances: FxHashMap<(Symbol, ProtocolRef), Conformance>,
+    /// Type head -> protocol applications it conforms to (for member search by head).
+    pub conformances_by_head: FxHashMap<Symbol, Vec<ProtocolRef>>,
     /// Member label → candidate owners, for improvement.
     pub member_owners: FxHashMap<String, Vec<MemberOwner>>,
     /// Rigid type parameter → declared protocol bounds.
-    pub param_bounds: FxHashMap<Symbol, Vec<Symbol>>,
+    pub param_bounds: FxHashMap<Symbol, Vec<ProtocolRef>>,
     /// Inherent extend members by type head.
     pub extend_members: FxHashMap<Symbol, IndexMap<String, InherentMember>>,
     /// Effect operation signatures.
@@ -193,6 +255,12 @@ pub struct TypeCatalog {
 /// One type-carrier the catalog embeds. Raw types sanitize per-`Ty`;
 /// schemes sanitize as schemes (their minted eff/row params register);
 /// predicates sanitize through their own folder.
+pub struct ConformanceMatch<'a> {
+    pub protocol: &'a ProtocolRef,
+    pub conformance: &'a Conformance,
+    pub substitution: FxHashMap<Symbol, Ty>,
+}
+
 pub(crate) enum EmbeddedTypes<'a> {
     Ty(&'a mut Ty),
     Scheme(&'a mut Scheme),
@@ -234,6 +302,9 @@ impl TypeCatalog {
         }
         for ((head, _), conformance) in self.conformances.iter_mut() {
             for ty in conformance.self_args.iter_mut() {
+                f(*head, EmbeddedTypes::Ty(ty));
+            }
+            for ty in conformance.protocol_args.iter_mut() {
                 f(*head, EmbeddedTypes::Ty(ty));
             }
             for ty in conformance.assoc.values_mut() {
@@ -315,7 +386,7 @@ impl TypeCatalog {
         if linear {
             return Grade::Linear;
         }
-        if self.conformances.contains_key(&(symbol, Symbol::Copy)) {
+        if self.has_bare_conformance(symbol, Symbol::Copy) {
             return Grade::Copy;
         }
         Grade::Affine
@@ -328,9 +399,68 @@ impl TypeCatalog {
     /// rule unify's coercion and generation's Apply-preservation share.
     pub fn copies_out_of_borrow(&self, symbol: Symbol) -> bool {
         self.grade_of(symbol) == Grade::Copy
-            || self
-                .conformances
-                .contains_key(&(symbol, Symbol::CheapClone))
+            || self.has_bare_conformance(symbol, Symbol::CheapClone)
+    }
+
+    /// Canonicalize a protocol-argument type for conformance lookup. Borrowed
+    /// Copy values satisfy owned protocol inputs by value, so `&Int` and `Int`
+    /// select the same conformance key. Non-Copy borrows stay explicit: a
+    /// borrow-shaped witness such as `Equatable<Pt>` must not become
+    /// `Equatable<&Pt>`.
+    pub fn canonical_conformance_arg(&self, ty: Ty) -> Ty {
+        match ty {
+            Ty::Borrow(perm, inner) => {
+                let inner = self.canonical_conformance_arg(*inner);
+                match &inner {
+                    Ty::Nominal(symbol, _) if self.grade_of(*symbol) == Grade::Copy => inner,
+                    _ => Ty::Borrow(perm, Box::new(inner)),
+                }
+            }
+            Ty::Nominal(symbol, args) => Ty::Nominal(
+                symbol,
+                args.into_iter()
+                    .map(|arg| self.canonical_conformance_arg(arg))
+                    .collect(),
+            ),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| self.canonical_conformance_arg(item))
+                    .collect(),
+            ),
+            Ty::Func(args, ret, eff) => Ty::Func(
+                args.into_iter()
+                    .map(|arg| self.canonical_conformance_arg(arg))
+                    .collect(),
+                Box::new(self.canonical_conformance_arg(*ret)),
+                eff,
+            ),
+            Ty::Record(record) => Ty::Record(crate::types::ty::Row {
+                fields: record
+                    .fields
+                    .into_iter()
+                    .map(|(label, field)| (label, self.canonical_conformance_arg(field)))
+                    .collect(),
+                tail: record.tail,
+            }),
+            Ty::Proj(base, protocol, assoc) => Ty::Proj(
+                Box::new(self.canonical_conformance_arg(*base)),
+                self.canonical_protocol_ref(protocol),
+                assoc,
+            ),
+            other => other,
+        }
+    }
+
+    pub fn canonical_protocol_ref(&self, protocol: ProtocolRef) -> ProtocolRef {
+        ProtocolRef {
+            protocol: protocol.protocol,
+            args: protocol
+                .args
+                .into_iter()
+                .map(|arg| self.canonical_conformance_arg(arg))
+                .collect(),
+        }
     }
 
     /// Remap every symbol for an importer (the catalog half of
@@ -420,12 +550,13 @@ impl TypeCatalog {
                     (
                         imp(k, target),
                         ProtocolInfo {
+                            params: v.params.iter().map(|s| imp(*s, target)).collect(),
                             assoc: v
                                 .assoc
                                 .into_iter()
                                 .map(|(name, s)| (name, imp(s, target)))
                                 .collect(),
-                            supers: v.supers.iter().map(|s| imp(*s, target)).collect(),
+                            supers: v.supers.iter().map(|s| s.import_symbols(target)).collect(),
                             predicates: v
                                 .predicates
                                 .into_iter()
@@ -453,10 +584,11 @@ impl TypeCatalog {
                 .into_iter()
                 .map(|((head, protocol), c)| {
                     (
-                        (imp(head, target), imp(protocol, target)),
+                        (imp(head, target), protocol.import_symbols(target)),
                         Conformance {
                             params: c.params.iter().map(|s| imp(*s, target)).collect(),
                             self_args: c.self_args.iter().map(&imp_ty).collect(),
+                            protocol_args: c.protocol_args.iter().map(&imp_ty).collect(),
                             context: c
                                 .context
                                 .into_iter()
@@ -482,7 +614,7 @@ impl TypeCatalog {
                 .map(|(head, protocols)| {
                     (
                         imp(head, target),
-                        protocols.iter().map(|p| imp(*p, target)).collect(),
+                        protocols.iter().map(|p| p.import_symbols(target)).collect(),
                     )
                 })
                 .collect(),
@@ -508,7 +640,7 @@ impl TypeCatalog {
                 .map(|(s, bounds)| {
                     (
                         imp(s, target),
-                        bounds.iter().map(|b| imp(*b, target)).collect(),
+                        bounds.iter().map(|b| b.import_symbols(target)).collect(),
                     )
                 })
                 .collect(),
@@ -610,35 +742,45 @@ impl TypeCatalog {
         }
     }
 
-    /// Return `protocol` followed by all transitive super-protocols, with
-    /// duplicates removed. Conformance to a protocol entails conformance to
-    /// every super-protocol, so both registration and lookup use this closure.
-    pub fn protocol_and_supers(&self, protocol: Symbol) -> Vec<Symbol> {
+    /// Return `protocol` followed by all transitive super-protocol
+    /// applications, with duplicates removed.
+    pub fn protocol_and_supers(&self, protocol: &ProtocolRef) -> Vec<ProtocolRef> {
         let mut result = vec![];
-        let mut queue = vec![protocol];
+        let mut seen = FxHashSet::default();
+        let mut queue = vec![protocol.clone()];
         while let Some(current) = queue.pop() {
-            if result.contains(&current) {
+            if !seen.insert(current.protocol) {
                 continue;
             }
-            result.push(current);
-            if let Some(info) = self.protocols.get(&current) {
-                queue.extend(info.supers.iter().rev().copied());
+            result.push(current.clone());
+            if let Some(info) = self.protocols.get(&current.protocol) {
+                let tys: FxHashMap<Symbol, Ty> = info
+                    .params
+                    .iter()
+                    .copied()
+                    .zip(current.args.iter().cloned())
+                    .collect();
+                queue.extend(
+                    info.supers
+                        .iter()
+                        .rev()
+                        .map(|sup| sup.substitute(&tys, &Default::default(), &Default::default())),
+                );
             }
         }
         result
     }
 
     /// Every requirement that a conformance to `protocol` must satisfy,
-    /// including inherited requirements. The owning protocol is retained
-    /// because associated-type projections and default bodies are keyed by the
-    /// protocol that declared the requirement.
+    /// including inherited requirements. The owning protocol application is
+    /// retained because projections are keyed by the full protocol ref.
     pub fn requirements_for_conformance(
         &self,
-        protocol: Symbol,
-    ) -> Vec<(Symbol, String, Requirement)> {
-        let mut requirements: Vec<(Symbol, String, Requirement)> = vec![];
+        protocol: &ProtocolRef,
+    ) -> Vec<(ProtocolRef, String, Requirement)> {
+        let mut requirements: Vec<(ProtocolRef, String, Requirement)> = vec![];
         for owner in self.protocol_and_supers(protocol) {
-            let Some(info) = self.protocols.get(&owner) else {
+            let Some(info) = self.protocols.get(&owner.protocol) else {
                 continue;
             };
             for (label, requirement) in &info.requirements {
@@ -648,7 +790,7 @@ impl TypeCatalog {
                 {
                     continue;
                 }
-                requirements.push((owner, label.clone(), requirement.clone()));
+                requirements.push((owner.clone(), label.clone(), requirement.clone()));
             }
         }
         requirements
@@ -656,83 +798,175 @@ impl TypeCatalog {
 
     /// Does a bound set satisfy `target`, directly or through super-protocol
     /// closure?
-    pub fn bounds_satisfy(&self, bounds: &[Symbol], target: Symbol) -> bool {
-        let mut queue: Vec<Symbol> = bounds.to_vec();
-        let mut seen: Vec<Symbol> = vec![];
-        while let Some(protocol) = queue.pop() {
-            if protocol == target {
-                return true;
-            }
-            if seen.contains(&protocol) {
-                continue;
-            }
-            seen.push(protocol);
-            if let Some(info) = self.protocols.get(&protocol) {
-                queue.extend(info.supers.iter().copied());
-            }
+    pub fn bounds_satisfy(&self, bounds: &[ProtocolRef], target: &ProtocolRef) -> bool {
+        bounds.iter().any(|bound| {
+            self.protocol_and_supers(bound)
+                .into_iter()
+                .any(|candidate| candidate == *target)
+        })
+    }
+
+    pub fn has_bare_conformance(&self, head: Symbol, protocol: Symbol) -> bool {
+        self.conformances
+            .contains_key(&(head, ProtocolRef::bare(protocol)))
+    }
+
+    pub fn conformance_rows_overlap(
+        &self,
+        left_protocol: &ProtocolRef,
+        left: &Conformance,
+        right_protocol: &ProtocolRef,
+        right: &Conformance,
+    ) -> bool {
+        if left_protocol.protocol != right_protocol.protocol
+            || left.self_args.len() != right.self_args.len()
+            || left.protocol_args.len() != right.protocol_args.len()
+        {
+            return false;
         }
-        false
+        let mut forward = FxHashMap::default();
+        let forward_matches = left
+            .self_args
+            .iter()
+            .zip(&right.self_args)
+            .all(|(left, right)| match_pattern(left, right, &mut forward))
+            && left
+                .protocol_args
+                .iter()
+                .zip(&right.protocol_args)
+                .all(|(left, right)| match_key_pattern(left, right, &mut forward));
+
+        let mut reverse = FxHashMap::default();
+        let reverse_matches = left
+            .self_args
+            .iter()
+            .zip(&right.self_args)
+            .all(|(left, right)| match_pattern(right, left, &mut reverse))
+            && left
+                .protocol_args
+                .iter()
+                .zip(&right.protocol_args)
+                .all(|(left, right)| match_key_pattern(right, left, &mut reverse));
+
+        forward_matches && reverse_matches
+    }
+
+    pub fn matching_conformances<'a>(
+        &'a self,
+        head: Symbol,
+        self_args: &[Ty],
+        target: &ProtocolRef,
+    ) -> Vec<ConformanceMatch<'a>> {
+        self.conformances
+            .iter()
+            .filter_map(|((candidate_head, candidate_protocol), conformance)| {
+                if *candidate_head != head || candidate_protocol.protocol != target.protocol {
+                    return None;
+                }
+                if conformance.self_args.len() != self_args.len()
+                    || conformance.protocol_args.len() != target.args.len()
+                {
+                    return None;
+                }
+                let mut substitution = FxHashMap::default();
+                let self_matches = conformance
+                    .self_args
+                    .iter()
+                    .zip(self_args)
+                    .all(|(pattern, actual)| match_pattern(pattern, actual, &mut substitution));
+                let protocol_matches = conformance
+                    .protocol_args
+                    .iter()
+                    .zip(&target.args)
+                    .all(|(pattern, actual)| match_key_pattern(pattern, actual, &mut substitution));
+                (self_matches && protocol_matches).then_some(ConformanceMatch {
+                    protocol: candidate_protocol,
+                    conformance,
+                    substitution,
+                })
+            })
+            .collect()
     }
 
     /// All associated types reachable from a protocol (through supers), in a
     /// stable traversal order. Same-named associated types are overridden by
     /// the most-specific protocol reached first.
     pub fn associated_types_in(&self, protocol: Symbol) -> Vec<(String, Symbol)> {
+        self.associated_types_in_ref(&ProtocolRef::bare(protocol))
+            .into_iter()
+            .map(|(name, _, assoc)| (name, assoc))
+            .collect()
+    }
+
+    pub fn declared_associated_types_in_ref(
+        &self,
+        protocol: &ProtocolRef,
+    ) -> Vec<(String, ProtocolRef, Symbol)> {
+        let Some(info) = self.protocols.get(&protocol.protocol) else {
+            return vec![];
+        };
+        info.assoc
+            .iter()
+            .map(|(name, symbol)| (name.clone(), protocol.clone(), *symbol))
+            .collect()
+    }
+
+    pub fn associated_types_in_ref(
+        &self,
+        protocol: &ProtocolRef,
+    ) -> Vec<(String, ProtocolRef, Symbol)> {
         let mut result = IndexMap::new();
-        let mut queue: Vec<Symbol> = vec![protocol];
-        let mut seen: Vec<Symbol> = vec![];
-        while let Some(current) = queue.pop() {
-            if seen.contains(&current) {
-                continue;
-            }
-            seen.push(current);
-            if let Some(info) = self.protocols.get(&current) {
+        for current in self.protocol_and_supers(protocol) {
+            if let Some(info) = self.protocols.get(&current.protocol) {
                 for (name, symbol) in &info.assoc {
-                    result.entry(name.clone()).or_insert(*symbol);
+                    result
+                        .entry(name.clone())
+                        .or_insert((current.clone(), *symbol));
                 }
-                queue.extend(info.supers.iter().copied());
             }
         }
-        result.into_iter().collect()
+        result
+            .into_iter()
+            .map(|(name, (owner, assoc))| (name, owner, assoc))
+            .collect()
     }
 
     /// Find an associated type named `label` reachable from a protocol
-    /// (through supers). Returns (owning protocol, associated type symbol).
+    /// (through supers). Returns (owning protocol application, assoc symbol).
+    pub fn associated_type_in_ref(
+        &self,
+        protocol: &ProtocolRef,
+        label: &str,
+    ) -> Option<(ProtocolRef, Symbol)> {
+        self.associated_types_in_ref(protocol)
+            .into_iter()
+            .find_map(|(name, owner, assoc)| (name == label).then_some((owner, assoc)))
+    }
+
     pub fn associated_type_in(&self, protocol: Symbol, label: &str) -> Option<(Symbol, Symbol)> {
-        let mut queue: Vec<Symbol> = vec![protocol];
-        let mut seen: Vec<Symbol> = vec![];
-        while let Some(current) = queue.pop() {
-            if seen.contains(&current) {
-                continue;
-            }
-            seen.push(current);
-            if let Some(info) = self.protocols.get(&current) {
-                if let Some(&assoc) = info.assoc.get(label) {
-                    return Some((current, assoc));
-                }
-                queue.extend(info.supers.iter().copied());
+        self.associated_type_in_ref(&ProtocolRef::bare(protocol), label)
+            .map(|(owner, assoc)| (owner.protocol, assoc))
+    }
+
+    /// Find a requirement named `label` reachable from a protocol (through
+    /// supers). Returns (owning protocol application, requirement).
+    pub fn requirement_in_ref(
+        &self,
+        protocol: &ProtocolRef,
+        label: &str,
+    ) -> Option<(ProtocolRef, &Requirement)> {
+        for current in self.protocol_and_supers(protocol) {
+            if let Some(info) = self.protocols.get(&current.protocol)
+                && let Some(requirement) = info.requirements.get(label)
+            {
+                return Some((current, requirement));
             }
         }
         None
     }
 
-    /// Find a requirement named `label` reachable from a protocol (through
-    /// supers). Returns (owning protocol, requirement).
     pub fn requirement_in(&self, protocol: Symbol, label: &str) -> Option<(Symbol, &Requirement)> {
-        let mut queue: Vec<Symbol> = vec![protocol];
-        let mut seen: Vec<Symbol> = vec![];
-        while let Some(current) = queue.pop() {
-            if seen.contains(&current) {
-                continue;
-            }
-            seen.push(current);
-            if let Some(info) = self.protocols.get(&current) {
-                if let Some(requirement) = info.requirements.get(label) {
-                    return Some((current, requirement));
-                }
-                queue.extend(info.supers.iter().copied());
-            }
-        }
-        None
+        self.requirement_in_ref(&ProtocolRef::bare(protocol), label)
+            .map(|(owner, requirement)| (owner.protocol, requirement))
     }
 }

@@ -125,9 +125,7 @@ fn sum() {
     let (value, out) = driver.run_vm_with_output().expect("vm");
     assert_eq!(value, talk::vm::interp::Value::I64(11));
     assert_eq!(out, "7\n");
-    let (evaluator_value, evaluator_out) = driver
-        .eval_with_output()
-        .expect("evaluator");
+    let (evaluator_value, evaluator_out) = driver.eval_with_output().expect("evaluator");
     assert_eq!(evaluator_value, talk::lambda_g::eval::EvalValue::I64(11));
     assert_eq!(evaluator_out, "7\n");
 }
@@ -138,9 +136,7 @@ fn protocols() {
     let (value, out) = driver.run_vm_with_output().expect("vm");
     assert_eq!(value, talk::vm::interp::Value::I64(123));
     assert_eq!(out, "");
-    let (evaluator_value, evaluator_out) = driver
-        .eval_with_output()
-        .expect("evaluator");
+    let (evaluator_value, evaluator_out) = driver.eval_with_output().expect("evaluator");
     assert_eq!(evaluator_value, talk::lambda_g::eval::EvalValue::I64(123));
     assert_eq!(evaluator_out, "");
 }
@@ -153,9 +149,7 @@ fn anon_func() {
     let (value, out) = driver.run_vm_with_output().expect("vm");
     assert_eq!(value, talk::vm::interp::Value::I64(123));
     assert_eq!(out, "");
-    let (evaluator_value, evaluator_out) = driver
-        .eval_with_output()
-        .expect("evaluator");
+    let (evaluator_value, evaluator_out) = driver.eval_with_output().expect("evaluator");
     assert_eq!(evaluator_value, talk::lambda_g::eval::EvalValue::I64(123));
     assert_eq!(evaluator_out, "");
 }
@@ -166,9 +160,7 @@ fn capture() {
     let (value, out) = driver.run_vm_with_output().expect("vm");
     assert_eq!(value, talk::vm::interp::Value::I64(3));
     assert_eq!(out, "");
-    let (evaluator_value, evaluator_out) = driver
-        .eval_with_output()
-        .expect("evaluator");
+    let (evaluator_value, evaluator_out) = driver.eval_with_output().expect("evaluator");
     assert_eq!(evaluator_value, talk::lambda_g::eval::EvalValue::I64(3));
     assert_eq!(evaluator_out, "");
 }
@@ -207,9 +199,7 @@ fn match_bind() {
     let (value, out) = driver.run_vm_with_output().expect("vm");
     assert_eq!(value, talk::vm::interp::Value::I64(22));
     assert_eq!(out, "");
-    let (evaluator_value, evaluator_out) = driver
-        .eval_with_output()
-        .expect("evaluator");
+    let (evaluator_value, evaluator_out) = driver.eval_with_output().expect("evaluator");
     assert_eq!(evaluator_value, talk::lambda_g::eval::EvalValue::I64(22));
     assert_eq!(evaluator_out, "");
 }
@@ -220,9 +210,7 @@ fn structural_typing() {
     let (value, out) = driver.run_vm_with_output().expect("vm");
     assert_eq!(value, talk::vm::interp::Value::Bool(true));
     assert_eq!(out, "");
-    let (evaluator_value, evaluator_out) = driver
-        .eval_with_output()
-        .expect("evaluator");
+    let (evaluator_value, evaluator_out) = driver.eval_with_output().expect("evaluator");
     assert_eq!(evaluator_value, talk::lambda_g::eval::EvalValue::Bool(true));
     assert_eq!(evaluator_out, "");
 }
@@ -243,9 +231,7 @@ fn chat_client() {
     let (value, out) = driver.run_vm_with_output().expect("vm");
     assert_eq!(value, talk::vm::interp::Value::I64(0));
     assert_eq!(out, "");
-    let (evaluator_value, evaluator_out) = driver
-        .eval_with_output()
-        .expect("evaluator");
+    let (evaluator_value, evaluator_out) = driver.eval_with_output().expect("evaluator");
     assert_eq!(evaluator_value, talk::lambda_g::eval::EvalValue::I64(0));
     assert_eq!(evaluator_out, "");
 }

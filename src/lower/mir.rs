@@ -309,10 +309,6 @@ struct Builder<'types> {
     /// they replace in later statement/terminator embeddings.
     next_temp: u32,
     temp_subs: FxHashMap<NodeID, u32>,
-    /// Temps minted while lowering the current statement whose values may
-    /// need teardown: drained into `DropCandidate` statements
-    /// (`TemporaryEnd`) when the full expression completes.
-    pending_temp_drops: Vec<Expr>,
     /// The join temps of the value-producing constructs currently being
     /// lowered, innermost last: an arm tail's `Continuation` delivery
     /// names the enclosing construct's temp.
@@ -541,7 +537,6 @@ impl<'types> Builder<'types> {
             handler_stack: vec![],
             next_temp: 0,
             temp_subs: FxHashMap::default(),
-            pending_temp_drops: vec![],
             continuation_temps: vec![],
             join_depth: 0,
             root_tail_is_return: true,
@@ -611,12 +606,11 @@ impl<'types> Builder<'types> {
         }
     }
 
-    /// Record a freshly minted temp whose value may need teardown; the
-    /// enclosing statement's completion drains it into a `TemporaryEnd`
-    /// drop candidate (the flow checker classifies consumed temps `Dead`,
-    /// scalar temps unelaborated — lowering drops only `Static` ones).
-    fn note_pending_temp(&mut self, id: NodeID, span: crate::span::Span, temp: u32, ty: Ty) {
-        self.pending_temp_drops.push(Expr {
+    /// Build the expression that reads a flattened temporary. The enclosing
+    /// statement records these structurally and emits `TemporaryEnd` drop
+    /// candidates at its own completion point.
+    fn temp_expr(&self, id: NodeID, span: crate::span::Span, temp: u32, ty: Ty) -> Expr {
+        Expr {
             id,
             kind: ExprKind::Temp(temp),
             span,
@@ -625,15 +619,15 @@ impl<'types> Builder<'types> {
             member_resolution: None,
             instantiation: None,
             existential_pack: None,
-        });
+        }
     }
 
-    /// Emit `TemporaryEnd` drop candidates for the statement's temps
-    /// (reverse creation order). Skipped when the block already
-    /// terminated: exits consume their value, and unreachable candidates
-    /// have no register to read.
-    fn drain_temp_drops(&mut self, current: BlockId) {
-        let pending = std::mem::take(&mut self.pending_temp_drops);
+    /// Emit `TemporaryEnd` drop candidates for the current statement's temps
+    /// (reverse creation order). Skipped when the block already terminated:
+    /// exits consume their value, and unreachable candidates have no register
+    /// to read.
+    fn emit_temp_drops(&mut self, current: BlockId, temps: &mut Vec<Expr>) {
+        let pending = std::mem::take(temps);
         if self.is_terminated(current) {
             return;
         }
@@ -672,17 +666,19 @@ impl<'types> Builder<'types> {
             let is_tail = mark_tail_exprs && index == last;
             let tail_expr = is_tail.then(|| tail_expr(node)).flatten();
             let tail_control_value = is_tail && node_is_value_control(node);
+            let mut temp_drops = vec![];
             current = self.lower_node(
                 node,
                 current,
                 tail_expr.is_none() && !tail_control_value,
                 is_tail && tail_exits,
+                &mut temp_drops,
             );
             // Temp drops precede the delivery/exit statements: the exit
             // machinery reads its scope-exit candidates adjacently, and a
             // consumed temp's candidate is Dead regardless of order
             // (consumption is static, the set completes before annotation).
-            self.drain_temp_drops(current);
+            self.emit_temp_drops(current, &mut temp_drops);
             if let Some(expr) = tail_expr {
                 // Only the root scope's tail is the function's return value;
                 // nested tails (branch arms, value blocks) deliver within it.
@@ -718,9 +714,10 @@ impl<'types> Builder<'types> {
         current: BlockId,
         consume_expr_value: bool,
         tail_exits: bool,
+        temp_drops: &mut Vec<Expr>,
     ) -> BlockId {
         match node {
-            Node::Decl(decl) => self.lower_decl(decl, current),
+            Node::Decl(decl) => self.lower_decl(decl, current, temp_drops),
             Node::Stmt(Stmt {
                 kind:
                     StmtKind::Expr(Expr {
@@ -732,10 +729,12 @@ impl<'types> Builder<'types> {
             Node::Stmt(Stmt {
                 kind: StmtKind::Expr(expr),
                 ..
-            }) if !consume_expr_value => self.lower_expr(expr, current),
-            Node::Stmt(stmt) => self.lower_stmt(stmt, current, consume_expr_value, tail_exits),
+            }) if !consume_expr_value => self.lower_expr(expr, current, temp_drops),
+            Node::Stmt(stmt) => {
+                self.lower_stmt(stmt, current, consume_expr_value, tail_exits, temp_drops)
+            }
             Node::Expr(expr) => {
-                let current = self.lower_expr(expr, current);
+                let current = self.lower_expr(expr, current, temp_drops);
                 if consume_expr_value {
                     self.push_statement(current, Statement::ConsumeValue { expr: expr.clone() });
                 }
@@ -744,7 +743,7 @@ impl<'types> Builder<'types> {
         }
     }
 
-    fn lower_decl(&mut self, decl: &Decl, current: BlockId) -> BlockId {
+    fn lower_decl(&mut self, decl: &Decl, current: BlockId, temp_drops: &mut Vec<Expr>) -> BlockId {
         match &decl.kind {
             DeclKind::Let {
                 lhs,
@@ -773,7 +772,7 @@ impl<'types> Builder<'types> {
                         );
                         current
                     }
-                    Some(rhs) => self.lower_expr(rhs, current),
+                    Some(rhs) => self.lower_expr(rhs, current, temp_drops),
                     None => current,
                 };
                 for (id, symbol) in lhs.collect_binders() {
@@ -864,6 +863,7 @@ impl<'types> Builder<'types> {
         current: BlockId,
         consume_expr_value: bool,
         tail_exits: bool,
+        temp_drops: &mut Vec<Expr>,
     ) -> BlockId {
         match &stmt.kind {
             StmtKind::Expr(Expr {
@@ -873,13 +873,13 @@ impl<'types> Builder<'types> {
                 builder.lower_nodes(&block.body, current, consume_expr_value, tail_exits)
             }),
             StmtKind::Expr(expr) => {
-                let current = self.lower_expr(expr, current);
+                let current = self.lower_expr(expr, current, temp_drops);
                 self.push_statement(current, Statement::ConsumeValue { expr: expr.clone() });
                 current
             }
             StmtKind::Return(Some(expr)) => {
-                let current = self.lower_expr(expr, current);
-                self.drain_temp_drops(current);
+                let current = self.lower_expr(expr, current, temp_drops);
+                self.emit_temp_drops(current, temp_drops);
                 self.push_statement(
                     current,
                     Statement::ReturnValue {
@@ -899,8 +899,8 @@ impl<'types> Builder<'types> {
             StmtKind::Continue(Some(expr)) => {
                 // `continue v` is a RESUME: the handler-body path ends at
                 // the handling construct's join, never at a loop header.
-                let current = self.lower_expr(expr, current);
-                self.drain_temp_drops(current);
+                let current = self.lower_expr(expr, current, temp_drops);
+                self.emit_temp_drops(current, temp_drops);
                 self.push_statement(current, Statement::ContinueValue { expr: expr.clone() });
                 if let Some(handler) = self.handler_stack.last().copied() {
                     self.emit_early_exit_drops(current, stmt.id, handler.scope_depth);
@@ -937,8 +937,8 @@ impl<'types> Builder<'types> {
                 current
             }
             StmtKind::Assignment(lhs, rhs) => {
-                let current = self.lower_expr(rhs, current);
-                self.lower_assignment_lhs(lhs, current);
+                let current = self.lower_expr(rhs, current, temp_drops);
+                self.lower_assignment_lhs(lhs, current, temp_drops);
                 let target_key_path = place_for_expr(lhs);
                 // The old value's drop; the flow checker classifies it at
                 // the pre-assignment state.
@@ -968,8 +968,11 @@ impl<'types> Builder<'types> {
                 current,
                 !consume_expr_value,
                 tail_exits,
+                temp_drops,
             ),
-            StmtKind::Loop(condition, body) => self.lower_loop(condition.as_ref(), body, current),
+            StmtKind::Loop(condition, body) => {
+                self.lower_loop(condition.as_ref(), body, current, temp_drops)
+            }
             StmtKind::Handling {
                 effect_name, body, ..
             } => {
@@ -1014,7 +1017,7 @@ impl<'types> Builder<'types> {
         }
     }
 
-    fn lower_expr(&mut self, expr: &Expr, current: BlockId) -> BlockId {
+    fn lower_expr(&mut self, expr: &Expr, current: BlockId, temp_drops: &mut Vec<Expr>) -> BlockId {
         match &expr.kind {
             ExprKind::Variable(_) => {
                 self.push_reads(expr, current);
@@ -1022,7 +1025,7 @@ impl<'types> Builder<'types> {
             }
             ExprKind::LiteralArray(items)
             | ExprKind::Tuple(items)
-            | ExprKind::Con { args: items, .. } => self.lower_exprs(items, current),
+            | ExprKind::Con { args: items, .. } => self.lower_exprs(items, current, temp_drops),
             ExprKind::Block(block) => self.lower_scope(current, block.id, |builder, current| {
                 builder.lower_nodes(&block.body, current, true, false)
             }),
@@ -1032,9 +1035,9 @@ impl<'types> Builder<'types> {
                 trailing_block,
                 ..
             } => {
-                let mut current = self.lower_expr(callee, current);
+                let mut current = self.lower_expr(callee, current, temp_drops);
                 for arg in args {
-                    current = self.lower_expr(&arg.value, current);
+                    current = self.lower_expr(&arg.value, current, temp_drops);
                 }
                 let temp = self.next_temp;
                 self.next_temp += 1;
@@ -1047,7 +1050,7 @@ impl<'types> Builder<'types> {
                     .map(|pack| pack.payload.clone())
                     .or_else(|| self.types.node_types.get(&expr.id).cloned())
                     .unwrap_or(Ty::Error);
-                self.note_pending_temp(expr.id, expr.span, temp, result_ty.clone());
+                temp_drops.push(self.temp_expr(expr.id, expr.span, temp, result_ty.clone()));
                 self.push_statement(
                     current,
                     Statement::Call {
@@ -1090,7 +1093,7 @@ impl<'types> Builder<'types> {
             ExprKind::CallEffect { args, .. } => {
                 let mut current = current;
                 for arg in args {
-                    current = self.lower_expr(&arg.value, current);
+                    current = self.lower_expr(&arg.value, current, temp_drops);
                 }
                 let temp = self.next_temp;
                 self.next_temp += 1;
@@ -1100,7 +1103,7 @@ impl<'types> Builder<'types> {
                     .map(|pack| pack.payload.clone())
                     .or_else(|| self.types.node_types.get(&expr.id).cloned())
                     .unwrap_or(Ty::Error);
-                self.note_pending_temp(expr.id, expr.span, temp, result_ty.clone());
+                temp_drops.push(self.temp_expr(expr.id, expr.span, temp, result_ty.clone()));
                 self.push_statement(
                     current,
                     Statement::Perform {
@@ -1116,7 +1119,7 @@ impl<'types> Builder<'types> {
                 self.push_reads(expr, current);
                 current
             }
-            ExprKind::Member(Some(receiver), ..) => self.lower_expr(receiver, current),
+            ExprKind::Member(Some(receiver), ..) => self.lower_expr(receiver, current, temp_drops),
             ExprKind::Func(func) => {
                 self.push_statement(
                     current,
@@ -1131,14 +1134,16 @@ impl<'types> Builder<'types> {
                 );
                 current
             }
-            ExprKind::Match(scrutinee, arms) => self.lower_match(expr.id, scrutinee, arms, current),
+            ExprKind::Match(scrutinee, arms) => {
+                self.lower_match(expr.id, scrutinee, arms, current, temp_drops)
+            }
             ExprKind::RecordLiteral { fields, spread } => {
                 let mut current = current;
                 if let Some(spread) = spread {
-                    current = self.lower_expr(spread, current);
+                    current = self.lower_expr(spread, current, temp_drops);
                 }
                 for field in fields {
-                    current = self.lower_expr(&field.value, current);
+                    current = self.lower_expr(&field.value, current, temp_drops);
                 }
                 current
             }
@@ -1150,26 +1155,31 @@ impl<'types> Builder<'types> {
         }
     }
 
-    fn lower_exprs(&mut self, exprs: &[Expr], mut current: BlockId) -> BlockId {
+    fn lower_exprs(
+        &mut self,
+        exprs: &[Expr],
+        mut current: BlockId,
+        temp_drops: &mut Vec<Expr>,
+    ) -> BlockId {
         for expr in exprs {
-            current = self.lower_expr(expr, current);
+            current = self.lower_expr(expr, current, temp_drops);
         }
         current
     }
 
-    fn lower_assignment_lhs(&mut self, expr: &Expr, current: BlockId) {
+    fn lower_assignment_lhs(&mut self, expr: &Expr, current: BlockId, temp_drops: &mut Vec<Expr>) {
         match &expr.kind {
             ExprKind::Variable(_) => {}
             ExprKind::Proj(receiver, ..) => {
-                self.lower_assignment_root(receiver, current);
+                self.lower_assignment_root(receiver, current, temp_drops);
             }
             _ => {
-                self.lower_expr(expr, current);
+                self.lower_expr(expr, current, temp_drops);
             }
         }
     }
 
-    fn lower_assignment_root(&mut self, expr: &Expr, current: BlockId) {
+    fn lower_assignment_root(&mut self, expr: &Expr, current: BlockId, temp_drops: &mut Vec<Expr>) {
         match &expr.kind {
             ExprKind::Variable(name) => {
                 if let Ok(symbol) = name.symbol() {
@@ -1184,10 +1194,10 @@ impl<'types> Builder<'types> {
                 }
             }
             ExprKind::Member(Some(receiver), ..) | ExprKind::Proj(receiver, ..) => {
-                self.lower_assignment_root(receiver, current)
+                self.lower_assignment_root(receiver, current, temp_drops)
             }
             _ => {
-                self.lower_expr(expr, current);
+                self.lower_expr(expr, current, temp_drops);
             }
         }
     }
@@ -1200,8 +1210,9 @@ impl<'types> Builder<'types> {
         current: BlockId,
         mark_tail_exprs: bool,
         tail_exits: bool,
+        temp_drops: &mut Vec<Expr>,
     ) -> BlockId {
-        let current = self.lower_expr(condition, current);
+        let current = self.lower_expr(condition, current, temp_drops);
         let then_id = self.new_block();
         let else_id = self.new_block();
         let join_id = self.new_block();
@@ -1233,14 +1244,20 @@ impl<'types> Builder<'types> {
         join_id
     }
 
-    fn lower_loop(&mut self, condition: Option<&Expr>, body: &Block, current: BlockId) -> BlockId {
+    fn lower_loop(
+        &mut self,
+        condition: Option<&Expr>,
+        body: &Block,
+        current: BlockId,
+        temp_drops: &mut Vec<Expr>,
+    ) -> BlockId {
         let header_id = self.new_block();
         let body_id = self.new_block();
         let exit_id = self.new_block();
 
         self.terminate_if_open(current, Terminator::Jump(header_id));
         if let Some(condition) = condition {
-            let condition_exit = self.lower_expr(condition, header_id);
+            let condition_exit = self.lower_expr(condition, header_id, temp_drops);
             self.terminate_if_open(
                 condition_exit,
                 Terminator::Loop {
@@ -1280,8 +1297,9 @@ impl<'types> Builder<'types> {
         scrutinee: &Expr,
         arms: &[MatchArm],
         current: BlockId,
+        temp_drops: &mut Vec<Expr>,
     ) -> BlockId {
-        let current = self.lower_expr(scrutinee, current);
+        let current = self.lower_expr(scrutinee, current, temp_drops);
         let join_id = self.new_block();
         let arm_blocks: Vec<_> = arms.iter().map(|_| self.new_block()).collect();
         self.scaffolds.insert(expr_id, current);
@@ -1297,7 +1315,7 @@ impl<'types> Builder<'types> {
             .map(|pack| pack.payload.clone())
             .or_else(|| self.types.node_types.get(&expr_id).cloned())
             .unwrap_or(Ty::Error);
-        self.note_pending_temp(expr_id, scrutinee.span, temp, result_ty.clone());
+        temp_drops.push(self.temp_expr(expr_id, scrutinee.span, temp, result_ty.clone()));
         let mut scrutinee_sub = scrutinee.clone();
         self.substitute_temps_expr(&mut scrutinee_sub);
         self.terminate_if_open(

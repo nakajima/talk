@@ -364,6 +364,7 @@ impl<'a> DeclDeclarer<'a> {
         &mut self,
         id: NodeID,
         name: &mut Name,
+        row_generics: Option<&mut [GenericDecl]>,
         generics: &mut [GenericDecl],
         decls: &[Decl],
         is_extend: bool,
@@ -423,6 +424,9 @@ impl<'a> DeclDeclarer<'a> {
             }
         }
 
+        if let Some(row_generics) = row_generics {
+            self.declare_generics(row_generics, true);
+        }
         self.declare_generics(generics, is_extend);
 
         self.predeclare_nominals(decls.iter().collect_vec().as_slice());
@@ -494,7 +498,7 @@ impl<'a> DeclDeclarer<'a> {
                 ..
             },
             {
-                self.enter_nominal(decl.id, name, generics, &body.decls, false);
+                self.enter_nominal(decl.id, name, None, generics, &body.decls, false);
             }
         );
 
@@ -507,7 +511,7 @@ impl<'a> DeclDeclarer<'a> {
                 ..
             },
             {
-                self.enter_nominal(decl.id, name, generics, &body.decls, false);
+                self.enter_nominal(decl.id, name, None, generics, &body.decls, false);
             }
         );
 
@@ -520,7 +524,7 @@ impl<'a> DeclDeclarer<'a> {
                 ..
             },
             {
-                self.enter_nominal(decl.id, name, generics, &body.decls, false);
+                self.enter_nominal(decl.id, name, None, generics, &body.decls, false);
             }
         );
 
@@ -528,12 +532,20 @@ impl<'a> DeclDeclarer<'a> {
             &mut decl.kind,
             DeclKind::Extend {
                 name,
+                row_generics,
                 generics,
                 body,
                 ..
             },
             {
-                self.enter_nominal(decl.id, name, generics, &body.decls, true);
+                self.enter_nominal(
+                    decl.id,
+                    name,
+                    Some(row_generics),
+                    generics,
+                    &body.decls,
+                    true,
+                );
             }
         );
 

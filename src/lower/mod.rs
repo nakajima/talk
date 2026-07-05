@@ -56,7 +56,7 @@ use crate::node_kinds::{
 use crate::token_kind::TokenKind;
 use crate::types::TypeOutput;
 use crate::types::ty::Ty as CheckTy;
-use crate::types::ty::TyFold;
+use crate::types::ty::{ProtocolRef, TyFold};
 
 pub struct LowerUnit<'a> {
     pub asts: &'a IndexMap<Source, HirFile>,
@@ -477,7 +477,10 @@ impl<'a> Lowering<'a> {
         };
         if let Some(pack) = self.existential_pack_at(expr.existential_pack.as_ref(), ctx) {
             if let CheckTy::Any { protocol, .. } = &pack.payload
-                && *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol)
+                && protocol.protocol
+                    == self
+                        .any_protocol(&pack.existential)
+                        .unwrap_or(protocol.protocol)
             {
                 return self.lower_expr_unpacked(expr, ctx, k);
             }
@@ -521,7 +524,7 @@ impl<'a> Lowering<'a> {
             unit.types
                 .catalog
                 .conformances
-                .contains_key(&(symbol, protocol))
+                .contains_key(&(symbol, ProtocolRef::bare(protocol)))
         })
     }
 
@@ -1004,7 +1007,7 @@ impl TyFold for CheckNormalizer<'_> {
         let CheckTy::Nominal(symbol, args) = base.as_ref() else {
             return rebuilt;
         };
-        match crate::types::solve::reduce_projection(self.catalog, *symbol, args, *protocol, *assoc)
+        match crate::types::solve::reduce_projection(self.catalog, *symbol, args, protocol, *assoc)
         {
             Some(reduced) => self.fold_ty(&reduced),
             None => rebuilt,

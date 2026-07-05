@@ -783,7 +783,7 @@ pub mod tests {
             ),
             (
                 "types::types_custom_add",
-                "\n        struct A {}\n        struct B {}\n        struct C {}\n        extend A: Add {\n            func add(rhs: B) -> C {\n                C()\n            }\n        }\n        A() + B()\n        ",
+                "\n        struct A {}\n        struct B {}\n        struct C {}\n        extend A: Add<B> {\n            func add(rhs: B) -> C {\n                C()\n            }\n        }\n        A() + B()\n        ",
                 true,
                 true,
             ),
@@ -1782,13 +1782,13 @@ pub mod tests {
         // against Int's conformances (Chakravarty/Keller/Peyton Jones,
         // Associated Type Synonyms).
         let t = check(
-            "// no-core\nprotocol Add {\n\tassociated RHS\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nprotocol Subtract {\n\tassociated RHS\n\tassociated Ret\n\tfunc minus(rhs: RHS) -> Ret\n}\nprotocol Comparable {\n\tassociated RHS\n\tfunc lte(rhs: RHS) -> Bool\n}\nextend Int: Add {\n\tfunc add(rhs: Int) -> Int { 0 }\n}\nextend Int: Subtract {\n\tfunc minus(rhs: Int) -> Int { 0 }\n}\nextend Int: Comparable {\n\tfunc lte(rhs: Int) -> Bool { true }\n}\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n - 2) + fib(n - 1)\n}\nlet x = fib(24)",
+            "// no-core\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nprotocol Subtract<RHS> {\n\tassociated Ret\n\tfunc minus(rhs: RHS) -> Ret\n}\nprotocol Comparable<RHS> {\n\tfunc lte(rhs: RHS) -> Bool\n}\nextend Int: Add<Int> {\n\tfunc add(rhs: Int) -> Int { 0 }\n}\nextend Int: Subtract<Int> {\n\tfunc minus(rhs: Int) -> Int { 0 }\n}\nextend Int: Comparable<Int> {\n\tfunc lte(rhs: Int) -> Bool { true }\n}\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n - 2) + fib(n - 1)\n}\nlet x = fib(24)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "x"), "Int");
         assert_eq!(
             ty_of(&t, "fib"),
-            "<T0: Add & Comparable & Subtract>(T0) -> T0 where Int == T0.RHS && T0 == T0.RHS && T0 == T0.Ret"
+            "<T0: Add<T0> & Comparable<Int> & Subtract<Int>>(T0) -> T0 where T0 == T0.Ret"
         );
     }
 
@@ -2659,17 +2659,49 @@ pub mod tests {
     }
 
     #[test]
-    fn projections_reject_unprovable_equalities_on_rigid_params() {
-        // `a + 1` inside `<T: Add>` claims T.RHS = Int, which no bound
-        // states; type families are not injective and rigid projections
-        // only equal themselves (OutsideIn(X) treats F as a free function
-        // symbol) — so this must error rather than silently hold.
+    fn overlapping_generic_protocol_argument_conformance_is_rejected() {
         let t = check(
-            "// no-core\nprotocol Add {\n\tassociated RHS\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nfunc bad<T: Add>(a: T) { a + 1 }",
+            "// no-core\nstruct String {}\nstruct Name {}\nprotocol Into<Target> {\n\tfunc into() -> Target\n}\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nextend Name: Into<String> {\n\tfunc into() -> String { String() }\n}\nextend<T: Into<String>> String: Add<T> {\n\tfunc add(other: T) -> String { other.into() }\n}\nextend String: Add<Name> {\n\tfunc add(other: Name) -> String { other.into() }\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Overlapping conformance")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn generic_protocol_argument_conformance_uses_prefix_extend_generics() {
+        let t = check(
+            "// no-core\nstruct String {}\nstruct Name {}\nprotocol Into<Target> {\n\tfunc into() -> Target\n}\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nextend Name: Into<String> {\n\tfunc into() -> String { String() }\n}\nextend<T: Into<String>> String: Add<T> {\n\tfunc add(other: T) -> String { other.into() }\n}\nlet result = String() + Name()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "result"), "String");
+    }
+
+    #[test]
+    fn protocol_argument_keys_allow_same_self_protocol_with_different_args() {
+        let t = check(
+            "// no-core\nstruct String {}\nstruct Character {}\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nextend String: Add<String> {\n\tfunc add(rhs: String) -> Int { 1 }\n}\nextend String: Add<Character> {\n\tfunc add(rhs: Character) -> Int { 2 }\n}\nlet bothStrings = String() + String()\nlet stringAndCharacter = String() + Character()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "bothStrings"), "Int");
+        assert_eq!(ty_of(&t, "stringAndCharacter"), "Int");
+    }
+
+    #[test]
+    fn projections_reject_unprovable_equalities_on_rigid_params() {
+        // `a + 1` inside `<T: Add<Bool>>` needs `T: Add<Int>`, which no bound
+        // states; protocol arguments are conformance-key inputs, so this
+        // must error rather than silently selecting a different application.
+        let t = check(
+            "// no-core\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nfunc bad<T: Add<Bool>>(a: T) { a + 1 }",
         );
         let errors = type_errors(&t);
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].contains("RHS"), "{errors:?}");
+        assert!(errors[0].contains("expected Int, found Bool"), "{errors:?}");
     }
 
     #[test]
@@ -3814,7 +3846,7 @@ mod with_core {
         // ADR 0014: comparison requirements take `rhs: &RHS`, so a
         // non-Copy conforming type witnesses with the borrow spelled out.
         let typed = check_with_core(Source::from(
-            "struct Pt {\n\tlet x: Int\n}\nextend Pt: Equatable {\n\tfunc equals(rhs: &Pt) -> Bool {\n\t\tself.x == rhs.x\n\t}\n}\nlet hit = Pt(x: 1) == Pt(x: 1)",
+            "struct Pt {\n\tlet x: Int\n}\nextend Pt: Equatable<Pt> {\n\tfunc equals(rhs: &Pt) -> Bool {\n\t\tself.x == rhs.x\n\t}\n}\nlet hit = Pt(x: 1) == Pt(x: 1)",
         ));
         let errors = type_errors(&typed);
         assert!(errors.is_empty(), "{errors:?}");

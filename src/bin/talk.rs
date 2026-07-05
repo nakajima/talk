@@ -564,7 +564,8 @@ const NVIM_RUNTIME_RAW_BASE: &str =
     "https://raw.githubusercontent.com/nakajima/talk/main/dev/editors/nvim";
 
 #[cfg(feature = "cli")]
-const TALK_RELEASE_DOWNLOAD_BASE: &str = "https://github.com/nakajima/talk/releases/download";
+const TALK_STATIC_ARCHIVE_BASE: &str =
+    "https://raw.githubusercontent.com/nakajima/talk/static-runtimes";
 
 #[cfg(feature = "cli")]
 const TALK_STATIC_ARCHIVE_NAME: &str = "libtalk_static.a";
@@ -843,17 +844,17 @@ impl RuntimeArchive {
 
     fn download_current() -> Result<std::path::PathBuf, String> {
         let target = Self::current_target()?;
-        let cached = Self::cache_path(target);
+        let build_sha = Self::build_sha()?;
+        let cached = Self::cache_path(target, build_sha);
         if Self::is_usable_archive(&cached) {
             return Ok(cached);
         }
 
-        let tag = Self::release_tag();
         let asset = Self::asset_name(target);
-        let url = format!("{TALK_RELEASE_DOWNLOAD_BASE}/{tag}/{asset}");
+        let url = format!("{TALK_STATIC_ARCHIVE_BASE}/{build_sha}/{asset}");
         let checksum_url = format!("{url}.sha256");
 
-        eprintln!("downloading Talk static runtime {tag} for {target}");
+        eprintln!("downloading Talk static runtime {build_sha} for {target}");
         let checksum = Downloader::download_url(&checksum_url)
             .map_err(|err| format!("could not download {checksum_url}: {err:#}"))?;
         let archive = Downloader::download_url(&url)
@@ -889,11 +890,11 @@ impl RuntimeArchive {
         }
     }
 
-    fn cache_path(target: &str) -> std::path::PathBuf {
+    fn cache_path(target: &str, build_sha: &str) -> std::path::PathBuf {
         Self::cache_root()
             .join("talk")
             .join("static-runtimes")
-            .join(Self::release_tag())
+            .join(build_sha)
             .join(target)
             .join(TALK_STATIC_ARCHIVE_NAME)
     }
@@ -910,8 +911,13 @@ impl RuntimeArchive {
         std::env::temp_dir()
     }
 
-    fn release_tag() -> String {
-        format!("v{}", env!("CARGO_PKG_VERSION"))
+    fn build_sha() -> Result<&'static str, String> {
+        let build_sha = option_env!("TALK_BUILD_SHA").unwrap_or("").trim();
+        if build_sha.is_empty() {
+            Err("this talk binary was built without a git SHA, so it cannot choose a static runtime archive".into())
+        } else {
+            Ok(build_sha)
+        }
     }
 
     fn asset_name(target: &str) -> String {

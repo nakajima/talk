@@ -116,9 +116,7 @@ pub enum InlineIRInstructionKind {
         addr: Value,
     },
     #[doc = "free $ptr"]
-    Free {
-        ptr: Value,
-    },
+    Free { ptr: Value },
     #[doc = "copy $ty $from $to $length"]
     Copy {
         ty: TypeAnnotation,

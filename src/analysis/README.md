@@ -1,11 +1,13 @@
 # What this directory is
 
 The editor-facing analysis API, with no LSP protocol types in it:
-`Workspace` (run the compiler pipeline leniently over a set of
-open documents and keep texts, ASTs, resolved names, types, and
-diagnostics), `hover.rs` (type at a position), `ownership.rs`
-(move/borrow/drop inlay hints from the ownership pass), and
-`completion.rs` (scope-based completions plus type-backed member completions).
+`Workspace` (runs the compiler pipeline leniently over open documents,
+keeps the source-faithful ASTs the compile pipeline later lowers away,
+and stores texts, resolved names, types, flow facts, and diagnostics),
+`hover.rs` (type or scheme at a position, plus ownership details),
+`ownership.rs` (move/borrow/clone/drop hover details and inlay hints from
+`FlowFacts`), and `completion.rs` (scope-based completions plus
+type-backed member completions).
 
 It exists as a separate layer so the same functionality serves the
 LSP server, the REPL's tab completion, and tests, without any of them

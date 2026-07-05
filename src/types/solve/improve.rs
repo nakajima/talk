@@ -50,8 +50,23 @@ impl<'s> Solver<'s> {
                 .unwrap_or_default();
             match owners.as_slice() {
                 [MemberOwner::Protocol(protocol)] => {
+                    let args = self
+                        .catalog
+                        .protocols
+                        .get(protocol)
+                        .map(|info| {
+                            info.params
+                                .iter()
+                                .map(|_| Ty::Var(self.store.fresh_ty(self.level, origin.node)))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let protocol = ProtocolRef {
+                        protocol: *protocol,
+                        args,
+                    };
                     if let Some((owner, requirement)) =
-                        self.catalog.requirement_in(*protocol, &label_str)
+                        self.catalog.requirement_in_ref(&protocol, &label_str)
                     {
                         let requirement = requirement.clone();
                         let witness = requirement.symbol;

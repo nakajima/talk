@@ -145,13 +145,13 @@ extend Substring {
 	}
 }
 
-extend Substring: Add {
+extend Substring: Add<String> {
 	func add(rhs: String) -> String {
 		self.to_string() + rhs
 	}
 }
 
-extend String: Add {
+extend String: Add<String> {
 	func add(rhs: String) -> String {
 		let selfLen: Int = self.byte_count
 		let rhsLen: Int = rhs.byte_count
@@ -165,7 +165,7 @@ extend String: Add {
 	}
 }
 
-extend String: Equatable {
+extend String: Equatable<String> {
 	func equals(rhs: &String) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 

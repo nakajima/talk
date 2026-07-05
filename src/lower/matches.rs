@@ -90,7 +90,10 @@ impl<'a> Lowering<'a> {
         }
         if let Some(pack) = self.existential_pack_at(expr.existential_pack.as_ref(), ctx) {
             if let CheckTy::Any { protocol, .. } = &pack.payload
-                && *protocol == self.any_protocol(&pack.existential).unwrap_or(*protocol)
+                && protocol.protocol
+                    == self
+                        .any_protocol(&pack.existential)
+                        .unwrap_or(protocol.protocol)
             {
                 return self.try_pure_unpacked(expr, ctx);
             }
@@ -302,7 +305,7 @@ impl<'a> Lowering<'a> {
 
     pub(super) fn any_protocol(&self, ty: &CheckTy) -> Option<Symbol> {
         match ty {
-            CheckTy::Any { protocol, .. } => Some(*protocol),
+            CheckTy::Any { protocol, .. } => Some(protocol.protocol),
             _ => None,
         }
     }
@@ -360,21 +363,26 @@ impl<'a> Lowering<'a> {
             return None;
         }
         if let CheckTy::Param(param) = &pack.payload {
-            return self
-                .existential_pack_from_local_evidence(*protocol, assoc, *param, payload, ctx);
+            return self.existential_pack_from_local_evidence(
+                protocol.protocol,
+                assoc,
+                *param,
+                payload,
+                ctx,
+            );
         }
 
         let requirements = self.units[ctx.unit]
             .types
             .catalog
-            .requirements_for_conformance(*protocol);
+            .requirements_for_conformance(protocol);
         let mut values = Vec::with_capacity(requirements.len() + 1);
         values.push(payload);
         for (owner, label, requirement) in requirements {
             let witness = self.existential_witness_wrapper(
-                *protocol,
+                protocol.protocol,
                 assoc,
-                owner,
+                owner.protocol,
                 &label,
                 &requirement,
                 &pack.payload,
@@ -385,8 +393,11 @@ impl<'a> Lowering<'a> {
         }
         let drop_thunk = self.existential_drop_thunk(ctx, &pack.payload);
         values.push(self.p.func_ref(drop_thunk));
-        let ty = self.p.ty(TyKind::Existential(*protocol));
-        Some(self.p.primop(Op::ExistentialPack(*protocol), &values, ty))
+        let ty = self.p.ty(TyKind::Existential(protocol.protocol));
+        Some(
+            self.p
+                .primop(Op::ExistentialPack(protocol.protocol), &values, ty),
+        )
     }
 
     pub(super) fn existential_pack_from_local_evidence(
@@ -401,19 +412,24 @@ impl<'a> Lowering<'a> {
         let target_requirements = self.units[ctx.unit]
             .types
             .catalog
-            .requirements_for_conformance(protocol);
+            .requirements_for_conformance(&ProtocolRef::bare(protocol));
         let source_requirements = self.units[ctx.unit]
             .types
             .catalog
-            .requirements_for_conformance(evidence.protocol);
+            .requirements_for_conformance(&ProtocolRef::bare(evidence.protocol));
         let mut values = Vec::with_capacity(target_requirements.len() + 1);
         values.push(payload);
         for (owner, label, requirement) in target_requirements {
             let source_index = source_requirements
                 .iter()
                 .position(|(_, _, source)| source.symbol == requirement.symbol)?;
-            let _signature =
-                self.erased_requirement_signature(protocol, assoc, owner, &requirement, ctx.unit)?;
+            let _signature = self.erased_requirement_signature(
+                protocol,
+                assoc,
+                owner.protocol,
+                &requirement,
+                ctx.unit,
+            )?;
             values.push(self.p.extract(evidence.table, source_index as u32));
             let _ = label;
         }
@@ -438,10 +454,10 @@ impl<'a> Lowering<'a> {
                 .iter()
                 .find(|((candidate_param, candidate_protocol), _)| {
                     *candidate_param == param
-                        && self.units[ctx.unit]
-                            .types
-                            .catalog
-                            .bounds_satisfy(&[*candidate_protocol], protocol)
+                        && self.units[ctx.unit].types.catalog.bounds_satisfy(
+                            &[ProtocolRef::bare(*candidate_protocol)],
+                            &ProtocolRef::bare(protocol),
+                        )
                 })
         {
             return Some(*binding);
@@ -450,10 +466,10 @@ impl<'a> Lowering<'a> {
             .local_evidence
             .iter()
             .filter(|((_, candidate_protocol), _)| {
-                self.units[ctx.unit]
-                    .types
-                    .catalog
-                    .bounds_satisfy(&[*candidate_protocol], protocol)
+                self.units[ctx.unit].types.catalog.bounds_satisfy(
+                    &[ProtocolRef::bare(*candidate_protocol)],
+                    &ProtocolRef::bare(protocol),
+                )
             })
             .map(|(_, binding)| *binding)
             .collect();
@@ -465,13 +481,13 @@ impl<'a> Lowering<'a> {
 
     pub(super) fn evidence_table_for_ty(
         &mut self,
-        protocol: Symbol,
+        protocol: &ProtocolRef,
         payload_ty: &CheckTy,
         ctx: &Ctx,
         node: crate::node_id::NodeID,
     ) -> Option<ExprId> {
         if let CheckTy::Param(param) = payload_ty
-            && let Some(evidence) = self.local_evidence_for(ctx, *param, protocol)
+            && let Some(evidence) = self.local_evidence_for(ctx, *param, protocol.protocol)
         {
             return Some(evidence.table);
         }
@@ -483,9 +499,9 @@ impl<'a> Lowering<'a> {
         let mut witnesses = Vec::with_capacity(requirements.len());
         for (owner, label, requirement) in requirements {
             let witness = self.existential_witness_wrapper(
-                protocol,
+                protocol.protocol,
                 &assoc,
-                owner,
+                owner.protocol,
                 &label,
                 &requirement,
                 payload_ty,
@@ -506,12 +522,17 @@ impl<'a> Lowering<'a> {
         let requirements = self.units[unit]
             .types
             .catalog
-            .requirements_for_conformance(protocol);
+            .requirements_for_conformance(&ProtocolRef::bare(protocol));
         let witness_tys: Vec<TyId> = requirements
             .into_iter()
             .filter_map(|(owner, _, requirement)| {
-                let signature =
-                    self.erased_requirement_signature(protocol, assoc, owner, &requirement, unit)?;
+                let signature = self.erased_requirement_signature(
+                    protocol,
+                    assoc,
+                    owner.protocol,
+                    &requirement,
+                    unit,
+                )?;
                 Some(self.map_ty(&signature))
             })
             .collect();
@@ -520,36 +541,38 @@ impl<'a> Lowering<'a> {
 
     pub(super) fn assoc_bindings_for_concrete(
         &self,
-        protocol: Symbol,
+        protocol: &ProtocolRef,
         payload_ty: &CheckTy,
         unit: usize,
     ) -> Vec<(Symbol, CheckTy)> {
-        let required = self.units[unit].types.catalog.associated_types_in(protocol);
+        let required = self.units[unit]
+            .types
+            .catalog
+            .associated_types_in_ref(protocol);
         let CheckTy::Nominal(head, args) = payload_ty else {
             return required
                 .into_iter()
-                .map(|(_, symbol)| (symbol, CheckTy::Param(symbol)))
+                .map(|(_, _, symbol)| (symbol, CheckTy::Param(symbol)))
                 .collect();
         };
         let Some(conformance) = self.units[unit]
             .types
             .catalog
-            .conformances
-            .get(&(*head, protocol))
+            .matching_conformances(*head, args, protocol)
+            .into_iter()
+            .next()
         else {
             return required
                 .into_iter()
-                .map(|(_, symbol)| (symbol, CheckTy::Param(symbol)))
+                .map(|(_, _, symbol)| (symbol, CheckTy::Param(symbol)))
                 .collect();
         };
-        let mut row_theta = Theta::default();
-        for (pattern, actual) in conformance.self_args.iter().zip(args) {
-            crate::types::solve::bind_param_pattern(pattern, actual, &mut row_theta);
-        }
+        let row_theta = conformance.substitution;
         required
             .into_iter()
-            .map(|(_, symbol)| {
+            .map(|(_, _, symbol)| {
                 let ty = conformance
+                    .conformance
                     .assoc
                     .get(&symbol)
                     .map(|ty| ty.substitute(&row_theta, &Default::default(), &Default::default()))
@@ -606,7 +629,7 @@ impl<'a> Lowering<'a> {
         args.push(ret_k);
         let arg_tuple = self.p.tuple(&args);
         let Some((target, _, _)) = self.resolve_witness(
-            owner,
+            ProtocolRef::bare(owner),
             requirement.symbol,
             label.to_string(),
             payload_ty,
@@ -636,7 +659,7 @@ impl<'a> Lowering<'a> {
         tys.insert(
             owner,
             CheckTy::Any {
-                protocol: root_protocol,
+                protocol: ProtocolRef::bare(root_protocol),
                 assoc: assoc.to_vec(),
             },
         );
@@ -662,7 +685,7 @@ impl<'a> Lowering<'a> {
         self.units[unit]
             .types
             .catalog
-            .requirements_for_conformance(protocol)
+            .requirements_for_conformance(&ProtocolRef::bare(protocol))
             .iter()
             .position(|(_, candidate_label, requirement)| {
                 candidate_label == label && requirement.symbol == requirement_symbol

@@ -260,7 +260,7 @@ impl<'a> Lowering<'a> {
                 continue;
             };
             let concrete = theta.get(param).cloned().unwrap_or(CheckTy::Param(*param));
-            match self.evidence_table_for_ty(*protocol, &concrete, ctx, site.node) {
+            match self.evidence_table_for_ty(protocol, &concrete, ctx, site.node) {
                 Some(table) => tables.push(table),
                 None => {
                     self.diagnostics.push(format!(
@@ -298,14 +298,14 @@ impl<'a> Lowering<'a> {
                 ..
             } = instantiated
             {
-                let table_ty = self.evidence_table_ty(*protocol, &[], unit);
+                let table_ty = self.evidence_table_ty(protocol.protocol, &[], unit);
                 let table = self
                     .p
                     .primop(Op::GetPayload(runtime_index), &[value], table_ty);
                 evidence.push((
-                    (param, *protocol),
+                    (param, protocol.protocol),
                     EvidenceBinding {
-                        protocol: *protocol,
+                        protocol: protocol.protocol,
                         table,
                     },
                 ));

@@ -17,7 +17,7 @@ use crate::{
     types::{
         TypeOutput,
         catalog::Requirement,
-        ty::{EffTail, RowTail, Ty},
+        ty::{EffTail, ProtocolRef, RowTail, Ty},
     },
 };
 
@@ -180,19 +180,19 @@ fn add_member_items_for_ty(
             }
         }
         Ty::Any { protocol, .. } => {
-            add_protocol_requirement_items(types, *protocol, receiver_ty, items);
+            add_protocol_requirement_items(types, protocol, receiver_ty, items);
         }
         Ty::Param(param) => {
             if let Some(bounds) = types.catalog.param_bounds.get(param) {
                 for protocol in bounds {
-                    add_protocol_requirement_items(types, *protocol, receiver_ty, items);
+                    add_protocol_requirement_items(types, protocol, receiver_ty, items);
                 }
             }
         }
         Ty::Proj(_, _, assoc_symbol) => {
             if let Some(bounds) = types.catalog.param_bounds.get(assoc_symbol) {
                 for protocol in bounds {
-                    add_protocol_requirement_items(types, *protocol, receiver_ty, items);
+                    add_protocol_requirement_items(types, protocol, receiver_ty, items);
                 }
             }
         }
@@ -256,9 +256,14 @@ fn add_nominal_member_items(
         }
     }
 
-    if let Some(protocols) = types.catalog.conformances_by_head.get(&symbol) {
-        for protocol in protocols {
-            add_protocol_requirement_items(types, *protocol, receiver_ty, items);
+    if types.catalog.conformances_by_head.contains_key(&symbol) {
+        for protocol in types
+            .catalog
+            .conformances
+            .keys()
+            .filter_map(|(head, protocol)| (*head == symbol).then_some(protocol))
+        {
+            add_protocol_requirement_items(types, protocol, receiver_ty, items);
         }
     }
 
@@ -266,7 +271,12 @@ fn add_nominal_member_items(
         types.catalog.structs.contains_key(&symbol) || types.catalog.enums.contains_key(&symbol);
     if is_derivable_head {
         for protocol in &types.catalog.derivable {
-            add_protocol_requirement_items(types, *protocol, receiver_ty, items);
+            add_protocol_requirement_items(
+                types,
+                &ProtocolRef::bare(*protocol),
+                receiver_ty,
+                items,
+            );
         }
     }
 
@@ -322,7 +332,10 @@ fn add_type_member_items(
     }
 
     if types.catalog.protocols.contains_key(&symbol) {
-        for (_, label, requirement) in types.catalog.requirements_for_conformance(symbol) {
+        for (_, label, requirement) in types
+            .catalog
+            .requirements_for_conformance(&ProtocolRef::bare(symbol))
+        {
             add_member_item(
                 items,
                 label,
@@ -360,7 +373,7 @@ fn add_symbol_member_item(
 
 fn add_protocol_requirement_items(
     types: &TypeOutput,
-    protocol: Symbol,
+    protocol: &ProtocolRef,
     receiver_ty: &Ty,
     items: &mut FxHashMap<String, CompletionItem>,
 ) {
@@ -376,16 +389,21 @@ fn add_protocol_requirement_items(
 
 fn requirement_detail(
     types: &TypeOutput,
-    owner: Symbol,
+    owner: ProtocolRef,
     requirement: &Requirement,
     receiver_ty: &Ty,
 ) -> Option<String> {
     let lookup_ty = member_lookup_ty(receiver_ty).clone();
     let mut substitution = FxHashMap::default();
-    substitution.insert(owner, lookup_ty.clone());
-    for (_, assoc) in types.catalog.associated_types_in(owner) {
+    substitution.insert(owner.protocol, lookup_ty.clone());
+    if let Some(info) = types.catalog.protocols.get(&owner.protocol) {
+        for (param, arg) in info.params.iter().copied().zip(owner.args.iter().cloned()) {
+            substitution.insert(param, arg);
+        }
+    }
+    for (_, _, assoc) in types.catalog.associated_types_in_ref(&owner) {
         let binding = associated_binding(&lookup_ty, assoc)
-            .unwrap_or_else(|| Ty::Proj(Box::new(lookup_ty.clone()), owner, assoc));
+            .unwrap_or_else(|| Ty::Proj(Box::new(lookup_ty.clone()), owner.clone(), assoc));
         substitution.insert(assoc, binding);
     }
     let sig = types.schemes.get(&requirement.symbol)?.ty.clone();

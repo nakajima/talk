@@ -306,8 +306,11 @@ does not merely add a hidden constraint to constructors.
 
 The predicate framework is kind-aware, including type, row, and effect
 equalities, so effect polymorphism and GADT refinements use the same
-architecture instead of a parallel constraint system. Runtime evidence is still erased: monomorphization and concrete
-witness selection remain the backend story for now.
+architecture instead of a parallel constraint system. Most generic and
+protocol evidence is still compile-time evidence for monomorphization and
+concrete witness selection. First-class existentials are the deliberate
+runtime-evidence case: the checker records pack sites and the lowerer builds
+payload-plus-witness-table packages.
 
 ## Member constraints ride schemes
 
@@ -420,13 +423,14 @@ inventing a non-principal type.
 
 ## What comes out
 
-`TypeOutput` carries: per-node types (hover and the REPL), finished
-schemes, per-call instantiation tables, member resolutions (which
-declaration each resolved member use landed on — unresolved ones are
-the scheme-carried constraints the lowerer re-resolves per
-specialization), the catalog, and tables the lowerer's effect handling
-needs: which functions' calls can abort, handler payload types, which
-handlers are self-contained, and display names for rendering.
+`TypeOutput` carries: the finalized type catalog; per-expression node
+types (hover, HIR, and the REPL); finished schemes; per-call
+instantiation tables; member resolutions (which declaration each resolved
+member use landed on — unresolved ones are the scheme-carried constraints
+the lowerer re-resolves per specialization); borrowed-to-owned CheapClone
+coercion sites; finalized local binder types for the flow checker;
+implicit existential pack sites; and merged display names for diagnostics,
+hover, and rendering.
 
 ## Further reading
 

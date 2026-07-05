@@ -1,5 +1,67 @@
 # Changelog
 
+## Unreleased (2026-07-04) — Protocol arguments in conformance keys
+
+Protocol applications now participate in conformance identity. A
+conformance is selected by the full protocol reference, not only by the
+protocol symbol, so one type can soundly provide multiple conformances to
+the same protocol family with different input arguments:
+
+```talk
+protocol Add<RHS> {
+	associated Ret
+	func add(rhs: RHS) -> Ret
+}
+
+extend String: Add<String> { ... }
+extend String: Add<Character> { ... }
+```
+
+The design boundary is now explicit:
+
+```text
+protocol arguments = inputs to conformance selection
+associated types   = outputs of selected conformance
+```
+
+Associated-type projections are therefore keyed by the selected full
+protocol application, e.g. `<Self as Add<RHS>>.Ret`, while `RHS` is an
+input used to choose that application. This preserves coherent,
+deterministic witness selection without relying on conformance table
+order. Duplicate or overlapping full conformance keys remain errors, and
+member uses whose protocol arguments cannot be determined report
+ambiguity instead of picking an arbitrary row.
+
+Conformance rows can now bind protocol-argument-only parameters with
+prefix extend generics:
+
+```talk
+extend<T: Into<String>> String: Add<T> {
+	func add(other: T) -> String { self + other.into() }
+}
+```
+
+This row means `forall T. T: Into<String> => String: Add<T>`. Rows that
+can overlap an existing conformance pattern are rejected for now; a later
+specialization design can make those preferences explicit.
+
+Core operator protocols were migrated to this model:
+
+- `Add<RHS>`, `Subtract<RHS>`, `Multiply<RHS>`, and `Divide<RHS>` keep
+  `Ret` as an associated output.
+- `Equatable<RHS>` and `Comparable<RHS>: Equatable<RHS>` now use the
+  compared type as a protocol input.
+
+The checker/lowerer now also carries a first-class `ProtocolApplication`
+for `Self: Protocol<Args...>` requirement instantiation, so protocol
+`Self`, protocol inputs, and associated projections are bound as one
+semantic operation rather than loose substitution plumbing.
+
+Protocols whose result/member type is determined by the conforming type,
+such as `Iterator.Element`, should continue to use associated types.
+See `docs/adr/0016-protocol-argument-conformance-keys.md` and
+`docs/protocol-arguments-vs-associated-types.md` for the design rationale.
+
 ## Unreleased (2026-07-04) — Leading-dot variants in inference position
 
 `.variant` and `.variant(args)` no longer require the expected enum to

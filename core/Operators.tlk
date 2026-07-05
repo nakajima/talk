@@ -1,34 +1,28 @@
 // no-core
-public protocol Add {
-	associated RHS
+public protocol Add<RHS> {
 	associated Ret
 	func add(rhs: RHS) -> Ret
 }
 
-public protocol Subtract {
-	associated RHS
+public protocol Subtract<RHS> {
 	associated Ret
 
 	func minus(rhs: RHS) -> Ret
 }
 
-public protocol Multiply {
-	associated RHS
+public protocol Multiply<RHS> {
 	associated Ret
 
 	func times(rhs: RHS) -> Ret
 }
 
-public protocol Divide {
-	associated RHS
+public protocol Divide<RHS> {
 	associated Ret
 
 	func divide(rhs: RHS) -> Ret
 }
 
-public protocol Equatable {
-	associated RHS
-
+public protocol Equatable<RHS> {
 	func equals(rhs: &RHS) -> Bool
 
 	func notEquals(rhs: &RHS) -> Bool {
@@ -56,67 +50,67 @@ extend Bool: Not {
 	}
 }
 
-extend Int: Add {
+extend Int: Add<Int> {
 	func add(rhs: Int) -> Int {
 		@_ir { %? = add Int %0 %1 }
 	}
 }
 
-extend Float: Add {
+extend Float: Add<Float> {
 	func add(rhs: Float) -> Float {
 		@_ir { %? = add Float %0 %1 }
 	}
 }
 
-extend Int: Subtract {
+extend Int: Subtract<Int> {
 	func minus(rhs: Int) -> Int {
 		@_ir { %? = sub Int %0 %1 }
 	}
 }
 
-extend Float: Subtract {
+extend Float: Subtract<Float> {
 	func minus(rhs: Float) -> Float {
 		@_ir { %? = sub Float %0 %1 }
 	}
 }
 
-extend Int: Multiply {
+extend Int: Multiply<Int> {
 	func times(rhs: Int) -> Int {
 		@_ir { %? = mul Int %0 %1 }
 	}
 }
 
-extend Float: Multiply {
+extend Float: Multiply<Float> {
 	func times(rhs: Float) -> Float {
 		@_ir { %? = mul Float %0 %1 }
 	}
 }
 
-extend Int: Divide {
+extend Int: Divide<Int> {
 	func divide(rhs: Int) -> Int {
 		@_ir { %? = div Int %0 %1 }
 	}
 }
 
-extend Float: Divide {
+extend Float: Divide<Float> {
 	func divide(rhs: Float) -> Float {
 		@_ir { %? = div Float %0 %1 }
 	}
 }
 
-extend Int: Equatable {
+extend Int: Equatable<Int> {
 	func equals(rhs: Int) -> Bool {
 		@_ir { %? = cmp Int %0 == %1 }
 	}
 }
 
-extend Float: Equatable {
+extend Float: Equatable<Float> {
 	func equals(rhs: Float) -> Bool {
 		@_ir { %? = cmp Float %0 == %1 }
 	}
 }
 
-extend Bool: Equatable {
+extend Bool: Equatable<Bool> {
 	func equals(rhs: Bool) -> Bool {
 		@_ir { %? = cmp Bool %0 == %1 }
 	}
@@ -134,9 +128,7 @@ extend Float: Negatable {
 	}
 }
 
-public protocol Comparable: Equatable {
-	associated RHS
-
+public protocol Comparable<RHS>: Equatable<RHS> {
 	func gt(rhs: &RHS) -> Bool
 
 	func gte(rhs: &RHS) -> Bool {
@@ -152,13 +144,13 @@ public protocol Comparable: Equatable {
 	}
 }
 
-extend Int: Comparable {
+extend Int: Comparable<Int> {
 	func gt(rhs: Int) -> Bool {
 		@_ir { %? = cmp Int %0 > %1 }
 	}
 }
 
-extend Float: Comparable {
+extend Float: Comparable<Float> {
 	func gt(rhs: Float) -> Bool {
 		@_ir { %? = cmp Float %0 > %1 }
 	}

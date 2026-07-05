@@ -1,6 +1,13 @@
 use super::*;
 use crate::types::ty::Perm;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MemberDispatch {
+    Handled,
+    NoCandidate,
+    Stuck,
+}
+
 impl<'s> Solver<'s> {
     /// One step on a HasMember predicate against a known head.
     /// Dispatch a member use through the protocols that could provide it.
@@ -13,7 +20,7 @@ impl<'s> Solver<'s> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn dispatch_member_through(
         &mut self,
-        protocols: &[Symbol],
+        protocols: &[ProtocolRef],
         head: Option<Symbol>,
         lookup_receiver: &Ty,
         self_receiver: &Ty,
@@ -21,10 +28,11 @@ impl<'s> Solver<'s> {
         member: &Ty,
         origin: CtOrigin,
         queue: &mut Vec<Constraint>,
-    ) -> bool {
-        let mut candidates: Vec<(Symbol, Symbol, Requirement)> = vec![];
-        for &protocol in protocols {
-            let Some((owner, requirement)) = self.catalog.requirement_in(protocol, label) else {
+    ) -> MemberDispatch {
+        let mut candidates: Vec<(ProtocolRef, ProtocolRef, Requirement)> = vec![];
+        for protocol in protocols {
+            let Some((owner, requirement)) = self.catalog.requirement_in_ref(protocol, label)
+            else {
                 continue;
             };
             // Two protocols inheriting one base share its requirement —
@@ -35,18 +43,43 @@ impl<'s> Solver<'s> {
             {
                 continue;
             }
-            candidates.push((protocol, owner, requirement.clone()));
+            candidates.push((protocol.clone(), owner, requirement.clone()));
+        }
+        if candidates.len() > 1 {
+            let filtered: Vec<_> = candidates
+                .iter()
+                .filter(|(protocol, owner, requirement)| {
+                    self.requirement_accepts_member_shape(
+                        protocol,
+                        owner,
+                        requirement,
+                        lookup_receiver,
+                        member,
+                    )
+                })
+                .cloned()
+                .collect();
+            if !filtered.is_empty() {
+                candidates = filtered;
+            }
         }
         match candidates.as_slice() {
-            [] => false,
+            [] => MemberDispatch::NoCandidate,
             [(protocol, owner, requirement)] => {
                 let witness = head
-                    .and_then(|h| self.catalog.conformances.get(&(h, *protocol)))
-                    .and_then(|c| c.witnesses.get(label))
-                    .copied()
+                    .and_then(|h| {
+                        let Ty::Nominal(_, args) = self.store.shallow(lookup_receiver) else {
+                            return None;
+                        };
+                        self.catalog
+                            .matching_conformances(h, &args, protocol)
+                            .into_iter()
+                            .next()
+                            .and_then(|matched| matched.conformance.witnesses.get(label).copied())
+                    })
                     .unwrap_or(requirement.symbol);
                 self.bind_requirement(
-                    *owner,
+                    owner.clone(),
                     requirement,
                     lookup_receiver,
                     self_receiver,
@@ -55,10 +88,19 @@ impl<'s> Solver<'s> {
                     queue,
                     witness,
                 );
-                true
+                MemberDispatch::Handled
             }
             many => {
                 let rendered = self.store.render(self_receiver);
+                let member = self.store.shallow(member);
+                let member_shape_stuck = match &member {
+                    Ty::Var(_) => true,
+                    Ty::Func(params, _, _) => params.iter().any(Ty::has_unification_vars),
+                    _ => false,
+                };
+                if member_shape_stuck {
+                    return MemberDispatch::Stuck;
+                }
                 self.errors.push((
                     TypeError::AmbiguousMember {
                         receiver: rendered,
@@ -67,9 +109,55 @@ impl<'s> Solver<'s> {
                     },
                     origin.node,
                 ));
-                true
+                MemberDispatch::Handled
             }
         }
+    }
+
+    fn requirement_accepts_member_shape(
+        &mut self,
+        protocol: &ProtocolRef,
+        owner: &ProtocolRef,
+        requirement: &Requirement,
+        lookup_receiver: &Ty,
+        member: &Ty,
+    ) -> bool {
+        let member = self.store.shallow(member);
+        let Ty::Func(member_params, _, _) = member else {
+            return true;
+        };
+        let Some(scheme) = self.schemes.get(&requirement.symbol) else {
+            return true;
+        };
+        let owner_app = ProtocolApplication::new(lookup_receiver.clone(), owner.clone());
+        let mut tys = owner_app.substitution(self.catalog);
+        if owner.protocol != protocol.protocol {
+            let protocol_app = ProtocolApplication::new(lookup_receiver.clone(), protocol.clone());
+            tys.extend(protocol_app.substitution(self.catalog));
+        }
+        for param in &scheme.params {
+            tys.entry(param.symbol).or_insert(Ty::Param(param.symbol));
+        }
+        let signature = scheme
+            .ty
+            .substitute(&tys, &Default::default(), &Default::default());
+        let Ty::Func(requirement_params, _, _) = signature else {
+            return true;
+        };
+        let requirement_params = requirement_params.into_iter().skip(1).collect::<Vec<_>>();
+        if requirement_params.len() != member_params.len() {
+            return false;
+        }
+        requirement_params
+            .iter()
+            .zip(member_params.iter())
+            .all(|(expected, actual)| {
+                let mut bindings = FxHashMap::default();
+                match_pattern(expected, actual, &mut bindings) || {
+                    let mut reverse_bindings = FxHashMap::default();
+                    match_pattern(actual, expected, &mut reverse_bindings)
+                }
+            })
     }
 
     pub(super) fn try_member(
@@ -108,7 +196,7 @@ impl<'s> Solver<'s> {
                     .get(&assoc_symbol)
                     .cloned()
                     .unwrap_or_default();
-                if self.dispatch_member_through(
+                match self.dispatch_member_through(
                     &bounds,
                     None,
                     &member_receiver,
@@ -118,7 +206,16 @@ impl<'s> Solver<'s> {
                     origin,
                     queue,
                 ) {
-                    return None;
+                    MemberDispatch::Handled => return None,
+                    MemberDispatch::Stuck => {
+                        return Some(Constraint::HasMember {
+                            receiver,
+                            label,
+                            member,
+                            origin,
+                        });
+                    }
+                    MemberDispatch::NoCandidate => {}
                 }
                 let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
@@ -150,7 +247,7 @@ impl<'s> Solver<'s> {
                     .cloned()
                     .unwrap_or_default();
                 bounds.extend(self.given_protocols_for(&member_receiver));
-                if self.dispatch_member_through(
+                match self.dispatch_member_through(
                     &bounds,
                     None,
                     &member_receiver,
@@ -160,7 +257,16 @@ impl<'s> Solver<'s> {
                     origin,
                     queue,
                 ) {
-                    return None;
+                    MemberDispatch::Handled => return None,
+                    MemberDispatch::Stuck => {
+                        return Some(Constraint::HasMember {
+                            receiver,
+                            label,
+                            member,
+                            origin,
+                        });
+                    }
+                    MemberDispatch::NoCandidate => {}
                 }
                 let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
@@ -173,7 +279,8 @@ impl<'s> Solver<'s> {
                 None
             }
             Ty::Any { protocol, .. } => {
-                let Some((owner, requirement)) = self.catalog.requirement_in(protocol, &label_str)
+                let Some((owner, requirement)) =
+                    self.catalog.requirement_in_ref(&protocol, &label_str)
                 else {
                     let rendered = self.store.render(&diagnostic_receiver);
                     self.errors.push((
@@ -225,9 +332,7 @@ impl<'s> Solver<'s> {
                             .iter()
                             .map(|&param| {
                                 let row = eff_args.next().unwrap_or_else(|| {
-                                    EffectRow::open(
-                                        self.store.fresh_eff(self.level, origin.node),
-                                    )
+                                    EffectRow::open(self.store.fresh_eff(self.level, origin.node))
                                 });
                                 (param, row)
                             })
@@ -278,9 +383,8 @@ impl<'s> Solver<'s> {
                 // type via the protocol requirement, which is always valid if
                 // the conformance is (the witness is checked against the
                 // requirement when the extend body is checked).
-                if let Some(protocols) = self.catalog.conformances_by_head.get(&symbol) {
-                    let protocols = protocols.clone();
-                    if self.dispatch_member_through(
+                if let Some(protocols) = self.catalog.conformances_by_head.get(&symbol).cloned() {
+                    match self.dispatch_member_through(
                         &protocols,
                         Some(symbol),
                         &member_receiver,
@@ -290,7 +394,16 @@ impl<'s> Solver<'s> {
                         origin,
                         queue,
                     ) {
-                        return None;
+                        MemberDispatch::Handled => return None,
+                        MemberDispatch::Stuck => {
+                            return Some(Constraint::HasMember {
+                                receiver,
+                                label,
+                                member,
+                                origin,
+                            });
+                        }
+                        MemberDispatch::NoCandidate => {}
                     }
                 }
                 // Auto-derived protocol members (`optional.show()` without
@@ -300,8 +413,9 @@ impl<'s> Solver<'s> {
                     || self.catalog.enums.contains_key(&symbol);
                 if is_derivable_head {
                     for protocol in self.catalog.derivable.clone() {
+                        let protocol = ProtocolRef::bare(protocol);
                         if let Some((owner, requirement)) =
-                            self.catalog.requirement_in(protocol, &label_str)
+                            self.catalog.requirement_in_ref(&protocol, &label_str)
                         {
                             let requirement = requirement.clone();
                             let witness = requirement.symbol;
@@ -627,7 +741,7 @@ impl<'s> Solver<'s> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn bind_requirement(
         &mut self,
-        protocol: Symbol,
+        protocol: ProtocolRef,
         requirement: &Requirement,
         lookup_receiver: &Ty,
         self_receiver: &Ty,
@@ -636,62 +750,9 @@ impl<'s> Solver<'s> {
         queue: &mut Vec<Constraint>,
         witness: Symbol,
     ) {
-        let owner_assoc: Vec<(String, Symbol)> = self
-            .catalog
-            .protocols
-            .get(&protocol)
-            .map(|info| info.assoc.iter().map(|(n, s)| (n.clone(), *s)).collect())
-            .unwrap_or_default();
-
         let receiver_head = self.store.shallow(lookup_receiver);
-        let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
-        match &receiver_head {
-            Ty::Param(self_symbol @ Symbol::Protocol(_)) => {
-                let receiver_assoc = self
-                    .catalog
-                    .protocols
-                    .get(self_symbol)
-                    .map(|info| info.assoc.clone())
-                    .unwrap_or_default();
-                for (name, owner_symbol) in &owner_assoc {
-                    let substituted = receiver_assoc
-                        .get(name)
-                        .map(|refined| Ty::Param(*refined))
-                        .unwrap_or_else(|| {
-                            Ty::Proj(Box::new(receiver_head.clone()), protocol, *owner_symbol)
-                        });
-                    tys.insert(*owner_symbol, substituted);
-                }
-            }
-            Ty::Param(_) | Ty::Proj(..) => {
-                for (_, owner_symbol) in &owner_assoc {
-                    tys.insert(
-                        *owner_symbol,
-                        Ty::Proj(Box::new(receiver_head.clone()), protocol, *owner_symbol),
-                    );
-                }
-            }
-            Ty::Any { assoc, .. } => {
-                for (_, owner_symbol) in &owner_assoc {
-                    let substituted = assoc
-                        .iter()
-                        .find_map(|(symbol, ty)| (symbol == owner_symbol).then(|| ty.clone()))
-                        .unwrap_or_else(|| {
-                            Ty::Proj(Box::new(lookup_receiver.clone()), protocol, *owner_symbol)
-                        });
-                    tys.insert(*owner_symbol, substituted);
-                }
-            }
-            _ => {
-                for (_, owner_symbol) in &owner_assoc {
-                    tys.insert(
-                        *owner_symbol,
-                        Ty::Proj(Box::new(lookup_receiver.clone()), protocol, *owner_symbol),
-                    );
-                }
-            }
-        }
-        tys.insert(protocol, lookup_receiver.clone());
+        let app = ProtocolApplication::new(receiver_head.clone(), protocol.clone());
+        let mut tys = app.substitution(self.catalog);
         // Snapshot the receiver-derived entries (Self + assoc bindings)
         // before the generics join `tys`: the default-body θ published
         // below is exactly these.
@@ -757,7 +818,7 @@ impl<'s> Solver<'s> {
         }
         queue.push(Constraint::Conforms {
             ty: lookup_receiver.clone(),
-            protocol,
+            protocol: protocol.clone(),
             origin,
         });
         // Publish the target-side θ on the node (Swift model: the IR
@@ -771,12 +832,13 @@ impl<'s> Solver<'s> {
         };
         if witness != requirement.symbol {
             if let Ty::Nominal(head, head_args) = &head_for_witness
-                && let Some(conformance) = self.catalog.conformances.get(&(*head, protocol))
+                && let Some(matched) = self
+                    .catalog
+                    .matching_conformances(*head, head_args, &protocol)
+                    .into_iter()
+                    .next()
             {
-                let mut bound: FxHashMap<Symbol, Ty> = FxHashMap::default();
-                for (pattern, actual) in conformance.self_args.iter().zip(head_args) {
-                    bind_param_pattern(pattern, actual, &mut bound);
-                }
+                let bound = matched.substitution;
                 self.instantiations
                     .entry(origin.node)
                     .or_default()
@@ -790,7 +852,10 @@ impl<'s> Solver<'s> {
         }
         self.member_resolutions.insert(
             origin.node,
-            MemberResolution::ViaConformance { protocol, witness },
+            MemberResolution::ViaConformance {
+                protocol: protocol.clone(),
+                witness,
+            },
         );
     }
 

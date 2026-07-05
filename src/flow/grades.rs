@@ -279,10 +279,7 @@ impl<'a> GradeView<'a> {
     }
 
     fn has_marker(&self, symbol: Symbol, marker: Symbol) -> bool {
-        self.types
-            .catalog
-            .conformances
-            .contains_key(&(symbol, marker))
+        self.types.catalog.has_bare_conformance(symbol, marker)
     }
 }
 

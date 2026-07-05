@@ -517,6 +517,7 @@ pub enum DeclKind {
     Extend {
         #[drive(skip)]
         name: Name,
+        row_generics: Vec<GenericDecl>,
         #[drive(skip)]
         conformances: Vec<TypeAnnotation>,
         generics: Vec<GenericDecl>,

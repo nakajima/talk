@@ -193,10 +193,10 @@ impl<'e> Elaborator<'e> {
             .cloned()
             .unwrap_or_default();
         for protocol in bounds {
-            if let Some((owner, assoc)) = self.catalog.associated_type_in(protocol, label) {
+            if let Some((owner, assoc)) = self.catalog.associated_type_in_ref(&protocol, label) {
                 // Inside the owning protocol's own context, `Self.A` is
                 // the assoc param itself, not a projection to reduce.
-                if base == Ty::Param(owner) {
+                if base == Ty::Param(owner.protocol) {
                     return Ty::Param(assoc);
                 }
                 return Ty::Proj(Box::new(base), owner, assoc);
@@ -338,7 +338,7 @@ impl<'e> Elaborator<'e> {
             return Ty::Error;
         };
 
-        if !args.is_empty() || !self.catalog.protocols.contains_key(&protocol) {
+        let Some(protocol_info) = self.catalog.protocols.get(&protocol) else {
             self.diagnostics.errors.push((
                 TypeError::InvalidExistentialProtocol {
                     ty: Ty::Nominal(protocol, args).render_mono(),
@@ -346,9 +346,28 @@ impl<'e> Elaborator<'e> {
                 node,
             ));
             return Ty::Error;
+        };
+        if args.len() != protocol_info.params.len() {
+            self.diagnostics.errors.push((
+                TypeError::ArityMismatch {
+                    expected: protocol_info.params.len(),
+                    found: args.len(),
+                },
+                node,
+            ));
+            return Ty::Error;
         }
 
-        let required = self.catalog.associated_types_in(protocol);
+        let protocol_ref = ProtocolRef {
+            protocol,
+            args: args.clone(),
+        };
+        let required: Vec<(String, Symbol)> = self
+            .catalog
+            .associated_types_in_ref(&protocol_ref)
+            .into_iter()
+            .map(|(name, _, assoc)| (name, assoc))
+            .collect();
         let mut required_by_name: FxHashMap<String, Symbol> = FxHashMap::default();
         for (name, symbol) in &required {
             required_by_name.insert(name.clone(), *symbol);
@@ -390,29 +409,37 @@ impl<'e> Elaborator<'e> {
             }
         }
 
-        self.validate_object_safe_existential(protocol, node);
+        self.validate_object_safe_existential(&protocol_ref, node);
 
         assoc.sort_by_key(|(symbol, _)| *symbol);
-        Ty::Any { protocol, assoc }
+        Ty::Any {
+            protocol: protocol_ref,
+            assoc,
+        }
     }
 
-    fn validate_object_safe_existential(&mut self, protocol: Symbol, node: NodeID) {
-        let mut queue = vec![protocol];
+    fn validate_object_safe_existential(&mut self, protocol: &ProtocolRef, node: NodeID) {
+        let mut queue = vec![protocol.clone()];
         let mut seen = FxHashSet::default();
         while let Some(current) = queue.pop() {
-            if !seen.insert(current) {
+            if !seen.insert(current.clone()) {
                 continue;
             }
-            let Some(info) = self.catalog.protocols.get(&current) else {
+            let Some(info) = self.catalog.protocols.get(&current.protocol) else {
                 continue;
             };
             let assoc_symbols: FxHashSet<Symbol> = self
                 .catalog
-                .associated_types_in(current)
+                .associated_types_in_ref(&current)
                 .into_iter()
-                .map(|(_, symbol)| symbol)
+                .map(|(_, _, symbol)| symbol)
                 .collect();
-            let supers = info.supers.clone();
+            let supers: Vec<ProtocolRef> = self
+                .catalog
+                .protocol_and_supers(&current)
+                .into_iter()
+                .skip(1)
+                .collect();
             let requirements: Vec<(String, Ty, Vec<Predicate>)> = info
                 .requirements
                 .iter()
@@ -423,8 +450,8 @@ impl<'e> Elaborator<'e> {
                 .collect();
             for (label, sig, predicates) in requirements {
                 self.validate_object_safe_requirement(
-                    protocol,
-                    current,
+                    protocol.protocol,
+                    current.protocol,
                     &assoc_symbols,
                     &label,
                     &sig,

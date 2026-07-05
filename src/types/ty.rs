@@ -175,6 +175,58 @@ impl EffectRow {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct ProtocolRef {
+    pub protocol: Symbol,
+    pub args: Vec<Ty>,
+}
+
+impl std::fmt::Display for ProtocolRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", render_protocol_ref(self, &FxHashMap::default()))
+    }
+}
+
+impl ProtocolRef {
+    pub fn bare(protocol: Symbol) -> Self {
+        Self {
+            protocol,
+            args: vec![],
+        }
+    }
+
+    pub fn has_unification_vars(&self) -> bool {
+        self.args.iter().any(Ty::has_unification_vars)
+    }
+
+    pub fn substitute(
+        &self,
+        tys: &FxHashMap<Symbol, Ty>,
+        effs: &FxHashMap<Symbol, EffTail>,
+        rows: &FxHashMap<Symbol, RowTail>,
+    ) -> Self {
+        Self {
+            protocol: self.protocol,
+            args: self
+                .args
+                .iter()
+                .map(|arg| arg.substitute(tys, effs, rows))
+                .collect(),
+        }
+    }
+
+    pub fn import_symbols(&self, target: crate::compiling::module::ModuleId) -> Self {
+        Self {
+            protocol: import_symbol(self.protocol, target),
+            args: self
+                .args
+                .iter()
+                .map(|arg| arg.import_symbols(target))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Ty {
     /// A unification variable, owned by the solver's VarStore.
     Var(TyVar),
@@ -200,7 +252,7 @@ pub enum Ty {
     /// protocol evidence, and associated-type equality evidence. The vector is
     /// canonicalized by associated-type symbol.
     Any {
-        protocol: Symbol,
+        protocol: ProtocolRef,
         assoc: Vec<(Symbol, Ty)>,
     },
     /// An associated-type projection `base.Assoc` through a protocol — an
@@ -210,7 +262,7 @@ pub enum Ty {
     /// table once `base`'s head is concrete; over a rigid base it is
     /// irreducible and equal only to itself (projections are NOT injective —
     /// OutsideIn(X) treats type functions as free symbols).
-    Proj(Box<Ty>, Symbol, Symbol),
+    Proj(Box<Ty>, ProtocolRef, Symbol),
     /// An effect row in type-argument position — a kind-restricted
     /// argument on `Ty::Nominal` (Koka-style E-kinded type argument).
     /// Carries a struct instance's closure-field effect rows in its type,
@@ -246,7 +298,7 @@ pub enum Predicate {
     RowEq(Row, Row),
     /// Protocol conformance as a class predicate in the Wadler/Blott sense.
     /// Associated types are projections plus `TypeEq`, not payloads here.
-    Conforms { ty: Ty, protocol: Symbol },
+    Conforms { ty: Ty, protocol: ProtocolRef },
     /// A member-access predicate carried by schemes when the receiver head is
     /// not yet known; the record-predicate lineage is Gaster/Jones.
     HasMember {
@@ -270,7 +322,12 @@ impl Predicate {
                 lhs.try_visit(visitor)?;
                 rhs.try_visit(visitor)?;
             }
-            Predicate::Conforms { ty, .. } => ty.try_visit(visitor)?,
+            Predicate::Conforms { ty, protocol } => {
+                ty.try_visit(visitor)?;
+                for arg in &protocol.args {
+                    arg.try_visit(visitor)?;
+                }
+            }
             Predicate::HasMember {
                 receiver, member, ..
             } => {
@@ -312,12 +369,20 @@ impl Ty {
                 ret.try_visit(visitor)?;
             }
             Ty::Record(row) => row.try_visit(visitor)?,
-            Ty::Any { assoc, .. } => {
+            Ty::Any { protocol, assoc } => {
+                for arg in &protocol.args {
+                    arg.try_visit(visitor)?;
+                }
                 for (_, ty) in assoc {
                     ty.try_visit(visitor)?;
                 }
             }
-            Ty::Proj(base, ..) => base.try_visit(visitor)?,
+            Ty::Proj(base, protocol, _) => {
+                base.try_visit(visitor)?;
+                for arg in &protocol.args {
+                    arg.try_visit(visitor)?;
+                }
+            }
             Ty::Eff(eff) => {
                 for entry in &eff.effects {
                     for arg in &entry.args {
@@ -361,21 +426,37 @@ impl Ty {
             (Ty::Record(left), Ty::Record(right)) => left.try_zip(right, visitor),
             (
                 Ty::Any {
-                    assoc: left_assoc, ..
+                    protocol: left_protocol,
+                    assoc: left_assoc,
                 },
                 Ty::Any {
-                    assoc: right_assoc, ..
+                    protocol: right_protocol,
+                    assoc: right_assoc,
                 },
             ) => {
-                left_assoc.len() == right_assoc.len()
+                left_protocol.protocol == right_protocol.protocol
+                    && left_protocol.args.len() == right_protocol.args.len()
+                    && left_protocol
+                        .args
+                        .iter()
+                        .zip(&right_protocol.args)
+                        .all(|(left, right)| left.try_zip(right, visitor))
+                    && left_assoc.len() == right_assoc.len()
                     && left_assoc.iter().zip(right_assoc).all(
                         |((left_symbol, left_ty), (right_symbol, right_ty))| {
                             left_symbol == right_symbol && left_ty.try_zip(right_ty, visitor)
                         },
                     )
             }
-            (Ty::Proj(left_base, ..), Ty::Proj(right_base, ..)) => {
-                left_base.try_zip(right_base, visitor)
+            (Ty::Proj(left_base, left_protocol, _), Ty::Proj(right_base, right_protocol, _)) => {
+                left_protocol.protocol == right_protocol.protocol
+                    && left_protocol.args.len() == right_protocol.args.len()
+                    && left_protocol
+                        .args
+                        .iter()
+                        .zip(&right_protocol.args)
+                        .all(|(left, right)| left.try_zip(right, visitor))
+                    && left_base.try_zip(right_base, visitor)
             }
             (Ty::Var(_), Ty::Var(_))
             | (Ty::Param(_), Ty::Param(_))
@@ -459,7 +540,7 @@ pub(crate) trait TyFold {
             Ty::Tuple(items) => Ty::Tuple(items.iter().map(|i| self.fold_ty(i)).collect()),
             Ty::Record(row) => Ty::Record(self.fold_row(row)),
             Ty::Any { protocol, assoc } => Ty::Any {
-                protocol: self.fold_symbol(*protocol),
+                protocol: self.fold_protocol_ref(protocol),
                 assoc: assoc
                     .iter()
                     .map(|(symbol, ty)| (self.fold_symbol(*symbol), self.fold_ty(ty)))
@@ -467,7 +548,7 @@ pub(crate) trait TyFold {
             },
             Ty::Proj(base, protocol, assoc) => Ty::Proj(
                 Box::new(self.fold_ty(base)),
-                self.fold_symbol(*protocol),
+                self.fold_protocol_ref(protocol),
                 self.fold_symbol(*assoc),
             ),
             Ty::Eff(eff) => Ty::Eff(self.fold_eff(eff)),
@@ -492,6 +573,13 @@ pub(crate) trait TyFold {
 
     fn fold_param(&mut self, symbol: Symbol) -> Ty {
         Ty::Param(self.fold_symbol(symbol))
+    }
+
+    fn fold_protocol_ref(&mut self, protocol: &ProtocolRef) -> ProtocolRef {
+        ProtocolRef {
+            protocol: self.fold_symbol(protocol.protocol),
+            args: protocol.args.iter().map(|arg| self.fold_ty(arg)).collect(),
+        }
     }
 
     fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {
@@ -739,8 +827,13 @@ impl Ty {
                     || eff.has_unification_vars()
             }
             Ty::Record(row) => row.has_unification_vars(),
-            Ty::Any { assoc, .. } => assoc.iter().any(|(_, ty)| ty.has_unification_vars()),
-            Ty::Proj(base, _, _) => base.has_unification_vars(),
+            Ty::Any { protocol, assoc } => {
+                protocol.has_unification_vars()
+                    || assoc.iter().any(|(_, ty)| ty.has_unification_vars())
+            }
+            Ty::Proj(base, protocol, _) => {
+                base.has_unification_vars() || protocol.has_unification_vars()
+            }
             Ty::Eff(eff) => eff.has_unification_vars(),
         }
     }
@@ -776,7 +869,9 @@ impl Predicate {
             Predicate::TypeEq(a, b) => a.has_unification_vars() || b.has_unification_vars(),
             Predicate::EffectEq(a, b) => a.has_unification_vars() || b.has_unification_vars(),
             Predicate::RowEq(a, b) => a.has_unification_vars() || b.has_unification_vars(),
-            Predicate::Conforms { ty, .. } => ty.has_unification_vars(),
+            Predicate::Conforms { ty, protocol } => {
+                ty.has_unification_vars() || protocol.has_unification_vars()
+            }
             Predicate::HasMember {
                 receiver, member, ..
             } => receiver.has_unification_vars() || member.has_unification_vars(),
@@ -799,7 +894,7 @@ impl Predicate {
             Predicate::RowEq(a, b) => Predicate::RowEq(folder.fold_row(a), folder.fold_row(b)),
             Predicate::Conforms { ty, protocol } => Predicate::Conforms {
                 ty: folder.fold_ty(ty),
-                protocol: *protocol,
+                protocol: folder.fold_protocol_ref(protocol),
             },
             Predicate::HasMember {
                 receiver,
@@ -834,7 +929,7 @@ impl Predicate {
             Predicate::RowEq(a, b) => Predicate::RowEq(folder.fold_row(a), folder.fold_row(b)),
             Predicate::Conforms { ty, protocol } => Predicate::Conforms {
                 ty: folder.fold_ty(ty),
-                protocol: *protocol,
+                protocol: folder.fold_protocol_ref(protocol),
             },
             Predicate::HasMember {
                 receiver,
@@ -894,7 +989,7 @@ impl Predicate {
             }
             Predicate::Conforms { ty, protocol } => Predicate::Conforms {
                 ty: ty.import_symbols(target),
-                protocol: import_symbol(*protocol, target),
+                protocol: protocol.import_symbols(target),
             },
             Predicate::HasMember {
                 receiver,
@@ -1004,13 +1099,33 @@ pub(crate) fn match_pattern(
     actual: &Ty,
     bindings: &mut FxHashMap<Symbol, Ty>,
 ) -> bool {
+    match_pattern_with_options(pattern, actual, bindings, true)
+}
+
+/// One-way structural match for full conformance-key components. Unlike
+/// `match_pattern`, this does not erase a borrow on only the pattern side: a
+/// conformance to `P<&Int>` must not also match a lookup for `P<Int>`.
+pub(crate) fn match_key_pattern(
+    pattern: &Ty,
+    actual: &Ty,
+    bindings: &mut FxHashMap<Symbol, Ty>,
+) -> bool {
+    match_pattern_with_options(pattern, actual, bindings, false)
+}
+
+fn match_pattern_with_options(
+    pattern: &Ty,
+    actual: &Ty,
+    bindings: &mut FxHashMap<Symbol, Ty>,
+    peel_pattern_borrows: bool,
+) -> bool {
     match (pattern, actual) {
         (Ty::Error, _) | (_, Ty::Error) => true,
         // A rigid param binds to whatever sits opposite it, *including* a
         // unification variable (conformance heads match against a receiver that
         // still holds inference variables). This must precede the variable
         // wildcards below, or such a binding would be silently skipped.
-        (Ty::Param(param), ty) => match_param(*param, ty, bindings),
+        (Ty::Param(param), ty) => match_param(*param, ty, bindings, peel_pattern_borrows),
         (Ty::Var(_), _) | (_, Ty::Var(_)) | (_, Ty::Param(_)) => true,
         (Ty::Nominal(left, left_args), Ty::Nominal(right, right_args)) => {
             // Effect args (a kind-restricted suffix) are invisible to
@@ -1029,40 +1144,54 @@ pub(crate) fn match_pattern(
                 && left_args[..left_len]
                     .iter()
                     .zip(&right_args[..right_len])
-                    .all(|(left, right)| match_pattern(left, right, bindings))
+                    .all(|(left, right)| {
+                        match_pattern_with_options(left, right, bindings, peel_pattern_borrows)
+                    })
         }
         (Ty::Borrow(left_kind, left_inner), Ty::Borrow(right_kind, right_inner)) => {
-            left_kind == right_kind && match_pattern(left_inner, right_inner, bindings)
+            left_kind == right_kind
+                && match_pattern_with_options(
+                    left_inner,
+                    right_inner,
+                    bindings,
+                    peel_pattern_borrows,
+                )
         }
         // A borrow in the pattern is transparent against a non-borrow
         // actual: a witness may spell `T` where the requirement says `&T`
         // (borrow erasure, ADR 0014). One-sided — a param pattern binding
         // TO a borrow (`Element = &Int`) stays intact via `match_param`.
-        (Ty::Borrow(_, left_inner), right) => match_pattern(left_inner, right, bindings),
+        (Ty::Borrow(_, left_inner), right) if peel_pattern_borrows => {
+            match_pattern_with_options(left_inner, right, bindings, peel_pattern_borrows)
+        }
         (Ty::Unique(left_inner), Ty::Unique(right_inner)) => {
-            match_pattern(left_inner, right_inner, bindings)
+            match_pattern_with_options(left_inner, right_inner, bindings, peel_pattern_borrows)
         }
         (Ty::Tuple(left_items), Ty::Tuple(right_items)) => {
             left_items.len() == right_items.len()
-                && left_items
-                    .iter()
-                    .zip(right_items)
-                    .all(|(left, right)| match_pattern(left, right, bindings))
+                && left_items.iter().zip(right_items).all(|(left, right)| {
+                    match_pattern_with_options(left, right, bindings, peel_pattern_borrows)
+                })
         }
         (Ty::Func(left_args, left_ret, _), Ty::Func(right_args, right_ret, _)) => {
             left_args.len() == right_args.len()
-                && left_args
-                    .iter()
-                    .zip(right_args)
-                    .all(|(left, right)| match_pattern(left, right, bindings))
-                && match_pattern(left_ret, right_ret, bindings)
+                && left_args.iter().zip(right_args).all(|(left, right)| {
+                    match_pattern_with_options(left, right, bindings, peel_pattern_borrows)
+                })
+                && match_pattern_with_options(left_ret, right_ret, bindings, peel_pattern_borrows)
         }
         (Ty::Record(left), Ty::Record(right)) => {
             left.fields.len() == right.fields.len()
                 && left.tail == right.tail
                 && left.fields.iter().zip(&right.fields).all(
                     |((left_label, left_ty), (right_label, right_ty))| {
-                        left_label == right_label && match_pattern(left_ty, right_ty, bindings)
+                        left_label == right_label
+                            && match_pattern_with_options(
+                                left_ty,
+                                right_ty,
+                                bindings,
+                                peel_pattern_borrows,
+                            )
                     },
                 )
         }
@@ -1070,9 +1199,17 @@ pub(crate) fn match_pattern(
             Ty::Proj(left_base, left_protocol, left_assoc),
             Ty::Proj(right_base, right_protocol, right_assoc),
         ) => {
-            left_protocol == right_protocol
+            left_protocol.protocol == right_protocol.protocol
+                && left_protocol.args.len() == right_protocol.args.len()
+                && left_protocol
+                    .args
+                    .iter()
+                    .zip(&right_protocol.args)
+                    .all(|(left, right)| {
+                        match_pattern_with_options(left, right, bindings, peel_pattern_borrows)
+                    })
                 && left_assoc == right_assoc
-                && match_pattern(left_base, right_base, bindings)
+                && match_pattern_with_options(left_base, right_base, bindings, peel_pattern_borrows)
         }
         (
             Ty::Any {
@@ -1084,11 +1221,25 @@ pub(crate) fn match_pattern(
                 assoc: right_assoc,
             },
         ) => {
-            left_protocol == right_protocol
+            left_protocol.protocol == right_protocol.protocol
+                && left_protocol.args.len() == right_protocol.args.len()
+                && left_protocol
+                    .args
+                    .iter()
+                    .zip(&right_protocol.args)
+                    .all(|(left, right)| {
+                        match_pattern_with_options(left, right, bindings, peel_pattern_borrows)
+                    })
                 && left_assoc.len() == right_assoc.len()
                 && left_assoc.iter().zip(right_assoc).all(
                     |((left_symbol, left_ty), (right_symbol, right_ty))| {
-                        left_symbol == right_symbol && match_pattern(left_ty, right_ty, bindings)
+                        left_symbol == right_symbol
+                            && match_pattern_with_options(
+                                left_ty,
+                                right_ty,
+                                bindings,
+                                peel_pattern_borrows,
+                            )
                     },
                 )
         }
@@ -1096,7 +1247,12 @@ pub(crate) fn match_pattern(
     }
 }
 
-fn match_param(param: Symbol, ty: &Ty, bindings: &mut FxHashMap<Symbol, Ty>) -> bool {
+fn match_param(
+    param: Symbol,
+    ty: &Ty,
+    bindings: &mut FxHashMap<Symbol, Ty>,
+    peel_pattern_borrows: bool,
+) -> bool {
     if matches!(ty, Ty::Param(other) if *other == param) {
         return true;
     }
@@ -1104,7 +1260,7 @@ fn match_param(param: Symbol, ty: &Ty, bindings: &mut FxHashMap<Symbol, Ty>) -> 
         return false;
     }
     if let Some(existing) = bindings.get(&param).cloned() {
-        return match_pattern(&existing, ty, bindings);
+        return match_pattern_with_options(&existing, ty, bindings, peel_pattern_borrows);
     }
     bindings.insert(param, ty.clone());
     true
@@ -1129,14 +1285,28 @@ fn pattern_occurs(param: Symbol, ty: &Ty, bindings: &FxHashMap<Symbol, Ty>) -> b
             .fields
             .iter()
             .any(|(_, ty)| pattern_occurs(param, ty, bindings)),
-        Ty::Any { assoc, .. } => assoc
-            .iter()
-            .any(|(_, ty)| pattern_occurs(param, ty, bindings)),
-        Ty::Proj(base, _, _) => pattern_occurs(param, base, bindings),
-        Ty::Eff(eff) => eff
-            .effects
-            .iter()
-            .any(|entry| entry.args.iter().any(|ty| pattern_occurs(param, ty, bindings))),
+        Ty::Any { protocol, assoc } => {
+            protocol
+                .args
+                .iter()
+                .any(|ty| pattern_occurs(param, ty, bindings))
+                || assoc
+                    .iter()
+                    .any(|(_, ty)| pattern_occurs(param, ty, bindings))
+        }
+        Ty::Proj(base, protocol, _) => {
+            pattern_occurs(param, base, bindings)
+                || protocol
+                    .args
+                    .iter()
+                    .any(|ty| pattern_occurs(param, ty, bindings))
+        }
+        Ty::Eff(eff) => eff.effects.iter().any(|entry| {
+            entry
+                .args
+                .iter()
+                .any(|ty| pattern_occurs(param, ty, bindings))
+        }),
         Ty::Var(_) | Ty::Error => false,
     }
 }
@@ -1186,7 +1356,7 @@ impl Scheme {
             names.insert(param.symbol, format!("T{i}"));
         }
 
-        let mut inline_bounds: FxHashMap<Symbol, Vec<Symbol>> = FxHashMap::default();
+        let mut inline_bounds: FxHashMap<Symbol, Vec<ProtocolRef>> = FxHashMap::default();
         let mut where_predicates = vec![];
         for predicate in &self.predicates {
             match predicate {
@@ -1194,7 +1364,10 @@ impl Scheme {
                     ty: Ty::Param(param),
                     protocol,
                 } if self.params.iter().any(|p| p.symbol == *param) => {
-                    inline_bounds.entry(*param).or_default().push(*protocol);
+                    inline_bounds
+                        .entry(*param)
+                        .or_default()
+                        .push(protocol.clone());
                 }
                 _ => where_predicates.push(predicate),
             }
@@ -1219,8 +1392,10 @@ impl Scheme {
                 .enumerate()
                 .map(|(i, param)| match inline_bounds.get(&param.symbol) {
                     Some(bounds) if !bounds.is_empty() => {
-                        let mut bounds: Vec<String> =
-                            bounds.iter().map(|b| format!("{b}")).collect();
+                        let mut bounds: Vec<String> = bounds
+                            .iter()
+                            .map(|b| render_protocol_ref(b, &names))
+                            .collect();
                         bounds.sort();
                         bounds.dedup();
                         format!("T{i}: {}", bounds.join(" & "))
@@ -1293,7 +1468,7 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
         }
         Ty::Any { protocol, assoc } => {
             if assoc.is_empty() {
-                format!("any {}", render_nominal_head(protocol))
+                format!("any {}", render_protocol_ref(protocol, param_names))
             } else {
                 let bindings: Vec<String> = assoc
                     .iter()
@@ -1301,7 +1476,7 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
                     .collect();
                 format!(
                     "any {}<{}>",
-                    render_nominal_head(protocol),
+                    render_protocol_ref(protocol, param_names),
                     bindings.join(", ")
                 )
             }
@@ -1319,6 +1494,23 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
             }
         }
         Ty::Error => "<error>".to_string(),
+    }
+}
+
+pub(crate) fn render_protocol_ref(
+    protocol: &ProtocolRef,
+    param_names: &FxHashMap<Symbol, String>,
+) -> String {
+    let head = render_nominal_head(&protocol.protocol);
+    if protocol.args.is_empty() {
+        head
+    } else {
+        let args: Vec<String> = protocol
+            .args
+            .iter()
+            .map(|arg| render_ty(arg, param_names))
+            .collect();
+        format!("{head}<{}>", args.join(", "))
     }
 }
 
@@ -1340,7 +1532,11 @@ fn render_predicate(predicate: &Predicate, param_names: &FxHashMap<Symbol, Strin
             render_ty(&Ty::Record(b.clone()), param_names)
         ),
         Predicate::Conforms { ty, protocol } => {
-            format!("{}: {protocol}", render_ty(ty, param_names))
+            format!(
+                "{}: {}",
+                render_ty(ty, param_names),
+                render_protocol_ref(protocol, param_names)
+            )
         }
         Predicate::HasMember {
             receiver,
@@ -1503,11 +1699,11 @@ mod traversal_tests {
         // Existential binding: `any P<K = B>` against `any P<K = Int>`.
         assert!(match_pattern(
             &Ty::Any {
-                protocol: Symbol::Int,
+                protocol: ProtocolRef::bare(Symbol::Int),
                 assoc: vec![(Symbol::Float, Ty::Param(Symbol::String))],
             },
             &Ty::Any {
-                protocol: Symbol::Int,
+                protocol: ProtocolRef::bare(Symbol::Int),
                 assoc: vec![(Symbol::Float, Ty::Nominal(Symbol::Int, vec![]))],
             },
             &mut bindings,
@@ -1521,12 +1717,12 @@ mod traversal_tests {
         assert!(match_pattern(
             &Ty::Proj(
                 Box::new(Ty::Param(Symbol::Void)),
-                Symbol::Int,
+                ProtocolRef::bare(Symbol::Int),
                 Symbol::Float
             ),
             &Ty::Proj(
                 Box::new(Ty::Nominal(Symbol::Int, vec![])),
-                Symbol::Int,
+                ProtocolRef::bare(Symbol::Int),
                 Symbol::Float,
             ),
             &mut bindings,
@@ -1579,12 +1775,12 @@ mod traversal_tests {
                     tail: Some(RowTail::Param(Symbol::Bool)),
                 }),
                 Ty::Any {
-                    protocol: Symbol::Bool,
+                    protocol: ProtocolRef::bare(Symbol::Bool),
                     assoc: vec![(Symbol::Int, Ty::Nominal(Symbol::String, vec![]))],
                 },
                 Ty::Proj(
                     Box::new(Ty::Param(Symbol::Int)),
-                    Symbol::Bool,
+                    ProtocolRef::bare(Symbol::Bool),
                     Symbol::Float,
                 ),
             ],
@@ -1601,7 +1797,7 @@ mod traversal_tests {
     #[test]
     fn ty_try_visit_reaches_any_associated_bindings_and_can_stop() {
         let ty = Ty::Any {
-            protocol: Symbol::Bool,
+            protocol: ProtocolRef::bare(Symbol::Bool),
             assoc: vec![(
                 Symbol::Int,
                 Ty::Tuple(vec![Ty::Nominal(Symbol::Float, vec![])]),
@@ -1642,14 +1838,14 @@ mod traversal_tests {
     #[test]
     fn ty_try_zip_reaches_any_associated_bindings() {
         let left = Ty::Any {
-            protocol: Symbol::Bool,
+            protocol: ProtocolRef::bare(Symbol::Bool),
             assoc: vec![(
                 Symbol::Int,
                 Ty::Tuple(vec![Ty::Nominal(Symbol::Float, vec![])]),
             )],
         };
         let right = Ty::Any {
-            protocol: Symbol::Bool,
+            protocol: ProtocolRef::bare(Symbol::Bool),
             assoc: vec![(
                 Symbol::Int,
                 Ty::Tuple(vec![Ty::Nominal(Symbol::String, vec![])]),
@@ -1671,11 +1867,11 @@ mod traversal_tests {
     #[test]
     fn ty_try_zip_rejects_any_associated_binding_mismatch() {
         let left = Ty::Any {
-            protocol: Symbol::Bool,
+            protocol: ProtocolRef::bare(Symbol::Bool),
             assoc: vec![(Symbol::Int, Ty::Nominal(Symbol::Float, vec![]))],
         };
         let right = Ty::Any {
-            protocol: Symbol::Bool,
+            protocol: ProtocolRef::bare(Symbol::Bool),
             assoc: vec![(Symbol::String, Ty::Nominal(Symbol::Float, vec![]))],
         };
 

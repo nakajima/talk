@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 
 use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
-use crate::types::ty::{Scheme, Ty};
+use crate::types::ty::{ProtocolRef, Scheme, Ty};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExistentialPack {
@@ -21,7 +21,10 @@ pub struct ExistentialPack {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemberResolution {
     Direct(Symbol),
-    ViaConformance { protocol: Symbol, witness: Symbol },
+    ViaConformance {
+        protocol: ProtocolRef,
+        witness: Symbol,
+    },
 }
 
 pub(crate) fn stored_field_symbol(

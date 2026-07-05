@@ -22,7 +22,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         // the member bodies: remember the fresh variables so the solved
         // bindings can be written back into the conformance row (the
         // lowerer specializes default bodies from it).
-        let mut inferred_assoc: Vec<((Symbol, Symbol), Symbol, Ty)> = vec![];
+        let mut inferred_assoc: Vec<((Symbol, ProtocolRef), Symbol, Ty)> = vec![];
         for member in &body.decls {
             let DeclKind::Method { func, .. } = &member.kind else {
                 continue;
@@ -38,7 +38,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             // associated bindings).
             let label = func.name.name_str();
             for protocol in &work.protocols {
-                let Some((owner, requirement)) = self.catalog.requirement_in(*protocol, &label)
+                let Some((owner, requirement)) = self.catalog.requirement_in_ref(protocol, &label)
                 else {
                     continue;
                 };
@@ -52,18 +52,24 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 let assoc_symbols: Vec<Symbol> = self
                     .catalog
                     .protocols
-                    .get(&owner)
+                    .get(&owner.protocol)
                     .map(|i| i.assoc.values().copied().collect())
                     .unwrap_or_default();
                 let bindings = self
                     .catalog
                     .conformances
-                    .get(&(head_symbol(&work.self_ty), owner))
+                    .get(&(head_symbol(&work.self_ty), owner.clone()))
                     .map(|c| c.assoc.clone())
                     .unwrap_or_default();
 
                 let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
-                tys.insert(owner, work.self_ty.clone());
+                tys.insert(owner.protocol, work.self_ty.clone());
+                if let Some(info) = self.catalog.protocols.get(&owner.protocol) {
+                    for (param, arg) in info.params.iter().copied().zip(owner.args.iter().cloned())
+                    {
+                        tys.insert(param, arg);
+                    }
+                }
                 // Method-level generics unify against the witness's own
                 // rigid generics through fresh variables.
                 for param in &req_scheme.params {
@@ -78,7 +84,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         None => {
                             let var = Ty::Var(self.store.fresh_ty(self.level, member.id));
                             inferred_assoc.push((
-                                (head_symbol(&work.self_ty), owner),
+                                (head_symbol(&work.self_ty), owner.clone()),
                                 assoc,
                                 var.clone(),
                             ));
@@ -192,7 +198,15 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         self.catalog
             .param_bounds
             .entry(protocol)
-            .or_insert_with(|| vec![protocol]);
+            .or_insert_with(|| {
+                let args = self
+                    .catalog
+                    .protocols
+                    .get(&protocol)
+                    .map(|info| info.params.iter().copied().map(Ty::Param).collect())
+                    .unwrap_or_default();
+                vec![ProtocolRef { protocol, args }]
+            });
 
         let group_eff = self.ambient_row();
         let group_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));

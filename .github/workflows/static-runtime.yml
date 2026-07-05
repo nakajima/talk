@@ -1,20 +1,19 @@
 name: Static runtime archives
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Release tag to upload assets to, for example v0.1.21
-        required: true
-        type: string
 
 permissions:
   contents: write
 
 env:
   CARGO_TERM_COLOR: always
+
+concurrency:
+  group: static-runtimes
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -35,8 +34,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Install Rust target
         run: rustup toolchain install nightly --profile minimal --target "${{ matrix.target }}"
@@ -44,7 +41,7 @@ jobs:
       - name: Build static runtime
         run: cargo +nightly build -p talk-static --release --locked --target "${{ matrix.target }}"
 
-      - name: Stage release asset
+      - name: Stage static runtime
         shell: bash
         run: |
           mkdir -p dist
@@ -52,8 +49,58 @@ jobs:
           cp "target/${{ matrix.target }}/release/libtalk_static.a" "$asset"
           shasum -a 256 "$asset" > "$asset.sha256"
 
-      - name: Upload release asset
+      - name: Upload static runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-runtime-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish by SHA
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download static runtime artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: static-runtime-*
+          merge-multiple: true
+
+      - name: Publish to static-runtimes branch
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: gh release upload "$TAG" dist/libtalk_static-${{ matrix.target }}.a dist/libtalk_static-${{ matrix.target }}.a.sha256 --clobber
+          REPOSITORY: ${{ github.repository }}
+          RUNTIME_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir publish
+          cd publish
+          git init
+          git remote add origin "https://github.com/${REPOSITORY}.git"
+
+          if git fetch --depth=1 origin static-runtimes; then
+            git checkout -B static-runtimes FETCH_HEAD
+          else
+            git checkout --orphan static-runtimes
+          fi
+
+          mkdir -p "$RUNTIME_SHA"
+          cp ../dist/libtalk_static-* "$RUNTIME_SHA"/
+          printf '%s\n' "$RUNTIME_SHA" > latest
+
+          git add "$RUNTIME_SHA" latest
+          if git diff --cached --quiet; then
+            echo "static runtime archives are already published for $RUNTIME_SHA"
+            exit 0
+          fi
+
+          git commit -m "Static runtimes for $RUNTIME_SHA"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" HEAD:static-runtimes

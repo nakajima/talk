@@ -228,7 +228,7 @@ impl IO for StdioIO {
             let Ok(path) = std::ffi::CString::new(path) else {
                 return EINVAL;
             };
-            let fd = unsafe { libc::open(path.as_ptr(), flags as i32, mode as libc::mode_t) };
+            let fd = unsafe { libc::open(path.as_ptr(), flags as i32, mode as libc::c_uint) };
             if fd < 0 { errno() } else { fd as i64 }
         }
         #[cfg(not(unix))]

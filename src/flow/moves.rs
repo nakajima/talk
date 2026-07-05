@@ -359,9 +359,7 @@ impl<'a> MoveChecker<'a> {
                 // parameters are exempt — params neither acquire nor
                 // release the region ledger.)
                 let generic = matches!(ty, Ty::Param(_) | Ty::Proj(..));
-                if (generic || self.grades.needs_drop(&ty))
-                    && !self.grades.contains_object(&ty)
-                {
+                if (generic || self.grades.needs_drop(&ty)) && !self.grades.contains_object(&ty) {
                     self.pending_locals.push(ScopeLocal {
                         symbol,
                         ty: ty.clone(),
@@ -964,7 +962,7 @@ impl<'a> MoveChecker<'a> {
                     };
                     self.types
                         .catalog
-                        .requirement_in(*protocol, &label.to_string())
+                        .requirement_in_ref(protocol, &label.to_string())
                         .and_then(|(_, requirement)| self.types.schemes.get(&requirement.symbol))
                         .and_then(|scheme| func_params(&scheme.ty))
                 }),

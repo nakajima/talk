@@ -244,9 +244,9 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 && let Ok(head) = name.symbol()
             {
                 for conformance in conformances {
-                    if let Ok(protocol) = conformance.symbol() {
+                    if let Some((protocol, _)) = self.lower_protocol_ref(conformance) {
+                        self.record_marker_claim(head, protocol.protocol, decl.id);
                         self.explicit_conformances.insert((head, protocol));
-                        self.record_marker_claim(head, protocol, decl.id);
                     }
                 }
             }
@@ -259,9 +259,9 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             for member in &body.decls {
                 if let DeclKind::Extend { conformances, .. } = &member.kind {
                     for conformance in conformances {
-                        if let Ok(protocol) = conformance.symbol() {
+                        if let Some((protocol, _)) = self.lower_protocol_ref(conformance) {
+                            self.record_marker_claim(*head, protocol.protocol, member.id);
                             self.explicit_conformances.insert((*head, protocol));
-                            self.record_marker_claim(*head, protocol, member.id);
                         }
                     }
                 }
@@ -377,8 +377,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                         self.catalog.grade_of(*symbol) == Grade::Copy
                             || self
                                 .catalog
-                                .conformances
-                                .contains_key(&(*symbol, Symbol::CheapClone))
+                                .has_bare_conformance(*symbol, Symbol::CheapClone)
                     }
                 };
                 head_ok && args.iter().all(|arg| self.satisfies_marker(arg, marker))
@@ -387,7 +386,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .catalog
                 .param_bounds
                 .get(symbol)
-                .is_some_and(|bounds| bounds.contains(&marker)),
+                .is_some_and(|bounds| bounds.contains(&ProtocolRef::bare(marker))),
             Ty::Tuple(items) => items.iter().all(|item| self.satisfies_marker(item, marker)),
             Ty::Record(row) => {
                 row.tail.is_none()
@@ -507,9 +506,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 match tail {
                     Some(EffTail::Var(v)) => {
                         let param = *self.minted.entry(v.0).or_insert_with(|| {
-                            let param = Symbol::Synthesized(
-                                self.symbols.next_synthesized(self.module_id),
-                            );
+                            let param =
+                                Symbol::Synthesized(self.symbols.next_synthesized(self.module_id));
                             self.order.push(param);
                             param
                         });
@@ -705,24 +703,27 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         else {
             return;
         };
-        if !generics.is_empty() {
-            self.unsupported(decl.id, "generic protocols");
-        }
-        let supers: Vec<Symbol> = conformances
+        let supers: Vec<ProtocolRef> = conformances
             .iter()
-            .filter_map(|c| c.symbol().ok())
+            .filter_map(|c| self.lower_protocol_ref(c).map(|(protocol, _)| protocol))
             .collect();
 
         let mut info = ProtocolInfo {
+            params: generic_symbols(generics),
             supers,
             ..Default::default()
         };
         self.self_types.push(Ty::Param(symbol));
         self.register_where_bounds(where_clause.as_ref());
-        self.catalog
-            .param_bounds
-            .entry(symbol)
-            .or_insert_with(|| vec![symbol]);
+        self.catalog.param_bounds.entry(symbol).or_insert_with(|| {
+            vec![ProtocolRef {
+                protocol: symbol,
+                args: generic_symbols(generics)
+                    .into_iter()
+                    .map(Ty::Param)
+                    .collect(),
+            }]
+        });
         for member in &body.decls {
             if let DeclKind::Associated {
                 generic,
@@ -755,7 +756,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 && *ty == Ty::Param(symbol)
                 && !info.supers.contains(protocol)
             {
-                info.supers.push(*protocol);
+                info.supers.push(protocol.clone());
             }
         }
         for member in &body.decls {
@@ -1077,6 +1078,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
     ) -> Option<ExtendWork<'a>> {
         let DeclKind::Extend {
             name,
+            row_generics,
             conformances,
             generics,
             where_clause,
@@ -1090,6 +1092,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             (Name::SelfType(_), Some(parent)) | (_, Some(parent)) => parent,
             _ => name.symbol().ok()?,
         };
+        self.register_generic_bounds(row_generics);
         self.register_generic_bounds(generics);
         self.register_where_bounds(where_clause.as_ref());
 
@@ -1097,7 +1100,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         // a nested extend uses the enclosing struct's generics; a top-level
         // `extend Array<Element>` uses its declared generics; plain heads
         // (`extend Int`) have none.
-        let params: Vec<Symbol> = if enclosing.is_some() || generics.is_empty() {
+        let self_params: Vec<Symbol> = if enclosing.is_some() || generics.is_empty() {
             self.catalog
                 .structs
                 .get(&head)
@@ -1107,10 +1110,17 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         } else {
             generic_symbols(generics)
         };
-        let self_args: Vec<Ty> = params.iter().map(|p| Ty::Param(*p)).collect();
+        let mut params = generic_symbols(row_generics);
+        params.extend(self_params.iter().copied());
+        let self_args: Vec<Ty> = self_params.iter().map(|p| Ty::Param(*p)).collect();
         let self_ty = Ty::Nominal(head, self_args.clone());
         self.self_types.push(self_ty.clone());
-        let context = self.declared_predicates(generics, where_clause.as_ref());
+        let context_generics: Vec<GenericDecl> = row_generics
+            .iter()
+            .cloned()
+            .chain(generics.iter().cloned())
+            .collect();
+        let context = self.declared_predicates(&context_generics, where_clause.as_ref());
         self.self_types.pop();
 
         // Collect declared members (witnesses and inherent methods).
@@ -1133,45 +1143,44 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         self.self_types.pop();
 
         let mut protocols = vec![];
-        let mut rows: IndexMap<Symbol, Conformance> = IndexMap::default();
+        let mut rows: IndexMap<ProtocolRef, Conformance> = IndexMap::default();
         let mut missing_requirements: FxHashSet<Symbol> = FxHashSet::default();
         for conformance_annotation in conformances {
-            let Ok(protocol) = conformance_annotation.symbol() else {
+            let Some((protocol, assoc_args)) = self.lower_protocol_ref(conformance_annotation)
+            else {
                 continue;
             };
-            if !self.catalog.protocols.contains_key(&protocol) {
+            if !self.catalog.protocols.contains_key(&protocol.protocol) {
                 self.unsupported(decl.id, "conforming to an unknown protocol");
                 continue;
             }
-            protocols.push(protocol);
+            protocols.push(protocol.clone());
 
             // A conformance to `B` is also a conformance to every super `A`.
             // Build a real row for each protocol in the closure so later
             // `T: A` constraints reduce through the same conformance table as
             // direct conformances.
-            for conformed in self.catalog.protocol_and_supers(protocol) {
-                let Some(info) = self.catalog.protocols.get(&conformed).cloned() else {
+            for conformed in self.catalog.protocol_and_supers(&protocol) {
+                let Some(info) = self.catalog.protocols.get(&conformed.protocol).cloned() else {
                     continue;
                 };
-                let requirements = self.catalog.requirements_for_conformance(conformed);
-                let conformance = rows.entry(conformed).or_insert_with(|| Conformance {
-                    params: params.clone(),
-                    self_args: self_args.clone(),
-                    context: context.clone(),
-                    ..Default::default()
-                });
+                let requirements = self.catalog.requirements_for_conformance(&conformed);
+                let conformance = rows
+                    .entry(conformed.clone())
+                    .or_insert_with(|| Conformance {
+                        params: params.clone(),
+                        self_args: self_args.clone(),
+                        protocol_args: conformed.args.clone(),
+                        context: context.clone(),
+                        ..Default::default()
+                    });
 
                 // Positional associated-type application: `Iterator<Element>`
                 // binds the named protocol's own assoc params in declaration
                 // order. Inherited assoc params bind through same-named
                 // `typealias` declarations or witness inference below.
-                if conformed == protocol
-                    && let TypeAnnotationKind::Nominal {
-                        generics: assoc_args,
-                        ..
-                    } = &conformance_annotation.kind
-                {
-                    for (assoc_symbol, arg) in info.assoc.values().zip(assoc_args) {
+                if conformed == protocol {
+                    for (assoc_symbol, arg) in info.assoc.values().zip(&assoc_args) {
                         let binding = self.lower_annotation(arg);
                         conformance.assoc.insert(*assoc_symbol, binding);
                     }
@@ -1191,10 +1200,12 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                             self.infer_assoc_bindings(&requirement, func, conformance);
                         }
                         None => {
-                            let already_conforms_to_owner =
-                                self.catalog.conformances.contains_key(&(head, owner));
+                            let already_conforms_to_owner = self
+                                .catalog
+                                .conformances
+                                .contains_key(&(head, owner.clone()));
                             let separately_claims_owner = owner != protocol
-                                && self.explicit_conformances.contains(&(head, owner));
+                                && self.explicit_conformances.contains(&(head, owner.clone()));
                             if !requirement.has_default
                                 && !already_conforms_to_owner
                                 && !separately_claims_owner
@@ -1216,7 +1227,34 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         }
 
         for (protocol, conformance) in rows {
-            match self.catalog.conformances.entry((head, protocol)) {
+            let overlaps_existing = self
+                .catalog
+                .conformances
+                .iter()
+                .find(|((existing_head, existing_protocol), existing)| {
+                    *existing_head == head
+                        && existing_protocol != &protocol
+                        && existing_protocol.protocol == protocol.protocol
+                        && self.catalog.conformance_rows_overlap(
+                            existing_protocol,
+                            existing,
+                            &protocol,
+                            &conformance,
+                        )
+                })
+                .map(|((_, existing_protocol), _)| existing_protocol.clone());
+            if let Some(existing) = overlaps_existing {
+                self.diagnostics.errors.push((
+                    TypeError::OverlappingConformance {
+                        ty: self_ty.render_mono(),
+                        protocol: protocol.to_string(),
+                        existing: existing.to_string(),
+                    },
+                    decl.id,
+                ));
+                continue;
+            }
+            match self.catalog.conformances.entry((head, protocol.clone())) {
                 std::collections::hash_map::Entry::Occupied(mut entry) => {
                     let existing = entry.get_mut();
                     for (label, witness) in conformance.witnesses {
@@ -1237,7 +1275,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             }
             let by_head = self.catalog.conformances_by_head.entry(head).or_default();
             if !by_head.contains(&protocol) {
-                by_head.push(protocol);
+                by_head.push(protocol.clone());
             }
         }
 

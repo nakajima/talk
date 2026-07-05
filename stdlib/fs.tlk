@@ -87,6 +87,18 @@ public struct Directory {
 
 		Array<DirectoryEntry>(storage: storage, count: out, capacity: capacity)
 	}
+
+	// func walk(fn: (&DirectoryEntry) -> ()) {
+	// 	for entry in self.entries() {
+	// 		match entry {
+	// 			.directory(directory) -> {
+	// 				fn(entry)
+	// 				walk(directory, fn)
+	// 			},
+	// 			other -> fn(other)
+	// 		}
+	// 	}
+	// }
 }
 
 public struct FsFile {

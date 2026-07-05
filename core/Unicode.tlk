@@ -277,7 +277,7 @@ extend Character: Borrowed {}
 
 // Byte equality of the cluster — same semantic as String equality, so
 // canonically equivalent characters in different normal forms differ.
-extend Character: Equatable {
+extend Character: Equatable<Character> {
 	func equals(rhs: &Character) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 		let idx = 0
@@ -298,10 +298,8 @@ extend Character: Showable {
 	}
 }
 
-extend Character: Add {
-	func add(string: String) -> String {
-		"hi"
-	}
+extend Character: Add<String> {
+	func add(rhs: String) -> String { "hi" }
 }
 
 public struct CharacterIterator {

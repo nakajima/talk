@@ -187,12 +187,21 @@ impl<'a> Lowering<'a> {
         let (owner, requirement) = self.units[ctx.unit]
             .types
             .catalog
-            .requirement_in(protocol, &label_str)
+            .requirement_in_ref(&protocol, &label_str)
             .map(|(owner, requirement)| (owner, requirement.clone()))?;
-        let index =
-            self.existential_requirement_index(protocol, &label_str, requirement.symbol, ctx.unit)?;
-        let signature =
-            self.erased_requirement_signature(protocol, &assoc, owner, &requirement, ctx.unit)?;
+        let index = self.existential_requirement_index(
+            protocol.protocol,
+            &label_str,
+            requirement.symbol,
+            ctx.unit,
+        )?;
+        let signature = self.erased_requirement_signature(
+            protocol.protocol,
+            &assoc,
+            owner.protocol,
+            &requirement,
+            ctx.unit,
+        )?;
         self.lower_requirement_call(
             receiver,
             args,
@@ -234,22 +243,27 @@ impl<'a> Lowering<'a> {
             }
             _ => return None,
         };
-        let evidence = self.local_evidence_for(ctx, param, protocol)?;
+        let evidence = self.local_evidence_for(ctx, param, protocol.protocol)?;
         let label_str = label.to_string();
         let (owner, requirement) = self.units[ctx.unit]
             .types
             .catalog
-            .requirement_in(protocol, &label_str)
+            .requirement_in_ref(&protocol, &label_str)
             .map(|(owner, requirement)| (owner, requirement.clone()))?;
         let source_requirements = self.units[ctx.unit]
             .types
             .catalog
-            .requirements_for_conformance(evidence.protocol);
+            .requirements_for_conformance(&ProtocolRef::bare(evidence.protocol));
         let index = source_requirements
             .iter()
             .position(|(_, _, source)| source.symbol == requirement.symbol)?;
-        let signature =
-            self.erased_requirement_signature(protocol, &[], owner, &requirement, ctx.unit)?;
+        let signature = self.erased_requirement_signature(
+            protocol.protocol,
+            &[],
+            owner.protocol,
+            &requirement,
+            ctx.unit,
+        )?;
         self.lower_requirement_call(
             receiver,
             args,
@@ -261,9 +275,13 @@ impl<'a> Lowering<'a> {
             "local_evidence_requirement",
             |this, values, _witness_ty| {
                 let payload = values[0];
-                let Some(package) =
-                    this.existential_pack_from_local_evidence(protocol, &[], param, payload, ctx)
-                else {
+                let Some(package) = this.existential_pack_from_local_evidence(
+                    protocol.protocol,
+                    &[],
+                    param,
+                    payload,
+                    ctx,
+                ) else {
                     return Err(this.dead_end("local_evidence_pack"));
                 };
                 values[0] = package;
@@ -514,7 +532,7 @@ impl<'a> Lowering<'a> {
                                 let target = self.demand(member, theta.clone())?;
                                 return Some((target, member, prefix, theta));
                             }
-                            let protocols: Vec<Symbol> = catalog
+                            let owner_protocols: FxHashSet<Symbol> = catalog
                                 .member_owners
                                 .get(&label_str)
                                 .into_iter()
@@ -523,19 +541,30 @@ impl<'a> Lowering<'a> {
                                     crate::types::catalog::MemberOwner::Protocol(p) => Some(*p),
                                     _ => None,
                                 })
-                                .filter(|p| {
-                                    catalog.conformances.contains_key(&(*symbol, *p))
-                                        || self
-                                            .units
+                                .collect();
+                            let mut protocols: Vec<ProtocolRef> = catalog
+                                .conformances
+                                .keys()
+                                .filter(|(head, protocol)| {
+                                    *head == *symbol && owner_protocols.contains(&protocol.protocol)
+                                })
+                                .map(|(_, protocol)| protocol.clone())
+                                .collect();
+                            protocols.extend(
+                                owner_protocols
+                                    .iter()
+                                    .filter(|p| {
+                                        self.units
                                             .iter()
                                             .any(|u| u.types.catalog.derivable.contains(p))
-                                })
-                                .collect();
+                                    })
+                                    .map(|p| ProtocolRef::bare(*p)),
+                            );
                             for protocol in protocols {
                                 let Some((_, requirement)) = self.units[self.entry]
                                     .types
                                     .catalog
-                                    .requirement_in(protocol, &label_str)
+                                    .requirement_in_ref(&protocol, &label_str)
                                 else {
                                     continue;
                                 };
@@ -746,7 +775,7 @@ impl<'a> Lowering<'a> {
     ///   along.
     pub(super) fn resolve_witness(
         &mut self,
-        protocol: Symbol,
+        protocol: ProtocolRef,
         requirement_or_witness: Symbol,
         label: String,
         head: &CheckTy,
@@ -764,12 +793,30 @@ impl<'a> Lowering<'a> {
             return None;
         };
         let catalog = &self.units[self.entry].types.catalog;
-        let is_requirement = catalog.protocols.get(&protocol).is_some_and(|info| {
-            info.requirements
-                .values()
-                .any(|r| r.symbol == requirement_or_witness)
-        });
-        let conformance = catalog.conformances.get(&(*head_symbol, protocol)).cloned();
+        let protocol = catalog.canonical_protocol_ref(protocol.substitute(
+            node_theta,
+            &Default::default(),
+            &Default::default(),
+        ));
+        let is_requirement = catalog
+            .protocols
+            .get(&protocol.protocol)
+            .is_some_and(|info| {
+                info.requirements
+                    .values()
+                    .any(|r| r.symbol == requirement_or_witness)
+            });
+        let matches = catalog.matching_conformances(*head_symbol, head_args, &protocol);
+        let conformance = match matches.as_slice() {
+            [matched] => Some(matched.conformance.clone()),
+            [] => None,
+            _ => {
+                self.diagnostics.push(format!(
+                    "lowering: ambiguous conformance ({head_symbol}, {protocol}) for '{label}'"
+                ));
+                return None;
+            }
+        };
 
         if let Some(conformance) = conformance {
             if !is_requirement {
@@ -813,7 +860,21 @@ impl<'a> Lowering<'a> {
             // conformance's associated bindings (substituted through the
             // row's params for conditional rows).
             let mut theta = Theta::default();
-            theta.insert(protocol, head_for_witness.clone());
+            let protocol_symbol = protocol.protocol;
+            theta.insert(protocol_symbol, head_for_witness.clone());
+            if let Some(info) = catalog.protocols.get(&protocol_symbol) {
+                for (param, arg) in info
+                    .params
+                    .iter()
+                    .copied()
+                    .zip(conformance.protocol_args.iter())
+                {
+                    theta.insert(
+                        param,
+                        arg.substitute(&row_theta, &Default::default(), &Default::default()),
+                    );
+                }
+            }
             for (assoc, ty) in &conformance.assoc {
                 let bound = ty.substitute(&row_theta, &Default::default(), &Default::default());
                 theta.insert(*assoc, bound);
@@ -825,14 +886,15 @@ impl<'a> Lowering<'a> {
         // No explicit row: an auto-derived protocol (today: Showable)
         // synthesizes its witness in λ_G — the checker discharged the
         // conformance structurally (`solve/conformance.rs::try_derive`).
+        let protocol_symbol = protocol.protocol;
         let derivable = self
             .units
             .iter()
-            .any(|u| u.types.catalog.derivable.contains(&protocol));
+            .any(|u| u.types.catalog.derivable.contains(&protocol_symbol));
         if derivable
             && label == "show"
             && let Some(synth) =
-                self.demand_derived_show(protocol, requirement_or_witness, head_for_witness)
+                self.demand_derived_show(protocol_symbol, requirement_or_witness, head_for_witness)
         {
             return Some((synth, requirement_or_witness, Theta::default()));
         }

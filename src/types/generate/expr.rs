@@ -308,12 +308,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
         self.wanteds.push(Constraint::Conforms {
             ty: found.clone(),
-            protocol,
+            protocol: protocol.clone(),
             origin: CtOrigin::new(node, reason),
         });
         for (assoc_symbol, assoc_ty) in &assoc {
             self.wanteds.push(Constraint::Eq(
-                Ty::Proj(Box::new(found.clone()), protocol, *assoc_symbol),
+                Ty::Proj(Box::new(found.clone()), protocol.clone(), *assoc_symbol),
                 assoc_ty.clone(),
                 CtOrigin::new(node, reason),
             ));

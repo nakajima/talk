@@ -93,9 +93,10 @@ fn level_adjustment_propagates_outward() {
 fn apply_reason_clones_borrowed_cheap_clone_argument() {
     let mut h = Harness::new();
     let cheap = Symbol::Struct(StructId::new(ModuleId::Current, 7));
-    h.catalog
-        .conformances
-        .insert((cheap, Symbol::CheapClone), Default::default());
+    h.catalog.conformances.insert(
+        (cheap, ProtocolRef::bare(Symbol::CheapClone)),
+        Default::default(),
+    );
     let owned = Ty::Nominal(cheap, vec![]);
     let borrowed = Ty::Borrow(Perm::Shared, Box::new(owned.clone()));
     let residual = h.solve(vec![Constraint::Eq(owned, borrowed, origin())]);

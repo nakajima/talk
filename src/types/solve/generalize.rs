@@ -93,7 +93,7 @@ impl<'s> Generalizer<'s> {
             Predicate::RowEq(a, b) => Predicate::RowEq(self.quantify_row(a), self.quantify_row(b)),
             Predicate::Conforms { ty, protocol } => Predicate::Conforms {
                 ty: self.quantify_ty(ty),
-                protocol: *protocol,
+                protocol: self.fold_protocol_ref(protocol),
             },
             Predicate::HasMember {
                 receiver,

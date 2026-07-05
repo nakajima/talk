@@ -1888,6 +1888,64 @@ extend Person {
     }
 
     #[test]
+    fn goto_definition_on_stdlib_imported_symbol_navigates_to_definition() {
+        let code = "use { Directory } from fs\nlet dir: Directory\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_stdlib_import.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+
+        let import_directory_offset = code.find("{ Directory }").expect("import Directory") + 2;
+        let target = super::goto_definition(&module, None, &uri, import_directory_offset as u32)
+            .expect("stdlib definition");
+
+        assert!(
+            target.uri.path().ends_with("stdlib/fs.tlk"),
+            "should jump to stdlib fs, got {:?}",
+            target.uri
+        );
+        assert_eq!(target.range.start.line, 39);
+    }
+
+    #[test]
+    fn goto_definition_on_stdlib_symbol_inside_call_argument_navigates_to_definition() {
+        let code = "use { Directory } from fs\nfunc walk(directory: &Directory) {}\nfunc main() { walk(Directory(path: Path([\".\"]))) }\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_stdlib_call_arg.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+
+        let directory_offset = code.rfind("Directory(path").expect("Directory constructor") as u32;
+        let target = super::goto_definition(&module, None, &uri, directory_offset)
+            .expect("stdlib definition");
+
+        assert!(
+            target.uri.path().ends_with("stdlib/fs.tlk"),
+            "should jump to stdlib fs instead of the outer call, got {:?}",
+            target.uri
+        );
+        assert_eq!(target.range.start.line, 39);
+    }
+
+    #[test]
+    fn goto_definition_on_stdlib_qualified_type_annotation_navigates_to_definition() {
+        let code = "use { Directory } from fs\nfunc walk(directory: &fs::Directory) {}\n";
+        let uri =
+            Url::from_file_path(std::env::temp_dir().join("goto_def_stdlib_qualified_type.tlk"))
+                .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+
+        let directory_offset = code.find("fs::Directory").expect("qualified type") + "fs::".len();
+        let target = super::goto_definition(&module, None, &uri, directory_offset as u32)
+            .expect("stdlib definition");
+
+        assert!(
+            target.uri.path().ends_with("stdlib/fs.tlk"),
+            "should jump to stdlib fs, got {:?}",
+            target.uri
+        );
+        assert_eq!(target.range.start.line, 39);
+    }
+
+    #[test]
     fn goto_definition_on_import_path_navigates_to_file() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

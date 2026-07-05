@@ -686,6 +686,11 @@ impl<'a> Parser<'a> {
     ) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
         self.consume(entry)?;
+        let row_generics = if context == BlockContext::Extend && self.peek_is(TokenKind::Less) {
+            self.generics()?
+        } else {
+            vec![]
+        };
         let (name, name_span) = self.identifier()?;
         let generics = self.generics()?;
 
@@ -762,6 +767,7 @@ impl<'a> Parser<'a> {
             BlockContext::Extend => DeclKind::Extend {
                 name: name.into(),
                 name_span,
+                row_generics,
                 conformances,
                 generics,
                 where_clause,

@@ -372,8 +372,7 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_string_concat() {
-        let (_, out) =
-            run_on_both_engines_io("print(\"hi \" + \"there\")");
+        let (_, out) = run_on_both_engines_io("print(\"hi \" + \"there\")");
         assert_eq!(out, "hi there\n");
     }
 
@@ -504,9 +503,8 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_float_array_round_trip() {
-        let (_, out) = run_on_both_engines_io(
-            "let a = [1.5, 2.5]\nprint(a.get(0))\nprint(a.get(1))",
-        );
+        let (_, out) =
+            run_on_both_engines_io("let a = [1.5, 2.5]\nprint(a.get(0))\nprint(a.get(1))");
         assert_eq!(out, "1.5\n2.5\n");
     }
 
@@ -524,8 +522,7 @@ pub mod tests {
     fn vm_matches_evaluator_on_conditional_conformance_array_show() {
         // extend Array<Element: Showable>: Showable — the witness demands
         // at Element := Int (context discharged by monomorphization).
-        let (_, out) =
-            run_on_both_engines_io("let a = [1, 2, 3]\nprint(a)");
+        let (_, out) = run_on_both_engines_io("let a = [1, 2, 3]\nprint(a)");
         assert_eq!(out, "[1, 2, 3]\n");
     }
 
@@ -681,6 +678,14 @@ pub mod tests {
             "func twice(foo: () -> ()) {\n\tfoo()\n\tfoo()\n}\ntwice { print(\"hi\") }",
         );
         assert_eq!(out, "hi\nhi\n");
+    }
+
+    #[test]
+    fn trailing_block_call_arg_temp_drops_after_callee_returns() {
+        let (_, out) = run_on_both_engines_io(
+            "func twice(path: &Path, fn: () -> ()) {\n\tfn()\n\tfn()\n}\ntwice(Path([\".\"])) { print(\"tick\") }",
+        );
+        assert_eq!(out, "tick\ntick\n");
     }
 
     #[test]
@@ -1211,7 +1216,7 @@ pub mod tests {
         // ADR 0014: a plain struct's borrow-shaped equals witness compares
         // borrowed elements without copy-out coercions.
         let (_, out) = run_on_both_engines_io(
-            "struct Pt {\n\tlet x: Int\n}\nextend Pt: Equatable {\n\tfunc equals(rhs: &Pt) -> Bool {\n\t\tself.x == rhs.x\n\t}\n}\nlet xs = [Pt(x: 1), Pt(x: 2), Pt(x: 3)]\nmatch xs.iter().index(Pt(x: 2)) {\n\t.some(i) -> print(i),\n\t.none -> print(\"not found\")\n}",
+            "struct Pt {\n\tlet x: Int\n}\nextend Pt: Equatable<Pt> {\n\tfunc equals(rhs: &Pt) -> Bool {\n\t\tself.x == rhs.x\n\t}\n}\nlet xs = [Pt(x: 1), Pt(x: 2), Pt(x: 3)]\nmatch xs.iter().index(Pt(x: 2)) {\n\t.some(i) -> print(i),\n\t.none -> print(\"not found\")\n}",
         );
         assert_eq!(out, "1\n");
     }
@@ -1319,15 +1324,11 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_string_operations() {
-        let (value, _) =
-            run_on_both_engines_io("\"hello\" == \"hello\"");
+        let (value, _) = run_on_both_engines_io("\"hello\" == \"hello\"");
         assert_eq!(value, Value::Bool(true));
-        let (value, _) =
-            run_on_both_engines_io("\"hello\" == \"world\"");
+        let (value, _) = run_on_both_engines_io("\"hello\" == \"world\"");
         assert_eq!(value, Value::Bool(false));
-        let (_, out) = run_on_both_engines_io(
-            "print(\"hello\".utf8().slice(1, 3).to_string())",
-        );
+        let (_, out) = run_on_both_engines_io("print(\"hello\".utf8().slice(1, 3).to_string())");
         assert_eq!(out, "ell\n");
         let (_, out) = run_on_both_engines_io(
             "print(\"hello\".as_substring().utf8().slice(1, 3).to_string())",

@@ -437,7 +437,11 @@ impl HirLowerer<'_> {
             name_span: p.name_span,
             type_annotation: p.type_annotation.clone(),
             span: p.span,
-            ty: self.types.node_types.get(&p.id).map(|ty| ty.erase_eff_args()),
+            ty: self
+                .types
+                .node_types
+                .get(&p.id)
+                .map(|ty| ty.erase_eff_args()),
         }
     }
 
@@ -565,6 +569,7 @@ impl HirLowerer<'_> {
             decl::DeclKind::Func(func) => hir::DeclKind::Func(self.func(func)),
             decl::DeclKind::Extend {
                 name,
+                row_generics,
                 conformances,
                 generics,
                 where_clause,
@@ -572,6 +577,7 @@ impl HirLowerer<'_> {
                 ..
             } => hir::DeclKind::Extend {
                 name: name.clone(),
+                row_generics: row_generics.clone(),
                 conformances: conformances.clone(),
                 generics: generics.clone(),
                 where_clause: where_clause.clone(),

@@ -180,7 +180,7 @@ impl Encoder {
             }
             Insn::Trunc { dest, src } => self.reg2(7, dest, src),
             Insn::IToF { dest, src } => self.reg2(8, dest, src),
-            Insn::BToI { dest, src } => self.reg2(46, dest, src),
+            Insn::BToI { dest, src } => self.reg2(48, dest, src),
             Insn::CellNew { dest, init } => self.reg2(9, dest, init),
             Insn::CellGet { dest, cell } => self.reg2(10, dest, cell),
             Insn::CellSet { cell, src } => self.reg2(11, cell, src),
@@ -1291,6 +1291,32 @@ mod tests {
                 n_regs: 1,
             }],
             consts: vec![Value::I64(42)],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        let decoded = Module::decode_bytecode(&encoded).unwrap();
+        assert_eq!(decoded.render(), module.render());
+    }
+
+    #[test]
+    fn round_trips_bool_to_int_opcode() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::BToI { dest: 1, src: 0 },
+                    Insn::Ret { src: 1 },
+                ],
+                arity: 0,
+                n_regs: 2,
+            }],
+            consts: vec![Value::Bool(true)],
             arg_pool: vec![],
             switch_pool: vec![],
             traps: vec![],
