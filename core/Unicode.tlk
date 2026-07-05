@@ -298,6 +298,12 @@ extend Character: Showable {
 	}
 }
 
+extend Character: Add {
+	func add(string: String) -> String {
+		"hi"
+	}
+}
+
 public struct CharacterIterator {
 	let storage: ByteStorage
 	let offset: Int
