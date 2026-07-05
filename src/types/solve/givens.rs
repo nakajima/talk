@@ -177,7 +177,7 @@ impl<'s> Solver<'s> {
             Ty::Proj(..) => 0,
             Ty::Var(_) | Ty::Param(_) => 1,
             Ty::Func(..) | Ty::Record(_) | Ty::Tuple(_) => 2,
-            Ty::Borrow(..) | Ty::Unique(_) | Ty::Nominal(..) | Ty::Any { .. } => 3,
+            Ty::Borrow(..) | Ty::Unique(_) | Ty::Nominal(..) | Ty::Any { .. } | Ty::Eff(_) => 3,
             Ty::Error => 4,
         }
     }

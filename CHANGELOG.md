@@ -1,5 +1,87 @@
 # Changelog
 
+## Unreleased (2026-07-04) — Protocol extensions, effect-polymorphic fields, leak-free ownership
+
+Three threads, one day. Protocols grew extension methods, so shared
+behavior lives on the protocol instead of every conforming type. Struct
+fields that hold closures became effect-polymorphic — one instance
+storing an effectful closure no longer taints another. And the ownership
+story closed its last gap: the generic-ownership leak fence is deleted,
+and every test in the suite now asserts exact allocation balance.
+
+### Protocol extensions
+
+- **`extend P { ... }` adds methods to a protocol.** Extension methods
+  behave as defaulted requirements: every conforming type gets them, and
+  they dispatch through the conformance like any witness. Iterator
+  pipelines compose on any element type:
+
+  ```talk
+  let i = [10, 20, 30].iter().skip(1).index(30)   // Optional.some(1)
+  for ch in "héllo".iter() { print(ch) }           // h é l l o
+  ```
+
+- **Comparisons take their right-hand side by borrow** (`rhs: &RHS`,
+  ADR 0014), so `==` and friends never consume their operands; scalar
+  witnesses still receive plain values (borrows of `Copy` types erase).
+
+### Effect-polymorphic struct fields
+
+- **A closure stored in one instance no longer contaminates another.**
+  A closure-typed field's effect row used to be a single module-wide
+  inference variable: constructing one `Wrapper` with an effectful
+  closure made an unrelated, pure `Wrapper` demand the same handler.
+  Fields' rows are now quantified per struct (implicit effect
+  parameters, Koka-style kinded type arguments), instantiated at each
+  construction, and recovered at each read:
+
+  ```talk
+  struct Wrapper {
+  	let f: () -> Int
+  }
+  effect 'ping() -> Void
+
+  func pure_use() -> Int {
+  	let w = Wrapper(f: func() { 1 })
+  	w.f()                       // fine — no 'ping here
+  }
+  func pingy_use() 'ping -> Int {
+  	let w = Wrapper(f: func() {
+  		'ping()
+  		1
+  	})
+  	w.f()                       // this one performs 'ping
+  }
+  ```
+
+- **And the effects still travel.** The instance's row rides its type,
+  so returning a struct that stores an effectful closure — even across
+  a module boundary — still demands the handler at the call site.
+  A struct cannot launder an effect. Design and trade-offs:
+  docs/effect-params-on-structs-plan.md.
+
+### Leak-free ownership, no exceptions
+
+- **The generic-ownership fence is deleted.** Every program-running test
+  — vm differential tests, the examples corpus, the program corpus —
+  now asserts that allocations and `'heap` objects balance to zero at
+  exit. Generic (type-parameter-typed) values are owned: the last
+  consuming use moves, earlier ones implicitly copy per instantiation
+  (a retain for refcounted types, free for `Copy`), and unconsumed
+  values release at scope exit — decided once over the generic body,
+  elided per specialization.
+- **Borrowed temporaries are released.** A call result that is only
+  borrowed by its consumer (`print("a" + "b")` — `print` takes `&T`)
+  now frees at the end of its full expression. Chasing the remaining
+  imbalances to zero fixed a family of latent bugs: operators consumed
+  receivers their callees only borrowed, empty string statics aliased
+  the first heap allocation, and derived `show` leaked every
+  intermediate accumulator.
+- **Raw allocations can be freed.** `_free(ptr)` releases an `_alloc`
+  buffer (one reference; statics are unmanaged), backed by a new
+  `@_ir { free $0 }` instruction. `open_path` now frees its
+  NUL-terminated path copy, and the raw-io examples free their buffers.
+
 ## Unreleased (2026-07-04) — Neovim setup
 
 - **`talk setup nvim` installs the Neovim runtime files.** The CLI
@@ -10,6 +92,24 @@
   `--target-dir` installs into an explicit runtime root. The Neovim README
   now points users at this command; adding the runtime directory to
   `runtimepath` remains the development setup.
+- **`TALK_CORE_PATH` can override the bundled core library.** Set it to a
+  directory containing the core `.tlk` files and the `talk` executable will
+  compile core from that directory instead of the embedded sources. The LSP
+  uses the same override for core analysis, so go-to-definition for core
+  symbols jumps into the override directory, and editing that directory works
+  even when it is not literally named `core`. Go-to-definition now also
+  follows resolved member accesses, including core methods reached through a
+  protocol conformance such as `String.utf8()`. The LSP now handles the
+  standard `shutdown`/`exit` lifecycle messages, so editor restarts can stop
+  the running server cleanly. The VSCode extension now preserves the parent
+  environment when spawning the LSP, exposes `talktalk.corePath` to pass
+  `TALK_CORE_PATH` explicitly when VSCode's extension host does not inherit
+  shell environment variables. `TalkTalk: Set Core Path` opens a folder
+  picker and writes `talktalk.corePath`; `TalkTalk: Clear Core Path` removes
+  it. Both commands offer to restart the language server.
+  `scripts/reinstall-vscode-extension.sh` rebuilds the debug `talk` binary,
+  packages the VSCode extension, and reinstalls it, including auto-detection
+  of VSCode Remote SSH's remote CLI when `code` is not on `PATH`.
 - **Member completion is less fragile while typing incomplete code.**
   Completion now keeps the dotted receiver when the dot appears in
   partially typed control-flow conditions, call and effect arguments,

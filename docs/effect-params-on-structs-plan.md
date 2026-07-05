@@ -1,9 +1,41 @@
 # Effect parameters on struct types: design plan
 
-Status: designed, not yet implemented. The deficit is pinned by
-`types_tests::struct_closure_field_rows_contaminate_across_constructions`
-(flip its assertion when this lands). Follow-up to ADR 0015's ledger
-entry "Effect-generic closure storage".
+Status: IMPLEMENTED (2026-07-04, same day). Tests:
+`struct_closure_fields_are_effect_polymorphic_per_construction` (the
+flipped pin), `struct_closure_field_rows_travel_with_the_instance`
+(soundness — no laundering),
+`generic_struct_closure_fields_stay_polymorphic_per_instantiation`,
+`struct_eff_params_cross_the_module_boundary`, and vm
+`vm_matches_evaluator_on_effectful_closure_stored_in_a_struct_field`
+(both engines, handled+resumed). Follow-up to ADR 0015's ledger entry
+"Effect-generic closure storage".
+
+Implementation notes vs the plan below (all landed as designed except):
+- Slice 4's conformance-head work reduced to `match_pattern`'s Nominal
+  arm comparing only the non-eff prefix (eff args are invisible to
+  heads); no self_args changes were needed — collection-time leftover
+  row vars sanitize to owner-keyed params through the existing walk.
+- The memberwise init's param types are copies of the field annotations
+  with their OWN row vars, so `infer_construction` additionally pins
+  init params to the (type- and effect-)substituted field types.
+- Member reads use a row-SPLICING substitution
+  (`Ty::substitute_eff_rows`) because instance rows accrue entries that
+  the tail-for-tail `Ty::substitute` map cannot carry; a head without
+  eff args (annotation/import that never met a construction) falls back
+  to fresh rows — the pre-existing behavior, per use instead of
+  module-shared.
+- Unification pads a bare same-symbol head against a full one (the
+  bare side adopts the eff suffix).
+
+Remaining (deliberate v1 scope):
+- Enum payload closures (same disease, same design; `Enum.eff_params`).
+- `Self` inside a struct's own method bodies stays bare (reads fall
+  back to fresh rows — old behavior, per use).
+- Explicit (non-memberwise) inits connect rows only through
+  `self.field = arg` writes on the bare Self head (fresh-row fallback);
+  precise once Self carries eff args.
+- Diagnostics render `Ty::Eff` as its row; heads with eff args render
+  them inline (cosmetic).
 
 ## The disease, concretely
 

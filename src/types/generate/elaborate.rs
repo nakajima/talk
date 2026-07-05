@@ -255,11 +255,25 @@ impl<'e> Elaborator<'e> {
                     }
                     return self.lower_type_alias(symbol, annotation.id, None);
                 }
-                let args: Vec<Ty> = generics.iter().map(|g| self.lower_annotation(g)).collect();
+                let mut args: Vec<Ty> = generics.iter().map(|g| self.lower_annotation(g)).collect();
                 match symbol {
                     Symbol::TypeParameter(_) | Symbol::AssociatedType(_) => Ty::Param(symbol),
                     _ => {
                         self.require_nominal_well_formed(symbol, &args, annotation.id);
+                        // Implicit effect args: annotations never spell
+                        // them, so `Wrapper` means "Wrapper with SOME
+                        // rows" — fresh here, pinned by whatever this
+                        // annotation meets (a declared return type's rows
+                        // are solved by the body and generalize with the
+                        // scheme). Collection-time leftovers sanitize to
+                        // owner-keyed params at the module boundary.
+                        if let Some(info) = self.catalog.structs.get(&symbol) {
+                            args.extend(info.eff_params.iter().map(|_| {
+                                Ty::Eff(EffectRow::open(
+                                    self.store.fresh_eff(self.level, annotation.id),
+                                ))
+                            }));
+                        }
                         Ty::Nominal(symbol, args)
                     }
                 }

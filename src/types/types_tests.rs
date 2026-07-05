@@ -2703,6 +2703,13 @@ pub mod tests {
                         || matches!(row.tail, Some(RowTail::Var(_)))
                 }
                 Ty::Any { assoc, .. } => assoc.iter().any(|(_, t)| ty_has_vars(t)),
+                Ty::Eff(eff) => {
+                    matches!(eff.tail, Some(EffTail::Var(_)))
+                        || eff
+                            .effects
+                            .iter()
+                            .any(|entry| entry.args.iter().any(ty_has_vars))
+                }
                 Ty::Proj(base, ..) => ty_has_vars(base),
                 Ty::Param(_) | Ty::Error => false,
             }
@@ -3548,6 +3555,59 @@ mod with_core {
     }
 
     #[test]
+    fn struct_eff_params_cross_the_module_boundary() {
+        // A struct with closure fields exports its implicit effect params
+        // (quantified field tails, no leaked variables); the importing
+        // module constructs and reads with per-construction rows, and the
+        // stored effect still demands a handler — nothing is laundered by
+        // the module boundary.
+        use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
+
+        let driver_a = Driver::new(
+            vec![Source::from(
+                "public struct Wrapper {\n\tlet f: () -> Int\n}",
+            )],
+            DriverConfig::new("A"),
+        );
+        let module_a = driver_a
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check()
+            .module("A");
+
+        let mut modules = ModuleEnvironment::default();
+        modules.import(module_a);
+        let config = crate::compiling::driver::DriverConfig {
+            module_id: ModuleId::Current,
+            modules: Rc::new(modules),
+            mode: crate::compiling::driver::CompilationMode::Library,
+            module_name: "B".to_string(),
+            parse_mode: crate::compiling::driver::ParseMode::Strict,
+            preserve_comments: false,
+        };
+        let driver_b = Driver::new(
+            vec![Source::from(
+                "use { Wrapper } from A\neffect 'ping() -> Void\nfunc pure_use() -> Int {\n\tlet w = Wrapper(f: func() { 1 })\n\tw.f()\n}\nfunc pingy_use() -> Int {\n\tlet w = Wrapper(f: func() {\n\t\t'ping()\n\t\t1\n\t})\n\tw.f()\n}\npure_use()\npingy_use()",
+            )],
+            config,
+        );
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        let errors = type_errors(&typed);
+        // pure_use is clean; pingy_use's stored 'ping reaches the top
+        // level unhandled — the row traveled through the imported struct.
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("No handler for 'ping"), "{errors:?}");
+    }
+
+    #[test]
     fn external_module_types_cross_the_boundary() {
         // Compile module A, import it into module B as an external module:
         // A's schemes and catalog must arrive with symbols remapped to B's
@@ -3784,20 +3844,42 @@ mod with_core {
     }
 
     #[test]
-    fn struct_closure_field_rows_contaminate_across_constructions() {
-        // PINS THE KNOWN DEFICIT (docs/effect-params-on-structs-plan.md):
-        // a closure field's effect row is one module-wide variable, so
-        // storing an effectful closure in ONE Wrapper contaminates a pure
-        // Wrapper elsewhere — `pure_use()` falsely reports an unhandled
-        // 'ping. When effect params on structs land, FLIP this assertion
-        // to `assert_eq!(errors, Vec::<String>::new())` and rename to
-        // struct_closure_fields_are_effect_polymorphic_per_construction.
+    fn struct_closure_fields_are_effect_polymorphic_per_construction() {
+        // Effect params on structs (docs/effect-params-on-structs-plan.md):
+        // a closure field's row is quantified per construction (implicit
+        // effect params on the nominal head, instantiated at the
+        // constructor, recovered at reads) — storing an effectful closure
+        // in ONE Wrapper contaminates nothing else.
         let typed = check_with_core(Source::from(
             "struct Wrapper {\n\tlet f: () -> Int\n}\neffect 'ping() -> Void\nfunc pure_use() -> Int {\n\tlet w = Wrapper(f: func() { 1 })\n\tw.f()\n}\nfunc pingy_use() 'ping -> Int {\n\tlet w = Wrapper(f: func() {\n\t\t'ping()\n\t\t1\n\t})\n\tw.f()\n}\npure_use()",
         ));
         let errors = type_errors(&typed);
+        assert_eq!(errors, Vec::<String>::new());
+    }
+
+    #[test]
+    fn struct_closure_field_rows_travel_with_the_instance() {
+        // The SOUND direction: the stored closure's effects ride the
+        // instance's type out of `make`, so calling the field elsewhere
+        // still demands a handler — a struct cannot launder an effect.
+        let typed = check_with_core(Source::from(
+            "struct Wrapper {\n\tlet f: () -> Int\n}\neffect 'ping() -> Void\nfunc make() -> Wrapper {\n\tWrapper(f: func() {\n\t\t'ping()\n\t\t1\n\t})\n}\nfunc use_it() -> Int {\n\tlet w = make()\n\tw.f()\n}\nuse_it()",
+        ));
+        let errors = type_errors(&typed);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("No handler for 'ping"), "{errors:?}");
+    }
+
+    #[test]
+    fn generic_struct_closure_fields_stay_polymorphic_per_instantiation() {
+        // The Map-shaped case: a generic struct's closure field, two
+        // instantiations with different rows — neither contaminates the
+        // other (type params and effect params instantiate together).
+        let typed = check_with_core(Source::from(
+            "struct Holder<T> {\n\tlet f: (T) -> T\n}\neffect 'ping() -> Void\nfunc pure_use() -> Int {\n\tlet h = Holder(f: func(x: Int) { x })\n\th.f(1)\n}\nfunc pingy_use() 'ping -> Bool {\n\tlet h = Holder(f: func(x: Bool) {\n\t\t'ping()\n\t\tx\n\t})\n\th.f(true)\n}\npure_use()",
+        ));
+        let errors = type_errors(&typed);
+        assert_eq!(errors, Vec::<String>::new());
     }
 
     #[test]

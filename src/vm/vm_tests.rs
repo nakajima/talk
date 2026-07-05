@@ -777,6 +777,19 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_effectful_closure_stored_in_a_struct_field() {
+        // Effect params on structs, end to end: the stored closure's row
+        // rides the instance's type (typing side) while its capability
+        // rides the closure environment (runtime side) — calling the
+        // field under the handler performs and resumes.
+        let (value, out) = run_on_both_engines_io(
+            "effect 'ask(prompt) -> Int\nstruct Wrapper {\n\tlet f: () -> Int\n}\n@handle 'ask { p in\n\tprint(p)\n\tcontinue 42\n}\nfunc go() 'ask -> Int {\n\tlet w = Wrapper(f: func() {\n\t\t'ask(\"meaning?\") + 1\n\t})\n\tw.f()\n}\ngo()",
+        );
+        assert_eq!(out, "meaning?\n");
+        assert_eq!(value, Value::I64(43));
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_resume_two_levels_below_the_scope() {
         // The perform sits two calls below the handler: resuming runs the
         // rest of the performer AND the rest of its caller, exactly once

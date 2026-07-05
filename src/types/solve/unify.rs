@@ -176,6 +176,40 @@ impl<'s> Solver<'s> {
                 }
             }
 
+            // Effect-arg padding: annotations spell nominal heads without
+            // their implicit effect args (`Wrapper`, not `Wrapper<'e>`),
+            // so a bare head ADOPTS the full head's eff suffix — the type
+            // args still unify pairwise.
+            (Ty::Nominal(s1, args1), Ty::Nominal(s2, args2))
+                if s1 == s2
+                    && args1.len() != args2.len()
+                    && {
+                        let (short, long) = if args1.len() < args2.len() {
+                            (args1, args2)
+                        } else {
+                            (args2, args1)
+                        };
+                        long[short.len()..].iter().all(|a| matches!(a, Ty::Eff(_)))
+                            && !short.iter().any(|a| matches!(a, Ty::Eff(_)))
+                    } =>
+            {
+                let nested = origin.nested();
+                let (short, long) = if args1.len() < args2.len() {
+                    (args1, args2)
+                } else {
+                    (args2, args1)
+                };
+                for (a1, a2) in short.iter().zip(long) {
+                    worklist.push(Constraint::Eq(a1.clone(), a2.clone(), nested));
+                }
+            }
+
+            // Effect arguments (kind-restricted Nominal args) unify as the
+            // rows they are.
+            (Ty::Eff(e1), Ty::Eff(e2)) => {
+                self.unify_eff(e1, e2, origin);
+            }
+
             (
                 Ty::Any {
                     protocol: p1,
@@ -481,6 +515,14 @@ impl<'s> Solver<'s> {
                 .iter()
                 .any(|(_, ty)| self.occurs_and_adjust_ty(root, level, ty)),
             Ty::Proj(base, _, _) => self.occurs_and_adjust_ty(root, level, &base),
+            Ty::Eff(eff) => {
+                eff.effects.iter().any(|entry| {
+                    entry
+                        .args
+                        .iter()
+                        .any(|a| self.occurs_and_adjust_ty(root, level, a))
+                }) || self.occurs_and_adjust_eff(root, level, &eff)
+            }
             Ty::Record(row) => {
                 let (fields, tail) = self.store.flatten_row(&row);
                 if let FlatTail::Var(v) = tail

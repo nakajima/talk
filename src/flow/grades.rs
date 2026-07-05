@@ -79,6 +79,7 @@ impl<'a> GradeView<'a> {
             | Ty::Proj(..)
             | Ty::Var(_)
             | Ty::Param(_)
+            | Ty::Eff(_)
             | Ty::Error => false,
         }
     }
@@ -144,6 +145,7 @@ impl<'a> GradeView<'a> {
             | Ty::Proj(..)
             | Ty::Var(_)
             | Ty::Param(_)
+            | Ty::Eff(_)
             | Ty::Error => false,
         }
     }
@@ -189,6 +191,8 @@ impl<'a> GradeView<'a> {
                 .fields
                 .iter()
                 .all(|(_, field)| self.copy_ty(field, seen)),
+            // An effect argument is runtime-inert: it never blocks a copy.
+            Ty::Eff(_) => true,
             Ty::Any { .. } | Ty::Proj(..) | Ty::Var(_) | Ty::Param(_) | Ty::Error => false,
         }
     }
@@ -239,7 +243,9 @@ impl<'a> GradeView<'a> {
             // the CALLER of a generic-param position owns its rvalue
             // arguments and drops them post-call, per specialization
             // (lower/calls.rs release_temps_then).
-            Ty::Func(..) | Ty::Proj(..) | Ty::Var(_) | Ty::Param(_) | Ty::Error => false,
+            Ty::Func(..) | Ty::Proj(..) | Ty::Var(_) | Ty::Param(_) | Ty::Eff(_) | Ty::Error => {
+                false
+            }
         }
     }
 

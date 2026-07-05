@@ -207,11 +207,34 @@ impl<'s> Solver<'s> {
                         .zip(args.iter().cloned())
                         .collect();
                     if let Some((property, field_ty)) = info.fields.get(&label_str) {
-                        let field_ty = field_ty.substitute(
-                            &substitution,
-                            &Default::default(),
-                            &Default::default(),
-                        );
+                        // A closure field's row is THIS instance's: splice
+                        // the head's trailing `Ty::Eff` args over the
+                        // field's quantified tails. A head without eff
+                        // args (an annotation or import that never met a
+                        // construction) reads with fresh rows instead.
+                        let mut eff_args = args
+                            .iter()
+                            .filter_map(|arg| match arg {
+                                Ty::Eff(row) => Some(row.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .into_iter();
+                        let eff_rows: FxHashMap<Symbol, EffectRow> = info
+                            .eff_params
+                            .iter()
+                            .map(|&param| {
+                                let row = eff_args.next().unwrap_or_else(|| {
+                                    EffectRow::open(
+                                        self.store.fresh_eff(self.level, origin.node),
+                                    )
+                                });
+                                (param, row)
+                            })
+                            .collect();
+                        let field_ty = field_ty
+                            .substitute(&substitution, &Default::default(), &Default::default())
+                            .substitute_eff_rows(&eff_rows);
                         queue.push(Constraint::Eq(member, field_ty, origin));
                         self.member_resolutions
                             .insert(origin.node, MemberResolution::Direct(*property));

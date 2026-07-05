@@ -564,6 +564,12 @@ const NVIM_RUNTIME_RAW_BASE: &str =
     "https://raw.githubusercontent.com/nakajima/talk/main/dev/editors/nvim";
 
 #[cfg(feature = "cli")]
+const TALK_RELEASE_DOWNLOAD_BASE: &str = "https://github.com/nakajima/talk/releases/download";
+
+#[cfg(feature = "cli")]
+const TALK_STATIC_ARCHIVE_NAME: &str = "libtalk_static.a";
+
+#[cfg(feature = "cli")]
 const NVIM_RUNTIME_FILES: &[&str] = &[
     "ftdetect/talktalk.lua",
     "ftplugin/talktalk.lua",
@@ -691,9 +697,15 @@ impl NvimRuntimeInstaller {
 
     fn download_file(relative_path: &str) -> anyhow::Result<Vec<u8>> {
         let url = format!("{NVIM_RUNTIME_RAW_BASE}/{relative_path}");
-        Self::download_url(&url)
+        Downloader::download_url(&url)
     }
+}
 
+#[cfg(feature = "cli")]
+struct Downloader;
+
+#[cfg(feature = "cli")]
+impl Downloader {
     fn download_url(url: &str) -> anyhow::Result<Vec<u8>> {
         let attempts = [
             ("curl", vec!["-fsSL", url]),
@@ -789,31 +801,174 @@ struct RuntimeArchive;
 #[cfg(feature = "cli")]
 impl RuntimeArchive {
     fn locate() -> Result<std::path::PathBuf, String> {
+        if let Some(candidate) = Self::locate_local() {
+            return Ok(candidate);
+        }
+
+        Self::download_current().map_err(|err| {
+            format!(
+                "could not find {TALK_STATIC_ARCHIVE_NAME} locally and {err}; run `cargo build -p talk-static` or pass --runtime"
+            )
+        })
+    }
+
+    fn locate_local() -> Option<std::path::PathBuf> {
+        Self::local_candidates()
+            .into_iter()
+            .find(|candidate| candidate.exists())
+    }
+
+    fn local_candidates() -> Vec<std::path::PathBuf> {
         let mut candidates = Vec::new();
         if let Ok(exe) = std::env::current_exe()
             && let Some(dir) = exe.parent()
         {
             if let Some(profile_dir) = dir.parent() {
-                candidates.push(profile_dir.join("release/libtalk_static.a"));
+                candidates.push(profile_dir.join(format!("release/{TALK_STATIC_ARCHIVE_NAME}")));
             }
-            candidates.push(dir.join("libtalk_static.a"));
-            candidates.push(dir.join("../lib/libtalk_static.a"));
+            candidates.push(dir.join(TALK_STATIC_ARCHIVE_NAME));
+            candidates.push(dir.join(format!("../lib/{TALK_STATIC_ARCHIVE_NAME}")));
             if let Some(profile_dir) = dir.parent() {
-                candidates.push(profile_dir.join("debug/libtalk_static.a"));
+                candidates.push(profile_dir.join(format!("debug/{TALK_STATIC_ARCHIVE_NAME}")));
             }
         }
-        candidates.push(std::path::PathBuf::from("target/release/libtalk_static.a"));
-        candidates.push(std::path::PathBuf::from("target/debug/libtalk_static.a"));
+        candidates.push(std::path::PathBuf::from(format!(
+            "target/release/{TALK_STATIC_ARCHIVE_NAME}"
+        )));
+        candidates.push(std::path::PathBuf::from(format!(
+            "target/debug/{TALK_STATIC_ARCHIVE_NAME}"
+        )));
+        candidates
+    }
 
-        for candidate in candidates {
-            if candidate.exists() {
-                return Ok(candidate);
-            }
+    fn download_current() -> Result<std::path::PathBuf, String> {
+        let target = Self::current_target()?;
+        let cached = Self::cache_path(target);
+        if Self::is_usable_archive(&cached) {
+            return Ok(cached);
         }
-        Err(
-            "could not find libtalk_static.a; run `cargo build -p talk-static` or pass --runtime"
-                .into(),
-        )
+
+        let tag = Self::release_tag();
+        let asset = Self::asset_name(target);
+        let url = format!("{TALK_RELEASE_DOWNLOAD_BASE}/{tag}/{asset}");
+        let checksum_url = format!("{url}.sha256");
+
+        eprintln!("downloading Talk static runtime {tag} for {target}");
+        let checksum = Downloader::download_url(&checksum_url)
+            .map_err(|err| format!("could not download {checksum_url}: {err:#}"))?;
+        let archive = Downloader::download_url(&url)
+            .map_err(|err| format!("could not download {url}: {err:#}"))?;
+        Self::verify_sha256(&archive, &checksum, &asset)?;
+        Self::write_cached(&cached, &archive)?;
+        Ok(cached)
+    }
+
+    fn current_target() -> Result<&'static str, String> {
+        if cfg!(all(
+            target_os = "linux",
+            target_env = "gnu",
+            target_arch = "x86_64"
+        )) {
+            Ok("x86_64-unknown-linux-gnu")
+        } else if cfg!(all(
+            target_os = "linux",
+            target_env = "gnu",
+            target_arch = "aarch64"
+        )) {
+            Ok("aarch64-unknown-linux-gnu")
+        } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+            Ok("x86_64-apple-darwin")
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            Ok("aarch64-apple-darwin")
+        } else {
+            Err(format!(
+                "automatic runtime download is not supported for {}-{}",
+                std::env::consts::ARCH,
+                std::env::consts::OS
+            ))
+        }
+    }
+
+    fn cache_path(target: &str) -> std::path::PathBuf {
+        Self::cache_root()
+            .join("talk")
+            .join("static-runtimes")
+            .join(Self::release_tag())
+            .join(target)
+            .join(TALK_STATIC_ARCHIVE_NAME)
+    }
+
+    fn cache_root() -> std::path::PathBuf {
+        if let Some(path) =
+            std::env::var_os("XDG_CACHE_HOME").filter(|value| !value.as_os_str().is_empty())
+        {
+            return std::path::PathBuf::from(path);
+        }
+        if let Some(home) = std::env::var_os("HOME").filter(|value| !value.as_os_str().is_empty()) {
+            return std::path::PathBuf::from(home).join(".cache");
+        }
+        std::env::temp_dir()
+    }
+
+    fn release_tag() -> String {
+        format!("v{}", env!("CARGO_PKG_VERSION"))
+    }
+
+    fn asset_name(target: &str) -> String {
+        format!("libtalk_static-{target}.a")
+    }
+
+    fn is_usable_archive(path: &std::path::Path) -> bool {
+        path.metadata()
+            .map(|metadata| metadata.is_file() && metadata.len() > 0)
+            .unwrap_or(false)
+    }
+
+    fn verify_sha256(bytes: &[u8], checksum: &[u8], asset: &str) -> Result<(), String> {
+        use sha2::Digest as _;
+
+        let checksum = std::str::from_utf8(checksum)
+            .map_err(|err| format!("invalid sha256 metadata for {asset}: {err}"))?;
+        let expected = checksum
+            .split_whitespace()
+            .next()
+            .ok_or_else(|| format!("empty sha256 metadata for {asset}"))?;
+        if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(format!("invalid sha256 metadata for {asset}"));
+        }
+
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(bytes);
+        let actual = format!("{:x}", hasher.finalize());
+        if !expected.eq_ignore_ascii_case(&actual) {
+            return Err(format!("checksum mismatch for downloaded {asset}"));
+        }
+        Ok(())
+    }
+
+    fn write_cached(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("invalid runtime cache path: {}", path.display()))?;
+        std::fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "failed to create runtime cache directory {}: {err}",
+                parent.display()
+            )
+        })?;
+        let temp = path.with_file_name(format!(
+            "{TALK_STATIC_ARCHIVE_NAME}.{}.tmp",
+            std::process::id()
+        ));
+        std::fs::write(&temp, bytes)
+            .map_err(|err| format!("failed to write {}: {err}", temp.display()))?;
+        std::fs::rename(&temp, path).map_err(|err| {
+            format!(
+                "failed to move {} to {}: {err}",
+                temp.display(),
+                path.display()
+            )
+        })
     }
 }
 

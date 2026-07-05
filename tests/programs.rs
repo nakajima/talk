@@ -7,16 +7,6 @@ use talk::compiling::driver::{Driver, DriverConfig, Lowered, Source};
 
 /// Programs whose containers leak buffers today — the corpus slice of the
 /// Track B fence. B2 empties this list.
-const EXPECTS_CONTAINER_ELEMENT_LEAK: &[&str] = &[
-    "iterate_and_match",
-    "string_building",
-    "conditional_moves",
-    "handlers",
-    "graphemes",
-    "caller_locals_handler",
-    "multi_effect_handlers",
-];
-
 fn run_program(name: &str) {
     let path = std::path::PathBuf::from(format!("tests/programs/{name}.tlk"));
     let driver = Driver::new(vec![Source::from(path)], DriverConfig::new("Corpus"));
@@ -41,13 +31,7 @@ fn run_program(name: &str) {
     assert!(verified.is_ok(), "{name}: verifier: {:?}", verified.err());
 
     let (_, vm_out) = lowered.run_vm_with_output().expect("vm");
-    let (_, evaluator_out) = if EXPECTS_CONTAINER_ELEMENT_LEAK.contains(&name) {
-        lowered
-            .eval_expecting_container_element_leak()
-            .expect("evaluator")
-    } else {
-        lowered.eval_with_output().expect("evaluator")
-    };
+    let (_, evaluator_out) = lowered.eval_with_output().expect("evaluator");
     assert_eq!(evaluator_out, vm_out, "{name}: stdout diverged");
     assert!(!vm_out.is_empty(), "{name}: corpus programs print evidence");
 }

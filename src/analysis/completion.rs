@@ -196,7 +196,7 @@ fn add_member_items_for_ty(
                 }
             }
         }
-        Ty::Borrow(..) | Ty::Func(..) | Ty::Tuple(_) | Ty::Var(_) | Ty::Error => {}
+        Ty::Borrow(..) | Ty::Func(..) | Ty::Tuple(_) | Ty::Var(_) | Ty::Eff(_) | Ty::Error => {}
     }
 }
 

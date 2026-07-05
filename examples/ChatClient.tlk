@@ -14,20 +14,24 @@ _io_connect(sock, LOCALHOST, 9900)
 let welcome_buf = _alloc(1024)
 let welcome_n = _io_read(sock, welcome_buf, 1024)
 _io_write(STDOUT_FD, welcome_buf, welcome_n)
+_free(welcome_buf)
 
 loop {
 	// Read a message from stdin and send it
 	let msg_buf = _alloc(1024)
 	let msg_n = _io_read(STDIN_FD, msg_buf, 1024)
 	_io_write(sock, msg_buf, msg_n)
+	_free(msg_buf)
 
 	// Read and print echo response
 	let buf = _alloc(1024)
 	let n = _io_read(sock, buf, 1024)
 	if n <= 0 {
+		_free(buf)
 		break
 	}
 	_io_write(STDOUT_FD, buf, n)
+	_free(buf)
 }
 
 _io_close(sock)

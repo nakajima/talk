@@ -150,7 +150,23 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             let ty = self.lower_annotation(annotation);
             self.emit_eq(target.clone(), ty, annotation.id, CtReason::Annotation);
         }
-        let self_ty = Ty::Nominal(symbol, theta.clone());
+        // Closure-field effect rows instantiate per construction (one
+        // fresh open row per implicit effect param) and ride the head as
+        // `Ty::Eff` arguments — THIS instance's rows, recovered at member
+        // reads, contaminating nothing else.
+        let eff_tails: FxHashMap<Symbol, EffTail> = info
+            .eff_params
+            .iter()
+            .map(|&param| (param, EffTail::Var(self.store.fresh_eff(self.level, expr.id))))
+            .collect();
+        let mut head_args = theta.clone();
+        head_args.extend(info.eff_params.iter().map(|param| {
+            Ty::Eff(EffectRow {
+                effects: vec![],
+                tail: Some(eff_tails[param].clone()),
+            })
+        }));
+        let self_ty = Ty::Nominal(symbol, head_args);
         self.emit_nominal_well_formedness(symbol, &theta, expr.id);
 
         let arg_count = args.len() + usize::from(trailing_block.is_some());
@@ -177,6 +193,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
         match self.store.shallow(&signature) {
             Ty::Func(params, _ret, eff) => {
+                // The memberwise init's param types are copies of the
+                // field annotations with their OWN row variables; pin
+                // them to this construction's instance rows so the stored
+                // closure's row is the row reads recover.
+                if !info.eff_params.is_empty() && params.len() == info.fields.len() + 1 {
+                    for (param, (_, field_ty)) in params[1..].iter().zip(info.fields.values()) {
+                        let field_ty =
+                            field_ty.substitute(&substitution, &eff_tails, &Default::default());
+                        self.emit_eq(param.clone(), field_ty, expr.id, CtReason::Apply);
+                    }
+                }
                 if params.len() != arg_count + 1 {
                     self.diagnostics.errors.push((
                         TypeError::ArityMismatch {

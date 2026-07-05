@@ -105,12 +105,20 @@ their closure rows instead of sharing one module-wide row var.
 
 ## Decided / deferred (the ledger — nothing is "known" without a home)
 
-- **Effect-generic closure storage** (Map's field row): per-READ
-  freshening is unsound (decouples the read row from what construction
-  stored); rigid-at-collection breaks `map`'s body. The sound fix is
-  effect parameters on struct types — a designed feature, not a patch.
-  Until then: field rows are raw vars in-module (module-wide
-  monomorphic) and owner-keyed rigid params across the boundary.
+- **Effect-generic closure storage — DONE (day 3)**: effect parameters
+  on struct types (docs/effect-params-on-structs-plan.md). Closure
+  fields' free row tails quantify as implicit effect params at
+  collection; constructions instantiate them (fresh open rows carried as
+  `Ty::Eff` args on the nominal head — Koka-style kinded type
+  arguments); member reads splice the INSTANCE's row back over the
+  field's tails (`Ty::substitute_eff_rows`); annotations append fresh
+  rows (a bare head means "some rows", pinned by whatever it meets);
+  HIR bake erases eff args (capabilities ride closure envs at runtime).
+  Sound in both directions — no cross-construction contamination, no
+  laundering through a struct or a module boundary — five tests pin it,
+  including a both-engines handled/resumed stored-closure run. v1 scope
+  residuals (enums, Self-in-methods, explicit inits) are listed in the
+  plan doc.
 - **Existential dispatch** stays erased/substitute-only (witness tables
   over `Any` receivers) — the same carve-out Swift makes for opened
   existentials.

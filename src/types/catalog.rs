@@ -34,6 +34,11 @@ pub struct StructInfo {
     pub heap: bool,
     /// Declared generic parameters, as rigid `Ty::Param` symbols.
     pub params: Vec<Symbol>,
+    /// Implicit effect-row parameters, one per free row tail in the
+    /// closure-typed fields — quantified per construction and carried as
+    /// `Ty::Eff` arguments after the type args on this nominal's head.
+    #[serde(default)]
+    pub eff_params: Vec<Symbol>,
     /// Field name → (property symbol, declared type over `params`).
     pub fields: IndexMap<String, (Symbol, Ty)>,
     /// Instance method name → method symbol.
@@ -344,6 +349,7 @@ impl TypeCatalog {
                             linear: v.linear,
                             heap: v.heap,
                             params: v.params.iter().map(|s| imp(*s, target)).collect(),
+                            eff_params: v.eff_params.iter().map(|s| imp(*s, target)).collect(),
                             fields: v
                                 .fields
                                 .into_iter()

@@ -13,7 +13,9 @@
   "activationEvents": [
     "onLanguage:talktalk",
     "workspaceContains:**/*.tlk",
-    "onCommand:talktalk.restartLsp"
+    "onCommand:talktalk.restartLsp",
+    "onCommand:talktalk.setCorePath",
+    "onCommand:talktalk.clearCorePath"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -21,8 +23,26 @@
       {
         "command": "talktalk.restartLsp",
         "title": "TalkTalk: Restart Language Server"
+      },
+      {
+        "command": "talktalk.setCorePath",
+        "title": "TalkTalk: Set Core Path"
+      },
+      {
+        "command": "talktalk.clearCorePath",
+        "title": "TalkTalk: Clear Core Path"
       }
     ],
+    "configuration": {
+      "title": "TalkTalk",
+      "properties": {
+        "talktalk.corePath": {
+          "type": "string",
+          "default": "",
+          "description": "Directory containing core .tlk files to pass as TALK_CORE_PATH to the language server. Supports a leading ~/. If empty, the extension forwards TALK_CORE_PATH from its own environment when present."
+        }
+      }
+    },
     "languages": [
       {
         "id": "talktalk",

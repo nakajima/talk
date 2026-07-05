@@ -277,6 +277,16 @@ impl VarStore {
                 }
             }
             Ty::Proj(base, ..) => self.query_resolved(base, f)?,
+            Ty::Eff(eff) => {
+                for entry in &eff.effects {
+                    for arg in &entry.args {
+                        self.query_resolved(arg, f)?;
+                    }
+                }
+                if let Some(tail) = &eff.tail {
+                    f(self, TyNode::EffTail(tail))?;
+                }
+            }
             Ty::Var(_) | Ty::Param(_) | Ty::Error => {}
         }
         ControlFlow::Continue(())

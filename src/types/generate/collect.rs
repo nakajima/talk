@@ -396,6 +396,9 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                         .iter()
                         .all(|(_, field)| self.satisfies_marker(field, marker))
             }
+            // An effect argument is runtime-inert: it never blocks a
+            // marker (Copy/CheapClone judge values, not rows).
+            Ty::Eff(_) => true,
             Ty::Borrow(..) | Ty::Func(..) | Ty::Any { .. } | Ty::Proj(..) => false,
         }
     }
@@ -477,10 +480,56 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 other => self.unsupported(member.id, decl_kind_name(other)),
             }
         }
+        self.mint_field_eff_params(&mut info);
         for label in info.fields.keys().chain(info.methods.keys()) {
             self.catalog.add_owner(label, MemberOwner::Nominal(symbol));
         }
         self.catalog.structs.insert(symbol, info);
+    }
+
+    /// Quantify the struct's closure-field effect rows: every free row
+    /// tail minted by the field annotations becomes an implicit rigid
+    /// effect param (one per distinct variable), instantiated per
+    /// construction and carried as a `Ty::Eff` argument on the nominal
+    /// head. Without this the module shares ONE row variable per field,
+    /// so any effectful construction contaminates every other use.
+    fn mint_field_eff_params(&mut self, info: &mut StructInfo) {
+        use crate::types::ty::{EffTail, TyFold};
+
+        struct Mint<'a> {
+            symbols: &'a mut Symbols,
+            module_id: ModuleId,
+            minted: FxHashMap<u32, Symbol>,
+            order: Vec<Symbol>,
+        }
+        impl TyFold for Mint<'_> {
+            fn fold_eff_tail(&mut self, tail: &Option<EffTail>) -> Option<EffTail> {
+                match tail {
+                    Some(EffTail::Var(v)) => {
+                        let param = *self.minted.entry(v.0).or_insert_with(|| {
+                            let param = Symbol::Synthesized(
+                                self.symbols.next_synthesized(self.module_id),
+                            );
+                            self.order.push(param);
+                            param
+                        });
+                        Some(EffTail::Param(param))
+                    }
+                    other => other.clone(),
+                }
+            }
+        }
+
+        let mut mint = Mint {
+            symbols: self.symbols,
+            module_id: self.module_id,
+            minted: FxHashMap::default(),
+            order: vec![],
+        };
+        for (_, ty) in info.fields.values_mut() {
+            *ty = mint.fold_ty(ty);
+        }
+        info.eff_params = mint.order;
     }
 
     pub(super) fn register_enum(&mut self, symbol: Symbol, decl: &Decl) {
