@@ -412,47 +412,32 @@ impl<'a> Lowering<'a> {
                         PayloadAction::Drop,
                     );
                 }
-                // A `Deinit` conformance runs the user's destructor, which
-                // consumes the value; its own body then drops the fields
-                // (its scope-exit drops), so no structural teardown follows
-                // here. Inside the deinit body itself, dropping self skips
-                // the dispatch (fields only) — no recursion.
+                // A `Deinit` conformance is the user's destructor hook
+                // (Rust's Drop::drop model): the body runs first, then the
+                // GLUE tears the fields down structurally — the body never
+                // owns field teardown. The self-recursion guard is θ-aware:
+                // inside `deinit<Array<String>>`, dropping an ELEMENT that
+                // is itself an array (a different instantiation) must
+                // still dispatch — only the body's own value skips. The
+                // witness ranges over the CONFORMANCE row's rigid params,
+                // so θ binds the row's self_args against this application.
+                let value_theta = self.deinit_theta(symbol, &args);
                 if let Some(witness) = self.deinit_witness(symbol)
-                    && ctx.owner != Some(witness)
-                    && let Some(label) = {
-                        let theta = self.nominal_theta(symbol, &args);
-                        self.demand(witness, theta)
-                    }
+                    && (ctx.owner != Some(witness) || value_theta != ctx.theta)
+                    && let Some(label) = self.demand(witness, value_theta)
                 {
                     let fn_ref = self.p.func_ref(label);
                     let void_ty = self.p.ty_void();
                     let bot = self.p.ty_bot();
+                    let teardown =
+                        self.lower_structural_teardown_then(ctx, value, symbol, &args, next);
                     let cont = self.p.func("after_deinit", void_ty, bot);
-                    self.p.set_body(cont, next);
+                    self.p.set_body(cont, teardown);
                     let cont_ref = self.p.func_ref(cont);
                     let args_tuple = self.p.tuple(&[value, cont_ref]);
                     return self.p.app(fn_ref, args_tuple);
                 }
-                if let Some(index) = self.rawptr_field_index(symbol) {
-                    let ptr_ty = self.p.ty_ptr();
-                    let ptr = self.p.primop(Op::GetField(index), &[value], ptr_ty);
-                    let void_ty = self.p.ty_void();
-                    let free = self.p.primop(Op::Free, &[ptr], void_ty);
-                    return self.sequence_void_effect(free, next);
-                }
-                let fields = self.field_types_for(symbol, &args);
-                let mut body = next;
-                for (index, (_, field_ty)) in fields.into_iter().enumerate().rev() {
-                    if !self.needs_drop_type(&field_ty) {
-                        continue;
-                    }
-                    let field_lambda_ty = self.map_ty(&field_ty);
-                    let field_value =
-                        self.p
-                            .primop(Op::GetField(index as u32), &[value], field_lambda_ty);
-                    body = self.lower_drop_value_then(ctx, field_value, &field_ty, body);
-                }
-                body
+                self.lower_structural_teardown_then(ctx, value, symbol, &args, next)
             }
             CheckTy::Tuple(items) => {
                 let mut body = next;
@@ -479,7 +464,10 @@ impl<'a> Lowering<'a> {
             CheckTy::Any { protocol, .. } => {
                 // Every existential carries a drop witness in its last
                 // table slot: `λ(payload, k)` (deinit dispatch included).
-                let index = self.units[ctx.unit]
+                // The slot index comes from the ENTRY unit's merged
+                // catalog — the drop may lower inside core (Array's
+                // deinit) for a protocol core has never heard of.
+                let index = self.units[self.entry]
                     .types
                     .catalog
                     .requirements_for_conformance(protocol)
@@ -673,6 +661,57 @@ impl<'a> Lowering<'a> {
                 .and_then(|conformance| conformance.witnesses.get("deinit"))
                 .copied()
         })
+    }
+
+    /// Structural teardown of a nominal's owned parts: the raw-pointer
+    /// field frees, other droppable fields drop recursively. Runs after a
+    /// Deinit hook returns (the glue owns teardown, never the hook body)
+    /// and directly for nominals without one.
+    fn lower_structural_teardown_then(
+        &mut self,
+        ctx: &Ctx,
+        value: ExprId,
+        symbol: Symbol,
+        args: &[CheckTy],
+        next: ExprId,
+    ) -> ExprId {
+        if let Some(index) = self.rawptr_field_index(symbol) {
+            let ptr_ty = self.p.ty_ptr();
+            let ptr = self.p.primop(Op::GetField(index), &[value], ptr_ty);
+            let void_ty = self.p.ty_void();
+            let free = self.p.primop(Op::Free, &[ptr], void_ty);
+            return self.sequence_void_effect(free, next);
+        }
+        let fields = self.field_types_for(symbol, args);
+        let mut body = next;
+        for (index, (_, field_ty)) in fields.into_iter().enumerate().rev() {
+            if !self.needs_drop_type(&field_ty) {
+                continue;
+            }
+            let field_lambda_ty = self.map_ty(&field_ty);
+            let field_value = self
+                .p
+                .primop(Op::GetField(index as u32), &[value], field_lambda_ty);
+            body = self.lower_drop_value_then(ctx, field_value, &field_ty, body);
+        }
+        body
+    }
+
+    /// θ for a Deinit witness at this application: the conformance row's
+    /// rigid params bound against the head args.
+    pub(super) fn deinit_theta(&self, symbol: Symbol, args: &[CheckTy]) -> Theta {
+        let mut theta = Theta::default();
+        if let Some(conformance) = self.units.iter().find_map(|unit| {
+            unit.types
+                .catalog
+                .conformances
+                .get(&(symbol, Symbol::Deinit))
+        }) {
+            for (pattern, actual) in conformance.self_args.iter().zip(args) {
+                crate::types::solve::bind_param_pattern(pattern, actual, &mut theta);
+            }
+        }
+        theta
     }
 
     /// θ binding a nominal's declared params to this application's args.

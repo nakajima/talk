@@ -15,14 +15,38 @@ impl<'a> Lowering<'a> {
                     self.index_decl(unit_index, decl);
                 }
             }
-            // Requirement signatures for default-body specialization.
-            for info in self.units[unit_index].types.catalog.protocols.values() {
-                for requirement in info.requirements.values() {
-                    self.requirement_sigs
-                        .insert(requirement.symbol, requirement.sig.clone());
+        }
+        self.derive_mutating();
+    }
+
+    /// The inout calling convention, derived ONCE from the signature
+    /// carrier: any callable whose scheme takes `self: &mut Self`
+    /// (first param an exclusive borrow) returns [result, Self] and the
+    /// caller writes Self back — methods, extend witnesses, and mut
+    /// requirements alike, local or imported. `'heap` receivers mutate
+    /// in place through the handle (no pair, no write-back), and inits
+    /// never match (their self is by value, returned as the result).
+    fn derive_mutating(&mut self) {
+        let mut mutating = FxHashSet::default();
+        for unit in &self.units {
+            for (symbol, scheme) in &unit.types.schemes {
+                let CheckTy::Func(params, ..) = &scheme.ty else {
+                    continue;
+                };
+                let Some(CheckTy::Borrow(perm, inner)) = params.first() else {
+                    continue;
+                };
+                if !perm.is_exclusive() {
+                    continue;
+                }
+                let heap_self = matches!(&**inner, CheckTy::Nominal(head, _)
+                    if self.units.iter().any(|u| u.types.catalog.is_heap(*head)));
+                if !heap_self {
+                    mutating.insert(*symbol);
                 }
             }
         }
+        self.mutating = mutating;
     }
 
     pub(super) fn index_decl(&mut self, unit: usize, decl: &'a Decl) {
@@ -37,7 +61,7 @@ impl<'a> Lowering<'a> {
                 {
                     match &rhs.kind {
                         ExprKind::Func(func) => {
-                            self.index_callable(unit, symbol, &func.params, &func.body, false);
+                            self.index_callable(unit, symbol, &func.params, &func.body);
                         }
                         _ => {
                             self.globals.insert(symbol, (unit, rhs));
@@ -59,12 +83,12 @@ impl<'a> Lowering<'a> {
             }
             DeclKind::Method { func, .. } => {
                 if let Ok(symbol) = func.name.symbol() {
-                    self.index_callable(unit, symbol, &func.params, &func.body, false);
+                    self.index_callable(unit, symbol, &func.params, &func.body);
                 }
             }
             DeclKind::Init { name, params, body } => {
                 if let Ok(symbol) = name.symbol() {
-                    self.index_callable(unit, symbol, params, body, true);
+                    self.index_callable(unit, symbol, params, body);
                 }
             }
             _ => {}
@@ -77,44 +101,9 @@ impl<'a> Lowering<'a> {
         symbol: Symbol,
         params: &'a [crate::hir::Parameter],
         body: &'a Block,
-        is_init: bool,
     ) {
-        // A `mut func` is internally `self: &mut Self`, which uses the
-        // inout calling convention: ret carries [result, Self] and the
-        // caller writes Self back. Initializers are excluded because their
-        // self starts blank and is returned as the result instead.
-        if !is_init && params.first().is_some_and(Self::is_mutable_self_param) {
-            // A `'heap` receiver mutates in place through the handle — no
-            // inout pair, no caller write-back.
-            let heap_self = params.first().is_some_and(|param| {
-                matches!(
-                    self.units[unit].types.node_types.get(&param.id),
-                    Some(crate::types::ty::Ty::Borrow(_, inner))
-                        if matches!(**inner, crate::types::ty::Ty::Nominal(inner_symbol, _)
-                            if self.units[unit].types.catalog.is_heap(inner_symbol))
-                ) || matches!(
-                    self.units[unit].types.node_types.get(&param.id),
-                    Some(crate::types::ty::Ty::Nominal(self_symbol, _))
-                        if self.units[unit].types.catalog.is_heap(*self_symbol)
-                )
-            });
-            if !heap_self {
-                self.mutating.insert(symbol);
-            }
-        }
         self.sources
             .insert(symbol, FuncSource { unit, params, body });
-    }
-
-    pub(super) fn is_mutable_self_param(param: &crate::hir::Parameter) -> bool {
-        param.name.name_str() == "self"
-            && matches!(
-                param
-                    .type_annotation
-                    .as_ref()
-                    .map(|annotation| &annotation.kind),
-                Some(TypeAnnotationKind::Borrow { mutable: true, .. })
-            )
     }
 
     // ----- Effect capabilities (dynamic-extent handlers) ------------------
@@ -428,9 +417,12 @@ impl<'a> Lowering<'a> {
         let raw = self
             .units
             .iter()
-            .find_map(|u| u.types.schemes.get(&symbol).map(|s| s.ty.clone()))
-            .or_else(|| self.requirement_sigs.get(&symbol).cloned())?;
-        Some(raw.substitute(theta, &Default::default(), &Default::default()))
+            .find_map(|u| u.types.schemes.get(&symbol).map(|s| s.ty.clone()))?;
+        let substituted = raw.substitute(theta, &Default::default(), &Default::default());
+        // θ can expose reducible projections (`ArrayIterator<Int>.Element`
+        // in a field or requirement signature): reduce them through the
+        // conformance table before anything maps this type to λ_G.
+        Some(self.normalize_check_ty(substituted, self.entry))
     }
 
     /// A specialization's display name: the source name plus the concrete

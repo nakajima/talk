@@ -104,8 +104,19 @@ impl<'s> Solver<'s> {
         for (lhs, rhs) in type_equalities {
             let lhs = normalize_ty(self.store, self.catalog, &lhs);
             let rhs = normalize_ty(self.store, self.catalog, &rhs);
+            if lhs == rhs {
+                continue;
+            }
             let local_given = self.given_mentions_local_params(&lhs, &rhs);
             let (from, to) = Self::oriented_given_rewrite(lhs, rhs);
+            // A target containing its source (`Int ~ &Int`) grows the type
+            // at every step and never reaches the fixpoint; rewrite such
+            // givens in the shrinking direction instead.
+            let (from, to) = if self.given_rewrite_occurs(&from, &to) {
+                (to, from)
+            } else {
+                (from, to)
+            };
             if rebuilt == from {
                 let (rewritten, used) = self.rewrite_ty_from_givens_inner(to, seen);
                 return (rewritten, used_local_given.or(local_given).or(used));
@@ -128,6 +139,18 @@ impl<'s> Solver<'s> {
         ty
     }
 
+    /// Whether `to` structurally contains `from` — the occurs check for an
+    /// oriented given rewrite.
+    fn given_rewrite_occurs(&mut self, from: &Ty, to: &Ty) -> bool {
+        let needle = from.clone();
+        self.store
+            .query_resolved(to, &mut |_, node| match node {
+                TyNode::Ty(ty) if *ty == needle => ControlFlow::Break(()),
+                _ => ControlFlow::Continue(()),
+            })
+            .is_break()
+    }
+
     pub(super) fn given_mentions_local_params(&mut self, lhs: &Ty, rhs: &Ty) -> Option<Symbol> {
         if self.local_params.is_empty() {
             return None;
@@ -147,10 +170,14 @@ impl<'s> Solver<'s> {
 
     pub(super) fn rewrite_specificity(ty: &Ty) -> u8 {
         match ty {
-            Ty::Var(_) | Ty::Param(_) => 0,
-            Ty::Proj(..) => 1,
+            // A projection is a family application: it is always the redex
+            // (OutsideIn(X)'s flattening direction), even against a bare
+            // param — otherwise a self-referential given like `E.RHS ~ E`
+            // rewrites E to E.RHS and diverges.
+            Ty::Proj(..) => 0,
+            Ty::Var(_) | Ty::Param(_) => 1,
             Ty::Func(..) | Ty::Record(_) | Ty::Tuple(_) => 2,
-            Ty::Borrow(..) | Ty::Unique(_) | Ty::Nominal(..) | Ty::Any { .. } => 3,
+            Ty::Borrow(..) | Ty::Unique(_) | Ty::Nominal(..) | Ty::Any { .. } | Ty::Eff(_) => 3,
             Ty::Error => 4,
         }
     }

@@ -14,6 +14,18 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         trailing_block: &Option<Block>,
         ctx: &Ctx,
     ) -> Ty {
+        self.finish_call_with_result_origin(node, node, callee_ty, args, trailing_block, ctx)
+    }
+
+    fn finish_call_with_result_origin(
+        &mut self,
+        node: NodeID,
+        result_origin: NodeID,
+        callee_ty: Ty,
+        args: &[CallArg],
+        trailing_block: &Option<Block>,
+        ctx: &Ctx,
+    ) -> Ty {
         let arg_count = args.len() + usize::from(trailing_block.is_some());
 
         match self.store.shallow(&callee_ty) {
@@ -51,7 +63,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 if let Some(block) = trailing_block {
                     arg_tys.push(self.infer_closure_block(block, ctx));
                 }
-                let ret = Ty::Var(self.store.fresh_ty(self.level, node));
+                let ret = Ty::Var(self.store.fresh_ty(self.level, result_origin));
                 let expected = Ty::Func(arg_tys, Box::new(ret.clone()), ctx.eff.clone());
                 self.emit_eq(callee_ty, expected, node, CtReason::Apply);
                 ret
@@ -83,7 +95,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let receiver_ty = self.infer_expr(receiver, ctx);
         let member = Ty::Var(self.store.fresh_ty(self.level, callee.id));
         self.artifacts.node_types.insert(callee.id, member.clone());
-        let result = self.finish_call(expr.id, member.clone(), args, trailing_block, ctx);
+        let result = self.finish_call_with_result_origin(
+            expr.id,
+            callee.id,
+            member.clone(),
+            args,
+            trailing_block,
+            ctx,
+        );
         self.wanteds.push(Constraint::HasMember {
             receiver: receiver_ty,
             label: label.clone(),
@@ -131,7 +150,23 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             let ty = self.lower_annotation(annotation);
             self.emit_eq(target.clone(), ty, annotation.id, CtReason::Annotation);
         }
-        let self_ty = Ty::Nominal(symbol, theta.clone());
+        // Closure-field effect rows instantiate per construction (one
+        // fresh open row per implicit effect param) and ride the head as
+        // `Ty::Eff` arguments — THIS instance's rows, recovered at member
+        // reads, contaminating nothing else.
+        let eff_tails: FxHashMap<Symbol, EffTail> = info
+            .eff_params
+            .iter()
+            .map(|&param| (param, EffTail::Var(self.store.fresh_eff(self.level, expr.id))))
+            .collect();
+        let mut head_args = theta.clone();
+        head_args.extend(info.eff_params.iter().map(|param| {
+            Ty::Eff(EffectRow {
+                effects: vec![],
+                tail: Some(eff_tails[param].clone()),
+            })
+        }));
+        let self_ty = Ty::Nominal(symbol, head_args);
         self.emit_nominal_well_formedness(symbol, &theta, expr.id);
 
         let arg_count = args.len() + usize::from(trailing_block.is_some());
@@ -158,6 +193,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
         match self.store.shallow(&signature) {
             Ty::Func(params, _ret, eff) => {
+                // The memberwise init's param types are copies of the
+                // field annotations with their OWN row variables; pin
+                // them to this construction's instance rows so the stored
+                // closure's row is the row reads recover.
+                if !info.eff_params.is_empty() && params.len() == info.fields.len() + 1 {
+                    for (param, (_, field_ty)) in params[1..].iter().zip(info.fields.values()) {
+                        let field_ty =
+                            field_ty.substitute(&substitution, &eff_tails, &Default::default());
+                        self.emit_eq(param.clone(), field_ty, expr.id, CtReason::Apply);
+                    }
+                }
                 if params.len() != arg_count + 1 {
                     self.diagnostics.errors.push((
                         TypeError::ArityMismatch {
@@ -284,6 +330,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         if self.catalog.protocols.contains_key(&symbol) {
             let (owner, requirement) = self.catalog.requirement_in(symbol, &label_str)?;
             let requirement = requirement.clone();
+            // The requirement's type is its scheme: freshen method-level
+            // generics (recorded for the lowerer's θ) and every effect
+            // row per use, like any scheme instantiation.
+            let scheme = self.schemes.get(&requirement.symbol)?.clone();
             let assoc_symbols: Vec<Symbol> = self
                 .catalog
                 .protocols
@@ -297,12 +347,27 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 .map(|a| (*a, Ty::Proj(Box::new(self_var.clone()), owner, *a)))
                 .collect();
             tys.insert(owner, self_var.clone());
+            for param in &scheme.params {
+                let var = Ty::Var(self.store.fresh_ty(self.level, node));
+                self.artifacts
+                    .instantiations
+                    .entry(node)
+                    .or_default()
+                    .push((param.symbol, var.clone()));
+                tys.insert(param.symbol, var);
+            }
             let mut effs = FxHashMap::default();
-            effs.insert(
-                requirement.symbol,
-                EffTail::Var(self.store.fresh_eff(self.level, node)),
-            );
-            let signature = requirement.sig.substitute(&tys, &effs, &Default::default());
+            for param in &scheme.eff_params {
+                effs.insert(*param, EffTail::Var(self.store.fresh_eff(self.level, node)));
+            }
+            for predicate in &scheme.predicates {
+                self.wanteds.push(
+                    predicate
+                        .substitute(&tys, &effs, &Default::default())
+                        .into_constraint(CtOrigin::new(node, CtReason::Apply)),
+                );
+            }
+            let signature = scheme.ty.substitute(&tys, &effs, &Default::default());
 
             self.wanteds.push(Constraint::Conforms {
                 ty: self_var,

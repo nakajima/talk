@@ -407,6 +407,22 @@ impl<'a> DeclDeclarer<'a> {
             .types
             .insert("Self".into(), sym);
 
+        // A protocol extension body sees the protocol's member type names
+        // (associated types, typealiases) unqualified, like the protocol
+        // body itself.
+        if is_extend && matches!(sym, Symbol::Protocol(_)) {
+            let children = self.resolver.phase.child_types.get(&sym).cloned();
+            if let Some(children) = children {
+                let scope = self
+                    .resolver
+                    .current_scope_mut()
+                    .expect("didn't get current scope");
+                for (label, child) in children {
+                    scope.types.insert(label.to_string(), child);
+                }
+            }
+        }
+
         self.declare_generics(generics, is_extend);
 
         self.predeclare_nominals(decls.iter().collect_vec().as_slice());

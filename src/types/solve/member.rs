@@ -207,11 +207,34 @@ impl<'s> Solver<'s> {
                         .zip(args.iter().cloned())
                         .collect();
                     if let Some((property, field_ty)) = info.fields.get(&label_str) {
-                        let field_ty = field_ty.substitute(
-                            &substitution,
-                            &Default::default(),
-                            &Default::default(),
-                        );
+                        // A closure field's row is THIS instance's: splice
+                        // the head's trailing `Ty::Eff` args over the
+                        // field's quantified tails. A head without eff
+                        // args (an annotation or import that never met a
+                        // construction) reads with fresh rows instead.
+                        let mut eff_args = args
+                            .iter()
+                            .filter_map(|arg| match arg {
+                                Ty::Eff(row) => Some(row.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .into_iter();
+                        let eff_rows: FxHashMap<Symbol, EffectRow> = info
+                            .eff_params
+                            .iter()
+                            .map(|&param| {
+                                let row = eff_args.next().unwrap_or_else(|| {
+                                    EffectRow::open(
+                                        self.store.fresh_eff(self.level, origin.node),
+                                    )
+                                });
+                                (param, row)
+                            })
+                            .collect();
+                        let field_ty = field_ty
+                            .substitute(&substitution, &Default::default(), &Default::default())
+                            .substitute_eff_rows(&eff_rows);
                         queue.push(Constraint::Eq(member, field_ty, origin));
                         self.member_resolutions
                             .insert(origin.node, MemberResolution::Direct(*property));
@@ -297,23 +320,49 @@ impl<'s> Solver<'s> {
                     }
                 }
                 // Inherent extend members (`extend Float { func _trunc() }`).
+                // The head application binds the extend's rigid params;
+                // everything quantified (method generics, effect rows)
+                // freshens through the member's scheme like any callable.
                 if let Some(members) = self.catalog.extend_members.get(&symbol)
                     && let Some(inherent) = members.get(&label_str)
                 {
                     let inherent = inherent.clone();
+                    let Some(scheme) = self.schemes.get(&inherent.symbol).cloned() else {
+                        return None;
+                    };
                     let mut substitution: FxHashMap<Symbol, Ty> = FxHashMap::default();
                     for (pattern, actual) in inherent.self_args.iter().zip(&args) {
                         bind_param_pattern(pattern, actual, &mut substitution);
+                    }
+                    for param in &scheme.params {
+                        let var = Ty::Var(self.store.fresh_ty(self.level, origin.node));
+                        self.instantiations
+                            .entry(origin.node)
+                            .or_default()
+                            .push((param.symbol, var.clone()));
+                        substitution.insert(param.symbol, var);
                     }
                     let mut effs = FxHashMap::default();
                     effs.insert(
                         inherent.symbol,
                         EffTail::Var(self.store.fresh_eff(self.level, origin.node)),
                     );
-                    let signature =
-                        inherent
-                            .sig
-                            .substitute(&substitution, &effs, &Default::default());
+                    for param in &scheme.eff_params {
+                        effs.insert(
+                            *param,
+                            EffTail::Var(self.store.fresh_eff(self.level, origin.node)),
+                        );
+                    }
+                    for predicate in &scheme.predicates {
+                        queue.push(
+                            predicate
+                                .substitute(&substitution, &effs, &Default::default())
+                                .into_constraint(origin),
+                        );
+                    }
+                    let signature = scheme
+                        .ty
+                        .substitute(&substitution, &effs, &Default::default());
                     if let Ty::Func(params, ret, eff) = signature
                         && !params.is_empty()
                     {
@@ -328,6 +377,12 @@ impl<'s> Solver<'s> {
                             member,
                             origin,
                         ));
+                        // Publish the instance-head bindings (the extend's
+                        // rigid params at the receiver's application).
+                        self.instantiations
+                            .entry(origin.node)
+                            .or_default()
+                            .extend(substitution.iter().map(|(s, t)| (*s, t.clone())));
                         self.member_resolutions
                             .insert(origin.node, MemberResolution::Direct(inherent.symbol));
                     }
@@ -538,6 +593,14 @@ impl<'s> Solver<'s> {
                     member,
                     origin,
                 ));
+                // Publish the owner-param bindings (struct/enum generics
+                // at the receiver's application) alongside the scheme
+                // instantiation `symbol_ty` recorded — the node carries
+                // the complete θ.
+                self.instantiations
+                    .entry(origin.node)
+                    .or_default()
+                    .extend(substitution.iter().map(|(s, t)| (*s, t.clone())));
                 self.member_resolutions
                     .insert(origin.node, MemberResolution::Direct(method));
                 None
@@ -629,12 +692,34 @@ impl<'s> Solver<'s> {
             }
         }
         tys.insert(protocol, lookup_receiver.clone());
+        // Snapshot the receiver-derived entries (Self + assoc bindings)
+        // before the generics join `tys`: the default-body θ published
+        // below is exactly these.
+        let receiver_entries: Vec<(Symbol, Ty)> =
+            tys.iter().map(|(s, t)| (*s, t.clone())).collect();
+        // The requirement's type is its scheme — the one signature
+        // carrier. Method-level generics (`func map<U>`) instantiate
+        // fresh per use, recorded for the lowerer's per-call-site θ;
+        // the outer tail and inner closure rows are its eff_params.
+        let Some(scheme) = self.schemes.get(&requirement.symbol).cloned() else {
+            return;
+        };
+        for param in &scheme.params {
+            let var = Ty::Var(self.store.fresh_ty(self.level, origin.node));
+            self.instantiations
+                .entry(origin.node)
+                .or_default()
+                .push((param.symbol, var.clone()));
+            tys.insert(param.symbol, var);
+        }
         let mut effs = FxHashMap::default();
-        effs.insert(
-            requirement.symbol,
-            EffTail::Var(self.store.fresh_eff(self.level, origin.node)),
-        );
-        let signature = requirement.sig.substitute(&tys, &effs, &Default::default());
+        for param in &scheme.eff_params {
+            effs.insert(
+                *param,
+                EffTail::Var(self.store.fresh_eff(self.level, origin.node)),
+            );
+        }
+        let signature = scheme.ty.substitute(&tys, &effs, &Default::default());
 
         let mut local_wanteds = vec![];
         if let Ty::Func(params, ret, eff) = signature
@@ -652,7 +737,7 @@ impl<'s> Solver<'s> {
                 origin,
             ));
         }
-        let givens: Vec<Predicate> = requirement
+        let givens: Vec<Predicate> = scheme
             .predicates
             .iter()
             .map(|predicate| predicate.substitute(&tys, &effs, &Default::default()))
@@ -675,6 +760,34 @@ impl<'s> Solver<'s> {
             protocol,
             origin,
         });
+        // Publish the target-side θ on the node (Swift model: the IR
+        // carries the resolution): a concrete witness needs its
+        // conformance row's rigid params bound against the receiver head;
+        // a default body needs Self and the assoc bindings. Entries may
+        // hold vars/projections — finalize zonks and normalizes them.
+        let head_for_witness = match &receiver_head {
+            Ty::Borrow(_, inner) => inner.as_ref().clone(),
+            other => other.clone(),
+        };
+        if witness != requirement.symbol {
+            if let Ty::Nominal(head, head_args) = &head_for_witness
+                && let Some(conformance) = self.catalog.conformances.get(&(*head, protocol))
+            {
+                let mut bound: FxHashMap<Symbol, Ty> = FxHashMap::default();
+                for (pattern, actual) in conformance.self_args.iter().zip(head_args) {
+                    bind_param_pattern(pattern, actual, &mut bound);
+                }
+                self.instantiations
+                    .entry(origin.node)
+                    .or_default()
+                    .extend(bound);
+            }
+        } else {
+            self.instantiations
+                .entry(origin.node)
+                .or_default()
+                .extend(receiver_entries);
+        }
         self.member_resolutions.insert(
             origin.node,
             MemberResolution::ViaConformance { protocol, witness },

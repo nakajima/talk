@@ -91,15 +91,36 @@ impl<'a> TypecheckSession<'a> {
             }
             instantiations.insert(node, finalized);
         }
-        // Effect signatures: perform/handler sites taught unannotated
-        // parameters their types during solving — bake them in, so the
-        // lowerer builds capability types from the catalog alone.
-        let mut effects = std::mem::take(&mut self.catalog.effects);
-        for sig in effects.values_mut() {
-            sig.params = sig.params.iter().map(|ty| self.final_ty(ty)).collect();
-            sig.ret = self.final_ty(&sig.ret);
-        }
-        self.catalog.effects = effects;
+        // Catalog types outlive this module's solver store (importers'
+        // stores don't share its ids): bake in everything solving
+        // inferred, then degrade genuine leftovers per the export
+        // sanitizer — a raw variable crossing the boundary reads foreign
+        // store slots (mis-unification, or the flatten_eff panic).
+        // ONE walk covers every embedded type (`for_each_embedded_mut`
+        // is the single authority for what the catalog carries); the
+        // normalization context is a pre-bake snapshot, since projection
+        // reduction consults the catalog being rewritten.
+        let mut catalog = std::mem::take(&mut self.catalog);
+        let normalize_ctx = catalog.clone();
+        let store = &mut self.store;
+        catalog.for_each_embedded_mut(&mut |owner, item| match item {
+            crate::types::catalog::EmbeddedTypes::Ty(ty) => {
+                *ty = final_ty(store, &normalize_ctx, ty).sanitize_for_export(owner);
+            }
+            crate::types::catalog::EmbeddedTypes::Scheme(scheme) => {
+                let ty = final_ty(store, &normalize_ctx, &scheme.ty);
+                *scheme = Scheme {
+                    ty,
+                    ..scheme.clone()
+                }
+                .sanitize_for_export(owner);
+            }
+            crate::types::catalog::EmbeddedTypes::Predicate(predicate) => {
+                *predicate = zonk_predicate(store, &normalize_ctx, predicate.clone())
+                    .sanitize_for_export(owner);
+            }
+        });
+        self.catalog = catalog;
         let mut existential_packs = FxHashMap::default();
         for (node, pack) in std::mem::take(&mut self.artifacts.existential_packs) {
             existential_packs.insert(

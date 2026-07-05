@@ -474,6 +474,8 @@ pub async fn start() {
 
                 async move { Ok(result) }
             })
+            .request::<request::Shutdown, _>(|_, _| async move { Ok(()) })
+            .notification::<notification::Exit>(|_, _| ControlFlow::Break(Ok(())))
             .notification::<notification::Initialized>(|_, _| ControlFlow::Continue(()))
             .notification::<notification::DidChangeConfiguration>(|_, _| ControlFlow::Continue(()))
             .request::<request::CodeActionRequest, _>(|state, params| {
@@ -2084,6 +2086,42 @@ func foo() 'fizz -> Int {
         let byte_offset = code.find("print_raw").expect("print_raw") as u32;
         let target = super::goto_definition(&module, core.as_ref(), &uri, byte_offset);
         assert!(target.is_some(), "should find core function definition");
+    }
+
+    #[test]
+    fn goto_definition_on_core_member() {
+        let code = "let bytes = \"hello\".utf8()\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_core_member.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let core = super::AnalysisWorkspace::core();
+
+        let byte_offset = code.find("utf8").expect("utf8") as u32;
+        let target = super::goto_definition(&module, core.as_ref(), &uri, byte_offset)
+            .expect("core member definition");
+        assert!(
+            target.uri.path().ends_with("String.tlk"),
+            "should jump to the core String member, got {:?}",
+            target.uri
+        );
+    }
+
+    #[test]
+    fn goto_definition_on_core_member_inside_extension() {
+        let code = "extend String {\n\tfunc ends_with(needle: &String) -> Bool {\n\t\tlet i = 0\n\t\tloop i < needle.count() {\n\t\t\tif self.utf8().at(self.count() - i - 1) != needle.utf8().at(i) { return false }\n\t\t\ti = i + 1\n\t\t}\n\t\ttrue\n\t}\n}\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_core_member_ext.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let core = super::AnalysisWorkspace::core();
+
+        let byte_offset = code.find("utf8").expect("utf8") as u32;
+        let target = super::goto_definition(&module, core.as_ref(), &uri, byte_offset)
+            .expect("core member definition inside extension");
+        assert!(
+            target.uri.path().ends_with("String.tlk"),
+            "should jump to the core String member, got {:?}",
+            target.uri
+        );
     }
 
     #[test]

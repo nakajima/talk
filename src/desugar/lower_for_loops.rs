@@ -85,6 +85,8 @@ impl LowerForLoops {
         };
 
         let iter_name = format!("__for_iter_{}", stmt.id.1);
+        let for_span = stmt.span;
+        let iterable_span = iterable.span;
 
         // Build: __for_iter_<id>.next()
         let iter_var = Expr {
@@ -95,17 +97,17 @@ impl LowerForLoops {
 
         let next_member = Expr {
             id: self.next_id(),
-            span: Span::SYNTHESIZED,
+            span: for_span,
             kind: ExprKind::Member(
                 Some(Box::new(iter_var.clone())),
                 Label::Named("next".into()),
-                Span::SYNTHESIZED,
+                for_span,
             ),
         };
 
         let next_call = Expr {
             id: self.next_id(),
-            span: Span::SYNTHESIZED,
+            span: for_span,
             kind: ExprKind::Call {
                 callee: Box::new(next_member),
                 type_args: vec![],
@@ -142,11 +144,11 @@ impl LowerForLoops {
             id: self.next_id(),
             pattern: Pattern {
                 id: self.next_id(),
-                span: Span::SYNTHESIZED,
+                span: for_span,
                 kind: PatternKind::Variant {
                     enum_name: Some("Optional".into()),
                     variant_name: "none".to_string(),
-                    variant_name_span: Span::SYNTHESIZED,
+                    variant_name_span: for_span,
                     fields: vec![],
                 },
             },
@@ -181,20 +183,52 @@ impl LowerForLoops {
             kind: StmtKind::Loop(None, loop_body),
         };
 
-        // Build: iterable.iter()
+        // An RVALUE iterable gets named first (`let __for_src = ...`):
+        // the iterator borrows it, and a NAMED binding gets the full
+        // drop machinery (deinit, element teardown) at scope exit —
+        // unnamed, its buffer would leak (the borrow escapes the
+        // statement into the loop). An already-named iterable is
+        // borrowed directly, as written.
+        let (src_decl, iter_receiver) = if matches!(iterable.kind, ExprKind::Variable(_)) {
+            (None, iterable)
+        } else {
+            let src_name = format!("__for_src_{}", stmt.id.1);
+            let src_var = Expr {
+                id: self.next_id(),
+                span: iterable_span,
+                kind: ExprKind::Variable(src_name.clone().into()),
+            };
+            let src_decl = Decl {
+                id: self.next_id(),
+                span: Span::SYNTHESIZED,
+                visibility: Visibility::Private,
+                kind: DeclKind::Let {
+                    lhs: Pattern {
+                        id: self.next_id(),
+                        span: Span::SYNTHESIZED,
+                        kind: PatternKind::Bind(src_name.into()),
+                    },
+                    type_annotation: None,
+                    rhs: Some(*iterable),
+                },
+            };
+            (Some(src_decl), Box::new(src_var))
+        };
+
+        // Build: <receiver>.iter()
         let iter_member = Expr {
             id: self.next_id(),
-            span: Span::SYNTHESIZED,
+            span: iterable_span,
             kind: ExprKind::Member(
-                Some(iterable),
+                Some(iter_receiver),
                 Label::Named("iter".into()),
-                Span::SYNTHESIZED,
+                iterable_span,
             ),
         };
 
         let iter_call = Expr {
             id: self.next_id(),
-            span: Span::SYNTHESIZED,
+            span: iterable_span,
             kind: ExprKind::Call {
                 callee: Box::new(iter_member),
                 type_args: vec![],
@@ -227,7 +261,15 @@ impl LowerForLoops {
                 id: self.next_id(),
                 span: stmt.span,
                 args: vec![],
-                body: vec![Node::Decl(let_decl), Node::Stmt(loop_stmt)],
+                body: {
+                    let mut nodes = vec![];
+                    if let Some(src_decl) = src_decl {
+                        nodes.push(Node::Decl(src_decl));
+                    }
+                    nodes.push(Node::Decl(let_decl));
+                    nodes.push(Node::Stmt(loop_stmt));
+                    nodes
+                },
             }),
         };
 
@@ -261,6 +303,8 @@ mod tests {
             panic!("expected for loop to lower to a block expression");
         };
 
+        // A NAMED iterable is borrowed directly: the iterator binding
+        // leads the block (an rvalue iterable would be named first).
         let crate::node::Node::Decl(decl) = &block.body[0] else {
             panic!("expected lowered block to start with iterator binding");
         };
@@ -274,6 +318,30 @@ mod tests {
             &callee.kind,
             crate::node_kinds::expr::ExprKind::Member(_, label, _)
                 if label.to_string() == "iter"
+        ));
+    }
+
+    #[test]
+    fn desugars_rvalue_iterable_with_source_binding() {
+        // An rvalue iterable is named first so its buffer gets ordinary
+        // scope-exit drops (the iterator borrows the binding).
+        let mut parsed = parse("for x in make() { print(x) }");
+        LowerForLoops::run(&mut parsed);
+        let stmt = parsed.roots[0].as_stmt();
+        let crate::node_kinds::stmt::StmtKind::Expr(crate::node_kinds::expr::Expr {
+            kind: crate::node_kinds::expr::ExprKind::Block(block),
+            ..
+        }) = &stmt.kind
+        else {
+            panic!("expected a block");
+        };
+        assert_eq!(block.body.len(), 3, "source binding + iterator + loop");
+        let crate::node::Node::Decl(decl) = &block.body[0] else {
+            panic!("expected the source binding first");
+        };
+        assert!(matches!(
+            &decl.kind,
+            crate::node_kinds::decl::DeclKind::Let { rhs: Some(_), .. }
         ));
     }
 

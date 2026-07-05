@@ -43,6 +43,12 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     continue;
                 };
                 let requirement = requirement.clone();
+                // The requirement's type is its scheme (the one signature
+                // carrier); the witness unifies against it with Self,
+                // assoc bindings, generics, and effect rows substituted.
+                let Some(req_scheme) = self.schemes.get(&requirement.symbol).cloned() else {
+                    continue;
+                };
                 let assoc_symbols: Vec<Symbol> = self
                     .catalog
                     .protocols
@@ -58,6 +64,14 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
 
                 let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
                 tys.insert(owner, work.self_ty.clone());
+                // Method-level generics unify against the witness's own
+                // rigid generics through fresh variables.
+                for param in &req_scheme.params {
+                    tys.insert(
+                        param.symbol,
+                        Ty::Var(self.store.fresh_ty(self.level, member.id)),
+                    );
+                }
                 for assoc in assoc_symbols {
                     let binding = match bindings.get(&assoc) {
                         Some(bound) => bound.clone(),
@@ -74,17 +88,19 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     tys.insert(assoc, binding);
                 }
                 let mut effs = FxHashMap::default();
-                effs.insert(
-                    requirement.symbol,
-                    EffTail::Var(self.store.fresh_eff(self.level, member.id)),
-                );
-                let expected = requirement.sig.substitute(&tys, &effs, &Default::default());
+                for param in &req_scheme.eff_params {
+                    effs.insert(
+                        *param,
+                        EffTail::Var(self.store.fresh_eff(self.level, member.id)),
+                    );
+                }
+                let expected = req_scheme.ty.substitute(&tys, &effs, &Default::default());
                 let wanted = Constraint::Eq(
                     expected,
                     ty.clone(),
                     CtOrigin::new(member.id, CtReason::Annotation),
                 );
-                let givens: Vec<Predicate> = requirement
+                let givens: Vec<Predicate> = req_scheme
                     .predicates
                     .iter()
                     .map(|predicate| predicate.substitute(&tys, &effs, &Default::default()))
@@ -127,9 +143,19 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
 
         for (symbol, ty, declared) in outputs {
             let zonked = self.store.zonk_ty(&ty);
+            // Leftover effect rows (closure-typed params, the outer tail)
+            // quantify into eff_params so every use freshens them — the
+            // same treatment the group Generalizer gives ordinary funcs.
+            let (zonked, eff_params) = crate::types::solve::quantify_leftover_eff_vars(
+                self.store,
+                self.symbols,
+                self.module_id,
+                &zonked,
+            );
             let mut scheme = Scheme::mono(zonked);
             // The witness's own generics quantify its scheme.
             scheme.params = declared.params.clone();
+            scheme.eff_params = eff_params;
             scheme.predicates = declared.predicates.clone();
             self.diagnostics
                 .errors
@@ -172,24 +198,46 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         let group_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
         let group_ctx = Ctx::root().with_ret_eff(group_ret, group_eff);
         self.self_types.push(Ty::Param(protocol));
+        let wanted_start = self.wanteds.len();
 
         let inferred = self
             .body()
             .infer_func(func, &group_ctx.with_binder(requirement_symbol));
-        let expected = self
-            .catalog
-            .protocols
-            .get(&protocol)
-            .and_then(|info| info.requirements.get(&func.name.name_str()))
-            .map(|requirement| requirement.sig.clone());
-        if let Some(expected) = expected {
+        // The requirement's type is its scheme (the one signature carrier).
+        let req_scheme = self.schemes.get(&requirement_symbol).cloned();
+        if let Some(scheme) = &req_scheme {
+            let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
+            for param in &scheme.params {
+                tys.insert(
+                    param.symbol,
+                    Ty::Var(self.store.fresh_ty(self.level, func.id)),
+                );
+            }
             let mut effs = FxHashMap::default();
-            effs.insert(
-                requirement_symbol,
-                EffTail::Var(self.store.fresh_eff(self.level, func.id)),
-            );
-            let expected = expected.substitute(&Default::default(), &effs, &Default::default());
+            for param in &scheme.eff_params {
+                effs.insert(
+                    *param,
+                    EffTail::Var(self.store.fresh_eff(self.level, func.id)),
+                );
+            }
+            let expected = scheme.ty.substitute(&tys, &effs, &Default::default());
             self.emit_eq(expected, inferred, func.id, CtReason::Annotation);
+        }
+
+        // The requirement's declared predicates are givens for the body
+        // (they are already over Self = the protocol's own param).
+        let givens = req_scheme.map(|s| s.predicates).unwrap_or_default();
+        if !givens.is_empty() {
+            let wanteds = self.wanteds.split_off(wanted_start);
+            if !wanteds.is_empty() {
+                self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                    level: self.level,
+                    givens,
+                    wanteds,
+                    local_params: vec![],
+                    touchable_level: None,
+                })));
+            }
         }
 
         self.self_types.pop();

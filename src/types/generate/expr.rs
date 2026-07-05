@@ -337,6 +337,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         ctx: &Ctx,
     ) -> Ty {
         if arms.is_empty() {
+            self.infer_expr(scrutinee, ctx);
             return Ty::Nominal(Symbol::Never, vec![]);
         }
         let result = Ty::Var(self.store.fresh_ty(self.level, node));
@@ -512,7 +513,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             },
 
             ExprKind::RecordLiteral { fields, spread } => {
-                if spread.is_some() {
+                if let Some(spread) = spread {
+                    self.infer_expr(spread, ctx);
                     self.unsupported(expr.id, "record spread");
                     return Ty::Error;
                 }

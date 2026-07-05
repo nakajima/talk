@@ -29,6 +29,10 @@ pub enum DropReason {
     AssignmentReplace,
     /// A `return`/`break`/`continue` leaves the scope early.
     EarlyExit,
+    /// The full expression that created a call/construct temp ended: an
+    /// unconsumed owned temporary (e.g. a call result that was only
+    /// borrowed) releases here.
+    TemporaryEnd,
 }
 
 /// One drop the lowerer must emit. `node` is the dropped binding's

@@ -258,57 +258,9 @@ pub mod tests {
     /// Both engines, including captured stdout (the M3 surface: records,
     /// strings, io_write).
     fn run_on_both_engines_io(code: &'static str) -> (Value, String) {
-        let code = unsafe_marked_if_raw(code);
-        let driver = Driver::new(
-            vec![Source::from(code.as_str())],
-            DriverConfig::new("VmTest"),
-        );
-        let typed = driver
-            .parse()
-            .expect("parse")
-            .resolve_names()
-            .expect("resolve")
-            .type_check();
-        assert!(
-            !typed.has_errors(),
-            "type errors: {:?}",
-            typed.diagnostics()
-        );
-        let mut lowered = typed.lower();
-        assert!(
-            lowered.phase.diagnostics.is_empty(),
-            "lowering: {:?}",
-            lowered.phase.diagnostics
-        );
-        let verified = lowered.phase.program.verify();
-        assert!(verified.is_ok(), "verifier: {:?}", verified.err());
-
-        let (vm_value, vm_out) = lowered.run_vm_with_output().expect("vm");
-        let (evaluator_value, evaluator_out) = lowered.eval_with_output().expect("evaluator");
-
-        let matches = match (&evaluator_value, &vm_value) {
-            (EvalValue::I64(a), Value::I64(b)) => a == b,
-            (EvalValue::F64(a), Value::F64(b)) => a == b,
-            (EvalValue::Bool(a), Value::Bool(b)) => a == b,
-            (EvalValue::Void, Value::Void) => true,
-            // Aggregates: stdout agreement is the assertion that matters.
-            (EvalValue::Record(..), Value::Record(..)) => true,
-            (EvalValue::Tuple(..), Value::Tuple(..)) => true,
-            _ => false,
-        };
-        assert!(matches, "evaluator {evaluator_value:?} != vm {vm_value:?}");
-        assert_eq!(evaluator_out, vm_out, "stdout diverged");
-        (vm_value, vm_out)
-    }
-
-    fn run_on_both_engines_io_expecting_container_element_leak(
-        code: &'static str,
-    ) -> (Value, String) {
         let mut lowered = lower_for_both_engines(code);
         let (vm_value, vm_out) = lowered.run_vm_with_output().expect("vm");
-        let (evaluator_value, evaluator_out) = lowered
-            .eval_expecting_container_element_leak()
-            .expect("evaluator");
+        let (evaluator_value, evaluator_out) = lowered.eval_with_output().expect("evaluator");
         assert_engine_values_match(&evaluator_value, &vm_value);
         assert_eq!(evaluator_out, vm_out, "stdout diverged");
         (vm_value, vm_out)
@@ -421,7 +373,7 @@ pub mod tests {
     #[test]
     fn vm_matches_evaluator_on_string_concat() {
         let (_, out) =
-            run_on_both_engines_io_expecting_container_element_leak("print(\"hi \" + \"there\")");
+            run_on_both_engines_io("print(\"hi \" + \"there\")");
         assert_eq!(out, "hi there\n");
     }
 
@@ -435,7 +387,7 @@ pub mod tests {
     #[test]
     fn vm_matches_evaluator_on_struct_example() {
         // examples/Strings.tlk in miniature: fields + concat + print.
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "struct Person {\n\tlet firstName: String\n\tlet lastName: String\n\n\tconsuming func greet() {\n\t\tprint(\"hi i'm \" + self.firstName + \" \" + self.lastName)\n\t}\n}\nPerson(firstName: \"Pat\", lastName: \"N\").greet()",
         );
         assert_eq!(out, "hi i'm Pat N\n");
@@ -552,7 +504,7 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_float_array_round_trip() {
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "let a = [1.5, 2.5]\nprint(a.get(0))\nprint(a.get(1))",
         );
         assert_eq!(out, "1.5\n2.5\n");
@@ -573,7 +525,7 @@ pub mod tests {
         // extend Array<Element: Showable>: Showable — the witness demands
         // at Element := Int (context discharged by monomorphization).
         let (_, out) =
-            run_on_both_engines_io_expecting_container_element_leak("let a = [1, 2, 3]\nprint(a)");
+            run_on_both_engines_io("let a = [1, 2, 3]\nprint(a)");
         assert_eq!(out, "[1, 2, 3]\n");
     }
 
@@ -620,7 +572,7 @@ pub mod tests {
         // Showable is auto-derived for enums (no conformance row): the
         // lowerer synthesizes show. Format matches the old implementation:
         // Name.variant(payloads…).
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "let some: Optional<Int> = Optional.some(5)\nlet none: Optional<Int> = Optional.none\nprint(some)\nprint(none)",
         );
         assert_eq!(out, "Optional.some(5)\nOptional.none\n");
@@ -881,6 +833,19 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_effectful_closure_stored_in_a_struct_field() {
+        // Effect params on structs, end to end: the stored closure's row
+        // rides the instance's type (typing side) while its capability
+        // rides the closure environment (runtime side) — calling the
+        // field under the handler performs and resumes.
+        let (value, out) = run_on_both_engines_io(
+            "effect 'ask(prompt) -> Int\nstruct Wrapper {\n\tlet f: () -> Int\n}\n@handle 'ask { p in\n\tprint(p)\n\tcontinue 42\n}\nfunc go() 'ask -> Int {\n\tlet w = Wrapper(f: func() {\n\t\t'ask(\"meaning?\") + 1\n\t})\n\tw.f()\n}\ngo()",
+        );
+        assert_eq!(out, "meaning?\n");
+        assert_eq!(value, Value::I64(43));
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_resume_two_levels_below_the_scope() {
         // The perform sits two calls below the handler: resuming runs the
         // rest of the performer AND the rest of its caller, exactly once
@@ -984,8 +949,8 @@ pub mod tests {
     fn vm_matches_evaluator_on_file_write_read_roundtrip() {
         // open mints a simulated fd; writes append; reads start at the
         // beginning — so a write then read round-trips the bytes.
-        let (value, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let path = _alloc<Byte>(1)\nlet fd = _io_open(path, 65, 384)\nlet hello = \"hello io\"\n_io_write(fd, hello.storage.base, hello.byte_count)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
+        let (value, out) = run_on_both_engines_io(
+            "let path = _alloc<Byte>(1)\nlet fd = _io_open(path, 65, 384)\n_free(path)\nlet hello = \"hello io\"\n_io_write(fd, hello.storage.base, hello.byte_count)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\nlet r = _io_close(fd)\n_free(buf)\nr",
         );
         assert_eq!(out, "hello io");
         assert_eq!(value, Value::I64(0));
@@ -995,8 +960,8 @@ pub mod tests {
     fn vm_matches_evaluator_on_open_path() {
         // open_path takes a Talk String (copied with a NUL terminator
         // into fresh memory); the simulated fd then round-trips bytes.
-        let (value, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let fd = open_path(\"scratch.txt\", 65, 384)\nlet data = \"file data\"\n_io_write(fd, data.storage.base, data.byte_count)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
+        let (value, out) = run_on_both_engines_io(
+            "let fd = open_path(\"scratch.txt\", 65, 384)\nlet data = \"file data\"\n_io_write(fd, data.storage.base, data.byte_count)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\nlet r = _io_close(fd)\n_free(buf)\nr",
         );
         assert_eq!(out, "file data");
         assert_eq!(value, Value::I64(0));
@@ -1006,8 +971,8 @@ pub mod tests {
     fn vm_matches_evaluator_on_socket_loopback() {
         // CaptureIO sockets are buffers: what a test writes to a
         // connection it can read back — the scripted-client loop.
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let sock = _io_socket(AF_INET, SOCK_STREAM, 0)\n_io_connect(sock, LOCALHOST, 9900)\nlet msg = \"ping\"\n_io_write(sock, msg.storage.base, msg.byte_count)\nlet buf = _alloc<Byte>(8)\nlet n = _io_read(sock, buf, 8)\n_io_write(STDOUT_FD, buf, n)",
+        let (_, out) = run_on_both_engines_io(
+            "let sock = _io_socket(AF_INET, SOCK_STREAM, 0)\n_io_connect(sock, LOCALHOST, 9900)\nlet msg = \"ping\"\n_io_write(sock, msg.storage.base, msg.byte_count)\nlet buf = _alloc<Byte>(8)\nlet n = _io_read(sock, buf, 8)\nlet w = _io_write(STDOUT_FD, buf, n)\n_free(buf)\nw",
         );
         assert_eq!(out, "ping");
     }
@@ -1016,8 +981,8 @@ pub mod tests {
     fn vm_matches_evaluator_on_server_accept_script() {
         // The ChatServer slice: bind/listen succeed, accept mints a
         // client fd, and the greeting written to it reads back.
-        let (value, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet b = _io_bind(server, INADDR_ANY, 9900)\nlet l = _io_listen(server, 128)\nlet client = _io_accept(server)\nlet hi = \"hi client\"\n_io_write(client, hi.storage.base, hi.byte_count)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(client, buf, 16)\n_io_write(STDOUT_FD, buf, n)\nb + l",
+        let (value, out) = run_on_both_engines_io(
+            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet b = _io_bind(server, INADDR_ANY, 9900)\nlet l = _io_listen(server, 128)\nlet client = _io_accept(server)\nlet hi = \"hi client\"\n_io_write(client, hi.storage.base, hi.byte_count)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(client, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_free(buf)\nb + l",
         );
         assert_eq!(out, "hi client");
         assert_eq!(value, Value::I64(0));
@@ -1027,8 +992,8 @@ pub mod tests {
     fn vm_matches_evaluator_on_io_error_returns() {
         // POSIX conventions: a bad fd reads as -EBADF, and ctl is
         // -EINVAL under the captured io (tests never ioctl for real).
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
-            "let buf = _alloc<Byte>(4)\nlet bad = _io_read(99, buf, 4)\nlet ctl = _io_ctl(1, 0, 0)\nbad * 100 + ctl",
+        let (value, _) = run_on_both_engines_io(
+            "let buf = _alloc<Byte>(4)\nlet bad = _io_read(99, buf, 4)\nlet ctl = _io_ctl(1, 0, 0)\n_free(buf)\nbad * 100 + ctl",
         );
         assert_eq!(value, Value::I64(-9 * 100 + -22));
     }
@@ -1037,8 +1002,8 @@ pub mod tests {
     fn vm_matches_evaluator_on_empty_poll() {
         // Zero descriptors: poll reports zero ready (the marshaling
         // boundary, without hand-building pollfd records in Talk).
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
-            "let fds = _alloc<Byte>(8)\n_io_poll(fds, 0, 0)",
+        let (value, _) = run_on_both_engines_io(
+            "let fds = _alloc<Byte>(8)\nlet r = _io_poll(fds, 0, 0)\n_free(fds)\nr",
         );
         assert_eq!(value, Value::I64(0));
     }
@@ -1176,13 +1141,152 @@ pub mod tests {
     fn vm_matches_evaluator_on_protocol_defaults_with_associated_types() {
         // A protocol default body dispatching through an associated
         // type's own protocol bound (the old pet-food example).
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "struct CatFood {}\nstruct DogFood {}\nprotocol Named {\n\tfunc name() -> String\n}\nextend CatFood: Named {\n\tfunc name() { \"tasty cat food\" }\n}\nextend DogFood: Named {\n\tfunc name() { \"tasty dog food\" }\n}\nprotocol Pet {\n\tassociated Food: Named\n\tfunc favoriteFood() -> Food\n\tfunc handleDSTChange() {\n\t\tprint(\"what the heck where is my \" + self.favoriteFood().name())\n\t}\n}\nstruct Cat {}\nextend Cat: Pet {\n\tfunc favoriteFood() {\n\t\tCatFood()\n\t}\n}\nstruct Dog {}\nextend Dog: Pet {\n\tfunc favoriteFood() {\n\t\tDogFood()\n\t}\n}\nCat().handleDSTChange()\nDog().handleDSTChange()",
         );
         assert_eq!(
             out,
             "what the heck where is my tasty cat food\nwhat the heck where is my tasty dog food\n"
         );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_protocol_extension_defaults() {
+        // `extend Greeter` methods are defaulted requirements: Cat takes
+        // the extension body, Dog's own witness overrides it.
+        let (_, out) = run_on_both_engines_io(
+            "protocol Greeter {\n\tfunc volume() -> Int\n}\nextend Greeter {\n\tfunc greet() -> Int {\n\t\tself.volume()\n\t}\n}\nstruct Cat {}\nextend Cat: Greeter {\n\tfunc volume() -> Int { 3 }\n}\nstruct Dog {}\nextend Dog: Greeter {\n\tfunc volume() -> Int { 7 }\n\tfunc greet() -> Int { 11 }\n}\nprint(Cat().greet())\nprint(Dog().greet())",
+        );
+        assert_eq!(out, "3\n11\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_return_only_loop_tail() {
+        // An unconditional loop that only exits via `return`: the loop's
+        // MIR exit block is unreachable, so the function tail after it
+        // must not deliver () to the return continuation.
+        let (_, out) = run_on_both_engines_io(
+            "func firstOver(limit: Int) -> Int {\n\tlet i = 0\n\tloop {\n\t\tif i > limit { return i }\n\t\ti = i + 1\n\t}\n}\nprint(firstOver(3))",
+        );
+        assert_eq!(out, "4\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_iterator_index_with_borrowed_elements() {
+        // Array iterators yield &Element; `index` compares them against a
+        // by-value needle through borrow-transparent conformance plus the
+        // Copy / copy-out-of-borrow coercions. The chained receiver is an
+        // rvalue (its iterator state dies with the call).
+        let (_, out) = run_on_both_engines_io(
+            "let xs = [10, 20, 30]\nmatch xs.iter().index(20) {\n\t.some(i) -> print(i),\n\t.none -> print(\"not found\")\n}\nmatch xs.iter().index(99) {\n\t.some(i) -> print(i),\n\t.none -> print(\"not found\")\n}",
+        );
+        assert_eq!(out, "1\nnot found\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_generic_inherent_extend_member_with_closures() {
+        // An inherent extend member with a method-level generic and a
+        // closure param, used at two different instantiations: dispatch
+        // must freshen the generic and the closure's row per use (the
+        // same class as `map`, latent in extend_members).
+        let (_, out) = run_on_both_engines_io(
+            "struct Box2 {\n\tlet v: Int\n}\nextend Box2 {\n\tfunc apply<U>(fn: (Int) -> U) -> U {\n\t\tfn(self.v)\n\t}\n}\nlet b = Box2(v: 3)\nlet x = b.apply() { n in n + 1 }\nlet s = b.apply() { n in \"got \" + n.show() }\nprint(x)\nprint(s)",
+        );
+        assert_eq!(out, "4\ngot 3\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_generic_requirement_with_trailing_closure() {
+        // `map<U>` is a generic requirement: its U instantiation must
+        // reach the lowerer's θ so the trailing closure's param type is
+        // concrete, not erased.
+        let (_, out) = run_on_both_engines_io(
+            "let xs = [10, 20, 30]\nlet m = xs.iter().map() { x in x }\nprint(\"ok\")",
+        );
+        assert_eq!(out, "ok\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_index_with_borrowed_struct_witness() {
+        // ADR 0014: a plain struct's borrow-shaped equals witness compares
+        // borrowed elements without copy-out coercions.
+        let (_, out) = run_on_both_engines_io(
+            "struct Pt {\n\tlet x: Int\n}\nextend Pt: Equatable {\n\tfunc equals(rhs: &Pt) -> Bool {\n\t\tself.x == rhs.x\n\t}\n}\nlet xs = [Pt(x: 1), Pt(x: 2), Pt(x: 3)]\nmatch xs.iter().index(Pt(x: 2)) {\n\t.some(i) -> print(i),\n\t.none -> print(\"not found\")\n}",
+        );
+        assert_eq!(out, "1\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_mut_method_on_rvalue_receiver() {
+        // A mutating call on an rvalue receiver: the updated Self has no
+        // home and dies with the call; the result still comes through.
+        let (_, out) = run_on_both_engines_io(
+            "struct Counter {\n\tlet n: Int\n\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\nfunc make() -> Counter { Counter(n: 41) }\nprint(make().bump())",
+        );
+        assert_eq!(out, "42\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_tail_block_alias_drops_once() {
+        // A tail-position block is REAL MIR (its moves are CFG facts):
+        // aliasing a droppable into it must not double-free — the outer
+        // binding is dead after the move, the inner drops once.
+        let (_, out) = run_on_both_engines_io(
+            "func f() -> Int {\n\tlet a = [1, 2, 3]\n\t{\n\t\tlet b = a\n\t\tb.count\n\t}\n}\nprint(f())",
+        );
+        assert_eq!(out, "3\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_array_element_teardown() {
+        // Containers deep-drop their elements: the LAST buffer reference
+        // tears them down (CoW-gated via _is_unique in Array's deinit).
+        // Runtime-built strings in a dropped array must not leak — this
+        // runs under the strict leak assertion.
+        let (_, out) = run_on_both_engines_io(
+            "let xs = [\"hello \" + \"world\", \"foo \" + \"bar\"]\nprint(xs.count)",
+        );
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_nested_array_element_teardown() {
+        // Nested containers compose: the inner array's deinit runs for
+        // element drops too (the recursion guard is θ-aware, not
+        // symbol-level).
+        let (_, out) =
+            run_on_both_engines_io("let xs = [[\"a\" + \"b\"], [\"c\" + \"d\"]]\nprint(xs.count)");
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_mut_inherent_extend_member() {
+        // The inout convention is DERIVED from the member's scheme (first
+        // param an exclusive borrow), not registered per declaration kind
+        // — an inherent extend member must get it like any method.
+        let (_, out) = run_on_both_engines_io(
+            "struct Counter3 {\n\tlet n: Int\n}\nextend Counter3 {\n\tmut func bump2() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\nlet c = Counter3(n: 0)\nc.bump2()\nprint(c.bump2())",
+        );
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_mut_protocol_defaults() {
+        // A mut default body calls a mut requirement through self: both
+        // the nested call and the default's own return use the inout
+        // convention (requirement symbols must be in the mutating set).
+        let (_, out) = run_on_both_engines_io(
+            "protocol Bumper {\n\tmut func bump() -> Int\n\n\tmut func twice() -> Int {\n\t\tself.bump()\n\t\tself.bump()\n\t}\n}\nstruct Counter2 {\n\tlet n: Int\n}\nextend Counter2: Bumper {\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\nlet c = Counter2(n: 0)\nprint(c.twice())",
+        );
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_mut_protocol_extension_defaults() {
+        let (_, out) = run_on_both_engines_io(
+            "protocol Bumper {\n\tmut func bump() -> Int\n}\nextend Bumper {\n\tmut func twice() -> Int {\n\t\tself.bump()\n\t\tself.bump()\n\t}\n}\nstruct Counter2 {\n\tlet n: Int\n}\nextend Counter2: Bumper {\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\nlet c = Counter2(n: 0)\nprint(c.twice())",
+        );
+        assert_eq!(out, "2\n");
     }
 
     #[test]
@@ -1216,28 +1320,28 @@ pub mod tests {
     #[test]
     fn vm_matches_evaluator_on_string_operations() {
         let (value, _) =
-            run_on_both_engines_io_expecting_container_element_leak("\"hello\" == \"hello\"");
+            run_on_both_engines_io("\"hello\" == \"hello\"");
         assert_eq!(value, Value::Bool(true));
         let (value, _) =
-            run_on_both_engines_io_expecting_container_element_leak("\"hello\" == \"world\"");
+            run_on_both_engines_io("\"hello\" == \"world\"");
         assert_eq!(value, Value::Bool(false));
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "print(\"hello\".utf8().slice(1, 3).to_string())",
         );
         assert_eq!(out, "ell\n");
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "print(\"hello\".as_substring().utf8().slice(1, 3).to_string())",
         );
         assert_eq!(out, "ell\n");
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "match \"hello world\".find(\"world\") {\n\t.some(i) -> print(i),\n\t.none -> print(0 - 1)\n}",
         );
         assert_eq!(out, "6\n");
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "match \"hello world\".find(\"missing\") {\n\t.some(i) -> print(i),\n\t.none -> print(0 - 1)\n}",
         );
         assert_eq!(out, "-1\n");
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "match \"banana\".find_from(\"na\", 3) {\n\t.some(i) -> print(i),\n\t.none -> print(0 - 1)\n}",
         );
         assert_eq!(out, "4\n");
@@ -1269,7 +1373,7 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_show_with_multiple_payloads() {
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "enum Shape {\n\tcase rect(Int, Int)\n}\nprint_raw(Shape.rect(3, 4).show())",
         );
         assert_eq!(out, "Shape.rect(3, 4)");
@@ -1285,7 +1389,7 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_show_through_a_generic_bound() {
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "func show_it<T: Showable>(x: T) -> String { x.show() }\nstruct Pair {\n\tlet a: Int\n\tlet b: Int\n}\nprint_raw(show_it(Pair(a: 1, b: 2)))",
         );
         assert_eq!(out, "Pair(a: 1, b: 2)");
@@ -1293,7 +1397,7 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_generic_struct_show_erases_arguments() {
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "struct Wrapper<T> {\n\tlet value: Int\n}\nprint_raw(Wrapper<String>(value: 42).show())",
         );
         assert_eq!(out, "Wrapper(value: 42)");
@@ -1531,12 +1635,12 @@ pub mod tests {
     fn vm_matches_evaluator_on_negative_io_counts_pass_through() {
         // A failed read's errno fed straight into the next write (the
         // chat client's loop) must come back untouched, not trap.
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
-            "let buf = _alloc<Byte>(16)\n_io_write(STDOUT_FD, buf, 0 - 91)",
+        let (value, _) = run_on_both_engines_io(
+            "let buf = _alloc<Byte>(16)\nlet r = _io_write(STDOUT_FD, buf, 0 - 91)\n_free(buf)\nr",
         );
         assert_eq!(value, Value::I64(-91));
-        let (value, _) = run_on_both_engines_io_expecting_container_element_leak(
-            "let buf = _alloc<Byte>(16)\n_io_read(STDIN_FD, buf, 0 - 91)",
+        let (value, _) = run_on_both_engines_io(
+            "let buf = _alloc<Byte>(16)\nlet r = _io_read(STDIN_FD, buf, 0 - 91)\n_free(buf)\nr",
         );
         assert_eq!(value, Value::I64(-91));
     }
@@ -1545,8 +1649,8 @@ pub mod tests {
     fn vm_matches_evaluator_on_read_loop_with_split_writes() {
         // Two separate writes (prefix + buffer) read back through a loop
         // — the chat client's segment-splitting pattern.
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let fd = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet msg = \"hello\"\n_io_write(fd, msg.storage.base, msg.byte_count)\nlet buf = _alloc<Byte>(1024)\nlet n = _io_read(fd, buf, 1024)\nlet echo = \"echo: \"\n_io_write(fd, echo.storage.base, echo.byte_count)\n_io_write(fd, buf, n)\nlet rbuf = _alloc<Byte>(1024)\nloop {\n\tlet chunk = _io_read(fd, rbuf, 1024)\n\tif chunk <= 0 { break }\n\t_io_write(STDOUT_FD, rbuf, chunk)\n}",
+        let (_, out) = run_on_both_engines_io(
+            "let fd = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet msg = \"hello\"\n_io_write(fd, msg.storage.base, msg.byte_count)\nlet buf = _alloc<Byte>(1024)\nlet n = _io_read(fd, buf, 1024)\nlet echo = \"echo: \"\n_io_write(fd, echo.storage.base, echo.byte_count)\n_io_write(fd, buf, n)\nlet rbuf = _alloc<Byte>(1024)\nloop {\n\tlet chunk = _io_read(fd, rbuf, 1024)\n\tif chunk <= 0 { break }\n\t_io_write(STDOUT_FD, rbuf, chunk)\n}\n_free(buf)\n_free(rbuf)",
         );
         assert_eq!(out, "echo: hello");
     }
@@ -1554,15 +1658,15 @@ pub mod tests {
     #[test]
     fn vm_matches_evaluator_on_echo_loop_over_two_connections() {
         // The ChatServer loop body twice over: greeting, read-back, echo.
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
-            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet i = 0\nloop {\n\tif i >= 2 { break }\n\tlet client = _io_accept(server)\n\tlet msg = \"hello\"\n\t_io_write(client, msg.storage.base, msg.byte_count)\n\tlet buf = _alloc<Byte>(1024)\n\tlet n = _io_read(client, buf, 1024)\n\t_io_write(STDOUT_FD, buf, n)\n\t_io_close(client)\n\ti = i + 1\n}",
+        let (_, out) = run_on_both_engines_io(
+            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet i = 0\nloop {\n\tif i >= 2 { break }\n\tlet client = _io_accept(server)\n\tlet msg = \"hello\"\n\t_io_write(client, msg.storage.base, msg.byte_count)\n\tlet buf = _alloc<Byte>(1024)\n\tlet n = _io_read(client, buf, 1024)\n\t_io_write(STDOUT_FD, buf, n)\n\t_free(buf)\n\t_io_close(client)\n\ti = i + 1\n}",
         );
         assert_eq!(out, "hellohello");
     }
 
     #[test]
     fn vm_matches_evaluator_on_binding_surviving_an_early_return_branch() {
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "func test(x: Float) -> String {\n\tlet s = x.show()\n\tif x == 0.0 { return s + \"!\" }\n\ts + \"?\"\n}\nprint_raw(test(1.5))",
         );
         assert_eq!(out, "1.5?");
@@ -1570,7 +1674,7 @@ pub mod tests {
 
     #[test]
     fn vm_matches_evaluator_on_array_show_through_conditional_conformance() {
-        let (_, out) = run_on_both_engines_io_expecting_container_element_leak(
+        let (_, out) = run_on_both_engines_io(
             "func printy<T: Showable>(showable: T) {\n\tprint_raw(showable.show())\n\tprint_raw(\"\\n\")\n}\nprinty([1, 2, 3])",
         );
         assert_eq!(out, "[1, 2, 3]\n");
@@ -1657,7 +1761,7 @@ pub mod tests {
         assert_eq!(written, 17);
 
         let code = format!(
-            "let buf = _alloc<Byte>(1024)\nlet n = _io_read({read_fd}, buf, 1024)\n_io_write({write_fd}, buf, n)\nn"
+            "let buf = _alloc<Byte>(1024)\nlet n = _io_read({read_fd}, buf, 1024)\n_io_write({write_fd}, buf, n)\n_free(buf)\nn"
         );
         let code = unsafe_marked_if_raw(&code);
         let driver = Driver::new(

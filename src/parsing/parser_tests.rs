@@ -3168,7 +3168,6 @@ pub mod tests {
             "@_ir { %? = ref Int 123 }",
             "@_ir { %? = call Int %1 () }",
             "@_ir { %? = getfield Int %1 0 }",
-            "@_ir { free %1 }",
             "@_ir { move Int %1 %2 }",
             "@_ir { %? = io_open %0 %1 %2 }",
             "@_ir { %? = cmp Int %0 + %1 }",

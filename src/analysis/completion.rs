@@ -16,7 +16,7 @@ use crate::{
     },
     types::{
         TypeOutput,
-        catalog::{Requirement, TypeCatalog},
+        catalog::Requirement,
         ty::{EffTail, RowTail, Ty},
     },
 };
@@ -131,6 +131,7 @@ fn member_completion_receiver(ast: &AST<NameResolved>, dot_offset: u32) -> Optio
                 kind: crate::node_kinds::stmt::StmtKind::Expr(expr),
                 ..
             }) => expr,
+            Node::CallArg(arg) => arg.value,
             _ => continue,
         };
         match &expr.kind {
@@ -195,7 +196,7 @@ fn add_member_items_for_ty(
                 }
             }
         }
-        Ty::Borrow(..) | Ty::Func(..) | Ty::Tuple(_) | Ty::Var(_) | Ty::Error => {}
+        Ty::Borrow(..) | Ty::Func(..) | Ty::Tuple(_) | Ty::Var(_) | Ty::Eff(_) | Ty::Error => {}
     }
 }
 
@@ -275,7 +276,10 @@ fn add_nominal_member_items(
             for (pattern, actual) in inherent.self_args.iter().zip(args) {
                 crate::types::solve::bind_param_pattern(pattern, actual, &mut substitution);
             }
-            let ty = substitute_ty(&inherent.sig, &substitution);
+            let Some(scheme) = types.schemes.get(&inherent.symbol) else {
+                continue;
+            };
+            let ty = substitute_ty(&scheme.ty, &substitution);
             add_member_item(
                 items,
                 label.clone(),
@@ -323,7 +327,10 @@ fn add_type_member_items(
                 items,
                 label,
                 CompletionItemKind::Method,
-                Some(requirement.sig.render_mono()),
+                types
+                    .schemes
+                    .get(&requirement.symbol)
+                    .map(|scheme| scheme.ty.render_mono()),
             );
         }
     }
@@ -362,13 +369,13 @@ fn add_protocol_requirement_items(
             items,
             label,
             CompletionItemKind::Method,
-            requirement_detail(&types.catalog, owner, &requirement, receiver_ty),
+            requirement_detail(types, owner, &requirement, receiver_ty),
         );
     }
 }
 
 fn requirement_detail(
-    catalog: &TypeCatalog,
+    types: &TypeOutput,
     owner: Symbol,
     requirement: &Requirement,
     receiver_ty: &Ty,
@@ -376,12 +383,13 @@ fn requirement_detail(
     let lookup_ty = member_lookup_ty(receiver_ty).clone();
     let mut substitution = FxHashMap::default();
     substitution.insert(owner, lookup_ty.clone());
-    for (_, assoc) in catalog.associated_types_in(owner) {
+    for (_, assoc) in types.catalog.associated_types_in(owner) {
         let binding = associated_binding(&lookup_ty, assoc)
             .unwrap_or_else(|| Ty::Proj(Box::new(lookup_ty.clone()), owner, assoc));
         substitution.insert(assoc, binding);
     }
-    let ty = substitute_ty(&requirement.sig, &substitution);
+    let sig = types.schemes.get(&requirement.symbol)?.ty.clone();
+    let ty = substitute_ty(&sig, &substitution);
     Some(drop_self_from_func(ty).render_mono())
 }
 
@@ -511,8 +519,19 @@ mod tests {
     }
 
     fn analyze(code: &str) -> Analyzed {
+        analyze_with_driver(code, Driver::new_bare)
+    }
+
+    fn analyze_with_stdlib(code: &str) -> Analyzed {
+        analyze_with_driver(code, Driver::new)
+    }
+
+    fn analyze_with_driver(
+        code: &str,
+        driver: impl FnOnce(Vec<Source>, DriverConfig) -> Driver,
+    ) -> Analyzed {
         let source = Source::in_memory(PathBuf::from("test.tlk"), code.to_string());
-        let driver = Driver::new_bare(
+        let driver = driver(
             vec![source],
             DriverConfig::new("Test")
                 .lenient_parsing()
@@ -590,6 +609,94 @@ mod tests {
         assert!(
             items.iter().any(|i| i.label == "age"),
             "expected age in {items:?}"
+        );
+    }
+
+    #[test]
+    fn completes_members_after_dot_in_if_condition_before_body() {
+        let code = "struct String {\n\tlet byte_count: Int\n}\nfunc starts_with(needle: &String) {\n\tif needle. {\n\t}\n}\n";
+        let analyzed = analyze(code);
+        let byte_offset = byte_offset_for(code, "needle.", 0) + 7;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "byte_count"
+                && i.kind == Some(crate::analysis::CompletionItemKind::Field)),
+            "expected byte_count field in {items:?}"
+        );
+    }
+
+    #[test]
+    fn completes_members_after_dot_in_unclosed_if_condition() {
+        let code = "struct String {\n\tlet byte_count: Int\n}\nfunc starts_with(needle: &String) {\n\tif needle.\n}\n";
+        let analyzed = analyze(code);
+        let byte_offset = byte_offset_for(code, "needle.", 0) + 7;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "byte_count"
+                && i.kind == Some(crate::analysis::CompletionItemKind::Field)),
+            "expected byte_count field in {items:?}"
+        );
+    }
+
+    #[test]
+    fn completes_members_after_dot_in_loop_condition_before_body() {
+        let code = "struct String {\n\tlet byte_count: Int\n}\nfunc starts_with(needle: &String) {\n\tlet i = 0\n\tloop i < needle. {\n\t}\n}\n";
+        let analyzed = analyze(code);
+        let byte_offset = byte_offset_for(code, "needle.", 0) + 7;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "byte_count"
+                && i.kind == Some(crate::analysis::CompletionItemKind::Field)),
+            "expected byte_count field in {items:?}"
+        );
+    }
+
+    #[test]
+    fn completes_members_after_dot_in_recovered_expression_delimiters() {
+        let cases = [
+            "match needle.\n",
+            "match 0 {\n\t\t_ -> needle.\n",
+            "sink(needle.\n",
+            "sink(needle.,\n",
+            "'sink_effect(needle.\n",
+            "let x = [needle.\n",
+            "let x = [needle.,\n",
+            "let x = { value: needle.\n",
+            "let x = { ...needle.\n",
+            "let x = (needle.\n",
+            "let x = if needle.\n",
+        ];
+
+        for body in cases {
+            let code = format!(
+                "effect 'sink_effect(value: Int) -> Int\nstruct String {{\n\tlet byte_count: Int\n}}\nfunc sink(value: Int) {{}}\nfunc starts_with(needle: &String) {{\n\t{body}}}\n"
+            );
+            let analyzed = analyze(&code);
+            let byte_offset = byte_offset_for(&code, "needle.", 0) + 7;
+            let completion = completion(&analyzed);
+            let items = super::complete(&code, &completion, byte_offset);
+            assert!(
+                items.iter().any(|i| i.label == "byte_count"
+                    && i.kind == Some(crate::analysis::CompletionItemKind::Field)),
+                "{body}: expected byte_count field in {items:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn completes_members_for_borrowed_core_string_with_unknown_current_member() {
+        let code = "extend String {\n\tfunc starts_with(needle: &String) -> Bool {\n\t\tif self.storage.get(0) != needle.byte_at(0) { return false }\n\t\ttrue\n\t}\n}\n";
+        let analyzed = analyze_with_stdlib(code);
+        let byte_offset = byte_offset_for(code, "needle.", 0) + 7;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "byte_count"
+                && i.kind == Some(crate::analysis::CompletionItemKind::Field)),
+            "expected byte_count field in {items:?}"
         );
     }
 

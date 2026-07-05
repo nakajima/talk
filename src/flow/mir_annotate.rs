@@ -136,9 +136,13 @@ fn candidate_elaboration(
             .get(&source)?
             .iter()
             .find(|schedule| schedule.reason == DropReason::AssignmentReplace)?,
+        // Temp candidates are classified by the CFG transfer directly
+        // (`classify_candidate`); the tree-walk fallback has no schedule
+        // for them.
+        DropReason::TemporaryEnd => return None,
     };
     Some(mir::DropElaborationResult {
-        key_path: schedule.place.clone(),
+        key_path: Some(schedule.place.clone()),
         kind: schedule.kind,
     })
 }
@@ -417,10 +421,16 @@ mod tests {
             "{:#?}",
             bodies[0]
         );
-        // check: `s` moved into take(s) at the tail → Dead.
+        // check: the concat temp is consumed by the binding (Dead), the
+        // Int-typed take(s) temp stays unelaborated (nothing to drop),
+        // and `s` moved into take(s) at the tail → Dead.
         assert_eq!(
             candidate_kinds(&bodies[1]),
-            vec![(DropReason::ScopeExit, Some(DropElaboration::Dead))],
+            vec![
+                (DropReason::TemporaryEnd, Some(DropElaboration::Dead)),
+                (DropReason::TemporaryEnd, None),
+                (DropReason::ScopeExit, Some(DropElaboration::Dead)),
+            ],
             "{:#?}",
             bodies[1]
         );

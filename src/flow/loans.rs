@@ -889,9 +889,13 @@ fn stores_borrow(ty: &Ty) -> bool {
         Ty::Nominal(_, args) => args.iter().any(stores_borrow),
         Ty::Tuple(items) => items.iter().any(stores_borrow),
         Ty::Record(row) => row.fields.iter().any(|(_, field)| stores_borrow(field)),
-        Ty::Func(..) | Ty::Any { .. } | Ty::Proj(..) | Ty::Var(_) | Ty::Param(_) | Ty::Error => {
-            false
-        }
+        Ty::Func(..)
+        | Ty::Any { .. }
+        | Ty::Proj(..)
+        | Ty::Var(_)
+        | Ty::Param(_)
+        | Ty::Eff(_)
+        | Ty::Error => false,
     }
 }
 

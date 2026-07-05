@@ -68,6 +68,14 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         self.register_catalog_type_aliases();
         self.collect_explicit_conformance_claims(&top_decls, &struct_decls);
 
+        // Protocol extensions register before conforming extends so their
+        // defaulted requirements are witnessable regardless of decl order.
+        for decl in &top_decls {
+            if let Some(protocol) = self.protocol_extension_head(decl) {
+                self.register_protocol_extension(protocol, decl, &mut protocol_defaults);
+            }
+        }
+
         for decl in &top_decls {
             match &decl.kind {
                 DeclKind::Let {
@@ -99,7 +107,9 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 }
                 DeclKind::Let { .. } => destructuring_lets.push(decl),
                 DeclKind::Extend { .. } => {
-                    if let Some(work) = self.register_extend(decl, None) {
+                    if self.protocol_extension_head(decl).is_none()
+                        && let Some(work) = self.register_extend(decl, None)
+                    {
                         extends.push(work);
                     }
                 }
@@ -386,6 +396,9 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                         .iter()
                         .all(|(_, field)| self.satisfies_marker(field, marker))
             }
+            // An effect argument is runtime-inert: it never blocks a
+            // marker (Copy/CheapClone judge values, not rows).
+            Ty::Eff(_) => true,
             Ty::Borrow(..) | Ty::Func(..) | Ty::Any { .. } | Ty::Proj(..) => false,
         }
     }
@@ -467,10 +480,56 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 other => self.unsupported(member.id, decl_kind_name(other)),
             }
         }
+        self.mint_field_eff_params(&mut info);
         for label in info.fields.keys().chain(info.methods.keys()) {
             self.catalog.add_owner(label, MemberOwner::Nominal(symbol));
         }
         self.catalog.structs.insert(symbol, info);
+    }
+
+    /// Quantify the struct's closure-field effect rows: every free row
+    /// tail minted by the field annotations becomes an implicit rigid
+    /// effect param (one per distinct variable), instantiated per
+    /// construction and carried as a `Ty::Eff` argument on the nominal
+    /// head. Without this the module shares ONE row variable per field,
+    /// so any effectful construction contaminates every other use.
+    fn mint_field_eff_params(&mut self, info: &mut StructInfo) {
+        use crate::types::ty::{EffTail, TyFold};
+
+        struct Mint<'a> {
+            symbols: &'a mut Symbols,
+            module_id: ModuleId,
+            minted: FxHashMap<u32, Symbol>,
+            order: Vec<Symbol>,
+        }
+        impl TyFold for Mint<'_> {
+            fn fold_eff_tail(&mut self, tail: &Option<EffTail>) -> Option<EffTail> {
+                match tail {
+                    Some(EffTail::Var(v)) => {
+                        let param = *self.minted.entry(v.0).or_insert_with(|| {
+                            let param = Symbol::Synthesized(
+                                self.symbols.next_synthesized(self.module_id),
+                            );
+                            self.order.push(param);
+                            param
+                        });
+                        Some(EffTail::Param(param))
+                    }
+                    other => other.clone(),
+                }
+            }
+        }
+
+        let mut mint = Mint {
+            symbols: self.symbols,
+            module_id: self.module_id,
+            minted: FxHashMap::default(),
+            order: vec![],
+        };
+        for (_, ty) in info.fields.values_mut() {
+            *ty = mint.fold_ty(ty);
+        }
+        info.eff_params = mint.order;
     }
 
     pub(super) fn register_enum(&mut self, symbol: Symbol, decl: &Decl) {
@@ -771,12 +830,46 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             effects: Default::default(),
             tail: Some(EffTail::Param(symbol)),
         };
+        self.insert_requirement_scheme(
+            symbol,
+            Ty::Func(params, Box::new(ret), eff),
+            generic_symbols(&signature.generics),
+            predicates,
+        );
         Some(Requirement {
             symbol,
-            sig: Ty::Func(params, Box::new(ret), eff),
-            predicates,
             has_default,
         })
+    }
+
+    /// A requirement's TYPE is an ordinary scheme entry — the one
+    /// signature carrier the whole compiler shares. params = the method's
+    /// own generics; eff_params = the symbol-keyed outer tail plus each
+    /// inner closure row; every consumer freshens through the scheme.
+    fn insert_requirement_scheme(
+        &mut self,
+        symbol: Symbol,
+        sig: Ty,
+        generics: Vec<Symbol>,
+        predicates: Vec<Predicate>,
+    ) {
+        let (sig, inner_eff_params) = self.quantify_signature_eff_vars(sig);
+        let mut eff_params = vec![symbol];
+        eff_params.extend(inner_eff_params);
+        self.schemes.insert(
+            symbol,
+            Scheme {
+                params: generics
+                    .into_iter()
+                    .map(|symbol| SchemeParam { symbol })
+                    .collect(),
+                eff_params,
+                row_params: vec![],
+                perm_params: vec![],
+                predicates,
+                ty: sig,
+            },
+        );
     }
 
     pub(super) fn lower_default_requirement(&mut self, func: &Func) -> Option<Requirement> {
@@ -799,12 +892,139 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             effects: Default::default(),
             tail: Some(EffTail::Param(symbol)),
         };
+        self.insert_requirement_scheme(
+            symbol,
+            Ty::Func(params, Box::new(ret), eff),
+            generic_symbols(&func.generics),
+            predicates,
+        );
         Some(Requirement {
             symbol,
-            sig: Ty::Func(params, Box::new(ret), eff),
-            predicates,
             has_default: true,
         })
+    }
+
+    /// Replace leftover inner effect-row variables in a catalog-bound
+    /// signature (a closure-typed parameter's latent row) with fresh rigid
+    /// params, returned for the requirement's `eff_params`. Catalog types
+    /// outlive this module's solver store, so a raw variable would be read
+    /// as a foreign id by importers; consumers freshen the params per use.
+    fn quantify_signature_eff_vars(&mut self, sig: Ty) -> (Ty, Vec<Symbol>) {
+        struct EffVarParams<'x> {
+            symbols: &'x mut Symbols,
+            module_id: ModuleId,
+            minted: Vec<Symbol>,
+        }
+        impl crate::types::ty::TyFold for EffVarParams<'_> {
+            fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {
+                let entries = eff
+                    .effects
+                    .iter()
+                    .map(|entry| EffectEntry {
+                        effect: entry.effect,
+                        args: entry.args.iter().map(|ty| self.fold_ty(ty)).collect(),
+                    })
+                    .collect();
+                let tail = match &eff.tail {
+                    Some(EffTail::Var(_)) => {
+                        let param =
+                            Symbol::TypeParameter(self.symbols.next_type_parameter(self.module_id));
+                        self.minted.push(param);
+                        Some(EffTail::Param(param))
+                    }
+                    other => other.clone(),
+                };
+                EffectRow::new(entries, tail)
+            }
+        }
+        let mut folder = EffVarParams {
+            symbols: self.symbols,
+            module_id: self.module_id,
+            minted: vec![],
+        };
+        use crate::types::ty::TyFold;
+        let sig = folder.fold_ty(&sig);
+        (sig, folder.minted)
+    }
+
+    /// A top-level `extend` whose head names a protocol (rather than a
+    /// nominal type getting witnesses or inherent members).
+    pub(super) fn protocol_extension_head(&self, decl: &Decl) -> Option<Symbol> {
+        let DeclKind::Extend { name, .. } = &decl.kind else {
+            return None;
+        };
+        let head = name.symbol().ok()?;
+        self.catalog.protocols.contains_key(&head).then_some(head)
+    }
+
+    /// Register `extend SomeProtocol { ... }`: each method joins the
+    /// protocol as a defaulted requirement — checked generically over
+    /// Self like an in-body default, witnessable by conforming extends.
+    pub(super) fn register_protocol_extension(
+        &mut self,
+        protocol: Symbol,
+        decl: &'a Decl,
+        protocol_defaults: &mut Vec<(Symbol, Symbol, &'a Func)>,
+    ) {
+        let DeclKind::Extend {
+            conformances,
+            generics,
+            where_clause,
+            body,
+            ..
+        } = &decl.kind
+        else {
+            return;
+        };
+        if !conformances.is_empty() {
+            self.unsupported(decl.id, "declaring conformances on a protocol extension");
+            return;
+        }
+        if !generics.is_empty() {
+            self.unsupported(decl.id, "generic protocol extensions");
+            return;
+        }
+        self.self_types.push(Ty::Param(protocol));
+        self.register_where_bounds(where_clause.as_ref());
+        let extension_predicates = self.declared_predicates(&[], where_clause.as_ref());
+        for member in &body.decls {
+            let DeclKind::Method { func, .. } = &member.kind else {
+                self.unsupported(member.id, decl_kind_name(&member.kind));
+                continue;
+            };
+            let label = func.name.name_str();
+            if self
+                .catalog
+                .protocols
+                .get(&protocol)
+                .is_some_and(|info| info.requirements.contains_key(&label))
+            {
+                self.unsupported(
+                    member.id,
+                    "redeclaring an existing protocol member in a protocol extension",
+                );
+                continue;
+            }
+            let Some(requirement) = self.lower_default_requirement(func) else {
+                continue;
+            };
+            // The extension-level where clause joins the requirement's
+            // scheme context (the scheme is the signature carrier).
+            if let Some(scheme) = self.schemes.get_mut(&requirement.symbol) {
+                for predicate in &extension_predicates {
+                    if !scheme.predicates.contains(predicate) {
+                        scheme.predicates.push(predicate.clone());
+                    }
+                }
+            }
+            protocol_defaults.push((protocol, requirement.symbol, func));
+            if let Some(info) = self.catalog.protocols.get_mut(&protocol) {
+                info.requirements.insert(label.clone(), requirement);
+            }
+            self.catalog
+                .add_owner(&label, MemberOwner::Protocol(protocol));
+        }
+        self.self_types.pop();
     }
 
     pub(super) fn register_effect(
@@ -1044,9 +1264,19 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 effects: Default::default(),
                 tail: Some(EffTail::Param(*method)),
             };
+            // The annotation-derived signature is an ordinary scheme (the
+            // one signature carrier); `check_extend` replaces it with the
+            // inferred, zonked scheme after the body checks. The catalog
+            // keeps only the instance-head pattern.
+            let predicates = self.declared_predicates(&func.generics, func.where_clause.as_ref());
+            self.insert_requirement_scheme(
+                *method,
+                Ty::Func(sig_params, Box::new(ret), eff),
+                generic_symbols(&func.generics),
+                predicates,
+            );
             let member = crate::types::catalog::InherentMember {
                 symbol: *method,
-                sig: Ty::Func(sig_params, Box::new(ret), eff),
                 params: params.clone(),
                 self_args: self_args.clone(),
             };
@@ -1077,9 +1307,13 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         func: &Func,
         conformance: &mut Conformance,
     ) {
-        let Ty::Func(req_params, req_ret, _) = &requirement.sig else {
+        let Some(Ty::Func(req_params, req_ret, _)) =
+            self.schemes.get(&requirement.symbol).map(|s| s.ty.clone())
+        else {
             return;
         };
+        let req_params = &req_params;
+        let req_ret: &Ty = &req_ret;
         let witness_params: Vec<Option<Ty>> = func
             .params
             .iter()

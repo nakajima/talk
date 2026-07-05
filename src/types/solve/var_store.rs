@@ -86,6 +86,11 @@ impl VarStore {
         self.vars[root as usize].value.clone()
     }
 
+    pub(crate) fn origin(&mut self, var: u32) -> NodeID {
+        let root = self.find(var);
+        self.vars[root as usize].origin
+    }
+
     pub(super) fn bind(&mut self, var: u32, value: VarValue) {
         let root = self.find(var);
         debug_assert!(self.vars[root as usize].value.is_none());
@@ -272,6 +277,16 @@ impl VarStore {
                 }
             }
             Ty::Proj(base, ..) => self.query_resolved(base, f)?,
+            Ty::Eff(eff) => {
+                for entry in &eff.effects {
+                    for arg in &entry.args {
+                        self.query_resolved(arg, f)?;
+                    }
+                }
+                if let Some(tail) = &eff.tail {
+                    f(self, TyNode::EffTail(tail))?;
+                }
+            }
             Ty::Var(_) | Ty::Param(_) | Ty::Error => {}
         }
         ControlFlow::Continue(())

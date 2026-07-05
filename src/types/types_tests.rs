@@ -2064,7 +2064,9 @@ pub mod tests {
     }
 
     #[test]
-    fn unknown_member_on_nested_borrow_reports_original_receiver() {
+    fn unknown_member_on_nested_borrow_reports_collapsed_receiver() {
+        // & of & is & (ADR 0015 addendum): a nested borrow annotation IS
+        // a single borrow, and diagnostics render the canonical type.
         let t = check(
             "// no-core\nstruct DirectoryEntry {}\nfunc f(entry: & &DirectoryEntry) {\n\tentry.show()\n}",
         );
@@ -2072,8 +2074,8 @@ pub mod tests {
         assert!(
             errors
                 .iter()
-                .any(|error| error.contains("Unknown member 'show' on &&DirectoryEntry")),
-            "expected original nested-borrow receiver in diagnostic, got {errors:?}"
+                .any(|error| error.contains("Unknown member 'show' on &DirectoryEntry")),
+            "expected the collapsed borrow receiver in the diagnostic, got {errors:?}"
         );
     }
 
@@ -2740,6 +2742,195 @@ pub mod tests {
             "// no-core\nprotocol Q {\n\tassociated A\n\tfunc get() -> A\n\tfunc also() -> A {\n\t\tself.get()\n\t}\n}",
         );
         assert_clean(&t);
+    }
+
+    #[test]
+    fn exported_catalog_carries_no_unification_variables() {
+        // Catalog types cross module boundaries, where this module's
+        // store ids mean nothing: a leaked var reads foreign slots on the
+        // importing side (silent mis-unification, or the "effect var
+        // bound to non-effect value" panic).
+        fn ty_has_vars(ty: &crate::types::ty::Ty) -> bool {
+            use crate::types::ty::{EffTail, RowTail, Ty};
+            match ty {
+                Ty::Var(_) => true,
+                Ty::Nominal(_, args) | Ty::Tuple(args) => args.iter().any(ty_has_vars),
+                Ty::Borrow(_, inner) | Ty::Unique(inner) => ty_has_vars(inner),
+                Ty::Func(params, ret, eff) => {
+                    params.iter().any(ty_has_vars)
+                        || ty_has_vars(ret)
+                        || matches!(eff.tail, Some(EffTail::Var(_)))
+                        || eff
+                            .effects
+                            .iter()
+                            .any(|entry| entry.args.iter().any(ty_has_vars))
+                }
+                Ty::Record(row) => {
+                    row.fields.iter().any(|(_, t)| ty_has_vars(t))
+                        || matches!(row.tail, Some(RowTail::Var(_)))
+                }
+                Ty::Any { assoc, .. } => assoc.iter().any(|(_, t)| ty_has_vars(t)),
+                Ty::Eff(eff) => {
+                    matches!(eff.tail, Some(EffTail::Var(_)))
+                        || eff
+                            .effects
+                            .iter()
+                            .any(|entry| entry.args.iter().any(ty_has_vars))
+                }
+                Ty::Proj(base, ..) => ty_has_vars(base),
+                Ty::Param(_) | Ty::Error => false,
+            }
+        }
+
+        let t = check(
+            "// no-core\nstruct Holder {\n\tlet f: (Int) -> Int\n}\nprotocol P {\n\tfunc run(fn: (Int) -> Int) -> Int\n}\neffect 'act(fn: (Int) -> Int) -> Int\nenum Cmd {\n\tcase go((Int) -> Int)\n}",
+        );
+        let module = t.module("VarFree");
+        let catalog = &module.types.catalog;
+        for (symbol, info) in &catalog.structs {
+            for (label, (_, field_ty)) in &info.fields {
+                assert!(
+                    !ty_has_vars(field_ty),
+                    "field {symbol}.{label} leaks vars: {field_ty:?}"
+                );
+            }
+        }
+        // Requirement and extend-member signatures are ordinary schemes
+        // now; the exported schemes map is asserted below.
+        for (symbol, scheme) in &module.types.schemes {
+            assert!(
+                !ty_has_vars(&scheme.ty),
+                "exported scheme {symbol} leaks vars: {:?}",
+                scheme.ty
+            );
+        }
+        for (symbol, sig) in &catalog.effects {
+            for ty in sig.params.iter().chain(std::iter::once(&sig.ret)) {
+                assert!(!ty_has_vars(ty), "effect {symbol} leaks vars: {ty:?}");
+            }
+        }
+        for (symbol, info) in &catalog.enums {
+            for (label, variant) in &info.variants {
+                assert!(
+                    !ty_has_vars(&variant.constructor_scheme.ty),
+                    "variant {symbol}.{label} leaks vars: {:?}",
+                    variant.constructor_scheme.ty
+                );
+            }
+        }
+        for ((head, protocol), conformance) in &catalog.conformances {
+            for (assoc, ty) in &conformance.assoc {
+                assert!(
+                    !ty_has_vars(ty),
+                    "conformance ({head}, {protocol}) assoc {assoc} leaks vars: {ty:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn self_qualified_associated_type_matches_bare_in_protocol_body() {
+        // `Self.A` inside the protocol's own context names the assoc
+        // param directly — it must unify with what `self.get()` returns.
+        let t = check(
+            "// no-core\nprotocol Q {\n\tassociated A\n\tfunc get() -> A\n\tfunc also() -> Self.A {\n\t\tself.get()\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    // ----- Protocol extensions -------------------------------------------
+    // `extend P { ... }` methods join P as defaulted requirements: checked
+    // generically over Self like in-body defaults, witnessable by
+    // conforming extends.
+
+    #[test]
+    fn protocol_extension_defaults_are_checked() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nextend P {\n\tfunc doubled() -> Int {\n\t\tself.base()\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_extension_default_type_errors_are_reported() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nextend P {\n\tfunc doubled() -> Int {\n\t\t1.5\n\t}\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+    }
+
+    #[test]
+    fn protocol_extension_methods_callable_on_conforming_types() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nextend P {\n\tfunc doubled() -> Int {\n\t\tself.base()\n\t}\n}\nstruct S {}\nextend S: P {\n\tfunc base() -> Int { 1 }\n}\nfunc useP<T: P>(x: T) -> Int { x.doubled() }\nlet genericValue = useP(S())\nlet directValue = S().doubled()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "genericValue"), "Int");
+        assert_eq!(ty_of(&t, "directValue"), "Int");
+    }
+
+    #[test]
+    fn protocol_extension_registers_regardless_of_decl_order() {
+        // The conforming extend appears before the protocol extension:
+        // the extension's requirements must still be visible to it.
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nstruct S {}\nextend S: P {\n\tfunc base() -> Int { 1 }\n}\nextend P {\n\tfunc doubled() -> Int {\n\t\tself.base()\n\t}\n}\nlet v = S().doubled()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "v"), "Int");
+    }
+
+    #[test]
+    fn protocol_extension_uses_self_associated_types() {
+        let t = check(
+            "// no-core\nprotocol Q {\n\tassociated A\n\tfunc get() -> A\n}\nextend Q {\n\tfunc also() -> Self.A {\n\t\tself.get()\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_extension_mut_method_calls_mut_requirement() {
+        let t = check(
+            "// no-core\nprotocol I {\n\tassociated E\n\tmut func next() -> E\n}\nextend I {\n\tmut func twice() -> Self.E {\n\t\tself.next()\n\t\tself.next()\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_extension_method_with_where_clause() {
+        let t = check(
+            "// no-core\nprotocol Eq2 {\n\tfunc same(rhs: &Self) -> Bool\n}\nprotocol I {\n\tassociated E\n\tmut func next() -> E\n}\nextend I {\n\tmut func matches(needle: &Self.E) -> Bool where E: Eq2 {\n\t\tself.next().same(needle)\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_extension_where_clause_binds_associated_types() {
+        // `E: Eq3<E>` adds a TypeEq given (E.R = E) that the default
+        // body's `same` call needs to typecheck.
+        let t = check(
+            "// no-core\nprotocol Eq3 {\n\tassociated R\n\tfunc same(rhs: R) -> Bool\n}\nprotocol I {\n\tassociated E\n\tmut func next() -> E\n}\nextend I {\n\tmut func found(needle: E) -> Bool where E: Eq3<E> {\n\t\tneedle.same(rhs: self.next())\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_extension_declaring_conformance_is_unsupported() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nprotocol R {\n\tfunc r() -> Int\n}\nextend P: R {\n\tfunc r() -> Int { 1 }\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+    }
+
+    #[test]
+    fn protocol_extension_redeclaring_requirement_is_unsupported() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nextend P {\n\tfunc base() -> Int { 1 }\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
     }
 
     #[test]
@@ -3431,6 +3622,59 @@ mod with_core {
     }
 
     #[test]
+    fn struct_eff_params_cross_the_module_boundary() {
+        // A struct with closure fields exports its implicit effect params
+        // (quantified field tails, no leaked variables); the importing
+        // module constructs and reads with per-construction rows, and the
+        // stored effect still demands a handler — nothing is laundered by
+        // the module boundary.
+        use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
+
+        let driver_a = Driver::new(
+            vec![Source::from(
+                "public struct Wrapper {\n\tlet f: () -> Int\n}",
+            )],
+            DriverConfig::new("A"),
+        );
+        let module_a = driver_a
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check()
+            .module("A");
+
+        let mut modules = ModuleEnvironment::default();
+        modules.import(module_a);
+        let config = crate::compiling::driver::DriverConfig {
+            module_id: ModuleId::Current,
+            modules: Rc::new(modules),
+            mode: crate::compiling::driver::CompilationMode::Library,
+            module_name: "B".to_string(),
+            parse_mode: crate::compiling::driver::ParseMode::Strict,
+            preserve_comments: false,
+        };
+        let driver_b = Driver::new(
+            vec![Source::from(
+                "use { Wrapper } from A\neffect 'ping() -> Void\nfunc pure_use() -> Int {\n\tlet w = Wrapper(f: func() { 1 })\n\tw.f()\n}\nfunc pingy_use() -> Int {\n\tlet w = Wrapper(f: func() {\n\t\t'ping()\n\t\t1\n\t})\n\tw.f()\n}\npure_use()\npingy_use()",
+            )],
+            config,
+        );
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        let errors = type_errors(&typed);
+        // pure_use is clean; pingy_use's stored 'ping reaches the top
+        // level unhandled — the row traveled through the imported struct.
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("No handler for 'ping"), "{errors:?}");
+    }
+
+    #[test]
     fn external_module_types_cross_the_boundary() {
         // Compile module A, import it into module B as an external module:
         // A's schemes and catalog must arrive with symbols remapped to B's
@@ -3563,6 +3807,158 @@ mod with_core {
             .map(|(sym, _)| *sym)
             .expect("x scheme");
         assert_eq!(typed.phase.types.schemes[&symbol].render(), "Int");
+    }
+
+    #[test]
+    fn borrow_shaped_equatable_witness_conforms() {
+        // ADR 0014: comparison requirements take `rhs: &RHS`, so a
+        // non-Copy conforming type witnesses with the borrow spelled out.
+        let typed = check_with_core(Source::from(
+            "struct Pt {\n\tlet x: Int\n}\nextend Pt: Equatable {\n\tfunc equals(rhs: &Pt) -> Bool {\n\t\tself.x == rhs.x\n\t}\n}\nlet hit = Pt(x: 1) == Pt(x: 1)",
+        ));
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn conformance_dispatch_publishes_receiver_theta_on_node() {
+        // Swift model: the node carries the complete θ. A ViaConformance
+        // callee's instantiation must include the receiver-derived
+        // entries (the conformance row's params bound at the receiver
+        // head), not just method generics — lowering reads, never
+        // re-derives.
+        let typed = check_with_core(Source::from(
+            "let xs = [10, 20, 30]\nlet it = xs.iter()\nlet r = it.skip(1)",
+        ));
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+        let published = typed
+            .phase
+            .types
+            .member_resolutions
+            .iter()
+            .filter(|(_, resolution)| {
+                matches!(
+                    resolution,
+                    crate::types::output::MemberResolution::ViaConformance { .. }
+                )
+            })
+            .any(|(node, _)| {
+                typed
+                    .phase
+                    .types
+                    .instantiations
+                    .get(node)
+                    .is_some_and(|pairs| {
+                        pairs.iter().any(|(symbol, _)| {
+                            matches!(symbol, crate::name_resolution::symbol::Symbol::Protocol(_))
+                        })
+                    })
+            });
+        let dump: Vec<String> = typed
+            .phase
+            .types
+            .member_resolutions
+            .iter()
+            .filter(|(_, r)| {
+                matches!(
+                    r,
+                    crate::types::output::MemberResolution::ViaConformance { .. }
+                )
+            })
+            .map(|(node, r)| {
+                format!(
+                    "{node:?} {r:?} => {:?}",
+                    typed.phase.types.instantiations.get(node).map(|pairs| pairs
+                        .iter()
+                        .map(|(s, t)| format!("{s} = {}", t.render_mono()))
+                        .collect::<Vec<_>>())
+                )
+            })
+            .collect();
+        assert!(
+            published,
+            "no ViaConformance callee node carries a receiver-derived θ entry; got:\n{}",
+            dump.join("\n")
+        );
+    }
+
+    #[test]
+    fn chained_map_with_closure_checks() {
+        // `map`'s closure param is a higher-order signature: its latent
+        // effect row must be an eff param freshened per use, not a raw
+        // store var leaked through the exported catalog (a foreign-store
+        // id panics or silently couples unrelated constraints).
+        let typed = check_with_core(Source::from(
+            "let xs = [10, 20, 30]\nlet m = xs.iter().map() { x in x }",
+        ));
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn chained_iterator_index_terminates() {
+        // Dispatching a requirement whose where clause binds an assoc type
+        // (`index`'s `Equatable<Element>`) at Element = &Int produces the
+        // given `Int ~ &Int` — a self-referential rewrite (the target
+        // contains the source) that must not diverge in the given-rewrite
+        // fixpoint. Termination is the assertion; the diagnostics are
+        // whatever the borrow story currently yields.
+        let typed = check_with_core(Source::from(
+            "let xs = [10, 20, 30]\nlet r = xs.iter().index(20)",
+        ));
+        let _ = type_errors(&typed);
+    }
+
+    #[test]
+    fn struct_closure_fields_are_effect_polymorphic_per_construction() {
+        // Effect params on structs (docs/effect-params-on-structs-plan.md):
+        // a closure field's row is quantified per construction (implicit
+        // effect params on the nominal head, instantiated at the
+        // constructor, recovered at reads) — storing an effectful closure
+        // in ONE Wrapper contaminates nothing else.
+        let typed = check_with_core(Source::from(
+            "struct Wrapper {\n\tlet f: () -> Int\n}\neffect 'ping() -> Void\nfunc pure_use() -> Int {\n\tlet w = Wrapper(f: func() { 1 })\n\tw.f()\n}\nfunc pingy_use() 'ping -> Int {\n\tlet w = Wrapper(f: func() {\n\t\t'ping()\n\t\t1\n\t})\n\tw.f()\n}\npure_use()",
+        ));
+        let errors = type_errors(&typed);
+        assert_eq!(errors, Vec::<String>::new());
+    }
+
+    #[test]
+    fn struct_closure_field_rows_travel_with_the_instance() {
+        // The SOUND direction: the stored closure's effects ride the
+        // instance's type out of `make`, so calling the field elsewhere
+        // still demands a handler — a struct cannot launder an effect.
+        let typed = check_with_core(Source::from(
+            "struct Wrapper {\n\tlet f: () -> Int\n}\neffect 'ping() -> Void\nfunc make() -> Wrapper {\n\tWrapper(f: func() {\n\t\t'ping()\n\t\t1\n\t})\n}\nfunc use_it() -> Int {\n\tlet w = make()\n\tw.f()\n}\nuse_it()",
+        ));
+        let errors = type_errors(&typed);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("No handler for 'ping"), "{errors:?}");
+    }
+
+    #[test]
+    fn generic_struct_closure_fields_stay_polymorphic_per_instantiation() {
+        // The Map-shaped case: a generic struct's closure field, two
+        // instantiations with different rows — neither contaminates the
+        // other (type params and effect params instantiate together).
+        let typed = check_with_core(Source::from(
+            "struct Holder<T> {\n\tlet f: (T) -> T\n}\neffect 'ping() -> Void\nfunc pure_use() -> Int {\n\tlet h = Holder(f: func(x: Int) { x })\n\th.f(1)\n}\nfunc pingy_use() 'ping -> Bool {\n\tlet h = Holder(f: func(x: Bool) {\n\t\t'ping()\n\t\tx\n\t})\n\th.f(true)\n}\npure_use()",
+        ));
+        let errors = type_errors(&typed);
+        assert_eq!(errors, Vec::<String>::new());
+    }
+
+    #[test]
+    fn for_loop_over_string_iterator_checks_cleanly() {
+        // `String.iter()` resolves through the Iterable conformance
+        // (protocol-extension dispatch); the for-loop consumes the
+        // returned CharacterIterator with no diagnostics.
+        let typed = check_with_core(Source::from(
+            "func f(s: String) {\n\tlet chars = s.iter()\n\tfor c in chars {}\n}",
+        ));
+        let errors = type_errors(&typed);
+        assert_eq!(errors, Vec::<String>::new());
     }
 
     // === Grades: Copy / Affine / Linear (substructural core) ===

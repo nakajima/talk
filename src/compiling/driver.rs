@@ -697,15 +697,20 @@ impl Driver<Typed> {
             .into_iter()
             .filter(|(symbol, _)| own(symbol))
             .collect();
+        #[cfg_attr(not(debug_assertions), allow(unused_mut))]
+        let mut catalog = self.phase.types.catalog;
+        // A module's types outlive this store: nothing var-shaped may
+        // cross. Finalization guarantees it through the same walk this
+        // assertion re-runs; a future catalog field that skips the walk
+        // fails loudly here in debug builds.
+        #[cfg(debug_assertions)]
+        catalog.debug_assert_portable();
         Module {
             id: StableModuleId::generate(&exports),
             name: name.into(),
             symbol_names,
             exports,
-            types: ModuleTypes {
-                schemes,
-                catalog: self.phase.types.catalog,
-            },
+            types: ModuleTypes { schemes, catalog },
         }
     }
 }
@@ -740,20 +745,6 @@ impl Driver<Lowered> {
             assert_eq!(live_objects, 0, "{live_objects} 'heap objects leaked");
             assert_eq!(live_allocations, 0, "{live_allocations} allocations leaked");
         }
-        Ok((value, out))
-    }
-
-    /// [`Self::eval_with_output`] with the known container-element-teardown
-    /// deficit fenced: containers never deep-drop their elements (Track B
-    /// of docs/confidence-and-core-plan.md), so leaked allocations are
-    /// tolerated — leaked `'heap` objects are still an error. Every caller
-    /// is a greppable enumeration of the deficit; Track B's exit criterion
-    /// deletes this method.
-    pub fn eval_expecting_container_element_leak(
-        &mut self,
-    ) -> Result<(crate::lambda_g::eval::EvalValue, String), crate::lambda_g::eval::EvalError> {
-        let (value, out, live_objects, _leaked) = self.eval_counted()?;
-        assert_eq!(live_objects, 0, "{live_objects} 'heap objects leaked");
         Ok((value, out))
     }
 

@@ -91,8 +91,30 @@ async fn main() {
             #[arg(value_enum)]
             shell: Shell,
         },
+        /// Install editor support files.
+        Setup {
+            #[command(subcommand)]
+            target: SetupTarget,
+        },
         /// Language? Server. Protocol!
         Lsp(LspArgs),
+    }
+
+    #[derive(Subcommand, Debug)]
+    enum SetupTarget {
+        /// Install plain Neovim runtime support files.
+        #[command(name = "nvim")]
+        Nvim(NvimSetupArgs),
+    }
+
+    #[derive(Debug, Args)]
+    struct NvimSetupArgs {
+        /// Overwrite existing TalkTalk runtime files if they differ.
+        #[arg(long)]
+        force: bool,
+        /// Install into this runtime root instead of Neovim's data/site dir.
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        target_dir: Option<std::path::PathBuf>,
     }
 
     #[derive(Debug, Args)]
@@ -234,6 +256,18 @@ async fn main() {
         }
         Commands::Lsp(_) => {
             talk::lsp::server::start().await;
+        }
+        Commands::Setup { target } => {
+            let result = match target {
+                SetupTarget::Nvim(args) => {
+                    NvimRuntimeInstaller::new(args.target_dir.as_deref(), args.force)
+                        .and_then(|installer| installer.install())
+                }
+            };
+            if let Err(err) = result {
+                eprintln!("error: {err:#}");
+                std::process::exit(1);
+            }
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
@@ -451,6 +485,7 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
     talk bytecode file        print raw bytecode module
     talk html/debug/parse     development views
     talk lsp --stdio          language server
+    talk setup nvim           install Neovim runtime support files
     talk completions SHELL    shell completion script
     talk llm                  print this reference
 
@@ -525,6 +560,188 @@ Pipeline: parse -> name resolution/imports -> OutsideIn-style type checking with
 "#;
 
 #[cfg(feature = "cli")]
+const NVIM_RUNTIME_RAW_BASE: &str =
+    "https://raw.githubusercontent.com/nakajima/talk/main/dev/editors/nvim";
+
+#[cfg(feature = "cli")]
+const TALK_RELEASE_DOWNLOAD_BASE: &str = "https://github.com/nakajima/talk/releases/download";
+
+#[cfg(feature = "cli")]
+const TALK_STATIC_ARCHIVE_NAME: &str = "libtalk_static.a";
+
+#[cfg(feature = "cli")]
+const NVIM_RUNTIME_FILES: &[&str] = &[
+    "ftdetect/talktalk.lua",
+    "ftplugin/talktalk.lua",
+    "indent/talktalk.vim",
+    "syntax/talktalk.vim",
+];
+
+#[cfg(feature = "cli")]
+struct NvimRuntimeInstaller {
+    target_root: std::path::PathBuf,
+    force: bool,
+}
+
+#[cfg(feature = "cli")]
+impl NvimRuntimeInstaller {
+    fn new(target_dir: Option<&std::path::Path>, force: bool) -> anyhow::Result<Self> {
+        let target_root = match target_dir {
+            Some(path) => path.to_path_buf(),
+            None => Self::default_target_root()?,
+        };
+
+        Ok(Self { target_root, force })
+    }
+
+    fn install(&self) -> anyhow::Result<()> {
+        use anyhow::Context as _;
+
+        println!("Installing TalkTalk Neovim runtime files from github.com/nakajima/talk");
+        println!("Target runtime root: {}", self.target_root.display());
+
+        let mut downloads = Vec::with_capacity(NVIM_RUNTIME_FILES.len());
+        for relative_path in NVIM_RUNTIME_FILES {
+            let contents = Self::download_file(relative_path)?;
+            downloads.push((*relative_path, contents));
+        }
+
+        for (relative_path, contents) in &downloads {
+            let target = self.target_root.join(*relative_path);
+            if target.exists() && !self.force {
+                let existing = std::fs::read(&target)
+                    .with_context(|| format!("failed to read {}", target.display()))?;
+                if existing.as_slice() != contents.as_slice() {
+                    anyhow::bail!(
+                        "{} already exists and differs; rerun with --force to overwrite",
+                        target.display()
+                    );
+                }
+            }
+        }
+
+        for (relative_path, contents) in downloads {
+            let target = self.target_root.join(relative_path);
+            if target.exists() && !self.force {
+                println!("up to date: {}", target.display());
+                continue;
+            }
+
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            std::fs::write(&target, contents)
+                .with_context(|| format!("failed to write {}", target.display()))?;
+            println!("installed: {}", target.display());
+        }
+
+        Ok(())
+    }
+
+    fn default_target_root() -> anyhow::Result<std::path::PathBuf> {
+        if let Some(data_dir) = Self::nvim_data_dir() {
+            return Ok(data_dir.join("site"));
+        }
+
+        Self::fallback_data_site_dir()
+    }
+
+    fn nvim_data_dir() -> Option<std::path::PathBuf> {
+        let output = std::process::Command::new("nvim")
+            .args([
+                "--headless",
+                "-u",
+                "NONE",
+                "-i",
+                "NONE",
+                "--noplugin",
+                "+lua io.write(vim.fn.stdpath('data'))",
+                "+qa!",
+            ])
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8(output.stdout).ok()?;
+        let path = stdout.trim();
+        if path.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(path))
+        }
+    }
+
+    fn fallback_data_site_dir() -> anyhow::Result<std::path::PathBuf> {
+        let appname = std::env::var_os("NVIM_APPNAME")
+            .filter(|value| !value.as_os_str().is_empty())
+            .unwrap_or_else(|| "nvim".into());
+
+        let data_home = match std::env::var_os("XDG_DATA_HOME")
+            .filter(|value| !value.as_os_str().is_empty())
+        {
+            Some(path) => std::path::PathBuf::from(path),
+            None => {
+                let home = std::env::var_os("HOME").ok_or_else(|| {
+                    anyhow::anyhow!("could not find Neovim data dir; set HOME or pass --target-dir")
+                })?;
+                std::path::PathBuf::from(home).join(".local/share")
+            }
+        };
+
+        Ok(data_home.join(appname).join("site"))
+    }
+
+    fn download_file(relative_path: &str) -> anyhow::Result<Vec<u8>> {
+        let url = format!("{NVIM_RUNTIME_RAW_BASE}/{relative_path}");
+        Downloader::download_url(&url)
+    }
+}
+
+#[cfg(feature = "cli")]
+struct Downloader;
+
+#[cfg(feature = "cli")]
+impl Downloader {
+    fn download_url(url: &str) -> anyhow::Result<Vec<u8>> {
+        let attempts = [
+            ("curl", vec!["-fsSL", url]),
+            ("wget", vec!["-qO-", url]),
+            ("fetch", vec!["-qo", "-", url]),
+        ];
+        let mut failures = Vec::new();
+
+        for (program, args) in attempts {
+            match std::process::Command::new(program).args(args).output() {
+                Ok(output) if output.status.success() => return Ok(output.stdout),
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    if stderr.is_empty() {
+                        failures.push(format!("{program} exited with {}", output.status));
+                    } else {
+                        failures.push(format!("{program} exited with {}: {stderr}", output.status));
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => failures.push(format!("{program}: {err}")),
+            }
+        }
+
+        if failures.is_empty() {
+            anyhow::bail!("could not download {url}; install curl, wget, or fetch");
+        }
+
+        anyhow::bail!(
+            "could not download {url}; install curl, wget, or fetch; attempts failed: {}",
+            failures.join("; ")
+        );
+    }
+}
+
+#[cfg(feature = "cli")]
 fn build_static_executable(
     bytecode: &[u8],
     output: &std::path::Path,
@@ -584,31 +801,174 @@ struct RuntimeArchive;
 #[cfg(feature = "cli")]
 impl RuntimeArchive {
     fn locate() -> Result<std::path::PathBuf, String> {
+        if let Some(candidate) = Self::locate_local() {
+            return Ok(candidate);
+        }
+
+        Self::download_current().map_err(|err| {
+            format!(
+                "could not find {TALK_STATIC_ARCHIVE_NAME} locally and {err}; run `cargo build -p talk-static` or pass --runtime"
+            )
+        })
+    }
+
+    fn locate_local() -> Option<std::path::PathBuf> {
+        Self::local_candidates()
+            .into_iter()
+            .find(|candidate| candidate.exists())
+    }
+
+    fn local_candidates() -> Vec<std::path::PathBuf> {
         let mut candidates = Vec::new();
         if let Ok(exe) = std::env::current_exe()
             && let Some(dir) = exe.parent()
         {
             if let Some(profile_dir) = dir.parent() {
-                candidates.push(profile_dir.join("release/libtalk_static.a"));
+                candidates.push(profile_dir.join(format!("release/{TALK_STATIC_ARCHIVE_NAME}")));
             }
-            candidates.push(dir.join("libtalk_static.a"));
-            candidates.push(dir.join("../lib/libtalk_static.a"));
+            candidates.push(dir.join(TALK_STATIC_ARCHIVE_NAME));
+            candidates.push(dir.join(format!("../lib/{TALK_STATIC_ARCHIVE_NAME}")));
             if let Some(profile_dir) = dir.parent() {
-                candidates.push(profile_dir.join("debug/libtalk_static.a"));
+                candidates.push(profile_dir.join(format!("debug/{TALK_STATIC_ARCHIVE_NAME}")));
             }
         }
-        candidates.push(std::path::PathBuf::from("target/release/libtalk_static.a"));
-        candidates.push(std::path::PathBuf::from("target/debug/libtalk_static.a"));
+        candidates.push(std::path::PathBuf::from(format!(
+            "target/release/{TALK_STATIC_ARCHIVE_NAME}"
+        )));
+        candidates.push(std::path::PathBuf::from(format!(
+            "target/debug/{TALK_STATIC_ARCHIVE_NAME}"
+        )));
+        candidates
+    }
 
-        for candidate in candidates {
-            if candidate.exists() {
-                return Ok(candidate);
-            }
+    fn download_current() -> Result<std::path::PathBuf, String> {
+        let target = Self::current_target()?;
+        let cached = Self::cache_path(target);
+        if Self::is_usable_archive(&cached) {
+            return Ok(cached);
         }
-        Err(
-            "could not find libtalk_static.a; run `cargo build -p talk-static` or pass --runtime"
-                .into(),
-        )
+
+        let tag = Self::release_tag();
+        let asset = Self::asset_name(target);
+        let url = format!("{TALK_RELEASE_DOWNLOAD_BASE}/{tag}/{asset}");
+        let checksum_url = format!("{url}.sha256");
+
+        eprintln!("downloading Talk static runtime {tag} for {target}");
+        let checksum = Downloader::download_url(&checksum_url)
+            .map_err(|err| format!("could not download {checksum_url}: {err:#}"))?;
+        let archive = Downloader::download_url(&url)
+            .map_err(|err| format!("could not download {url}: {err:#}"))?;
+        Self::verify_sha256(&archive, &checksum, &asset)?;
+        Self::write_cached(&cached, &archive)?;
+        Ok(cached)
+    }
+
+    fn current_target() -> Result<&'static str, String> {
+        if cfg!(all(
+            target_os = "linux",
+            target_env = "gnu",
+            target_arch = "x86_64"
+        )) {
+            Ok("x86_64-unknown-linux-gnu")
+        } else if cfg!(all(
+            target_os = "linux",
+            target_env = "gnu",
+            target_arch = "aarch64"
+        )) {
+            Ok("aarch64-unknown-linux-gnu")
+        } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+            Ok("x86_64-apple-darwin")
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            Ok("aarch64-apple-darwin")
+        } else {
+            Err(format!(
+                "automatic runtime download is not supported for {}-{}",
+                std::env::consts::ARCH,
+                std::env::consts::OS
+            ))
+        }
+    }
+
+    fn cache_path(target: &str) -> std::path::PathBuf {
+        Self::cache_root()
+            .join("talk")
+            .join("static-runtimes")
+            .join(Self::release_tag())
+            .join(target)
+            .join(TALK_STATIC_ARCHIVE_NAME)
+    }
+
+    fn cache_root() -> std::path::PathBuf {
+        if let Some(path) =
+            std::env::var_os("XDG_CACHE_HOME").filter(|value| !value.as_os_str().is_empty())
+        {
+            return std::path::PathBuf::from(path);
+        }
+        if let Some(home) = std::env::var_os("HOME").filter(|value| !value.as_os_str().is_empty()) {
+            return std::path::PathBuf::from(home).join(".cache");
+        }
+        std::env::temp_dir()
+    }
+
+    fn release_tag() -> String {
+        format!("v{}", env!("CARGO_PKG_VERSION"))
+    }
+
+    fn asset_name(target: &str) -> String {
+        format!("libtalk_static-{target}.a")
+    }
+
+    fn is_usable_archive(path: &std::path::Path) -> bool {
+        path.metadata()
+            .map(|metadata| metadata.is_file() && metadata.len() > 0)
+            .unwrap_or(false)
+    }
+
+    fn verify_sha256(bytes: &[u8], checksum: &[u8], asset: &str) -> Result<(), String> {
+        use sha2::Digest as _;
+
+        let checksum = std::str::from_utf8(checksum)
+            .map_err(|err| format!("invalid sha256 metadata for {asset}: {err}"))?;
+        let expected = checksum
+            .split_whitespace()
+            .next()
+            .ok_or_else(|| format!("empty sha256 metadata for {asset}"))?;
+        if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(format!("invalid sha256 metadata for {asset}"));
+        }
+
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(bytes);
+        let actual = format!("{:x}", hasher.finalize());
+        if !expected.eq_ignore_ascii_case(&actual) {
+            return Err(format!("checksum mismatch for downloaded {asset}"));
+        }
+        Ok(())
+    }
+
+    fn write_cached(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("invalid runtime cache path: {}", path.display()))?;
+        std::fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "failed to create runtime cache directory {}: {err}",
+                parent.display()
+            )
+        })?;
+        let temp = path.with_file_name(format!(
+            "{TALK_STATIC_ARCHIVE_NAME}.{}.tmp",
+            std::process::id()
+        ));
+        std::fs::write(&temp, bytes)
+            .map_err(|err| format!("failed to write {}: {err}", temp.display()))?;
+        std::fs::rename(&temp, path).map_err(|err| {
+            format!(
+                "failed to move {} to {}: {err}",
+                temp.display(),
+                path.display()
+            )
+        })
     }
 }
 

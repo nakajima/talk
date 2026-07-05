@@ -211,6 +211,13 @@ pub enum Ty {
     /// irreducible and equal only to itself (projections are NOT injective —
     /// OutsideIn(X) treats type functions as free symbols).
     Proj(Box<Ty>, Symbol, Symbol),
+    /// An effect row in type-argument position — a kind-restricted
+    /// argument on `Ty::Nominal` (Koka-style E-kinded type argument).
+    /// Carries a struct instance's closure-field effect rows in its type,
+    /// so construction pins them and member reads recover them. Never a
+    /// value's type; appears only inside a Nominal's argument list (and
+    /// substitution payloads).
+    Eff(EffectRow),
     /// Poison type for error recovery: equalities involving it succeed
     /// silently so one mistake doesn't cascade.
     Error,
@@ -311,6 +318,13 @@ impl Ty {
                 }
             }
             Ty::Proj(base, ..) => base.try_visit(visitor)?,
+            Ty::Eff(eff) => {
+                for entry in &eff.effects {
+                    for arg in &entry.args {
+                        arg.try_visit(visitor)?;
+                    }
+                }
+            }
             Ty::Var(_) | Ty::Param(_) | Ty::Error => {}
         }
         ControlFlow::Continue(())
@@ -363,9 +377,10 @@ impl Ty {
             (Ty::Proj(left_base, ..), Ty::Proj(right_base, ..)) => {
                 left_base.try_zip(right_base, visitor)
             }
-            (Ty::Var(_), Ty::Var(_)) | (Ty::Param(_), Ty::Param(_)) | (Ty::Error, Ty::Error) => {
-                true
-            }
+            (Ty::Var(_), Ty::Var(_))
+            | (Ty::Param(_), Ty::Param(_))
+            | (Ty::Eff(_), Ty::Eff(_))
+            | (Ty::Error, Ty::Error) => true,
             _ => false,
         }
     }
@@ -386,6 +401,23 @@ impl Ty {
     /// the many type-only substitution sites stay three-argument.
     pub fn substitute_perms(&self, perms: &FxHashMap<Symbol, Perm>) -> Ty {
         PermSubstituter { perms }.fold_ty(self)
+    }
+
+    /// Substitute effect-row PARAMS with full rows, splicing entries: a
+    /// tail `Param(p)` replaced by `['ping | t]` contributes both the
+    /// entry and the new tail. [`Ty::substitute`]'s tail-for-tail map
+    /// cannot carry entries — this is the member-read side of struct
+    /// effect params, where the instance's row (which may have accrued
+    /// entries) replaces the field's quantified tail.
+    pub fn substitute_eff_rows(&self, rows: &FxHashMap<Symbol, EffectRow>) -> Ty {
+        EffRowSubstituter { rows }.fold_ty(self)
+    }
+
+    /// Strip effect arguments from nominal applications — the HIR bake:
+    /// effect args are typing-internal (capabilities ride closure
+    /// environments at runtime), so flow and lowering never see them.
+    pub fn erase_eff_args(&self) -> Ty {
+        EffArgEraser.fold_ty(self)
     }
 }
 
@@ -417,9 +449,7 @@ pub(crate) trait TyFold {
                 self.fold_symbol(*symbol),
                 args.iter().map(|a| self.fold_ty(a)).collect(),
             ),
-            Ty::Borrow(perm, inner) => {
-                Ty::Borrow(self.fold_perm(*perm), Box::new(self.fold_ty(inner)))
-            }
+            Ty::Borrow(perm, inner) => collapse_borrow(self.fold_perm(*perm), self.fold_ty(inner)),
             Ty::Unique(inner) => Ty::Unique(Box::new(self.fold_ty(inner))),
             Ty::Func(params, ret, eff) => Ty::Func(
                 params.iter().map(|p| self.fold_ty(p)).collect(),
@@ -440,6 +470,7 @@ pub(crate) trait TyFold {
                 self.fold_symbol(*protocol),
                 self.fold_symbol(*assoc),
             ),
+            Ty::Eff(eff) => Ty::Eff(self.fold_eff(eff)),
             Ty::Error => Ty::Error,
         }
     }
@@ -508,6 +539,51 @@ struct Substituter<'a> {
 /// Instantiation's permission-param leg (see [`Ty::substitute_perms`]).
 struct PermSubstituter<'a> {
     perms: &'a FxHashMap<Symbol, Perm>,
+}
+
+/// Row-splicing effect substitution (see [`Ty::substitute_eff_rows`]).
+struct EffRowSubstituter<'a> {
+    rows: &'a FxHashMap<Symbol, EffectRow>,
+}
+
+impl TyFold for EffRowSubstituter<'_> {
+    fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {
+        let mut effects: Vec<EffectEntry> = eff
+            .effects
+            .iter()
+            .map(|entry| EffectEntry {
+                effect: entry.effect,
+                args: entry.args.iter().map(|ty| self.fold_ty(ty)).collect(),
+            })
+            .collect();
+        let tail = match &eff.tail {
+            Some(EffTail::Param(sym)) if self.rows.contains_key(sym) => {
+                let replacement = &self.rows[sym];
+                effects.extend(replacement.effects.iter().cloned());
+                replacement.tail.clone()
+            }
+            other => other.clone(),
+        };
+        EffectRow { effects, tail }
+    }
+}
+
+/// Effect-argument erasure (see [`Ty::erase_eff_args`]).
+struct EffArgEraser;
+
+impl TyFold for EffArgEraser {
+    fn fold_ty(&mut self, ty: &Ty) -> Ty {
+        match ty {
+            Ty::Nominal(symbol, args) => Ty::Nominal(
+                *symbol,
+                args.iter()
+                    .filter(|a| !matches!(a, Ty::Eff(_)))
+                    .map(|a| self.fold_ty(a))
+                    .collect(),
+            ),
+            other => self.fold_children(other),
+        }
+    }
 }
 
 impl TyFold for PermSubstituter<'_> {
@@ -623,6 +699,117 @@ impl TyFold for ExportSanitizer {
                 Some(RowTail::Param(self.owner))
             }
             other => other.clone(),
+        }
+    }
+}
+
+/// Nested shared/exclusive borrows collapse: a borrow is a permission
+/// view, and viewing through two views is one view at the weaker
+/// permission (`&(&mut T)` ≡ `&T`; ADR 0015 addendum). Collapse applies
+/// only when both permissions are concrete — var/param perms wait for
+/// defaulting.
+pub(crate) fn collapse_borrow(perm: Perm, inner: Ty) -> Ty {
+    if let Ty::Borrow(inner_perm, innermost) = &inner
+        && matches!(perm, Perm::Shared | Perm::Exclusive)
+        && matches!(inner_perm, Perm::Shared | Perm::Exclusive)
+    {
+        let collapsed = if perm.is_exclusive() && inner_perm.is_exclusive() {
+            Perm::Exclusive
+        } else {
+            Perm::Shared
+        };
+        return collapse_borrow(collapsed, innermost.as_ref().clone());
+    }
+    Ty::Borrow(perm, Box::new(inner))
+}
+
+impl Ty {
+    /// Whether any unification variable (type, effect/row tail, or perm)
+    /// survives in this type — the module-boundary portability check.
+    pub(crate) fn has_unification_vars(&self) -> bool {
+        match self {
+            Ty::Var(_) => true,
+            Ty::Param(_) | Ty::Error => false,
+            Ty::Nominal(_, args) | Ty::Tuple(args) => args.iter().any(Ty::has_unification_vars),
+            Ty::Borrow(perm, inner) => matches!(perm, Perm::Var(_)) || inner.has_unification_vars(),
+            Ty::Unique(inner) => inner.has_unification_vars(),
+            Ty::Func(params, ret, eff) => {
+                params.iter().any(Ty::has_unification_vars)
+                    || ret.has_unification_vars()
+                    || eff.has_unification_vars()
+            }
+            Ty::Record(row) => row.has_unification_vars(),
+            Ty::Any { assoc, .. } => assoc.iter().any(|(_, ty)| ty.has_unification_vars()),
+            Ty::Proj(base, _, _) => base.has_unification_vars(),
+            Ty::Eff(eff) => eff.has_unification_vars(),
+        }
+    }
+}
+
+impl EffectRow {
+    pub(crate) fn has_unification_vars(&self) -> bool {
+        matches!(self.tail, Some(EffTail::Var(_)))
+            || self
+                .effects
+                .iter()
+                .any(|entry| entry.args.iter().any(Ty::has_unification_vars))
+    }
+}
+
+impl Row {
+    pub(crate) fn has_unification_vars(&self) -> bool {
+        matches!(self.tail, Some(RowTail::Var(_)))
+            || self.fields.iter().any(|(_, ty)| ty.has_unification_vars())
+    }
+}
+
+impl Scheme {
+    pub(crate) fn has_unification_vars(&self) -> bool {
+        self.ty.has_unification_vars()
+            || self.predicates.iter().any(Predicate::has_unification_vars)
+    }
+}
+
+impl Predicate {
+    pub(crate) fn has_unification_vars(&self) -> bool {
+        match self {
+            Predicate::TypeEq(a, b) => a.has_unification_vars() || b.has_unification_vars(),
+            Predicate::EffectEq(a, b) => a.has_unification_vars() || b.has_unification_vars(),
+            Predicate::RowEq(a, b) => a.has_unification_vars() || b.has_unification_vars(),
+            Predicate::Conforms { ty, .. } => ty.has_unification_vars(),
+            Predicate::HasMember {
+                receiver, member, ..
+            } => receiver.has_unification_vars() || member.has_unification_vars(),
+        }
+    }
+
+    /// Export form of a predicate: leftover variables degrade exactly as
+    /// they do in types (vars → Error, tails → owner-keyed params).
+    pub fn sanitize_for_export(&self, owner: Symbol) -> Predicate {
+        let mut folder = ExportSanitizer {
+            owner,
+            minted_eff: false,
+            minted_row: false,
+        };
+        match self {
+            Predicate::TypeEq(a, b) => Predicate::TypeEq(folder.fold_ty(a), folder.fold_ty(b)),
+            Predicate::EffectEq(a, b) => {
+                Predicate::EffectEq(folder.fold_eff(a), folder.fold_eff(b))
+            }
+            Predicate::RowEq(a, b) => Predicate::RowEq(folder.fold_row(a), folder.fold_row(b)),
+            Predicate::Conforms { ty, protocol } => Predicate::Conforms {
+                ty: folder.fold_ty(ty),
+                protocol: *protocol,
+            },
+            Predicate::HasMember {
+                receiver,
+                label,
+                member,
+            } => Predicate::HasMember {
+                receiver: folder.fold_ty(receiver),
+                label: label.clone(),
+                member: folder.fold_ty(member),
+            },
         }
     }
 }
@@ -786,7 +973,16 @@ impl Scheme {
             minted_row: false,
         };
         let ty = sanitizer.fold_ty(&self.ty);
-        let mut scheme = Scheme { ty, ..self.clone() };
+        let predicates = self
+            .predicates
+            .iter()
+            .map(|predicate| predicate.sanitize_for_export(owner))
+            .collect();
+        let mut scheme = Scheme {
+            ty,
+            predicates,
+            ..self.clone()
+        };
         if sanitizer.minted_eff && !scheme.eff_params.contains(&owner) {
             scheme.eff_params.push(owner);
         }
@@ -817,16 +1013,32 @@ pub(crate) fn match_pattern(
         (Ty::Param(param), ty) => match_param(*param, ty, bindings),
         (Ty::Var(_), _) | (_, Ty::Var(_)) | (_, Ty::Param(_)) => true,
         (Ty::Nominal(left, left_args), Ty::Nominal(right, right_args)) => {
+            // Effect args (a kind-restricted suffix) are invisible to
+            // conformance heads: `extend Wrapper` matches every instance
+            // row. Compare the shared prefix when the excess is all-eff.
+            let left_len = left_args
+                .iter()
+                .take_while(|a| !matches!(a, Ty::Eff(_)))
+                .count();
+            let right_len = right_args
+                .iter()
+                .take_while(|a| !matches!(a, Ty::Eff(_)))
+                .count();
             left == right
-                && left_args.len() == right_args.len()
-                && left_args
+                && left_len == right_len
+                && left_args[..left_len]
                     .iter()
-                    .zip(right_args)
+                    .zip(&right_args[..right_len])
                     .all(|(left, right)| match_pattern(left, right, bindings))
         }
         (Ty::Borrow(left_kind, left_inner), Ty::Borrow(right_kind, right_inner)) => {
             left_kind == right_kind && match_pattern(left_inner, right_inner, bindings)
         }
+        // A borrow in the pattern is transparent against a non-borrow
+        // actual: a witness may spell `T` where the requirement says `&T`
+        // (borrow erasure, ADR 0014). One-sided — a param pattern binding
+        // TO a borrow (`Element = &Int`) stays intact via `match_param`.
+        (Ty::Borrow(_, left_inner), right) => match_pattern(left_inner, right, bindings),
         (Ty::Unique(left_inner), Ty::Unique(right_inner)) => {
             match_pattern(left_inner, right_inner, bindings)
         }
@@ -921,6 +1133,10 @@ fn pattern_occurs(param: Symbol, ty: &Ty, bindings: &FxHashMap<Symbol, Ty>) -> b
             .iter()
             .any(|(_, ty)| pattern_occurs(param, ty, bindings)),
         Ty::Proj(base, _, _) => pattern_occurs(param, base, bindings),
+        Ty::Eff(eff) => eff
+            .effects
+            .iter()
+            .any(|entry| entry.args.iter().any(|ty| pattern_occurs(param, ty, bindings))),
         Ty::Var(_) | Ty::Error => false,
     }
 }
@@ -1093,6 +1309,15 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
         Ty::Proj(base, _, assoc) => {
             format!("{}.{assoc}", render_ty(base, param_names))
         }
+        // An effect argument renders as its row (it is a row, not a type).
+        Ty::Eff(eff) => {
+            let rendered = render_effect_row(eff);
+            if rendered.is_empty() {
+                "'{}".to_string()
+            } else {
+                rendered.trim_start().to_string()
+            }
+        }
         Ty::Error => "<error>".to_string(),
     }
 }
@@ -1199,6 +1424,58 @@ fn render_nominal_head(sym: &Symbol) -> String {
 #[cfg(test)]
 mod traversal_tests {
     use super::*;
+
+    #[test]
+    fn nested_borrows_collapse_through_folds() {
+        // & of & is & (ADR 0015 addendum): substitution exposing a nested
+        // borrow collapses it, with the weaker permission winning.
+        let mut subst = FxHashMap::default();
+        subst.insert(
+            Symbol::Bool,
+            Ty::Borrow(Perm::Shared, Box::new(Ty::Nominal(Symbol::Int, vec![]))),
+        );
+        let outer = Ty::Borrow(Perm::Shared, Box::new(Ty::Param(Symbol::Bool)));
+        let collapsed = outer.substitute(&subst, &Default::default(), &Default::default());
+        assert_eq!(
+            collapsed,
+            Ty::Borrow(Perm::Shared, Box::new(Ty::Nominal(Symbol::Int, vec![])))
+        );
+
+        // Exclusive-over-shared caps at Shared.
+        let outer = Ty::Borrow(Perm::Exclusive, Box::new(Ty::Param(Symbol::Bool)));
+        let collapsed = outer.substitute(&subst, &Default::default(), &Default::default());
+        assert_eq!(
+            collapsed,
+            Ty::Borrow(Perm::Shared, Box::new(Ty::Nominal(Symbol::Int, vec![])))
+        );
+    }
+
+    #[test]
+    fn match_pattern_peels_pattern_side_borrows() {
+        // `&RHS` against `Int` binds RHS = Int: a witness may spell the
+        // operand by value where the requirement borrows it (ADR 0014).
+        let mut bindings = FxHashMap::default();
+        assert!(match_pattern(
+            &Ty::Borrow(Perm::Shared, Box::new(Ty::Param(Symbol::Bool))),
+            &Ty::Nominal(Symbol::Int, vec![]),
+            &mut bindings,
+        ));
+        assert_eq!(
+            bindings.get(&Symbol::Bool),
+            Some(&Ty::Nominal(Symbol::Int, vec![]))
+        );
+
+        // The other direction stays a whole-borrow bind: `Element`
+        // against `&Int` binds Element = &Int (ArrayIterator's shape).
+        let mut bindings = FxHashMap::default();
+        let borrowed_int = Ty::Borrow(Perm::Shared, Box::new(Ty::Nominal(Symbol::Int, vec![])));
+        assert!(match_pattern(
+            &Ty::Param(Symbol::Bool),
+            &borrowed_int,
+            &mut bindings,
+        ));
+        assert_eq!(bindings.get(&Symbol::Bool), Some(&borrowed_int));
+    }
 
     #[test]
     fn match_pattern_binds_params_nested_in_record_any_and_proj() {

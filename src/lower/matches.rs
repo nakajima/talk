@@ -605,9 +605,13 @@ impl<'a> Lowering<'a> {
         let ret_k = self.p.extract(self_var, params.len() as u32);
         args.push(ret_k);
         let arg_tuple = self.p.tuple(&args);
-        let Some((target, _, _)) =
-            self.resolve_witness(owner, requirement.symbol, label.to_string(), payload_ty)
-        else {
+        let Some((target, _, _)) = self.resolve_witness(
+            owner,
+            requirement.symbol,
+            label.to_string(),
+            payload_ty,
+            &Theta::default(),
+        ) else {
             self.diagnostics.push(format!(
                 "lowering: cannot build existential witness for {label} at {:?}",
                 node
@@ -639,9 +643,12 @@ impl<'a> Lowering<'a> {
         for (assoc_symbol, ty) in assoc {
             tys.insert(*assoc_symbol, ty.clone());
         }
-        let signature = requirement
-            .sig
-            .substitute(&tys, &Default::default(), &Default::default());
+        let sig = self
+            .units
+            .iter()
+            .find_map(|u| u.types.schemes.get(&requirement.symbol))
+            .map(|scheme| scheme.ty.clone())?;
+        let signature = sig.substitute(&tys, &Default::default(), &Default::default());
         Some(self.normalize_check_ty(signature, unit))
     }
 

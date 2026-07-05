@@ -8,6 +8,7 @@ use { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
 use { ByteStorage, _alloc, _copy, _ptr_add } from ./Memory.tlk
 use { Borrowed, CheapClone } from ./Ownership.tlk
 use { Optional } from ./Optional.tlk
+use { IndexIterable } from ./Iterable.tlk
 
 public struct String {
 	let storage: ByteStorage
@@ -165,7 +166,7 @@ extend String: Add {
 }
 
 extend String: Equatable {
-	func equals(rhs: String) -> Bool {
+	func equals(rhs: &String) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 
 		let i = 0

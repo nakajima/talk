@@ -140,11 +140,13 @@ impl HirLowerer<'_> {
             // only arise downstream of an error diagnostic (which normally
             // blocks the file, but an unattributed solver error blocks
             // nothing), so it bakes as the poison type rather than a panic.
+            // `erase_eff_args`: effect args on nominal heads are
+            // typing-internal; flow and lowering never see them.
             ty: self
                 .types
                 .node_types
                 .get(&e.id)
-                .cloned()
+                .map(|ty| ty.erase_eff_args())
                 .unwrap_or(crate::types::ty::Ty::Error),
             member_resolution: self.types.member_resolutions.get(&e.id).cloned(),
             instantiation: self.types.instantiations.get(&e.id).cloned(),
@@ -164,7 +166,7 @@ impl HirLowerer<'_> {
         built.span = e.span;
         built.ownership.auto_clone |= self.types.coerce_clones.contains(&e.id);
         if let Some(ty) = self.types.node_types.get(&e.id) {
-            built.ty = ty.clone();
+            built.ty = ty.erase_eff_args();
         }
         if let Some(pack) = self.types.existential_packs.get(&e.id) {
             built.existential_pack = Some(pack.clone());
@@ -435,7 +437,7 @@ impl HirLowerer<'_> {
             name_span: p.name_span,
             type_annotation: p.type_annotation.clone(),
             span: p.span,
-            ty: self.types.node_types.get(&p.id).cloned(),
+            ty: self.types.node_types.get(&p.id).map(|ty| ty.erase_eff_args()),
         }
     }
 

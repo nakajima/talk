@@ -3,7 +3,7 @@ use { Storage, _storage, _load, _store, _is_unique } from ./Memory.tlk
 use { String } from ./String.tlk
 use { Add, Subtract, Comparable } from ./Operators.tlk
 use { Showable } from ./Showable.tlk
-use { CheapClone } from ./Ownership.tlk
+use { CheapClone, Deinit } from ./Ownership.tlk
 
 public struct Array<Element> {
 	let storage: Storage<Element>
@@ -47,6 +47,24 @@ public struct Array<Element> {
 }
 
 extend Array<Element>: CheapClone {}
+
+// Elements die with the buffer: only the LAST reference tears them
+// down (CoW sharers hold identical elements, so the `_is_unique` gate
+// makes teardown run exactly once). Loading each element re-owns it;
+// its drop runs at scope exit, recursing structurally (nested arrays
+// dispatch their own deinit).
+extend Array<Element>: Deinit {
+	consuming func deinit() -> Void {
+		if _is_unique(self.storage.base) {
+			let i = 0
+			loop i < self.count {
+				let ptr: RawPtr = @_ir(self.storage.base, i) { %? = gep Element $0 $1 }
+				let element: Element = _load<Element>(ptr)
+				i = i + 1
+			}
+		}
+	}
+}
 extend Array<Element: Showable>: Showable {
 	func show() -> String {
 		let result = "["

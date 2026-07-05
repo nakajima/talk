@@ -241,7 +241,10 @@ fn render_unicode_data(entries: &[(u32, u8)]) -> String {
     for (name, value) in CAT_NAMES {
         let _ = writeln!(out, "public let _GC_{name}: Int = {value}");
     }
-    let _ = writeln!(out, "\npublic func _gcb_table() -> String {{\n\t\"{literal}\"\n}}");
+    let _ = writeln!(
+        out,
+        "\npublic func _gcb_table() -> String {{\n\t\"{literal}\"\n}}"
+    );
     out
 }
 
@@ -276,7 +279,11 @@ fn render_conformance(test_text: &str) -> (String, usize) {
         if scalars.is_empty() {
             continue;
         }
-        assert_eq!(breaks_after.len(), scalars.len(), "malformed test line: {line}");
+        assert_eq!(
+            breaks_after.len(),
+            scalars.len(),
+            "malformed test line: {line}"
+        );
         let mut literal = String::new();
         let mut cluster_lens: Vec<usize> = vec![];
         let mut current = 0usize;
@@ -289,10 +296,7 @@ fn render_conformance(test_text: &str) -> (String, usize) {
                 current = 0;
             }
         }
-        let expected: String = cluster_lens
-            .iter()
-            .map(|len| format!("{len},"))
-            .collect();
+        let expected: String = cluster_lens.iter().map(|len| format!("{len},")).collect();
         count += 1;
         cases.push(format!("check(\"{literal}\", \"{expected}\", {count})"));
     }
@@ -425,10 +429,7 @@ mod tests {
         for cp in 4..8 {
             cats[cp] = EXTEND;
         }
-        assert_eq!(
-            boundaries(&cats),
-            vec![(0, OTHER), (4, EXTEND), (8, OTHER)]
-        );
+        assert_eq!(boundaries(&cats), vec![(0, OTHER), (4, EXTEND), (8, OTHER)]);
     }
 
     #[test]
@@ -443,9 +444,7 @@ mod tests {
         let mid = encode_entry(0x0916, INCB_CONSONANT);
         assert!(low < mid && mid < high);
         // Decode round-trip.
-        let v = mid
-            .iter()
-            .fold(0u64, |acc, &b| acc * 128 + b as u64);
+        let v = mid.iter().fold(0u64, |acc, &b| acc * 128 + b as u64);
         assert_eq!(v / 32, 0x0916);
         assert_eq!(v % 32, INCB_CONSONANT as u64);
     }

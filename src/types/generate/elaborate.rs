@@ -3,6 +3,7 @@ use super::*;
 struct Elaborator<'e> {
     store: &'e mut VarStore,
     catalog: &'e TypeCatalog,
+    schemes: &'e FxHashMap<Symbol, Scheme>,
     diagnostics: &'e mut DiagnosticSink,
     type_aliases: &'e FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'e mut Vec<Symbol>,
@@ -193,6 +194,11 @@ impl<'e> Elaborator<'e> {
             .unwrap_or_default();
         for protocol in bounds {
             if let Some((owner, assoc)) = self.catalog.associated_type_in(protocol, label) {
+                // Inside the owning protocol's own context, `Self.A` is
+                // the assoc param itself, not a projection to reduce.
+                if base == Ty::Param(owner) {
+                    return Ty::Param(assoc);
+                }
                 return Ty::Proj(Box::new(base), owner, assoc);
             }
         }
@@ -249,11 +255,25 @@ impl<'e> Elaborator<'e> {
                     }
                     return self.lower_type_alias(symbol, annotation.id, None);
                 }
-                let args: Vec<Ty> = generics.iter().map(|g| self.lower_annotation(g)).collect();
+                let mut args: Vec<Ty> = generics.iter().map(|g| self.lower_annotation(g)).collect();
                 match symbol {
                     Symbol::TypeParameter(_) | Symbol::AssociatedType(_) => Ty::Param(symbol),
                     _ => {
                         self.require_nominal_well_formed(symbol, &args, annotation.id);
+                        // Implicit effect args: annotations never spell
+                        // them, so `Wrapper` means "Wrapper with SOME
+                        // rows" — fresh here, pinned by whatever this
+                        // annotation meets (a declared return type's rows
+                        // are solved by the body and generalize with the
+                        // scheme). Collection-time leftovers sanitize to
+                        // owner-keyed params at the module boundary.
+                        if let Some(info) = self.catalog.structs.get(&symbol) {
+                            args.extend(info.eff_params.iter().map(|_| {
+                                Ty::Eff(EffectRow::open(
+                                    self.store.fresh_eff(self.level, annotation.id),
+                                ))
+                            }));
+                        }
                         Ty::Nominal(symbol, args)
                     }
                 }
@@ -396,12 +416,9 @@ impl<'e> Elaborator<'e> {
             let requirements: Vec<(String, Ty, Vec<Predicate>)> = info
                 .requirements
                 .iter()
-                .map(|(label, requirement)| {
-                    (
-                        label.clone(),
-                        requirement.sig.clone(),
-                        requirement.predicates.clone(),
-                    )
+                .filter_map(|(label, requirement)| {
+                    let scheme = self.schemes.get(&requirement.symbol)?;
+                    Some((label.clone(), scheme.ty.clone(), scheme.predicates.clone()))
                 })
                 .collect();
             for (label, sig, predicates) in requirements {
@@ -504,6 +521,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         Elaborator {
             store: &mut *self.store,
             catalog: &*self.catalog,
+            schemes: &*self.schemes,
             diagnostics: &mut *self.diagnostics,
             type_aliases: &*self.type_aliases,
             alias_stack: &mut *self.alias_stack,
@@ -537,6 +555,7 @@ macro_rules! impl_checking_elaboration_for {
                 Elaborator {
                     store: &mut *self.store,
                     catalog: &*self.catalog,
+                    schemes: &*self.schemes,
                     diagnostics: &mut *self.diagnostics,
                     type_aliases: &*self.type_aliases,
                     alias_stack: &mut *self.alias_stack,

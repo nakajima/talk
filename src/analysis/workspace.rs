@@ -1,5 +1,5 @@
 use rustc_hash::FxHashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::analysis::{Diagnostic, DiagnosticSeverity, DocumentId, DocumentInput, TextRange};
 use crate::ast::{AST, NameResolved};
@@ -155,7 +155,9 @@ impl Workspace {
             return false;
         };
 
-        if core_dir.file_name().and_then(|name| name.to_str()) != Some("core") {
+        if core_dir.file_name().and_then(|name| name.to_str()) != Some("core")
+            && !Self::is_core_path_override(&core_dir)
+        {
             return false;
         }
 
@@ -169,6 +171,18 @@ impl Workspace {
                 && crate::compiling::core::CORE_SOURCE_NAMES.contains(&file_name)
                 && doc.text.trim_start().starts_with("// no-core")
         })
+    }
+
+    fn is_core_path_override(path: &Path) -> bool {
+        let Some(override_path) = crate::compiling::core::path_override() else {
+            return false;
+        };
+
+        let normalized_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let normalized_override = override_path
+            .canonicalize()
+            .unwrap_or_else(|_| override_path.to_path_buf());
+        normalized_path == normalized_override
     }
 
     fn core_documents_with_overrides(docs: &[DocumentInput]) -> Vec<DocumentInput> {
@@ -209,17 +223,28 @@ impl Workspace {
     }
 
     pub fn core() -> Option<Self> {
-        let core_dir = std::env::temp_dir().join("talk-core");
-        let _ = std::fs::create_dir_all(&core_dir);
+        let core_files: Vec<(PathBuf, String)> =
+            if let Some(core_dir) = crate::compiling::core::path_override() {
+                crate::compiling::core::CORE_SOURCE_NAMES
+                    .iter()
+                    .map(|name| {
+                        let path = core_dir.join(name);
+                        std::fs::read_to_string(&path).ok().map(|text| (path, text))
+                    })
+                    .collect::<Option<Vec<_>>>()?
+            } else {
+                let core_dir = std::env::temp_dir().join("talk-core");
+                let _ = std::fs::create_dir_all(&core_dir);
 
-        let core_files: Vec<(PathBuf, &str)> = crate::compiling::core::core_sources()
-            .into_iter()
-            .map(|(name, content)| {
-                let path = core_dir.join(name);
-                let _ = std::fs::write(&path, content);
-                (path, content)
-            })
-            .collect();
+                crate::compiling::core::core_sources()
+                    .into_iter()
+                    .map(|(name, content)| {
+                        let path = core_dir.join(name);
+                        let _ = std::fs::write(&path, content);
+                        (path, content.to_string())
+                    })
+                    .collect()
+            };
 
         let file_id_to_document: Vec<DocumentId> = core_files
             .iter()
@@ -232,13 +257,10 @@ impl Workspace {
             .map(|(i, id)| (id.clone(), FileID(i as u32)))
             .collect();
 
-        let texts: Vec<String> = core_files
-            .iter()
-            .map(|(_, text)| (*text).to_string())
-            .collect();
+        let texts: Vec<String> = core_files.iter().map(|(_, text)| text.clone()).collect();
         let sources: Vec<Source> = core_files
             .iter()
-            .map(|(path, text)| Source::in_memory(path.clone(), *text))
+            .map(|(path, text)| Source::in_memory(path.clone(), text.clone()))
             .collect();
 
         let mut config = DriverConfig::new("Core").preserve_comments(true);

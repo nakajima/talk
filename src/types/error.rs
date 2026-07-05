@@ -26,6 +26,9 @@ pub enum TypeError {
         receiver: String,
         label: String,
     },
+    UnknownMemberOnInferred {
+        label: String,
+    },
     NotAFunction {
         found: String,
     },
@@ -163,6 +166,12 @@ impl Display for TypeError {
             }
             TypeError::UnknownMember { receiver, label } => {
                 write!(f, "Unknown member '{label}' on {receiver}")
+            }
+            TypeError::UnknownMemberOnInferred { label } => {
+                write!(
+                    f,
+                    "Unknown member '{label}' on the inferred result of this expression"
+                )
             }
             TypeError::NotAFunction { found } => {
                 write!(f, "Cannot call non-function value of type {found}")

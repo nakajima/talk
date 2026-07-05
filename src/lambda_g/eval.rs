@@ -122,6 +122,7 @@ impl Evaluator {
         self.allocations.live_count()
     }
 
+
     /// Live `'heap` objects — the region leak invariant's companion to
     /// [`Evaluator::live_allocations`].
     pub fn live_objects(&self) -> usize {

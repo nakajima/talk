@@ -12,16 +12,23 @@ impl<'a> Lowering<'a> {
         ctx: &Ctx,
     ) -> Option<ExprId> {
         let mut binds = Vec::with_capacity(instruction.binds.len());
-        for (i, bind) in instruction.binds.iter().enumerate() {
-            let Some(value) = self.try_pure(bind, ctx) else {
-                self.diagnostics.push(format!(
-                    "lowering: @_ir bind ${i} is not a pure expression: {:?}",
-                    bind.kind
-                ));
-                return None;
-            };
-            binds.push(value);
+        for bind in &instruction.binds {
+            // Impure binds (auto-cloned generic values needing retains)
+            // take the continuation path in `lower_expr`.
+            binds.push(self.try_pure(bind, ctx)?);
         }
+        self.splice_with_values(instruction, ctx, &binds)
+    }
+
+    /// The splice core over already-lowered bind values — shared by the
+    /// pure path (`try_pure` binds) and the continuation path
+    /// (`lower_args` binds, which applies per-bind auto-clone retains).
+    pub(super) fn splice_with_values(
+        &mut self,
+        instruction: &InlineIRInstruction,
+        ctx: &Ctx,
+        binds: &[ExprId],
+    ) -> Option<ExprId> {
         let operand = |this: &mut Self, v: &IrValue| -> Option<ExprId> {
             match v {
                 IrValue::Bind(i) => binds.get(*i).copied(),
@@ -118,6 +125,7 @@ impl<'a> Lowering<'a> {
                 };
                 return Some(self.p.add(addr, offset));
             }
+            K::Free { ptr } => (Op::Free, vec![operand(self, ptr)?]),
             K::Copy {
                 from, to, length, ..
             } => (

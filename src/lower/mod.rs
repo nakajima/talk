@@ -97,9 +97,6 @@ pub struct Lowering<'a> {
     entry: usize,
     pub p: Program,
     sources: FxHashMap<Symbol, FuncSource<'a>>,
-    /// Requirement symbol → its signature (over Self/assoc params), for
-    /// protocol-default specializations.
-    requirement_sigs: FxHashMap<Symbol, CheckTy>,
     /// Methods whose body assigns through `self`: their ret continuation
     /// carries `[result, Self]` and the caller writes Self back (mutable
     /// value semantics + inout self — Racordon et al., JOT 2022).
@@ -414,7 +411,6 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
         entry,
         p: Program::new(),
         sources: FxHashMap::default(),
-        requirement_sigs: FxHashMap::default(),
         mutating: FxHashSet::default(),
         statics: FxHashMap::default(),
         globals: FxHashMap::default(),
@@ -718,6 +714,19 @@ impl<'a> Lowering<'a> {
                     let tuple = this.p.tuple(&items);
                     let body = this.p.app(k, tuple);
                     this.embed_acquires_then(&field_exprs, &values, ctx, body)
+                })
+            }
+            // An impure @_ir (a bind needing an auto-clone retain — e.g.
+            // `_store<Element>`'s value under implicit-copy generics):
+            // lower the binds continuation-style, which applies the
+            // per-bind retains, then splice over the values.
+            ExprKind::InlineIR(instruction) => {
+                let bind_refs: Vec<&Expr> = instruction.binds.iter().collect();
+                self.lower_args(&bind_refs, ctx, vec![], &mut |this, values| match this
+                    .splice_with_values(instruction, ctx, &values)
+                {
+                    Some(result) => this.p.app(k, result),
+                    None => this.dead_end("unsupported_ir"),
                 })
             }
             other => {

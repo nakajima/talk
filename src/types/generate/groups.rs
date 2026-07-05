@@ -223,14 +223,31 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     origin,
                     ..
                 } => {
-                    let receiver = self.store.render(&receiver);
-                    self.diagnostics.errors.push((
-                        TypeError::UnknownMember {
-                            receiver,
-                            label: label.to_string(),
-                        },
-                        origin.node,
-                    ));
+                    let label = label.to_string();
+                    let diagnostic = match self.store.shallow(&receiver) {
+                        Ty::Var(var) => {
+                            let inferred_origin = self.store.origin(var.0);
+                            if self
+                                .diagnostics
+                                .errors
+                                .iter()
+                                .any(|(_, id)| *id == inferred_origin)
+                            {
+                                continue;
+                            }
+                            let node = if inferred_origin.0 == crate::node_id::FileID::SYNTHESIZED {
+                                origin.node
+                            } else {
+                                inferred_origin
+                            };
+                            (TypeError::UnknownMemberOnInferred { label }, node)
+                        }
+                        _ => {
+                            let receiver = self.store.render(&receiver);
+                            (TypeError::UnknownMember { receiver, label }, origin.node)
+                        }
+                    };
+                    self.diagnostics.errors.push(diagnostic);
                 }
                 Constraint::HasVariant { label, origin, .. } => {
                     self.diagnostics.errors.push((

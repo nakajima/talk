@@ -3,8 +3,16 @@
  * Licensed under the MIT License. See License.txt in the project root for license information.
  * ------------------------------------------------------------------------------------------ */
 
+import { existsSync } from "fs";
 import { homedir } from "os";
-import { commands, window, workspace, ExtensionContext } from "vscode";
+import {
+  commands,
+  ConfigurationTarget,
+  ExtensionContext,
+  Uri,
+  window,
+  workspace,
+} from "vscode";
 
 import {
   LanguageClient,
@@ -16,21 +24,110 @@ import {
 let client: LanguageClient;
 let restartPromise: Promise<void> | undefined;
 
-export function activate(context: ExtensionContext) {
-  // If the extension is launched in debug mode then the debug server options are used
-  // Otherwise the run options are used
-  console.info(homedir());
-  const serverOptions: ServerOptions = {
+function expandHome(path: string): string {
+  if (path === "~") {
+    return homedir();
+  }
+
+  if (path.startsWith("~/")) {
+    return homedir() + path.slice(1);
+  }
+
+  return path;
+}
+
+function configuredCorePath(): string | undefined {
+  const corePath = workspace
+    .getConfiguration("talktalk")
+    .get<string>("corePath")
+    ?.trim();
+
+  if (corePath) {
+    return expandHome(corePath);
+  }
+
+  const envCorePath = process.env.TALK_CORE_PATH?.trim();
+  if (envCorePath) {
+    return expandHome(envCorePath);
+  }
+
+  return undefined;
+}
+
+function serverOptions(): ServerOptions {
+  const corePath = configuredCorePath();
+  const env = {
+    ...process.env,
+    RUST_LOG: process.env.RUST_LOG ?? "debug",
+    ...(corePath ? { TALK_CORE_PATH: corePath } : {}),
+  };
+
+  return {
     command: homedir() + "/apps/talk/target/debug/talk",
     transport: TransportKind.stdio,
     args: ["lsp"],
-    options: {
-      env: {
-        RUST_LOG: "debug",
-      },
-    },
+    options: { env },
   };
+}
 
+async function restartLanguageServer() {
+  if (client) {
+    await client.stop();
+  }
+  client = createClient();
+  await client.start();
+}
+
+let createClient: () => LanguageClient;
+
+async function setCorePath() {
+  const current = configuredCorePath();
+  const devCorePath = homedir() + "/apps/talk/core";
+  const defaultPath = current ?? (existsSync(devCorePath) ? devCorePath : homedir());
+  const selected = await window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    defaultUri: Uri.file(defaultPath),
+    openLabel: "Use as TALK_CORE_PATH",
+    title: "Select Talk core directory",
+  });
+
+  const folder = selected?.[0]?.fsPath;
+  if (!folder) {
+    return;
+  }
+
+  const target = workspace.workspaceFolders?.length
+    ? ConfigurationTarget.Workspace
+    : ConfigurationTarget.Global;
+  await workspace.getConfiguration("talktalk").update("corePath", folder, target);
+
+  const restart = await window.showInformationMessage(
+    `TalkTalk core path set to ${folder}.`,
+    "Restart Language Server"
+  );
+  if (restart === "Restart Language Server") {
+    await commands.executeCommand("talktalk.restartLsp");
+  }
+}
+
+async function clearCorePath() {
+  const target = workspace.workspaceFolders?.length
+    ? ConfigurationTarget.Workspace
+    : ConfigurationTarget.Global;
+  await workspace.getConfiguration("talktalk").update("corePath", undefined, target);
+
+  const restart = await window.showInformationMessage(
+    "TalkTalk core path cleared.",
+    "Restart Language Server"
+  );
+  if (restart === "Restart Language Server") {
+    await commands.executeCommand("talktalk.restartLsp");
+  }
+}
+
+export function activate(context: ExtensionContext) {
   // Options to control the language client
   const clientOptions: LanguageClientOptions = {
     // Register the server for plain text documents
@@ -41,29 +138,28 @@ export function activate(context: ExtensionContext) {
     },
   };
 
-  const createClient = () =>
+  createClient = () =>
     new LanguageClient(
       "TalkTalk",
       "TalkTalk Language Server",
-      serverOptions,
+      serverOptions(),
       clientOptions
     );
 
   context.subscriptions.push(
     commands.registerCommand("talktalk.restartLsp", async () => {
-      restartPromise ??= (async () => {
-        if (client) {
-          await client.stop();
-        }
-        client = createClient();
-        await client.start();
-        window.showInformationMessage("TalkTalk language server restarted.");
-      })().finally(() => {
-        restartPromise = undefined;
-      });
+      restartPromise ??= restartLanguageServer()
+        .then(() => {
+          window.showInformationMessage("TalkTalk language server restarted.");
+        })
+        .finally(() => {
+          restartPromise = undefined;
+        });
 
       return restartPromise;
-    })
+    }),
+    commands.registerCommand("talktalk.setCorePath", setCorePath),
+    commands.registerCommand("talktalk.clearCorePath", clearCorePath)
   );
 
   // Create the language client and start the client.

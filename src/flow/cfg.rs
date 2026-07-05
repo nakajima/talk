@@ -438,13 +438,40 @@ fn classify_candidate(
 
     let (place, symbol, id) = match target {
         mir::DropTarget::Symbol { id, symbol } => (Place::root(*symbol), Some(*symbol), *id),
+        // A `TemporaryEnd` candidate: the embedded `Temp` read is the
+        // value. Consumed temps handed their value on (`Dead`); anything
+        // droppable (or generic — each specialization elides per θ) that
+        // was merely read drops here. Consumption is static per temp, so
+        // the checker-level set (complete before the annotate pass)
+        // classifies without per-path state.
+        mir::DropTarget::Expr(expr) if matches!(expr.kind, hir::ExprKind::Temp(_)) => {
+            let hir::ExprKind::Temp(temp) = expr.kind else {
+                unreachable!()
+            };
+            let generic = matches!(expr.ty, Ty::Param(_) | Ty::Proj(..));
+            if !generic
+                && !checker.grades.needs_drop(&expr.ty)
+                && !checker.grades.contains_object(&expr.ty)
+            {
+                return None;
+            }
+            let kind = if checker.consumed_temps.contains(&temp) {
+                mir::DropElaboration::Dead
+            } else {
+                mir::DropElaboration::Static
+            };
+            return annotate.then_some(mir::DropElaborationResult {
+                key_path: None,
+                kind,
+            });
+        }
         mir::DropTarget::Expr(expr) => {
             // The assignment-replace target: classified at the
             // pre-assignment state (this candidate precedes the Assign).
             let place = checker.place(expr)?;
             let kind = classify(&place, state);
             return annotate.then_some(mir::DropElaborationResult {
-                key_path: place,
+                key_path: Some(place),
                 kind,
             });
         }
@@ -452,13 +479,21 @@ fn classify_candidate(
     let symbol_value = symbol?;
     let ty = local_ty(checker, id, symbol_value);
     // "Needs release": owned values drop; `'heap`-handle carriers release
-    // their regions. Neither → no drop, keep the candidate unelaborated.
-    if !checker.grades.needs_drop(&ty) && !checker.grades.contains_object(&ty) {
+    // their regions. GENERIC (Param/Proj) types classify too — the flow
+    // runs once over the generic body, and each specialization elides
+    // the drop when its instantiation doesn't need one. Otherwise the
+    // candidate stays unelaborated.
+    let generic = matches!(ty, Ty::Param(_) | Ty::Proj(..));
+    if !generic && !checker.grades.needs_drop(&ty) && !checker.grades.contains_object(&ty) {
         return None;
     }
     // A pattern binder over a handle-only payload is a pure alias of the
     // scrutinee's value (which outlives the arm): no ledger event.
-    if matches!(symbol_value, Symbol::PatternBindLocal(_)) && !checker.grades.needs_drop(&ty) {
+    // Generic binders stay aliases as well (the scrutinee's teardown
+    // owns the payload).
+    if matches!(symbol_value, Symbol::PatternBindLocal(_))
+        && (generic || !checker.grades.needs_drop(&ty))
+    {
         return None;
     }
     let kind = classify(&place, state);
@@ -484,7 +519,7 @@ fn classify_candidate(
         });
     }
     annotate.then_some(mir::DropElaborationResult {
-        key_path: place,
+        key_path: Some(place),
         kind,
     })
 }

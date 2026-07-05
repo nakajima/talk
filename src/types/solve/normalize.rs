@@ -18,7 +18,19 @@ pub fn normalize_ty(store: &mut VarStore, catalog: &TypeCatalog, ty: &Ty) -> Ty 
             {
                 return normalize_ty(store, catalog, &reduced);
             }
+            // A projection off the protocol's own Self param is the assoc
+            // param itself: within P's context, `Self.A` ≡ `A`.
+            if projection_base == Ty::Param(protocol) {
+                return Ty::Param(assoc);
+            }
             Ty::Proj(Box::new(base), protocol, assoc)
+        }
+        // Nested borrows collapse once a solved variable exposes the
+        // inner borrow (the fold-time collapse can't see through vars).
+        Ty::Borrow(perm, inner) => {
+            let inner = store.shallow(&inner);
+            let inner = normalize_ty(store, catalog, &inner);
+            crate::types::ty::collapse_borrow(perm, inner)
         }
         Ty::Any { protocol, assoc } => Ty::Any {
             protocol,
