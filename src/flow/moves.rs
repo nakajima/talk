@@ -219,6 +219,8 @@ pub(crate) struct BodyContext {
     liveness: Liveness,
     borrowed_params: FxHashSet<crate::name_resolution::symbol::Symbol>,
     param_tys: FxHashMap<crate::name_resolution::symbol::Symbol, Ty>,
+    /// Temp numbering restarts per body; the consumed set must too.
+    consumed_temps: rustc_hash::FxHashSet<u32>,
 }
 
 /// One scope's tracked locals, in declaration order.
@@ -240,6 +242,12 @@ pub(crate) struct MoveChecker<'a> {
     reported: FxHashSet<(NodeID, String)>,
     /// Enclosing scopes of the body being walked, outermost first.
     scopes: Vec<ScopeFrame>,
+    /// Temps whose values were consumed (ownership transferred) by some
+    /// statement — `TemporaryEnd` candidates for them classify `Dead`.
+    /// Consumption of a temp is static per site (its single read either
+    /// moves or borrows), so a plain set suffices; filled across the
+    /// fixpoint/record passes, complete before the annotate pass reads it.
+    pub(crate) consumed_temps: rustc_hash::FxHashSet<u32>,
     /// Borrower liveness for the body being walked (per body; swapped on
     /// nested-body entry like the scope stack).
     liveness: Liveness,
@@ -293,6 +301,7 @@ impl<'a> MoveChecker<'a> {
             reported: FxHashSet::default(),
             scopes: vec![],
             liveness: Liveness::default(),
+            consumed_temps: rustc_hash::FxHashSet::default(),
             borrowed_params: FxHashSet::default(),
             param_tys: FxHashMap::default(),
             return_reach: FxHashMap::default(),
@@ -349,7 +358,10 @@ impl<'a> MoveChecker<'a> {
                 // parameter is a scope local of the body. (`'heap`-carrying
                 // parameters are exempt — params neither acquire nor
                 // release the region ledger.)
-                if self.grades.needs_drop(&ty) && !self.grades.contains_object(&ty) {
+                let generic = matches!(ty, Ty::Param(_) | Ty::Proj(..));
+                if (generic || self.grades.needs_drop(&ty))
+                    && !self.grades.contains_object(&ty)
+                {
                     self.pending_locals.push(ScopeLocal {
                         symbol,
                         ty: ty.clone(),
@@ -519,6 +531,7 @@ impl<'a> MoveChecker<'a> {
             liveness: std::mem::replace(&mut self.liveness, liveness),
             borrowed_params: std::mem::take(&mut self.borrowed_params),
             param_tys: std::mem::take(&mut self.param_tys),
+            consumed_temps: std::mem::take(&mut self.consumed_temps),
         };
         if is_function {
             self.fn_depth += 1;
@@ -534,6 +547,7 @@ impl<'a> MoveChecker<'a> {
         self.liveness = outer.liveness;
         self.borrowed_params = outer.borrowed_params;
         self.param_tys = outer.param_tys;
+        self.consumed_temps = outer.consumed_temps;
     }
 
     /// Open the body's root scope frame, adopting any pending locals the
@@ -737,6 +751,11 @@ impl<'a> MoveChecker<'a> {
             // Opaque: their effects (and the arms' value consumption)
             // already rode the enclosing body's blocks.
             ExprKind::Block(_) | ExprKind::Match(..) => {}
+            // Consuming a temp takes the embedded call/construct result:
+            // its `TemporaryEnd` candidate classifies `Dead`.
+            ExprKind::Temp(temp) => {
+                self.consumed_temps.insert(*temp);
+            }
             _ => self.walk_expr(expr, state),
         }
     }
@@ -778,7 +797,15 @@ impl<'a> MoveChecker<'a> {
             }
             ExprKind::InlineIR(ir) => {
                 for bind in &ir.binds {
-                    self.walk_expr(bind, state);
+                    // A generic-typed value handed to raw IR transfers
+                    // ownership (`_store<Element>`'s value): the
+                    // implicit-copy rule inserts the retain. Concrete
+                    // binds stay reads.
+                    if matches!(bind.ty, Ty::Param(_) | Ty::Proj(..)) {
+                        self.consume_expr(bind, state);
+                    } else {
+                        self.walk_expr(bind, state);
+                    }
                 }
             }
             ExprKind::Lit(_) | ExprKind::Temp(_) => {}
@@ -804,6 +831,15 @@ impl<'a> MoveChecker<'a> {
             } else {
                 self.consume_expr(receiver, state);
             }
+        } else if let ExprKind::Member(Some(receiver), _) = &callee.kind
+            && matches!(receiver.kind, ExprKind::Constructor(_))
+        {
+            // Protocol-static / type-static form (`Add.add(a, rhs)` — the
+            // operator desugar's shape): the head names a type, not a
+            // value. Every argument aligns with the FULL parameter list,
+            // self included — stripping the first param here consumed
+            // borrowed receivers.
+            value_params = self.member_callable_params(callee);
         } else if let ExprKind::Member(Some(receiver), _) = &callee.kind {
             let method_params = self.member_callable_params(callee);
             let self_param = method_params.as_ref().and_then(|params| params.first());
@@ -864,9 +900,44 @@ impl<'a> MoveChecker<'a> {
                         }
                     }
                 }
-                _ if borrowed_constructor => self.walk_expr(&arg.value, state),
+                _ if borrowed_constructor => {
+                    // Ledger rule B: place reads RETAIN into the region
+                    // (the owner's scope-exit drop still runs), rvalues
+                    // MOVE in — so any embedded call-result temp is
+                    // consumed by the region and must not release at its
+                    // full expression's end.
+                    self.mark_rvalue_temps_consumed(&arg.value);
+                    self.walk_expr(&arg.value, state)
+                }
                 _ => self.consume_expr(&arg.value, state),
             }
+        }
+    }
+
+    /// Mark every call/construct temp inside an rvalue expression tree as
+    /// consumed (its value moves into whatever owns the rvalue — a region
+    /// acquire path takes it without a flow-level consume).
+    fn mark_rvalue_temps_consumed(&mut self, expr: &hir::Expr) {
+        match &expr.kind {
+            ExprKind::Temp(temp) => {
+                self.consumed_temps.insert(*temp);
+            }
+            ExprKind::Tuple(items)
+            | ExprKind::LiteralArray(items)
+            | ExprKind::Con { args: items, .. } => {
+                for item in items {
+                    self.mark_rvalue_temps_consumed(item);
+                }
+            }
+            ExprKind::RecordLiteral { fields, spread } => {
+                for field in fields {
+                    self.mark_rvalue_temps_consumed(&field.value);
+                }
+                if let Some(spread) = spread {
+                    self.mark_rvalue_temps_consumed(spread);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -894,7 +965,8 @@ impl<'a> MoveChecker<'a> {
                     self.types
                         .catalog
                         .requirement_in(*protocol, &label.to_string())
-                        .and_then(|(_, requirement)| func_params(&requirement.sig))
+                        .and_then(|(_, requirement)| self.types.schemes.get(&requirement.symbol))
+                        .and_then(|scheme| func_params(&scheme.ty))
                 }),
         }
     }
@@ -1050,6 +1122,35 @@ impl<'a> MoveChecker<'a> {
         if !self.grades.is_copy(&expr.ty) && self.check_move_out_of_borrowed(expr, &place, state) {
             // Tier 2: the extraction clones (lowering retains the buffers),
             // so the owner stays live — a read, not a move.
+            return;
+        }
+        // GENERIC (Param/Proj-typed) values: the LAST consume moves, every
+        // earlier consume implicitly copies (tier-2 auto-clone: CheapClone
+        // retains, Copy is free — decided per instantiation at lowering).
+        // Liveness decides which is which: `dead_after` is conservative
+        // (false in sibling branches, loop-carried uses extend to the loop
+        // end), so over-approximation only adds a balanced retain+release
+        // pair, never a move before a live use. A moved-then-used generic
+        // can therefore never arise — moving early and reusing would read
+        // memory the consumer may already have freed.
+        if matches!(expr.ty, Ty::Param(_) | Ty::Proj(..)) && tracked_root(place.root) {
+            if !self.liveness.dead_after(expr.id, place.root) {
+                if self.recording {
+                    self.auto_clones.insert(expr.id);
+                }
+                return;
+            }
+            self.check_move_while_borrowed(expr.id, &place, state);
+            if self.recording {
+                self.consumed.insert(expr.id);
+                self.facts.moves.push(super::FlowMoveFact {
+                    node: expr.id,
+                    place: render_place(&place, self.types),
+                    ty: expr.ty.render_mono(),
+                });
+            }
+            state.invalidate_borrows_of(&place);
+            state.note_move(place, expr.id, expr.ty.clone());
             return;
         }
         if (owned || noncopy_closure) && tracked_root(place.root) {

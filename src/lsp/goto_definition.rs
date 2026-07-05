@@ -40,8 +40,12 @@ pub fn goto_definition(
         };
 
         let symbol = match node {
-            crate::node::Node::Expr(expr) => goto_definition_symbol_from_expr(&expr, byte_offset),
-            crate::node::Node::Stmt(stmt) => goto_definition_symbol_from_stmt(&stmt, byte_offset),
+            crate::node::Node::Expr(expr) => {
+                goto_definition_symbol_from_expr(module, &expr, byte_offset)
+            }
+            crate::node::Node::Stmt(stmt) => {
+                goto_definition_symbol_from_stmt(module, &stmt, byte_offset)
+            }
             crate::node::Node::TypeAnnotation(ty) => {
                 goto_definition_symbol_from_type_annotation(&ty, byte_offset)
             }
@@ -202,6 +206,7 @@ fn resolve_import_path(
 }
 
 fn goto_definition_symbol_from_expr(
+    module: &AnalysisWorkspace,
     expr: &crate::node_kinds::expr::Expr,
     byte_offset: u32,
 ) -> Option<Symbol> {
@@ -209,7 +214,15 @@ fn goto_definition_symbol_from_expr(
 
     match &expr.kind {
         ExprKind::Variable(name) | ExprKind::Constructor(name) => name.symbol().ok(),
-        ExprKind::Call { callee, .. } => goto_definition_symbol_from_expr(callee, byte_offset),
+        ExprKind::Call { callee, .. } => {
+            goto_definition_symbol_from_expr(module, callee, byte_offset)
+        }
+        ExprKind::Member(_, _, label_span) => {
+            if !span_contains(*label_span, byte_offset) {
+                return None;
+            }
+            symbol_for_member_resolution(module.types.member_resolutions.get(&expr.id))
+        }
         ExprKind::CallEffect {
             effect_name,
             effect_name_span,
@@ -224,19 +237,33 @@ fn goto_definition_symbol_from_expr(
     }
 }
 
+fn symbol_for_member_resolution(
+    resolution: Option<&crate::types::output::MemberResolution>,
+) -> Option<Symbol> {
+    match resolution? {
+        crate::types::output::MemberResolution::Direct(symbol) => Some(*symbol),
+        crate::types::output::MemberResolution::ViaConformance { witness, .. } => Some(*witness),
+    }
+}
+
 fn goto_definition_symbol_from_stmt(
+    module: &AnalysisWorkspace,
     stmt: &crate::node_kinds::stmt::Stmt,
     byte_offset: u32,
 ) -> Option<Symbol> {
     use crate::node_kinds::stmt::StmtKind;
 
     match &stmt.kind {
-        StmtKind::Expr(expr) => goto_definition_symbol_from_expr(expr, byte_offset),
-        StmtKind::Return(Some(expr)) => goto_definition_symbol_from_expr(expr, byte_offset),
-        StmtKind::If(cond, ..) => goto_definition_symbol_from_expr(cond, byte_offset),
-        StmtKind::Loop(Some(cond), ..) => goto_definition_symbol_from_expr(cond, byte_offset),
-        StmtKind::Assignment(lhs, rhs) => goto_definition_symbol_from_expr(lhs, byte_offset)
-            .or_else(|| goto_definition_symbol_from_expr(rhs, byte_offset)),
+        StmtKind::Expr(expr) => goto_definition_symbol_from_expr(module, expr, byte_offset),
+        StmtKind::Return(Some(expr)) => goto_definition_symbol_from_expr(module, expr, byte_offset),
+        StmtKind::If(cond, ..) => goto_definition_symbol_from_expr(module, cond, byte_offset),
+        StmtKind::Loop(Some(cond), ..) => {
+            goto_definition_symbol_from_expr(module, cond, byte_offset)
+        }
+        StmtKind::Assignment(lhs, rhs) => {
+            goto_definition_symbol_from_expr(module, lhs, byte_offset)
+                .or_else(|| goto_definition_symbol_from_expr(module, rhs, byte_offset))
+        }
         StmtKind::Handling {
             effect_name,
             effect_name_span,
@@ -247,7 +274,9 @@ fn goto_definition_symbol_from_stmt(
             }
             effect_name.symbol().ok()
         }
-        StmtKind::Continue(Some(expr)) => goto_definition_symbol_from_expr(expr, byte_offset),
+        StmtKind::Continue(Some(expr)) => {
+            goto_definition_symbol_from_expr(module, expr, byte_offset)
+        }
         _ => None,
     }
 }

@@ -781,16 +781,46 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             effects: Default::default(),
             tail: Some(EffTail::Param(symbol)),
         };
-        let (sig, eff_params) =
-            self.quantify_signature_eff_vars(Ty::Func(params, Box::new(ret), eff));
+        self.insert_requirement_scheme(
+            symbol,
+            Ty::Func(params, Box::new(ret), eff),
+            generic_symbols(&signature.generics),
+            predicates,
+        );
         Some(Requirement {
             symbol,
-            sig,
-            predicates,
             has_default,
-            eff_params,
-            generics: generic_symbols(&signature.generics),
         })
+    }
+
+    /// A requirement's TYPE is an ordinary scheme entry — the one
+    /// signature carrier the whole compiler shares. params = the method's
+    /// own generics; eff_params = the symbol-keyed outer tail plus each
+    /// inner closure row; every consumer freshens through the scheme.
+    fn insert_requirement_scheme(
+        &mut self,
+        symbol: Symbol,
+        sig: Ty,
+        generics: Vec<Symbol>,
+        predicates: Vec<Predicate>,
+    ) {
+        let (sig, inner_eff_params) = self.quantify_signature_eff_vars(sig);
+        let mut eff_params = vec![symbol];
+        eff_params.extend(inner_eff_params);
+        self.schemes.insert(
+            symbol,
+            Scheme {
+                params: generics
+                    .into_iter()
+                    .map(|symbol| SchemeParam { symbol })
+                    .collect(),
+                eff_params,
+                row_params: vec![],
+                perm_params: vec![],
+                predicates,
+                ty: sig,
+            },
+        );
     }
 
     pub(super) fn lower_default_requirement(&mut self, func: &Func) -> Option<Requirement> {
@@ -813,15 +843,15 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             effects: Default::default(),
             tail: Some(EffTail::Param(symbol)),
         };
-        let (sig, eff_params) =
-            self.quantify_signature_eff_vars(Ty::Func(params, Box::new(ret), eff));
+        self.insert_requirement_scheme(
+            symbol,
+            Ty::Func(params, Box::new(ret), eff),
+            generic_symbols(&func.generics),
+            predicates,
+        );
         Some(Requirement {
             symbol,
-            sig,
-            predicates,
             has_default: true,
-            eff_params,
-            generics: generic_symbols(&func.generics),
         })
     }
 
@@ -848,9 +878,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     .collect();
                 let tail = match &eff.tail {
                     Some(EffTail::Var(_)) => {
-                        let param = Symbol::TypeParameter(
-                            self.symbols.next_type_parameter(self.module_id),
-                        );
+                        let param =
+                            Symbol::TypeParameter(self.symbols.next_type_parameter(self.module_id));
                         self.minted.push(param);
                         Some(EffTail::Param(param))
                     }
@@ -927,19 +956,24 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 );
                 continue;
             }
-            let Some(mut requirement) = self.lower_default_requirement(func) else {
+            let Some(requirement) = self.lower_default_requirement(func) else {
                 continue;
             };
-            for predicate in &extension_predicates {
-                if !requirement.predicates.contains(predicate) {
-                    requirement.predicates.push(predicate.clone());
+            // The extension-level where clause joins the requirement's
+            // scheme context (the scheme is the signature carrier).
+            if let Some(scheme) = self.schemes.get_mut(&requirement.symbol) {
+                for predicate in &extension_predicates {
+                    if !scheme.predicates.contains(predicate) {
+                        scheme.predicates.push(predicate.clone());
+                    }
                 }
             }
             protocol_defaults.push((protocol, requirement.symbol, func));
             if let Some(info) = self.catalog.protocols.get_mut(&protocol) {
                 info.requirements.insert(label.clone(), requirement);
             }
-            self.catalog.add_owner(&label, MemberOwner::Protocol(protocol));
+            self.catalog
+                .add_owner(&label, MemberOwner::Protocol(protocol));
         }
         self.self_types.pop();
     }
@@ -1181,9 +1215,19 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 effects: Default::default(),
                 tail: Some(EffTail::Param(*method)),
             };
+            // The annotation-derived signature is an ordinary scheme (the
+            // one signature carrier); `check_extend` replaces it with the
+            // inferred, zonked scheme after the body checks. The catalog
+            // keeps only the instance-head pattern.
+            let predicates = self.declared_predicates(&func.generics, func.where_clause.as_ref());
+            self.insert_requirement_scheme(
+                *method,
+                Ty::Func(sig_params, Box::new(ret), eff),
+                generic_symbols(&func.generics),
+                predicates,
+            );
             let member = crate::types::catalog::InherentMember {
                 symbol: *method,
-                sig: Ty::Func(sig_params, Box::new(ret), eff),
                 params: params.clone(),
                 self_args: self_args.clone(),
             };
@@ -1214,9 +1258,13 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         func: &Func,
         conformance: &mut Conformance,
     ) {
-        let Ty::Func(req_params, req_ret, _) = &requirement.sig else {
+        let Some(Ty::Func(req_params, req_ret, _)) =
+            self.schemes.get(&requirement.symbol).map(|s| s.ty.clone())
+        else {
             return;
         };
+        let req_params = &req_params;
+        let req_ret: &Ty = &req_ret;
         let witness_params: Vec<Option<Ty>> = func
             .params
             .iter()

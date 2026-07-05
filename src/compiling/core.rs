@@ -24,6 +24,15 @@ pub struct LibraryTyped {
 
 const TALK_CORE_PATH_ENV: &str = "TALK_CORE_PATH";
 
+pub fn path_override() -> Option<PathBuf> {
+    std::env::var_os(TALK_CORE_PATH_ENV)
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            let path = PathBuf::from(path);
+            path.canonicalize().unwrap_or(path)
+        })
+}
+
 lazy_static! {
     static ref CORE: (Arc<Module>, Arc<LibraryTyped>) = _compile();
 }
@@ -86,8 +95,7 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
 }
 
 fn compilation_sources() -> Vec<Source> {
-    if let Some(core_path) = std::env::var_os(TALK_CORE_PATH_ENV).filter(|path| !path.is_empty()) {
-        let core_dir = PathBuf::from(core_path);
+    if let Some(core_dir) = path_override() {
         assert!(
             core_dir.is_dir(),
             "{TALK_CORE_PATH_ENV} must point to a directory: {}",

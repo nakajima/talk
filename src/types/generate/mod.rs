@@ -203,6 +203,7 @@ struct CatalogBuilder<'s, 'a> {
     module_id: ModuleId,
     store: &'s mut VarStore,
     catalog: &'s mut TypeCatalog,
+    schemes: &'s mut FxHashMap<Symbol, Scheme>,
     diagnostics: &'s mut DiagnosticSink,
     type_aliases: &'s mut FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'s mut Vec<Symbol>,
@@ -371,6 +372,7 @@ impl<'a> TypecheckSession<'a> {
                 module_id: self.module_id,
                 store: &mut self.store,
                 catalog: &mut self.catalog,
+                schemes: &mut self.schemes,
                 diagnostics: &mut self.diagnostics,
                 type_aliases: &mut self.type_aliases,
                 alias_stack: &mut self.alias_stack,
@@ -433,7 +435,7 @@ impl<'a> TypecheckSession<'a> {
                 continue;
             };
             let ty = self.store.zonk_ty(ty);
-            if matches!(ty, Ty::Error) {
+            if matches!(ty, Ty::Error) || ty.has_unification_vars() {
                 continue;
             }
             let ty = match ty {

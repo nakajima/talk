@@ -86,6 +86,11 @@ impl VarStore {
         self.vars[root as usize].value.clone()
     }
 
+    pub(crate) fn origin(&mut self, var: u32) -> NodeID {
+        let root = self.find(var);
+        self.vars[root as usize].origin
+    }
+
     pub(super) fn bind(&mut self, var: u32, value: VarValue) {
         let root = self.find(var);
         debug_assert!(self.vars[root as usize].value.is_none());

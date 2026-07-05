@@ -16,7 +16,7 @@ use crate::{
     },
     types::{
         TypeOutput,
-        catalog::{Requirement, TypeCatalog},
+        catalog::Requirement,
         ty::{EffTail, RowTail, Ty},
     },
 };
@@ -276,7 +276,10 @@ fn add_nominal_member_items(
             for (pattern, actual) in inherent.self_args.iter().zip(args) {
                 crate::types::solve::bind_param_pattern(pattern, actual, &mut substitution);
             }
-            let ty = substitute_ty(&inherent.sig, &substitution);
+            let Some(scheme) = types.schemes.get(&inherent.symbol) else {
+                continue;
+            };
+            let ty = substitute_ty(&scheme.ty, &substitution);
             add_member_item(
                 items,
                 label.clone(),
@@ -324,7 +327,10 @@ fn add_type_member_items(
                 items,
                 label,
                 CompletionItemKind::Method,
-                Some(requirement.sig.render_mono()),
+                types
+                    .schemes
+                    .get(&requirement.symbol)
+                    .map(|scheme| scheme.ty.render_mono()),
             );
         }
     }
@@ -363,13 +369,13 @@ fn add_protocol_requirement_items(
             items,
             label,
             CompletionItemKind::Method,
-            requirement_detail(&types.catalog, owner, &requirement, receiver_ty),
+            requirement_detail(types, owner, &requirement, receiver_ty),
         );
     }
 }
 
 fn requirement_detail(
-    catalog: &TypeCatalog,
+    types: &TypeOutput,
     owner: Symbol,
     requirement: &Requirement,
     receiver_ty: &Ty,
@@ -377,12 +383,13 @@ fn requirement_detail(
     let lookup_ty = member_lookup_ty(receiver_ty).clone();
     let mut substitution = FxHashMap::default();
     substitution.insert(owner, lookup_ty.clone());
-    for (_, assoc) in catalog.associated_types_in(owner) {
+    for (_, assoc) in types.catalog.associated_types_in(owner) {
         let binding = associated_binding(&lookup_ty, assoc)
             .unwrap_or_else(|| Ty::Proj(Box::new(lookup_ty.clone()), owner, assoc));
         substitution.insert(assoc, binding);
     }
-    let ty = substitute_ty(&requirement.sig, &substitution);
+    let sig = types.schemes.get(&requirement.symbol)?.ty.clone();
+    let ty = substitute_ty(&sig, &substitution);
     Some(drop_self_from_func(ty).render_mono())
 }
 

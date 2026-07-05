@@ -71,7 +71,10 @@ pub(crate) struct StatementOwnership {
 
 #[derive(Debug, Clone)]
 pub(crate) struct DropElaborationResult {
-    pub(crate) key_path: Place,
+    /// The elaborated place, for symbol-rooted candidates; `None` for
+    /// temp candidates (temps have no place — the statement's embedded
+    /// `Temp` expression is the value).
+    pub(crate) key_path: Option<Place>,
     pub(crate) kind: DropElaboration,
 }
 
@@ -306,10 +309,19 @@ struct Builder<'types> {
     /// they replace in later statement/terminator embeddings.
     next_temp: u32,
     temp_subs: FxHashMap<NodeID, u32>,
+    /// Temps minted while lowering the current statement whose values may
+    /// need teardown: drained into `DropCandidate` statements
+    /// (`TemporaryEnd`) when the full expression completes.
+    pending_temp_drops: Vec<Expr>,
     /// The join temps of the value-producing constructs currently being
     /// lowered, innermost last: an arm tail's `Continuation` delivery
     /// names the enclosing construct's temp.
     continuation_temps: Vec<u32>,
+    /// Depth of value-construct arms with a pending JOIN (if/match arms):
+    /// their tail deliveries are continuations into the join, never the
+    /// function return. A tail-position BLOCK scope is join-free — its
+    /// inner tail is still the function's return.
+    join_depth: usize,
     /// Whether this body's root-scope tail is the function's return value
     /// (true for function/top-level bodies; false for standalone match-arm
     /// bodies, whose tail delivers to the match join).
@@ -529,7 +541,9 @@ impl<'types> Builder<'types> {
             handler_stack: vec![],
             next_temp: 0,
             temp_subs: FxHashMap::default(),
+            pending_temp_drops: vec![],
             continuation_temps: vec![],
+            join_depth: 0,
             root_tail_is_return: true,
             scaffolds: FxHashMap::default(),
         }
@@ -568,7 +582,11 @@ impl<'types> Builder<'types> {
             if self.grades.contains_borrowed(&ty) {
                 continue;
             }
-            if self.grades.needs_drop(&ty) && !self.grades.contains_object(&ty) {
+            // GENERIC params classify like owned ones: the flow runs once
+            // over the generic body and each specialization elides the
+            // exit drop when its instantiation doesn't need one.
+            let generic = matches!(ty, Ty::Param(_) | Ty::Proj(..));
+            if (generic || self.grades.needs_drop(&ty)) && !self.grades.contains_object(&ty) {
                 locals.push((param.id, symbol));
             }
         }
@@ -590,6 +608,46 @@ impl<'types> Builder<'types> {
             entry,
             blocks: self.blocks,
             scaffolds: self.scaffolds,
+        }
+    }
+
+    /// Record a freshly minted temp whose value may need teardown; the
+    /// enclosing statement's completion drains it into a `TemporaryEnd`
+    /// drop candidate (the flow checker classifies consumed temps `Dead`,
+    /// scalar temps unelaborated — lowering drops only `Static` ones).
+    fn note_pending_temp(&mut self, id: NodeID, span: crate::span::Span, temp: u32, ty: Ty) {
+        self.pending_temp_drops.push(Expr {
+            id,
+            kind: ExprKind::Temp(temp),
+            span,
+            ownership: Default::default(),
+            ty,
+            member_resolution: None,
+            instantiation: None,
+            existential_pack: None,
+        });
+    }
+
+    /// Emit `TemporaryEnd` drop candidates for the statement's temps
+    /// (reverse creation order). Skipped when the block already
+    /// terminated: exits consume their value, and unreachable candidates
+    /// have no register to read.
+    fn drain_temp_drops(&mut self, current: BlockId) {
+        let pending = std::mem::take(&mut self.pending_temp_drops);
+        if self.is_terminated(current) {
+            return;
+        }
+        for temp_expr in pending.into_iter().rev() {
+            let source = temp_expr.id;
+            self.push_statement(
+                current,
+                Statement::DropCandidate {
+                    target: DropTarget::Expr(temp_expr),
+                    key_path: None,
+                    reason: DropReason::TemporaryEnd,
+                    source,
+                },
+            );
         }
     }
 
@@ -620,10 +678,15 @@ impl<'types> Builder<'types> {
                 tail_expr.is_none() && !tail_control_value,
                 is_tail && tail_exits,
             );
+            // Temp drops precede the delivery/exit statements: the exit
+            // machinery reads its scope-exit candidates adjacently, and a
+            // consumed temp's candidate is Dead regardless of order
+            // (consumption is static, the set completes before annotation).
+            self.drain_temp_drops(current);
             if let Some(expr) = tail_expr {
                 // Only the root scope's tail is the function's return value;
                 // nested tails (branch arms, value blocks) deliver within it.
-                let destination = if self.scope_stack.len() == 1 && self.root_tail_is_return {
+                let destination = if self.root_tail_is_return && self.join_depth == 0 {
                     ValueDestination::TailReturn
                 } else {
                     ValueDestination::Continuation(self.continuation_temps.last().copied())
@@ -807,7 +870,7 @@ impl<'types> Builder<'types> {
                 kind: ExprKind::Block(block),
                 ..
             }) => self.lower_scope(current, block.id, |builder, current| {
-                builder.lower_nodes(&block.body, current, false, false)
+                builder.lower_nodes(&block.body, current, consume_expr_value, tail_exits)
             }),
             StmtKind::Expr(expr) => {
                 let current = self.lower_expr(expr, current);
@@ -816,6 +879,7 @@ impl<'types> Builder<'types> {
             }
             StmtKind::Return(Some(expr)) => {
                 let current = self.lower_expr(expr, current);
+                self.drain_temp_drops(current);
                 self.push_statement(
                     current,
                     Statement::ReturnValue {
@@ -836,6 +900,7 @@ impl<'types> Builder<'types> {
                 // `continue v` is a RESUME: the handler-body path ends at
                 // the handling construct's join, never at a loop header.
                 let current = self.lower_expr(expr, current);
+                self.drain_temp_drops(current);
                 self.push_statement(current, Statement::ContinueValue { expr: expr.clone() });
                 if let Some(handler) = self.handler_stack.last().copied() {
                     self.emit_early_exit_drops(current, stmt.id, handler.scope_depth);
@@ -982,6 +1047,7 @@ impl<'types> Builder<'types> {
                     .map(|pack| pack.payload.clone())
                     .or_else(|| self.types.node_types.get(&expr.id).cloned())
                     .unwrap_or(Ty::Error);
+                self.note_pending_temp(expr.id, expr.span, temp, result_ty.clone());
                 self.push_statement(
                     current,
                     Statement::Call {
@@ -1034,6 +1100,7 @@ impl<'types> Builder<'types> {
                     .map(|pack| pack.payload.clone())
                     .or_else(|| self.types.node_types.get(&expr.id).cloned())
                     .unwrap_or(Ty::Error);
+                self.note_pending_temp(expr.id, expr.span, temp, result_ty.clone());
                 self.push_statement(
                     current,
                     Statement::Perform {
@@ -1147,6 +1214,7 @@ impl<'types> Builder<'types> {
             },
         );
 
+        self.join_depth += 1;
         let then_exit = self.lower_scope(then_id, then_block.id, |builder, then_id| {
             builder.lower_nodes(&then_block.body, then_id, mark_tail_exprs, tail_exits)
         });
@@ -1160,6 +1228,7 @@ impl<'types> Builder<'types> {
             else_id
         };
         self.terminate_if_open(else_exit, Terminator::Jump(join_id));
+        self.join_depth -= 1;
 
         join_id
     }
@@ -1228,6 +1297,7 @@ impl<'types> Builder<'types> {
             .map(|pack| pack.payload.clone())
             .or_else(|| self.types.node_types.get(&expr_id).cloned())
             .unwrap_or(Ty::Error);
+        self.note_pending_temp(expr_id, scrutinee.span, temp, result_ty.clone());
         let mut scrutinee_sub = scrutinee.clone();
         self.substitute_temps_expr(&mut scrutinee_sub);
         self.terminate_if_open(
@@ -1243,6 +1313,7 @@ impl<'types> Builder<'types> {
         );
 
         self.continuation_temps.push(temp);
+        self.join_depth += 1;
         for (arm, arm_id) in arms.iter().zip(arm_blocks) {
             let arm_exit = self.lower_scope(arm_id, arm.body.id, |builder, arm_id| {
                 builder.lower_pattern_binders(&arm.pattern, arm_id);
@@ -1250,6 +1321,7 @@ impl<'types> Builder<'types> {
             });
             self.terminate_if_open(arm_exit, Terminator::Jump(join_id));
         }
+        self.join_depth -= 1;
         self.continuation_temps.pop();
 
         join_id
@@ -1516,14 +1588,22 @@ impl<'types> Builder<'types> {
 }
 
 fn tail_expr(node: &Node) -> Option<&Expr> {
-    match node {
+    let expr = match node {
         Node::Expr(expr) => Some(expr),
         Node::Stmt(stmt) => match &stmt.kind {
             StmtKind::Expr(expr) => Some(expr),
             _ => None,
         },
         _ => None,
+    }?;
+    // A tail-position BLOCK is not an embeddable value expression: it
+    // lowers as a real scope (its lets/moves/drops must be CFG facts —
+    // an embedded copy would hide them from flow) and its own inner
+    // tail delivers the value.
+    if matches!(expr.kind, ExprKind::Block(_)) {
+        return None;
     }
+    Some(expr)
 }
 
 fn node_is_value_control(node: &Node) -> bool {
@@ -1565,7 +1645,7 @@ fn render_key_path(key_path: &Place) -> String {
 }
 
 #[cfg(test)]
-fn render_statement(statement: &Statement) -> String {
+pub(crate) fn render_statement(statement: &Statement) -> String {
     match statement {
         Statement::ScopeEnter { scope } => format!("scope_enter s{}", scope.0),
         Statement::ScopeExit { scope } => format!("scope_exit s{}", scope.0),

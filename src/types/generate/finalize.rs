@@ -96,58 +96,31 @@ impl<'a> TypecheckSession<'a> {
         // inferred, then degrade genuine leftovers per the export
         // sanitizer — a raw variable crossing the boundary reads foreign
         // store slots (mis-unification, or the flatten_eff panic).
-        let mut effects = std::mem::take(&mut self.catalog.effects);
-        for (symbol, sig) in effects.iter_mut() {
-            sig.params = sig
-                .params
-                .iter()
-                .map(|ty| self.final_ty(ty).sanitize_for_export(*symbol))
-                .collect();
-            sig.ret = self.final_ty(&sig.ret).sanitize_for_export(*symbol);
-        }
-        self.catalog.effects = effects;
-        let mut structs = std::mem::take(&mut self.catalog.structs);
-        for (symbol, info) in structs.iter_mut() {
-            for (_, field_ty) in info.fields.values_mut() {
-                *field_ty = self.final_ty(field_ty).sanitize_for_export(*symbol);
+        // ONE walk covers every embedded type (`for_each_embedded_mut`
+        // is the single authority for what the catalog carries); the
+        // normalization context is a pre-bake snapshot, since projection
+        // reduction consults the catalog being rewritten.
+        let mut catalog = std::mem::take(&mut self.catalog);
+        let normalize_ctx = catalog.clone();
+        let store = &mut self.store;
+        catalog.for_each_embedded_mut(&mut |owner, item| match item {
+            crate::types::catalog::EmbeddedTypes::Ty(ty) => {
+                *ty = final_ty(store, &normalize_ctx, ty).sanitize_for_export(owner);
             }
-        }
-        self.catalog.structs = structs;
-        let mut enums = std::mem::take(&mut self.catalog.enums);
-        for (symbol, info) in enums.iter_mut() {
-            for variant in info.variants.values_mut() {
-                let ty = self.final_ty(&variant.constructor_scheme.ty);
-                variant.constructor_scheme = Scheme {
+            crate::types::catalog::EmbeddedTypes::Scheme(scheme) => {
+                let ty = final_ty(store, &normalize_ctx, &scheme.ty);
+                *scheme = Scheme {
                     ty,
-                    ..variant.constructor_scheme.clone()
+                    ..scheme.clone()
                 }
-                .sanitize_for_export(*symbol);
+                .sanitize_for_export(owner);
             }
-        }
-        self.catalog.enums = enums;
-        let mut protocols = std::mem::take(&mut self.catalog.protocols);
-        for info in protocols.values_mut() {
-            for requirement in info.requirements.values_mut() {
-                requirement.sig = self
-                    .final_ty(&requirement.sig)
-                    .sanitize_for_export(requirement.symbol);
+            crate::types::catalog::EmbeddedTypes::Predicate(predicate) => {
+                *predicate = zonk_predicate(store, &normalize_ctx, predicate.clone())
+                    .sanitize_for_export(owner);
             }
-        }
-        self.catalog.protocols = protocols;
-        let mut extend_members = std::mem::take(&mut self.catalog.extend_members);
-        for members in extend_members.values_mut() {
-            for member in members.values_mut() {
-                member.sig = self.final_ty(&member.sig).sanitize_for_export(member.symbol);
-            }
-        }
-        self.catalog.extend_members = extend_members;
-        let mut conformances = std::mem::take(&mut self.catalog.conformances);
-        for ((head, _), conformance) in conformances.iter_mut() {
-            for ty in conformance.assoc.values_mut() {
-                *ty = self.final_ty(ty).sanitize_for_export(*head);
-            }
-        }
-        self.catalog.conformances = conformances;
+        });
+        self.catalog = catalog;
         let mut existential_packs = FxHashMap::default();
         for (node, pack) in std::mem::take(&mut self.artifacts.existential_packs) {
             existential_packs.insert(

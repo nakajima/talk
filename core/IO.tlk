@@ -1,5 +1,5 @@
 // no-core
-use { _alloc, _copy } from ./Memory.tlk
+use { _alloc, _copy, _free } from ./Memory.tlk
 use { Add, Comparable, Equatable } from ./Operators.tlk
 use { String } from ./String.tlk
 use { Showable } from ./Showable.tlk
@@ -92,7 +92,9 @@ public func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {
 public func open_path(path: String, flags: Int, mode: Int) 'io -> Int {
 	let buf = _alloc<Byte>(path.byte_count + 1)
 	_copy(path.storage.base, buf, path.byte_count)
-	_io_open(buf, flags, mode)
+	let fd = _io_open(buf, flags, mode)
+	_free(buf)
+	fd
 }
 
 public func _io_read(fd: Int, buf: RawPtr, count: Int) 'io -> Int {

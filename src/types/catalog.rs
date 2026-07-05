@@ -71,26 +71,18 @@ pub struct Enum {
     pub predicates: Vec<Predicate>,
 }
 
-/// A protocol method requirement. The signature is self-prepended and ranges
-/// over `Ty::Param(protocol symbol)` for Self and `Ty::Param(assoc symbol)`
-/// for associated types; its effect tail is `EffTail::Param(requirement
-/// symbol)` so every use refreshes it.
+/// A protocol method requirement. The catalog carries only the structure
+/// (label keying, witness matching, defaultedness); the requirement's
+/// TYPE lives in the schemes table under `symbol`, like every other
+/// callable — one signature carrier, one instantiation/sanitize/export
+/// path. The scheme's ty is self-prepended, ranges over
+/// `Ty::Param(protocol symbol)` for Self and `Ty::Param(assoc symbol)`
+/// for associated types, and its effect tail plus inner closure rows are
+/// eff_params freshened per use.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Requirement {
     pub symbol: Symbol,
-    pub sig: Ty,
-    pub predicates: Vec<Predicate>,
     pub has_default: bool,
-    /// Rigid params standing in for the sig's inner effect rows (a
-    /// closure-typed parameter's latent row). Catalog types outlive the
-    /// defining module's solver store, so these are params — every
-    /// consumer freshens them per use, like `Scheme::eff_params`.
-    #[serde(default)]
-    pub eff_params: Vec<Symbol>,
-    /// The requirement's own method-level generics (`func map<U>(...)`),
-    /// freshened per use alongside `eff_params`.
-    #[serde(default)]
-    pub generics: Vec<Symbol>,
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -124,12 +116,13 @@ pub struct Conformance {
 }
 
 /// An inherent (protocol-less) extend member: `extend Float { func _trunc()
-/// ... }`. The signature comes from annotations, over the extend's rigid
-/// params; its effect tail is `EffTail::Param(symbol)` so uses refresh it.
+/// ... }`.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InherentMember {
     pub symbol: Symbol,
-    pub sig: Ty,
+    /// The extend's rigid params and the head application they index —
+    /// the instance-head pattern bound against the receiver at dispatch.
+    /// The member's TYPE lives in the schemes table under `symbol`.
     pub params: Vec<Symbol>,
     pub self_args: Vec<Ty>,
 }
@@ -192,7 +185,104 @@ pub struct TypeCatalog {
     pub derivable: Vec<Symbol>,
 }
 
+/// One type-carrier the catalog embeds. Raw types sanitize per-`Ty`;
+/// schemes sanitize as schemes (their minted eff/row params register);
+/// predicates sanitize through their own folder.
+pub(crate) enum EmbeddedTypes<'a> {
+    Ty(&'a mut Ty),
+    Scheme(&'a mut Scheme),
+    Predicate(&'a mut Predicate),
+}
+
 impl TypeCatalog {
+    /// Visit every type the catalog embeds, with its owning symbol. THE
+    /// single authority for "types the catalog carries": finalization
+    /// bakes and sanitizes through this walk, and the module-boundary
+    /// portability assertion re-walks it — a new catalog field inherits
+    /// both by being added here (and only here).
+    pub(crate) fn for_each_embedded_mut(&mut self, f: &mut impl FnMut(Symbol, EmbeddedTypes)) {
+        for (symbol, info) in self.structs.iter_mut() {
+            for (_, field_ty) in info.fields.values_mut() {
+                f(*symbol, EmbeddedTypes::Ty(field_ty));
+            }
+            for predicate in info.predicates.iter_mut() {
+                f(*symbol, EmbeddedTypes::Predicate(predicate));
+            }
+        }
+        for (symbol, info) in self.enums.iter_mut() {
+            for variant in info.variants.values_mut() {
+                f(
+                    *symbol,
+                    EmbeddedTypes::Scheme(&mut variant.constructor_scheme),
+                );
+            }
+            for predicate in info.predicates.iter_mut() {
+                f(*symbol, EmbeddedTypes::Predicate(predicate));
+            }
+        }
+        // Requirements carry no types: their signatures are ordinary
+        // schemes (finalized and exported through the schemes path).
+        for (symbol, info) in self.protocols.iter_mut() {
+            for predicate in info.predicates.iter_mut() {
+                f(*symbol, EmbeddedTypes::Predicate(predicate));
+            }
+        }
+        for ((head, _), conformance) in self.conformances.iter_mut() {
+            for ty in conformance.self_args.iter_mut() {
+                f(*head, EmbeddedTypes::Ty(ty));
+            }
+            for ty in conformance.assoc.values_mut() {
+                f(*head, EmbeddedTypes::Ty(ty));
+            }
+            for predicate in conformance.context.iter_mut() {
+                f(*head, EmbeddedTypes::Predicate(predicate));
+            }
+        }
+        // Inherent members carry no signature (it's a scheme); only
+        // the instance-head pattern is catalog-embedded.
+        for members in self.extend_members.values_mut() {
+            for member in members.values_mut() {
+                let owner = member.symbol;
+                for ty in member.self_args.iter_mut() {
+                    f(owner, EmbeddedTypes::Ty(ty));
+                }
+            }
+        }
+        for (symbol, sig) in self.effects.iter_mut() {
+            for ty in sig.params.iter_mut() {
+                f(*symbol, EmbeddedTypes::Ty(ty));
+            }
+            f(*symbol, EmbeddedTypes::Ty(&mut sig.ret));
+            for predicate in sig.predicates.iter_mut() {
+                f(*symbol, EmbeddedTypes::Predicate(predicate));
+            }
+        }
+        for (symbol, alias) in self.type_aliases.iter_mut() {
+            f(*symbol, EmbeddedTypes::Ty(&mut alias.ty));
+        }
+    }
+
+    /// Debug-mode boundary check: no unification variable may survive
+    /// into a catalog that crosses a module boundary (a foreign store
+    /// would misread its ids). Panics naming the owner on violation.
+    pub fn debug_assert_portable(&mut self) {
+        let mut violations: Vec<String> = vec![];
+        self.for_each_embedded_mut(&mut |owner, item| {
+            let leaked = match item {
+                EmbeddedTypes::Ty(ty) => ty.has_unification_vars(),
+                EmbeddedTypes::Scheme(scheme) => scheme.has_unification_vars(),
+                EmbeddedTypes::Predicate(predicate) => predicate.has_unification_vars(),
+            };
+            if leaked {
+                violations.push(format!("{owner}"));
+            }
+        });
+        assert!(
+            violations.is_empty(),
+            "catalog leaks unification vars across the module boundary (owners: {violations:?})"
+        );
+    }
+
     /// The usage grade of a nominal: `Linear` iff declared `linear`, `Copy`
     /// for scalars and explicit `Copy` conformances, `Affine` otherwise
     /// (including unknown heads — affine is the safe default for both).
@@ -343,23 +433,7 @@ impl TypeCatalog {
                                         l,
                                         Requirement {
                                             symbol: imp(r.symbol, target),
-                                            sig: imp_ty(&r.sig),
-                                            predicates: r
-                                                .predicates
-                                                .into_iter()
-                                                .map(|predicate| predicate.import_symbols(target))
-                                                .collect(),
                                             has_default: r.has_default,
-                                            eff_params: r
-                                                .eff_params
-                                                .iter()
-                                                .map(|s| imp(*s, target))
-                                                .collect(),
-                                            generics: r
-                                                .generics
-                                                .iter()
-                                                .map(|s| imp(*s, target))
-                                                .collect(),
                                         },
                                     )
                                 })
@@ -445,7 +519,6 @@ impl TypeCatalog {
                                     l,
                                     InherentMember {
                                         symbol: imp(m.symbol, target),
-                                        sig: imp_ty(&m.sig),
                                         params: m.params.iter().map(|s| imp(*s, target)).collect(),
                                         self_args: m.self_args.iter().map(&imp_ty).collect(),
                                     },

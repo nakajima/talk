@@ -306,6 +306,12 @@ public struct CharacterIterator {
 
 extend CharacterIterator: Borrowed {}
 
+extend CharacterIterator: Iterable {
+	func iter() {
+		CharacterIterator(storage: self.storage, offset: self.offset, end: self.end)
+	}
+}
+
 extend CharacterIterator: Iterator<Character> {
 	mut func next() -> Character? {
 		if self.end <= self.offset { return Optional.none }

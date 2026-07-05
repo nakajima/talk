@@ -156,6 +156,63 @@ impl<'s> Generalizer<'s> {
     }
 }
 
+/// Quantify ONLY the leftover effect-tail variables of an already-zonked
+/// type into fresh rigid params, binding each in the store so sharers
+/// agree. Used for schemes built outside the group Generalizer (extend
+/// methods): their closure-typed params must be effect-polymorphic per
+/// use, not module-wide shared rows.
+pub(crate) fn quantify_leftover_eff_vars(
+    store: &mut VarStore,
+    symbols: &mut Symbols,
+    module_id: crate::compiling::module::ModuleId,
+    ty: &Ty,
+) -> (Ty, Vec<Symbol>) {
+    struct EffVarQuantifier<'x> {
+        store: &'x mut VarStore,
+        symbols: &'x mut Symbols,
+        module_id: crate::compiling::module::ModuleId,
+        minted: Vec<Symbol>,
+    }
+    impl TyFold for EffVarQuantifier<'_> {
+        fn fold_eff(&mut self, eff: &EffectRow) -> EffectRow {
+            let zonked = self.store.zonk_eff(eff);
+            let tail = match zonked.tail {
+                Some(EffTail::Var(v)) => {
+                    let param =
+                        Symbol::TypeParameter(self.symbols.next_type_parameter(self.module_id));
+                    self.store.bind(
+                        v.0,
+                        VarValue::Eff(EffectRow {
+                            effects: vec![],
+                            tail: Some(EffTail::Param(param)),
+                        }),
+                    );
+                    self.minted.push(param);
+                    Some(EffTail::Param(param))
+                }
+                other => other,
+            };
+            let effects = zonked
+                .effects
+                .iter()
+                .map(|entry| EffectEntry {
+                    effect: entry.effect,
+                    args: entry.args.iter().map(|ty| self.fold_ty(ty)).collect(),
+                })
+                .collect();
+            EffectRow::new(effects, tail)
+        }
+    }
+    let mut folder = EffVarQuantifier {
+        store,
+        symbols,
+        module_id,
+        minted: vec![],
+    };
+    let ty = folder.fold_ty(ty);
+    (ty, folder.minted)
+}
+
 /// Generalization is the param-minting `TyFold`: a variable deeper than the
 /// group's base level becomes a fresh rigid `Param` (bound in the store so all
 /// sharers see it); shallower variables stay free. Effect/row var tails mint

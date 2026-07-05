@@ -214,8 +214,31 @@ impl<'a> Lowering<'a> {
             | mir::Statement::ScopeExit { .. }
             | mir::Statement::StorageLive { .. }
             | mir::Statement::Read { .. }
-            | mir::Statement::AssignmentRootUse { .. }
-            | mir::Statement::DropCandidate { .. } => rest(self, ctx, k),
+            | mir::Statement::AssignmentRootUse { .. } => rest(self, ctx, k),
+            // An unconsumed owned temporary releases at its full
+            // expression's end; `Dead` (consumed) and unelaborated
+            // (scalar) temps emit nothing. Symbol-rooted candidates are
+            // read by their neighboring StorageDead/Assign/exit handling.
+            mir::Statement::DropCandidate {
+                reason: mir::DropReason::TemporaryEnd,
+                target: mir::DropTarget::Expr(temp_expr),
+                ..
+            } => {
+                let rest_body = rest(self, ctx, k);
+                let Some(mir::DropElaboration::Static) =
+                    self.drop_elaboration_at(statement, None)
+                else {
+                    return rest_body;
+                };
+                let hir::ExprKind::Temp(temp) = temp_expr.kind else {
+                    return rest_body;
+                };
+                let Some(value) = ctx.temps.get(&temp).copied() else {
+                    return rest_body;
+                };
+                self.lower_drop_value_then(ctx, value, &temp_expr.ty, rest_body)
+            }
+            mir::Statement::DropCandidate { .. } => rest(self, ctx, k),
             mir::Statement::StorageDead { symbol, .. } => {
                 self.lower_mir_storage_dead(*symbol, cursor, ctx, k, cache)
             }
@@ -523,15 +546,16 @@ impl<'a> Lowering<'a> {
 
         for statement in body.blocks.iter().flat_map(|block| &block.statements) {
             if let Some(drop) = &statement.ownership.drop
-                && drop.key_path.root == symbol
+                && let Some(drop_key_path) = &drop.key_path
+                && drop_key_path.root == symbol
                 && matches!(
                     drop.kind,
                     mir::DropElaboration::Conditional | mir::DropElaboration::Open
                 )
             {
                 needs_root_flag = true;
-                if !drop.key_path.fields.is_empty() {
-                    Self::push_unique_drop_flag_key(&mut keys, drop.key_path.clone());
+                if !drop_key_path.fields.is_empty() {
+                    Self::push_unique_drop_flag_key(&mut keys, drop_key_path.clone());
                 }
             }
             for source in &statement.ownership.moves {
@@ -627,7 +651,7 @@ impl<'a> Lowering<'a> {
     ) -> Option<mir::DropElaboration> {
         let drop = statement.ownership.drop.as_ref()?;
         key_path
-            .is_none_or(|key_path| drop.key_path == *key_path)
+            .is_none_or(|key_path| drop.key_path.as_ref() == Some(key_path))
             .then_some(drop.kind)
     }
 
@@ -1209,13 +1233,12 @@ impl<'a> Lowering<'a> {
                 // An unconditional loop with no break never reaches its
                 // exit block; lowering it anyway would deliver () to a
                 // continuation expecting the function's value.
-                let exit_body = if condition.is_some()
-                    || Self::loop_exit_reachable(cursor.body, *exit_block)
-                {
-                    self.lower_mir_block(cursor.at_block(*exit_block), ctx, k, cache)
-                } else {
-                    self.dead_end("loop_exit_unreachable")
-                };
+                let exit_body =
+                    if condition.is_some() || Self::loop_exit_reachable(cursor.body, *exit_block) {
+                        self.lower_mir_block(cursor.at_block(*exit_block), ctx, k, cache)
+                    } else {
+                        self.dead_end("loop_exit_unreachable")
+                    };
                 self.p.set_body(exit, exit_body);
 
                 let mut loop_ctx = ctx.clone();

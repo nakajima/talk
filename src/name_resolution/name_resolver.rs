@@ -1381,7 +1381,8 @@ impl NameResolver {
                 | InlineIRInstructionKind::Trunc { .. }
                 | InlineIRInstructionKind::IsUnique { .. }
                 | InlineIRInstructionKind::IntToFloat { .. }
-                | InlineIRInstructionKind::ByteToInt { .. } => (),
+                | InlineIRInstructionKind::ByteToInt { .. }
+                | InlineIRInstructionKind::Free { .. } => (),
             }
         });
 

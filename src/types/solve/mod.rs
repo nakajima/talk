@@ -498,6 +498,7 @@ impl<'s> Solver<'s> {
 }
 
 pub use generalize::Generalizer;
+pub(crate) use generalize::quantify_leftover_eff_vars;
 pub use normalize::normalize_ty;
 pub(crate) use normalize::reduce_projection;
 use normalize::stuck_projection;

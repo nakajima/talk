@@ -3,6 +3,7 @@ use super::*;
 struct Elaborator<'e> {
     store: &'e mut VarStore,
     catalog: &'e TypeCatalog,
+    schemes: &'e FxHashMap<Symbol, Scheme>,
     diagnostics: &'e mut DiagnosticSink,
     type_aliases: &'e FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'e mut Vec<Symbol>,
@@ -401,12 +402,9 @@ impl<'e> Elaborator<'e> {
             let requirements: Vec<(String, Ty, Vec<Predicate>)> = info
                 .requirements
                 .iter()
-                .map(|(label, requirement)| {
-                    (
-                        label.clone(),
-                        requirement.sig.clone(),
-                        requirement.predicates.clone(),
-                    )
+                .filter_map(|(label, requirement)| {
+                    let scheme = self.schemes.get(&requirement.symbol)?;
+                    Some((label.clone(), scheme.ty.clone(), scheme.predicates.clone()))
                 })
                 .collect();
             for (label, sig, predicates) in requirements {
@@ -509,6 +507,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         Elaborator {
             store: &mut *self.store,
             catalog: &*self.catalog,
+            schemes: &*self.schemes,
             diagnostics: &mut *self.diagnostics,
             type_aliases: &*self.type_aliases,
             alias_stack: &mut *self.alias_stack,
@@ -542,6 +541,7 @@ macro_rules! impl_checking_elaboration_for {
                 Elaborator {
                     store: &mut *self.store,
                     catalog: &*self.catalog,
+                    schemes: &*self.schemes,
                     diagnostics: &mut *self.diagnostics,
                     type_aliases: &*self.type_aliases,
                     alias_stack: &mut *self.alias_stack,

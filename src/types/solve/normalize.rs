@@ -25,6 +25,13 @@ pub fn normalize_ty(store: &mut VarStore, catalog: &TypeCatalog, ty: &Ty) -> Ty 
             }
             Ty::Proj(Box::new(base), protocol, assoc)
         }
+        // Nested borrows collapse once a solved variable exposes the
+        // inner borrow (the fold-time collapse can't see through vars).
+        Ty::Borrow(perm, inner) => {
+            let inner = store.shallow(&inner);
+            let inner = normalize_ty(store, catalog, &inner);
+            crate::types::ty::collapse_borrow(perm, inner)
+        }
         Ty::Any { protocol, assoc } => Ty::Any {
             protocol,
             assoc: assoc

@@ -412,10 +412,10 @@ impl<'a> Lowering<'a> {
                     ));
                     return None;
                 };
-                let constructed = self.checker_ty(expr, ctx);
                 let blank = self.blank_record(struct_symbol)?;
-                let mut theta = self.call_theta(init, expr.instantiation.as_ref(), ctx);
-                self.owner_theta(init, &constructed, &mut theta);
+                // The construction node publishes the owner-param
+                // instantiation (record_instantiation at infer time).
+                let theta = self.call_theta(init, expr.instantiation.as_ref(), ctx);
                 let label = self.demand(init, theta.clone());
                 Some((label, init, Prefix::Value(blank), theta))
             }
@@ -442,35 +442,40 @@ impl<'a> Lowering<'a> {
                         witness,
                     }) => {
                         let head_ty = head_ty?;
-                        // Method-level generics (`map<U>`) ride the callee's
-                        // recorded instantiation; the head derives only the
-                        // Self/assoc entries.
-                        let generics = self.instantiation_at(callee.instantiation.as_ref(), ctx);
+                        // The node carries the solver's published θ;
+                        // resolve_witness reads it (committed) or selects
+                        // at this specialization (deferred).
+                        let theta = self.instantiation_at(callee.instantiation.as_ref(), ctx);
                         let (target, target_symbol, witness_theta) = self.resolve_witness(
                             protocol,
                             witness,
                             label.to_string(),
                             &head_ty,
-                            &generics,
+                            &theta,
                         )?;
                         Some((target, target_symbol, prefix, witness_theta))
                     }
                     Some(crate::types::output::MemberResolution::Direct(member)) => {
-                        let mut theta = self.call_theta(member, callee.instantiation.as_ref(), ctx);
-                        if let Some(head) = &head_ty {
-                            self.owner_theta(member, head, &mut theta);
-                        }
+                        // The node's published θ includes the owner-param
+                        // bindings (struct/enum generics at the receiver's
+                        // application) — no receiver re-derivation.
+                        let theta = self.call_theta(member, callee.instantiation.as_ref(), ctx);
                         let target = self.demand(member, theta.clone());
                         Some((target, member, prefix, theta))
                     }
                     None => {
-                        // No resolution at this node: the member use rode
-                        // its binder's scheme (qualified types — Jones
-                        // 1994) and the checker discharged it per call
-                        // site. The θ-substituted head is concrete here,
-                        // so resolve the label the way the solver's
-                        // try_member does: the type's own methods first,
-                        // then protocol witnesses.
+                        // Monomorphization-time member selection — the ONE
+                        // case the solver cannot commit: the member use
+                        // rode its binder's scheme (a HasMember context
+                        // predicate, qualified types — Jones 1994), so this
+                        // single node serves MANY specializations with
+                        // different targets. Selection from the
+                        // θ-substituted concrete head is inherent to
+                        // dictionary-free monomorphization (rustc's
+                        // Instance::resolve makes the same move): the
+                        // type's own methods first, then protocol
+                        // witnesses. Everything the solver CAN commit is
+                        // published on nodes and read above.
                         if let Some(CheckTy::Nominal(symbol, _)) = &head_ty {
                             let label_str = label.to_string();
                             let catalog = &self.units[self.entry].types.catalog;
@@ -520,15 +525,13 @@ impl<'a> Lowering<'a> {
                                 };
                                 let witness = requirement.symbol;
                                 let head = head_ty.clone()?;
-                                let generics =
-                                    self.instantiation_at(callee.instantiation.as_ref(), ctx);
                                 if let Some((target, target_symbol, witness_theta)) = self
                                     .resolve_witness(
                                         protocol,
                                         witness,
                                         label_str.clone(),
                                         &head,
-                                        &generics,
+                                        &Theta::default(),
                                     )
                                 {
                                     return Some((target, target_symbol, prefix, witness_theta));
@@ -698,22 +701,39 @@ impl<'a> Lowering<'a> {
         })
     }
 
+    /// The declared scheme params (method generics) of a symbol, from the
+    /// one signature carrier.
+    fn scheme_params_of(&self, symbol: Symbol) -> impl Iterator<Item = Symbol> + '_ {
+        self.units
+            .iter()
+            .find_map(move |u| u.types.schemes.get(&symbol))
+            .into_iter()
+            .flat_map(|scheme| scheme.params.iter().map(|p| p.symbol))
+    }
+
     /// Declared `'heap` in any unit's catalog: values are object handles.
     pub(super) fn symbol_is_heap(&self, symbol: Symbol) -> bool {
         self.units.iter().any(|u| u.types.catalog.is_heap(symbol))
     }
 
-    /// Witness selection (Wadler & Blott's instance method lookup, made
-    /// static by monomorphization): a concrete head + protocol picks the
-    /// conformance row; its witness function, or the protocol default body
-    /// specialized at Self := head.
+    /// Witness selection. Two regimes, one line between them:
+    /// - The solver COMMITTED a concrete witness (the resolution's symbol
+    ///   is not a requirement): the node's published θ is authoritative —
+    ///   filter it to the target's own parameter space and demand. Pure
+    ///   reader (Swift model: the IR carries the resolution).
+    /// - The solver DEFERRED (generic receiver in a polymorphic body, or
+    ///   a protocol-static operator pinned later): witness selection is
+    ///   inherently a monomorphization-time decision (rustc's
+    ///   Instance::resolve) — select from the θ-substituted concrete head
+    ///   here. `node_theta` filtered to the requirement's generics rides
+    ///   along.
     pub(super) fn resolve_witness(
         &mut self,
         protocol: Symbol,
         requirement_or_witness: Symbol,
         label: String,
         head: &CheckTy,
-        generics: &Theta,
+        node_theta: &Theta,
     ) -> Option<(Label, Symbol, Theta)> {
         let head_for_witness = match head {
             CheckTy::Nominal(..) => head,
@@ -727,13 +747,42 @@ impl<'a> Lowering<'a> {
             return None;
         };
         let catalog = &self.units[self.entry].types.catalog;
+        let is_requirement = catalog.protocols.get(&protocol).is_some_and(|info| {
+            info.requirements
+                .values()
+                .any(|r| r.symbol == requirement_or_witness)
+        });
         let conformance = catalog.conformances.get(&(*head_symbol, protocol)).cloned();
 
         if let Some(conformance) = conformance {
-            // Bind the row's rigid params against the concrete head args —
-            // the same binding the solver performed at discharge (instances
-            // with contexts, Hall et al., TOPLAS 1996; the context itself
-            // needs no re-check: the checker proved it).
+            if !is_requirement {
+                // Committed witness: read the published θ, keyed by the
+                // conformance row's params plus the witness's own generics.
+                let keys: FxHashSet<Symbol> = conformance
+                    .params
+                    .iter()
+                    .copied()
+                    .chain(self.scheme_params_of(requirement_or_witness))
+                    .collect();
+                let theta: Theta = node_theta
+                    .iter()
+                    .filter(|(s, _)| keys.contains(s))
+                    .map(|(s, t)| (*s, t.clone()))
+                    .collect();
+                let target = self.demand(requirement_or_witness, theta.clone());
+                return Some((target, requirement_or_witness, theta));
+            }
+            // Deferred: bind the row's rigid params against the concrete
+            // head args (monomorphization-time selection).
+            let generics: Theta = {
+                let keys: FxHashSet<Symbol> =
+                    self.scheme_params_of(requirement_or_witness).collect();
+                node_theta
+                    .iter()
+                    .filter(|(s, _)| keys.contains(s))
+                    .map(|(s, t)| (*s, t.clone()))
+                    .collect()
+            };
             let mut row_theta = Theta::default();
             for (pattern, actual) in conformance.self_args.iter().zip(head_args) {
                 crate::types::solve::bind_param_pattern(pattern, actual, &mut row_theta);

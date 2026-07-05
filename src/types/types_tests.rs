@@ -2064,7 +2064,9 @@ pub mod tests {
     }
 
     #[test]
-    fn unknown_member_on_nested_borrow_reports_original_receiver() {
+    fn unknown_member_on_nested_borrow_reports_collapsed_receiver() {
+        // & of & is & (ADR 0015 addendum): a nested borrow annotation IS
+        // a single borrow, and diagnostics render the canonical type.
         let t = check(
             "// no-core\nstruct DirectoryEntry {}\nfunc f(entry: & &DirectoryEntry) {\n\tentry.show()\n}",
         );
@@ -2072,8 +2074,8 @@ pub mod tests {
         assert!(
             errors
                 .iter()
-                .any(|error| error.contains("Unknown member 'show' on &&DirectoryEntry")),
-            "expected original nested-borrow receiver in diagnostic, got {errors:?}"
+                .any(|error| error.contains("Unknown member 'show' on &DirectoryEntry")),
+            "expected the collapsed borrow receiver in the diagnostic, got {errors:?}"
         );
     }
 
@@ -2719,23 +2721,14 @@ pub mod tests {
                 );
             }
         }
-        for (symbol, info) in &catalog.protocols {
-            for (label, requirement) in &info.requirements {
-                assert!(
-                    !ty_has_vars(&requirement.sig),
-                    "requirement {symbol}.{label} leaks vars: {:?}",
-                    requirement.sig
-                );
-            }
-        }
-        for (symbol, member_map) in &catalog.extend_members {
-            for (label, member) in member_map {
-                assert!(
-                    !ty_has_vars(&member.sig),
-                    "extend member {symbol}.{label} leaks vars: {:?}",
-                    member.sig
-                );
-            }
+        // Requirement and extend-member signatures are ordinary schemes
+        // now; the exported schemes map is asserted below.
+        for (symbol, scheme) in &module.types.schemes {
+            assert!(
+                !ty_has_vars(&scheme.ty),
+                "exported scheme {symbol} leaks vars: {:?}",
+                scheme.ty
+            );
         }
         for (symbol, sig) in &catalog.effects {
             for ty in sig.params.iter().chain(std::iter::once(&sig.ret)) {
@@ -3701,6 +3694,69 @@ mod with_core {
     }
 
     #[test]
+    fn conformance_dispatch_publishes_receiver_theta_on_node() {
+        // Swift model: the node carries the complete θ. A ViaConformance
+        // callee's instantiation must include the receiver-derived
+        // entries (the conformance row's params bound at the receiver
+        // head), not just method generics — lowering reads, never
+        // re-derives.
+        let typed = check_with_core(Source::from(
+            "let xs = [10, 20, 30]\nlet it = xs.iter()\nlet r = it.skip(1)",
+        ));
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+        let published = typed
+            .phase
+            .types
+            .member_resolutions
+            .iter()
+            .filter(|(_, resolution)| {
+                matches!(
+                    resolution,
+                    crate::types::output::MemberResolution::ViaConformance { .. }
+                )
+            })
+            .any(|(node, _)| {
+                typed
+                    .phase
+                    .types
+                    .instantiations
+                    .get(node)
+                    .is_some_and(|pairs| {
+                        pairs.iter().any(|(symbol, _)| {
+                            matches!(symbol, crate::name_resolution::symbol::Symbol::Protocol(_))
+                        })
+                    })
+            });
+        let dump: Vec<String> = typed
+            .phase
+            .types
+            .member_resolutions
+            .iter()
+            .filter(|(_, r)| {
+                matches!(
+                    r,
+                    crate::types::output::MemberResolution::ViaConformance { .. }
+                )
+            })
+            .map(|(node, r)| {
+                format!(
+                    "{node:?} {r:?} => {:?}",
+                    typed.phase.types.instantiations.get(node).map(|pairs| pairs
+                        .iter()
+                        .map(|(s, t)| format!("{s} = {}", t.render_mono()))
+                        .collect::<Vec<_>>())
+                )
+            })
+            .collect();
+        assert!(
+            published,
+            "no ViaConformance callee node carries a receiver-derived θ entry; got:\n{}",
+            dump.join("\n")
+        );
+    }
+
+    #[test]
     fn chained_map_with_closure_checks() {
         // `map`'s closure param is a higher-order signature: its latent
         // effect row must be an eff param freshened per use, not a raw
@@ -3725,6 +3781,35 @@ mod with_core {
             "let xs = [10, 20, 30]\nlet r = xs.iter().index(20)",
         ));
         let _ = type_errors(&typed);
+    }
+
+    #[test]
+    fn struct_closure_field_rows_contaminate_across_constructions() {
+        // PINS THE KNOWN DEFICIT (docs/effect-params-on-structs-plan.md):
+        // a closure field's effect row is one module-wide variable, so
+        // storing an effectful closure in ONE Wrapper contaminates a pure
+        // Wrapper elsewhere — `pure_use()` falsely reports an unhandled
+        // 'ping. When effect params on structs land, FLIP this assertion
+        // to `assert_eq!(errors, Vec::<String>::new())` and rename to
+        // struct_closure_fields_are_effect_polymorphic_per_construction.
+        let typed = check_with_core(Source::from(
+            "struct Wrapper {\n\tlet f: () -> Int\n}\neffect 'ping() -> Void\nfunc pure_use() -> Int {\n\tlet w = Wrapper(f: func() { 1 })\n\tw.f()\n}\nfunc pingy_use() 'ping -> Int {\n\tlet w = Wrapper(f: func() {\n\t\t'ping()\n\t\t1\n\t})\n\tw.f()\n}\npure_use()",
+        ));
+        let errors = type_errors(&typed);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("No handler for 'ping"), "{errors:?}");
+    }
+
+    #[test]
+    fn for_loop_over_string_iterator_checks_cleanly() {
+        // `String.iter()` resolves through the Iterable conformance
+        // (protocol-extension dispatch); the for-loop consumes the
+        // returned CharacterIterator with no diagnostics.
+        let typed = check_with_core(Source::from(
+            "func f(s: String) {\n\tlet chars = s.iter()\n\tfor c in chars {}\n}",
+        ));
+        let errors = type_errors(&typed);
+        assert_eq!(errors, Vec::<String>::new());
     }
 
     // === Grades: Copy / Affine / Linear (substructural core) ===

@@ -1613,6 +1613,16 @@ impl<'a> Parser<'a> {
                         kind: InlineIRInstructionKind::Store { value, ty, addr },
                     })
                 }
+                "free" => {
+                    let ptr = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Free { ptr },
+                    })
+                }
                 "copy" => {
                     let ty = self.type_annotation()?;
                     let from = self.ir_value()?;

@@ -202,6 +202,9 @@ impl<'a> Lowering<'a> {
                 let next = self.p.func("show_acc", string_ty, bot);
                 let next_var = self.p.var(next);
                 let next_body = self.render_rest(protocol, requirement, next_var, rest, k)?;
+                // `add` borrows self: the superseded accumulator is this
+                // chain's to free (statics free as no-ops).
+                let next_body = self.free_shown_acc_then(acc, next_body);
                 self.p.set_body(next, next_body);
                 let next_ref = self.p.func_ref(next);
                 let add_ref = self.p.func_ref(add);
@@ -210,12 +213,18 @@ impl<'a> Lowering<'a> {
             }
             Piece::Show(value, ty) => {
                 // s ← show(value); acc ← acc + s; continue.
-                let (show, _, _) =
-                    self.resolve_witness(protocol, requirement, "show".into(), ty, &Theta::default())?;
+                let (show, _, _) = self.resolve_witness(
+                    protocol,
+                    requirement,
+                    "show".into(),
+                    ty,
+                    &Theta::default(),
+                )?;
                 let add = self.string_add()?;
                 let joined = self.p.func("show_acc", string_ty, bot);
                 let joined_var = self.p.var(joined);
                 let joined_body = self.render_rest(protocol, requirement, joined_var, rest, k)?;
+                let joined_body = self.free_shown_acc_then(acc, joined_body);
                 self.p.set_body(joined, joined_body);
                 let joined_ref = self.p.func_ref(joined);
 
@@ -255,6 +264,28 @@ impl<'a> Lowering<'a> {
             return None;
         };
         Some(self.demand(witness, Theta::default()))
+    }
+
+    /// Free a superseded show-accumulator's buffer: the `String: Add`
+    /// witness borrows self, so every intermediate is the chain's to
+    /// release — the same `free(value.storage.base)` the drop glue emits
+    /// for String. Static bases (the leading literal) free as no-ops.
+    fn free_shown_acc_then(&mut self, acc: ExprId, next: ExprId) -> ExprId {
+        let storage_ty = self
+            .units
+            .iter()
+            .find_map(|unit| unit.types.catalog.structs.get(&Symbol::String))
+            .and_then(|info| info.fields.get("storage").map(|(_, ty)| ty.clone()));
+        let Some(storage_ty) = storage_ty else {
+            return next;
+        };
+        let storage_lambda_ty = self.map_ty(&storage_ty);
+        let storage = self.p.primop(Op::GetField(0), &[acc], storage_lambda_ty);
+        let ptr_ty = self.p.ty_ptr();
+        let ptr = self.p.primop(Op::GetField(0), &[storage], ptr_ty);
+        let void_ty = self.p.ty_void();
+        let free = self.p.primop(Op::Free, &[ptr], void_ty);
+        self.sequence_void_effect(free, next)
     }
 
     /// A String record over interned static bytes (the same layout string

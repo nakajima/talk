@@ -377,6 +377,13 @@ impl<'a> Lowering<'a> {
         }
         let offset = self.p.static_mem.len() as u32;
         self.p.static_mem.extend_from_slice(bytes);
+        if bytes.is_empty() {
+            // A zero-length static still needs an address strictly inside
+            // the region: at the region's end its offset would equal
+            // static_len and alias the first heap allocation, whose free
+            // would then release the wrong buffer.
+            self.p.static_mem.push(0);
+        }
         self.statics.insert(bytes.to_vec(), offset);
         offset
     }

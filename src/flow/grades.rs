@@ -235,6 +235,10 @@ impl<'a> GradeView<'a> {
                 .any(|(_, field)| self.contains_owned(field, seen)),
             // Existentials own conservatively: the payload is hidden.
             Ty::Any { .. } => true,
+            // Generic params stay copy-like at flow (moves untracked):
+            // the CALLER of a generic-param position owns its rvalue
+            // arguments and drops them post-call, per specialization
+            // (lower/calls.rs release_temps_then).
             Ty::Func(..) | Ty::Proj(..) | Ty::Var(_) | Ty::Param(_) | Ty::Error => false,
         }
     }

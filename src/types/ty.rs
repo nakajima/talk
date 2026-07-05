@@ -417,9 +417,7 @@ pub(crate) trait TyFold {
                 self.fold_symbol(*symbol),
                 args.iter().map(|a| self.fold_ty(a)).collect(),
             ),
-            Ty::Borrow(perm, inner) => {
-                Ty::Borrow(self.fold_perm(*perm), Box::new(self.fold_ty(inner)))
-            }
+            Ty::Borrow(perm, inner) => collapse_borrow(self.fold_perm(*perm), self.fold_ty(inner)),
             Ty::Unique(inner) => Ty::Unique(Box::new(self.fold_ty(inner))),
             Ty::Func(params, ret, eff) => Ty::Func(
                 params.iter().map(|p| self.fold_ty(p)).collect(),
@@ -627,6 +625,116 @@ impl TyFold for ExportSanitizer {
     }
 }
 
+/// Nested shared/exclusive borrows collapse: a borrow is a permission
+/// view, and viewing through two views is one view at the weaker
+/// permission (`&(&mut T)` ≡ `&T`; ADR 0015 addendum). Collapse applies
+/// only when both permissions are concrete — var/param perms wait for
+/// defaulting.
+pub(crate) fn collapse_borrow(perm: Perm, inner: Ty) -> Ty {
+    if let Ty::Borrow(inner_perm, innermost) = &inner
+        && matches!(perm, Perm::Shared | Perm::Exclusive)
+        && matches!(inner_perm, Perm::Shared | Perm::Exclusive)
+    {
+        let collapsed = if perm.is_exclusive() && inner_perm.is_exclusive() {
+            Perm::Exclusive
+        } else {
+            Perm::Shared
+        };
+        return collapse_borrow(collapsed, innermost.as_ref().clone());
+    }
+    Ty::Borrow(perm, Box::new(inner))
+}
+
+impl Ty {
+    /// Whether any unification variable (type, effect/row tail, or perm)
+    /// survives in this type — the module-boundary portability check.
+    pub(crate) fn has_unification_vars(&self) -> bool {
+        match self {
+            Ty::Var(_) => true,
+            Ty::Param(_) | Ty::Error => false,
+            Ty::Nominal(_, args) | Ty::Tuple(args) => args.iter().any(Ty::has_unification_vars),
+            Ty::Borrow(perm, inner) => matches!(perm, Perm::Var(_)) || inner.has_unification_vars(),
+            Ty::Unique(inner) => inner.has_unification_vars(),
+            Ty::Func(params, ret, eff) => {
+                params.iter().any(Ty::has_unification_vars)
+                    || ret.has_unification_vars()
+                    || eff.has_unification_vars()
+            }
+            Ty::Record(row) => row.has_unification_vars(),
+            Ty::Any { assoc, .. } => assoc.iter().any(|(_, ty)| ty.has_unification_vars()),
+            Ty::Proj(base, _, _) => base.has_unification_vars(),
+        }
+    }
+}
+
+impl EffectRow {
+    pub(crate) fn has_unification_vars(&self) -> bool {
+        matches!(self.tail, Some(EffTail::Var(_)))
+            || self
+                .effects
+                .iter()
+                .any(|entry| entry.args.iter().any(Ty::has_unification_vars))
+    }
+}
+
+impl Row {
+    pub(crate) fn has_unification_vars(&self) -> bool {
+        matches!(self.tail, Some(RowTail::Var(_)))
+            || self.fields.iter().any(|(_, ty)| ty.has_unification_vars())
+    }
+}
+
+impl Scheme {
+    pub(crate) fn has_unification_vars(&self) -> bool {
+        self.ty.has_unification_vars()
+            || self.predicates.iter().any(Predicate::has_unification_vars)
+    }
+}
+
+impl Predicate {
+    pub(crate) fn has_unification_vars(&self) -> bool {
+        match self {
+            Predicate::TypeEq(a, b) => a.has_unification_vars() || b.has_unification_vars(),
+            Predicate::EffectEq(a, b) => a.has_unification_vars() || b.has_unification_vars(),
+            Predicate::RowEq(a, b) => a.has_unification_vars() || b.has_unification_vars(),
+            Predicate::Conforms { ty, .. } => ty.has_unification_vars(),
+            Predicate::HasMember {
+                receiver, member, ..
+            } => receiver.has_unification_vars() || member.has_unification_vars(),
+        }
+    }
+
+    /// Export form of a predicate: leftover variables degrade exactly as
+    /// they do in types (vars → Error, tails → owner-keyed params).
+    pub fn sanitize_for_export(&self, owner: Symbol) -> Predicate {
+        let mut folder = ExportSanitizer {
+            owner,
+            minted_eff: false,
+            minted_row: false,
+        };
+        match self {
+            Predicate::TypeEq(a, b) => Predicate::TypeEq(folder.fold_ty(a), folder.fold_ty(b)),
+            Predicate::EffectEq(a, b) => {
+                Predicate::EffectEq(folder.fold_eff(a), folder.fold_eff(b))
+            }
+            Predicate::RowEq(a, b) => Predicate::RowEq(folder.fold_row(a), folder.fold_row(b)),
+            Predicate::Conforms { ty, protocol } => Predicate::Conforms {
+                ty: folder.fold_ty(ty),
+                protocol: *protocol,
+            },
+            Predicate::HasMember {
+                receiver,
+                label,
+                member,
+            } => Predicate::HasMember {
+                receiver: folder.fold_ty(receiver),
+                label: label.clone(),
+                member: folder.fold_ty(member),
+            },
+        }
+    }
+}
+
 impl Predicate {
     pub fn render_mono(&self) -> String {
         render_predicate(self, &FxHashMap::default())
@@ -786,7 +894,16 @@ impl Scheme {
             minted_row: false,
         };
         let ty = sanitizer.fold_ty(&self.ty);
-        let mut scheme = Scheme { ty, ..self.clone() };
+        let predicates = self
+            .predicates
+            .iter()
+            .map(|predicate| predicate.sanitize_for_export(owner))
+            .collect();
+        let mut scheme = Scheme {
+            ty,
+            predicates,
+            ..self.clone()
+        };
         if sanitizer.minted_eff && !scheme.eff_params.contains(&owner) {
             scheme.eff_params.push(owner);
         }
@@ -1204,6 +1321,31 @@ fn render_nominal_head(sym: &Symbol) -> String {
 #[cfg(test)]
 mod traversal_tests {
     use super::*;
+
+    #[test]
+    fn nested_borrows_collapse_through_folds() {
+        // & of & is & (ADR 0015 addendum): substitution exposing a nested
+        // borrow collapses it, with the weaker permission winning.
+        let mut subst = FxHashMap::default();
+        subst.insert(
+            Symbol::Bool,
+            Ty::Borrow(Perm::Shared, Box::new(Ty::Nominal(Symbol::Int, vec![]))),
+        );
+        let outer = Ty::Borrow(Perm::Shared, Box::new(Ty::Param(Symbol::Bool)));
+        let collapsed = outer.substitute(&subst, &Default::default(), &Default::default());
+        assert_eq!(
+            collapsed,
+            Ty::Borrow(Perm::Shared, Box::new(Ty::Nominal(Symbol::Int, vec![])))
+        );
+
+        // Exclusive-over-shared caps at Shared.
+        let outer = Ty::Borrow(Perm::Exclusive, Box::new(Ty::Param(Symbol::Bool)));
+        let collapsed = outer.substitute(&subst, &Default::default(), &Default::default());
+        assert_eq!(
+            collapsed,
+            Ty::Borrow(Perm::Shared, Box::new(Ty::Nominal(Symbol::Int, vec![])))
+        );
+    }
 
     #[test]
     fn match_pattern_peels_pattern_side_borrows() {

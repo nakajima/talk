@@ -26,6 +26,12 @@ public func _copy(from: RawPtr, to: RawPtr, length: Int) 'alloc -> Void {
 	@_ir(from, to, length) { copy Byte $0 $1 $2 }
 }
 
+// Release one reference to a raw allocation (frees at zero). Static data
+// is unmanaged: freeing it is a no-op.
+public func _free(ptr: RawPtr) 'alloc -> Void {
+	@_ir(ptr) { free $0 }
+}
+
 public func _ptr_add(ptr: RawPtr, offset: Int) 'alloc -> RawPtr {
 	@_ir(ptr, offset) { %? = add RawPtr $0 $1 }
 }
