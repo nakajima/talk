@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +24,21 @@ lazy_static! {
 /// All stdlib source strings, in a fixed order.
 pub fn stdlib_sources() -> Vec<(&'static str, &'static str)> {
     vec![("fs", include_str!("../../stdlib/fs.tlk"))]
+}
+
+pub fn module_name_for_path(path: &Path) -> Option<&'static str> {
+    let source_path = path.canonicalize().ok()?;
+    let stdlib_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("stdlib")
+        .canonicalize()
+        .ok()?;
+    if source_path.parent()? != stdlib_dir.as_path() {
+        return None;
+    }
+    let file_name = source_path.file_name()?.to_str()?;
+    stdlib_sources()
+        .into_iter()
+        .find_map(|(name, _)| (file_name == format!("{name}.tlk")).then_some(name))
 }
 
 pub fn modules() -> Vec<Arc<Module>> {

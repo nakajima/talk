@@ -24,7 +24,11 @@ use rustc_hash::FxHashSet;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::{hash::Hash, hash::Hasher};
-use std::{io, path::PathBuf, rc::Rc};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 pub trait DriverPhase {}
 
@@ -327,11 +331,14 @@ fn resolve_import_path(source_path: &str, import_path: &ImportPath) -> Option<(P
 
 impl Driver {
     pub fn new(files: Vec<Source>, mut config: DriverConfig) -> Self {
+        let compiling_stdlib_source = Self::files_are_stdlib_sources(&files);
         {
             let modules = Rc::make_mut(&mut config.modules);
             modules.import_core(super::core::compile());
-            for module in super::stdlib::modules() {
-                modules.import((*module).clone());
+            if !compiling_stdlib_source {
+                for module in super::stdlib::modules() {
+                    modules.import((*module).clone());
+                }
             }
         }
 
@@ -340,6 +347,13 @@ impl Driver {
             phase: Initial {},
             config,
         }
+    }
+
+    fn files_are_stdlib_sources(files: &[Source]) -> bool {
+        !files.is_empty()
+            && files.iter().all(|source| {
+                super::stdlib::module_name_for_path(Path::new(source.path().as_ref())).is_some()
+            })
     }
 
     pub fn new_bare(files: Vec<Source>, config: DriverConfig) -> Self {
@@ -948,6 +962,28 @@ pub mod tests {
         assert!(
             !module.types.schemes.is_empty(),
             "the module's own schemes are exported"
+        );
+    }
+
+    #[test]
+    fn new_does_not_import_bundled_stdlib_when_compiling_stdlib_source() {
+        let (_, fs) = crate::compiling::stdlib::stdlib_sources()
+            .into_iter()
+            .find(|(name, _)| *name == "fs")
+            .expect("fs stdlib source");
+        let source = Source::in_memory("stdlib/fs.tlk".into(), fs);
+        let driver = Driver::new(vec![source], DriverConfig::new("fs"));
+
+        assert!(
+            driver
+                .config
+                .modules
+                .get_module_id_by_name("Core")
+                .is_some()
+        );
+        assert!(
+            driver.config.modules.get_module_id_by_name("fs").is_none(),
+            "compiling stdlib/fs.tlk must not also import bundled fs"
         );
     }
 

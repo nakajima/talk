@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased (2026-07-05) — Drop correctness and protocol-argument fixes
+
+Structural temporary drops now replace the MIR builder's ambient
+`pending_temp_drops` accumulator. Temporaries are recorded by the
+statement that creates them and their `TemporaryEnd` drop candidates are
+emitted at that statement's completion point. This fixes a double-free
+where a call argument temporary could be dropped from inside a trailing
+closure body and therefore freed once per callback invocation.
+
+Protocol-argument conformance handling also received correctness fixes:
+
+- Super-protocol traversal is bounded by protocol symbol, preventing
+  argument-growing recursive protocol graphs from hanging the checker.
+- Bound-based conformance solving no longer commits to the first
+  protocol+arity match when multiple protocol applications are in scope.
+- Existential protocol annotations validate protocol arity again.
+- Associated-type generic arity for protocol bounds counts only directly
+  declared associated types, not inherited ones.
+- Member/evidence lookup paths preserve full protocol applications where
+  needed, including parameterized conformances.
+- Protocol member dispatch deduplicates inherited candidates by
+  requirement symbol and reuses `ProtocolApplication::substitution`.
+
 ## Unreleased (2026-07-04) — Protocol arguments in conformance keys
 
 Protocol applications now participate in conformance identity. A

@@ -13,6 +13,13 @@ use crate::name_resolution::symbol::set_symbol_names;
 use crate::node_id::FileID;
 use crate::parser_error::ParserError;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkspaceCompileContext {
+    Core,
+    Stdlib(&'static str),
+    Normal,
+}
+
 #[derive(Clone)]
 pub struct Workspace {
     pub versions: FxHashMap<DocumentId, i32>,
@@ -37,8 +44,8 @@ impl Workspace {
         }
 
         docs.sort_by(|a, b| a.id.cmp(&b.id));
-        let typecheck_as_core = Self::should_typecheck_as_core(&docs);
-        if typecheck_as_core {
+        let compile_context = Self::compile_context(&docs);
+        if compile_context == WorkspaceCompileContext::Core {
             docs = Self::core_documents_with_overrides(&docs);
         }
 
@@ -67,21 +74,32 @@ impl Workspace {
             .map(|doc| Source::in_memory(PathBuf::from(&doc.path), doc.text.clone()))
             .collect();
 
-        let mut config = DriverConfig::new(if typecheck_as_core {
-            "Core"
-        } else {
-            "Workspace"
-        })
-        .lenient_parsing()
-        .preserve_comments(true);
-        if typecheck_as_core {
-            config.module_id = ModuleId::Core;
+        let module_name = match compile_context {
+            WorkspaceCompileContext::Core => "Core",
+            WorkspaceCompileContext::Stdlib(name) => name,
+            WorkspaceCompileContext::Normal => "Workspace",
+        };
+        let mut config = DriverConfig::new(module_name)
+            .lenient_parsing()
+            .preserve_comments(true);
+        match compile_context {
+            WorkspaceCompileContext::Core => {
+                config.module_id = ModuleId::Core;
+            }
+            WorkspaceCompileContext::Stdlib(_) => {
+                let mut modules = ModuleEnvironment::default();
+                modules.import_core(crate::compiling::core::compile());
+                config.mode = CompilationMode::Library;
+                config.modules = Rc::new(modules);
+            }
+            WorkspaceCompileContext::Normal => {}
         }
 
-        let driver = if typecheck_as_core {
-            Driver::new_bare(sources, config)
-        } else {
-            Driver::new(sources, config)
+        let driver = match compile_context {
+            WorkspaceCompileContext::Core | WorkspaceCompileContext::Stdlib(_) => {
+                Driver::new_bare(sources, config)
+            }
+            WorkspaceCompileContext::Normal => Driver::new(sources, config),
         };
         let stdlib_module_ids = crate::compiling::stdlib::stdlib_sources()
             .into_iter()
@@ -161,6 +179,16 @@ impl Workspace {
         })
     }
 
+    fn compile_context(docs: &[DocumentInput]) -> WorkspaceCompileContext {
+        if Self::should_typecheck_as_core(docs) {
+            return WorkspaceCompileContext::Core;
+        }
+        if let Some(name) = Self::stdlib_module_name_for_docs(docs) {
+            return WorkspaceCompileContext::Stdlib(name);
+        }
+        WorkspaceCompileContext::Normal
+    }
+
     fn should_typecheck_as_core(docs: &[DocumentInput]) -> bool {
         let Some(first_doc) = docs.first() else {
             return false;
@@ -186,6 +214,22 @@ impl Workspace {
                 && crate::compiling::core::CORE_SOURCE_NAMES.contains(&file_name)
                 && doc.text.trim_start().starts_with("// no-core")
         })
+    }
+
+    fn stdlib_module_name_for_docs(docs: &[DocumentInput]) -> Option<&'static str> {
+        let mut names = docs
+            .iter()
+            .map(|doc| Self::stdlib_module_name_for_path(Path::new(&doc.path)));
+        let first = names.next()??;
+        if names.all(|name| name == Some(first)) {
+            Some(first)
+        } else {
+            None
+        }
+    }
+
+    fn stdlib_module_name_for_path(path: &Path) -> Option<&'static str> {
+        crate::compiling::stdlib::module_name_for_path(path)
     }
 
     fn is_core_path_override(path: &Path) -> bool {
@@ -566,6 +610,32 @@ mod tests {
         assert!(
             workspace.diagnostics.is_empty(),
             "expected no core diagnostics, got {:?}",
+            workspace.diagnostics
+        );
+    }
+
+    #[test]
+    fn stdlib_source_does_not_import_bundled_stdlib_into_itself() {
+        let (name, text) = crate::compiling::stdlib::stdlib_sources()
+            .into_iter()
+            .find(|(name, _)| *name == "fs")
+            .expect("fs stdlib source");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("stdlib")
+            .join(format!("{name}.tlk"))
+            .to_string_lossy()
+            .into_owned();
+        let docs = vec![DocumentInput {
+            id: path.clone(),
+            path,
+            version: 0,
+            text: text.to_string(),
+        }];
+
+        let workspace = Workspace::new(docs).expect("workspace");
+        assert!(
+            workspace.diagnostics.is_empty(),
+            "expected no stdlib diagnostics, got {:?}",
             workspace.diagnostics
         );
     }
