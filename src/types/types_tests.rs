@@ -2111,6 +2111,73 @@ pub mod tests {
     }
 
     #[test]
+    fn leading_dot_resolves_in_inference_position() {
+        // The callee's parameter type is a fresh variable when the argument
+        // is checked, so the leading dot cannot resolve eagerly — the enum
+        // arrives later, through the result unification.
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet y: Opt<Int> = id(.some(1))",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "y"), "Opt<Int>");
+    }
+
+    #[test]
+    fn bare_leading_dot_resolves_in_inference_position() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet y: Opt<Int> = id(.none)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "y"), "Opt<Int>");
+    }
+
+    #[test]
+    fn nested_leading_dots_resolve_in_inference_position() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet y: Opt<Opt<Int>> = id(.some(.some(1)))",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "y"), "Opt<Opt<Int>>");
+    }
+
+    #[test]
+    fn inferred_leading_dot_unknown_variant_errors() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet y: Opt<Int> = id(.nope)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("nope")),
+            "expected unknown-variant error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn inferred_leading_dot_arity_mismatch_errors() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet y: Opt<Int> = id(.some(1, 2))",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Wrong number of arguments")),
+            "expected arity mismatch error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn leading_dot_without_context_errors() {
+        // Nothing ever determines the enum: the program is ambiguous.
+        let t = check("// no-core\nenum Color {\n\tcase red\n\tcase green\n}\nlet x = .red");
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("red")),
+            "expected an unresolved leading-dot error naming the variant, got {errors:?}"
+        );
+    }
+
+    #[test]
     fn inferred_match_result_is_concrete_within_its_binding_group() {
         // An inferred match joins its non-refining arms eagerly (like `if`),
         // so a later unannotated variant match in the same binding group

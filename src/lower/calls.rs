@@ -365,8 +365,24 @@ impl<'a> Lowering<'a> {
                         .push("lowering: calling local function values not yet supported".into());
                     return None;
                 }
+                // A local symbol with no binding here has no global to
+                // demand (e.g. a celled recursive func binder read inside
+                // its own body): diagnose instead of minting a bogus
+                // label that trips the λ_G constructor.
+                if matches!(
+                    symbol,
+                    Symbol::DeclaredLocal(..)
+                        | Symbol::PatternBindLocal(..)
+                        | Symbol::ParamLocal(..)
+                ) {
+                    self.diagnostics.push(format!(
+                        "lowering: local '{}' has no value here (not yet supported)",
+                        name.name_str()
+                    ));
+                    return None;
+                }
                 let theta = self.call_theta(symbol, callee.instantiation.as_ref(), ctx);
-                let label = self.demand(symbol, theta.clone());
+                let label = self.demand(symbol, theta.clone())?;
                 Some((label, symbol, Prefix::None, theta))
             }
             // `Person(args…)`: construction is a call to the (explicit or
@@ -385,7 +401,7 @@ impl<'a> Lowering<'a> {
                 let blank = self.blank_record(struct_symbol)?;
                 let mut theta = self.call_theta(init, expr.instantiation.as_ref(), ctx);
                 self.owner_theta(init, &constructed, &mut theta);
-                let label = self.demand(init, theta.clone());
+                let label = self.demand(init, theta.clone())?;
                 Some((label, init, Prefix::Value(blank), theta))
             }
             // Protocol-static (operators) or instance member calls: resolve
@@ -420,7 +436,7 @@ impl<'a> Lowering<'a> {
                         if let Some(head) = &head_ty {
                             self.owner_theta(member, head, &mut theta);
                         }
-                        let target = self.demand(member, theta.clone());
+                        let target = self.demand(member, theta.clone())?;
                         Some((target, member, prefix, theta))
                     }
                     None => {
@@ -450,7 +466,7 @@ impl<'a> Lowering<'a> {
                                 let mut theta =
                                     self.call_theta(member, callee.instantiation.as_ref(), ctx);
                                 self.owner_theta(member, &head, &mut theta);
-                                let target = self.demand(member, theta.clone());
+                                let target = self.demand(member, theta.clone())?;
                                 return Some((target, member, prefix, theta));
                             }
                             let protocols: Vec<Symbol> = catalog
@@ -567,8 +583,9 @@ impl<'a> Lowering<'a> {
                     .primop(Op::ObjectGet(index as u32), &[self_value], field_lambda_ty);
             body = self.lower_drop_value_then(ctx, field_value, field_ty, body);
         }
-        if let Some(witness) = witness {
-            let label = self.demand(witness, theta);
+        if let Some(witness) = witness
+            && let Some(label) = self.demand(witness, theta)
+        {
             let fn_ref = self.p.func_ref(label);
             let cont = self.p.func("after_heap_deinit", void_ty, bot);
             self.p.set_body(cont, body);
@@ -690,7 +707,7 @@ impl<'a> Lowering<'a> {
                 crate::types::solve::bind_param_pattern(pattern, actual, &mut row_theta);
             }
             if let Some(&witness) = conformance.witnesses.get(&label) {
-                let target = self.demand(witness, row_theta.clone());
+                let target = self.demand(witness, row_theta.clone())?;
                 return Some((target, witness, row_theta));
             }
             // Default body: specialize at Self := head, with the
@@ -702,7 +719,7 @@ impl<'a> Lowering<'a> {
                 let bound = ty.substitute(&row_theta, &Default::default(), &Default::default());
                 theta.insert(*assoc, bound);
             }
-            let target = self.demand(requirement_or_witness, theta.clone());
+            let target = self.demand(requirement_or_witness, theta.clone())?;
             return Some((target, requirement_or_witness, theta));
         }
         // No explicit row: an auto-derived protocol (today: Showable)

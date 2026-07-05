@@ -77,6 +77,62 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_sequential_rebinding() {
+        // Rule 2 of docs/sequential-scoping-plan.md: a later `let` shadows
+        // from its point of declaration on; its rhs sees the earlier
+        // binding.
+        assert_eq!(
+            run_on_both_engines("func f() -> Int {\n\tlet x = 1\n\tlet x = x + 1\n\tx\n}\nf()"),
+            Value::I64(2)
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_capture_of_rebound_binding() {
+        // A closure keeps the binding visible where it was written; a
+        // later rebinding doesn't retroactively change the capture.
+        assert_eq!(
+            run_on_both_engines(
+                "func f() -> Int {\n\tlet x = 1\n\tlet g = func() -> Int { x }\n\tlet x = 2\n\tg() + x\n}\nf()"
+            ),
+            Value::I64(3)
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_local_self_recursion() {
+        assert_eq!(
+            run_on_both_engines(
+                "func outer() -> Int {\n\tfunc fact(n: Int) -> Int { if n > 1 { n * fact(n - 1) } else { 1 } }\n\tfact(5)\n}\nouter()"
+            ),
+            Value::I64(120)
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_local_mutual_recursion() {
+        // `func a` / `func b` in one block see each other regardless of
+        // order (the resolver hoists func-valued let binders; lowering
+        // must give them their labels up front the same way).
+        assert_eq!(
+            run_on_both_engines(
+                "func outer() -> Int {\n\tfunc a(n: Int) -> Int { if n > 0 { b(n - 1) } else { 0 } }\n\tfunc b(n: Int) -> Int { a(n) + 1 }\n\ta(4)\n}\nouter()"
+            ),
+            Value::I64(4)
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_recursive_closure_capturing_a_local() {
+        assert_eq!(
+            run_on_both_engines(
+                "func outer() -> Int {\n\tlet step = 2\n\tfunc down(n: Int) -> Int { if n > 0 { down(n - step) + 1 } else { 0 } }\n\tdown(6)\n}\nouter()"
+            ),
+            Value::I64(3)
+        );
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_calls() {
         assert_eq!(
             run_on_both_engines("func double(x: Int) -> Int { x * 2 }\ndouble(21)"),
@@ -1448,6 +1504,17 @@ pub mod tests {
     fn vm_matches_evaluator_on_match_on_an_unannotated_next() {
         let (_, out) = run_on_both_engines_io(
             "func main() {\n\tlet a = [42]\n\tlet i = a.iter()\n\tlet opt = i.next()\n\tmatch opt {\n\t\t.some(x) -> print(x),\n\t\t.none -> print(0)\n\t}\n}",
+        );
+        assert_eq!(out, "42\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_leading_dot_in_inference_position() {
+        // The leading dot resolves through the solver (the parameter type
+        // of `id` is a variable when the argument is checked), so the
+        // variant's artifacts flow to lowering from the deferred path.
+        let (_, out) = run_on_both_engines_io(
+            "enum Maybe<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet m: Maybe<Int> = id(.some(42))\nmatch m {\n\t.some(x) -> print(x),\n\t.none -> print(0)\n}",
         );
         assert_eq!(out, "42\n");
     }

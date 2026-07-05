@@ -357,6 +357,151 @@ impl<'s> Solver<'s> {
         }
     }
 
+    /// One step on a HasVariant constraint (a leading-dot use in inference
+    /// position). Waits for the enum type's head like `try_member`; a known
+    /// enum resolves exactly as the checking-mode path does — variant
+    /// lookup, constructor instantiation, artifact recording — with the
+    /// written arguments' types equated against the instantiated payload.
+    pub(super) fn try_variant(
+        &mut self,
+        enum_ty: Ty,
+        label: Label,
+        payload: Vec<Ty>,
+        ctor: Option<Ty>,
+        origin: CtOrigin,
+        queue: &mut Vec<Constraint>,
+    ) -> Option<Constraint> {
+        // Borrow expectations construct through to the enum inside (the
+        // syntactic pre-strip in `check_expr` covers written borrows; this
+        // covers heads that only resolve to a borrow in the solver).
+        let (lookup, _) = self.member_receivers(&enum_ty);
+        if stuck_projection(self.store, &lookup) {
+            return Some(Constraint::HasVariant {
+                enum_ty,
+                label,
+                payload,
+                ctor,
+                origin,
+            });
+        }
+        let head = self.store.shallow(&lookup);
+        let Ty::Nominal(symbol, args) = head else {
+            return match head {
+                Ty::Var(_) => Some(Constraint::HasVariant {
+                    enum_ty,
+                    label,
+                    payload,
+                    ctor,
+                    origin,
+                }),
+                Ty::Error => None,
+                _ => {
+                    let receiver = self.store.render(&lookup);
+                    self.errors.push((
+                        TypeError::UnknownMember {
+                            receiver,
+                            label: label.to_string(),
+                        },
+                        origin.node,
+                    ));
+                    None
+                }
+            };
+        };
+        let Some(info) = self.catalog.enums.get(&symbol).cloned() else {
+            let receiver = self.store.render(&lookup);
+            self.errors.push((
+                TypeError::UnknownMember {
+                    receiver,
+                    label: label.to_string(),
+                },
+                origin.node,
+            ));
+            return None;
+        };
+        let Some(variant) = info.variants.get(&label.to_string()).cloned() else {
+            let receiver = self.store.render(&lookup);
+            self.errors.push((
+                TypeError::UnknownMember {
+                    receiver,
+                    label: label.to_string(),
+                },
+                origin.node,
+            ));
+            return None;
+        };
+        self.member_resolutions
+            .insert(origin.node, MemberResolution::Direct(variant.symbol));
+        let mut tys: FxHashMap<Symbol, Ty> = info
+            .params
+            .iter()
+            .copied()
+            .zip(args.iter().cloned())
+            .collect();
+        for param in &variant.constructor_scheme.params {
+            tys.entry(param.symbol)
+                .or_insert_with(|| Ty::Var(self.store.fresh_ty(self.level, origin.node)));
+        }
+        let mut effs = FxHashMap::default();
+        for param in &variant.constructor_scheme.eff_params {
+            effs.insert(
+                *param,
+                EffTail::Var(self.store.fresh_eff(self.level, origin.node)),
+            );
+        }
+        let mut rows = FxHashMap::default();
+        for param in &variant.constructor_scheme.row_params {
+            rows.insert(
+                *param,
+                RowTail::Var(self.store.fresh_row(self.level, origin.node)),
+            );
+        }
+        let instantiation = variant.instantiate(&tys, &effs, &rows);
+        if !instantiation.instantiations.is_empty() {
+            self.instantiations
+                .entry(origin.node)
+                .or_default()
+                .extend(instantiation.instantiations.iter().cloned());
+        }
+        for given in &instantiation.givens {
+            queue.push(
+                given
+                    .clone()
+                    .into_constraint(CtOrigin::new(origin.node, CtReason::Apply)),
+            );
+        }
+        queue.push(Constraint::Eq(
+            lookup,
+            instantiation.result_type.clone(),
+            origin,
+        ));
+        if payload.len() != instantiation.argument_types.len() {
+            self.errors.push((
+                TypeError::ArityMismatch {
+                    expected: instantiation.argument_types.len(),
+                    found: payload.len(),
+                },
+                origin.node,
+            ));
+        } else {
+            for (expected, found) in instantiation.argument_types.iter().zip(&payload) {
+                queue.push(Constraint::Eq(expected.clone(), found.clone(), origin));
+            }
+        }
+        if let Some(ctor) = ctor {
+            queue.push(Constraint::Eq(
+                ctor,
+                Ty::Func(
+                    instantiation.argument_types,
+                    Box::new(instantiation.result_type),
+                    EffectRow::pure(),
+                ),
+                origin,
+            ));
+        }
+        None
+    }
+
     pub(super) fn member_receivers(&mut self, receiver: &Ty) -> (Ty, Ty) {
         let normalized = normalize_ty(self.store, self.catalog, receiver);
         let self_receiver = self.rewrite_ty_from_givens(normalized);

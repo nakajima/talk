@@ -1,11 +1,8 @@
 pub mod builtins;
 pub mod decl_declarer;
 pub mod name_resolver;
-pub mod scc_graph;
 pub mod symbol;
 
-#[cfg(test)]
-pub mod dependency_resolving_tests;
 #[cfg(test)]
 pub mod name_resolver_tests;
 

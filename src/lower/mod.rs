@@ -118,6 +118,11 @@ pub struct Lowering<'a> {
     /// environment (unknown occurrences — the closure-conversion criterion
     /// of flat closures, Cardelli 1984).
     escaping: FxHashSet<Label>,
+    /// Named local funcs' labels, minted before their bodies lower (per
+    /// enclosing instantiation): block hoisting binds every func-valued
+    /// binder of a block up front, so local funcs can call themselves
+    /// and each other regardless of declaration order.
+    local_func_labels: FxHashMap<(Symbol, ThetaKey), Label>,
     /// Cells of mutable top-level bindings: functions that read or assign
     /// them reference the cell directly (a free variable of main; the
     /// closure machinery carries it, exactly like handler capabilities).
@@ -417,6 +422,7 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
         finalizer_thunks: FxHashMap::default(),
         queue: vec![],
         escaping: FxHashSet::default(),
+        local_func_labels: FxHashMap::default(),
         top_level_cells: FxHashMap::default(),
         mir_bodies: FxHashMap::default(),
         scaffold_ctx: vec![],
@@ -885,6 +891,10 @@ impl<'a> Lowering<'a> {
         let bot = self.p.ty_bot();
         let ret_k_ty = self.p.ty_fn(result_ty, bot);
         let dom = self.p.ty_tuple(&[ret_k_ty]);
+        // No callable `main` (diagnosed above, plus by `demand`): a
+        // bodyless entry of the right shape keeps the program well-typed;
+        // the scheduler emits it as a trap, honest if ever reached.
+        let entry_label = entry_label.unwrap_or_else(|| self.p.func("main_unsupported", dom, bot));
         let main = self.p.func("main", dom, bot);
         self.p.name_params(main, &["k"]);
         let main_var = self.p.var(main);

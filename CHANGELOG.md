@@ -1,5 +1,118 @@
 # Changelog
 
+## Unreleased (2026-07-04) — Leading-dot variants in inference position
+
+`.variant` and `.variant(args)` no longer require the expected enum to
+be known at the use site's syntax. When the enum arrives through
+unification — a generic call's argument, a binder typed by later use —
+resolution defers to the constraint solver (the same discipline as
+member access on an unknown receiver):
+
+```talk
+enum Maybe<T> { case some(T), none }
+func id<T>(x: T) -> T { x }
+let m: Maybe<Int> = id(.some(42))   // previously: unsupported
+```
+
+A leading dot whose enum is never determined by context reports
+"Cannot infer the enum for '.variant'; add a type annotation".
+
+## Unreleased (2026-07-04) — Sequential scoping for locals
+
+Local bindings now follow the standard ML/Rust model: a `let` is
+visible from just after its initializer to the end of its block, and
+rebinding a name is ordinary shadowing. Module scope (and the REPL's
+top-level redefinition) is unchanged. Design and citations:
+docs/adr/0013-sequential-scoping-for-locals.md.
+
+### Scoping
+
+- **A binding starts at its initializer, not at block top.** The
+  right-hand side of a `let` sees the outer binding, so staged
+  initialization reads naturally — and rebinding in the same block is
+  legal now (the interim "already declared in this scope" error is
+  gone).
+
+  ```talk
+  func f(x: Int) -> Int {
+  	let x = x + 1     // reads the parameter
+  	let x = x * 10    // reads the previous x
+  	x                 // 10 * (param + 1)
+  }
+  ```
+
+- **Using a name before its `let` is an error.** Locals no longer hoist:
+  a use before the declaration is `Undefined name`, instead of silently
+  resolving to a binding that doesn't exist yet.
+- **Closures capture the binding visible where they're written.** A
+  later rebinding doesn't retroactively change what an earlier closure
+  captured.
+
+  ```talk
+  let x = 1
+  let g = func() -> Int { x }
+  let x = 2
+  g() + x               // 3
+  ```
+
+- **`func` decls in a block are items** (like Rust's `fn` in a block):
+  visible block-wide regardless of order, so local funcs can be
+  mutually recursive. A later `let` of the same name still shadows one.
+- **Duplicate bindings that would orphan each other still error** — one
+  pattern binding a name twice (`(a, a)`), or two same-named local
+  `func`s in one block — now worded "declared more than once in this
+  scope".
+
+### Recursive local funcs
+
+Local funcs that call themselves (or each other) now compile and run —
+previously they resolved but crashed the compiler during lowering, and
+a recursive func declared after another `let` failed to type-check.
+Recursion works through captures too:
+
+```talk
+func outer() -> Int {
+	let step = 2
+	func down(n: Int) -> Int {
+		if n > 0 { down(n - step) + 1 } else { 0 }
+	}
+	down(6)               // 3
+}
+```
+
+Local funcs stay monomorphic within their block (recursion doesn't
+generalize), matching `let rec` in ML without a signature. A local func
+binding that is itself reassigned can't recurse yet; that's a
+diagnosed "not yet supported", not a crash.
+
+### Compiler internals
+
+- **Locals resolve in one in-order walk.** The declarer pass shrank to
+  module scope and type members; the resolver pass creates block, arm,
+  and function scopes fresh as it walks, minting a `let`'s binders at
+  the declaration and inserting them when the initializer resolves.
+  The per-`let` mini-scopes, their paired enter/exit in both passes,
+  and the parent-pointer scope teleporting are deleted
+  (docs/adr/0013-sequential-scoping-for-locals.md).
+- **The resolver's shadow analyses are gone.** Its capture recording
+  and SCC dependency graph (with the per-`let` level bookkeeping) were
+  consumed only by the resolver's own tests — the checker runs its own
+  dependency analysis and flow computes closure captures. Deleted
+  outright (net −396 lines in `name_resolution`); the `Level` type
+  moved to `types/`, its real consumer.
+- **Every mirror of fn-in-block hoisting is explicit.** The resolver
+  hoists func-valued `let` binders at block entry; the checker
+  pre-binds them to shared monomorphic variables before checking the
+  block; the lowerer pre-mints their λ_G labels at basic-block entry
+  and binds a named local func directly to its `func_ref` (no `let_…`
+  continuation — through a binder var, mutual funcs would nest under
+  each other's lets and cycle the λ_G nesting relation).
+- **A missing callable signature can no longer panic the lowerer.**
+  `demand` returns `Option<Label>`: callers abandon the construct as a
+  diagnosed, well-typed `dead_end` instead of applying a void-domain
+  placeholder whose type was a lie (the old `unreachable!` at the λ_G
+  T-App check).
+
 ## Unreleased (2026-07-03) — Unicode characters
 
 Strings now work in user-perceived characters. A `Character` is an

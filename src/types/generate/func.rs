@@ -193,7 +193,43 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
     /// A block's value is its final expression statement; a block ending in
     /// a divergent statement is `Never`; anything else is unit.
+    /// Pre-bind every func-valued `let` binder in this block to a fresh
+    /// monomorphic type variable (the checker's mirror of the resolver's
+    /// fn-in-block hoisting): a local func's own body — and earlier
+    /// funcs' bodies, for mutual recursion — unify their uses against
+    /// the same variable that `check_local_decl` later ties to the
+    /// definition's type.
+    fn hoist_local_func_signatures(&mut self, block: &Block) {
+        for node in &block.body {
+            if let Node::Decl(Decl {
+                id,
+                kind:
+                    DeclKind::Let {
+                        lhs:
+                            Pattern {
+                                kind: PatternKind::Bind(name),
+                                ..
+                            },
+                        rhs:
+                            Some(Expr {
+                                kind: ExprKind::Func(_),
+                                ..
+                            }),
+                        ..
+                    },
+                ..
+            }) = node
+                && let Ok(symbol) = name.symbol()
+                && !self.mono.contains_key(&symbol)
+            {
+                let ty = Ty::Var(self.store.fresh_ty(self.level, *id));
+                self.mono.insert(symbol, ty);
+            }
+        }
+    }
+
     pub(super) fn infer_block_value(&mut self, block: &Block, ctx: &Ctx) -> Ty {
+        self.hoist_local_func_signatures(block);
         let mut last = StmtValue::Unit;
         let mut is_empty = true;
         let final_index = block.body.len().saturating_sub(1);
@@ -266,6 +302,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         reason: CtReason,
         ctx: &Ctx,
     ) {
+        self.hoist_local_func_signatures(block);
         let final_index = block.body.len().saturating_sub(1);
         if block.body.is_empty() {
             self.emit_eq(expected.clone(), Ty::unit(), block.id, reason);

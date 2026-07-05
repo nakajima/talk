@@ -7,12 +7,27 @@ impl<'a> Lowering<'a> {
     /// environment — free variables ARE the captures (paper §2.2's
     /// higher-order setting; the reference evaluator runs them by
     /// dependency-aware substitution, the scheduler closure-converts).
-    pub(super) fn lower_func_value(
+    /// The λ_G label for a function literal, from the checker's type at
+    /// its node. A named local func's label is minted once per enclosing
+    /// instantiation (`local_func_labels`), so block hoisting and the
+    /// literal's own lowering agree on it.
+    pub(super) fn func_literal_label(
         &mut self,
-        expr: &Expr,
         func: &hir::Func,
+        expr: &Expr,
         ctx: &Ctx,
-    ) -> Option<ExprId> {
+    ) -> Option<Label> {
+        let key = func
+            .name
+            .symbol()
+            .ok()
+            .filter(|s| matches!(s, Symbol::DeclaredLocal(..)))
+            .map(|s| (s, theta_key(&ctx.theta)));
+        if let Some(key) = &key
+            && let Some(&label) = self.local_func_labels.get(key)
+        {
+            return Some(label);
+        }
         let CheckTy::Func(param_check_tys, ret_check, _) = self.checker_ty(expr, ctx) else {
             self.diagnostics
                 .push("lowering: function literal without a function type".into());
@@ -27,6 +42,19 @@ impl<'a> Lowering<'a> {
         let dom = self.p.ty_tuple(&dom_items);
         let label = self.p.func("closure", dom, bot);
         self.escaping.insert(label);
+        if let Some(key) = key {
+            self.local_func_labels.insert(key, label);
+        }
+        Some(label)
+    }
+
+    pub(super) fn lower_func_value(
+        &mut self,
+        expr: &Expr,
+        func: &hir::Func,
+        ctx: &Ctx,
+    ) -> Option<ExprId> {
+        let label = self.func_literal_label(func, expr, ctx)?;
 
         let self_var = self.p.var(label);
         // The enclosing environment stays visible: references to it become
@@ -60,6 +88,16 @@ impl<'a> Lowering<'a> {
         // cross the closure boundary.
         inner.resume_k = None;
         inner.top_level = false;
+        // The func sees itself: recursion through its own binder is a
+        // value call to this same label (block hoisting covers the
+        // mutual case; a celled binder keeps its late-bound cell).
+        if let Ok(symbol) = func.name.symbol()
+            && matches!(symbol, Symbol::DeclaredLocal(..))
+            && !inner.cellable.contains(&symbol)
+        {
+            let self_ref = self.p.func_ref(label);
+            inner.env.insert(symbol, Binding::Value(self_ref));
+        }
         let body_block = &func.body;
         let body = self.with_cells(&prologue, &mut inner, |this, inner| {
             let ret_k = inner.ret_k;

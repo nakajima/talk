@@ -419,9 +419,11 @@ impl<'a> Lowering<'a> {
                 // the dispatch (fields only) — no recursion.
                 if let Some(witness) = self.deinit_witness(symbol)
                     && ctx.owner != Some(witness)
+                    && let Some(label) = {
+                        let theta = self.nominal_theta(symbol, &args);
+                        self.demand(witness, theta)
+                    }
                 {
-                    let theta = self.nominal_theta(symbol, &args);
-                    let label = self.demand(witness, theta);
                     let fn_ref = self.p.func_ref(label);
                     let void_ty = self.p.ty_void();
                     let bot = self.p.ty_bot();
@@ -858,9 +860,11 @@ impl<'a> Lowering<'a> {
                 // the dispatch (fields only) — no recursion.
                 if let Some(witness) = self.deinit_witness(symbol)
                     && ctx.owner != Some(witness)
+                    && let Some(label) = {
+                        let theta = self.nominal_theta(symbol, &args);
+                        self.demand(witness, theta)
+                    }
                 {
-                    let theta = self.nominal_theta(symbol, &args);
-                    let label = self.demand(witness, theta);
                     let fn_ref = self.p.func_ref(label);
                     let void_ty = self.p.ty_void();
                     let bot = self.p.ty_bot();

@@ -232,6 +232,14 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         origin.node,
                     ));
                 }
+                Constraint::HasVariant { label, origin, .. } => {
+                    self.diagnostics.errors.push((
+                        TypeError::UnresolvedVariant {
+                            label: label.to_string(),
+                        },
+                        origin.node,
+                    ));
+                }
                 Constraint::Eq(a, b, origin) => {
                     // A projection equality that never reduced: unprovable.
                     let expected = self.store.render(&a);
@@ -533,6 +541,12 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     }
                 }
                 Constraint::ApplyBorrow { .. } => self.deferred.push(residual),
+                // A leading-dot use whose enum this group never determined:
+                // a later group (or the final solve's error) owns it. It
+                // never qualifies a scheme — lowering needs one concrete
+                // variant per node, so "polymorphic over enums with this
+                // variant" is deliberately not a thing.
+                Constraint::HasVariant { .. } => self.deferred.push(residual),
                 _ => {}
             }
         }

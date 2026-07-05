@@ -223,7 +223,7 @@ impl<'a> Lowering<'a> {
                 // specialization (instantiation recorded at this node).
                 if self.sources.contains_key(&symbol) {
                     let theta = self.instantiation_at(expr.instantiation.as_ref(), ctx);
-                    let label = self.demand(symbol, theta.clone());
+                    let label = self.demand(symbol, theta.clone())?;
                     let cap_entries = self.cap_entries_of(symbol, &theta);
                     if cap_entries.is_empty() {
                         return Some(self.p.func_ref(label));

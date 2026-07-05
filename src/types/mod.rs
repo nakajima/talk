@@ -20,3 +20,32 @@ pub mod types_tests;
 
 pub use error::TypeError;
 pub use output::TypeOutput;
+
+/// Generalization depth for unification variables (OutsideIn's levels):
+/// the checker works at `GROUP_LEVEL` inside a binding group and
+/// `OUTER_LEVEL` outside; a variable generalizes when its level is
+/// deeper than the point it escapes to.
+#[derive(
+    Default,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct Level(pub u32);
+
+impl Level {
+    pub fn next(&self) -> Level {
+        Level(self.0 + 1)
+    }
+
+    pub fn prev(&self) -> Level {
+        Level(self.0.saturating_sub(1))
+    }
+}

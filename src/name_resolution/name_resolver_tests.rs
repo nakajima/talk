@@ -3,7 +3,6 @@ pub mod tests {
     use std::rc::Rc;
 
     use indexmap::indexset;
-    use rustc_hash::FxHashSet;
 
     use crate::{
         annotation, any, any_block, any_body, any_decl, any_expr, any_expr_stmt, any_stmt,
@@ -13,9 +12,8 @@ pub mod tests {
         diagnostic::{AnyDiagnostic, Diagnostic, Severity},
         label::Label,
         name::Name,
-        name_resolution::scc_graph::Level,
         name_resolution::{
-            name_resolver::{Capture, NameResolver, NameResolverError, ResolvedNames},
+            name_resolver::{NameResolver, NameResolverError, ResolvedNames},
             symbol::{
                 AssociatedTypeId, BuiltinId, DeclaredLocalId, EffectId, EnumId, GlobalId,
                 InitializerId, InstanceMethodId, MethodRequirementId, ParamLocalId,
@@ -178,10 +176,33 @@ pub mod tests {
         );
     }
 
-    /// The ids of every resolved `Variable` named `needle`, in source
+    /// The ids of every resolved `Variable` of symbol kind `kind` (e.g.
+    /// "DeclaredLocal", "ParamLocal", "Global") named `needle`, in source
     /// order, scraped from the AST's debug rendering.
+    fn variable_uses(rendered: &str, kind: &str, needle: &str) -> Vec<u32> {
+        let pattern = format!("Variable(Resolved(@{kind}({kind}Id(");
+        rendered
+            .match_indices(&pattern)
+            .filter_map(|(at, _)| {
+                let rest = &rendered[at + pattern.len()..];
+                let close = rest.find(')')?;
+                let id = rest[..close].parse::<u32>().ok()?;
+                let suffix = &rest[close..];
+                suffix
+                    .starts_with(&format!(")), \"{needle}\""))
+                    .then_some(id)
+            })
+            .collect()
+    }
+
     fn local_variable_uses(rendered: &str, needle: &str) -> Vec<u32> {
-        let pattern = "Variable(Resolved(@DeclaredLocal(DeclaredLocalId(";
+        variable_uses(rendered, "DeclaredLocal", needle)
+    }
+
+    /// Like [`variable_uses`], for `Global` symbols (module ids render as
+    /// `@Global(Global(_:1))`, not `GlobalId`).
+    fn global_variable_uses(rendered: &str, needle: &str) -> Vec<u32> {
+        let pattern = "Variable(Resolved(@Global(Global(_:";
         rendered
             .match_indices(pattern)
             .filter_map(|(at, _)| {
@@ -228,26 +249,157 @@ pub mod tests {
     }
 
     #[test]
-    fn same_scope_redeclaration_is_an_error() {
-        let resolved = resolve_err(
-            "func f(x: Int) -> Int {\n\tlet y = x\n\tlet y = x\n\ty\n}",
+    fn sequential_rebinding_is_legal() {
+        // Rule 2: a later same-named `let` shadows from its point of
+        // declaration on; earlier uses (including the shadow's own rhs)
+        // keep the earlier binding.
+        let (ast, _) = resolve("func f(x: Int) -> Int {\n\tlet y = x\n\tlet y = y\n\ty\n}");
+        let rendered = format!("{ast:?}");
+        let y_uses = variable_uses(&rendered, "DeclaredLocal", "y");
+        // In source order: the second let's rhs, then the tail.
+        assert_eq!(y_uses.len(), 2, "{rendered}");
+        assert_ne!(
+            y_uses[0], y_uses[1],
+            "the rhs sees the first y, the tail sees the rebinding"
         );
-        assert_eq!(
-            1,
-            resolved.1.diagnostics.len(),
-            "expected a duplicate-declaration error: {:?}",
-            resolved.1.diagnostics
-        );
+    }
+
+    #[test]
+    fn duplicate_binders_in_one_pattern_are_an_error() {
+        // Rebinding across `let`s is legal; binding one name twice in a
+        // single pattern is not (each would silently orphan the other).
+        let resolved = resolve_err("match (1, 2) {\n\t(a, a) -> a\n}");
         assert!(
             matches!(
                 &resolved.1.diagnostics[0],
                 AnyDiagnostic::NameResolution(Diagnostic::<NameResolverError> {
                     kind: NameResolverError::DuplicateDeclaration(name),
                     ..
-                }) if name == "y"
+                }) if name == "a"
             ),
             "{:?}",
             resolved.1.diagnostics
+        );
+    }
+
+    ///////////////////////////////////////////////////////////////////////
+    // Sequential-scoping characterization matrix
+    // (docs/sequential-scoping-plan.md). Each test locks today's
+    // behavior; the ones marked "flips at step N" record the current
+    // locals-hoisting semantics that sequential scoping replaces.
+    ///////////////////////////////////////////////////////////////////////
+
+    #[test]
+    fn let_rhs_resolves_to_the_outer_binding() {
+        // Rule 1: a binding is visible from just after its initializer, so
+        // `let y = y` sees the *outer* y on the rhs.
+        let (ast, _) = resolve(
+            "func f(a: Bool) -> Int {\n\tlet y = 1\n\tif a {\n\t\tlet y = y\n\t\ty\n\t}\n\ty\n}",
+        );
+        let rendered = format!("{ast:?}");
+        let y_uses = variable_uses(&rendered, "DeclaredLocal", "y");
+        // In source order: the inner rhs, the inner tail, the outer tail.
+        assert_eq!(y_uses.len(), 3, "{rendered}");
+        assert_eq!(y_uses[0], y_uses[2], "the rhs use resolves to the outer y");
+        assert_ne!(y_uses[0], y_uses[1], "the inner tail sees the shadow");
+    }
+
+    #[test]
+    fn body_let_rhs_sees_the_param_it_shadows() {
+        // Rule 3: parameters live in the function's scope; a body-level
+        // `let x = x` reads the parameter on the rhs and shadows it after.
+        let (ast, _) = resolve("func f(x: Int) -> Int {\n\tlet x = x\n\tx\n}");
+        let rendered = format!("{ast:?}");
+        let local = variable_uses(&rendered, "DeclaredLocal", "x");
+        let param = variable_uses(&rendered, "ParamLocal", "x");
+        assert_eq!(param.len(), 1, "the rhs reads the param: {rendered}");
+        assert_eq!(local.len(), 1, "the tail reads the shadow: {rendered}");
+    }
+
+    #[test]
+    fn use_before_declaration_is_undefined() {
+        // Rule 1: a binding is not visible before its declaration.
+        let resolved = resolve_err("func f() -> Int {\n\tlet a = b\n\tlet b = 2\n\tb\n}");
+        assert_eq!(
+            resolved.1.diagnostics,
+            vec![AnyDiagnostic::NameResolution(Diagnostic::<
+                NameResolverError,
+            > {
+                id: NodeID::ANY,
+                severity: Severity::Error,
+                kind: NameResolverError::UndefinedName("b".into())
+            })],
+            "{:?}",
+            resolved.1.diagnostics
+        );
+    }
+
+    #[test]
+    fn closure_sees_the_binding_visible_at_the_closure() {
+        // A shadow *after* (and inside a sibling block of) the closure must
+        // not change which binding the closure body resolved to.
+        let (ast, _) = resolve(
+            "func outer() {\n\tlet x = 1\n\tfunc inner() { x }\n\tif true {\n\t\tlet x = 2\n\t\tx\n\t}\n}",
+        );
+        let rendered = format!("{ast:?}");
+        let x_uses = variable_uses(&rendered, "DeclaredLocal", "x");
+        // In source order: inner's body use, then the if-block's use.
+        assert_eq!(x_uses.len(), 2, "{rendered}");
+        assert_ne!(
+            x_uses[0], x_uses[1],
+            "inner reads the outer x, the block reads its shadow"
+        );
+    }
+
+    #[test]
+    fn local_named_funcs_are_mutually_visible_in_their_block() {
+        // Item behavior (Rust's fn-in-block): `func a` / `func b` in one
+        // block see each other regardless of order. They desugar to
+        // func-valued lets before resolution; their binders must keep
+        // block-wide visibility under sequential scoping.
+        let (ast, _) = resolve("func outer() {\n\tfunc a() { b() }\n\tfunc b() { a() }\n\ta()\n}");
+        let rendered = format!("{ast:?}");
+        let a_uses = variable_uses(&rendered, "DeclaredLocal", "a");
+        let b_uses = variable_uses(&rendered, "DeclaredLocal", "b");
+        assert_eq!(b_uses.len(), 1, "{rendered}");
+        assert_eq!(a_uses.len(), 2, "{rendered}");
+        assert_eq!(a_uses[0], a_uses[1], "both a uses hit the same binder");
+    }
+
+    #[test]
+    fn func_valued_let_is_visible_inside_its_own_body() {
+        // Self-recursion through the binder: `func f` sugar and
+        // `let f = func ...` both resolve the body's f to the binder.
+        let (ast, _) = resolve("func outer() {\n\tlet f = func() { f() }\n\tf()\n}");
+        let rendered = format!("{ast:?}");
+        let f_uses = variable_uses(&rendered, "DeclaredLocal", "f");
+        assert_eq!(f_uses.len(), 2, "{rendered}");
+        assert_eq!(f_uses[0], f_uses[1]);
+    }
+
+    #[test]
+    fn module_scope_rebinding_is_legal_and_last_wins() {
+        // Matrix rule 4: module scope keeps its declare-then-resolve
+        // semantics — redeclaration is allowed and every use resolves to
+        // the newest binder (the REPL depends on this).
+        let (ast, _) = resolve("let x = 1\nlet x = 2\nx");
+        let rendered = format!("{ast:?}");
+        let x_uses = global_variable_uses(&rendered, "x");
+        assert_eq!(x_uses.len(), 1, "{rendered}");
+        assert_eq!(x_uses[0], 2, "the use sees the last declaration");
+    }
+
+    #[test]
+    fn each_method_body_resolves_its_own_params() {
+        let (ast, _) = resolve(
+            "struct P {\n\tfunc m1(a: Int) -> Int { a }\n\tfunc m2(a: Int) -> Int { a }\n}",
+        );
+        let rendered = format!("{ast:?}");
+        let a_uses = variable_uses(&rendered, "ParamLocal", "a");
+        assert_eq!(a_uses.len(), 2, "{rendered}");
+        assert_ne!(
+            a_uses[0], a_uses[1],
+            "each method body sees its own parameter"
         );
     }
 
@@ -457,7 +609,7 @@ pub mod tests {
     }
 
     #[test]
-    fn resolves_captures() {
+    fn resolves_nested_func_bodies_against_enclosing_locals() {
         let resolved = resolve(
             "
         func fizz() {
@@ -491,7 +643,7 @@ pub mod tests {
                     body: any_block!(vec![
                         any_decl!(DeclKind::Let {
                             lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
-                                Symbol::DeclaredLocal(DeclaredLocalId(1)),
+                                Symbol::DeclaredLocal(DeclaredLocalId(2)),
                                 "count".into()
                             ))),
                             type_annotation: None,
@@ -500,14 +652,14 @@ pub mod tests {
                         .into(),
                         any_decl!(DeclKind::Let {
                             lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
-                                Symbol::DeclaredLocal(DeclaredLocalId(2)),
+                                Symbol::DeclaredLocal(DeclaredLocalId(1)),
                                 "counter".into()
                             ))),
                             type_annotation: None,
                             rhs: Some(any_expr!(ExprKind::Func(Func {
                                 id: NodeID::ANY,
                                 name: Name::Resolved(
-                                    Symbol::DeclaredLocal(DeclaredLocalId(2)),
+                                    Symbol::DeclaredLocal(DeclaredLocalId(1)),
                                     "counter".into()
                                 ),
                                 name_span: Span::ANY,
@@ -520,12 +672,12 @@ pub mod tests {
                                     any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x")))
                                         .into(),
                                     any_stmt!(StmtKind::Expr(variable!(
-                                        DeclaredLocalId(1),
+                                        DeclaredLocalId(2),
                                         "count"
                                     )))
                                     .into(),
                                     any_stmt!(StmtKind::Expr(variable!(
-                                        DeclaredLocalId(1),
+                                        DeclaredLocalId(2),
                                         "count"
                                     )))
                                     .into(),
@@ -540,20 +692,6 @@ pub mod tests {
                     attributes: Default::default()
                 }))),
             })
-        );
-
-        let mut expected = FxHashSet::default();
-        expected.insert(Capture {
-            symbol: Symbol::DeclaredLocal(DeclaredLocalId(1)),
-            parent_binder: Some(Symbol::Global(GlobalId::from(1))),
-            level: Level(1),
-        });
-
-        assert_eq!(
-            resolved.1.captures.get(&DeclaredLocalId(2).into()),
-            Some(&expected),
-            "{:?}",
-            resolved.1.captures
         );
     }
 
@@ -616,72 +754,6 @@ pub mod tests {
                 ("d".to_string(), CaptureMode::BorrowShared),
                 ("e".to_string(), CaptureMode::BorrowMut),
             ]
-        );
-    }
-
-    #[test]
-    fn types_arent_captured() {
-        let resolved = resolve(
-            "
-        struct Foo {}
-        func bar() { Foo() }
-        ",
-        );
-
-        assert!(
-            !resolved.1.captures.contains_key(&GlobalId::from(1).into()),
-            "captures: {:?}",
-            resolved.1.captures.get(&GlobalId::from(1).into()).unwrap()
-        );
-    }
-
-    #[test]
-    fn let_scopes_do_not_create_spurious_captures() {
-        let resolved = resolve(
-            "
-        func f(x) {
-            let y = x
-            y
-        }
-        ",
-        );
-
-        assert!(
-            !resolved.1.captures.contains_key(&GlobalId::from(1).into()),
-            "captures: {:?}",
-            resolved.1.captures
-        );
-    }
-
-    #[test]
-    fn resolves_nested_captures() {
-        let resolved = resolve(
-            "
-        func outer(x) {
-            let y = 123
-            func inner() {
-                (x, y)
-            }
-        }
-        ",
-        );
-
-        let mut expected = FxHashSet::default();
-        expected.insert(Capture {
-            symbol: Symbol::DeclaredLocal(DeclaredLocalId(1)),
-            parent_binder: Some(GlobalId::from(1).into()),
-            level: Level(1),
-        });
-
-        expected.insert(Capture {
-            symbol: Symbol::ParamLocal(ParamLocalId(1)),
-            parent_binder: Some(Symbol::Global(GlobalId::from(1))),
-            level: Level(1),
-        });
-
-        assert_eq!(
-            resolved.1.captures.get(&DeclaredLocalId(2).into()),
-            Some(&expected),
         );
     }
 
@@ -1128,7 +1200,7 @@ pub mod tests {
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
                         params: vec![param!(
-                            ParamLocalId(4),
+                            ParamLocalId(2),
                             "self",
                             annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
                                 StructId::from(1).into(),
@@ -1136,7 +1208,7 @@ pub mod tests {
                             )))
                         )],
                         body: any_block!(vec![any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                            ParamLocalId(4).into(),
+                            ParamLocalId(2).into(),
                             "self".into()
                         )))])
                     }),
@@ -1153,7 +1225,7 @@ pub mod tests {
                             where_clause: None,
                             effects: Default::default(),
                             params: vec![param!(
-                                Symbol::ParamLocal(ParamLocalId(1)),
+                                Symbol::ParamLocal(ParamLocalId(3)),
                                 "self",
                                 annotation!(TypeAnnotationKind::Borrow {
                                     mutable: false,
@@ -1166,7 +1238,7 @@ pub mod tests {
                                 callee: any_expr!(ExprKind::Member(
                                     Some(
                                         any_expr!(ExprKind::Variable(Name::Resolved(
-                                            Symbol::ParamLocal(ParamLocalId(1)),
+                                            Symbol::ParamLocal(ParamLocalId(3)),
                                             "self".into()
                                         )))
                                         .into()
@@ -1198,7 +1270,7 @@ pub mod tests {
                             captures: vec![],
                             where_clause: None,
                             params: vec![param!(
-                                Symbol::ParamLocal(ParamLocalId(2)),
+                                Symbol::ParamLocal(ParamLocalId(4)),
                                 "self",
                                 annotation!(TypeAnnotationKind::Borrow {
                                     mutable: false,
@@ -1210,7 +1282,7 @@ pub mod tests {
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                                 callee: any_expr!(ExprKind::Member(
                                     Some(Box::new(any_expr!(ExprKind::Variable(Name::Resolved(
-                                        Symbol::ParamLocal(ParamLocalId(2)),
+                                        Symbol::ParamLocal(ParamLocalId(4)),
                                         "self".into()
                                     ))))),
                                     "fizz".into(),
@@ -1309,7 +1381,7 @@ pub mod tests {
                         params: vec![Parameter {
                             id: NodeID::ANY,
                             name: Name::Resolved(
-                                Symbol::ParamLocal(ParamLocalId(1)),
+                                Symbol::ParamLocal(ParamLocalId(2)),
                                 "self".into()
                             ),
                             name_span: Span::ANY,

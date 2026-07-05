@@ -571,6 +571,30 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         ctx,
                     );
                 }
+                // A leading-dot construction whose enum is not yet known:
+                // infer the payload, hand the resolution to the solver. The
+                // callee node gets a variable unified with the constructor's
+                // function type on discharge.
+                if let ExprKind::Member(None, label, _) = &callee.kind
+                    && type_args.is_empty()
+                    && trailing_block.is_none()
+                {
+                    let payload: Vec<Ty> = args
+                        .iter()
+                        .map(|arg| self.infer_expr(&arg.value, ctx))
+                        .collect();
+                    let result = Ty::Var(self.store.fresh_ty(self.level, expr.id));
+                    let ctor = Ty::Var(self.store.fresh_ty(self.level, callee.id));
+                    self.artifacts.node_types.insert(callee.id, ctor.clone());
+                    self.wanteds.push(Constraint::HasVariant {
+                        enum_ty: result.clone(),
+                        label: label.clone(),
+                        payload,
+                        ctor: Some(ctor),
+                        origin: CtOrigin::new(expr.id, CtReason::Apply),
+                    });
+                    return result;
+                }
                 let callee_ty = self.infer_expr(callee, ctx);
                 if !type_args.is_empty() {
                     self.apply_type_args(callee.id, type_args);
@@ -622,9 +646,19 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 });
                 member
             }
-            ExprKind::Member(None, _, _) => {
-                self.unsupported(expr.id, "leading-dot member access");
-                Ty::Error
+            // A leading dot in inference position: the enum arrives through
+            // unification, not the checking mode, so resolution defers to
+            // the solver (the same discipline as `HasMember`).
+            ExprKind::Member(None, label, _) => {
+                let result = Ty::Var(self.store.fresh_ty(self.level, expr.id));
+                self.wanteds.push(Constraint::HasVariant {
+                    enum_ty: result.clone(),
+                    label: label.clone(),
+                    payload: vec![],
+                    ctor: None,
+                    origin: CtOrigin::new(expr.id, CtReason::Apply),
+                });
+                result
             }
 
             ExprKind::Constructor(_) => {

@@ -75,6 +75,22 @@ impl PatternRefinement {
                 member: member.substitute(&tys, &effs, &rows),
                 origin,
             },
+            Constraint::HasVariant {
+                enum_ty,
+                label,
+                payload,
+                ctor,
+                origin,
+            } => Constraint::HasVariant {
+                enum_ty: enum_ty.substitute(&tys, &effs, &rows),
+                label,
+                payload: payload
+                    .into_iter()
+                    .map(|ty| ty.substitute(&tys, &effs, &rows))
+                    .collect(),
+                ctor: ctor.map(|ty| ty.substitute(&tys, &effs, &rows)),
+                origin,
+            },
             Constraint::ApplyBorrow {
                 expected_perm,
                 expected_inner,

@@ -136,6 +136,11 @@ pub enum TypeError {
         ty: String,
         protocol: String,
     },
+    /// A leading-dot variant use whose enum was never determined by
+    /// context — nothing to resolve `.label` against.
+    UnresolvedVariant {
+        label: String,
+    },
     Unsupported(String),
 }
 
@@ -335,6 +340,12 @@ impl Display for TypeError {
                 write!(
                     f,
                     "`{ty}` is 'heap and cannot conform to {protocol}: heap values are shared by reference"
+                )
+            }
+            TypeError::UnresolvedVariant { label } => {
+                write!(
+                    f,
+                    "Cannot infer the enum for '.{label}'; add a type annotation"
                 )
             }
             TypeError::Unsupported(what) => {

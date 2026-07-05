@@ -45,7 +45,7 @@ use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
 use crate::label::Label;
 use crate::name::Name;
 use crate::name_resolution::name_resolver::ResolvedNames;
-use crate::name_resolution::scc_graph::Level;
+use crate::types::Level;
 use crate::name_resolution::symbol::{Symbol, Symbols};
 use crate::node::Node;
 use crate::node_id::NodeID;

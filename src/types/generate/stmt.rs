@@ -156,6 +156,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 match &lhs.kind {
                     PatternKind::Bind(name) => {
                         if let Ok(symbol) = name.symbol() {
+                            // A hoisted func binder already holds the
+                            // placeholder this block's bodies unified
+                            // against; tie it to the definition's type.
+                            if let Some(existing) = self.mono.get(&symbol).cloned() {
+                                self.emit_eq(existing, ty.clone(), decl.id, CtReason::Recursion);
+                            }
                             self.mono.insert(symbol, ty);
                         }
                     }

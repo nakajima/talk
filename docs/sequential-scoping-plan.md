@@ -1,7 +1,11 @@
 # Sequential lexical scoping for locals
 
-Status: approved, not started. Follows the unicode-strings landing
-(`d0e3ba94`); runs on its own branch.
+Status: implemented 2026-07-04 (branch `worktree-sequential-scoping`);
+recorded as [ADR 0013](adr/0013-sequential-scoping-for-locals.md). One
+departure surfaced during implementation: func-valued `let` binders are
+hoisted block-wide (Rust's `fn`-in-block item behavior) because `func`
+decls desugar to lets before resolution and local mutual recursion is
+long-standing, test-locked behavior. Details in the ADR.
 
 ## Context
 

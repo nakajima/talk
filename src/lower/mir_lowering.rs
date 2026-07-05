@@ -203,6 +203,21 @@ impl<'a> Lowering<'a> {
         k: ExprId,
         cache: &mut MirBlockCache,
     ) -> ExprId {
+        // Block entry: pre-bind this block's named func-valued binders to
+        // their labels (the value-level mirror of the resolver's
+        // fn-in-block hoisting), so local funcs can call themselves and
+        // each other regardless of declaration order.
+        let hoisted;
+        let ctx = match (cursor.index == 0)
+            .then(|| self.hoist_block_funcs(cursor, ctx))
+            .flatten()
+        {
+            Some(with_funcs) => {
+                hoisted = with_funcs;
+                &hoisted
+            }
+            None => ctx,
+        };
         let Some(statement) = cursor.statements().get(cursor.index) else {
             return self.lower_mir_terminator(cursor, ctx, k, cache);
         };
@@ -366,6 +381,46 @@ impl<'a> Lowering<'a> {
         }
     }
 
+    /// Bindings for every named func-valued `let` in this basic block:
+    /// each binder resolves to its (pre-minted) label's value before any
+    /// statement lowers. `None` when the block declares no local funcs.
+    /// Celled binders are skipped — a mutated func binding stays
+    /// late-bound through its cell.
+    fn hoist_block_funcs(&mut self, cursor: MirCursor, ctx: &Ctx) -> Option<Ctx> {
+        let mut hoisted: Option<Ctx> = None;
+        for located in cursor.statements() {
+            let mir::Statement::Bind {
+                lhs,
+                rhs: Some(rhs),
+                ..
+            } = &located.kind
+            else {
+                continue;
+            };
+            let hir::ExprKind::Func(func) = &rhs.kind else {
+                continue;
+            };
+            let hir::PatternKind::Bind(name) = &lhs.kind else {
+                continue;
+            };
+            let Ok(symbol) = name.symbol() else {
+                continue;
+            };
+            if !matches!(symbol, Symbol::DeclaredLocal(..)) || ctx.cellable.contains(&symbol) {
+                continue;
+            }
+            let Some(label) = self.func_literal_label(func, rhs, ctx) else {
+                continue;
+            };
+            let func_ref = self.p.func_ref(label);
+            hoisted
+                .get_or_insert_with(|| ctx.clone())
+                .env
+                .insert(symbol, Binding::Value(func_ref));
+        }
+        hoisted
+    }
+
     fn lower_mir_bind(
         &mut self,
         lhs: &hir::Pattern,
@@ -447,6 +502,23 @@ impl<'a> Lowering<'a> {
         let Ok(symbol) = name.symbol() else {
             return self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         };
+
+        // A named local func binds directly to its label's value, with no
+        // `let_…` continuation: funcs referencing it (mutual recursion)
+        // then see the stable func_ref instead of a binder var that would
+        // nest them under this let and cycle the nesting relation
+        // (Property 2). Nothing droppable is skipped — a func value
+        // carries no owned buffers.
+        if let hir::ExprKind::Func(func) = &rhs.kind
+            && matches!(symbol, Symbol::DeclaredLocal(..))
+            && !ctx.cellable.contains(&symbol)
+            && !self.contains_object_type(&self.checker_ty(rhs, ctx))
+            && let Some(value) = self.lower_func_value(rhs, func, ctx)
+        {
+            let mut inner = ctx.clone();
+            inner.env.insert(symbol, Binding::Value(value));
+            return self.lower_mir_statements(cursor.advance(), &inner, k, cache);
+        }
 
         let mutated = ctx.cellable.contains(&symbol);
         let value_ty = self.expr_lambda_ty(rhs, ctx);

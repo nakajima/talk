@@ -178,7 +178,12 @@ impl<'a> Lowering<'a> {
             ));
             return None;
         }
-        let theta: Theta = sig.generics.iter().copied().zip(args.iter().cloned()).collect();
+        let theta: Theta = sig
+            .generics
+            .iter()
+            .copied()
+            .zip(args.iter().cloned())
+            .collect();
         Some(crate::types::catalog::EffectSig {
             generics: vec![],
             predicates: vec![],
@@ -198,11 +203,7 @@ impl<'a> Lowering<'a> {
     /// Built from the finalized catalog signature, so a materialized
     /// capability closure and every demanded cap parameter agree on the
     /// type.
-    pub(super) fn cap_dom_items(
-        &mut self,
-        effect: Symbol,
-        args: &[CheckTy],
-    ) -> Option<Vec<TyId>> {
+    pub(super) fn cap_dom_items(&mut self, effect: Symbol, args: &[CheckTy]) -> Option<Vec<TyId>> {
         let sig = self.effect_sig_at(effect, args)?;
         let mut items = Vec::with_capacity(sig.params.len() + 1);
         for param in &sig.params {
@@ -357,21 +358,20 @@ impl<'a> Lowering<'a> {
     // ----- Worklist (lazy monomorphization) -------------------------------
 
     /// Demand the specialization of `symbol` at θ; returns its λ_G label.
-    pub(super) fn demand(&mut self, symbol: Symbol, theta: Theta) -> Label {
+    /// `None` (diagnosed) when the symbol has no callable signature —
+    /// callers abandon their construct in a well-typed way (`dead_end`)
+    /// instead of applying a label whose type would be a lie.
+    pub(super) fn demand(&mut self, symbol: Symbol, theta: Theta) -> Option<Label> {
         let key = (symbol, theta_key(&theta));
         if let Some(&label) = self.done.get(&key) {
-            return label;
+            return Some(label);
         }
         let sig = self.signature_of(symbol, &theta);
         let Some(CheckTy::Func(params, mut ret, _)) = sig else {
             self.diagnostics.push(format!(
                 "lowering: no callable signature for {symbol} (not yet supported)"
             ));
-            let void = self.p.ty_void();
-            let bot = self.p.ty_bot();
-            let dead = self.p.func("unsupported", void, bot);
-            self.done.insert(key, dead);
-            return dead;
+            return None;
         };
 
         // An init returns self whatever its body's final value is
@@ -412,7 +412,7 @@ impl<'a> Lowering<'a> {
         let label = self.p.func(&name, dom, bot);
         self.done.insert(key, label);
         self.queue.push((symbol, theta, label));
-        label
+        Some(label)
     }
 
     pub(super) fn drain_queue(&mut self) {

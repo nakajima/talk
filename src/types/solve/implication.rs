@@ -73,6 +73,7 @@ impl<'s> Solver<'s> {
             | Constraint::EffEq(_, _, origin)
             | Constraint::Conforms { origin, .. }
             | Constraint::HasMember { origin, .. }
+            | Constraint::HasVariant { origin, .. }
             | Constraint::ApplyBorrow { origin, .. }
             | Constraint::PatternView { origin, .. }
             | Constraint::HandleEffect { origin, .. } => Some(*origin),
@@ -124,6 +125,22 @@ impl<'s> Solver<'s> {
             } => self
                 .ty_mentions_params(receiver, params)
                 .or_else(|| self.ty_mentions_params(member, params)),
+            Constraint::HasVariant {
+                enum_ty,
+                payload,
+                ctor,
+                ..
+            } => self
+                .ty_mentions_params(enum_ty, params)
+                .or_else(|| {
+                    payload
+                        .iter()
+                        .find_map(|ty| self.ty_mentions_params(ty, params))
+                })
+                .or_else(|| {
+                    ctor.as_ref()
+                        .and_then(|ty| self.ty_mentions_params(ty, params))
+                }),
             Constraint::ApplyBorrow {
                 expected_inner,
                 found,

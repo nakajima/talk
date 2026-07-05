@@ -490,6 +490,24 @@ mod tests {
     }
 
     #[test]
+    fn redefinition_updates_binding() {
+        // Top-level redefinition is module-scope behavior: the newest
+        // declaration wins (docs/sequential-scoping-plan.md, rule 4).
+        let mut session = session();
+        session.eval("let x = 2");
+        session.eval("let x = 3");
+        let result = session.eval("x");
+        assert_eq!(
+            result,
+            ReplEvalResult::Output {
+                stdout: String::new(),
+                stderr: String::new(),
+                value: Some("3".to_string()),
+            }
+        );
+    }
+
+    #[test]
     fn bad_input_does_not_persist() {
         let mut session = session();
         let result = session.eval("let x =");

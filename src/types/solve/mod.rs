@@ -41,7 +41,7 @@ use std::ops::ControlFlow;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::label::Label;
-use crate::name_resolution::scc_graph::Level;
+use crate::types::Level;
 use crate::name_resolution::symbol::{Symbol, Symbols};
 use crate::node_id::NodeID;
 use crate::types::catalog::{MemberOwner, Requirement, TypeCatalog};
@@ -170,6 +170,19 @@ impl<'s> Solver<'s> {
                             stuck.push(unsolved);
                         }
                     }
+                    Constraint::HasVariant {
+                        enum_ty,
+                        label,
+                        payload,
+                        ctor,
+                        origin,
+                    } => {
+                        if let Some(unsolved) =
+                            self.try_variant(enum_ty, label, payload, ctor, origin, &mut queue)
+                        {
+                            stuck.push(unsolved);
+                        }
+                    }
                     Constraint::PatternView {
                         scrutinee,
                         view,
@@ -293,6 +306,11 @@ impl<'s> Solver<'s> {
                         view,
                         origin,
                     });
+                }
+                variant @ Constraint::HasVariant { .. } => {
+                    // Float like HasMember: a later group may resolve the
+                    // enum's head.
+                    residual.push(variant);
                 }
                 Constraint::ApplyBorrow {
                     expected_perm,

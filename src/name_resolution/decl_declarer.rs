@@ -20,9 +20,8 @@ use crate::{
         func::Func,
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
-        match_arm::MatchArm,
         parameter::Parameter,
-        pattern::{Pattern, PatternKind, RecordFieldPatternKind},
+        pattern::PatternKind,
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
@@ -178,19 +177,17 @@ macro_rules! some {
 }
 
 #[derive(VisitorMut)]
-#[visitor(
-    FuncSignature,
-    MatchArm(enter, exit),
-    Func,
-    Decl(enter, exit),
-    Block(enter, exit)
-)]
+#[visitor(FuncSignature, Decl(enter, exit), Block(enter, exit))]
 pub struct DeclDeclarer<'a> {
     pub(super) resolver: &'a mut NameResolver,
     // For determining whether we need to synth an init
     type_members: FxHashMap<NodeID, TypeMembers>,
     // For synthesizing
     node_ids: &'a mut IDGenerator,
+    // How many blocks deep the walk is: anything inside a block is local
+    // territory, declared in resolution order by the resolver pass, not
+    // here.
+    block_depth: u32,
 }
 
 #[derive(Default)]
@@ -206,42 +203,19 @@ impl<'a> DeclDeclarer<'a> {
             resolver,
             type_members: Default::default(),
             node_ids,
+            block_depth: 0,
         }
     }
 
-    pub fn at_module_scope(&self) -> bool {
-        matches!(self.resolver.current_scope_id, Some(NodeID(_, 0)))
-    }
-
-    #[instrument(skip(self), fields(level = ?self.resolver.current_level))]
-    pub fn start_scope(
-        &mut self,
-        binder: Option<Symbol>,
-        id: NodeID,
-        bump_level: bool,
-        capture_boundary: bool,
-    ) {
+    #[instrument(skip(self))]
+    pub fn start_scope(&mut self, id: NodeID) {
         let parent_id = self.resolver.current_scope_id;
-        let parent_level = self
+        let depth = self
             .resolver
             .current_scope()
-            .map(|s| s.level)
-            .unwrap_or(self.resolver.current_level);
-        let scope = Scope::new(
-            binder,
-            if bump_level {
-                parent_level.next()
-            } else {
-                parent_level
-            },
-            id,
-            parent_id,
-            self.resolver
-                .current_scope()
-                .map(|s| s.depth + 1)
-                .unwrap_or(1),
-            capture_boundary,
-        );
+            .map(|s| s.depth + 1)
+            .unwrap_or(1);
+        let scope = Scope::new(id, parent_id, depth);
         tracing::trace!("start_scope: {:?}", scope);
         self.resolver.scopes.insert(id, scope);
         self.resolver.current_scope_id = Some(id);
@@ -264,7 +238,7 @@ impl<'a> DeclDeclarer<'a> {
     fn declare_generics(&mut self, generics: &mut [GenericDecl], is_extend: bool) {
         for generic in generics {
             if is_extend
-                && let Some(resolved) = self.resolver.lookup(&generic.name, None, None)
+                && let Some(resolved) = self.resolver.lookup(&generic.name)
                 && let Ok(sym) = resolved.symbol()
                 && !matches!(sym, Symbol::TypeParameter(..))
             {
@@ -386,77 +360,6 @@ impl<'a> DeclDeclarer<'a> {
         }
     }
 
-    ///////////////////////////////////////////////////////////////////////////
-    // Local decls
-    ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
-    fn declare_pattern(&mut self, pattern: &mut Pattern, bind_type: Symbol) {
-        let Pattern { kind, span, .. } = pattern;
-        let span = *span;
-
-        match kind {
-            PatternKind::Bind(name @ Name::Raw(_)) => {
-                *name = if self.at_module_scope() {
-                    self.resolver.declare(name, some!(Global), pattern.id, span)
-                } else {
-                    self.resolver.declare(name, bind_type, pattern.id, span)
-                }
-            }
-            PatternKind::Or(patterns) => {
-                // Declare the binds in the first pattern, the following patterns will get resolved from those
-                self.declare_pattern(&mut patterns[0], bind_type);
-            }
-            PatternKind::Bind(..) => {}
-            PatternKind::Variant { fields, .. } => {
-                for field in fields.iter_mut() {
-                    self.declare_pattern(field, some!(PatternBindLocal));
-                }
-            }
-            PatternKind::Record { fields } => {
-                for field in fields {
-                    match &mut field.kind {
-                        RecordFieldPatternKind::Bind(name) => {
-                            *name = self.resolver.declare(
-                                name,
-                                some!(PatternBindLocal),
-                                pattern.id,
-                                field.span,
-                            );
-                        }
-                        RecordFieldPatternKind::Equals {
-                            name,
-                            name_span,
-                            value,
-                        } => {
-                            *name = self.resolver.declare(
-                                name,
-                                some!(PatternBindLocal),
-                                pattern.id,
-                                *name_span,
-                            );
-                            self.declare_pattern(value, some!(PatternBindLocal));
-                        }
-                        RecordFieldPatternKind::Rest => (),
-                    }
-                }
-            }
-            #[allow(clippy::todo)]
-            PatternKind::Struct { .. } => {
-                todo!()
-            }
-            PatternKind::Tuple(values) => {
-                for value in values {
-                    self.declare_pattern(value, bind_type);
-                }
-            }
-            PatternKind::Wildcard => (),
-            PatternKind::LiteralFalse
-            | PatternKind::LiteralTrue
-            | PatternKind::LiteralInt(..)
-            | PatternKind::LiteralFloat(..) => (),
-        }
-    }
-
     fn enter_nominal(
         &mut self,
         id: NodeID,
@@ -470,10 +373,7 @@ impl<'a> DeclDeclarer<'a> {
         // state consistent so we don't crash while walking the body.
         // Note: name_span is not available in this function signature, so we pass None.
         // The spans are already recorded by predeclare_nominals for Struct/Enum/Protocol.
-        *name = self
-            .resolver
-            .lookup(name, Some(id), None)
-            .unwrap_or(name.clone());
+        *name = self.resolver.lookup(name).unwrap_or(name.clone());
 
         let sym = match name.symbol() {
             Ok(sym) => sym,
@@ -500,7 +400,7 @@ impl<'a> DeclDeclarer<'a> {
         self.resolver.nominal_stack.push((sym, id));
         self.type_members.insert(id, TypeMembers::default());
 
-        self.start_scope(Some(sym), id, false, false);
+        self.start_scope(id);
         self.resolver
             .current_scope_mut()
             .expect("didn't get current scope")
@@ -513,90 +413,18 @@ impl<'a> DeclDeclarer<'a> {
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    // Block scoping
+    // Blocks
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self, arm))]
-    fn enter_match_arm(&mut self, arm: &mut MatchArm) {
-        self.start_scope(None, arm.id, false, false);
-        self.declare_pattern(&mut arm.pattern, some!(PatternBindLocal));
-    }
-
-    fn exit_match_arm(&mut self, _arm: &mut MatchArm) {
-        self.end_scope();
-    }
-
-    // Every block is a scope of its own: same-named `let`s in sibling
-    // blocks stay distinct bindings, and a nested `let` shadows the outer
-    // one instead of overwriting it in a shared name map.
-    fn enter_block(&mut self, block: &mut Block) {
-        self.start_scope(None, block.id, false, false);
-        for arg in &mut block.args {
-            arg.name = self
-                .resolver
-                .declare(&arg.name, some!(ParamLocal), arg.id, arg.name_span);
-        }
+    // Blocks (function bodies included) are local territory: their
+    // scopes, binders, and nested funcs are declared in resolution order
+    // by the resolver pass. This pass only tracks how deep it is, so
+    // module-scope handling doesn't fire inside them.
+    fn enter_block(&mut self, _block: &mut Block) {
+        self.block_depth += 1;
     }
 
     fn exit_block(&mut self, _block: &mut Block) {
-        self.end_scope();
-    }
-
-    ///////////////////////////////////////////////////////////////////////////
-    // Funcs
-    ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func.name = ?func.name))]
-    fn enter_func(&mut self, func: &mut Func) {
-        let func_id = func.id;
-        let func_name_span = func.name_span;
-        on!(
-            func,
-            Func {
-                id,
-                name,
-                generics,
-                params,
-                body: _,
-                ret: _,
-                attributes: _,
-                ..
-            },
-            {
-                let is_synth = matches!(name, Name::Raw(raw) if raw.starts_with("#fn_"))
-                    || matches!(name, Name::Resolved(_, raw) if raw.starts_with("#fn_"));
-                let fallback = if is_synth {
-                    some!(Synthesized)
-                } else {
-                    some!(Global)
-                };
-                *name = self
-                    .resolver
-                    .lookup(name, Some(*id), Some(func_name_span))
-                    .unwrap_or_else(|| {
-                        self.resolver
-                            .declare(name, fallback, func_id, func_name_span)
-                    });
-
-                let func_sym = name
-                    .symbol()
-                    .unwrap_or_else(|_| unreachable!("did not resolve func name"));
-                self.start_scope(Some(func_sym), *id, false, true);
-
-                self.declare_generics(generics, false);
-
-                for param in params {
-                    param.name = self.resolver.declare(
-                        &param.name,
-                        some!(ParamLocal),
-                        param.id,
-                        param.name_span,
-                    );
-                }
-            }
-        )
-    }
-
-    fn exit_func(&mut self, _func: &mut Func) {
-        self.end_scope();
+        self.block_depth -= 1;
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, func))]
@@ -616,12 +444,7 @@ impl<'a> DeclDeclarer<'a> {
                     .resolver
                     .declare(name, some!(MethodRequirement), func.id, func_span);
 
-                self.start_scope(
-                    Some(name.symbol().unwrap_or_else(|_| unreachable!())),
-                    func.id,
-                    false,
-                    true,
-                );
+                self.start_scope(func.id);
 
                 self.declare_generics(generics, false);
 
@@ -732,8 +555,7 @@ impl<'a> DeclDeclarer<'a> {
                 *name = self
                     .resolver
                     .declare(name, some!(Variant), decl.id, *name_span);
-                let variant_symbol = name.symbol().unwrap_or_else(|_| unreachable!());
-                self.start_scope(Some(variant_symbol), decl.id, false, false);
+                self.start_scope(decl.id);
                 self.declare_generics(generics, false);
             }
         );
@@ -741,7 +563,7 @@ impl<'a> DeclDeclarer<'a> {
         on!(
             &mut decl.kind,
             DeclKind::Method {
-                func: box Func { id, name, name_span, generics, .. },
+                func: box Func { name, name_span, generics, .. },
                 is_static,
                 ..
             },
@@ -751,15 +573,6 @@ impl<'a> DeclDeclarer<'a> {
                 } else {
                     self.resolver.declare(name, some!(InstanceMethod), decl.id, *name_span)
                 };
-
-                if let Some((nominal_sym, nominal_id)) = self.resolver.nominal_stack.last().cloned()
-                {
-                    let method_sym = name.symbol().unwrap_or_else(|_| unreachable!());
-                    self.resolver
-                        .track_dependency_from_to(method_sym, *id, nominal_sym, nominal_id);
-                    self.resolver
-                        .track_dependency_from_to(nominal_sym, nominal_id, method_sym, *id);
-                }
 
                 // self.start_scope(name.symbol().ok(), *id, true);
                 self.declare_generics(generics, false);
@@ -792,7 +605,6 @@ impl<'a> DeclDeclarer<'a> {
         on!(
             &mut decl.kind,
             DeclKind::FuncSignature(FuncSignature {
-                id,
                 name,
                 span,
                 generics,
@@ -801,18 +613,6 @@ impl<'a> DeclDeclarer<'a> {
             {
                 // FuncSignature doesn't have name_span, use its span
                 *name = self.resolver.declare(name, some!(Global), decl.id, *span);
-
-                let (nominal_sym, nominal_id) = self
-                    .resolver
-                    .nominal_stack
-                    .last()
-                    .cloned()
-                    .unwrap_or_else(|| unreachable!());
-                let method_sym = name.symbol().unwrap_or_else(|_| unreachable!());
-                self.resolver
-                    .track_dependency_from_to(method_sym, *id, nominal_sym, nominal_id);
-                self.resolver
-                    .track_dependency_from_to(nominal_sym, nominal_id, method_sym, *id);
 
                 self.declare_generics(generics, false);
             }
@@ -859,13 +659,14 @@ impl<'a> DeclDeclarer<'a> {
                 .resolver
                 .declare(name, some!(Initializer), decl.id, decl.span);
 
-            self.start_scope(None, decl.id, false, false);
+            self.start_scope(decl.id);
         });
 
         on!(&mut decl.kind, DeclKind::Let { lhs, .. }, {
-            self.declare_pattern(lhs, some!(DeclaredLocal));
-            for (id, binder) in lhs.collect_binders() {
-                self.start_scope(Some(binder), id, true, false);
+            // Module-scope lets only: they predeclare (order-independent,
+            // rule 4). Locals declare at their point in the resolver pass.
+            if self.block_depth == 0 {
+                self.resolver.declare_pattern(lhs, some!(Global));
             }
         });
 
@@ -884,7 +685,7 @@ impl<'a> DeclDeclarer<'a> {
                     .declare(name, some!(Effect), decl.id, *name_span);
 
                 // Start a scope for the effect's generics and params
-                self.start_scope(None, decl.id, false, false);
+                self.start_scope(decl.id);
 
                 self.declare_generics(generics, false);
 
@@ -943,16 +744,6 @@ impl<'a> DeclDeclarer<'a> {
                 self.end_scope();
             }
         );
-
-        on!(&mut decl.kind, DeclKind::Let { lhs, .. }, {
-            for _ in lhs.collect_binders() {
-                self.end_scope();
-            }
-        });
-
-        // on!(&mut decl.kind, DeclKind::Method { .. }, {
-        //     self.end_scope();
-        // });
 
         on!(
             &mut decl.kind,
@@ -1087,7 +878,7 @@ impl<'a> DeclDeclarer<'a> {
             Span::SYNTHESIZED,
         );
 
-        self.start_scope(None, init_id, false, false);
+        self.start_scope(init_id);
 
         // Need to synthesize an init
         let self_param_name = self.resolver.declare(

@@ -19,7 +19,7 @@
 //! outlives a group — that discipline is the whole point.
 
 use crate::label::Label;
-use crate::name_resolution::scc_graph::Level;
+use crate::types::Level;
 use crate::node_id::NodeID;
 use crate::types::ty::{EffectRow, Perm, Predicate, Ty};
 
@@ -94,6 +94,20 @@ pub enum Constraint {
         receiver: Ty,
         label: Label,
         member: Ty,
+        origin: CtOrigin,
+    },
+    /// A leading-dot variant use (`.some(1)`) in inference position: the
+    /// enum arrives through unification rather than the checking mode, so
+    /// resolution defers until `enum_ty`'s head is known — the same
+    /// discipline as `HasMember`. `payload` carries the written arguments'
+    /// inferred types; `ctor` is the callee node's type variable when the
+    /// dot is a call's callee, unified with the constructor's function type
+    /// on discharge.
+    HasVariant {
+        enum_ty: Ty,
+        label: Label,
+        payload: Vec<Ty>,
+        ctor: Option<Ty>,
         origin: CtOrigin,
     },
     /// Application-position auto-borrow whose argument type is not known yet.
