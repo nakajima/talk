@@ -22,6 +22,7 @@ enum WorkspaceCompileContext {
 
 #[derive(Clone)]
 pub struct Workspace {
+    pub local_module_id: ModuleId,
     pub versions: FxHashMap<DocumentId, i32>,
     pub file_id_to_document: Vec<DocumentId>,
     pub document_to_file_id: FxHashMap<DocumentId, FileID>,
@@ -95,6 +96,7 @@ impl Workspace {
             WorkspaceCompileContext::Normal => {}
         }
 
+        let local_module_id = config.module_id;
         let driver = match compile_context {
             WorkspaceCompileContext::Core | WorkspaceCompileContext::Stdlib(_) => {
                 Driver::new_bare(sources, config)
@@ -166,6 +168,7 @@ impl Workspace {
         }
 
         Some(Self {
+            local_module_id,
             versions,
             file_id_to_document,
             document_to_file_id,
@@ -339,6 +342,7 @@ impl Workspace {
         }
 
         Some(Self {
+            local_module_id: ModuleId::Core,
             versions: FxHashMap::default(),
             file_id_to_document,
             document_to_file_id,
@@ -398,6 +402,7 @@ impl Workspace {
         }
 
         Some(Self {
+            local_module_id: module_id,
             versions: FxHashMap::default(),
             file_id_to_document,
             document_to_file_id,

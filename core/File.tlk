@@ -16,24 +16,24 @@ public enum FileMode {
 	case append
 }
 
-public struct File {
+public struct Rawfile {
 	let fd: Int
 
-	public func open_read(path: String) -> File {
+	public func open_read(path: String) -> Rawfile {
 		let fd = open_path(path, O_RDONLY, 0)
-		File(fd: fd)
+		Rawfile(fd: fd)
 	}
 
-	public func open_write(path: String) -> File {
+	public func open_write(path: String) -> Rawfile {
 		let mode = S_IRUSR + S_IWUSR
 		let fd = open_path(path, O_WRONLY + O_CREAT + O_TRUNC, mode)
-		File(fd: fd)
+		Rawfile(fd: fd)
 	}
 
-	public func open_append(path: String) -> File {
+	public func open_append(path: String) -> Rawfile {
 		let mode = S_IRUSR + S_IWUSR
 		let fd = open_path(path, O_WRONLY + O_CREAT + O_APPEND, mode)
-		File(fd: fd)
+		Rawfile(fd: fd)
 	}
 
 	public func read(buf: RawPtr, count: Int) -> Int {

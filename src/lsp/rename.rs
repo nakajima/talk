@@ -4,7 +4,6 @@ use rustc_hash::FxHashSet;
 
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
 use crate::analysis::{node_ids_at_offset, span_contains};
-use crate::compiling::module::ModuleId;
 use crate::lexer::Lexer;
 use crate::name_resolution::symbol::{EffectId, Symbol};
 use crate::node_kinds::{
@@ -15,6 +14,7 @@ use crate::node_kinds::{
     generic_decl::GenericDecl,
     parameter::Parameter,
     pattern::{Pattern, RecordFieldPattern},
+    stmt::Stmt,
     type_annotation::TypeAnnotation,
 };
 use crate::token_kind::TokenKind;
@@ -32,14 +32,18 @@ fn is_valid_identifier(name: &str) -> bool {
     matches!(lexer.next().ok().map(|t| t.kind), Some(TokenKind::EOF))
 }
 
-fn is_symbol_renamable(symbol: Symbol) -> bool {
+fn is_symbol_renamable(module: &AnalysisWorkspace, symbol: Symbol) -> bool {
     use crate::name_resolution::symbol::{
-        AssociatedTypeId, EnumId, GlobalId, InitializerId, InstanceMethodId, MethodRequirementId,
-        PropertyId, ProtocolId, StaticMethodId, StructId, TypeAliasId, VariantId,
+        AssociatedTypeId, EnumId, GlobalId, InstanceMethodId, MethodRequirementId, PropertyId,
+        ProtocolId, StaticMethodId, StructId, TypeAliasId, VariantId,
     };
 
     match symbol {
-        Symbol::Builtin(..) | Symbol::Main | Symbol::Library | Symbol::Synthesized(..) => false,
+        Symbol::Builtin(..)
+        | Symbol::Main
+        | Symbol::Library
+        | Symbol::Synthesized(..)
+        | Symbol::Initializer(..) => false,
 
         Symbol::Struct(StructId { module_id, .. })
         | Symbol::Enum(EnumId { module_id, .. })
@@ -47,14 +51,13 @@ fn is_symbol_renamable(symbol: Symbol) -> bool {
         | Symbol::Global(GlobalId { module_id, .. })
         | Symbol::Property(PropertyId { module_id, .. })
         | Symbol::InstanceMethod(InstanceMethodId { module_id, .. })
-        | Symbol::Initializer(InitializerId { module_id, .. })
         | Symbol::StaticMethod(StaticMethodId { module_id, .. })
         | Symbol::Variant(VariantId { module_id, .. })
         | Symbol::Protocol(ProtocolId { module_id, .. })
         | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
         | Symbol::Effect(EffectId { module_id, .. })
         | Symbol::MethodRequirement(MethodRequirementId { module_id, .. }) => {
-            module_id == ModuleId::Current
+            module_id == module.local_module_id
         }
 
         Symbol::TypeParameter(..)
@@ -75,7 +78,7 @@ pub fn rename_at(
     }
 
     let symbol = rename_symbol_at_offset(module, uri, byte_offset)?;
-    if !is_symbol_renamable(symbol) {
+    if !is_symbol_renamable(module, symbol) {
         return None;
     }
 
@@ -128,6 +131,17 @@ fn rename_symbol_at_offset(
         .asts
         .get(file_id.0 as usize)
         .and_then(|a| a.as_ref())?;
+    for root in &ast.roots {
+        let crate::node::Node::Decl(decl) = root else {
+            continue;
+        };
+        if let Some(symbol) = goto_definition_symbol_from_decl(decl, byte_offset)
+            .or_else(|| imported_symbol_at_offset(module, &ast.path, decl, byte_offset))
+        {
+            return Some(symbol);
+        }
+    }
+
     let candidate_ids = node_ids_at_offset(ast, byte_offset);
 
     for node_id in candidate_ids {
@@ -136,10 +150,10 @@ fn rename_symbol_at_offset(
         };
 
         let symbol = match node {
-            crate::node::Node::Expr(expr) => goto_definition_symbol_from_expr(&expr, byte_offset),
-            crate::node::Node::Stmt(stmt) => goto_definition_symbol_from_stmt(&stmt, byte_offset),
+            crate::node::Node::Expr(expr) => rename_symbol_from_expr(module, &expr, byte_offset),
+            crate::node::Node::Stmt(stmt) => rename_symbol_from_stmt(module, &stmt, byte_offset),
             crate::node::Node::TypeAnnotation(ty) => {
-                goto_definition_symbol_from_type_annotation(&ty, byte_offset)
+                goto_definition_symbol_from_type_annotation(module, &ty, byte_offset)
             }
             crate::node::Node::Decl(decl) => goto_definition_symbol_from_decl(&decl, byte_offset)
                 .or_else(|| imported_symbol_at_offset(module, &ast.path, &decl, byte_offset)),
@@ -154,7 +168,7 @@ fn rename_symbol_at_offset(
                 if span_contains(func.name_span, byte_offset) {
                     func.name.symbol().ok()
                 } else {
-                    None
+                    effect_symbol_at_offset(&func.effects, byte_offset)
                 }
             }
             crate::node::Node::FuncSignature(sig) => {
@@ -163,7 +177,7 @@ fn rename_symbol_at_offset(
                 if start <= byte_offset && byte_offset <= end {
                     sig.name.symbol().ok()
                 } else {
-                    None
+                    effect_symbol_at_offset(&sig.effects, byte_offset)
                 }
             }
             crate::node::Node::GenericDecl(generic) => {
@@ -183,6 +197,17 @@ fn rename_symbol_at_offset(
                         None
                     }
                 }
+                crate::node_kinds::pattern::PatternKind::Variant {
+                    variant_name_span, ..
+                } => {
+                    if span_contains(*variant_name_span, byte_offset) {
+                        symbol_for_member_resolution(
+                            module.types.member_resolutions.get(&pattern.id),
+                        )
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             },
             _ => None,
@@ -196,49 +221,141 @@ fn rename_symbol_at_offset(
     None
 }
 
-fn goto_definition_symbol_from_expr(
+fn rename_symbol_from_expr(
+    module: &AnalysisWorkspace,
     expr: &crate::node_kinds::expr::Expr,
-    _byte_offset: u32,
+    byte_offset: u32,
 ) -> Option<Symbol> {
     use crate::node_kinds::expr::ExprKind;
 
     match &expr.kind {
         ExprKind::Variable(name) | ExprKind::Constructor(name) => name.symbol().ok(),
+        ExprKind::Call { callee, args, .. } => {
+            if span_contains(callee.span, byte_offset) {
+                rename_symbol_from_expr(module, callee, byte_offset)
+            } else {
+                construction_arg_symbol_at_offset(module, callee, args, byte_offset)
+            }
+        }
+        ExprKind::Member(_, _, label_span) => {
+            if !span_contains(*label_span, byte_offset) {
+                return None;
+            }
+            symbol_for_member_resolution(module.types.member_resolutions.get(&expr.id))
+        }
+        ExprKind::CallEffect {
+            effect_name,
+            effect_name_span,
+            ..
+        } => {
+            if !effect_span_contains(*effect_name_span, byte_offset) {
+                return None;
+            }
+            effect_name.symbol().ok()
+        }
         _ => None,
     }
 }
 
-fn goto_definition_symbol_from_stmt(
+fn construction_arg_symbol_at_offset(
+    module: &AnalysisWorkspace,
+    callee: &crate::node_kinds::expr::Expr,
+    args: &[crate::node_kinds::call_arg::CallArg],
+    byte_offset: u32,
+) -> Option<Symbol> {
+    let struct_info = module
+        .types
+        .catalog
+        .structs
+        .get(&construction_callee_symbol(callee)?)?;
+    args.iter().find_map(|arg| {
+        if span_contains(arg.label_span, byte_offset) {
+            struct_info
+                .fields
+                .get(&arg.label.to_string())
+                .map(|(symbol, _)| *symbol)
+        } else {
+            None
+        }
+    })
+}
+
+fn construction_callee_symbol(callee: &crate::node_kinds::expr::Expr) -> Option<Symbol> {
+    use crate::node_kinds::expr::ExprKind;
+
+    match &callee.kind {
+        ExprKind::Constructor(name) | ExprKind::Variable(name) => name.symbol().ok(),
+        _ => None,
+    }
+}
+
+fn symbol_for_member_resolution(
+    resolution: Option<&crate::types::output::MemberResolution>,
+) -> Option<Symbol> {
+    match resolution? {
+        crate::types::output::MemberResolution::Direct(symbol) => Some(*symbol),
+        crate::types::output::MemberResolution::ViaConformance { witness, .. } => Some(*witness),
+    }
+}
+
+fn rename_symbol_from_stmt(
+    module: &AnalysisWorkspace,
     stmt: &crate::node_kinds::stmt::Stmt,
     byte_offset: u32,
 ) -> Option<Symbol> {
     use crate::node_kinds::stmt::StmtKind;
 
     match &stmt.kind {
-        StmtKind::Expr(expr) => goto_definition_symbol_from_expr(expr, byte_offset),
-        StmtKind::Return(Some(expr)) => goto_definition_symbol_from_expr(expr, byte_offset),
-        StmtKind::If(cond, ..) => goto_definition_symbol_from_expr(cond, byte_offset),
-        StmtKind::Loop(Some(cond), ..) => goto_definition_symbol_from_expr(cond, byte_offset),
-        StmtKind::Assignment(lhs, rhs) => goto_definition_symbol_from_expr(lhs, byte_offset)
-            .or_else(|| goto_definition_symbol_from_expr(rhs, byte_offset)),
+        StmtKind::Expr(expr) => span_contains(expr.span, byte_offset)
+            .then(|| rename_symbol_from_expr(module, expr, byte_offset))?,
+        StmtKind::Return(Some(expr)) => span_contains(expr.span, byte_offset)
+            .then(|| rename_symbol_from_expr(module, expr, byte_offset))?,
+        StmtKind::If(cond, ..) => span_contains(cond.span, byte_offset)
+            .then(|| rename_symbol_from_expr(module, cond, byte_offset))?,
+        StmtKind::Loop(Some(cond), ..) => span_contains(cond.span, byte_offset)
+            .then(|| rename_symbol_from_expr(module, cond, byte_offset))?,
+        StmtKind::Assignment(lhs, rhs) => {
+            if span_contains(lhs.span, byte_offset) {
+                rename_symbol_from_expr(module, lhs, byte_offset)
+            } else if span_contains(rhs.span, byte_offset) {
+                rename_symbol_from_expr(module, rhs, byte_offset)
+            } else {
+                None
+            }
+        }
+        StmtKind::For { iterable, .. } => span_contains(iterable.span, byte_offset)
+            .then(|| rename_symbol_from_expr(module, iterable, byte_offset))?,
+        StmtKind::Continue(Some(expr)) => span_contains(expr.span, byte_offset)
+            .then(|| rename_symbol_from_expr(module, expr, byte_offset))?,
+        StmtKind::Handling {
+            effect_name,
+            effect_name_span,
+            ..
+        } => {
+            if !effect_span_contains(*effect_name_span, byte_offset) {
+                return None;
+            }
+            effect_name.symbol().ok()
+        }
         _ => None,
     }
 }
 
 fn goto_definition_symbol_from_type_annotation(
+    module: &AnalysisWorkspace,
     ty: &crate::node_kinds::type_annotation::TypeAnnotation,
     byte_offset: u32,
 ) -> Option<Symbol> {
     use crate::node_kinds::type_annotation::TypeAnnotationKind;
 
     match &ty.kind {
-        TypeAnnotationKind::Borrow { inner, .. } => {
-            goto_definition_symbol_from_type_annotation(inner, byte_offset)
+        TypeAnnotationKind::Borrow { inner, .. } | TypeAnnotationKind::Unique { inner } => {
+            goto_definition_symbol_from_type_annotation(module, inner, byte_offset)
         }
         TypeAnnotationKind::Nominal {
             name, name_span, ..
         } => {
-            if !span_contains(*name_span, byte_offset) {
+            if !nominal_name_span_contains(name, *name_span, byte_offset) {
                 return None;
             }
             name.symbol().ok()
@@ -246,11 +363,33 @@ fn goto_definition_symbol_from_type_annotation(
         TypeAnnotationKind::Any {
             protocol,
             assoc_bindings,
-        } => goto_definition_symbol_from_type_annotation(protocol, byte_offset).or_else(|| {
-            assoc_bindings.iter().find_map(|binding| {
-                goto_definition_symbol_from_type_annotation(&binding.value, byte_offset)
-            })
-        }),
+        } => goto_definition_symbol_from_type_annotation(module, protocol, byte_offset).or_else(
+            || {
+                assoc_bindings.iter().find_map(|binding| {
+                    if span_contains(binding.name_span, byte_offset) {
+                        symbol_for_any_assoc_binding(module, protocol, binding)
+                    } else {
+                        goto_definition_symbol_from_type_annotation(
+                            module,
+                            &binding.value,
+                            byte_offset,
+                        )
+                    }
+                })
+            },
+        ),
+        TypeAnnotationKind::NominalPath {
+            base,
+            member,
+            member_span,
+            ..
+        } => {
+            if span_contains(*member_span, byte_offset) {
+                symbol_for_associated_type_member(module, base, member)
+            } else {
+                goto_definition_symbol_from_type_annotation(module, base, byte_offset)
+            }
+        }
         _ => None,
     }
 }
@@ -275,6 +414,9 @@ fn goto_definition_symbol_from_decl(
             name, name_span, ..
         }
         | DeclKind::Property {
+            name, name_span, ..
+        }
+        | DeclKind::Effect {
             name, name_span, ..
         } => {
             if !span_contains(*name_span, byte_offset) {
@@ -372,6 +514,97 @@ fn identifier_span_at_offset(
         .map(|tok| (tok.start, tok.end))
 }
 
+fn nominal_name_span_contains(
+    name: &crate::name::Name,
+    name_span: crate::span::Span,
+    byte_offset: u32,
+) -> bool {
+    if span_contains(name_span, byte_offset) {
+        return true;
+    }
+
+    let name = name.name_str();
+    if !name.contains("::") || name.starts_with('.') {
+        return false;
+    }
+
+    let qualified_end = name_span.start.saturating_add(name.len() as u32);
+    name_span.start <= byte_offset && byte_offset <= qualified_end
+}
+
+fn symbol_for_any_assoc_binding(
+    module: &AnalysisWorkspace,
+    protocol: &crate::node_kinds::type_annotation::TypeAnnotation,
+    binding: &crate::node_kinds::type_annotation::AnyAssocBinding,
+) -> Option<Symbol> {
+    let crate::node_kinds::type_annotation::TypeAnnotationKind::Nominal { name, .. } =
+        &protocol.kind
+    else {
+        return None;
+    };
+    let protocol = name.symbol().ok()?;
+    module
+        .types
+        .catalog
+        .associated_type_in(protocol, &binding.name.name_str())
+        .map(|(_, assoc)| assoc)
+}
+
+fn symbol_for_associated_type_member(
+    module: &AnalysisWorkspace,
+    base: &crate::node_kinds::type_annotation::TypeAnnotation,
+    member: &crate::label::Label,
+) -> Option<Symbol> {
+    let label = member.to_string();
+    let base_symbol = match &base.kind {
+        crate::node_kinds::type_annotation::TypeAnnotationKind::Nominal { name, .. }
+        | crate::node_kinds::type_annotation::TypeAnnotationKind::SelfType(name) => {
+            name.symbol().ok()?
+        }
+        _ => return None,
+    };
+
+    if let Some(info) = module.types.catalog.protocols.get(&base_symbol) {
+        return info.assoc.get(&label).copied().or_else(|| {
+            module
+                .types
+                .catalog
+                .associated_type_in(base_symbol, &label)
+                .map(|(_, assoc)| assoc)
+        });
+    }
+
+    module
+        .types
+        .catalog
+        .param_bounds
+        .get(&base_symbol)?
+        .iter()
+        .find_map(|protocol| {
+            module
+                .types
+                .catalog
+                .associated_type_in_ref(protocol, &label)
+                .map(|(_, assoc)| assoc)
+        })
+}
+
+fn effect_symbol_at_offset(
+    effects: &crate::node_kinds::func::EffectSet,
+    byte_offset: u32,
+) -> Option<Symbol> {
+    for (name, span) in effects.names.iter().zip(effects.spans.iter()) {
+        if effect_span_contains(*span, byte_offset) {
+            return name.symbol().ok();
+        }
+    }
+    None
+}
+
+fn effect_span_contains(span: crate::span::Span, byte_offset: u32) -> bool {
+    span_contains(span, byte_offset) || (span.start > 0 && byte_offset == span.start - 1)
+}
+
 fn target_import_aliases(
     module: &AnalysisWorkspace,
     ast: &crate::ast::AST<crate::ast::NameResolved>,
@@ -435,6 +668,7 @@ fn rename_spans_in_ast(
     Parameter(enter),
     Pattern(enter),
     RecordFieldPattern(enter),
+    Stmt(enter),
     TypeAnnotation(enter)
 )]
 struct RenameCollector<'a> {
@@ -477,6 +711,9 @@ impl RenameCollector<'_> {
             }
             | DeclKind::Property {
                 name, name_span, ..
+            }
+            | DeclKind::Effect {
+                name, name_span, ..
             } => {
                 if name.symbol().ok() == Some(self.target) {
                     self.push_span(*name_span);
@@ -518,20 +755,17 @@ impl RenameCollector<'_> {
         if func.name.symbol().ok() == Some(self.target) {
             self.push_span(func.name_span);
         }
+        self.push_matching_effect_spans(&func.effects);
     }
 
     fn enter_func_signature(&mut self, sig: &crate::node_kinds::func_signature::FuncSignature) {
-        if sig.name.symbol().ok() != Some(self.target) {
-            return;
+        if sig.name.symbol().ok() == Some(self.target)
+            && let Some(meta) = self.ast.meta.get(&sig.id)
+            && let Some(tok) = meta.identifiers.first()
+        {
+            self.push_u32_span(tok.start, tok.end);
         }
-
-        let Some(meta) = self.ast.meta.get(&sig.id) else {
-            return;
-        };
-        let Some(tok) = meta.identifiers.first() else {
-            return;
-        };
-        self.push_u32_span(tok.start, tok.end);
+        self.push_matching_effect_spans(&sig.effects);
     }
 
     fn enter_generic_decl(&mut self, generic: &crate::node_kinds::generic_decl::GenericDecl) {
@@ -549,12 +783,23 @@ impl RenameCollector<'_> {
     fn enter_pattern(&mut self, pattern: &crate::node_kinds::pattern::Pattern) {
         use crate::node_kinds::pattern::PatternKind;
 
-        let PatternKind::Bind(name) = &pattern.kind else {
-            return;
-        };
-
-        if name.symbol().ok() == Some(self.target) {
-            self.push_span(pattern.span);
+        match &pattern.kind {
+            PatternKind::Bind(name) => {
+                if name.symbol().ok() == Some(self.target) {
+                    self.push_span(pattern.span);
+                }
+            }
+            PatternKind::Variant {
+                variant_name_span, ..
+            } => {
+                if symbol_for_member_resolution(
+                    self.module.types.member_resolutions.get(&pattern.id),
+                ) == Some(self.target)
+                {
+                    self.push_span(*variant_name_span);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -584,13 +829,57 @@ impl RenameCollector<'_> {
     fn enter_type_annotation(&mut self, ty: &crate::node_kinds::type_annotation::TypeAnnotation) {
         use crate::node_kinds::type_annotation::TypeAnnotationKind;
 
-        if let TypeAnnotationKind::Nominal {
-            name, name_span, ..
-        } = &ty.kind
-            && name.symbol().ok() == Some(self.target)
-            && self.should_rename_visible_reference(name)
-        {
-            self.push_span(*name_span);
+        match &ty.kind {
+            TypeAnnotationKind::Nominal {
+                name, name_span, ..
+            } => {
+                if name.symbol().ok() == Some(self.target)
+                    && self.should_rename_visible_reference(name)
+                {
+                    self.push_span(*name_span);
+                }
+            }
+            TypeAnnotationKind::NominalPath {
+                base,
+                member,
+                member_span,
+                ..
+            } => {
+                if symbol_for_associated_type_member(self.module, base, member) == Some(self.target)
+                {
+                    self.push_span(*member_span);
+                }
+            }
+            TypeAnnotationKind::Any {
+                protocol,
+                assoc_bindings,
+            } => {
+                for binding in assoc_bindings {
+                    if symbol_for_any_assoc_binding(self.module, protocol, binding)
+                        == Some(self.target)
+                    {
+                        self.push_span(binding.name_span);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn enter_stmt(&mut self, stmt: &crate::node_kinds::stmt::Stmt) {
+        use crate::node_kinds::stmt::StmtKind;
+
+        let StmtKind::Handling {
+            effect_name,
+            effect_name_span,
+            ..
+        } = &stmt.kind
+        else {
+            return;
+        };
+
+        if effect_name.symbol().ok() == Some(self.target) {
+            self.push_span(*effect_name_span);
         }
     }
 
@@ -605,7 +894,46 @@ impl RenameCollector<'_> {
                     self.push_span(expr.span);
                 }
             }
+            ExprKind::Member(_, _, label_span) => {
+                if symbol_for_member_resolution(self.module.types.member_resolutions.get(&expr.id))
+                    == Some(self.target)
+                {
+                    self.push_span(*label_span);
+                }
+            }
+            ExprKind::Call { callee, args, .. } => {
+                if let Some(struct_info) = construction_callee_symbol(callee)
+                    .and_then(|symbol| self.module.types.catalog.structs.get(&symbol))
+                {
+                    for arg in args {
+                        if struct_info
+                            .fields
+                            .get(&arg.label.to_string())
+                            .is_some_and(|(symbol, _)| *symbol == self.target)
+                        {
+                            self.push_span(arg.label_span);
+                        }
+                    }
+                }
+            }
+            ExprKind::CallEffect {
+                effect_name,
+                effect_name_span,
+                ..
+            } => {
+                if effect_name.symbol().ok() == Some(self.target) {
+                    self.push_span(*effect_name_span);
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn push_matching_effect_spans(&mut self, effects: &crate::node_kinds::func::EffectSet) {
+        for (name, span) in effects.names.iter().zip(effects.spans.iter()) {
+            if name.symbol().ok() == Some(self.target) {
+                self.push_span(*span);
+            }
         }
     }
 }

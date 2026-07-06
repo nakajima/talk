@@ -1685,6 +1685,80 @@ mod tests {
     }
 
     #[test]
+    fn rename_renames_property_member_access() {
+        let code = "struct Point {\n  let x: Int\n}\nfunc make() -> Point { Point(x: 1) }\nfunc read(point: Point) -> Int { point.x }\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("rename_property_member.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let member_use = code.rfind("x").expect("member use");
+        let edit = super::rename_at(&module, &uri, member_use as u32, "y").expect("edit");
+        let rewritten = apply_edits(code, &edit, &uri);
+
+        assert!(rewritten.contains("let y: Int"), "{rewritten}");
+        assert!(rewritten.contains("Point(y: 1)"), "{rewritten}");
+        assert!(rewritten.contains("point.y"), "{rewritten}");
+    }
+
+    #[test]
+    fn rename_renames_method_member_access() {
+        let code = "struct Thing {}\nextend Thing {\n  func foo() -> Int { 1 }\n}\nfunc read(thing: Thing) -> Int { thing.foo() }\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("rename_method_member.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let member_use = code.rfind("foo").expect("member use");
+        let edit = super::rename_at(&module, &uri, member_use as u32, "bar").expect("edit");
+        let rewritten = apply_edits(code, &edit, &uri);
+
+        assert!(rewritten.contains("func bar()"), "{rewritten}");
+        assert!(rewritten.contains("thing.bar()"), "{rewritten}");
+    }
+
+    #[test]
+    fn rename_renames_effect_declaration_and_uses() {
+        let code = "effect 'boom(message: String) -> ()\nfunc emit() 'boom -> () {\n  'boom(\"x\")\n}\n@handle 'boom { message in emit() }\n";
+        let uri =
+            Url::from_file_path(std::env::temp_dir().join("rename_effect.tlk")).expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let perform = code.find("boom(\"x\")").expect("perform");
+        let edit = super::rename_at(&module, &uri, perform as u32, "zap").expect("edit");
+        let rewritten = apply_edits(code, &edit, &uri);
+
+        assert!(rewritten.contains("effect 'zap"), "{rewritten}");
+        assert!(rewritten.contains("func emit() 'zap"), "{rewritten}");
+        assert!(rewritten.contains("'zap(\"x\")"), "{rewritten}");
+        assert!(rewritten.contains("@handle 'zap"), "{rewritten}");
+    }
+
+    #[test]
+    fn rename_renames_variant_patterns_and_constructors() {
+        let code = "enum Opt<T> {\n  case some(T)\n  case none\n}\nlet r = match Opt.some(123) {\n  .some(x) -> x,\n  .none -> 0\n}\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("rename_variant_pattern.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let pattern = code.find(".some(x)").expect("pattern") + 1;
+        let edit = super::rename_at(&module, &uri, pattern as u32, "present").expect("edit");
+        let rewritten = apply_edits(code, &edit, &uri);
+
+        assert!(rewritten.contains("case present(T)"), "{rewritten}");
+        assert!(rewritten.contains("Opt.present(123)"), "{rewritten}");
+        assert!(rewritten.contains(".present(x)"), "{rewritten}");
+    }
+
+    #[test]
+    fn rename_renames_associated_type_bindings() {
+        let code = "protocol Iterator {\n  associated Element\n}\nfunc read(it: any Iterator<Element = Int>) -> Int { 1 }\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("rename_assoc_binding.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let binding = code.rfind("Element").expect("binding");
+        let edit = super::rename_at(&module, &uri, binding as u32, "Item").expect("edit");
+        let rewritten = apply_edits(code, &edit, &uri);
+
+        assert!(rewritten.contains("associated Item"), "{rewritten}");
+        assert!(rewritten.contains("Iterator<Item = Int>"), "{rewritten}");
+    }
+
+    #[test]
     fn goto_definition_finds_unopened_file_in_workspace() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

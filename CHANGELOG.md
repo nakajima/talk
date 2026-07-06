@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased (2026-07-05) — LSP rename coverage
+
+LSP rename now covers the symbol surfaces that have first-class source
+names: fields and member accesses, struct constructor argument labels,
+methods, enum variants in constructors and patterns, effects in
+declarations/effect rows/handlers/performs, and associated type bindings
+and projections. Initializers remain intentionally non-renamable because
+`init` is syntax, not an independently named symbol.
+
+Regression coverage was added for property, method, effect, variant,
+associated-type, and core-source renames. Core source symbols such as
+`core/File.tlk`'s `File` are now considered local to a Core workspace,
+so they can be renamed while editing Core itself without enabling rename
+of imported Core symbols from ordinary workspaces.
+
 ## Unreleased (2026-07-05) — Drop correctness and protocol-argument fixes
 
 Structural temporary drops now replace the MIR builder's ambient

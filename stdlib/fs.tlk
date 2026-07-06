@@ -93,7 +93,7 @@ public struct Directory {
 			match entry {
 				.directory(directory) -> {
 					fn(entry)
-					walk(directory, fn)
+					self.walk(fn)
 				},
 				other -> fn(other)
 			}
@@ -106,12 +106,6 @@ public struct FsFile {
 }
 
 public typealias File = FsFile
-
-extend FsFile: Showable {
-	func show() -> String {
-		"File(" + self.path.to_string() + ")"
-	}
-}
 
 public enum DirectoryEntry {
 	case directory(Directory)
