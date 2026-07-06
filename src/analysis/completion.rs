@@ -1,4 +1,5 @@
-use rustc_hash::FxHashMap;
+use derive_visitor::Drive;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::workspace::Workspace;
 use crate::analysis::{CompletionItem, CompletionItemKind, DocumentId, node_ids_at_offset};
@@ -11,8 +12,10 @@ use crate::{
     node::Node,
     node_id::{FileID, NodeID},
     node_kinds::{
+        decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         incomplete_expr::IncompleteExpr,
+        type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     types::{
         TypeOutput,
@@ -23,6 +26,7 @@ use crate::{
 
 pub struct CompletionAnalysis<'a> {
     pub ast: &'a AST<NameResolved>,
+    pub all_asts: Option<&'a [Option<AST<NameResolved>>]>,
     pub resolved_names: &'a ResolvedNames,
     pub types: &'a TypeOutput,
 }
@@ -44,6 +48,7 @@ pub fn complete_in_workspace(
 
     let completion = CompletionAnalysis {
         ast,
+        all_asts: Some(&workspace.asts),
         resolved_names: &workspace.resolved_names,
         types: &workspace.types,
     };
@@ -97,9 +102,12 @@ fn scope_completions(analysis: &CompletionAnalysis<'_>, byte_offset: u32) -> Vec
             label: name,
             kind: completion_kind(sym),
             detail: None,
+            insert_text: None,
+            insert_text_is_snippet: false,
         })
         .collect();
 
+    items.extend(conformance_requirement_completions(analysis, byte_offset));
     items.sort_by(|a, b| a.label.cmp(&b.label));
     items
 }
@@ -449,7 +457,266 @@ fn add_member_item(
         label,
         kind: Some(kind),
         detail,
+        insert_text: None,
+        insert_text_is_snippet: false,
     });
+}
+
+struct ImplementedConformanceMembers {
+    methods: FxHashSet<String>,
+    associated: FxHashSet<String>,
+}
+
+fn conformance_requirement_completions(
+    analysis: &CompletionAnalysis<'_>,
+    byte_offset: u32,
+) -> Vec<CompletionItem> {
+    let Some(extend) = enclosing_extend_decl(analysis.ast, byte_offset) else {
+        return vec![];
+    };
+    if !directly_in_extend_body(&extend, byte_offset) {
+        return vec![];
+    }
+
+    let protocols = conformance_protocol_refs(analysis.types, &extend);
+    if protocols.is_empty() {
+        return vec![];
+    }
+
+    let implemented = implemented_conformance_members(&extend);
+    let mut items: FxHashMap<String, CompletionItem> = FxHashMap::default();
+    for protocol in protocols {
+        for (owner, label, requirement) in analysis
+            .types
+            .catalog
+            .requirements_for_conformance(&protocol)
+        {
+            if implemented.methods.contains(&label) {
+                continue;
+            }
+            let signature = source_requirement_signature(analysis, requirement.symbol)
+                .or_else(|| requirement_signature_from_scheme(analysis.types, &label, &requirement))
+                .unwrap_or_else(|| format!("func {label}()"));
+            items.entry(label.clone()).or_insert(CompletionItem {
+                label,
+                kind: Some(CompletionItemKind::Method),
+                detail: Some(format!("required by {owner}: {signature}")),
+                insert_text: Some(method_stub(&signature, true)),
+                insert_text_is_snippet: true,
+            });
+        }
+
+        for (name, owner, _) in analysis.types.catalog.associated_types_in_ref(&protocol) {
+            if implemented.associated.contains(&name) {
+                continue;
+            }
+            items.entry(name.clone()).or_insert(CompletionItem {
+                label: name.clone(),
+                kind: Some(CompletionItemKind::TypeParameter),
+                detail: Some(format!("associated type required by {owner}")),
+                insert_text: Some(format!("typealias {name} = $0")),
+                insert_text_is_snippet: true,
+            });
+        }
+    }
+
+    let mut items: Vec<_> = items.into_values().collect();
+    items.sort_by(|a, b| a.label.cmp(&b.label));
+    items
+}
+
+fn enclosing_extend_decl(ast: &AST<NameResolved>, byte_offset: u32) -> Option<Decl> {
+    node_ids_at_offset(ast, byte_offset)
+        .into_iter()
+        .filter_map(|node_id| match ast.find(node_id) {
+            Some(Node::Decl(
+                decl @ Decl {
+                    kind: DeclKind::Extend { .. },
+                    ..
+                },
+            )) => Some(decl),
+            _ => None,
+        })
+        .find(|decl| match &decl.kind {
+            DeclKind::Extend { body, .. } => {
+                body.span.start <= byte_offset && byte_offset <= body.span.end
+            }
+            _ => false,
+        })
+}
+
+fn directly_in_extend_body(extend: &Decl, byte_offset: u32) -> bool {
+    let DeclKind::Extend { body, .. } = &extend.kind else {
+        return false;
+    };
+    if !(body.span.start <= byte_offset && byte_offset <= body.span.end) {
+        return false;
+    }
+    !body
+        .decls
+        .iter()
+        .any(|decl| decl.span.start <= byte_offset && byte_offset <= decl.span.end)
+}
+
+fn implemented_conformance_members(extend: &Decl) -> ImplementedConformanceMembers {
+    let mut methods = FxHashSet::default();
+    let mut associated = FxHashSet::default();
+    let DeclKind::Extend { body, .. } = &extend.kind else {
+        return ImplementedConformanceMembers {
+            methods,
+            associated,
+        };
+    };
+
+    for decl in &body.decls {
+        match &decl.kind {
+            DeclKind::Method { func, .. } => {
+                methods.insert(func.name.name_str());
+            }
+            DeclKind::TypeAlias(name, ..) => {
+                associated.insert(name.name_str());
+            }
+            _ => {}
+        }
+    }
+
+    ImplementedConformanceMembers {
+        methods,
+        associated,
+    }
+}
+
+fn conformance_protocol_refs(types: &TypeOutput, extend: &Decl) -> Vec<ProtocolRef> {
+    let DeclKind::Extend {
+        name, conformances, ..
+    } = &extend.kind
+    else {
+        return vec![];
+    };
+    let Some(head) = name.symbol().ok() else {
+        return vec![];
+    };
+
+    let mut refs = vec![];
+    for conformance in conformances {
+        let Some(protocol) = type_annotation_symbol(conformance) else {
+            continue;
+        };
+        let mut matched = false;
+        for ((candidate_head, candidate_protocol), _) in &types.catalog.conformances {
+            if *candidate_head == head && candidate_protocol.protocol == protocol {
+                if !refs.contains(candidate_protocol) {
+                    refs.push(candidate_protocol.clone());
+                }
+                matched = true;
+            }
+        }
+        if !matched {
+            let protocol_ref = ProtocolRef::bare(protocol);
+            if !refs.contains(&protocol_ref) {
+                refs.push(protocol_ref);
+            }
+        }
+    }
+    refs
+}
+
+fn type_annotation_symbol(annotation: &TypeAnnotation) -> Option<Symbol> {
+    match &annotation.kind {
+        TypeAnnotationKind::Nominal { .. } | TypeAnnotationKind::SelfType(_) => {
+            annotation.symbol().ok()
+        }
+        _ => None,
+    }
+}
+
+fn source_requirement_signature(
+    analysis: &CompletionAnalysis<'_>,
+    symbol: Symbol,
+) -> Option<String> {
+    if let Some(asts) = analysis.all_asts {
+        for ast in asts.iter().flatten() {
+            if let Some(signature) = source_requirement_signature_in_ast(ast, symbol) {
+                return Some(signature);
+            }
+        }
+        return None;
+    }
+    source_requirement_signature_in_ast(analysis.ast, symbol)
+}
+
+fn source_requirement_signature_in_ast(ast: &AST<NameResolved>, symbol: Symbol) -> Option<String> {
+    let mut result = None;
+    let mut visitor = derive_visitor::visitor_enter_fn(|decl: &Decl| {
+        if result.is_some() {
+            return;
+        }
+        match &decl.kind {
+            DeclKind::MethodRequirement { signature, .. } | DeclKind::FuncSignature(signature)
+                if signature.name.symbol().ok() == Some(symbol) =>
+            {
+                result = Some(crate::parsing::formatter::format_node(
+                    &Node::Decl(decl.clone()),
+                    &ast.meta,
+                ));
+            }
+            _ => {}
+        }
+    });
+    for root in &ast.roots {
+        root.drive(&mut visitor);
+    }
+    drop(visitor);
+    result.map(|signature: String| strip_implicit_self_param(signature.trim()))
+}
+
+fn strip_implicit_self_param(signature: &str) -> String {
+    let Some(open) = signature.find('(') else {
+        return signature.to_string();
+    };
+    let after_open = &signature[open + 1..];
+    let leading = after_open.len() - after_open.trim_start().len();
+    let params = &after_open[leading..];
+    if !params.starts_with("self:") {
+        return signature.to_string();
+    }
+    if let Some(comma) = params.find(',') {
+        return format!(
+            "{}{}",
+            &signature[..open + 1],
+            params[comma + 1..].trim_start()
+        );
+    }
+    if let Some(close) = params.find(')') {
+        return format!("{}{}", &signature[..open + 1], &params[close..]);
+    }
+    signature.to_string()
+}
+
+fn requirement_signature_from_scheme(
+    types: &TypeOutput,
+    label: &str,
+    requirement: &Requirement,
+) -> Option<String> {
+    let scheme = types.schemes.get(&requirement.symbol)?;
+    let Ty::Func(params, ret, _) = &scheme.ty else {
+        return None;
+    };
+    let params = params
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| format!("arg{index}: {}", ty.render_mono()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(strip_implicit_self_param(&format!(
+        "func {label}({params}) -> {}",
+        ret.render_mono()
+    )))
+}
+
+fn method_stub(signature: &str, snippet: bool) -> String {
+    let body = if snippet { "$0" } else { "{}" };
+    format!("{} {{\n\t{}\n}}", signature.trim(), body)
 }
 
 fn visible_symbols(
@@ -572,6 +839,7 @@ mod tests {
     fn completion(analyzed: &Analyzed) -> CompletionAnalysis<'_> {
         CompletionAnalysis {
             ast: &analyzed.ast,
+            all_asts: None,
             resolved_names: &analyzed.resolved_names,
             types: &analyzed.types,
         }
@@ -734,6 +1002,37 @@ mod tests {
             items.iter().any(|i| i.label == "some"
                 && i.kind == Some(crate::analysis::CompletionItemKind::EnumMember)),
             "expected some case in {items:?}"
+        );
+    }
+
+    #[test]
+    fn completes_missing_conformance_requirements_in_extend_body() {
+        let code = "protocol Foo {\n\tassociated Item\n\tfunc foo() -> Int\n\tfunc bar(value: Int) -> Bool\n}\nstruct Thing {}\nextend Thing: Foo {\n\tfunc foo() -> Int { 1 }\n\t\n}\n";
+        let analyzed = analyze(code);
+        let byte_offset = code.rfind("\t\n}").expect("blank line") as u32 + 1;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "bar"
+                && i.kind == Some(crate::analysis::CompletionItemKind::Method)
+                && i.insert_text.as_deref().is_some_and(|text| text
+                    .contains("func bar(value: Int) -> Bool")
+                    && text.contains("$0"))),
+            "expected bar requirement in {items:?}"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|i| i.label == "Item"
+                    && i.insert_text.as_deref() == Some("typealias Item = $0")),
+            "expected Item associated type in {items:?}"
+        );
+        assert!(
+            !items.iter().any(|i| i.label == "foo"
+                && i.insert_text
+                    .as_deref()
+                    .is_some_and(|text| text.contains("func foo"))),
+            "implemented requirement should not be offered: {items:?}"
         );
     }
 }

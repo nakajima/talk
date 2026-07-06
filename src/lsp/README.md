@@ -53,12 +53,13 @@ text edits.
 - **Semantic tokens** (`semantic_tokens.rs`) — full-document highlighting
   classified from the AST/highlighter (`src/parsing/highlighter.rs`).
 - **Completions** (`completion.rs`) — translation of analysis completion
-  items to LSP completion items; dot completion is triggered by `.`.
+  items to LSP completion items; dot completion is triggered by `.`, and
+  extension bodies offer missing protocol requirements as snippets.
 - **Code actions** (`compute_code_actions` in `server.rs`) — quick fixes
-  keyed off diagnostic messages: add a missing `use { name } from ...` for
-  an undefined name that is public in another workspace file, and rewrite an
-  ambiguous member call `x.m(args)` into the explicit protocol-static form
-  `P.m(x, args)`, one action per candidate protocol.
+  keyed off diagnostics: add a missing path-only `use ...` for an
+  undefined name that is public in another workspace file, rewrite an
+  ambiguous member call `x.m(args)` into `P.m(x, args)`, add missing protocol
+  requirement stubs, and insert missing match arms for non-exhaustive matches.
 
 ## Notes
 

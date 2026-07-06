@@ -9,7 +9,9 @@ macro_rules! impl_bounds_for {
                         continue;
                     };
                     for conformance in &generic.conformances {
-                        if let Some((protocol, _)) = self.lower_protocol_ref(conformance) {
+                        if let Some((protocol, _)) =
+                            self.lower_protocol_ref_with_self(conformance, Some(&Ty::Param(symbol)))
+                        {
                             self.register_param_bound(symbol, protocol);
                         }
                     }
@@ -38,7 +40,9 @@ macro_rules! impl_bounds_for {
                         continue;
                     };
                     for protocol in protocols {
-                        if let Some((protocol, _)) = self.lower_protocol_ref(protocol) {
+                        if let Some((protocol, _)) =
+                            self.lower_protocol_ref_with_self(protocol, Some(&Ty::Param(param)))
+                        {
                             self.register_param_bound(param, protocol);
                         }
                     }
@@ -52,9 +56,10 @@ macro_rules! impl_bounds_for {
                 }
             }
 
-            pub(super) fn lower_protocol_ref(
+            pub(super) fn lower_protocol_ref_with_self(
                 &mut self,
                 annotation: &TypeAnnotation,
+                self_ty: Option<&Ty>,
             ) -> Option<(ProtocolRef, Vec<TypeAnnotation>)> {
                 let (protocol, generics) = match &annotation.kind {
                     TypeAnnotationKind::Nominal { name, generics, .. } => {
@@ -69,30 +74,68 @@ macro_rules! impl_bounds_for {
                         return None;
                     }
                 };
-                let param_count = self
+                let (params, defaults) = self
                     .catalog
                     .protocols
                     .get(&protocol)
-                    .map(|info| info.params.len())
-                    .unwrap_or(0);
-                if generics.len() == param_count {
-                    let args = generics
-                        .iter()
-                        .map(|generic| self.lower_annotation(generic))
-                        .collect();
-                    return Some((ProtocolRef { protocol, args }, vec![]));
-                }
+                    .map(|info| (info.params.clone(), info.param_defaults.clone()))
+                    .unwrap_or_default();
+                let param_count = params.len();
                 if param_count == 0 {
                     return Some((ProtocolRef::bare(protocol), generics.to_vec()));
                 }
-                self.diagnostics.errors.push((
-                    TypeError::ArityMismatch {
-                        expected: param_count,
-                        found: generics.len(),
-                    },
-                    annotation.id,
-                ));
-                Some((ProtocolRef::bare(protocol), vec![]))
+                if generics.len() > param_count {
+                    self.diagnostics.errors.push((
+                        TypeError::ArityMismatch {
+                            expected: param_count,
+                            found: generics.len(),
+                        },
+                        annotation.id,
+                    ));
+                    return Some((ProtocolRef::bare(protocol), vec![]));
+                }
+
+                let mut args: Vec<Ty> = generics
+                    .iter()
+                    .map(|generic| self.lower_annotation(generic))
+                    .collect();
+                let mut substitution = FxHashMap::default();
+                substitution.insert(
+                    protocol,
+                    self_ty.cloned().unwrap_or_else(|| Ty::Param(protocol)),
+                );
+                for (param, arg) in params.iter().copied().zip(args.iter().cloned()) {
+                    substitution.insert(param, arg);
+                }
+                let provided = args.len();
+                let mut reported_missing_default = false;
+                for index in provided..param_count {
+                    match defaults.get(index).and_then(Clone::clone) {
+                        Some(default) => {
+                            let default = default.substitute(
+                                &substitution,
+                                &Default::default(),
+                                &Default::default(),
+                            );
+                            substitution.insert(params[index], default.clone());
+                            args.push(default);
+                        }
+                        None => {
+                            if !reported_missing_default {
+                                self.diagnostics.errors.push((
+                                    TypeError::ArityMismatch {
+                                        expected: param_count,
+                                        found: provided,
+                                    },
+                                    annotation.id,
+                                ));
+                                reported_missing_default = true;
+                            }
+                            args.push(Ty::Error);
+                        }
+                    }
+                }
+                Some((ProtocolRef { protocol, args }, vec![]))
             }
 
             pub(super) fn declared_predicates(
@@ -204,7 +247,8 @@ macro_rules! impl_bounds_for {
                 ty: Ty,
                 protocol_annotation: &TypeAnnotation,
             ) -> Vec<Predicate> {
-                let Some((protocol, assoc_args)) = self.lower_protocol_ref(protocol_annotation)
+                let Some((protocol, assoc_args)) =
+                    self.lower_protocol_ref_with_self(protocol_annotation, Some(&ty))
                 else {
                     return vec![];
                 };

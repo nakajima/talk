@@ -260,6 +260,18 @@ pub mod tests {
     }
 
     #[test]
+    fn consuming_method_receiver_clears_conditional_drop_flag() {
+        let ir = lowered_ir(
+            "extend String {\n\tconsuming func consume_len() -> Int {\n\t\tself.byte_count\n\t}\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tif flag { s.consume_len() }\n\t0\n}\nf(true)",
+        );
+        let top_level_clears = ir.matches("cell_set(var drop_flag, false)").count();
+        assert!(
+            top_level_clears >= 2,
+            "expected the consuming receiver and scope drop to both clear the top drop flag:\n{ir}"
+        );
+    }
+
+    #[test]
     fn open_field_move_drop_uses_field_drop_flag() {
         let ir = lowered_ir(
             "struct Person {\n\tlet name: String\n\tlet title: String\n\tlet age: Int\n}\nfunc f() -> Int {\n\tlet person = Person(name: \"Pat\" + \"\", title: \"Dr\" + \"\", age: 41)\n\tlet name = person.name\n\tname.byte_count + person.title.byte_count + person.age\n}\nf()",

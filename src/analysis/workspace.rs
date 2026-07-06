@@ -372,10 +372,7 @@ impl Workspace {
     }
 
     fn stdlib_module(name: &str, module_id: ModuleId) -> Option<Self> {
-        let (_, bundled_text) = crate::compiling::stdlib::stdlib_sources()
-            .into_iter()
-            .find(|(source_name, _)| *source_name == name)?;
-        let (path, text) = Self::stdlib_document(name, bundled_text);
+        let (path, text) = crate::compiling::stdlib::source_document(name)?;
         let document_id = path.to_string_lossy().into_owned();
 
         let mut modules = ModuleEnvironment::default();
@@ -414,31 +411,6 @@ impl Workspace {
             diagnostics: FxHashMap::default(),
             stdlib_module_ids: FxHashMap::default(),
         })
-    }
-
-    fn stdlib_document(name: &str, bundled_text: &str) -> (PathBuf, String) {
-        let filename = format!("{name}.tlk");
-        let candidates = [
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("stdlib")
-                .join(&filename),
-            PathBuf::from("stdlib").join(&filename),
-        ];
-        for candidate in candidates {
-            if candidate.is_file()
-                && let Ok(path) = candidate.canonicalize()
-            {
-                let text =
-                    std::fs::read_to_string(&path).unwrap_or_else(|_| bundled_text.to_string());
-                return (path, text);
-            }
-        }
-
-        let dir = std::env::temp_dir().join("talk-stdlib");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join(format!("{name}.tlk"));
-        let _ = std::fs::write(&path, bundled_text);
-        (path, bundled_text.to_string())
     }
 
     pub fn document_index(&self, id: &DocumentId) -> Option<usize> {

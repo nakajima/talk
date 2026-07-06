@@ -2659,6 +2659,14 @@ pub mod tests {
     }
 
     #[test]
+    fn protocol_argument_defaults_use_self_in_conformances_and_bounds() {
+        let t = check(
+            "// no-core\nprotocol Eq<RHS = Self> {\n\tfunc same(rhs: &RHS) -> Bool\n}\nextend Int: Eq {\n\tfunc same(rhs: &Int) -> Bool { true }\n}\nfunc uses<T: Eq>(x: T, y: &T) -> Bool {\n\tx.same(rhs: y)\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
     fn overlapping_generic_protocol_argument_conformance_is_rejected() {
         let t = check(
             "// no-core\nstruct String {}\nstruct Name {}\nprotocol Into<Target> {\n\tfunc into() -> Target\n}\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nextend Name: Into<String> {\n\tfunc into() -> String { String() }\n}\nextend<T: Into<String>> String: Add<T> {\n\tfunc add(other: T) -> String { other.into() }\n}\nextend String: Add<Name> {\n\tfunc add(other: Name) -> String { other.into() }\n}",

@@ -302,6 +302,9 @@ fn collect_consumed_places(expr: &hir::Expr, out: &mut Vec<Place>) {
                 collect_consumed_places(spread, out);
             }
         }
+        ExprKind::Member(Some(receiver), _) | ExprKind::Proj(receiver, ..) => {
+            collect_consumed_places(receiver, out);
+        }
         _ => {}
     }
 }

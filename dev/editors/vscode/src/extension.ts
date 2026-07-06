@@ -54,12 +54,32 @@ function configuredCorePath(): string | undefined {
   return undefined;
 }
 
+function configuredStdlibPath(): string | undefined {
+  const stdlibPath = workspace
+    .getConfiguration("talktalk")
+    .get<string>("stdlibPath")
+    ?.trim();
+
+  if (stdlibPath) {
+    return expandHome(stdlibPath);
+  }
+
+  const envStdlibPath = process.env.TALK_STDLIB_PATH?.trim();
+  if (envStdlibPath) {
+    return expandHome(envStdlibPath);
+  }
+
+  return undefined;
+}
+
 function serverOptions(): ServerOptions {
   const corePath = configuredCorePath();
+  const stdlibPath = configuredStdlibPath();
   const env = {
     ...process.env,
     RUST_LOG: process.env.RUST_LOG ?? "debug",
     ...(corePath ? { TALK_CORE_PATH: corePath } : {}),
+    ...(stdlibPath ? { TALK_STDLIB_PATH: stdlibPath } : {}),
   };
 
   return {
@@ -127,6 +147,53 @@ async function clearCorePath() {
   }
 }
 
+async function setStdlibPath() {
+  const current = configuredStdlibPath();
+  const devStdlibPath = homedir() + "/apps/talk/stdlib";
+  const defaultPath = current ?? (existsSync(devStdlibPath) ? devStdlibPath : homedir());
+  const selected = await window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    defaultUri: Uri.file(defaultPath),
+    openLabel: "Use as TALK_STDLIB_PATH",
+    title: "Select Talk stdlib directory",
+  });
+
+  const folder = selected?.[0]?.fsPath;
+  if (!folder) {
+    return;
+  }
+
+  const target = workspace.workspaceFolders?.length
+    ? ConfigurationTarget.Workspace
+    : ConfigurationTarget.Global;
+  await workspace.getConfiguration("talktalk").update("stdlibPath", folder, target);
+
+  const restart = await window.showInformationMessage(
+    `TalkTalk stdlib path set to ${folder}.`,
+    "Restart Language Server"
+  );
+  if (restart === "Restart Language Server") {
+    await commands.executeCommand("talktalk.restartLsp");
+  }
+}
+
+async function clearStdlibPath() {
+  const target = workspace.workspaceFolders?.length
+    ? ConfigurationTarget.Workspace
+    : ConfigurationTarget.Global;
+  await workspace.getConfiguration("talktalk").update("stdlibPath", undefined, target);
+
+  const restart = await window.showInformationMessage(
+    "TalkTalk stdlib path cleared.",
+    "Restart Language Server"
+  );
+  if (restart === "Restart Language Server") {
+    await commands.executeCommand("talktalk.restartLsp");
+  }
+}
+
 export function activate(context: ExtensionContext) {
   // Options to control the language client
   const clientOptions: LanguageClientOptions = {
@@ -159,7 +226,9 @@ export function activate(context: ExtensionContext) {
       return restartPromise;
     }),
     commands.registerCommand("talktalk.setCorePath", setCorePath),
-    commands.registerCommand("talktalk.clearCorePath", clearCorePath)
+    commands.registerCommand("talktalk.clearCorePath", clearCorePath),
+    commands.registerCommand("talktalk.setStdlibPath", setStdlibPath),
+    commands.registerCommand("talktalk.clearStdlibPath", clearStdlibPath)
   );
 
   // Create the language client and start the client.

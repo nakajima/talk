@@ -72,7 +72,8 @@ the point where two compilations' id spaces touch.
 
 The core library is ordinary Talk source embedded into the binary (or
 read from `TALK_CORE_PATH` when that override is set) and compiled once,
-lazily, the first time a driver needs it. Current core files are:
+lazily, the first time a driver needs it. The stdlib follows the same
+pattern with `TALK_STDLIB_PATH`. Current core files are:
 `Ownership`, `Optional`, `Operators`, `Convert`, `String`, `Memory`,
 `UnicodeData`, `Unicode`, `Array`, `Dict`, `Iterable`, `Async`, `IO`,
 `Net`, `File`, `Showable`, `Http`, and `OS`.
@@ -83,7 +84,7 @@ unless that file starts with `// no-core`. `Driver::new_bare` skips that
 setup and is used for compiling core itself and for deliberately small
 tests.
 
-`Driver::new` also imports the bundled stdlib modules into the module
+`Driver::new` also imports the stdlib modules into the module
 environment. Today that stdlib contains the `fs` package module; it is
 available through package-style `use` imports rather than as a prelude.
 

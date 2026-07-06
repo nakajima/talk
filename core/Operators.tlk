@@ -22,7 +22,7 @@ public protocol Divide<RHS> {
 	func divide(rhs: RHS) -> Ret
 }
 
-public protocol Equatable<RHS> {
+public protocol Equatable<RHS = Self> {
 	func equals(rhs: &RHS) -> Bool
 
 	func notEquals(rhs: &RHS) -> Bool {

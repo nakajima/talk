@@ -1,6 +1,8 @@
 pub mod completion;
+pub mod definition;
 pub mod hover;
 pub mod ownership;
+pub mod rename;
 pub mod workspace;
 
 pub type DocumentId = String;
@@ -61,10 +63,14 @@ pub struct CompletionItem {
     pub label: String,
     pub kind: Option<CompletionItemKind>,
     pub detail: Option<String>,
+    pub insert_text: Option<String>,
+    pub insert_text_is_snippet: bool,
 }
 
+pub use definition::{Location, goto_definition};
 pub use hover::{Hover, hover_at};
-pub use ownership::{OwnershipInlayHint, ownership_inlay_hints};
+pub use ownership::{OwnershipInlayHint, OwnershipInlayHintKind, ownership_inlay_hints};
+pub use rename::{DocumentEdit, TextEdit, WorkspaceEdit, rename_at};
 pub use workspace::Workspace;
 
 pub(crate) fn node_ids_at_offset(

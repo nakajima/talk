@@ -1,11 +1,11 @@
 [workspace]
-members = [".", "wasm", "www", "talk-runtime", "talk-static"]
+members = [".", "wasm", "www", "talk-runtime", "talk-static", "talk-c"]
 default-members = ["."]
 resolver = "2"
 
 [package]
 name = "talk"
-version = "0.1.23"
+version = "0.1.24"
 edition = "2024"
 default-run = "talk"
 

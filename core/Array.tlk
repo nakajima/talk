@@ -1,7 +1,8 @@
 // no-core
+// unsafe
 use { Storage, _storage, _load, _store, _is_unique } from ./Memory.tlk
 use { String } from ./String.tlk
-use { Add, Subtract, Comparable } from ./Operators.tlk
+use { Add, Subtract, Multiply, Comparable, Equatable } from ./Operators.tlk
 use { Showable } from ./Showable.tlk
 use { CheapClone, Deinit } from ./Ownership.tlk
 
@@ -27,22 +28,51 @@ public struct Array<Element> {
 		_load<Element>(ptr)
 	}
 
-	mut func set(index: Int, value: Element) -> Void {
-		// Copy-on-write: a buffer shared with another Array (or with
-		// static data) is copied before the first write, so writes never
-		// alias — Arrays keep value semantics.
-		if _is_unique(self.storage.base) { self.storage.set(index, value) } else {
-			let fresh = _storage<Element>(self.capacity)
-			let i = 0
-			loop i < self.count {
-				let from: RawPtr = @_ir(self.storage.base, i) { %? = gep Element $0 $1 }
-				let to: RawPtr = @_ir(fresh.base, i) { %? = gep Element $0 $1 }
-				_store<Element>(to, _load<Element>(from))
-				i = i + 1
-			}
-			self.storage = fresh
-			self.storage.set(index, value)
+	mut func push(value: Element) -> () {
+		let new_capacity = if self.capacity == 0 { 1 } else {
+			self.capacity * 2
 		}
+
+		if self.count >= self.capacity {
+			let fresh = self.allocate_with_capacity(new_capacity)
+			self.capacity = new_capacity
+			self.storage = fresh
+		} else {
+			self.uniqued_storage()
+		}
+
+		self.set(self.count, value)
+		self.count = self.count + 1
+	}
+
+	mut func set(index: Int, value: Element) -> Void {
+		let storage = self.uniqued_storage()
+		storage.set(index, value)
+	}
+
+	// Copy-on-write: a buffer shared with another Array (or with
+	// static data) is copied before the first write, so writes never
+	// alias — Arrays keep value semantics.
+	mut func uniqued_storage() -> &mut Storage<Element> {
+		if _is_unique(self.storage.base) { return self.storage } else {
+			let fresh = self.allocate_with_capacity(self.capacity)
+			self.storage = fresh
+			return self.storage
+		}
+	}
+
+	func allocate_with_capacity(capacity: Int) -> Storage<Element> {
+		// If capacity is 0, it'll never double.
+		if capacity == 0 { capacity = 1 }
+		let fresh = _storage<Element>(capacity)
+		let i = 0
+		loop i < self.count {
+			let from: RawPtr = @_ir(self.storage.base, i) { %? = gep Element $0 $1 }
+			let to: RawPtr = @_ir(fresh.base, i) { %? = gep Element $0 $1 }
+			_store<Element>(to, _load<Element>(from))
+			i = i + 1
+		}
+		fresh
 	}
 }
 
@@ -76,5 +106,18 @@ extend Array<Element: Showable>: Showable {
 		}
 		result = result + "]"
 		result
+	}
+}
+
+extend Array<Element: Equatable<Element>>: Equatable {
+	func equals(rhs: &Self) -> Bool {
+		if self.count != rhs.count { return false }
+		let i = 0
+		loop i < self.count {
+			if self.get(i) != rhs.get(i) { return false }
+			i = i + 1
+		}
+
+		true
 	}
 }

@@ -93,7 +93,7 @@ public struct Directory {
 			match entry {
 				.directory(directory) -> {
 					fn(entry)
-					self.walk(fn)
+					directory.walk(fn)
 				},
 				other -> fn(other)
 			}

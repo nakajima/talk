@@ -788,6 +788,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         generics: vec![],
                         conformances: vec![],
+                        default: None,
                     }],
                     captures: vec![],
                     where_clause: None,
@@ -1059,6 +1060,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     generics: vec![],
                     conformances: vec![],
+                    default: None,
                     span: Span::ANY
                 }],
                 where_clause: None,
@@ -1600,6 +1602,7 @@ pub mod tests {
                             name_span: Span::ANY,
                             generics: vec![],
                             conformances: vec![],
+                            default: None,
                             span: Span::ANY
                         },
                         where_clause: None
@@ -2006,7 +2009,7 @@ pub mod tests {
     fn resolves_import_all() {
         let (asts, resolved) = resolve_multi(&[
             ("./lib.tlk", "public let a = 1\npublic let b = 2"),
-            ("./main.tlk", "use _ from ./lib.tlk\na\nb"),
+            ("./main.tlk", "use ./lib.tlk\na\nb"),
         ]);
 
         assert!(

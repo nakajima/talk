@@ -1247,8 +1247,13 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_import(&self, import: &Import) -> Doc {
-        let symbols = match &import.symbols {
-            ImportedSymbols::All => text("_"),
+        let path = match &import.path {
+            ImportPath::Relative(p) => text(p),
+            ImportPath::Package(p) => text(p),
+        };
+
+        match &import.symbols {
+            ImportedSymbols::All => join(vec![text("use"), path], text(" ")),
             ImportedSymbols::Named(symbols) => {
                 let symbol_docs: Vec<_> = symbols
                     .iter()
@@ -1260,19 +1265,13 @@ impl<'a> Formatter<'a> {
                         }
                     })
                     .collect();
-                concat(
+                let symbols = concat(
                     text("{ "),
                     concat(join(symbol_docs, text(", ")), text(" }")),
-                )
+                );
+                join(vec![text("use"), symbols, text("from"), path], text(" "))
             }
-        };
-
-        let path = match &import.path {
-            ImportPath::Relative(p) => text(p),
-            ImportPath::Package(p) => text(p),
-        };
-
-        join(vec![text("use"), symbols, text("from"), path], text(" "))
+        }
     }
 
     fn format_struct(
@@ -2141,6 +2140,13 @@ impl<'a> Formatter<'a> {
             result = concat(
                 result,
                 concat(text(": "), join(conformance_docs, text(", "))),
+            );
+        }
+
+        if let Some(default) = &generic.default {
+            result = concat(
+                result,
+                concat(text(" = "), self.format_type_annotation(default)),
             );
         }
 

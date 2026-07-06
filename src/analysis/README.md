@@ -6,8 +6,8 @@ keeps the source-faithful ASTs the compile pipeline later lowers away,
 and stores texts, resolved names, types, flow facts, and diagnostics),
 `hover.rs` (type or scheme at a position, plus ownership details),
 `ownership.rs` (move/borrow/clone/drop hover details and inlay hints from
-`FlowFacts`), and `completion.rs` (scope-based completions plus
-type-backed member completions).
+`FlowFacts`), and `completion.rs` (scope-based completions,
+type-backed member completions, and conformance requirement completions).
 
 It exists as a separate layer so the same functionality serves the
 LSP server, the REPL's tab completion, and tests, without any of them

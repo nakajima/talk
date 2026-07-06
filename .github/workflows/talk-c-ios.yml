@@ -1,0 +1,106 @@
+name: Talk C iOS archives
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: talk-c-ios-archives
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-ios
+            os: macos-14
+          - target: aarch64-apple-ios-sim
+            os: macos-14
+          - target: x86_64-apple-ios
+            os: macos-13
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust target
+        run: rustup toolchain install nightly --profile minimal --target "${{ matrix.target }}"
+
+      - name: Build talk-c static library
+        run: cargo +nightly build -p talk-c --release --locked --target "${{ matrix.target }}"
+
+      - name: Stage talk-c archive
+        shell: bash
+        run: |
+          mkdir -p dist
+          asset="dist/libtalk_c-${{ matrix.target }}.a"
+          cp "target/${{ matrix.target }}/release/libtalk_c.a" "$asset"
+          cp "talk-c/include/talk_c.h" "dist/talk_c.h"
+          shasum -a 256 "$asset" > "$asset.sha256"
+
+      - name: Upload talk-c artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: talk-c-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish by SHA
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download talk-c artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: talk-c-*
+          merge-multiple: true
+
+      - name: Publish to talk-c-ios-archives branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TALK_C_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir publish
+          cd publish
+          git init
+          git remote add origin "https://github.com/${REPOSITORY}.git"
+
+          if git fetch --depth=1 origin talk-c-ios-archives; then
+            git checkout -B talk-c-ios-archives FETCH_HEAD
+          else
+            git checkout --orphan talk-c-ios-archives
+          fi
+
+          mkdir -p "$TALK_C_SHA"
+          cp ../dist/libtalk_c-* "$TALK_C_SHA"/
+          cp ../dist/talk_c.h "$TALK_C_SHA"/
+          printf '%s\n' "$TALK_C_SHA" > latest
+
+          git add "$TALK_C_SHA" latest
+          if git diff --cached --quiet; then
+            echo "talk-c iOS archives are already published for $TALK_C_SHA"
+            exit 0
+          fi
+
+          git commit -m "Talk C iOS archives for $TALK_C_SHA"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" HEAD:talk-c-ios-archives

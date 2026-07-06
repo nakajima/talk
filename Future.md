@@ -10,6 +10,14 @@
 - Const generics
 - Dependent types????????????
 
+# Grammar
+
+- Bitwise operators
+- Force type annotations in conformance extends
+- Subscriptable protocol for allowing thing[idx]
+- Character literals
+- #[attributes]
+
 # Stdlib
 
 - Array
@@ -23,10 +31,6 @@
 
 - Benchmark suite first
 
-# Syntax
-
-- Subscriptable protocol for allowing thing[idx]
-
 # ggez
 
 - `talk new` for initializing new projects
@@ -36,10 +40,6 @@
 # Random
 
 - Clean up diagnostics stuff. Maybe a DiagnosticSet object that tracks sevs separately so we don't need to do filtering all the time?
-
-# Lower
-
-- Let's stop doing MIR twice
 
 # else
 

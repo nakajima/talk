@@ -15,7 +15,9 @@
     "workspaceContains:**/*.tlk",
     "onCommand:talktalk.restartLsp",
     "onCommand:talktalk.setCorePath",
-    "onCommand:talktalk.clearCorePath"
+    "onCommand:talktalk.clearCorePath",
+    "onCommand:talktalk.setStdlibPath",
+    "onCommand:talktalk.clearStdlibPath"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -31,6 +33,14 @@
       {
         "command": "talktalk.clearCorePath",
         "title": "TalkTalk: Clear Core Path"
+      },
+      {
+        "command": "talktalk.setStdlibPath",
+        "title": "TalkTalk: Set Stdlib Path"
+      },
+      {
+        "command": "talktalk.clearStdlibPath",
+        "title": "TalkTalk: Clear Stdlib Path"
       }
     ],
     "configuration": {
@@ -40,6 +50,11 @@
           "type": "string",
           "default": "",
           "description": "Directory containing core .tlk files to pass as TALK_CORE_PATH to the language server. Supports a leading ~/. If empty, the extension forwards TALK_CORE_PATH from its own environment when present."
+        },
+        "talktalk.stdlibPath": {
+          "type": "string",
+          "default": "",
+          "description": "Directory containing stdlib .tlk files to pass as TALK_STDLIB_PATH to the language server. Supports a leading ~/. If empty, the extension forwards TALK_STDLIB_PATH from its own environment when present."
         }
       }
     },

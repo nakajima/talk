@@ -239,12 +239,34 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
     ) {
         for decl in top_decls {
             if let DeclKind::Extend {
-                name, conformances, ..
+                name,
+                conformances,
+                generics,
+                ..
             } = &decl.kind
                 && let Ok(head) = name.symbol()
             {
+                let self_params: Vec<Symbol> = if generics.is_empty() {
+                    self.catalog
+                        .structs
+                        .get(&head)
+                        .map(|info| info.params.clone())
+                        .or_else(|| {
+                            self.catalog
+                                .enums
+                                .get(&head)
+                                .map(|info| info.params.clone())
+                        })
+                        .unwrap_or_default()
+                } else {
+                    generic_symbols(generics)
+                };
+                let self_ty =
+                    Ty::Nominal(head, self_params.iter().copied().map(Ty::Param).collect());
                 for conformance in conformances {
-                    if let Some((protocol, _)) = self.lower_protocol_ref(conformance) {
+                    if let Some((protocol, _)) =
+                        self.lower_protocol_ref_with_self(conformance, Some(&self_ty))
+                    {
                         self.record_marker_claim(head, protocol.protocol, decl.id);
                         self.explicit_conformances.insert((head, protocol));
                     }
@@ -256,10 +278,19 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             let DeclKind::Struct { body, .. } = &decl.kind else {
                 continue;
             };
+            let self_params = self
+                .catalog
+                .structs
+                .get(head)
+                .map(|info| info.params.clone())
+                .unwrap_or_default();
+            let self_ty = Ty::Nominal(*head, self_params.iter().copied().map(Ty::Param).collect());
             for member in &body.decls {
                 if let DeclKind::Extend { conformances, .. } = &member.kind {
                     for conformance in conformances {
-                        if let Some((protocol, _)) = self.lower_protocol_ref(conformance) {
+                        if let Some((protocol, _)) =
+                            self.lower_protocol_ref_with_self(conformance, Some(&self_ty))
+                        {
                             self.record_marker_claim(*head, protocol.protocol, member.id);
                             self.explicit_conformances.insert((*head, protocol));
                         }
@@ -703,25 +734,37 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         else {
             return;
         };
+        self.self_types.push(Ty::Param(symbol));
+        let params = generic_symbols(generics);
+        let param_defaults = generics
+            .iter()
+            .map(|generic| {
+                generic
+                    .default
+                    .as_ref()
+                    .map(|default| self.lower_annotation(default))
+            })
+            .collect();
+        let self_ty = Ty::Param(symbol);
         let supers: Vec<ProtocolRef> = conformances
             .iter()
-            .filter_map(|c| self.lower_protocol_ref(c).map(|(protocol, _)| protocol))
+            .filter_map(|c| {
+                self.lower_protocol_ref_with_self(c, Some(&self_ty))
+                    .map(|(protocol, _)| protocol)
+            })
             .collect();
 
         let mut info = ProtocolInfo {
-            params: generic_symbols(generics),
+            params: params.clone(),
+            param_defaults,
             supers,
             ..Default::default()
         };
-        self.self_types.push(Ty::Param(symbol));
         self.register_where_bounds(where_clause.as_ref());
         self.catalog.param_bounds.entry(symbol).or_insert_with(|| {
             vec![ProtocolRef {
                 protocol: symbol,
-                args: generic_symbols(generics)
-                    .into_iter()
-                    .map(Ty::Param)
-                    .collect(),
+                args: params.iter().copied().map(Ty::Param).collect(),
             }]
         });
         for member in &body.decls {
@@ -1146,7 +1189,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         let mut rows: IndexMap<ProtocolRef, Conformance> = IndexMap::default();
         let mut missing_requirements: FxHashSet<Symbol> = FxHashSet::default();
         for conformance_annotation in conformances {
-            let Some((protocol, assoc_args)) = self.lower_protocol_ref(conformance_annotation)
+            let Some((protocol, assoc_args)) =
+                self.lower_protocol_ref_with_self(conformance_annotation, Some(&self_ty))
             else {
                 continue;
             };

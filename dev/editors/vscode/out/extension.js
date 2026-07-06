@@ -35,12 +35,28 @@ function configuredCorePath() {
     }
     return undefined;
 }
+function configuredStdlibPath() {
+    const stdlibPath = vscode_1.workspace
+        .getConfiguration("talktalk")
+        .get("stdlibPath")
+        ?.trim();
+    if (stdlibPath) {
+        return expandHome(stdlibPath);
+    }
+    const envStdlibPath = process.env.TALK_STDLIB_PATH?.trim();
+    if (envStdlibPath) {
+        return expandHome(envStdlibPath);
+    }
+    return undefined;
+}
 function serverOptions() {
     const corePath = configuredCorePath();
+    const stdlibPath = configuredStdlibPath();
     const env = {
         ...process.env,
         RUST_LOG: process.env.RUST_LOG ?? "debug",
         ...(corePath ? { TALK_CORE_PATH: corePath } : {}),
+        ...(stdlibPath ? { TALK_STDLIB_PATH: stdlibPath } : {}),
     };
     return {
         command: (0, os_1.homedir)() + "/apps/talk/target/debug/talk",
@@ -92,6 +108,41 @@ async function clearCorePath() {
         await vscode_1.commands.executeCommand("talktalk.restartLsp");
     }
 }
+async function setStdlibPath() {
+    const current = configuredStdlibPath();
+    const devStdlibPath = (0, os_1.homedir)() + "/apps/talk/stdlib";
+    const defaultPath = current ?? ((0, fs_1.existsSync)(devStdlibPath) ? devStdlibPath : (0, os_1.homedir)());
+    const selected = await vscode_1.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        defaultUri: vscode_1.Uri.file(defaultPath),
+        openLabel: "Use as TALK_STDLIB_PATH",
+        title: "Select Talk stdlib directory",
+    });
+    const folder = selected?.[0]?.fsPath;
+    if (!folder) {
+        return;
+    }
+    const target = vscode_1.workspace.workspaceFolders?.length
+        ? vscode_1.ConfigurationTarget.Workspace
+        : vscode_1.ConfigurationTarget.Global;
+    await vscode_1.workspace.getConfiguration("talktalk").update("stdlibPath", folder, target);
+    const restart = await vscode_1.window.showInformationMessage(`TalkTalk stdlib path set to ${folder}.`, "Restart Language Server");
+    if (restart === "Restart Language Server") {
+        await vscode_1.commands.executeCommand("talktalk.restartLsp");
+    }
+}
+async function clearStdlibPath() {
+    const target = vscode_1.workspace.workspaceFolders?.length
+        ? vscode_1.ConfigurationTarget.Workspace
+        : vscode_1.ConfigurationTarget.Global;
+    await vscode_1.workspace.getConfiguration("talktalk").update("stdlibPath", undefined, target);
+    const restart = await vscode_1.window.showInformationMessage("TalkTalk stdlib path cleared.", "Restart Language Server");
+    if (restart === "Restart Language Server") {
+        await vscode_1.commands.executeCommand("talktalk.restartLsp");
+    }
+}
 function activate(context) {
     // Options to control the language client
     const clientOptions = {
@@ -112,7 +163,7 @@ function activate(context) {
             restartPromise = undefined;
         });
         return restartPromise;
-    }), vscode_1.commands.registerCommand("talktalk.setCorePath", setCorePath), vscode_1.commands.registerCommand("talktalk.clearCorePath", clearCorePath));
+    }), vscode_1.commands.registerCommand("talktalk.setCorePath", setCorePath), vscode_1.commands.registerCommand("talktalk.clearCorePath", clearCorePath), vscode_1.commands.registerCommand("talktalk.setStdlibPath", setStdlibPath), vscode_1.commands.registerCommand("talktalk.clearStdlibPath", clearStdlibPath));
     // Create the language client and start the client.
     client = createClient();
     // Start the client. This will also launch the server

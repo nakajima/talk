@@ -53,7 +53,7 @@ pub struct ImportedSymbol {
 pub enum ImportedSymbols {
     /// Named imports: { a, b, c }
     Named(Vec<ImportedSymbol>),
-    /// Import all public symbols: _
+    /// Import all public symbols.
     All,
 }
 

@@ -938,6 +938,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     generics: vec![],
                     conformances: vec![],
+                    default: None,
                 }],
                 captures: vec![],
                 where_clause: None,
@@ -986,6 +987,20 @@ pub mod tests {
             where_clause.predicates[1].kind,
             WherePredicateKind::TypeEq { .. }
         ));
+    }
+
+    #[test]
+    fn parses_generic_default() {
+        let parsed = parse("protocol Equatable<RHS = Self> {}");
+        let DeclKind::Protocol { generics, .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected protocol")
+        };
+        assert_eq!(generics.len(), 1);
+        let default = generics[0].default.as_ref().expect("generic default");
+        let TypeAnnotationKind::Nominal { name, .. } = &default.kind else {
+            panic!("expected nominal default")
+        };
+        assert_eq!(name.name_str(), "Self");
     }
 
     #[test]
@@ -1803,7 +1818,8 @@ pub mod tests {
                         name: "T".into(),
                         name_span: Span::ANY,
                         generics: vec![],
-                        conformances: vec![]
+                        conformances: vec![],
+                        default: None,
                     },
                     GenericDecl {
                         id: NodeID::ANY,
@@ -1811,7 +1827,8 @@ pub mod tests {
                         name: "Y".into(),
                         name_span: Span::ANY,
                         generics: vec![],
-                        conformances: vec![]
+                        conformances: vec![],
+                        default: None,
                     },
                 ],
                 where_clause: None,
@@ -2991,6 +3008,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         generics: vec![],
                         conformances: vec![],
+                        default: None,
                         span: Span::ANY
                     },
                     where_clause: None
@@ -4206,6 +4224,24 @@ pub mod tests {
     fn parses_import_all() {
         use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
 
+        let parsed = parse("use ./utils.tlk");
+
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Import(import) = &decl.kind else {
+            panic!("Expected import, got {:?}", decl.kind);
+        };
+
+        assert!(matches!(import.symbols, ImportedSymbols::All));
+        match &import.path {
+            ImportPath::Relative(p) => assert_eq!(p, "./utils.tlk"),
+            _ => panic!("Expected relative path"),
+        }
+    }
+
+    #[test]
+    fn parses_legacy_import_all() {
+        use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
+
         let parsed = parse("use _ from ./utils.tlk");
 
         let decl = parsed.roots[0].as_decl();
@@ -4239,6 +4275,24 @@ pub mod tests {
             _ => panic!("Expected named imports"),
         }
 
+        match &import.path {
+            ImportPath::Package(p) => assert_eq!(p, "collections"),
+            _ => panic!("Expected package path"),
+        }
+    }
+
+    #[test]
+    fn parses_package_import_all() {
+        use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
+
+        let parsed = parse("use collections");
+
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Import(import) = &decl.kind else {
+            panic!("Expected import, got {:?}", decl.kind);
+        };
+
+        assert!(matches!(import.symbols, ImportedSymbols::All));
         match &import.path {
             ImportPath::Package(p) => assert_eq!(p, "collections"),
             _ => panic!("Expected package path"),

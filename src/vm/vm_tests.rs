@@ -377,6 +377,16 @@ pub mod tests {
     }
 
     #[test]
+    fn consuming_method_receiver_in_branch_does_not_double_free() {
+        assert_eq!(
+            run_on_both_engines(
+                "extend String {\n\tconsuming func consume_len() -> Int {\n\t\tself.byte_count\n\t}\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tif flag { s.consume_len() }\n\t1\n}\nf(true)"
+            ),
+            Value::I64(1)
+        );
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_print_int() {
         // Pulls in Int: Showable → _digit → match on Int literals.
         let (_, out) = run_on_both_engines_io("print(417)");

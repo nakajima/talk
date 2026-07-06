@@ -2,10 +2,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TALK_BUILD_SHA");
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
     println!("cargo:rerun-if-changed=.git/HEAD");
-    if let Ok(head) = std::fs::read_to_string(".git/HEAD") {
-        if let Some(ref_name) = head.trim().strip_prefix("ref: ") {
-            println!("cargo:rerun-if-changed=.git/{ref_name}");
-        }
+    if let Ok(head) = std::fs::read_to_string(".git/HEAD")
+        && let Some(ref_name) = head.trim().strip_prefix("ref: ")
+    {
+        println!("cargo:rerun-if-changed=.git/{ref_name}");
     }
 
     let sha = std::env::var("TALK_BUILD_SHA")

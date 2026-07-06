@@ -80,16 +80,16 @@ File imports use Talk's `use` syntax:
 ```talk
 use { name } from ./file.tlk
 use { OldName: LocalName } from ./file.tlk
-use _ from ./file.tlk
+use ./file.tlk
 ```
 
 A relative import resolves against the target file's public symbols. The
 driver discovers and parses relative imports before name resolution; the
 resolver checks that each named import exists and is public, applies
 aliases, and inserts the imported symbol into the importing file's root
-scope. `use _` imports all public, non-builtin symbols from the target.
-Package-style imports (`use { name } from package`) resolve against the
-`ModuleEnvironment` instead of a source file.
+scope. A path-only `use` imports all public, non-builtin symbols from the
+target. Package-style imports (`use { name } from package` or `use package`)
+resolve against the `ModuleEnvironment` instead of a source file.
 
 Qualified names such as `./file::Thing`, `../lib::Thing`, and
 `Package::Thing` are resolved through the same public-symbol rules. Core

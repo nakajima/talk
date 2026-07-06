@@ -26,6 +26,7 @@ use async_lsp::{
     server::LifecycleLayer,
     tracing::TracingLayer,
 };
+use derive_visitor::Drive;
 use ignore::WalkBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::any::Any;
@@ -1110,6 +1111,35 @@ fn compute_code_actions(
             continue;
         }
 
+        if diagnostic.message.starts_with("Missing '") {
+            actions.extend(missing_witness_quick_fixes(
+                workspace,
+                text,
+                uri,
+                file_id,
+                diagnostic.range.start,
+                &diagnostic.message,
+                diag_range,
+            ));
+            continue;
+        }
+
+        if diagnostic
+            .message
+            .starts_with("Match does not cover every case;")
+        {
+            actions.extend(non_exhaustive_match_quick_fixes(
+                workspace,
+                text,
+                uri,
+                file_id,
+                diagnostic.range.start,
+                &diagnostic.message,
+                diag_range,
+            ));
+            continue;
+        }
+
         // Ambiguous member: one rewrite per candidate protocol,
         // `x.m(args)` -> `P.m(x, args)` (the explicit protocol-static
         // form the checker's message suggests).
@@ -1156,7 +1186,7 @@ fn compute_code_actions(
                 };
 
                 // Create the import statement
-                let import_stmt = format!("use {{ {} }} from {}\n", name, relative_path);
+                let import_stmt = format!("use {}\n", relative_path);
 
                 // Find where to insert (at the start of the file, after any existing imports)
                 let insert_position = Position::new(0, 0);
@@ -1268,7 +1298,7 @@ fn ambiguous_member_quick_fixes(
             std::collections::HashMap::new();
         changes.insert(uri.clone(), edits);
         actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-            title: format!("Use '{candidate}.{label}({receiver}…)'"),
+            title: format!("Use '{candidate}.{label}({receiver}...)'"),
             kind: Some(CodeActionKind::QUICKFIX),
             diagnostics: Some(vec![Diagnostic {
                 range: diag_range,
@@ -1289,6 +1319,383 @@ fn ambiguous_member_quick_fixes(
         }));
     }
     actions
+}
+
+fn missing_witness_quick_fixes(
+    workspace: &AnalysisWorkspace,
+    text: &str,
+    uri: &Url,
+    file_id: crate::node_id::FileID,
+    diag_start: u32,
+    message: &str,
+    diag_range: Range,
+) -> Vec<CodeActionOrCommand> {
+    let Some((requirement, protocol)) = parse_missing_witness(message) else {
+        return vec![];
+    };
+    let Some(ast) = workspace
+        .asts
+        .get(file_id.0 as usize)
+        .and_then(|ast| ast.as_ref())
+    else {
+        return vec![];
+    };
+    let Some(extend) = enclosing_extend_at(ast, diag_start) else {
+        return vec![];
+    };
+    let crate::node_kinds::decl::DeclKind::Extend { body, .. } = &extend.kind else {
+        return vec![];
+    };
+    let signature = source_requirement_signature(workspace, requirement, protocol)
+        .or_else(|| catalog_requirement_signature(workspace, requirement, protocol))
+        .unwrap_or_else(|| format!("func {requirement}()"));
+    let stub = method_stub(&signature);
+    let Some((insert_offset, insert_text)) = insertion_before_closing_brace(text, body.span, &stub)
+    else {
+        return vec![];
+    };
+    let Some(range) = byte_span_to_range_utf16(text, insert_offset as u32, insert_offset as u32)
+    else {
+        return vec![];
+    };
+
+    vec![quick_fix_action(
+        uri,
+        format!("Add requirement '{requirement}'"),
+        vec![TextEdit::new(range, insert_text)],
+        message,
+        diag_range,
+        Some(true),
+    )]
+}
+
+fn non_exhaustive_match_quick_fixes(
+    workspace: &AnalysisWorkspace,
+    text: &str,
+    uri: &Url,
+    file_id: crate::node_id::FileID,
+    diag_start: u32,
+    message: &str,
+    diag_range: Range,
+) -> Vec<CodeActionOrCommand> {
+    let Some(ast) = workspace
+        .asts
+        .get(file_id.0 as usize)
+        .and_then(|ast| ast.as_ref())
+    else {
+        return vec![];
+    };
+    let Some(expr) = enclosing_match_at(ast, diag_start) else {
+        return vec![];
+    };
+    let patterns = missing_patterns_for_match(workspace, &expr)
+        .filter(|patterns| !patterns.is_empty())
+        .unwrap_or_else(|| parse_missing_patterns(message));
+    if patterns.is_empty() {
+        return vec![];
+    }
+    let arms = patterns
+        .iter()
+        .map(|pattern| format!("{pattern} -> {{}}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Some((insert_offset, insert_text)) = insertion_before_closing_brace(text, expr.span, &arms)
+    else {
+        return vec![];
+    };
+    let Some(range) = byte_span_to_range_utf16(text, insert_offset as u32, insert_offset as u32)
+    else {
+        return vec![];
+    };
+    let title = if patterns.len() == 1 {
+        format!("Add missing match arm '{}'", patterns[0])
+    } else {
+        "Add missing match arms".to_string()
+    };
+
+    vec![quick_fix_action(
+        uri,
+        title,
+        vec![TextEdit::new(range, insert_text)],
+        message,
+        diag_range,
+        Some(true),
+    )]
+}
+
+fn quick_fix_action(
+    uri: &Url,
+    title: String,
+    edits: Vec<TextEdit>,
+    message: &str,
+    diag_range: Range,
+    is_preferred: Option<bool>,
+) -> CodeActionOrCommand {
+    let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+        std::collections::HashMap::new();
+    changes.insert(uri.clone(), edits);
+    CodeActionOrCommand::CodeAction(CodeAction {
+        title,
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![Diagnostic {
+            range: diag_range,
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("talk".to_string()),
+            message: message.to_string(),
+            ..Default::default()
+        }]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        command: None,
+        is_preferred,
+        disabled: None,
+        data: None,
+    })
+}
+
+fn parse_missing_witness(message: &str) -> Option<(&str, &str)> {
+    let rest = message.strip_prefix("Missing '")?;
+    let (requirement, rest) = rest.split_once("' required by ")?;
+    Some((requirement, rest))
+}
+
+fn enclosing_extend_at(
+    ast: &crate::ast::AST<crate::ast::NameResolved>,
+    byte_offset: u32,
+) -> Option<crate::node_kinds::decl::Decl> {
+    crate::analysis::node_ids_at_offset(ast, byte_offset)
+        .into_iter()
+        .filter_map(|node_id| match ast.find(node_id) {
+            Some(crate::node::Node::Decl(
+                decl @ crate::node_kinds::decl::Decl {
+                    kind: crate::node_kinds::decl::DeclKind::Extend { .. },
+                    ..
+                },
+            )) => Some(decl),
+            _ => None,
+        })
+        .find(|decl| decl.span.start <= byte_offset && byte_offset <= decl.span.end)
+}
+
+fn enclosing_match_at(
+    ast: &crate::ast::AST<crate::ast::NameResolved>,
+    byte_offset: u32,
+) -> Option<crate::node_kinds::expr::Expr> {
+    crate::analysis::node_ids_at_offset(ast, byte_offset)
+        .into_iter()
+        .filter_map(|node_id| match ast.find(node_id) {
+            Some(crate::node::Node::Expr(expr)) => Some(expr),
+            _ => None,
+        })
+        .find(|expr| match &expr.kind {
+            crate::node_kinds::expr::ExprKind::Match(scrutinee, _) => {
+                scrutinee.span.start <= byte_offset && byte_offset <= scrutinee.span.end
+            }
+            _ => false,
+        })
+}
+
+fn source_requirement_signature(
+    workspace: &AnalysisWorkspace,
+    requirement: &str,
+    protocol: &str,
+) -> Option<String> {
+    let protocol_name = protocol.split('<').next().unwrap_or(protocol);
+    for ast in workspace.asts.iter().flatten() {
+        let mut result = None;
+        let mut visitor =
+            derive_visitor::visitor_enter_fn(|decl: &crate::node_kinds::decl::Decl| {
+                if result.is_some() {
+                    return;
+                }
+                let crate::node_kinds::decl::DeclKind::Protocol { name, body, .. } = &decl.kind
+                else {
+                    return;
+                };
+                if name.name_str() != protocol_name {
+                    return;
+                }
+                for member in &body.decls {
+                    match &member.kind {
+                        crate::node_kinds::decl::DeclKind::MethodRequirement {
+                            signature, ..
+                        }
+                        | crate::node_kinds::decl::DeclKind::FuncSignature(signature)
+                            if signature.name.name_str() == requirement =>
+                        {
+                            result = Some(crate::parsing::formatter::format_node(
+                                &crate::node::Node::Decl(member.clone()),
+                                &ast.meta,
+                            ));
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        for root in &ast.roots {
+            root.drive(&mut visitor);
+        }
+        drop(visitor);
+        if let Some(result) = result {
+            return Some(strip_implicit_self_param(result.trim()));
+        }
+    }
+    None
+}
+
+fn catalog_requirement_signature(
+    workspace: &AnalysisWorkspace,
+    requirement: &str,
+    protocol: &str,
+) -> Option<String> {
+    let _names =
+        crate::name_resolution::symbol::set_symbol_names(workspace.types.display_names.clone());
+    let mut refs: Vec<crate::types::ty::ProtocolRef> = workspace
+        .types
+        .catalog
+        .protocols
+        .keys()
+        .copied()
+        .map(crate::types::ty::ProtocolRef::bare)
+        .collect();
+    for (_, protocol_ref) in workspace.types.catalog.conformances.keys() {
+        if !refs.contains(protocol_ref) {
+            refs.push(protocol_ref.clone());
+        }
+    }
+
+    for protocol_ref in refs {
+        for (owner, label, req) in workspace
+            .types
+            .catalog
+            .requirements_for_conformance(&protocol_ref)
+        {
+            if label == requirement && owner.to_string() == protocol {
+                return signature_from_requirement_scheme(&workspace.types, &label, req.symbol);
+            }
+        }
+    }
+    None
+}
+
+fn signature_from_requirement_scheme(
+    types: &crate::types::TypeOutput,
+    label: &str,
+    symbol: crate::name_resolution::symbol::Symbol,
+) -> Option<String> {
+    let scheme = types.schemes.get(&symbol)?;
+    let crate::types::ty::Ty::Func(params, ret, _) = &scheme.ty else {
+        return None;
+    };
+    let params = params
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| format!("arg{index}: {}", ty.render_mono()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(strip_implicit_self_param(&format!(
+        "func {label}({params}) -> {}",
+        ret.render_mono()
+    )))
+}
+
+fn strip_implicit_self_param(signature: &str) -> String {
+    let Some(open) = signature.find('(') else {
+        return signature.to_string();
+    };
+    let after_open = &signature[open + 1..];
+    let leading = after_open.len() - after_open.trim_start().len();
+    let params = &after_open[leading..];
+    if !params.starts_with("self:") {
+        return signature.to_string();
+    }
+    if let Some(comma) = params.find(',') {
+        return format!(
+            "{}{}",
+            &signature[..open + 1],
+            params[comma + 1..].trim_start()
+        );
+    }
+    if let Some(close) = params.find(')') {
+        return format!("{}{}", &signature[..open + 1], &params[close..]);
+    }
+    signature.to_string()
+}
+
+fn method_stub(signature: &str) -> String {
+    format!("{} {{\n\t{{}}\n}}", signature.trim())
+}
+
+fn missing_patterns_for_match(
+    workspace: &AnalysisWorkspace,
+    expr: &crate::node_kinds::expr::Expr,
+) -> Option<Vec<String>> {
+    let crate::node_kinds::expr::ExprKind::Match(scrutinee, arms) = &expr.kind else {
+        return None;
+    };
+    let mut ty = workspace.types.node_types.get(&scrutinee.id)?.clone();
+    if let crate::types::ty::Ty::Borrow(_, inner) = ty {
+        ty = *inner;
+    }
+    let arms: Vec<&crate::node_kinds::pattern::Pattern> =
+        arms.iter().map(|arm| &arm.pattern).collect();
+    Some(crate::types::exhaustiveness::check_match(&workspace.types.catalog, &ty, &arms).missing)
+}
+
+fn parse_missing_patterns(message: &str) -> Vec<String> {
+    if message.contains("add a catch-all arm") {
+        return vec!["_".to_string()];
+    }
+    let Some(rest) = message.strip_prefix("Match does not cover every case; unhandled: ") else {
+        return vec![];
+    };
+    rest.split(", ").map(str::to_string).collect()
+}
+
+fn insertion_before_closing_brace(
+    text: &str,
+    span: crate::span::Span,
+    block: &str,
+) -> Option<(usize, String)> {
+    let span_text = text.get(span.start as usize..span.end as usize)?;
+    let close = span.start as usize + span_text.rfind('}')?;
+    let line_start = text[..close].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let before_close_on_line = text.get(line_start..close)?;
+    let base_indent = if before_close_on_line.trim().is_empty() {
+        before_close_on_line
+    } else {
+        text.get(line_start..line_start + leading_whitespace_len(before_close_on_line))?
+    };
+    let child_indent = format!("{base_indent}\t");
+    let indented = indent_block(block, &child_indent);
+
+    if before_close_on_line.trim().is_empty() {
+        Some((line_start, format!("{indented}\n")))
+    } else {
+        Some((close, format!("\n{indented}\n{base_indent}")))
+    }
+}
+
+fn leading_whitespace_len(text: &str) -> usize {
+    text.char_indices()
+        .find_map(|(idx, ch)| (!matches!(ch, ' ' | '\t')).then_some(idx))
+        .unwrap_or(text.len())
+}
+
+fn indent_block(block: &str, indent: &str) -> String {
+    let mut result = String::new();
+    for (index, line) in block.lines().enumerate() {
+        if index > 0 {
+            result.push('\n');
+        }
+        result.push_str(indent);
+        result.push_str(line);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -1338,6 +1745,39 @@ mod tests {
     }
 
     #[test]
+    fn undefined_name_quick_fix_uses_path_only_import() {
+        let main_code = "foo\n";
+        let lib_code = "public let foo = 1\n";
+        let uri_main =
+            Url::from_file_path(std::env::temp_dir().join("auto_import_path_only_main.tlk"))
+                .expect("main uri");
+        let uri_lib =
+            Url::from_file_path(std::env::temp_dir().join("auto_import_path_only_lib.tlk"))
+                .expect("lib uri");
+        let module = workspace_for_docs(vec![(uri_main.clone(), main_code), (uri_lib, lib_code)]);
+        let document_id = super::document_id_for_uri(&uri_main);
+        let everywhere = Range::new(
+            async_lsp::lsp_types::Position::new(0, 0),
+            async_lsp::lsp_types::Position::new(999, 0),
+        );
+        let actions = super::compute_code_actions(&module, &document_id, &uri_main, everywhere);
+        let async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) = actions
+            .iter()
+            .find(|a| match a {
+                async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) => {
+                    action.title.contains("Import 'foo'")
+                }
+                _ => false,
+            })
+            .expect("import quick-fix")
+        else {
+            panic!("not a code action");
+        };
+        let rewritten = apply_edits(main_code, action.edit.as_ref().expect("edit"), &uri_main);
+        assert_eq!(rewritten, "use ./auto_import_path_only_lib.tlk\nfoo\n");
+    }
+
+    #[test]
     fn ambiguous_member_quick_fix_offers_each_protocol() {
         let code = "protocol Aa {\n\tfunc m() -> Int\n}\nprotocol Bb {\n\tfunc m() -> Int\n}\nextend Int: Aa {\n\tfunc m() -> Int { 1 }\n}\nextend Int: Bb {\n\tfunc m() -> Int { 2 }\n}\nlet n = 5\nlet x = n.m()\n";
         let uri = Url::from_file_path(std::env::temp_dir().join("ambiguous_member_quick_fix.tlk"))
@@ -1378,6 +1818,69 @@ mod tests {
         let rewritten = apply_edits(code, aa.edit.as_ref().expect("edit"), &uri);
         assert!(
             rewritten.contains("let x = Aa.m(n)"),
+            "rewritten source: {rewritten}"
+        );
+    }
+
+    #[test]
+    fn missing_witness_quick_fix_inserts_requirement_stub() {
+        let code = "protocol Foo {\n\tfunc foo() -> Int\n\tfunc bar(value: Int) -> Bool\n}\nstruct Thing {}\nextend Thing: Foo {\n\tfunc foo() -> Int { 1 }\n}\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("missing_witness_fix.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let document_id = super::document_id_for_uri(&uri);
+        let everywhere = Range::new(
+            async_lsp::lsp_types::Position::new(0, 0),
+            async_lsp::lsp_types::Position::new(999, 0),
+        );
+        let actions = super::compute_code_actions(&module, &document_id, &uri, everywhere);
+        let async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) = actions
+            .iter()
+            .find(|a| match a {
+                async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) => {
+                    action.title.contains("bar")
+                }
+                _ => false,
+            })
+            .expect("bar quick-fix")
+        else {
+            panic!("not a code action");
+        };
+        let rewritten = apply_edits(code, action.edit.as_ref().expect("edit"), &uri);
+        assert!(
+            rewritten.contains("func bar(value: Int) -> Bool"),
+            "rewritten source: {rewritten}"
+        );
+        assert!(rewritten.contains("{}"), "rewritten source: {rewritten}");
+    }
+
+    #[test]
+    fn non_exhaustive_match_quick_fix_inserts_missing_arms() {
+        let code = "enum Color {\n\tcase red, green\n}\nlet c = Color.red\nlet x = match c {\n\t.red -> 1\n}\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("missing_match_arm_fix.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let document_id = super::document_id_for_uri(&uri);
+        let everywhere = Range::new(
+            async_lsp::lsp_types::Position::new(0, 0),
+            async_lsp::lsp_types::Position::new(999, 0),
+        );
+        let actions = super::compute_code_actions(&module, &document_id, &uri, everywhere);
+        let async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) = actions
+            .iter()
+            .find(|a| match a {
+                async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) => {
+                    action.title.contains("match arm")
+                }
+                _ => false,
+            })
+            .expect("match quick-fix")
+        else {
+            panic!("not a code action");
+        };
+        let rewritten = apply_edits(code, action.edit.as_ref().expect("edit"), &uri);
+        assert!(
+            rewritten.contains(".green -> {}"),
             "rewritten source: {rewritten}"
         );
     }

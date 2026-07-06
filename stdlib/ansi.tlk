@@ -1,0 +1,19 @@
+public protocol ColorfulString where Self: Showable {
+	consuming func bold() -> String {
+		wrap(self.show(), "1")
+	}
+
+	consuming func green() -> String {
+		wrap(self.show(), "32")
+	}
+
+	consuming func red() -> String {
+		wrap(self.show(), "31")
+	}
+}
+
+extend String: ColorfulString {}
+
+func wrap(string: String, code: String) -> String {
+	"\u{1B}[" + code + "m" + string + "\u{1B}[0m"
+}

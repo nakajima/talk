@@ -15,6 +15,7 @@ pub struct GenericDecl {
     pub name_span: Span,
     pub generics: Vec<GenericDecl>,
     pub conformances: Vec<TypeAnnotation>,
+    pub default: Option<TypeAnnotation>,
     #[drive(skip)]
     pub span: Span,
 }

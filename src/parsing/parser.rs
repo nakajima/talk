@@ -361,11 +361,14 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Use)?;
 
-        // Parse imported symbols: either { a, b } or _
-        let symbols = if self.did_match(TokenKind::Underscore)? {
-            ImportedSymbols::All
-        } else {
-            self.consume(TokenKind::LeftBrace)?;
+        // Parse imported symbols. `use path` imports every public symbol from path,
+        // while `use { a, b } from path` imports specific symbols.
+        let (symbols, path_start, path) = if self.did_match(TokenKind::Underscore)? {
+            // Legacy import-all syntax.
+            self.consume_import_from()?;
+            let path_start = self.current.as_ref().map(|t| t.start).unwrap_or(0);
+            (ImportedSymbols::All, path_start, self.module_path()?)
+        } else if self.did_match(TokenKind::LeftBrace)? {
             let mut imported = vec![];
 
             loop {
@@ -398,27 +401,17 @@ impl<'a> Parser<'a> {
             }
 
             self.consume(TokenKind::RightBrace)?;
-            ImportedSymbols::Named(imported)
+            self.consume_import_from()?;
+            let path_start = self.current.as_ref().map(|t| t.start).unwrap_or(0);
+            (
+                ImportedSymbols::Named(imported),
+                path_start,
+                self.module_path()?,
+            )
+        } else {
+            let path_start = self.current.as_ref().map(|t| t.start).unwrap_or(0);
+            (ImportedSymbols::All, path_start, self.module_path()?)
         };
-
-        // Expect 'from' keyword (as contextual keyword)
-        match &self.current {
-            Some(tok) if tok.kind == TokenKind::Identifier && self.lexeme(tok) == "from" => {
-                self.advance();
-            }
-            _ => {
-                return Err(ParserError::UnexpectedToken {
-                    expected: "from".into(),
-                    actual: format!("{:?}", self.current),
-                    token: self.current.clone(),
-                });
-            }
-        }
-
-        // Parse import path
-        let path_start = self.current.as_ref().map(|t| t.start).unwrap_or(0);
-
-        let path = self.module_path()?;
 
         let path_end = self.current.as_ref().map(|t| t.start).unwrap_or(path_start);
         let path_span = Span {
@@ -437,6 +430,21 @@ impl<'a> Parser<'a> {
                 path_span,
             }),
         })
+    }
+
+    fn consume_import_from(&mut self) -> Result<(), ParserError> {
+        // Expect 'from' keyword (as contextual keyword)
+        match &self.current {
+            Some(tok) if tok.kind == TokenKind::Identifier && self.lexeme(tok) == "from" => {
+                self.advance();
+                Ok(())
+            }
+            _ => Err(ParserError::UnexpectedToken {
+                expected: "from".into(),
+                actual: format!("{:?}", self.current),
+                token: self.current.clone(),
+            }),
+        }
     }
 
     fn module_path(&mut self) -> Result<ImportPath, ParserError> {
@@ -3234,6 +3242,11 @@ impl<'a> Parser<'a> {
         } else {
             vec![]
         };
+        let default = if self.did_match(TokenKind::Equals)? {
+            Some(self.type_annotation()?)
+        } else {
+            None
+        };
 
         self.save_meta(tok, |id, span| GenericDecl {
             id,
@@ -3242,6 +3255,7 @@ impl<'a> Parser<'a> {
             name_span,
             generics,
             conformances,
+            default,
         })
     }
 

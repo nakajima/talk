@@ -370,6 +370,9 @@ impl<'a> Higlighter<'a> {
                 result.push(self.make_span(Kind::TYPE_PARAMETER, generic_decl.name_span));
                 result.extend(self.tokens_from_exprs(&generic_decl.conformances, ast));
                 result.extend(self.tokens_from_exprs(&generic_decl.generics, ast));
+                if let Some(default) = &generic_decl.default {
+                    result.extend(self.tokens_from_expr(default, ast));
+                }
             }
             Node::Parameter(parameter) => {
                 result.push(self.make_span(Kind::PARAMETER, parameter.name_span));

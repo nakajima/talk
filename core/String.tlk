@@ -72,6 +72,8 @@ public protocol StringMethods {
 	func utf8() -> UTF8View
 	func find(needle: &String) -> Int?
 	func find_from(needle: &String, start: Int) -> Int?
+	func starts_with(needle: &String) -> Bool
+	func ends_with(needle: &String) -> Bool
 }
 
 extend String: StringMethods {
@@ -89,6 +91,14 @@ extend String: StringMethods {
 
 	func find_from(needle: &String, start: Int) -> Int? {
 		self.as_substring().find_from(needle, start)
+	}
+
+	func starts_with(needle: &String) -> Bool {
+		self.as_substring().starts_with(needle)
+	}
+
+	func ends_with(needle: &String) -> Bool {
+		self.as_substring().ends_with(needle)
 	}
 }
 
@@ -141,6 +151,38 @@ extend Substring {
 			if same == false { return false }
 			i = i + 1
 		}
+		true
+	}
+
+	func starts_with(needle: &String) -> Bool {
+		if needle.count() > self.count() { return false }
+		let chars = self.iter()
+		let needle_chars = needle.iter()
+
+		for needle_char in needle_chars {
+			if let .some(char) = chars.next() {
+				if char != needle_char { return false }
+			} else {
+				return false
+			}
+		}
+
+		true
+	}
+
+	func ends_with(needle: &String) -> Bool {
+		if needle.count() > self.count() { return false }
+		let chars = self.iter().skip(self.count() - needle.count())
+		let needle_chars = needle.iter()
+
+		for char in chars {
+			if let .some(needle_char) = needle_chars.next() {
+				if needle_char != char { return false }
+			} else {
+				return false
+			}
+		}
+
 		true
 	}
 }

@@ -94,6 +94,8 @@ pub struct Requirement {
 pub struct ProtocolInfo {
     /// Protocol input parameters, in source order.
     pub params: Vec<Symbol>,
+    /// Default arguments for `params`, in the same order.
+    pub param_defaults: Vec<Option<Ty>>,
     /// Associated types by source name (name-keyed so a sub-protocol's
     /// same-named `associated` refines its super's, Swift-style).
     pub assoc: IndexMap<String, Symbol>,
@@ -551,6 +553,11 @@ impl TypeCatalog {
                         imp(k, target),
                         ProtocolInfo {
                             params: v.params.iter().map(|s| imp(*s, target)).collect(),
+                            param_defaults: v
+                                .param_defaults
+                                .iter()
+                                .map(|default| default.as_ref().map(&imp_ty))
+                                .collect(),
                             assoc: v
                                 .assoc
                                 .into_iter()
