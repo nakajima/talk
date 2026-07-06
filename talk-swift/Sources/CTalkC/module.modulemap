@@ -1,0 +1,5 @@
+module CTalkC [system] {
+  header "../../../talk-c/include/talk_c.h"
+  link "talk_c"
+  export *
+}

@@ -1,9 +1,14 @@
 use derive_visitor::{Drive, DriveMut};
 
 use crate::{
-    impl_into_node, label::Label, name::Name, name_resolution::name_resolver::NameResolverError,
-    name_resolution::symbol::Symbol, node_id::NodeID,
-    node_kinds::record_field::RecordFieldTypeAnnotation, parsing::span::Span,
+    impl_into_node,
+    label::Label,
+    name::Name,
+    name_resolution::name_resolver::NameResolverError,
+    name_resolution::symbol::Symbol,
+    node_id::NodeID,
+    node_kinds::{func::EffectSet, record_field::RecordFieldTypeAnnotation},
+    parsing::span::Span,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
@@ -33,6 +38,8 @@ pub enum TypeAnnotationKind {
     },
     Func {
         params: Vec<TypeAnnotation>,
+        #[drive(skip)]
+        effects: EffectSet,
         returns: Box<TypeAnnotation>,
     },
     NominalPath {

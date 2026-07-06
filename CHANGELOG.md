@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased (2026-07-06) — Effectful function type annotations
+
+Function type annotations now carry explicit effect rows. Syntax such as
+`() 'io -> Int`, `() '[read, write] -> Void`, and `() '[] -> Void`
+parses into `TypeAnnotationKind::Func { effects, .. }` instead of
+silently creating an inferred open row. The checker lowers those effect
+sets into the function type's latent effect row, so annotated closure
+values and higher-order parameters can bound or close the effects they
+permit.
+
+Name resolution, formatting, highlighting, goto-definition, and rename
+coverage were updated for effects that appear inside function type
+annotations.
+
+## Unreleased (2026-07-05) — Heavily WIP C/iOS embedding facade
+
+A new `talk-c` workspace crate exposes a heavily WIP C ABI facade for
+embedding Talk in Swift/iOS and other C-compatible hosts. The facade
+wraps the compiler pipeline, bytecode compilation, formatting,
+highlighting, direct workspace language-service APIs, and REPL support
+behind opaque handles instead of exposing Rust internals directly.
+
+Language-service calls now use typed C result handles rather than JSON:
+diagnostics, hover, completions, ownership inlay hints, highlight
+tokens, goto definition, rename edits, evaluation results, and REPL
+completions are all read through count/get/value accessors. Returned
+strings are borrowed `TalkStringRef` slices tied to the result handle's
+lifetime, so host wrappers should copy them before freeing the handle.
+Raw string/byte APIs still use `TalkResult` for formatting, HTML
+highlighting, IR/bytecode rendering, and bytecode emission.
+
+The analysis layer gained protocol-independent goto-definition and rename
+entry points so embedders can call the language-service functionality
+directly without running the LSP server. A new GitHub workflow builds
+`libtalk_c.a` plus `talk_c.h` for iOS device and simulator targets and
+publishes them to the `talk-c-ios-archives` branch by commit SHA.
+
+A heavily WIP `talk-swift` Swift package now wraps the local `talk-c`
+facade. It can consume a generated `TalkC.xcframework` when present or
+fall back to a system-library import of `talk_c.h` plus a caller-provided
+`libtalk_c` linker search path. The Swift layer copies borrowed C string
+slices into native Swift values and exposes typed wrappers for workspace,
+compiler, highlighter, and REPL operations.
+
+This interface is intentionally not stable yet: naming, result shapes,
+threading expectations, Swift package layout, and XCFramework packaging
+are still expected to change.
+
 ## Unreleased (2026-07-05) — LSP rename coverage
 
 LSP rename now covers the symbol surfaces that have first-class source

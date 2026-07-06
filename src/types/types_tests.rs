@@ -2618,6 +2618,22 @@ pub mod tests {
     }
 
     #[test]
+    fn effectful_function_type_annotation_accepts_declared_effects() {
+        let t = check("// no-core\neffect 'a() -> ()\nlet f: () 'a -> () = func() {\n\t'a()\n}");
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn effectful_function_type_annotation_rejects_extra_effects() {
+        let t = check(
+            "// no-core\neffect 'a() -> ()\neffect 'b() -> ()\nlet f: () 'a -> () = func() {\n\t'b()\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("'b"), "{errors:?}");
+    }
+
+    #[test]
     fn handler_parameters_infer_from_perform_sites() {
         // `effect 'oops(e)` has no annotation: the perform's argument and the
         // handler's parameter meet in the effect signature's shared

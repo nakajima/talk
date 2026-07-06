@@ -349,6 +349,15 @@ fn goto_definition_symbol_from_type_annotation(
                 goto_definition_symbol_from_type_annotation(&binding.value, byte_offset)
             })
         }),
+        TypeAnnotationKind::Func {
+            params,
+            effects,
+            returns,
+        } => params
+            .iter()
+            .find_map(|param| goto_definition_symbol_from_type_annotation(param, byte_offset))
+            .or_else(|| effect_symbol_at_offset(effects, byte_offset))
+            .or_else(|| goto_definition_symbol_from_type_annotation(returns, byte_offset)),
         // NominalPath member resolution needs the type catalog, which is
         // unavailable until the type checker is rebuilt.
         _ => None,

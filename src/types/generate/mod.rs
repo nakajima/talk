@@ -55,7 +55,7 @@ use crate::node_kinds::{
     call_arg::CallArg,
     decl::{Decl, DeclKind},
     expr::{Expr, ExprKind},
-    func::Func,
+    func::{EffectSet, Func},
     match_arm::MatchArm,
     parameter::Parameter,
     pattern::{Pattern, PatternKind, RecordFieldPatternKind},

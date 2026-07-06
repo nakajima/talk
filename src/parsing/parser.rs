@@ -896,12 +896,58 @@ impl<'a> Parser<'a> {
         let params = self.parameters()?;
         self.consume(TokenKind::RightParen)?;
 
+        let effects = self.effect_set()?;
+
+        let ret = if self.consume(TokenKind::Arrow).is_ok() {
+            Some(self.type_annotation()?)
+        } else {
+            None
+        };
+
+        let where_clause = self.where_clause()?;
+
+        if context == BlockContext::Protocol && !self.peek_is(TokenKind::LeftBrace) {
+            let ret = ret.map(Box::new);
+
+            return self.save_meta(tok, |id, span| {
+                FuncOrFuncSignature::FuncSignature(FuncSignature {
+                    id,
+                    span,
+                    name: name.into(),
+                    generics,
+                    where_clause,
+                    params,
+                    effects: effects.clone(),
+                    ret,
+                })
+            });
+        }
+
+        let body = self.block(BlockContext::Func, true)?;
+        self.save_meta(tok, |id, _span| {
+            FuncOrFuncSignature::Func(Func {
+                id,
+                name: name.into(),
+                name_span,
+                effects,
+                generics,
+                captures,
+                where_clause,
+                params,
+                body,
+                ret,
+                attributes: vec![],
+            })
+        })
+    }
+
+    fn effect_set(&mut self) -> Result<EffectSet, ParserError> {
         let mut names = vec![];
         let mut spans = vec![];
         let mut is_open = false;
         if self.peek_is(TokenKind::SingleQuote) {
             self.advance();
-            // It's an effect list
+            // It's an effect list.
             self.consume(TokenKind::LeftBracket)?;
             while !self.did_match(TokenKind::RightBracket)? && !self.did_match(TokenKind::EOF)? {
                 if let Ok((name, span)) = self.identifier() {
@@ -932,54 +978,10 @@ impl<'a> Parser<'a> {
             is_open = true;
         }
 
-        let ret = if self.consume(TokenKind::Arrow).is_ok() {
-            Some(self.type_annotation()?)
-        } else {
-            None
-        };
-
-        let where_clause = self.where_clause()?;
-
-        if context == BlockContext::Protocol && !self.peek_is(TokenKind::LeftBrace) {
-            let ret = ret.map(Box::new);
-
-            return self.save_meta(tok, |id, span| {
-                FuncOrFuncSignature::FuncSignature(FuncSignature {
-                    id,
-                    span,
-                    name: name.into(),
-                    generics,
-                    where_clause,
-                    params,
-                    effects: EffectSet {
-                        names,
-                        spans,
-                        is_open,
-                    },
-                    ret,
-                })
-            });
-        }
-
-        let body = self.block(BlockContext::Func, true)?;
-        self.save_meta(tok, |id, _span| {
-            FuncOrFuncSignature::Func(Func {
-                id,
-                name: name.into(),
-                name_span,
-                effects: EffectSet {
-                    names,
-                    spans,
-                    is_open,
-                },
-                generics,
-                captures,
-                where_clause,
-                params,
-                body,
-                ret,
-                attributes: vec![],
-            })
+        Ok(EffectSet {
+            names,
+            spans,
+            is_open,
         })
     }
 
@@ -2672,6 +2674,12 @@ impl<'a> Parser<'a> {
                 sig_args.push(self.type_annotation()?);
                 self.consume(TokenKind::Comma).ok();
             }
+            let has_effects = self.peek_is(TokenKind::SingleQuote)
+                || matches!(
+                    self.current.as_ref().map(|t| &t.kind),
+                    Some(TokenKind::EffectName)
+                );
+            let effects = self.effect_set()?;
             if self.did_match(TokenKind::Arrow)? {
                 let ret = self.type_annotation()?;
                 return self.save_meta(tok, |id, span| TypeAnnotation {
@@ -2679,10 +2687,18 @@ impl<'a> Parser<'a> {
                     span,
                     kind: TypeAnnotationKind::Func {
                         params: sig_args,
+                        effects,
                         returns: Box::new(ret),
                     },
                 });
             } else {
+                if has_effects {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "->".to_string(),
+                        actual: format!("{:?}", self.current),
+                        token: self.current.clone(),
+                    });
+                }
                 return self.save_meta(tok, |id, span| TypeAnnotation {
                     id,
                     span,

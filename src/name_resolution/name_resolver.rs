@@ -1190,6 +1190,16 @@ impl NameResolver {
                 self.diagnostic(ty.id, NameResolverError::UndefinedName(name.name_str()));
             }
         }
+
+        if let TypeAnnotationKind::Func { effects, .. } = &mut ty.kind {
+            for name in effects.names.iter_mut() {
+                let Some(resolved_name) = self.lookup(name) else {
+                    self.diagnostic(ty.id, NameResolverError::Unresolved(name.clone()));
+                    continue;
+                };
+                *name = resolved_name;
+            }
+        }
     }
 
     ///////////////////////////////////////////////////////////////////////////

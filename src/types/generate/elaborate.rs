@@ -220,6 +220,21 @@ impl<'e> Elaborator<'e> {
         }
     }
 
+    fn lower_effect_set(&mut self, effects: &EffectSet, node: NodeID) -> EffectRow {
+        let entries = effects
+            .names
+            .iter()
+            .filter_map(|name| name.symbol().ok())
+            .map(EffectEntry::label)
+            .collect();
+        let tail = if effects.is_open {
+            Some(EffTail::Var(self.store.fresh_eff(self.level, node)))
+        } else {
+            None
+        };
+        EffectRow::new(entries, tail)
+    }
+
     fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
         match &annotation.kind {
             TypeAnnotationKind::Borrow { mutable, inner } => {
@@ -278,10 +293,14 @@ impl<'e> Elaborator<'e> {
                     }
                 }
             }
-            TypeAnnotationKind::Func { params, returns } => {
+            TypeAnnotationKind::Func {
+                params,
+                effects,
+                returns,
+            } => {
                 let params = params.iter().map(|p| self.lower_annotation(p)).collect();
                 let ret = self.lower_annotation(returns);
-                let eff = EffectRow::open(self.store.fresh_eff(self.level, annotation.id));
+                let eff = self.lower_effect_set(effects, annotation.id);
                 Ty::Func(params, Box::new(ret), eff)
             }
             TypeAnnotationKind::Tuple(items) => match items.as_slice() {

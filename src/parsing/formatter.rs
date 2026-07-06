@@ -14,7 +14,7 @@ use crate::{
         call_arg::CallArg,
         decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, ReceiverMode, Visibility},
         expr::{Expr, ExprKind},
-        func::{CaptureMode, CaptureSpec, Func},
+        func::{CaptureMode, CaptureSpec, EffectSet, Func},
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
         inline_ir_instruction::InlineIRInstruction,
@@ -1433,6 +1433,25 @@ impl<'a> Formatter<'a> {
         result
     }
 
+    fn format_effect_set(&self, effects: &EffectSet) -> Option<Doc> {
+        match effects.names.len() {
+            0 if effects.is_open => None,
+            0 => Some(text("'[]")),
+            1 if !effects.is_open => Some(text(format!("'{}", effects.names[0].name_str()))),
+            _ => {
+                let mut parts: Vec<_> = effects
+                    .names
+                    .iter()
+                    .map(|effect| text(effect.name_str()))
+                    .collect();
+                if effects.is_open {
+                    parts.push(text(".."));
+                }
+                Some(text("'[") + join(parts, concat(text(","), text(" "))) + text("]"))
+            }
+        }
+    }
+
     fn format_type_annotation(&self, ty: &TypeAnnotation) -> Doc {
         match &ty.kind {
             TypeAnnotationKind::SelfType(..) => text("Self"),
@@ -1486,18 +1505,26 @@ impl<'a> Formatter<'a> {
                 ],
                 text("."),
             ),
-            TypeAnnotationKind::Func { params, returns } => {
+            TypeAnnotationKind::Func {
+                params,
+                effects,
+                returns,
+            } => {
                 let param_docs: Vec<_> = params
                     .iter()
                     .map(|p| self.format_type_annotation(p))
                     .collect();
 
-                concat(
+                let mut result = concat(
                     text("("),
-                    concat(
-                        join(param_docs, concat(text(","), text(" "))),
-                        concat_space(text(") ->"), self.format_type_annotation(returns)),
-                    ),
+                    concat(join(param_docs, concat(text(","), text(" "))), text(")")),
+                );
+                if let Some(effects) = self.format_effect_set(effects) {
+                    result = concat_space(result, effects);
+                }
+                concat_space(
+                    concat_space(result, text("->")),
+                    self.format_type_annotation(returns),
                 )
             }
             TypeAnnotationKind::Nominal { name, generics, .. }
@@ -1614,45 +1641,8 @@ impl<'a> Formatter<'a> {
             ),
         );
 
-        match func.effects.names.len() {
-            0 => (),
-            1 => {
-                result = if func.effects.is_open {
-                    concat_space(
-                        result,
-                        text("'[")
-                            + text(func.effects.names[0].name_str())
-                            + text(",")
-                            + text("..")
-                            + text("]"),
-                    )
-                } else {
-                    concat_space(
-                        result,
-                        text(format!("'{}", func.effects.names[0].name_str())),
-                    )
-                };
-            }
-            _ => {
-                let names = join(
-                    func.effects
-                        .names
-                        .iter()
-                        .map(|e| text(e.name_str()))
-                        .collect(),
-                    text(","),
-                );
-                result = concat_space(
-                    result,
-                    text("[")
-                        + if func.effects.is_open {
-                            join(vec![names, text("..")], text(","))
-                        } else {
-                            names
-                        }
-                        + text("]"),
-                )
-            }
+        if let Some(effects) = self.format_effect_set(&func.effects) {
+            result = concat_space(result, effects);
         }
 
         if let Some(ref ret) = func.ret {
@@ -2064,6 +2054,10 @@ impl<'a> Formatter<'a> {
                 concat(join(param_docs, concat(text(","), text(" "))), text(")")),
             ),
         );
+
+        if let Some(effects) = self.format_effect_set(&sig.effects) {
+            result = concat_space(result, effects);
+        }
 
         if let Some(ret) = &sig.ret {
             result = concat_space(

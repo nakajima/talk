@@ -235,13 +235,37 @@ impl TypeAnnotation {
                 }
             }
             TypeAnnotationKind::SelfType(name) => name.name_str(),
-            TypeAnnotationKind::Func { params, returns } => {
+            TypeAnnotationKind::Func {
+                params,
+                effects,
+                returns,
+            } => {
                 let params = params
                     .iter()
                     .map(TypeAnnotation::simple_display)
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({params}) -> {}", returns.simple_display())
+                let effects = match effects.names.len() {
+                    0 if effects.is_open => String::new(),
+                    0 => "'[]".to_string(),
+                    1 if !effects.is_open => format!("'{}", effects.names[0].name_str()),
+                    _ => {
+                        let mut parts = effects
+                            .names
+                            .iter()
+                            .map(|effect| effect.name_str())
+                            .collect::<Vec<_>>();
+                        if effects.is_open {
+                            parts.push("..".to_string());
+                        }
+                        format!("'[{}]", parts.join(", "))
+                    }
+                };
+                if effects.is_empty() {
+                    format!("({params}) -> {}", returns.simple_display())
+                } else {
+                    format!("({params}) {effects} -> {}", returns.simple_display())
+                }
             }
             TypeAnnotationKind::Tuple(items) => {
                 let items = items

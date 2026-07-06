@@ -390,6 +390,17 @@ fn goto_definition_symbol_from_type_annotation(
                 goto_definition_symbol_from_type_annotation(module, base, byte_offset)
             }
         }
+        TypeAnnotationKind::Func {
+            params,
+            effects,
+            returns,
+        } => params
+            .iter()
+            .find_map(|param| {
+                goto_definition_symbol_from_type_annotation(module, param, byte_offset)
+            })
+            .or_else(|| effect_symbol_at_offset(effects, byte_offset))
+            .or_else(|| goto_definition_symbol_from_type_annotation(module, returns, byte_offset)),
         _ => None,
     }
 }
@@ -861,6 +872,9 @@ impl RenameCollector<'_> {
                         self.push_span(binding.name_span);
                     }
                 }
+            }
+            TypeAnnotationKind::Func { effects, .. } => {
+                self.push_matching_effect_spans(effects);
             }
             _ => {}
         }

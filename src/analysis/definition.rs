@@ -322,6 +322,15 @@ fn symbol_from_type_annotation(
         TypeAnnotationKind::NominalPath { base, .. } => {
             symbol_from_type_annotation(base, byte_offset)
         }
+        TypeAnnotationKind::Func {
+            params,
+            effects,
+            returns,
+        } => params
+            .iter()
+            .find_map(|param| symbol_from_type_annotation(param, byte_offset))
+            .or_else(|| effect_symbol_at_offset(effects, byte_offset))
+            .or_else(|| symbol_from_type_annotation(returns, byte_offset)),
         _ => None,
     }
 }

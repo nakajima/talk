@@ -397,9 +397,13 @@ impl<'a> Higlighter<'a> {
                 }
                 TypeAnnotationKind::Func {
                     params,
+                    effects,
                     box returns,
                 } => {
                     result.extend(self.tokens_from_exprs(params, ast));
+                    for span in &effects.spans {
+                        result.push(self.make_span(Kind::EFFECT, *span));
+                    }
                     result.extend(self.tokens_from_expr(&returns, ast));
                 }
                 TypeAnnotationKind::NominalPath {

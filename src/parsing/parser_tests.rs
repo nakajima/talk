@@ -2168,6 +2168,7 @@ pub mod tests {
                                     generics: vec![]
                                 }
                             }],
+                            effects: Default::default(),
                             returns: Box::new(TypeAnnotation {
                                 id: NodeID::ANY,
                                 span: Span::ANY,
@@ -2186,6 +2187,24 @@ pub mod tests {
                 attributes: vec![],
             }))
         );
+    }
+
+    #[test]
+    fn parses_effectful_fn_type_repr() {
+        let parsed = parse("effect 'fizz() -> ()\nfunc greet(using: () 'fizz -> ()) {}");
+        let DeclKind::Func(func) = &parsed.roots[1].as_decl().kind else {
+            panic!("expected func decl");
+        };
+        let Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Func { effects, .. },
+            ..
+        }) = &func.params[0].type_annotation
+        else {
+            panic!("expected func type annotation");
+        };
+
+        assert_eq!(effects.names, vec![Name::Raw("fizz".into())]);
+        assert!(!effects.is_open);
     }
 
     #[test]
