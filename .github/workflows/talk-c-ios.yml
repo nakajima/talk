@@ -35,15 +35,19 @@ jobs:
         run: rustup toolchain install nightly --profile minimal --target "${{ matrix.target }}"
 
       - name: Build talk-c static library
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: "false"
         run: cargo +nightly build -p talk-c --release --locked --target "${{ matrix.target }}"
 
       - name: Stage talk-c archive
         shell: bash
         run: |
-          mkdir -p dist
-          asset="dist/libtalk_c-${{ matrix.target }}.a"
-          cp "target/${{ matrix.target }}/release/libtalk_c.a" "$asset"
-          cp "talk-c/include/talk_c.h" "dist/talk_c.h"
+          set -euo pipefail
+          mkdir -p dist "stage/talk-c-${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/libtalk_c.a" "stage/talk-c-${{ matrix.target }}/libtalk_c.a"
+          cp "talk-c/include/talk_c.h" "stage/talk-c-${{ matrix.target }}/talk_c.h"
+          asset="dist/talk-c-${{ matrix.target }}.tar.gz"
+          tar -czf "$asset" -C stage "talk-c-${{ matrix.target }}"
           shasum -a 256 "$asset" > "$asset.sha256"
 
       - name: Upload talk-c artifact
@@ -90,8 +94,7 @@ jobs:
           fi
 
           mkdir -p "$TALK_C_SHA"
-          cp ../dist/libtalk_c-* "$TALK_C_SHA"/
-          cp ../dist/talk_c.h "$TALK_C_SHA"/
+          cp ../dist/talk-c-*.tar.gz* "$TALK_C_SHA"/
           printf '%s\n' "$TALK_C_SHA" > latest
 
           git add "$TALK_C_SHA" latest

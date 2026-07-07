@@ -9,8 +9,8 @@ cd "$repo_dir"
 
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 
-cargo +nightly build -p talk-c --release --locked --target aarch64-apple-ios
-cargo +nightly build -p talk-c --release --locked --target aarch64-apple-ios-sim
+CARGO_PROFILE_RELEASE_DEBUG=false cargo +nightly build -p talk-c --release --locked --target aarch64-apple-ios
+CARGO_PROFILE_RELEASE_DEBUG=false cargo +nightly build -p talk-c --release --locked --target aarch64-apple-ios-sim
 
 work_dir="$package_dir/.build/TalkC.xcframework"
 headers_dir="$work_dir/Headers"

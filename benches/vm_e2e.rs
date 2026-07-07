@@ -2,10 +2,10 @@
 
 extern crate test;
 
-use test::{Bencher, black_box};
-use talk::compiling::driver::{Driver, DriverConfig, Lowered, Source, compile_bytecode_from};
+use talk::compiling::driver::{compile_bytecode_from, Driver, DriverConfig, Lowered, Source};
 use talk::vm::interp::Value;
-use talk::vm::{Module, interp, io::CaptureIO};
+use talk::vm::{interp, io::CaptureIO, Module};
+use test::{black_box, Bencher};
 
 #[derive(Clone, Copy)]
 struct Program {

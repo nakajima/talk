@@ -9,3 +9,9 @@ test("can push") {
 	a.push(4)
 	assert(a.get(3) == 4)
 }
+
+test("can set") {
+	let a = [1, 2, 3]
+	a.set(0, 4)
+	assert(a == [4, 2, 3])
+}
