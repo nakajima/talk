@@ -11,7 +11,7 @@ use crate::{
         attribute::Attribute,
         block::Block,
         body::Body,
-        call_arg::CallArg,
+        call_arg::{ArgMode, CallArg},
         decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, ReceiverMode, Visibility},
         expr::{Expr, ExprKind},
         func::{CaptureMode, CaptureSpec, EffectSet, Func},
@@ -1109,12 +1109,16 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_call_arg(&self, arg: &CallArg) -> Doc {
+        let value = match arg.mode {
+            None => self.format_expr(&arg.value),
+            Some(ArgMode::Borrow) => concat_space(text("borrow"), self.format_expr(&arg.value)),
+            Some(ArgMode::Mut) => concat_space(text("mut"), self.format_expr(&arg.value)),
+            Some(ArgMode::Consume) => concat_space(text("consume"), self.format_expr(&arg.value)),
+            Some(ArgMode::Copy) => concat_space(text("copy"), self.format_expr(&arg.value)),
+        };
         match &arg.label {
-            Label::Named(name) => group(concat(
-                concat(text(name), text(": ")),
-                self.format_expr(&arg.value),
-            )),
-            Label::Positional(_) => self.format_expr(&arg.value),
+            Label::Named(name) => group(concat(concat(text(name), text(": ")), value)),
+            Label::Positional(_) => value,
             Label::_Symbol(s) => text(format!("{s}")),
         }
     }
@@ -2516,6 +2520,29 @@ mod formatter_tests {
             format(&ast, width)
         };
         adjust_trailing_newlines(input, formatted)
+    }
+
+    #[test]
+    fn formats_parameter_modes_and_argument_markers() {
+        // ADR 0018 spellings round-trip.
+        assert_eq!(
+            format_code(
+                "func f(consume a: A, mut b: B, borrow c: C, consume mut d: D) {}",
+                100
+            ),
+            "func f(consume a: A, mut b: B, borrow c: C, consume mut d: D) {\n}"
+        );
+        let call = "f(consume a, copy b, borrow c, mut d, label: consume e)";
+        assert_eq!(format_code(call, 100), call);
+        assert_eq!(
+            format_code("func f(fn: (Foo, mut Bar, consume Baz) -> Void) {}", 100),
+            "func f(fn: (Foo, mut Bar, consume Baz) -> Void) {\n}"
+        );
+        // Legacy borrow spellings canonicalize in function-type position.
+        assert_eq!(
+            format_code("func f(fn: (&Foo, &mut Bar) -> Void) {}", 100),
+            "func f(fn: (Foo, mut Bar) -> Void) {}"
+        );
     }
 
     #[test]

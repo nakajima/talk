@@ -772,6 +772,115 @@ impl<'a> MoveChecker<'a> {
         }
     }
 
+    /// A call-site ownership marker (ADR 0018). Returns true when the
+    /// marker fully handled the argument; false hands it back to the
+    /// default per-parameter rules.
+    fn apply_argument_marker(
+        &mut self,
+        mode: crate::node_kinds::call_arg::ArgMode,
+        param: Option<&Ty>,
+        value: &typed_ast::Expr,
+        state: &mut MoveState,
+    ) -> bool {
+        use crate::node_kinds::call_arg::ArgMode;
+        let param_perm = match param {
+            Some(Ty::Borrow(perm, _)) => Some(*perm),
+            _ => None,
+        };
+        match mode {
+            ArgMode::Borrow => match param_perm {
+                Some(perm) if !perm.is_exclusive() => false,
+                Some(_) => self.argument_marker_error(
+                    "borrow",
+                    "the parameter needs exclusive (`mut`) access",
+                    value,
+                    state,
+                ),
+                None => self.argument_marker_error(
+                    "borrow",
+                    "the parameter takes ownership; use `consume` or `copy`",
+                    value,
+                    state,
+                ),
+            },
+            ArgMode::Mut => match param_perm {
+                Some(perm) if perm.is_exclusive() => false,
+                _ => self.argument_marker_error("mut", "the parameter is not `mut`", value, state),
+            },
+            ArgMode::Consume => {
+                if param_perm.is_some() {
+                    return self.argument_marker_error(
+                        "consume",
+                        "the parameter borrows; it does not take ownership",
+                        value,
+                        state,
+                    );
+                }
+                self.consume_expr_forced(value, state);
+                true
+            }
+            ArgMode::Copy => {
+                if param_perm.is_some() {
+                    return self.argument_marker_error(
+                        "copy",
+                        "the parameter borrows; nothing is consumed",
+                        value,
+                        state,
+                    );
+                }
+                if self.place(value).is_none() {
+                    // An rvalue is already owned: nothing to copy, the
+                    // default consumption applies.
+                    return false;
+                }
+                let ty = value.ty.clone();
+                if self.grades.is_copy(&ty) {
+                    self.walk_expr(value, state);
+                    return true;
+                }
+                if self.grades.is_cheap_clone(&ty) || matches!(ty, Ty::Param(_) | Ty::Proj(..)) {
+                    if self.recording {
+                        self.auto_clones.insert(value.id);
+                    }
+                    self.walk_expr(value, state);
+                    return true;
+                }
+                let reason = format!("{} cannot be copied", ty.render_mono());
+                self.argument_marker_error("copy", &reason, value, state)
+            }
+        }
+    }
+
+    fn argument_marker_error(
+        &mut self,
+        marker: &str,
+        reason: &str,
+        value: &typed_ast::Expr,
+        state: &mut MoveState,
+    ) -> bool {
+        let error = OwnershipError::ArgumentMarker {
+            marker: marker.into(),
+            reason: reason.into(),
+        };
+        self.error(error, value.id);
+        self.walk_expr(value, state);
+        true
+    }
+
+    /// `consume`-marked argument: like `consume_expr`, but a place moves
+    /// even when a later use is live (no liveness auto-clone) and a
+    /// borrowed extraction never falls back to a tier-2 clone.
+    fn consume_expr_forced(&mut self, expr: &typed_ast::Expr, state: &mut MoveState) {
+        if let Some(place) = self.place(expr) {
+            if let Some(summary) = state.closure_captures.get(&place).cloned() {
+                self.check_escaping_summary(expr.id, &summary);
+            }
+            self.move_place_with(expr, place, state, true);
+            return;
+        }
+        self.consume_expr(expr, state);
+    }
+
     /// Walk an expression for its uses (reads); consume sites inside it
     /// (call arguments, receivers, aggregate elements) apply their own rules.
     pub(crate) fn walk_expr(&mut self, expr: &typed_ast::Expr, state: &mut MoveState) {
@@ -892,6 +1001,11 @@ impl<'a> MoveChecker<'a> {
 
         for (index, arg) in args.iter().enumerate() {
             let param = params.get(index);
+            if let Some(mode) = arg.mode
+                && self.apply_argument_marker(mode, param, &arg.value, state)
+            {
+                continue;
+            }
             match param {
                 Some(Ty::Borrow(perm, inner)) => {
                     let is_object = self.grades.is_object(inner);
@@ -910,6 +1024,16 @@ impl<'a> MoveChecker<'a> {
                         if perm.is_exclusive() {
                             state.invalidate_borrows_of(&owner);
                         }
+                    } else if !is_object && perm.is_exclusive() && self.place(&arg.value).is_none()
+                    {
+                        // V1: a `mut` parameter writes back; a temporary
+                        // has no home for the write.
+                        let error = OwnershipError::ArgumentMarker {
+                            marker: "mut".into(),
+                            reason: "a `mut` parameter needs a mutable place to write back to"
+                                .into(),
+                        };
+                        self.error(error, arg.value.id);
                     }
                 }
                 _ if borrowed_constructor => {
@@ -1125,13 +1249,29 @@ impl<'a> MoveChecker<'a> {
     }
 
     fn move_place(&mut self, expr: &typed_ast::Expr, place: Place, state: &mut MoveState) {
+        self.move_place_with(expr, place, state, false);
+    }
+
+    /// `forced` = a `consume`-marked argument (ADR 0018): no liveness
+    /// auto-clone (the move happens even before a live use, which then
+    /// errors) and no tier-2 clone out of a borrow (moving out of a
+    /// borrow errors instead).
+    fn move_place_with(
+        &mut self,
+        expr: &typed_ast::Expr,
+        place: Place,
+        state: &mut MoveState,
+        forced: bool,
+    ) {
         let owned = self.grades.needs_drop(&expr.ty);
         let noncopy_closure = state
             .closure_captures
             .get(&place)
             .is_some_and(|summary| !summary.is_copyable());
         self.check_use(expr.id, &expr.ty, &place, owned || noncopy_closure, state);
-        if !self.grades.is_copy(&expr.ty) && self.check_move_out_of_borrowed(expr, &place, state) {
+        if !self.grades.is_copy(&expr.ty)
+            && self.check_move_out_of_borrowed_with(expr, &place, state, forced)
+        {
             // Tier 2: the extraction clones (lowering retains the buffers),
             // so the owner stays live — a read, not a move.
             return;
@@ -1146,7 +1286,7 @@ impl<'a> MoveChecker<'a> {
         // can therefore never arise — moving early and reusing would read
         // memory the consumer may already have freed.
         if matches!(expr.ty, Ty::Param(_) | Ty::Proj(..)) && tracked_root(place.root) {
-            if !self.liveness.dead_after(expr.id, place.root) {
+            if !forced && !self.liveness.dead_after(expr.id, place.root) {
                 if self.recording {
                     self.auto_clones.insert(expr.id);
                 }

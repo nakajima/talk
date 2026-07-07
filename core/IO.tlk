@@ -185,6 +185,6 @@ func _print_line(s: String) -> () {
 	()
 }
 
-public func print<T: Showable>(value: &T) -> () {
+public func print<T: Showable>(value: T) -> () {
 	_print_line(value.show())
 }

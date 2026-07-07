@@ -227,6 +227,24 @@ impl<'a> Lowering<'a> {
                 // A function-typed global used as a value: demand its
                 // specialization (instantiation recorded at this node).
                 if self.sources.contains_key(&symbol) {
+                    // A mutating function's CPS convention (its ret carries
+                    // the written-back value) is not a plain function value.
+                    // Diagnose and stand in a well-typed bodyless function
+                    // (a trap if ever called) instead of building an
+                    // ill-typed reference.
+                    if self.mutating.contains(&symbol) {
+                        self.diagnostics.push(format!(
+                            "lowering: a function with a `mut` parameter is not yet supported \
+                             as a value ({symbol})"
+                        ));
+                        let value_ty = self.expr_lambda_ty(expr, ctx);
+                        let TyKind::Fn(dom, _) = *self.p.ty_kind(value_ty) else {
+                            return None;
+                        };
+                        let bot = self.p.ty_bot();
+                        let stand_in = self.p.func("mut_value_unsupported", dom, bot);
+                        return Some(self.p.func_ref(stand_in));
+                    }
                     let theta = self.instantiation_at(expr.instantiation.as_ref(), ctx);
                     let label = self.demand(symbol, theta.clone())?;
                     let cap_entries = self.cap_entries_of(symbol, &theta);

@@ -1,6 +1,48 @@
 # 0018 — Borrow-by-default function parameters
 
-Status: proposed (2026-07-06)
+Status: implemented (2026-07-07)
+
+## Implementation notes (as landed)
+
+Everything in the Decision section is implemented: parameter modes
+(`borrow`/`mut`/`consume`/`consume mut`) on declarations, closures, and
+requirement signatures; borrow-by-default for unadorned parameters and
+function-type parameters; consuming defaults for `init` (including
+synthesized memberwise inits) and effect-operation parameters; the
+call-site markers `consume`/`copy`/`borrow`/`mut`; formatter round-trip
+in the new spelling; and the core/stdlib migration. Legacy `&`/`&mut`
+parameter spellings remain accepted without warnings for now.
+
+Notable decisions and departures made while landing:
+
+- **Copy borrows erase at elaboration.** A shared borrow of a Copy-grade
+  head lowers to the bare type (`&Int` never surfaces), extending
+  ADR 0014's unification-time erasure to annotations and modes. This
+  keeps schemes, flow provenance, and renderings scalar-shaped.
+- **V1 inout has one write-back slot**: the receiver, or a free
+  function's first parameter (`func bump(mut c: Counter)` works
+  end-to-end on both engines). A `mut` parameter anywhere else, or on a
+  function VALUE (closure, function-typed parameter), is rejected with a
+  lowering diagnostic instead of silently dropping its mutations.
+  Generalizing the convention to multiple slots and value calls is
+  future work.
+- **Temporaries passed to `mut` are rejected** ("needs a mutable place"),
+  as proposed. Rvalue receivers of mutating METHODS keep their existing
+  discard-write-back behavior.
+- **Rvalue aggregate call operands get structural temps** (`TemporaryEnd`
+  candidates) so a borrowed callee leaves the caller something to free —
+  the operand is no longer implicitly consumed. This is the ADR 0017
+  direction, applied to call operands.
+- **Operator audit outcome**: `Add`/comparison operands stay borrowed
+  (the String impls only read; derived `show` now frees its sub-show
+  temporaries itself). Storing APIs spell `consume`: `Array.push`/`set`,
+  `Storage.set`, `_store`, `Dict.insert`, `Iterator.map`'s fn,
+  `Http.get`, `testing.test`, `fs.appending`.
+- **Known gaps**: implicitly packed existentials can return a borrowed
+  payload as owned (the pack path bypasses the borrowed-return check);
+  call-site markers are not yet enforced on `perform` arguments; the
+  tooling pass (hovers, semantic tokens, a copies report) has not been
+  done.
 
 ## Context
 

@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased (2026-07-07) — Borrow-by-default parameters (ADR 0018)
+
+Function parameters are now borrow-by-default. An unadorned `x: T`
+parameter is a shared borrow; ownership modes are spelled on the
+parameter instead of in its type:
+
+- `func read(x: Foo)` — shared borrow (the quiet default)
+- `func update(mut x: Foo)` — exclusive/inout borrow with caller
+  write-back (works for method receivers and a free function's first
+  parameter)
+- `func store(consume x: Foo)` — the callee takes ownership (the old
+  meaning of `x: Foo`)
+- `init` parameters (including synthesized memberwise inits) and effect
+  operation parameters still consume by default; `borrow x: T` opts an
+  init parameter out.
+
+Function TYPE parameters follow the same spelling: `(Foo) -> Void`
+borrows, `(mut Foo) -> Void` is exclusive, `(consume Foo) -> Void` is
+owned. Call sites gained explicit ownership markers — `f(consume x)`
+forces a move (disabling automatic cloning), `f(copy x)` forces an O(1)
+clone, `f(borrow x)`/`f(mut x)` assert the parameter's mode.
+
+Shared borrows of Copy-grade types erase at elaboration (`&Int` never
+surfaces), extending ADR 0014. Value-semantic (CheapClone) arguments
+still coerce borrowed→owned with an inserted retain; generic `T` does
+not implicitly clone, so identity-style functions now spell
+`consume x: T`. Rvalue aggregates passed as call operands get structural
+temporaries so borrowed callees leave the caller a drop point.
+
+Core and the stdlib migrated to the new spelling; the formatter prints
+it (and canonicalizes legacy `&` in function-type positions). Legacy
+`&T`/`&mut T` parameter annotations remain accepted. `mut` parameters
+beyond the single v1 write-back slot, `mut` parameters on function
+values, and temporaries passed to `mut` are rejected with diagnostics
+instead of silently dropping mutations.
+
 ## Unreleased (2026-07-06) — Effectful function type annotations
 
 Function type annotations now carry explicit effect rows. Syntax such as
@@ -36,7 +72,10 @@ panic`, making release-build failures easier to diagnose from Swift.
 Core and stdlib caches now use retryable `OnceLock` initialization instead
 of poisonable `lazy_static` cells. A failed embedded initialization no
 longer permanently poisons the process and turns every later call into a
-secondary `Once instance has previously been poisoned` panic.
+secondary `Once instance has previously been poisoned` panic. Bundled
+stdlib sources are also materialized into a runtime temp directory when
+the build-machine source path is not present, so relative stdlib imports
+such as `testing.tlk` importing `ansi.tlk` work from XCFramework builds.
 
 The analysis layer gained protocol-independent goto-definition and rename
 entry points so embedders can call the language-service functionality

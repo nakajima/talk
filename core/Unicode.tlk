@@ -26,7 +26,7 @@ func _is_continuation(b: Int) -> Bool {
 	b < 192
 }
 
-public func _utf8_decode(storage: &ByteStorage, offset: Int, end: Int) -> Int {
+public func _utf8_decode(storage: ByteStorage, offset: Int, end: Int) -> Int {
 	let replacement: Int = 65533
 	let b0: Int = storage.get(offset)._toInt()
 
@@ -104,7 +104,7 @@ public func _utf8_decode(storage: &ByteStorage, offset: Int, end: Int) -> Int {
 }
 
 // One table entry (four big-endian base-128 septets; see gen_unicode).
-func _entry_value(storage: &ByteStorage, index: Int) -> Int {
+func _entry_value(storage: ByteStorage, index: Int) -> Int {
 	let base: Int = index * 4
 	let v0: Int = storage.get(base)._toInt()
 	let v1: Int = storage.get(base + 1)._toInt()
@@ -204,7 +204,7 @@ func _joins(prev: Int, cat: Int, emoji: Int, incb: Int, ri_run: Int) -> Bool {
 // at true boundaries, all UAX #29 rule state (GB11's emoji sequence,
 // GB9c's conjunct chain, GB12/13's regional-indicator parity) is local to
 // this one scan — the iterator carries none.
-public func _next_boundary(storage: &ByteStorage, offset: Int, end: Int) -> Int {
+public func _next_boundary(storage: ByteStorage, offset: Int, end: Int) -> Int {
 	let head: Int = _utf8_decode(storage, offset, end)
 	let head_cat: Int = _grapheme_category(_packed_scalar(head))
 	let pos: Int = offset + _packed_size(head)
@@ -296,7 +296,7 @@ extend Character: Borrowed {}
 // Byte equality of the cluster — same semantic as String equality, so
 // canonically equivalent characters in different normal forms differ.
 extend Character: Equatable {
-	func equals(rhs: &Character) -> Bool {
+	func equals(rhs: Character) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 		let idx = 0
 		loop idx < self.byte_count {

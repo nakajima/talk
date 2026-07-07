@@ -1937,6 +1937,14 @@ pub mod tests {
     }
 
     #[test]
+    fn extension_method_parameters_borrow_by_default() {
+        let t = check(
+            "// no-core\nstruct Wrap {\n\tlet value: Int\n}\nstruct Token {}\nextend Wrap {\n\tfunc poke(borrow t: Token) -> Int {\n\t\tself.value\n\t}\n}\nfunc caller(w: Wrap, t: Token) -> Int {\n\tw.poke(t)\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
     fn unadorned_parameters_borrow_by_default() {
         let t = check(
             "// no-core\nstruct Counter {\n\tlet count: Int\n}\nfunc read(c: Counter) -> Int {\n\tc.count\n}",

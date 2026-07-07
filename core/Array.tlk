@@ -118,7 +118,7 @@ extend Array<Element: Showable>: Showable {
 }
 
 extend Array<Element: Equatable<Element>>: Equatable {
-	func equals(rhs: &Self) -> Bool {
+	func equals(rhs: Self) -> Bool {
 		if self.count != rhs.count { return false }
 		let i = 0
 		loop i < self.count {

@@ -66,3 +66,38 @@ impl ResolveParamModes {
         Self::stamp(&mut block.args, ParamMode::Borrow);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        node::Node,
+        node_kinds::{
+            decl::{Decl, DeclKind},
+            parameter::ParamMode,
+        },
+    };
+
+    #[test]
+    fn stamps_extension_method_params() {
+        let mut ast = crate::parser_tests::tests::parse(
+            "struct Wrap {}\nextend Wrap {\n\tfunc poke(t: Token) -> Int { 0 }\n}",
+        );
+        crate::desugar::desugar(std::slice::from_mut(&mut ast));
+        let Node::Decl(Decl {
+            kind: DeclKind::Extend { body, .. },
+            ..
+        }) = &ast.roots[1]
+        else {
+            panic!("expected extend, got {:?}", ast.roots[1]);
+        };
+        let Decl {
+            kind: DeclKind::Method { func, .. },
+            ..
+        } = &body.decls[0]
+        else {
+            panic!("expected method, got {:?}", body.decls[0]);
+        };
+        // params[0] is the prepended self; the user param follows.
+        assert_eq!(func.params[1].mode, Some(ParamMode::Borrow));
+    }
+}

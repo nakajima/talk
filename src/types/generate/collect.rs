@@ -1343,7 +1343,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .params
                 .iter()
                 .map(|p| match &p.type_annotation {
-                    Some(annotation) => self.lower_annotation(annotation),
+                    Some(annotation) => {
+                        let ty = self.lower_annotation(annotation);
+                        elaborate::apply_param_mode(self.catalog, p.mode, ty)
+                    }
                     None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),
                 })
                 .collect();
@@ -1409,9 +1412,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             .params
             .iter()
             .map(|p| {
-                p.type_annotation
-                    .as_ref()
-                    .map(|annotation| self.lower_annotation(annotation))
+                p.type_annotation.as_ref().map(|annotation| {
+                    let ty = self.lower_annotation(annotation);
+                    elaborate::apply_param_mode(self.catalog, p.mode, ty)
+                })
             })
             .collect();
         let witness_ret = func

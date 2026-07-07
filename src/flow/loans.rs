@@ -239,11 +239,14 @@ impl MoveChecker<'_> {
     /// is CheapClone, in which case the extraction clones (tier 2: lowering
     /// retains the buffers, the owner stays live). Returns whether the
     /// tier-2 clone applied.
-    pub(crate) fn check_move_out_of_borrowed(
+    /// `forced` = a `consume`-marked argument (ADR 0018): the tier-2
+    /// clone is disabled, so a borrowed extraction errors instead.
+    pub(crate) fn check_move_out_of_borrowed_with(
         &mut self,
         expr: &typed_ast::Expr,
         place: &Place,
         state: &MoveState,
+        forced: bool,
     ) -> bool {
         if place.fields.is_empty() {
             return false;
@@ -261,7 +264,7 @@ impl MoveChecker<'_> {
                 .symbol_ty(place.root)
                 .is_some_and(|ty| self.grades.is_borrowed_value(&ty));
         if root_is_borrowed || root_is_object {
-            if self.grades.is_cheap_clone(&expr.ty) {
+            if !forced && self.grades.is_cheap_clone(&expr.ty) {
                 if self.recording {
                     self.auto_clones.insert(expr.id);
                 }
@@ -271,7 +274,7 @@ impl MoveChecker<'_> {
             // the instantiation's, so the clone/no-op/error decision moves
             // to lowering (which holds θ). Mark it and let each
             // monomorphization resolve.
-            if root_is_object && matches!(expr.ty, Ty::Param(_)) {
+            if !forced && root_is_object && matches!(expr.ty, Ty::Param(_)) {
                 if self.recording {
                     self.auto_clones.insert(expr.id);
                 }

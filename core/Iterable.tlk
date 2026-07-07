@@ -22,7 +22,7 @@ public protocol Iterator {
 }
 
 extend Iterator {
-	mut func index(needle: &Element) -> Int? where Element: Equatable<Element> {
+	mut func index(needle: Element) -> Int? where Element: Equatable<Element> {
 		let i = 0
 		loop {
 			if let .some(candidate) = self.next() {

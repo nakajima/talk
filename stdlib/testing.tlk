@@ -25,7 +25,7 @@ public func assertMessage(condition: Bool, message: String) 'fail {
 	if !condition { 'fail(message) }
 }
 
-public func report(tests: &Array<TestCase>, failures: &Array<Failure>) {
+public func report(tests: Array<TestCase>, failures: Array<Failure>) {
 	if failures.is_empty() {
 		print(tests.count.show() + " tests passed.")
 	} else {

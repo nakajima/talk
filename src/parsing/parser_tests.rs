@@ -10,7 +10,7 @@ pub mod tests {
         node_id::FileID,
         node_kinds::{
             block::Block,
-            call_arg::CallArg,
+            call_arg::{ArgMode, CallArg},
             decl::{Decl, DeclKind, ReceiverMode, Visibility},
             expr::{Expr, ExprKind},
             func::{CaptureMode, EffectSet, Func},
@@ -4652,6 +4652,53 @@ pub mod tests {
                 "expected parse error for {source:?}"
             );
         }
+    }
+
+    #[test]
+    fn parses_call_argument_markers() {
+        let parsed = parse("f(consume a, copy b, borrow c, mut d, e, label: consume g)");
+
+        let Node::Stmt(stmt) = &parsed.roots[0] else {
+            panic!("expected stmt, got {:?}", parsed.roots[0]);
+        };
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Call { args, .. },
+            ..
+        }) = &stmt.kind
+        else {
+            panic!("expected call, got {:?}", stmt.kind);
+        };
+
+        let modes: Vec<Option<ArgMode>> = args.iter().map(|arg| arg.mode).collect();
+        assert_eq!(
+            modes,
+            vec![
+                Some(ArgMode::Consume),
+                Some(ArgMode::Copy),
+                Some(ArgMode::Borrow),
+                Some(ArgMode::Mut),
+                None,
+                Some(ArgMode::Consume),
+            ]
+        );
+    }
+
+    #[test]
+    fn marker_names_still_call_as_functions() {
+        // `copy(x)` is a call of a function named copy, not a marker.
+        let parsed = parse("f(copy(x), consume(y))");
+        let Node::Stmt(stmt) = &parsed.roots[0] else {
+            panic!("expected stmt, got {:?}", parsed.roots[0]);
+        };
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Call { args, .. },
+            ..
+        }) = &stmt.kind
+        else {
+            panic!("expected call, got {:?}", stmt.kind);
+        };
+        assert!(args.iter().all(|arg| arg.mode.is_none()));
+        assert!(matches!(args[0].value.kind, ExprKind::Call { .. }));
     }
 
     #[test]

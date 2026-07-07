@@ -70,10 +70,10 @@ extend UTF8View: Borrowed {}
 public protocol StringMethods {
 	func as_substring() -> Substring
 	func utf8() -> UTF8View
-	func find(needle: &String) -> Int?
-	func find_from(needle: &String, start: Int) -> Int?
-	func starts_with(needle: &String) -> Bool
-	func ends_with(needle: &String) -> Bool
+	func find(needle: String) -> Int?
+	func find_from(needle: String, start: Int) -> Int?
+	func starts_with(needle: String) -> Bool
+	func ends_with(needle: String) -> Bool
 }
 
 extend String: StringMethods {
@@ -85,19 +85,19 @@ extend String: StringMethods {
 		UTF8View(storage: self.storage, start: 0, byte_count: self.byte_count)
 	}
 
-	func find(needle: &String) -> Int? {
+	func find(needle: String) -> Int? {
 		self.as_substring().find(needle)
 	}
 
-	func find_from(needle: &String, start: Int) -> Int? {
+	func find_from(needle: String, start: Int) -> Int? {
 		self.as_substring().find_from(needle, start)
 	}
 
-	func starts_with(needle: &String) -> Bool {
+	func starts_with(needle: String) -> Bool {
 		self.as_substring().starts_with(needle)
 	}
 
-	func ends_with(needle: &String) -> Bool {
+	func ends_with(needle: String) -> Bool {
 		self.as_substring().ends_with(needle)
 	}
 }
@@ -107,14 +107,14 @@ extend Substring {
 		UTF8View(storage: self.storage, start: self.start, byte_count: self.byte_count)
 	}
 
-	func find(needle: &String) -> Int? {
+	func find(needle: String) -> Int? {
 		self.find_from(needle, 0)
 	}
 
 	// The found offset is a UTF-8 byte offset, valid as `utf8().slice`
 	// input. Byte-wise search is exact for UTF-8: a needle can only
 	// match at character boundaries of itself.
-	func find_from(needle: &String, start: Int) -> Int? {
+	func find_from(needle: String, start: Int) -> Int? {
 		if start < 0 { return Optional.none }
 		if self.byte_count < start { return Optional.none }
 		if needle.byte_count == 0 { return Optional.some(start) }
@@ -140,7 +140,7 @@ extend Substring {
 		String(base, self.byte_count, self.byte_count)
 	}
 
-	func equals_string(rhs: &String) -> Bool {
+	func equals_string(rhs: String) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 
 		let i = 0
@@ -154,7 +154,7 @@ extend Substring {
 		true
 	}
 
-	func starts_with(needle: &String) -> Bool {
+	func starts_with(needle: String) -> Bool {
 		if needle.count() > self.count() { return false }
 		let chars = self.iter()
 		let needle_chars = needle.iter()
@@ -170,7 +170,7 @@ extend Substring {
 		true
 	}
 
-	func ends_with(needle: &String) -> Bool {
+	func ends_with(needle: String) -> Bool {
 		if needle.count() > self.count() { return false }
 		let chars = self.iter().skip(self.count() - needle.count())
 		let needle_chars = needle.iter()
@@ -208,7 +208,7 @@ extend String: Add<String> {
 }
 
 extend String: Equatable<String> {
-	func equals(rhs: &String) -> Bool {
+	func equals(rhs: String) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 
 		let i = 0

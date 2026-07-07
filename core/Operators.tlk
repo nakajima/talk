@@ -23,9 +23,9 @@ public protocol Divide<RHS> {
 }
 
 public protocol Equatable<RHS = Self> {
-	func equals(rhs: &RHS) -> Bool
+	func equals(rhs: RHS) -> Bool
 
-	func notEquals(rhs: &RHS) -> Bool {
+	func notEquals(rhs: RHS) -> Bool {
 		if self.equals(rhs: rhs) {
 			false
 		} else {
@@ -131,17 +131,17 @@ extend Float: Negatable {
 }
 
 public protocol Comparable<RHS>: Equatable<RHS> {
-	func gt(rhs: &RHS) -> Bool
+	func gt(rhs: RHS) -> Bool
 
-	func gte(rhs: &RHS) -> Bool {
+	func gte(rhs: RHS) -> Bool {
 		self.gt(rhs) || self.equals(rhs)
 	}
 
-	func lt(rhs: &RHS) -> Bool {
+	func lt(rhs: RHS) -> Bool {
 		!self.gt(rhs) && !self.equals(rhs)
 	}
 
-	func lte(rhs: &RHS) -> Bool {
+	func lte(rhs: RHS) -> Bool {
 		self.equals(rhs) || !self.gt(rhs)
 	}
 }

@@ -212,6 +212,24 @@ impl<'a> Lowering<'a> {
                 .push("lowering: computed callee expressions not yet supported".into());
             return self.dead_end("computed_callee");
         };
+        // V1 inout is symbol-routed: a function VALUE has no write-back
+        // convention, so a `mut` parameter through a value call would
+        // silently drop its mutations. Reject it honestly instead.
+        let mut callee_ty = &callee.ty;
+        while let CheckTy::Borrow(_, inner) = callee_ty {
+            callee_ty = inner;
+        }
+        if let CheckTy::Func(params, ..) = callee_ty
+            && params
+                .iter()
+                .any(|param| matches!(param, CheckTy::Borrow(perm, _) if perm.is_exclusive()))
+        {
+            self.diagnostics.push(
+                "lowering: a `mut` parameter on a function value is not yet supported \
+                 (its mutations would not write back)"
+                    .into(),
+            );
+        }
         let trailing_value = trailing_block.map(|b| {
             let expected = self.final_param_ty(self.p.expr_ty(callee_value));
             self.lower_block_closure(b, expected, ctx)

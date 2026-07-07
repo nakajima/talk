@@ -58,7 +58,7 @@ struct RouteNode 'heap {
 	let next: RouteNode?
 }
 
-func route_walk(current: RouteNode?, path: &Substring) -> Response {
+func route_walk(current: RouteNode?, path: Substring) -> Response {
 	match current {
 		.some(node) -> {
 			if path.equals_string(node.path) {
@@ -89,7 +89,7 @@ public struct HttpServer 'heap {
 		()
 	}
 
-	func extract_method(raw_request: &String) -> Substring {
+	func extract_method(raw_request: String) -> Substring {
 		let bytes: UTF8View = raw_request.utf8()
 		match raw_request.find(" ") {
 			.some(first_space) -> bytes.slice(0, first_space),
@@ -97,7 +97,7 @@ public struct HttpServer 'heap {
 		}
 	}
 
-	func extract_path(raw_request: &String) -> Substring {
+	func extract_path(raw_request: String) -> Substring {
 		let bytes: UTF8View = raw_request.utf8()
 		match raw_request.find(" ") {
 			.some(first_space) -> {

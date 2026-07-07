@@ -135,6 +135,39 @@ pub mod tests {
     }
 
     #[test]
+    fn mut_parameter_on_a_function_value_is_diagnosed() {
+        // Value calls have no inout convention: a closure's `mut` param
+        // would silently drop its mutations, so lowering rejects it.
+        let driver = Driver::new(
+            vec![Source::from(
+                "struct Counter {\n\tlet count: Int\n}\nfunc call_it(f: (mut Counter) -> Int, mut c: Counter) -> Int {\n\tf(c)\n}\nfunc bump(mut c: Counter) -> Int {\n\tc.count = c.count + 1\n\tc.count\n}\nlet c = Counter(count: 0)\ncall_it(bump, c)",
+            )],
+            DriverConfig::new("LowerTest"),
+        );
+        let typed = driver
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
+        let lowered = typed.lower();
+        assert!(
+            lowered
+                .phase
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("mut` parameter on a function value")),
+            "expected a mut-parameter diagnostic, got {:?}",
+            lowered.phase.diagnostics
+        );
+    }
+
+    #[test]
     fn arithmetic_through_operator_witnesses() {
         // 2 + 3 * 3: operators desugar to protocol-static calls; lowering
         // resolves them to Int's conformance witnesses, whose bodies are

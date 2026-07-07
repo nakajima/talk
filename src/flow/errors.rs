@@ -101,6 +101,14 @@ pub enum OwnershipError {
         container: String,
         ty: String,
     },
+    /// A call-site ownership marker (`consume`/`copy`/`borrow`/`mut`,
+    /// ADR 0018) that the callee's parameter or the argument cannot
+    /// satisfy. Also covers the unmarked v1 rule that a `mut` parameter
+    /// needs a mutable place.
+    ArgumentMarker {
+        marker: String,
+        reason: String,
+    },
 }
 
 impl Error for OwnershipError {}
@@ -226,6 +234,9 @@ impl Display for OwnershipError {
                     f,
                     "Heap type {ty} cannot be stored in {container}: raw storage bypasses region tracking"
                 )
+            }
+            OwnershipError::ArgumentMarker { marker, reason } => {
+                write!(f, "Cannot pass this argument as `{marker}`; {reason}")
             }
         }
     }

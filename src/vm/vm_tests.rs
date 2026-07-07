@@ -1748,6 +1748,17 @@ pub mod tests {
     }
 
     #[test]
+    fn copy_marker_clones_and_balances_frees() {
+        // `copy s` forces an O(1) retain at the call; the callee frees its
+        // owned copy and the caller's binding frees at scope exit — the
+        // strict allocation fence holds on both engines.
+        let (_, out) = run_on_both_engines_io(
+            "func eat(consume s: String) -> Int {\n\ts.byte_count\n}\nlet s = \"hi\" + \"!\"\nlet n = eat(copy s)\nprint(n + s.byte_count)",
+        );
+        assert_eq!(out, "6\n");
+    }
+
+    #[test]
     fn borrowed_generic_rvalue_argument_is_freed_by_the_caller() {
         // An rvalue passed to a borrowed generic parameter stays the
         // caller's to free once the call returns (ADR 0018: unadorned

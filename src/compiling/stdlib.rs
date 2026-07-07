@@ -78,11 +78,10 @@ pub fn source_document(name: &str) -> Option<(PathBuf, String)> {
         }
     }
 
-    let dir = std::env::temp_dir().join("talk-stdlib");
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = bundled_compilation_dir();
     let path = dir.join(filename);
-    let _ = std::fs::write(&path, bundled_text);
-    Some((path, bundled_text.to_string()))
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| bundled_text.to_string());
+    Some((path, text))
 }
 
 pub fn modules() -> Vec<Arc<Module>> {
@@ -154,7 +153,7 @@ mod tests {
 }
 
 fn active_stdlib_dir() -> PathBuf {
-    path_override().unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib"))
+    path_override().unwrap_or_else(bundled_compilation_dir)
 }
 
 fn source_file_name(name: &str) -> Option<&'static str> {
@@ -203,7 +202,18 @@ fn compilation_sources() -> Vec<(&'static str, Source)> {
 }
 
 fn bundled_compilation_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib")
+    let source_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib");
+    if source_dir.is_dir() {
+        return source_dir;
+    }
+
+    let dir = std::env::temp_dir().join("talk-stdlib");
+    let _ = std::fs::create_dir_all(&dir);
+    for (name, content) in stdlib_sources() {
+        let path = dir.join(format!("{name}.tlk"));
+        let _ = std::fs::write(path, content);
+    }
+    dir
 }
 
 fn compile_driver(name: &'static str, source: Source, module_id: ModuleId) -> Driver<Typed> {
