@@ -1,3 +1,9 @@
+test("has a count") {
+	assert([1].count == 1)
+	assert([1, 2].count == 2)
+	assert([1, 2, 3].count == 3)
+}
+
 test("can push") {
 	let a = [1, 2, 3]
 	a.push(4)

@@ -35,14 +35,21 @@ The analysis layer gained protocol-independent goto-definition and rename
 entry points so embedders can call the language-service functionality
 directly without running the LSP server. A new GitHub workflow builds
 `libtalk_c.a` plus `talk_c.h` for iOS device and simulator targets and
-publishes them to the `talk-c-ios-archives` branch by commit SHA.
+publishes them to the `talk-c-ios-archives` branch by commit SHA. Another
+manual release workflow builds `TalkC.xcframework.zip`, computes the
+SwiftPM checksum, stamps the root package manifest for the requested
+version tag, pushes that tag, and uploads the XCFramework zip as a GitHub
+Release asset.
 
 A heavily WIP `talk-swift` Swift package now wraps the local `talk-c`
-facade. It can consume a generated `TalkC.xcframework` when present or
-fall back to a system-library import of `talk_c.h` plus a caller-provided
-`libtalk_c` linker search path. The Swift layer copies borrowed C string
-slices into native Swift values and exposes typed wrappers for workspace,
-compiler, highlighter, and REPL operations.
+facade. The repository root now also has a SwiftPM `Package.swift` for
+remote Xcode/SwiftPM consumption from version tags produced by the
+TalkSwift XCFramework release workflow. The local nested package can
+consume a generated `TalkC.xcframework` when present or fall back to a
+system-library import of `talk_c.h` plus a caller-provided `libtalk_c`
+linker search path. The Swift layer copies borrowed C string slices into
+native Swift values and exposes typed wrappers for workspace, compiler,
+highlighter, and REPL operations.
 
 This interface is intentionally not stable yet: naming, result shapes,
 threading expectations, Swift package layout, and XCFramework packaging

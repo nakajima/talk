@@ -2,7 +2,9 @@
 
 Swift package wrapper around the local `talk-c` C ABI facade.
 
-The package has two modes:
+For remote SwiftPM/Xcode consumption, use the repository root package from a version tag produced by the `TalkSwift XCFramework release` workflow. That tag's root `Package.swift` points at the matching GitHub Release `TalkC.xcframework.zip` asset and checksum.
+
+This nested package is mainly for local development. It has two modes:
 
 1. If `Artifacts/TalkC.xcframework` exists, `Package.swift` consumes it as a binary target.
 2. Otherwise it falls back to a `systemLibrary` target that imports `../talk-c/include/talk_c.h` and links `libtalk_c` from the build/linker search path.

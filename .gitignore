@@ -1,4 +1,5 @@
 /target
+/.build
 dev/editors/vscode/node_modules
 examples/cove-talk
 wasm/pkg

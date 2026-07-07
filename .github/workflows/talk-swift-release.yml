@@ -1,0 +1,129 @@
+name: TalkSwift XCFramework release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "SemVer tag to create, for example 0.1.23-swift.1"
+        required: true
+      prerelease:
+        description: "Mark the GitHub release as a prerelease"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build and publish TalkC.xcframework
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject existing tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::tag already exists: ${TAG}"
+            exit 1
+          fi
+
+      - name: Build TalkC.xcframework
+        run: ./talk-swift/scripts/build-xcframework.sh
+
+      - name: Zip XCFramework
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd talk-swift/Artifacts
+          ditto -c -k --sequesterRsrc --keepParent TalkC.xcframework ../../dist/TalkC.xcframework.zip
+
+      - name: Compute SwiftPM checksum
+        id: checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          checksum="$(swift package compute-checksum dist/TalkC.xcframework.zip)"
+          echo "checksum=${checksum}" >> "$GITHUB_OUTPUT"
+          echo "TalkC.xcframework.zip checksum: ${checksum}"
+
+      - name: Stamp root Package.swift for the release tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+          CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          package = Path("Package.swift")
+          text = package.read_text()
+          url = f"https://github.com/{os.environ['REPOSITORY']}/releases/download/{os.environ['TAG']}/TalkC.xcframework.zip"
+          checksum = os.environ["CHECKSUM"]
+          text = re.sub(
+              r'let talkCReleaseURL = "[^"]*"',
+              f'let talkCReleaseURL = "{url}"',
+              text,
+          )
+          text = re.sub(
+              r'let talkCReleaseChecksum = "[0-9a-fA-F]*"',
+              f'let talkCReleaseChecksum = "{checksum}"',
+              text,
+          )
+          package.write_text(text)
+          PY
+          git diff -- Package.swift
+
+      - name: Create version tag commit
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Package.swift
+          git commit -m "TalkSwift package ${TAG}"
+          git tag "${TAG}"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          cat > dist/release-notes.md <<EOF
+          TalkSwift binary dependency for ${TAG}.
+
+          SwiftPM checksum:
+
+          \`\`\`
+          ${CHECKSUM}
+          \`\`\`
+          EOF
+
+          args=("${TAG}" "dist/TalkC.xcframework.zip" --title "TalkSwift ${TAG}" --notes-file "dist/release-notes.md")
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "${args[@]}"
