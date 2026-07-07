@@ -14,15 +14,14 @@ in the type, so consumers cannot call a stage out of order:
 Driver<Initial>
   .parse()           -> Driver<Parsed>
   .resolve_names()   -> Driver<NameResolved> // desugars first
-  .type_check()      -> Driver<Typed>        // TypeOutput + HIR + MIR + flow
+  .type_check()      -> Driver<Typed>        // TypedProgram + CheckedMir + flow facts
   .lower()           -> Driver<Lowered>      // lambda-G program
 ```
 
 Each state carries that stage's outputs. `Parsed` holds parsed ASTs and
 parser diagnostics. `NameResolved` holds the desugared, symbol-bearing
-ASTs plus `ResolvedNames`. `Typed` holds the checker's `TypeOutput`,
-the owned HIR that downstream compiler stages use, the prebuilt
-flow-annotated MIR body store, `FlowFacts`, and all diagnostics so far.
+ASTs plus `ResolvedNames`. `Typed` holds a `TypedProgram`, the module's
+`CheckedMir`, editor-facing `FlowFacts`, and all diagnostics so far.
 `Lowered` holds the lambda-G `Program`, `main`, result type, the labels
 that must become bytecode chunks, lowering diagnostics, and the earlier
 compiler diagnostics.
@@ -42,11 +41,10 @@ time.
 binding names. The resolver itself only declares and resolves symbols.
 
 `type_check()` runs the constraint generator/solver (`src/types`), then
-lowers error-free source files into HIR (`src/hir`), builds one
-structural MIR body per checkable body (`src/lower/mir.rs`), and runs
-the flow checker (`src/flow`) over those bodies. The flow checker
-annotates the HIR and MIR in place; lowering reads those annotations
-instead of recomputing ownership/drop information.
+builds a `TypedProgram` for error-free source files and asks
+`src/lower/mir.rs` for checked MIR. `mir::build_checked` owns the
+structural body store, runs `src/flow`, and returns only the checked MIR
+plus editor-facing flow facts.
 
 `DriverConfig` controls the knobs: which module is being compiled (the
 current program, core, or an external library), executable vs library
@@ -89,10 +87,10 @@ environment. Today that stdlib contains the `fs` package module; it is
 available through package-style `use` imports rather than as a prelude.
 
 Core and stdlib keep typed artifacts beside their module exports:
-`LibraryTyped` stores HIR, MIR bodies, `TypeOutput`, and `ResolvedNames`.
-Lowering needs those bodies because generic functions, witness bodies,
-protocol defaults, `@_ir` splices, derived operations, and other library
-code are specialized on demand together with the using program.
+`LibraryTyped` stores the `TypedProgram` and `CheckedMir`. Lowering needs
+those bodies because generic functions, witness bodies, protocol defaults,
+`@_ir` splices, derived operations, and other library code are specialized
+on demand together with the using program.
 
 ## Everything around the pipeline
 
@@ -107,9 +105,9 @@ mapping here:
   `@_ir`, are documented in `../../docs/ir-and-lambda-g-format.md`.
 - `src/desugar/` — surface-syntax rewrites run between parsing and name
   resolution.
-- `src/hir/` + `src/flow/` + `src/lower/mir.rs` — the downstream tree,
-  MIR body store, and flow-sensitive ownership/drop analysis that lowering
-  consumes.
+- `src/compiling/typed_program.rs` + `src/flow/` + `src/lower/mir.rs` —
+  the typed program, checked MIR seam, and flow-sensitive ownership/drop
+  analysis that lowering consumes.
 - `src/cli/` — terminal concerns: diagnostic rendering with source
   excerpts and carets (colors off under `NO_COLOR`, JSON for
   `talk check --json`) and the interactive REPL frontend.

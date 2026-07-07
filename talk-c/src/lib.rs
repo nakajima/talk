@@ -909,7 +909,7 @@ impl ProgramRunner {
                 ReplEvalResult::Error(message),
             ));
         }
-        let names = Self::value_names(&typed.phase.types);
+        let names = Self::value_names(typed.phase.program.types());
         let mut lowered = typed.lower();
         if !lowered.phase.diagnostics.is_empty() {
             return Ok(TalkEvalResult::from_repl_result(

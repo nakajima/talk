@@ -13,7 +13,7 @@ impl<'a> Lowering<'a> {
     /// literal's own lowering agree on it.
     pub(super) fn func_literal_label(
         &mut self,
-        func: &hir::Func,
+        func: &typed_ast::Func,
         expr: &Expr,
         ctx: &Ctx,
     ) -> Option<Label> {
@@ -51,7 +51,7 @@ impl<'a> Lowering<'a> {
     pub(super) fn lower_func_value(
         &mut self,
         expr: &Expr,
-        func: &hir::Func,
+        func: &typed_ast::Func,
         ctx: &Ctx,
     ) -> Option<ExprId> {
         let label = self.func_literal_label(func, expr, ctx)?;
@@ -101,7 +101,7 @@ impl<'a> Lowering<'a> {
         let body_block = &func.body;
         let body = self.with_cells(&prologue, &mut inner, |this, inner| {
             let ret_k = inner.ret_k;
-            this.lower_block(body_block, &func.params, inner, ret_k)
+            this.lower_block(body_block, inner, ret_k)
         });
         self.p.set_body(label, body);
         Some(self.p.func_ref(label))
@@ -186,7 +186,11 @@ impl<'a> Lowering<'a> {
         let body = self.with_cells(&celled, &mut inner, |this, inner| {
             let ret_k = inner.ret_k;
             this.lower_sub_body_from_scaffold(block_id, inner, ret_k)
-                .unwrap_or_else(|| this.lower_block(block, &[], inner, ret_k))
+                .unwrap_or_else(|| {
+                    this.diagnostics
+                        .push("lowering: missing checked MIR scaffold for trailing block".into());
+                    this.dead_end("missing_trailing_block_scaffold")
+                })
         });
         self.p.set_body(label, body);
         self.p.func_ref(label)
@@ -198,7 +202,7 @@ impl<'a> Lowering<'a> {
     pub(super) fn lower_value_call(
         &mut self,
         callee: &Expr,
-        args: &[hir::CallArg],
+        args: &[typed_ast::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,

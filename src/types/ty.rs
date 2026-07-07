@@ -494,7 +494,7 @@ impl Ty {
         EffRowSubstituter { rows }.fold_ty(self)
     }
 
-    /// Strip effect arguments from nominal applications — the HIR bake:
+    /// Strip effect arguments from nominal applications — the typed-tree bake:
     /// effect args are typing-internal (capabilities ride closure
     /// environments at runtime), so flow and lowering never see them.
     pub fn erase_eff_args(&self) -> Ty {

@@ -116,8 +116,8 @@ impl Workspace {
         let parsed = driver.parse().ok()?;
         let resolved = parsed.resolve_names().ok()?;
         // The editor keeps the source-faithful surface AST (type annotations,
-        // imports, identifier spans the HIR strips). Capture it here, before
-        // `type_check` consumes the AST into the compile pipeline's HIR.
+        // imports, identifier spans the typed compiler tree strips). Capture it
+        // here, before `type_check` consumes the AST.
         let asts_by_source = resolved.phase.asts.clone();
         // Files discovered through imports get FileIDs past the input docs
         // (Driver::parse appends them). Extend the file-id-indexed tables so
@@ -138,8 +138,7 @@ impl Workspace {
         }
         let typed = resolved.type_check();
         let Driver { phase, .. } = typed;
-        let resolved_names = phase.resolved_names;
-        let types = phase.types;
+        let (resolved_names, types) = phase.program.into_semantic_parts();
         // The flow checker's editor facts: moves, borrows, drops — no
         // second ownership walk.
         let flow = phase.flow;
@@ -385,8 +384,8 @@ impl Workspace {
 
         let driver = Driver::new_bare(vec![Source::in_memory(path, text.clone())], config);
         let resolved = driver.parse().ok()?.resolve_names().ok()?;
-        let asts_by_source = resolved.phase.asts;
         let resolved_names = resolved.phase.resolved_names;
+        let asts_by_source = resolved.phase.asts;
 
         let file_id_to_document = vec![document_id.clone()];
         let document_to_file_id = [(document_id, FileID(0))].into_iter().collect();

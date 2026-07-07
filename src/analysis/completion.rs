@@ -829,10 +829,11 @@ mod tests {
             .expect("resolve");
         let ast = resolved.phase.asts.values().next().expect("ast").clone();
         let typed = resolved.type_check();
+        let (resolved_names, types) = typed.phase.program.into_semantic_parts();
         Analyzed {
             ast,
-            resolved_names: typed.phase.resolved_names,
-            types: typed.phase.types,
+            resolved_names,
+            types,
         }
     }
 

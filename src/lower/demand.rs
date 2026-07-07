@@ -99,7 +99,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         unit: usize,
         symbol: Symbol,
-        params: &'a [crate::hir::Parameter],
+        params: &'a [crate::typed_ast::Parameter],
         body: &'a Block,
     ) {
         self.sources

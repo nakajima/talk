@@ -28,7 +28,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         expr: &Expr,
         effect_name: &crate::name::Name,
-        args: &[hir::CallArg],
+        args: &[typed_ast::CallArg],
         ctx: &Ctx,
         k: ExprId,
     ) -> ExprId {
@@ -178,12 +178,12 @@ impl<'a> Lowering<'a> {
         let effect = template.effect;
         let handling_id = template.handling_id;
         let scaffold = std::sync::Arc::clone(&template.scaffold);
-        let handler_block = template.handler_block.clone();
+        let handler_args = template.handler_args.clone();
         let install_ctx = template.install_ctx.clone();
 
         let sig = self.effect_sig_at(effect, args)?;
         let dom_items = self.cap_dom_items(effect, args)?;
-        if handler_block.args.len() + 1 > dom_items.len() {
+        if handler_args.len() + 1 > dom_items.len() {
             self.diagnostics.push(
                 "lowering: handler block takes more arguments than the effect declares".into(),
             );
@@ -224,7 +224,7 @@ impl<'a> Lowering<'a> {
             inner.resume_k = Some(self.p.extract(cap_var, (dom_items.len() - 1) as u32));
         }
         let mut celled: Vec<(Symbol, ExprId)> = vec![];
-        for (i, arg) in handler_block.args.iter().enumerate() {
+        for (i, arg) in handler_args.iter().enumerate() {
             let value = self.p.extract(cap_var, i as u32);
             let Ok(symbol) = arg.name.symbol() else {
                 continue;
@@ -244,7 +244,11 @@ impl<'a> Lowering<'a> {
         let handler_body_expr = self.with_cells(&celled, &mut inner, |this, inner| {
             let handler_k = inner.ret_k;
             this.lower_sub_body_from_scaffold(handling_id, inner, handler_k)
-                .unwrap_or_else(|| this.lower_block(&handler_block, &[], inner, handler_k))
+                .unwrap_or_else(|| {
+                    this.diagnostics
+                        .push("lowering: missing checked MIR scaffold for handler body".into());
+                    this.dead_end("missing_handler_scaffold")
+                })
         });
         self.scaffold_ctx.pop();
         self.p.set_body(cap, handler_body_expr);
@@ -333,7 +337,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         effect: Symbol,
         expr: &Expr,
-        args: &[hir::CallArg],
+        args: &[typed_ast::CallArg],
         ctx: &Ctx,
         k: ExprId,
     ) -> ExprId {

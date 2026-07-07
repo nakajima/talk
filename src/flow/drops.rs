@@ -1,11 +1,7 @@
-//! Drop scheduling: the annotation types the flow checker writes onto HIR
-//! blocks and statements, and the classification rule that decides how each
-//! drop lowers. Lowering emits exactly what these schedules say — no
-//! re-analysis downstream.
-
-use crate::types::ty::Ty;
-
-use super::place::Place;
+//! Drop scheduling: the flow vocabulary for drop sites and the classification
+//! rule that decides how each drop lowers. Checked MIR stores these
+//! classifications at the drop program points so lowering does not re-analyze
+//! ownership.
 
 /// How a scheduled drop lowers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,15 +29,4 @@ pub enum DropReason {
     /// unconsumed owned temporary (e.g. a call result that was only
     /// borrowed) releases here.
     TemporaryEnd,
-}
-
-/// One drop the lowerer must emit. `node` is the dropped binding's
-/// declaration (or the assignment overwriting it) — the editor's anchor.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DropSchedule {
-    pub place: Place,
-    pub ty: Ty,
-    pub kind: DropElaboration,
-    pub reason: DropReason,
-    pub node: crate::node_id::NodeID,
 }

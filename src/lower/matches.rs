@@ -105,12 +105,14 @@ impl<'a> Lowering<'a> {
 
     pub(super) fn try_pure_unpacked(&mut self, expr: &Expr, ctx: &Ctx) -> Option<ExprId> {
         match &expr.kind {
-            ExprKind::Lit(hir::Literal::Int(text)) => Some(self.p.int(text.parse().ok()?)),
-            ExprKind::Lit(hir::Literal::Float(text)) => Some(self.p.float(text.parse().ok()?)),
-            ExprKind::Lit(hir::Literal::Bool(value)) => Some(self.p.bool(*value)),
+            ExprKind::Lit(typed_ast::Literal::Int(text)) => Some(self.p.int(text.parse().ok()?)),
+            ExprKind::Lit(typed_ast::Literal::Float(text)) => {
+                Some(self.p.float(text.parse().ok()?))
+            }
+            ExprKind::Lit(typed_ast::Literal::Bool(value)) => Some(self.p.bool(*value)),
             // A string literal is a String record over interned static
             // bytes: {storage, length, capacity}.
-            ExprKind::Lit(hir::Literal::String(text)) => {
+            ExprKind::Lit(typed_ast::Literal::String(text)) => {
                 // The lexer rejects invalid escapes, so this only fails on
                 // literals that never went through it.
                 let Ok(unescaped) = crate::parsing::lexing::unescape(text) else {

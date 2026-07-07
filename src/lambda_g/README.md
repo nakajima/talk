@@ -1,14 +1,13 @@
 # How the λ_G intermediate representation works
 
 This directory is the compiler's middle language. After type checking,
-error-free Talk files are lowered to HIR (`src/hir`); structural MIR
-bodies are built in `src/lower/mir.rs` and annotated by the flow checker
-(`src/flow`); then the lowerer (`src/lower`) translates that HIR/MIR
-pair into the λ_G IR described here. The scheduler (`src/vm`) lowers
-λ_G to register bytecode, and the runtime VM (`talk-runtime`) executes
-that bytecode. For the exact textual syntax printed by `talk lower`,
-and how it differs from `@_ir` source splices and `talk ir` bytecode
-listings, see `../../docs/ir-and-lambda-g-format.md`.
+error-free Talk files become a `TypedProgram`; `src/lower/mir.rs` builds
+checked MIR and runs flow; then the lowerer (`src/lower`) translates that
+checked input into the λ_G IR described here. The scheduler (`src/vm`)
+lowers λ_G to register bytecode, and the runtime VM (`talk-runtime`)
+executes that bytecode. For the exact textual syntax printed by `talk lower`,
+and how it differs from `@_ir` source splices and `talk ir` bytecode listings,
+see `../../docs/ir-and-lambda-g-format.md`.
 The whole design is one bet: **if the only thing in the language is
 small functions calling each other, then every compiler problem becomes
 a question about functions** — and those questions have simple answers.

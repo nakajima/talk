@@ -122,17 +122,13 @@ fn compile_module(name: &'static str, source: Source) -> Arc<Module> {
 fn compile_typed_module(name: &'static str, source: Source, module_id: ModuleId) -> LibraryTyped {
     let typed = compile_driver(name, source, module_id);
     let Typed {
-        hir,
-        mir_bodies,
-        resolved_names,
-        types,
+        program,
+        checked_mir,
         ..
     } = typed.phase;
     LibraryTyped {
-        hir,
-        mir_bodies,
-        types,
-        resolved_names,
+        program,
+        checked_mir,
     }
 }
 

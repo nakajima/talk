@@ -86,21 +86,17 @@ impl<'a> Lowering<'a> {
         let is_mutating = self.mutating.contains(&symbol);
         let is_init = self.is_init(symbol);
         // An init's self is constructed and delivered to the caller, never
-        // dropped in the body — the flow checker seeds no init params, so
-        // the MIR builder must not either.
-        let drop_params: &[crate::hir::Parameter] = if is_init { &[] } else { source_params };
+        // dropped in the body — the flow checker seeds no init params.
         let self_symbol = source_params
             .first()
             .and_then(|param| param.name.symbol().ok());
         if is_init {
             ctx.initializing_self = self_symbol;
         }
-        // The flow-annotated MIR body (the same one `lower_block` reuses
-        // below): a parameter moved on only some paths has Conditional
-        // drops annotated here, which need flag cells like a let-bind's.
-        let mir_body = self.annotated_body(source_body, &ctx, |types, owner, block| {
-            mir::build_function(types, owner, drop_params, block)
-        });
+        // The checked MIR body (the same one `lower_block` reuses below): a
+        // parameter moved on only some paths has Conditional drops recorded
+        // here, which need flag cells like a let-bind's.
+        let mir_body = self.checked_body(source_body, &ctx);
         // Owned by-value parameters: consumed arguments' drops ride the
         // callee, so the flow checker schedules them at body exit — seed
         // the drop stack so those candidates resolve (`'heap`-carrying
@@ -222,7 +218,7 @@ impl<'a> Lowering<'a> {
                         this.diagnostics
                             .push("lowering: mutating method without a self cell".into());
                         let ret_k = ctx.ret_k;
-                        return this.lower_block(source_body, drop_params, ctx, ret_k);
+                        return this.lower_block(source_body, ctx, ret_k);
                     };
                     let TyKind::Fn(pair_ty, _) = *this.p.ty_kind(this.p.expr_ty(ctx.ret_k)) else {
                         unreachable!("ret continuation is not a function");
@@ -244,7 +240,7 @@ impl<'a> Lowering<'a> {
                     ctx.tail_k = ctx.ret_k;
                 }
                 let ret_k = ctx.ret_k;
-                this.lower_block(source_body, drop_params, ctx, ret_k)
+                this.lower_block(source_body, ctx, ret_k)
             })
         });
         self.p.set_body(label, body);

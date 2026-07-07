@@ -2,14 +2,14 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     flow::{Place, place_for_expr},
-    hir::{
-        Block, CallArg, Decl, DeclKind, Expr, ExprKind, MatchArm, Node, Parameter, Pattern,
-        PatternKind, Stmt, StmtKind,
-    },
     name::Name,
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     node_kinds::{func::CaptureSpec, type_annotation::TypeAnnotation},
+    typed_ast::{
+        Block, CallArg, Decl, DeclKind, Expr, ExprKind, MatchArm, Node, Parameter, Pattern,
+        PatternKind, Stmt, StmtKind,
+    },
     types::{TypeOutput, ty::Ty},
 };
 
@@ -47,6 +47,7 @@ pub(crate) struct Body {
 pub(crate) struct BasicBlock {
     pub(crate) statements: Vec<LocatedStatement>,
     pub(crate) terminator: Terminator,
+    pub(crate) terminator_ownership: TerminatorOwnership,
 }
 
 #[derive(Clone, Debug)]
@@ -65,7 +66,15 @@ pub(crate) struct StatementOwnership {
     /// For a `DropCandidate`: how lowering must elaborate the drop at this point
     /// (static / dead / conditional / open), plus the resolved key path it applies to.
     pub(crate) drop: Option<DropElaborationResult>,
-    /// Key paths moved at this statement, so lowering can clear their drop flags.
+    /// Runtime ownership transfers at this statement, recorded by flow.
+    /// Lowering clears drop flags from this list; it must not re-derive moves
+    /// from expression syntax.
+    pub(crate) moves: Vec<Place>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct TerminatorOwnership {
+    /// Runtime ownership transfers at this terminator, recorded by flow.
     pub(crate) moves: Vec<Place>,
 }
 
@@ -79,7 +88,7 @@ pub(crate) struct DropElaborationResult {
 }
 
 #[allow(dead_code)]
-// Statements own the cloned HIR nodes they reference (the MIR is built once and reused), so
+// Statements own the cloned typed nodes they reference (the MIR is built once and reused), so
 // kinds carrying an `Expr`/`Pattern` are inherently larger than the marker kinds. Boxing every
 // node field would only add indirection to a build-once IR.
 #[allow(clippy::large_enum_variant)]
@@ -107,10 +116,9 @@ pub(crate) enum Statement {
         node: NodeID,
         ty: Ty,
         place: Option<Place>,
-        /// Set by the annotate pass when this node's value is consumed by
-        /// its consuming statement (the use is checked there, as an owned
-        /// use); default-false is load-bearing — per-file error bodies
-        /// check without an annotate pass.
+        /// Set by the CFG flow pass when this node's value is consumed by its
+        /// consuming statement (the use is checked there, as an owned use);
+        /// default-false is load-bearing for per-file error bodies.
         consumes: bool,
         pack: Option<crate::types::output::ExistentialPack>,
     },
@@ -136,7 +144,7 @@ pub(crate) enum Statement {
         target: DropTarget,
         key_path: Option<Place>,
         reason: DropReason,
-        /// The HIR node whose flow results elaborate this candidate: the
+        /// The typed node whose flow results elaborate this candidate: the
         /// scope's source block for `ScopeExit`, the jumping/assigning
         /// statement for `EarlyExit`/`AssignmentReplace`. Placement is
         /// structural; the flow checker fills `ownership.drop` afterwards.
@@ -178,7 +186,7 @@ pub(crate) enum Statement {
         /// flow checker can apply its capture effects at this statement.
         /// Other function-like statements (closure values, methods, inits)
         /// apply theirs at their embedded consumption sites, or not at all.
-        decl_func: Option<Box<crate::hir::Func>>,
+        decl_func: Option<Box<crate::typed_ast::Func>>,
     },
     Handling {
         stmt: Stmt,
@@ -186,27 +194,30 @@ pub(crate) enum Statement {
         body: Box<Block>,
     },
     DeclBody {
-        body: crate::hir::Body,
+        body: crate::typed_ast::Body,
     },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ValueDestination {
-    /// A nested tail delivery (branch arm, block value): the value flows on
-    /// within the function, into the enclosing construct's join temp when
-    /// one exists (the flow checker records the temp's provenance there).
-    Continuation(Option<u32>),
+    /// A nested tail delivery into an enclosing construct's join temp.
+    /// The flow checker records the delivered value's provenance there.
+    Continuation(u32),
+    /// A nested tail delivery to the current continuation without binding a temp.
+    Fallthrough,
+    /// A value-producing block's tail: bind the value to this temp, then
+    /// continue through the block's scope-exit statements and enclosing use.
+    TempThenContinue(u32),
     /// The body's own tail expression: the function's return value.
-    /// Lowering treats it exactly like `Continuation` (CPS delivers to the
-    /// same continuation); the flow checker provenance-checks it as a
-    /// return.
+    /// Lowering delivers it to the current continuation; the flow checker
+    /// provenance-checks it as a return.
     TailReturn,
     /// A source `return`.
     Return,
 }
 
 #[allow(dead_code)]
-// Owns a cloned HIR `Expr` for the same reason as `Statement` (build-once MIR).
+// Owns a cloned typed `Expr` for the same reason as `Statement` (build-once MIR).
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub(crate) enum DropTarget {
@@ -249,6 +260,7 @@ pub(crate) enum Terminator {
     },
     Loop {
         condition: Option<Expr>,
+        header_block: BlockId,
         body_block: BlockId,
         exit_block: BlockId,
     },
@@ -318,6 +330,9 @@ struct Builder<'types> {
     /// function return. A tail-position BLOCK scope is join-free — its
     /// inner tail is still the function's return.
     join_depth: usize,
+    /// Result temps for value-producing block expressions currently being
+    /// flattened into the surrounding MIR body.
+    block_value_temps: Vec<u32>,
     /// Whether this body's root-scope tail is the function's return value
     /// (true for function/top-level bodies; false for standalone match-arm
     /// bodies, whose tail delivers to the match join).
@@ -328,7 +343,7 @@ struct Builder<'types> {
 #[derive(Debug)]
 struct ScopeFrame {
     id: ScopeId,
-    /// The HIR block this scope was built from (`NodeID::SYNTHESIZED` for
+    /// The typed block this scope was built from (`NodeID::SYNTHESIZED` for
     /// the top-level file scope): the `source` its drop candidates carry.
     source: NodeID,
     locals: Vec<(NodeID, Symbol)>,
@@ -370,8 +385,7 @@ pub(crate) fn build_init_body(types: &TypeOutput, block: &Block) -> Body {
 
 /// Match-arm payload binders that need release at arm exit, with their
 /// types — the rest are pure aliases of the scrutinee's payload (the flow
-/// checker's alias rule). Shared between the builder's arm bodies and
-/// lowering's arm drop-stack seeding.
+/// checker's alias rule).
 pub(crate) fn arm_release_binders(
     types: &TypeOutput,
     pattern: &Pattern,
@@ -390,22 +404,6 @@ pub(crate) fn arm_release_binders(
         .collect()
 }
 
-/// Build a match arm's body as a standalone body: the arm's pattern
-/// binders that need release are root-frame locals (drop candidates at
-/// scope exit, no storage statements — like owned by-value parameters,
-/// their storage is the scrutinee's).
-pub(crate) fn build_arm_body(types: &TypeOutput, pattern: &Pattern, block: &Block) -> Body {
-    let mut builder = Builder::new(types);
-    builder.root_tail_is_return = false;
-    let entry = builder.new_block();
-    let binders = builder.arm_binder_locals(pattern);
-    let exit = builder.lower_body_scope(entry, block.id, binders, |builder, entry| {
-        builder.lower_nodes(&block.body, entry, true, false)
-    });
-    builder.terminate_if_open(exit, Terminator::Return);
-    builder.finish(entry)
-}
-
 /// Build a top-level body (a file's roots, or several files' concatenated
 /// for the combined `main` body).
 pub(crate) fn build_nodes(types: &TypeOutput, nodes: &[Node]) -> Body {
@@ -422,7 +420,9 @@ pub(crate) fn build_nodes(types: &TypeOutput, nodes: &[Node]) -> Body {
 /// statements and non-func `let` declarations, in source order — the same
 /// filter `lower_main` applies, shared so the flow checker analyzes and
 /// annotates exactly the body lowering runs.
-pub fn main_body_nodes<'a>(files: impl Iterator<Item = &'a crate::hir::HirFile>) -> Vec<Node> {
+pub fn main_body_nodes<'a>(
+    files: impl Iterator<Item = &'a crate::typed_ast::TypedFile>,
+) -> Vec<Node> {
     let mut nodes = vec![];
     for file in files {
         for root in &file.roots {
@@ -445,12 +445,33 @@ pub fn main_body_nodes<'a>(files: impl Iterator<Item = &'a crate::hir::HirFile>)
 /// One module's checkable bodies (functions, methods, closures, inits),
 /// keyed by body block, plus the combined top-level `main` body: built
 /// structurally BEFORE the flow pass, annotated by it, consumed by
-/// lowering. Lowering still builds on miss (an inlined constant's nested
-/// value blocks) as an unchecked fallback.
+/// lowering.
 #[derive(Clone, Debug, Default)]
-pub struct ModuleBodies {
+pub(crate) struct ModuleBodies {
     map: FxHashMap<NodeID, std::sync::Arc<Body>>,
     top_level: Option<std::sync::Arc<Body>>,
+}
+
+/// Flow-checked MIR for one module. This is the compiler seam after type
+/// checking: callers cannot build or mutate the structural body store directly.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CheckedMir {
+    bodies: ModuleBodies,
+}
+
+impl CheckedMir {
+    pub(crate) fn get(&self, block: NodeID) -> Option<std::sync::Arc<Body>> {
+        self.bodies.get(block)
+    }
+
+    pub(crate) fn top_level(&self) -> Option<std::sync::Arc<Body>> {
+        self.bodies.top_level()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.bodies.len()
+    }
 }
 
 impl ModuleBodies {
@@ -479,11 +500,30 @@ impl ModuleBodies {
     }
 }
 
-/// Enumerate and build every function-like body in a module's HIR:
-/// `hir::Func` bodies (functions, methods, closures) and init bodies.
-pub fn build_module_bodies<'a>(
+/// Enumerate and build every function-like body in a module's typed tree:
+/// function/method/closure bodies and init bodies.
+pub(crate) fn build_checked(
+    program: &mut crate::compiling::typed_program::TypedProgram,
+    module_id: crate::compiling::module::ModuleId,
+) -> (
+    CheckedMir,
+    crate::flow::FlowFacts,
+    Vec<crate::diagnostic::AnyDiagnostic>,
+) {
+    let mut bodies = build_module_bodies(program.types(), program.files().values());
+    let (flow, diagnostics) = if program.is_empty() {
+        bodies.set_top_level(build_nodes(program.types(), &[]));
+        (crate::flow::FlowFacts::default(), vec![])
+    } else {
+        let (files, types) = program.files_and_types_mut();
+        crate::flow::check_flow(files, &mut bodies, types, module_id)
+    };
+    (CheckedMir { bodies }, flow, diagnostics)
+}
+
+fn build_module_bodies<'a>(
     types: &TypeOutput,
-    files: impl Iterator<Item = &'a crate::hir::HirFile>,
+    files: impl Iterator<Item = &'a crate::typed_ast::TypedFile>,
 ) -> ModuleBodies {
     use derive_visitor::{Drive, Visitor};
 
@@ -497,7 +537,7 @@ pub fn build_module_bodies<'a>(
             if !matches!(event, derive_visitor::Event::Enter) {
                 return;
             }
-            if let Some(func) = item.downcast_ref::<crate::hir::Func>() {
+            if let Some(func) = item.downcast_ref::<crate::typed_ast::Func>() {
                 let owner = func.name.symbol().ok();
                 let body = build_function(self.types, owner, &func.params, &func.body);
                 self.bodies
@@ -539,6 +579,7 @@ impl<'types> Builder<'types> {
             temp_subs: FxHashMap::default(),
             continuation_temps: vec![],
             join_depth: 0,
+            block_value_temps: vec![],
             root_tail_is_return: true,
             scaffolds: FxHashMap::default(),
         }
@@ -586,16 +627,6 @@ impl<'types> Builder<'types> {
             }
         }
         locals
-    }
-
-    /// Match-arm payload binders that need release at arm exit — the rest
-    /// are pure aliases of the scrutinee's payload (the flow checker's
-    /// alias rule) with no ledger events of their own.
-    fn arm_binder_locals(&mut self, pattern: &Pattern) -> Vec<(NodeID, Symbol)> {
-        arm_release_binders(self.types, pattern)
-            .into_iter()
-            .map(|(id, symbol, _)| (id, symbol))
-            .collect()
     }
 
     fn finish(self, entry: BlockId) -> Body {
@@ -682,10 +713,14 @@ impl<'types> Builder<'types> {
             if let Some(expr) = tail_expr {
                 // Only the root scope's tail is the function's return value;
                 // nested tails (branch arms, value blocks) deliver within it.
-                let destination = if self.root_tail_is_return && self.join_depth == 0 {
+                let destination = if let Some(temp) = self.continuation_temps.last().copied() {
+                    ValueDestination::Continuation(temp)
+                } else if let Some(temp) = self.block_value_temps.last().copied() {
+                    ValueDestination::TempThenContinue(temp)
+                } else if self.root_tail_is_return && self.join_depth == 0 {
                     ValueDestination::TailReturn
                 } else {
-                    ValueDestination::Continuation(self.continuation_temps.last().copied())
+                    ValueDestination::Fallthrough
                 };
                 self.push_statement(
                     current,
@@ -1026,9 +1061,43 @@ impl<'types> Builder<'types> {
             ExprKind::LiteralArray(items)
             | ExprKind::Tuple(items)
             | ExprKind::Con { args: items, .. } => self.lower_exprs(items, current, temp_drops),
-            ExprKind::Block(block) => self.lower_scope(current, block.id, |builder, current| {
-                builder.lower_nodes(&block.body, current, true, false)
-            }),
+            ExprKind::Block(block) => {
+                let temp = self.next_temp;
+                self.next_temp += 1;
+                let result_ty = expr
+                    .existential_pack
+                    .as_ref()
+                    .map(|pack| pack.payload.clone())
+                    .or_else(|| self.types.node_types.get(&expr.id).cloned())
+                    .unwrap_or(Ty::Error);
+                temp_drops.push(self.temp_expr(expr.id, expr.span, temp, result_ty.clone()));
+                self.temp_subs.insert(expr.id, temp);
+                let delivers_value = block.body.last().is_some_and(node_delivers_tail_value);
+                self.block_value_temps.push(temp);
+                let exit = self.lower_scope(current, block.id, |builder, current| {
+                    builder.lower_nodes(&block.body, current, true, false)
+                });
+                self.block_value_temps.pop();
+                if !delivers_value && !self.is_terminated(exit) {
+                    self.push_statement(
+                        exit,
+                        Statement::ReturnValue {
+                            expr: Expr {
+                                id: expr.id,
+                                kind: ExprKind::Tuple(vec![]),
+                                span: expr.span,
+                                ownership: Default::default(),
+                                ty: result_ty,
+                                member_resolution: None,
+                                instantiation: None,
+                                existential_pack: None,
+                            },
+                            destination: ValueDestination::TempThenContinue(temp),
+                        },
+                    );
+                }
+                exit
+            }
             ExprKind::Call {
                 callee,
                 args,
@@ -1210,16 +1279,20 @@ impl<'types> Builder<'types> {
         current: BlockId,
         mark_tail_exprs: bool,
         tail_exits: bool,
-        temp_drops: &mut Vec<Expr>,
+        _temp_drops: &mut Vec<Expr>,
     ) -> BlockId {
-        let current = self.lower_expr(condition, current, temp_drops);
+        let mut condition_temp_drops = vec![];
+        let current = self.lower_expr(condition, current, &mut condition_temp_drops);
         let then_id = self.new_block();
         let else_id = self.new_block();
         let join_id = self.new_block();
+        let mut lowered_condition = condition.clone();
+        self.substitute_temps_expr(&mut lowered_condition);
+        self.emit_temp_drops(current, &mut condition_temp_drops);
         self.terminate_if_open(
             current,
             Terminator::Branch {
-                condition: condition.clone(),
+                condition: lowered_condition,
                 then_block: then_id,
                 else_block: else_id,
             },
@@ -1249,7 +1322,7 @@ impl<'types> Builder<'types> {
         condition: Option<&Expr>,
         body: &Block,
         current: BlockId,
-        temp_drops: &mut Vec<Expr>,
+        _temp_drops: &mut Vec<Expr>,
     ) -> BlockId {
         let header_id = self.new_block();
         let body_id = self.new_block();
@@ -1257,11 +1330,16 @@ impl<'types> Builder<'types> {
 
         self.terminate_if_open(current, Terminator::Jump(header_id));
         if let Some(condition) = condition {
-            let condition_exit = self.lower_expr(condition, header_id, temp_drops);
+            let mut condition_temp_drops = vec![];
+            let condition_exit = self.lower_expr(condition, header_id, &mut condition_temp_drops);
+            let mut lowered_condition = condition.clone();
+            self.substitute_temps_expr(&mut lowered_condition);
+            self.emit_temp_drops(condition_exit, &mut condition_temp_drops);
             self.terminate_if_open(
                 condition_exit,
                 Terminator::Loop {
-                    condition: Some(condition.clone()),
+                    condition: Some(lowered_condition),
+                    header_block: header_id,
                     body_block: body_id,
                     exit_block: exit_id,
                 },
@@ -1271,6 +1349,7 @@ impl<'types> Builder<'types> {
                 header_id,
                 Terminator::Loop {
                     condition: None,
+                    header_block: header_id,
                     body_block: body_id,
                     exit_block: exit_id,
                 },
@@ -1397,8 +1476,8 @@ impl<'types> Builder<'types> {
 
     /// Rewrite embedded expressions so nodes standing for flattened
     /// constructs read their temps. Handler/trailing/function payload
-    /// copies are left alone: they are the standalone-body fallback's
-    /// input, which rebuilds from the unflattened tree.
+    /// copies are left alone because they lower from their own checked
+    /// MIR body or scaffold, not from the enclosing operand bridge.
     fn substitute_temps(&self, statement: &mut Statement) {
         if self.temp_subs.is_empty() {
             return;
@@ -1634,6 +1713,21 @@ fn node_is_value_control(node: &Node) -> bool {
     )
 }
 
+fn node_delivers_tail_value(node: &Node) -> bool {
+    tail_expr(node).is_some()
+        || node_is_value_control(node)
+        || matches!(
+            node,
+            Node::Stmt(Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::Block(_),
+                    ..
+                }),
+                ..
+            })
+        )
+}
+
 impl Body {
     #[cfg(test)]
     pub(crate) fn render(&self) -> String {
@@ -1724,10 +1818,14 @@ pub(crate) fn render_terminator(terminator: &Terminator) -> String {
             }
         }
         Terminator::Loop {
+            header_block,
             body_block,
             exit_block,
             ..
-        } => format!("loop bb{} bb{}", body_block.0, exit_block.0),
+        } => format!(
+            "loop header bb{} body bb{} exit bb{}",
+            header_block.0, body_block.0, exit_block.0
+        ),
     }
 }
 
@@ -1756,10 +1854,10 @@ mod tests {
         );
         for ast in resolved.phase.asts.values() {
             // The MIR builder is tested for structure, not types, so it needn't be
-            // type-checked: give every expression a placeholder type and lower to HIR.
+            // type-checked: give every expression a placeholder type and build the typed tree.
             let types = placeholder_types(&ast.roots);
-            let hir = crate::hir::build::build_file(ast, &types);
-            for node in &hir.roots {
+            let typed_file = crate::compiling::typed_program::build::build_file(ast, &types);
+            for node in &typed_file.roots {
                 let Node::Decl(decl) = node else { continue };
                 let DeclKind::Func(func) = &decl.kind else {
                     if let DeclKind::Let {
@@ -1780,7 +1878,7 @@ mod tests {
     }
 
     /// A `TypeOutput` giving every AST expression a placeholder type — enough for
-    /// the (strict) HIR lowerer to run without type-checking, so MIR-builder tests
+    /// the strict typed-tree builder to run without type-checking, so MIR-builder tests
     /// can exercise structure on programs that need not be type-correct.
     fn placeholder_types(roots: &[crate::node::Node]) -> TypeOutput {
         use derive_visitor::{Drive, Visitor};
@@ -2081,7 +2179,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_tail_deliveries_are_continuations_not_returns() {
+    fn nested_tail_deliveries_are_fallthrough_not_returns() {
         // A tail-position if's arm tails deliver within the function — they
         // are not the return value itself (no provenance check applies).
         let source = "
@@ -2096,9 +2194,7 @@ mod tests {
         with_first_func_mir(source, |body| {
             let destinations = destinations(body);
             assert!(
-                destinations
-                    .iter()
-                    .any(|d| matches!(d, ValueDestination::Continuation(_))),
+                destinations.contains(&ValueDestination::Fallthrough),
                 "{body:#?}"
             );
             assert!(

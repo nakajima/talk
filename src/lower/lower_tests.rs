@@ -200,6 +200,24 @@ pub mod tests {
     }
 
     #[test]
+    fn loop_condition_match_reevaluates_from_header() {
+        assert_eq!(
+            run(
+                "let i = 0\nloop match i < 3 { true -> true, false -> false } {\n\ti = i + 1\n}\ni",
+            ),
+            EvalValue::I64(3)
+        );
+    }
+
+    #[test]
+    fn value_block_rhs_delivers_to_binding() {
+        assert_eq!(
+            run("func f() -> Int {\n\tlet x = {\n\t\tlet y = 40\n\t\ty + 2\n\t}\n\tx\n}\nf()"),
+            EvalValue::I64(42)
+        );
+    }
+
+    #[test]
     fn continue_skips() {
         assert_eq!(
             run(

@@ -26,10 +26,10 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::hir::{MatchArm, Pattern, PatternKind, RecordFieldPatternKind};
 use crate::lambda_g::expr::{CmpOp, ExprId, Op};
 use crate::lambda_g::program::Label;
 use crate::name_resolution::symbol::Symbol;
+use crate::typed_ast::{MatchArm, Pattern, PatternKind, RecordFieldPatternKind};
 use crate::types::ty::Ty as CheckTy;
 
 use super::{Binding, Ctx, EvidenceBinding, Lowering, ScaffoldArms};
@@ -41,21 +41,40 @@ struct Occurrence {
     ty: CheckTy,
 }
 
+/// What ownership action a synthetic wildcard cell represents at a leaf.
+#[derive(Clone, Copy)]
+enum WildcardCell {
+    /// A source discard owns this occurrence and must release it.
+    Drop,
+    /// The occurrence is owned through an already-recorded binder.
+    Ignore,
+}
+
 /// A row's pattern cell: a source pattern, or a wildcard introduced by
 /// specialization (default rows, consumed binds, record-shorthand binds).
 #[derive(Clone, Copy)]
 enum Pat<'p> {
-    Wild,
+    Wild(WildcardCell),
     Source(&'p Pattern),
 }
 
-impl Pat<'_> {
+impl<'p> Pat<'p> {
     /// Wildcards and binds match anything; binds are recorded into the row
     /// when their column is consumed.
     fn is_irrefutable(self) -> bool {
         match self {
-            Pat::Wild => true,
+            Pat::Wild(_) => true,
             Pat::Source(p) => matches!(p.kind, PatternKind::Wildcard | PatternKind::Bind(_)),
+        }
+    }
+
+    fn expanded_wildcard(self) -> Pat<'p> {
+        match self {
+            Pat::Wild(kind) => Pat::Wild(kind),
+            Pat::Source(pattern) if matches!(pattern.kind, PatternKind::Bind(_)) => {
+                Pat::Wild(WildcardCell::Ignore)
+            }
+            Pat::Source(_) => Pat::Wild(WildcardCell::Drop),
         }
     }
 }
@@ -294,7 +313,22 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
         values.extend(evidence_values);
         let arg = self.lowering.p.tuple(&values);
         let func = self.lowering.p.func_ref(label);
-        self.lowering.p.app(func, arg)
+        let mut body = self.lowering.p.app(func, arg);
+        if !self.scrutinee_borrowed {
+            for (pat, occ) in row.pats.iter().zip(occs).rev() {
+                let should_drop = match pat {
+                    Pat::Wild(WildcardCell::Drop) => true,
+                    Pat::Wild(WildcardCell::Ignore) => false,
+                    Pat::Source(pattern) => matches!(pattern.kind, PatternKind::Wildcard),
+                };
+                if should_drop {
+                    body = self
+                        .lowering
+                        .lower_drop_value_then(self.ctx, occ.value, &occ.ty, body);
+                }
+            }
+        }
+        body
     }
 
     /// Lower the arm's body once, as a join point taking its binders.
@@ -367,7 +401,6 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             .scaffold_arms
             .as_ref()
             .and_then(|scaffold| Some((*scaffold.blocks.get(arm)?, scaffold.join)));
-        let pattern = &self.arms[arm].pattern;
         let body = self
             .lowering
             .with_cells(&celled, &mut inner, |this, inner| {
@@ -376,7 +409,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                 {
                     return done;
                 }
-                this.lower_arm_block(pattern, body_block, inner, k)
+                this.lower_block(body_block, inner, k)
             });
         self.lowering.p.set_body(label, body);
         label
@@ -457,7 +490,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             let mut spec_rows: Vec<Row<'p>> = vec![];
             for row in &rows {
                 if row.pats[column].is_irrefutable() {
-                    let wilds = vec![Pat::Wild; payload_occs.len()];
+                    let wilds = vec![row.pats[column].expanded_wildcard(); payload_occs.len()];
                     spec_rows.push(row.with_column_expanded(column, &occ, wilds));
                     continue;
                 }
@@ -596,7 +629,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
         let mut expanded: Vec<Row<'p>> = vec![];
         for row in &rows {
             if row.pats[column].is_irrefutable() {
-                let wilds = vec![Pat::Wild; sub_occs.len()];
+                let wilds = vec![row.pats[column].expanded_wildcard(); sub_occs.len()];
                 expanded.push(row.with_column_expanded(column, &occ, wilds));
                 continue;
             }
@@ -653,7 +686,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
         let mut expanded: Vec<Row<'p>> = vec![];
         for row in &rows {
             if row.pats[column].is_irrefutable() {
-                let wilds = vec![Pat::Wild; sub_occs.len()];
+                let wilds = vec![row.pats[column].expanded_wildcard(); sub_occs.len()];
                 expanded.push(row.with_column_expanded(column, &occ, wilds));
                 continue;
             }
@@ -674,7 +707,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                         if let Ok(symbol) = name.symbol() {
                             new_row.binds.push((symbol, sub_occs[i].value));
                         }
-                        Some(Pat::Wild)
+                        Some(Pat::Wild(WildcardCell::Ignore))
                     }
                     // `y: pat` binds `y` to the field *and* matches the
                     // sub-pattern (the checker binds both names).
@@ -688,7 +721,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                     }
                     _ => None,
                 });
-                cells.push(cell.unwrap_or(Pat::Wild));
+                cells.push(cell.unwrap_or(Pat::Wild(WildcardCell::Drop)));
             }
             new_row.pats.splice(column..column, cells);
             expanded.push(new_row);

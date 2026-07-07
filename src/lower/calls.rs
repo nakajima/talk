@@ -7,7 +7,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         expr: &Expr,
         callee: &Expr,
-        args: &[hir::CallArg],
+        args: &[typed_ast::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
@@ -119,7 +119,7 @@ impl<'a> Lowering<'a> {
     pub(super) fn lower_requirement_call(
         &mut self,
         receiver: &Expr,
-        args: &[hir::CallArg],
+        args: &[typed_ast::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
@@ -166,7 +166,7 @@ impl<'a> Lowering<'a> {
     pub(super) fn try_lower_existential_member_call(
         &mut self,
         callee: &Expr,
-        args: &[hir::CallArg],
+        args: &[typed_ast::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
@@ -225,7 +225,7 @@ impl<'a> Lowering<'a> {
     pub(super) fn try_lower_local_evidence_member_call(
         &mut self,
         callee: &Expr,
-        args: &[hir::CallArg],
+        args: &[typed_ast::CallArg],
         trailing_block: Option<&Block>,
         ctx: &Ctx,
         k: ExprId,
@@ -403,7 +403,7 @@ impl<'a> Lowering<'a> {
         &mut self,
         expr: &Expr,
         callee: &'e Expr,
-        args: &[hir::CallArg],
+        args: &[typed_ast::CallArg],
         ctx: &Ctx,
     ) -> Option<(Label, Symbol, Prefix<'e>, Theta)> {
         match &callee.kind {

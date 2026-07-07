@@ -17,7 +17,6 @@ use crate::{
     },
     parser::Parser,
     parser_error::ParserError,
-    types::TypeOutput,
 };
 use indexmap::IndexMap;
 use rustc_hash::FxHashSet;
@@ -66,18 +65,13 @@ pub struct Lowered {
 
 impl DriverPhase for Typed {}
 pub struct Typed {
-    /// The program lowered to HIR (one entry per analyzed file). Built in
-    /// `type_check` by consuming the surface AST, which the compile pipeline
-    /// does not retain past this point — the HIR is the sole program tree from
-    /// here on (ownership checks it, lowering builds the MIR from it). The LSP,
-    /// which needs source-faithful nodes the HIR strips, keeps its own AST.
-    pub hir: IndexMap<Source, crate::hir::HirFile>,
-    /// One structural MIR body per checkable body, built pre-flow and
-    /// annotated by the flow checker; lowering consumes these.
-    pub mir_bodies: crate::lower::mir::ModuleBodies,
-    pub symbols: Symbols,
-    pub resolved_names: ResolvedNames,
-    pub types: TypeOutput,
+    /// The checked typed program. Later compiler phases must go through this
+    /// artifact rather than coordinating a public type side-table with a
+    /// separate compiler-tree phase.
+    pub program: crate::compiling::typed_program::TypedProgram,
+    /// Flow-checked MIR built behind the MIR seam. Lowering consumes this
+    /// checked artifact; callers never receive the structural MIR store.
+    pub(crate) checked_mir: crate::lower::mir::CheckedMir,
     pub flow: crate::flow::FlowFacts,
     pub diagnostics: Vec<AnyDiagnostic>,
 }
@@ -509,8 +503,8 @@ fn error_diagnostic_files(diagnostics: &[AnyDiagnostic]) -> FxHashSet<FileID> {
             continue;
         }
         // A synthesized-id diagnostic names no file: it blocks nothing
-        // rather than everything (HIR building tolerates the odd hole —
-        // a missing node type bakes as `Ty::Error`).
+        // rather than everything (typed-program building tolerates the odd
+        // hole — a missing node type bakes as `Ty::Error`).
         if id.0 == FileID::SYNTHESIZED {
             continue;
         }
@@ -557,43 +551,23 @@ impl Driver<NameResolved> {
             self.config.module_id,
         );
         diagnostics.extend(type_diagnostics);
-        // Consume the surface AST into the HIR (once, NodeID-preserving) for the
-        // error-free files: ownership checks it and lowering builds its MIR from
-        // it. Files with errors are dropped rather than lowered. The surface AST
-        // is not retained past here in the compile pipeline.
-        let mut hir: IndexMap<Source, crate::hir::HirFile> = IndexMap::default();
         let blocked_files = error_diagnostic_files(&diagnostics);
-        for (source, ast) in asts {
-            if blocked_files.contains(&ast.file_id) {
-                continue;
-            }
-            let file = crate::hir::build::build_file(&ast, &types);
-            hir.insert(source, file);
-        }
-        // The MIR store: one structural body per checkable body, built
-        // BEFORE flow (no flow inputs) so the flow checker can annotate
-        // exactly the bodies lowering consumes.
-        let mut mir_bodies = crate::lower::mir::build_module_bodies(&types, hir.values());
-        let (flow, flow_diagnostics) = if hir.is_empty() {
-            (crate::flow::FlowFacts::default(), vec![])
-        } else {
-            // The flow checker annotates the HIR in place (`Block::drops`,
-            // `Stmt::drops`, `Expr.ownership`) and the stored MIR bodies —
-            // lowering's drop/move source — and returns the editor-facing
-            // facts.
-            crate::flow::check_flow(&mut hir, &mut mir_bodies, &types, self.config.module_id)
-        };
+        let mut program = crate::compiling::typed_program::TypedProgram::from_checked_asts(
+            asts,
+            resolved_names,
+            types,
+            &blocked_files,
+        );
+        let (checked_mir, flow, flow_diagnostics) =
+            crate::lower::mir::build_checked(&mut program, self.config.module_id);
         diagnostics.extend(flow_diagnostics);
 
         Driver {
             files: self.files,
             config: self.config,
             phase: Typed {
-                hir,
-                mir_bodies,
-                symbols,
-                resolved_names,
-                types,
+                program,
+                checked_mir,
                 flow,
                 diagnostics,
             },
@@ -609,11 +583,8 @@ impl Driver<Typed> {
         use crate::lower::{LowerUnit, lower_program};
 
         let Typed {
-            hir,
-            mir_bodies,
-            symbols: _,
-            resolved_names,
-            types,
+            program,
+            checked_mir,
             flow: _,
             diagnostics,
         } = self.phase;
@@ -627,25 +598,25 @@ impl Driver<Typed> {
         let mut units = vec![];
         if let Some(core) = core.as_ref() {
             units.push(LowerUnit {
-                asts: &core.hir,
-                types: &core.types,
-                resolved: &core.resolved_names,
-                bodies: &core.mir_bodies,
+                asts: core.program.files(),
+                types: core.program.types(),
+                resolved: core.program.resolved_names(),
+                bodies: &core.checked_mir,
             });
         }
         for module in &stdlib {
             units.push(LowerUnit {
-                asts: &module.hir,
-                types: &module.types,
-                resolved: &module.resolved_names,
-                bodies: &module.mir_bodies,
+                asts: module.program.files(),
+                types: module.program.types(),
+                resolved: module.program.resolved_names(),
+                bodies: &module.checked_mir,
             });
         }
         units.push(LowerUnit {
-            asts: &hir,
-            types: &types,
-            resolved: &resolved_names,
-            bodies: &mir_bodies,
+            asts: program.files(),
+            types: program.types(),
+            resolved: program.resolved_names(),
+            bodies: &checked_mir,
         });
         let entry = units.len() - 1;
         let lowered = lower_program(units, entry);
@@ -690,10 +661,9 @@ impl Driver<Typed> {
             None => true,
             Some(id) => id == compiled_as,
         };
-        let exports = self.phase.resolved_names.exports();
-        let schemes = self
-            .phase
-            .types
+        let (resolved_names, types) = self.phase.program.into_semantic_parts();
+        let exports = resolved_names.exports();
+        let schemes = types
             .schemes
             .into_iter()
             .filter(|(symbol, _)| own(symbol))
@@ -704,15 +674,13 @@ impl Driver<Typed> {
             // it meets — the http.run regression).
             .map(|(symbol, scheme)| (symbol, scheme.sanitize_for_export(symbol)))
             .collect();
-        let symbol_names = self
-            .phase
-            .resolved_names
+        let symbol_names = resolved_names
             .symbol_names
             .into_iter()
             .filter(|(symbol, _)| own(symbol))
             .collect();
         #[cfg_attr(not(debug_assertions), allow(unused_mut))]
-        let mut catalog = self.phase.types.catalog;
+        let mut catalog = types.catalog;
         // A module's types outlive this store: nothing var-shaped may
         // cross. Finalization guarantees it through the same walk this
         // assertion re-runs; a future catalog field that skips the walk
@@ -990,7 +958,7 @@ pub mod tests {
     #[test]
     fn synthesized_error_blocks_no_file() {
         // A solver diagnostic with no origin node (NodeID::SYNTHESIZED)
-        // names no file, so it must not block HIR/flow for the whole
+        // names no file, so it must not block typed-program/flow for the whole
         // workspace — only diagnostics attributed to a file block that file.
         use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
         use crate::node_id::{FileID, NodeID};

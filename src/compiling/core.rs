@@ -1,14 +1,11 @@
 use std::{path::PathBuf, sync::Arc};
 
-use indexmap::IndexMap;
 use lazy_static::lazy_static;
 
 use crate::compiling::{
     driver::{CompilationMode, Driver, DriverConfig, Source},
     module::{Module, ModuleId},
 };
-use crate::name_resolution::name_resolver::ResolvedNames;
-use crate::types::TypeOutput;
 
 /// A bundled library's typed artifacts (core, stdlib), retained for
 /// whole-program lowering: lazy monomorphization needs the library's
@@ -16,10 +13,8 @@ use crate::types::TypeOutput;
 /// lower time — the MLton whole-program model rather than polymorphic IR
 /// in modules.
 pub struct LibraryTyped {
-    pub hir: IndexMap<Source, crate::hir::HirFile>,
-    pub mir_bodies: crate::lower::mir::ModuleBodies,
-    pub types: TypeOutput,
-    pub resolved_names: ResolvedNames,
+    pub(crate) program: crate::compiling::typed_program::TypedProgram,
+    pub(crate) checked_mir: crate::lower::mir::CheckedMir,
 }
 
 const TALK_CORE_PATH_ENV: &str = "TALK_CORE_PATH";
@@ -136,10 +131,8 @@ fn _compile() -> (Arc<Module>, Arc<LibraryTyped>) {
     );
 
     let core_typed = LibraryTyped {
-        hir: typed.phase.hir.clone(),
-        mir_bodies: typed.phase.mir_bodies.clone(),
-        types: typed.phase.types.clone(),
-        resolved_names: typed.phase.resolved_names.clone(),
+        program: typed.phase.program.clone(),
+        checked_mir: typed.phase.checked_mir.clone(),
     };
     (Arc::new(typed.module("Core")), Arc::new(core_typed))
 }
@@ -155,7 +148,7 @@ mod tests {
         let (module, typed) = _compile();
         assert_eq!(module.name, "Core");
         assert!(!module.exports.is_empty());
-        assert!(!typed.types.schemes.is_empty());
+        assert!(!typed.program.types().schemes.is_empty());
     }
 
     #[test]
@@ -174,16 +167,11 @@ mod tests {
         );
         assert_eq!(module.exports.get("Owner").copied(), Some(Symbol::Owner));
 
-        assert!(typed.types.catalog.structs.contains_key(&Symbol::String));
-        assert!(typed.types.catalog.structs.contains_key(&Symbol::Array));
-        assert!(typed.types.catalog.structs.contains_key(&Symbol::Storage));
-        assert!(
-            typed
-                .types
-                .catalog
-                .protocols
-                .contains_key(&Symbol::Borrowed)
-        );
-        assert!(typed.types.catalog.protocols.contains_key(&Symbol::Owner));
+        let types = typed.program.types();
+        assert!(types.catalog.structs.contains_key(&Symbol::String));
+        assert!(types.catalog.structs.contains_key(&Symbol::Array));
+        assert!(types.catalog.structs.contains_key(&Symbol::Storage));
+        assert!(types.catalog.protocols.contains_key(&Symbol::Borrowed));
+        assert!(types.catalog.protocols.contains_key(&Symbol::Owner));
     }
 }

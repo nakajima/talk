@@ -17,12 +17,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::compiling::module::ModuleId;
 use crate::flow::OwnershipError;
-use crate::hir::{self, ExprKind};
 use crate::node_id::NodeID;
+use crate::typed_ast::{self, ExprKind};
 use crate::types::TypeOutput;
 use crate::types::ty::{Perm, Ty};
 
-use super::drops::{DropElaboration, DropReason, DropSchedule};
+use super::drops::DropElaboration;
 use super::grades::GradeView;
 use super::liveness::Liveness;
 use super::loans::{ActiveLoan, Origin, Provenance};
@@ -246,7 +246,7 @@ pub(crate) struct MoveChecker<'a> {
     /// statement — `TemporaryEnd` candidates for them classify `Dead`.
     /// Consumption of a temp is static per site (its single read either
     /// moves or borrows), so a plain set suffices; filled across the
-    /// fixpoint/record passes, complete before the annotate pass reads it.
+    /// fixpoint/record passes, complete before checked facts are projected.
     pub(crate) consumed_temps: rustc_hash::FxHashSet<u32>,
     /// Borrower liveness for the body being walked (per body; swapped on
     /// nested-body entry like the scope stack).
@@ -257,10 +257,6 @@ pub(crate) struct MoveChecker<'a> {
     pub(crate) param_tys: FxHashMap<crate::name_resolution::symbol::Symbol, Ty>,
     /// Which parameter indices a free function's returned borrow reaches.
     pub(crate) return_reach: FxHashMap<crate::name_resolution::symbol::Symbol, Vec<usize>>,
-    /// Drop schedules by owning HIR block / statement, written onto the tree
-    /// after the walk (see `flow::annotate`).
-    pub(crate) block_drops: FxHashMap<NodeID, Vec<DropSchedule>>,
-    pub(crate) stmt_drops: FxHashMap<NodeID, Vec<DropSchedule>>,
     /// Expressions whose use consumes their place.
     pub(crate) consumed: FxHashSet<NodeID>,
     /// Expressions that clone instead of moving: CheapClone values
@@ -289,6 +285,11 @@ pub(crate) struct MoveChecker<'a> {
     /// auto-clone flags, drop schedules): true for the tree walk, false for
     /// every CFG-engine walk, whose repeated visits would duplicate them.
     pub(crate) recording: bool,
+    /// Runtime ownership transfers produced by the statement/terminator
+    /// currently being recorded. Logical consumes that do not transfer
+    /// runtime ownership (notably effect performs) suppress this collection.
+    runtime_moves: Option<Vec<Place>>,
+    runtime_moves_enabled: bool,
 }
 
 impl<'a> MoveChecker<'a> {
@@ -305,8 +306,6 @@ impl<'a> MoveChecker<'a> {
             borrowed_params: FxHashSet::default(),
             param_tys: FxHashMap::default(),
             return_reach: FxHashMap::default(),
-            block_drops: FxHashMap::default(),
-            stmt_drops: FxHashMap::default(),
             consumed: FxHashSet::default(),
             auto_clones: FxHashSet::default(),
             pending_locals: vec![],
@@ -316,6 +315,34 @@ impl<'a> MoveChecker<'a> {
             fn_depth: 0,
             report_errors: true,
             recording: true,
+            runtime_moves: None,
+            runtime_moves_enabled: true,
+        }
+    }
+
+    pub(crate) fn begin_runtime_moves(&mut self) {
+        self.runtime_moves = Some(Vec::new());
+    }
+
+    pub(crate) fn take_runtime_moves(&mut self) -> Vec<Place> {
+        self.runtime_moves.take().unwrap_or_default()
+    }
+
+    pub(crate) fn with_runtime_moves_suppressed<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let old = self.runtime_moves_enabled;
+        self.runtime_moves_enabled = false;
+        let result = f(self);
+        self.runtime_moves_enabled = old;
+        result
+    }
+
+    pub(crate) fn record_runtime_move(&mut self, place: &Place) {
+        if self.recording
+            && self.runtime_moves_enabled
+            && let Some(moves) = &mut self.runtime_moves
+            && !moves.iter().any(|seen| seen == place)
+        {
+            moves.push(place.clone());
         }
     }
 
@@ -335,7 +362,7 @@ impl<'a> MoveChecker<'a> {
     /// and moving out of it is not.
     pub(crate) fn seed_params(
         &mut self,
-        params: &[hir::Parameter],
+        params: &[typed_ast::Parameter],
         func_ty: Option<&Ty>,
         state: &mut MoveState,
     ) {
@@ -392,7 +419,7 @@ impl<'a> MoveChecker<'a> {
     /// (tier 1: parameter-derived is fine; owned/unknown are errors); owned
     /// returns consume (which also checks move-out-of-borrowed and closure
     /// escapes).
-    pub(crate) fn check_return_value(&mut self, expr: &hir::Expr, state: &mut MoveState) {
+    pub(crate) fn check_return_value(&mut self, expr: &typed_ast::Expr, state: &mut MoveState) {
         if self.grades.contains_borrowed(&expr.ty) {
             self.check_return_provenance(expr, state);
             self.walk_expr(expr, state);
@@ -403,9 +430,9 @@ impl<'a> MoveChecker<'a> {
 
     pub(crate) fn check_let(
         &mut self,
-        lhs: &hir::Pattern,
+        lhs: &typed_ast::Pattern,
         annotation: Option<&crate::node_kinds::type_annotation::TypeAnnotation>,
-        rhs: Option<&hir::Expr>,
+        rhs: Option<&typed_ast::Expr>,
         state: &mut MoveState,
     ) {
         // A single-binder let's type comes from its `&`/`&mut` annotation
@@ -418,7 +445,7 @@ impl<'a> MoveChecker<'a> {
             _ => None,
         };
         let whole_binding_ty = match (&lhs.kind, rhs) {
-            (hir::PatternKind::Bind(_), Some(rhs)) => match annotation_borrow {
+            (typed_ast::PatternKind::Bind(_), Some(rhs)) => match annotation_borrow {
                 Some(perm) => Some(Ty::Borrow(perm, Box::new(rhs.ty.clone()))),
                 None => Some(rhs.ty.clone()),
             },
@@ -578,9 +605,9 @@ impl<'a> MoveChecker<'a> {
 
     pub(crate) fn check_assignment(
         &mut self,
-        stmt_id: NodeID,
-        lhs: &hir::Expr,
-        rhs: &hir::Expr,
+        _stmt_id: NodeID,
+        lhs: &typed_ast::Expr,
+        rhs: &typed_ast::Expr,
         state: &mut MoveState,
     ) {
         // Assignment through a shared borrow is rejected — except through
@@ -643,19 +670,6 @@ impl<'a> MoveChecker<'a> {
             // pre-assignment state, so a moved-out place drops Dead), and any
             // borrows of it are invalidated.
             if self.grades.needs_drop(&lhs.ty) || self.grades.contains_object(&lhs.ty) {
-                if self.recording {
-                    let kind = classify(&place, state);
-                    self.stmt_drops
-                        .entry(stmt_id)
-                        .or_default()
-                        .push(DropSchedule {
-                            place: place.clone(),
-                            ty: lhs.ty.clone(),
-                            kind,
-                            reason: DropReason::AssignmentReplace,
-                            node: lhs.id,
-                        });
-                }
                 state.invalidate_borrows_of(&place);
             }
             state.restore(&place);
@@ -670,7 +684,7 @@ impl<'a> MoveChecker<'a> {
     /// root is a shared borrow.
     fn shared_borrow_assignment_receiver(
         &self,
-        lhs: &hir::Expr,
+        lhs: &typed_ast::Expr,
         state: &MoveState,
     ) -> Option<(crate::name_resolution::symbol::Symbol, Ty)> {
         let receiver = match &lhs.kind {
@@ -707,7 +721,7 @@ impl<'a> MoveChecker<'a> {
     /// moved (if owned), an aggregate literal consumes its elements, and
     /// anything else evaluates normally (its interior consume sites are its
     /// own).
-    pub(crate) fn consume_expr(&mut self, expr: &hir::Expr, state: &mut MoveState) {
+    pub(crate) fn consume_expr(&mut self, expr: &typed_ast::Expr, state: &mut MoveState) {
         self.check_object_boundaries(expr);
         // A call's effects (receiver borrows, argument consumption) rode
         // its own Call/Perform statement; its result is an rvalue with no
@@ -760,7 +774,7 @@ impl<'a> MoveChecker<'a> {
 
     /// Walk an expression for its uses (reads); consume sites inside it
     /// (call arguments, receivers, aggregate elements) apply their own rules.
-    pub(crate) fn walk_expr(&mut self, expr: &hir::Expr, state: &mut MoveState) {
+    pub(crate) fn walk_expr(&mut self, expr: &typed_ast::Expr, state: &mut MoveState) {
         self.check_object_boundaries(expr);
         if let Some(place) = self.place(expr) {
             self.check_use(expr.id, &expr.ty, &place, false, state);
@@ -812,8 +826,8 @@ impl<'a> MoveChecker<'a> {
 
     pub(crate) fn check_call(
         &mut self,
-        callee: &hir::Expr,
-        args: &[hir::CallArg],
+        callee: &typed_ast::Expr,
+        args: &[typed_ast::CallArg],
         state: &mut MoveState,
     ) {
         // Receiver: a borrowed self parameter (from the method's scheme, which
@@ -915,7 +929,7 @@ impl<'a> MoveChecker<'a> {
     /// Mark every call/construct temp inside an rvalue expression tree as
     /// consumed (its value moves into whatever owns the rvalue — a region
     /// acquire path takes it without a flow-level consume).
-    fn mark_rvalue_temps_consumed(&mut self, expr: &hir::Expr) {
+    fn mark_rvalue_temps_consumed(&mut self, expr: &typed_ast::Expr) {
         match &expr.kind {
             ExprKind::Temp(temp) => {
                 self.consumed_temps.insert(*temp);
@@ -942,7 +956,7 @@ impl<'a> MoveChecker<'a> {
     /// The full self-first parameter list of a member call's method, from
     /// the resolved member's scheme (the callee expression's own type is the
     /// bound-method type with self already stripped).
-    pub(crate) fn member_callable_params(&self, callee: &hir::Expr) -> Option<Vec<Ty>> {
+    pub(crate) fn member_callable_params(&self, callee: &typed_ast::Expr) -> Option<Vec<Ty>> {
         use crate::types::output::MemberResolution;
         match callee.member_resolution.as_ref()? {
             MemberResolution::Direct(symbol) => self
@@ -1019,7 +1033,7 @@ impl<'a> MoveChecker<'a> {
 
     /// v1 ledger boundaries: `'heap` values cannot enter existentials or
     /// raw-storage containers (both are invisible to the region scans).
-    pub(crate) fn check_object_boundaries(&mut self, expr: &hir::Expr) {
+    pub(crate) fn check_object_boundaries(&mut self, expr: &typed_ast::Expr) {
         self.check_boundaries(expr.id, &expr.ty, expr.existential_pack.as_ref());
     }
 
@@ -1082,7 +1096,7 @@ impl<'a> MoveChecker<'a> {
 
     /// The place an expression names, if it is one: a variable, or a chain
     /// of stored-field accesses off one.
-    pub(crate) fn place(&self, expr: &hir::Expr) -> Option<Place> {
+    pub(crate) fn place(&self, expr: &typed_ast::Expr) -> Option<Place> {
         super::place::place_for_expr(expr)
     }
 
@@ -1110,7 +1124,7 @@ impl<'a> MoveChecker<'a> {
         }
     }
 
-    fn move_place(&mut self, expr: &hir::Expr, place: Place, state: &mut MoveState) {
+    fn move_place(&mut self, expr: &typed_ast::Expr, place: Place, state: &mut MoveState) {
         let owned = self.grades.needs_drop(&expr.ty);
         let noncopy_closure = state
             .closure_captures
@@ -1148,6 +1162,7 @@ impl<'a> MoveChecker<'a> {
                 });
             }
             state.invalidate_borrows_of(&place);
+            self.record_runtime_move(&place);
             state.note_move(place, expr.id, expr.ty.clone());
             return;
         }
@@ -1162,6 +1177,7 @@ impl<'a> MoveChecker<'a> {
                 });
             }
             state.invalidate_borrows_of(&place);
+            self.record_runtime_move(&place);
             state.note_move(place, expr.id, expr.ty.clone());
         }
     }
@@ -1188,7 +1204,7 @@ fn tracked_root(root: crate::name_resolution::symbol::Symbol) -> bool {
 }
 
 /// The callee expression's own parameter types (no self).
-fn callee_params(callee: &hir::Expr) -> Vec<Ty> {
+fn callee_params(callee: &typed_ast::Expr) -> Vec<Ty> {
     func_params(&callee.ty).unwrap_or_default()
 }
 
@@ -1200,7 +1216,7 @@ pub(crate) fn func_params(ty: &Ty) -> Option<Vec<Ty>> {
 }
 
 /// A constructor call's produced type (the function's return).
-fn result_ty(callee: &hir::Expr) -> Ty {
+fn result_ty(callee: &typed_ast::Expr) -> Ty {
     match &callee.ty {
         Ty::Func(_, ret, _) => (**ret).clone(),
         other => other.clone(),

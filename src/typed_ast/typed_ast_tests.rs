@@ -1,18 +1,21 @@
 use crate::compiling::driver::{Driver, DriverConfig, Source};
-use crate::hir;
 use crate::node::Node;
 use crate::node_id::NodeID;
+use crate::typed_ast;
 
-/// Type-check `source` and pair each file's AST roots with the HIR the
-/// type-checker lowered them to (`Typed.hir`).
-fn lower(source: &str) -> Vec<(Vec<Node>, Vec<hir::Node>)> {
-    let resolved = Driver::new_bare(vec![Source::from(source)], DriverConfig::new("HirTest"))
-        .parse()
-        .expect("parse")
-        .resolve_names()
-        .expect("resolve");
-    // `type_check` consumes the AST into the HIR, so capture the AST roots here
-    // to pair them against the lowered HIR roots.
+/// Type-check `source` and pair each file's AST roots with the typed tree the
+/// type checker produced.
+fn lower(source: &str) -> Vec<(Vec<Node>, Vec<typed_ast::Node>)> {
+    let resolved = Driver::new_bare(
+        vec![Source::from(source)],
+        DriverConfig::new("TypedAstTest"),
+    )
+    .parse()
+    .expect("parse")
+    .resolve_names()
+    .expect("resolve");
+    // `type_check` consumes the AST into the typed compiler tree, so capture the AST roots here
+    // to pair them against the typed compiler tree roots.
     let asts = resolved.phase.asts.clone();
     let typed = resolved.type_check();
     assert!(
@@ -24,29 +27,30 @@ fn lower(source: &str) -> Vec<(Vec<Node>, Vec<hir::Node>)> {
         .filter_map(|(source, ast)| {
             typed
                 .phase
-                .hir
+                .program
+                .files()
                 .get(source)
                 .map(|file| (ast.roots.clone(), file.roots.clone()))
         })
         .collect()
 }
 
-/// Every `hir::Expr` id, recursively.
-fn hir_expr_ids(nodes: &[hir::Node]) -> Vec<NodeID> {
+/// Every typed expression id, recursively.
+fn hir_expr_ids(nodes: &[typed_ast::Node]) -> Vec<NodeID> {
     let mut ids = Vec::new();
     for node in nodes {
         match node {
-            hir::Node::Expr(e) => collect_expr(e, &mut ids),
-            hir::Node::Stmt(s) => collect_stmt(s, &mut ids),
-            hir::Node::Decl(d) => collect_decl(d, &mut ids),
+            typed_ast::Node::Expr(e) => collect_expr(e, &mut ids),
+            typed_ast::Node::Stmt(s) => collect_stmt(s, &mut ids),
+            typed_ast::Node::Decl(d) => collect_decl(d, &mut ids),
         }
     }
     ids
 }
 
-fn collect_expr(e: &hir::Expr, ids: &mut Vec<NodeID>) {
+fn collect_expr(e: &typed_ast::Expr, ids: &mut Vec<NodeID>) {
     ids.push(e.id);
-    use hir::ExprKind as K;
+    use typed_ast::ExprKind as K;
     match &e.kind {
         K::InlineIR(ir) => ir.binds.iter().for_each(|b| collect_expr(b, ids)),
         K::CallEffect { args, .. } => args.iter().for_each(|a| collect_expr(&a.value, ids)),
@@ -87,8 +91,8 @@ fn collect_expr(e: &hir::Expr, ids: &mut Vec<NodeID>) {
     }
 }
 
-fn collect_stmt(s: &hir::Stmt, ids: &mut Vec<NodeID>) {
-    use hir::StmtKind as K;
+fn collect_stmt(s: &typed_ast::Stmt, ids: &mut Vec<NodeID>) {
+    use typed_ast::StmtKind as K;
     match &s.kind {
         K::Expr(e) => collect_expr(e, ids),
         K::If(c, t, e2) => {
@@ -118,12 +122,12 @@ fn collect_stmt(s: &hir::Stmt, ids: &mut Vec<NodeID>) {
     }
 }
 
-fn collect_block(b: &hir::Block, ids: &mut Vec<NodeID>) {
+fn collect_block(b: &typed_ast::Block, ids: &mut Vec<NodeID>) {
     ids.extend(hir_expr_ids(&b.body));
 }
 
-fn collect_decl(d: &hir::Decl, ids: &mut Vec<NodeID>) {
-    use hir::DeclKind as K;
+fn collect_decl(d: &typed_ast::Decl, ids: &mut Vec<NodeID>) {
+    use typed_ast::DeclKind as K;
     match &d.kind {
         K::Let { rhs, .. } => {
             if let Some(rhs) = rhs {
@@ -167,7 +171,7 @@ fn lowers_a_construct_diverse_program_without_panicking() {
             Fizz.foo(123).unwrap()
             ";
     for (_ast_roots, hir_nodes) in lower(source) {
-        // Building HIR for real code must not hit any panic arm
+        // Building the typed compiler tree for real code must not hit any panic arm
         // (Unary/Binary/For/Incomplete must already be desugared).
         assert!(!hir_nodes.is_empty());
     }
@@ -183,7 +187,7 @@ fn preserves_node_ids_one_to_one() {
         hir_ids.sort();
         assert_eq!(
             ast_ids, hir_ids,
-            "HIR must preserve exactly the AST's expression NodeIDs"
+            "Typed compiler tree must preserve exactly the AST's expression NodeIDs"
         );
         assert!(!hir_ids.is_empty());
     }
@@ -196,8 +200,8 @@ fn or_pattern_binders_collect_once() {
     let source = "enum E {\n\tcase a(Int)\n\tcase b(Int)\n}\nfunc f(e: E) -> Int {\n\tmatch e {\n\t\t.a(s) | .b(s) -> s,\n\t}\n}";
     let mut or_binders = None;
     for (_, hir_nodes) in lower(source) {
-        visit_patterns(&hir_nodes, &mut |pattern: &hir::Pattern| {
-            if matches!(pattern.kind, hir::PatternKind::Or(_)) {
+        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
+            if matches!(pattern.kind, typed_ast::PatternKind::Or(_)) {
                 or_binders = Some(pattern.collect_binders());
             }
         });
@@ -210,14 +214,14 @@ fn or_pattern_binders_collect_once() {
     );
 }
 
-fn visit_patterns(nodes: &[hir::Node], f: &mut impl FnMut(&hir::Pattern)) {
+fn visit_patterns(nodes: &[typed_ast::Node], f: &mut impl FnMut(&typed_ast::Pattern)) {
     use derive_visitor::{Drive, Visitor};
 
     struct Collect<'a, F>(&'a mut F);
-    impl<F: FnMut(&hir::Pattern)> Visitor for Collect<'_, F> {
+    impl<F: FnMut(&typed_ast::Pattern)> Visitor for Collect<'_, F> {
         fn visit(&mut self, item: &dyn std::any::Any, event: derive_visitor::Event) {
             if matches!(event, derive_visitor::Event::Enter)
-                && let Some(pattern) = item.downcast_ref::<hir::Pattern>()
+                && let Some(pattern) = item.downcast_ref::<typed_ast::Pattern>()
             {
                 (self.0)(pattern);
             }

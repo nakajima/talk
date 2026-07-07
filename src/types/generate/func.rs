@@ -4,7 +4,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     // ----- Functions ------------------------------------------------------
 
     /// Bind a parameter's type: into the mono environment for the body, and
-    /// onto the parameter's node so downstream stages (HIR baking, the flow
+    /// onto the parameter's node so downstream stages (typed-tree baking, the flow
     /// checker) see it without consulting the function's scheme.
     fn bind_param(&mut self, param: &Parameter, ty: &Ty) {
         self.artifacts.node_types.insert(param.id, ty.clone());

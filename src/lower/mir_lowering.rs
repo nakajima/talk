@@ -9,6 +9,22 @@ struct PendingDrop {
     elaboration: Option<mir::DropElaboration>,
 }
 
+#[derive(derive_visitor::Visitor)]
+#[visitor(Expr(enter))]
+struct TempCollector {
+    temps: Vec<u32>,
+}
+
+impl TempCollector {
+    fn enter_expr(&mut self, expr: &Expr) {
+        if let ExprKind::Temp(temp) = expr.kind
+            && !self.temps.contains(&temp)
+        {
+            self.temps.push(temp);
+        }
+    }
+}
+
 /// The position of a MIR→λ_G walk: the statement currently under the cursor
 /// (`body.blocks[block].statements[index]`) plus the loops in scope. Threaded by
 /// value through the statement lowerers so they share one positional argument
@@ -20,6 +36,10 @@ struct MirCursor<'b> {
     block: mir::BlockId,
     index: usize,
     loops: &'b [MirLoop],
+    /// The λ_G entry function for `block` when this cursor is lowering that
+    /// block's own body. Loop back-edges target it so condition-evaluation
+    /// statements run on every iteration.
+    entry: Option<ExprId>,
     /// When lowering a scaffold arm with a value continuation: a jump to
     /// this block (the construct's join) delivers void to `k` instead of
     /// walking on — the join's statements belong to the enclosing walk.
@@ -43,11 +63,19 @@ impl<'b> MirCursor<'b> {
         }
     }
 
+    fn with_entry(self, entry: ExprId) -> Self {
+        MirCursor {
+            entry: Some(entry),
+            ..self
+        }
+    }
+
     /// The start of another block, keeping the same loops in scope.
     fn at_block(self, block: mir::BlockId) -> Self {
         MirCursor {
             block,
             index: 0,
+            entry: None,
             ..self
         }
     }
@@ -70,6 +98,7 @@ impl<'a> Lowering<'a> {
             block: body.entry,
             index: 0,
             loops: &[],
+            entry: None,
             deliver_at: None,
         };
         // Expression lowering needs this body (and the loops in scope) to
@@ -98,6 +127,7 @@ impl<'a> Lowering<'a> {
             block: switch_block,
             index: 0,
             loops: &scaffold.loops,
+            entry: None,
             deliver_at: None,
         };
         let join = Self::switch_join_target(cursor, arms, *default);
@@ -112,9 +142,8 @@ impl<'a> Lowering<'a> {
     /// own id) from its scaffold blocks — the `Handler` terminator's
     /// `body_block` — delivering the body's tail value to `k` (the
     /// closure's return continuation); `continue v` statements lower as
-    /// resume applications via `ctx.resume_k`. `None` when the construct
-    /// has no scaffold in the body being lowered (a standalone-body
-    /// fallback: the embedded block lowers tree-style).
+    /// resume applications via `ctx.resume_k`. `None` means the checked MIR
+    /// body did not publish the required scaffold.
     pub(super) fn lower_sub_body_from_scaffold(
         &mut self,
         key: crate::node_id::NodeID,
@@ -137,6 +166,7 @@ impl<'a> Lowering<'a> {
             // jump targets from inside it (matching the tree path's
             // closure rebase).
             loops: &[],
+            entry: None,
             deliver_at: Some(join),
         };
         let mut cache = MirBlockCache::default();
@@ -161,10 +191,86 @@ impl<'a> Lowering<'a> {
             block: arm_block,
             index: 0,
             loops: &loops,
+            entry: None,
             deliver_at: join,
         };
         let mut cache = MirBlockCache::default();
         Some(self.lower_mir_statements(cursor, ctx, k, &mut cache))
+    }
+
+    fn temp_bindings_for_block(
+        &self,
+        body: &mir::Body,
+        block: mir::BlockId,
+        ctx: &Ctx,
+    ) -> Vec<(u32, ExprId)> {
+        let mut collector = TempCollector { temps: vec![] };
+        for statement in &body.blocks[block.0].statements {
+            self.collect_statement_temps(&statement.kind, &mut collector);
+        }
+        self.collect_terminator_temps(&body.blocks[block.0].terminator, &mut collector);
+        collector.temps.sort_unstable();
+        collector
+            .temps
+            .into_iter()
+            .filter_map(|temp| ctx.temps.get(&temp).copied().map(|value| (temp, value)))
+            .collect()
+    }
+
+    fn collect_statement_temps(&self, statement: &mir::Statement, collector: &mut TempCollector) {
+        use derive_visitor::Drive;
+        match statement {
+            mir::Statement::ConsumeValue { expr }
+            | mir::Statement::ReturnValue { expr, .. }
+            | mir::Statement::ContinueValue { expr }
+            | mir::Statement::Perform { expr, .. } => expr.drive(collector),
+            mir::Statement::Bind { rhs: Some(rhs), .. } => rhs.drive(collector),
+            mir::Statement::Assign { lhs, rhs, .. } => {
+                lhs.drive(collector);
+                rhs.drive(collector);
+            }
+            mir::Statement::DropCandidate {
+                target: mir::DropTarget::Expr(expr),
+                ..
+            } => expr.drive(collector),
+            mir::Statement::Call {
+                expr, callee, args, ..
+            } => {
+                expr.drive(collector);
+                callee.drive(collector);
+                for arg in args {
+                    arg.value.drive(collector);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_terminator_temps(
+        &self,
+        terminator: &mir::Terminator,
+        collector: &mut TempCollector,
+    ) {
+        use derive_visitor::Drive;
+        match terminator {
+            mir::Terminator::Branch { condition, .. } => condition.drive(collector),
+            mir::Terminator::Switch { scrutinee, .. } => scrutinee.drive(collector),
+            mir::Terminator::Loop {
+                condition: Some(condition),
+                ..
+            } => condition.drive(collector),
+            _ => {}
+        }
+    }
+
+    fn block_key(&self, cursor: MirCursor, ctx: &Ctx, k: ExprId) -> MirBlockKey {
+        MirBlockKey {
+            block: cursor.block,
+            k,
+            ctx: ctx.mir_key(),
+            loops: cursor.loops.to_vec(),
+            temps: self.temp_bindings_for_block(cursor.body, cursor.block, ctx),
+        }
     }
 
     fn lower_mir_block(
@@ -174,12 +280,7 @@ impl<'a> Lowering<'a> {
         k: ExprId,
         cache: &mut MirBlockCache,
     ) -> ExprId {
-        let key = MirBlockKey {
-            block: cursor.block,
-            k,
-            ctx: ctx.mir_key(),
-            loops: cursor.loops.to_vec(),
-        };
+        let key = self.block_key(cursor, ctx, k);
         if let Some(&entry) = cache.blocks.get(&key) {
             let void = self.p.void();
             return self.p.app(entry, void);
@@ -187,10 +288,18 @@ impl<'a> Lowering<'a> {
 
         let void_ty = self.p.ty_void();
         let bot = self.p.ty_bot();
-        let label = self.p.func("mir_bb", void_ty, bot);
+        let label_name = if matches!(
+            cursor.body.blocks[cursor.block.0].terminator,
+            mir::Terminator::Loop { .. }
+        ) {
+            "loop_head"
+        } else {
+            "mir_bb"
+        };
+        let label = self.p.func(label_name, void_ty, bot);
         let entry = self.p.func_ref(label);
         cache.blocks.insert(key, entry);
-        let body_expr = self.lower_mir_statements(cursor, ctx, k, cache);
+        let body_expr = self.lower_mir_statements(cursor.with_entry(entry), ctx, k, cache);
         self.p.set_body(label, body_expr);
         let void = self.p.void();
         self.p.app(entry, void)
@@ -244,7 +353,7 @@ impl<'a> Lowering<'a> {
                 else {
                     return rest_body;
                 };
-                let hir::ExprKind::Temp(temp) = temp_expr.kind else {
+                let typed_ast::ExprKind::Temp(temp) = temp_expr.kind else {
                     return rest_body;
                 };
                 let Some(value) = ctx.temps.get(&temp).copied() else {
@@ -336,13 +445,19 @@ impl<'a> Lowering<'a> {
             mir::Statement::ReturnValue {
                 expr, destination, ..
             } => {
+                if let mir::ValueDestination::TempThenContinue(temp) = destination {
+                    return self.lower_mir_temp_delivery(expr, *temp, cursor, ctx, k, cache);
+                }
                 let target = match destination {
-                    mir::ValueDestination::Continuation(_) | mir::ValueDestination::TailReturn => {
+                    mir::ValueDestination::Continuation(_)
+                    | mir::ValueDestination::Fallthrough
+                    | mir::ValueDestination::TailReturn => {
                         self.wrap_cont_with_following_drops(ctx, cursor, k)
                     }
                     mir::ValueDestination::Return => {
                         self.wrap_cont_with_following_drops(ctx, cursor, ctx.ret_k)
                     }
+                    mir::ValueDestination::TempThenContinue(_) => unreachable!(),
                 };
                 // Ledger rule E: a delivered place read tops up +1 BEFORE
                 // the exit releases run (the receiving binding claims it as
@@ -419,10 +534,10 @@ impl<'a> Lowering<'a> {
             else {
                 continue;
             };
-            let hir::ExprKind::Func(func) = &rhs.kind else {
+            let typed_ast::ExprKind::Func(func) = &rhs.kind else {
                 continue;
             };
-            let hir::PatternKind::Bind(name) = &lhs.kind else {
+            let typed_ast::PatternKind::Bind(name) = &lhs.kind else {
                 continue;
             };
             let Ok(symbol) = name.symbol() else {
@@ -445,7 +560,7 @@ impl<'a> Lowering<'a> {
 
     fn lower_mir_bind(
         &mut self,
-        lhs: &hir::Pattern,
+        lhs: &typed_ast::Pattern,
         rhs: Option<&Expr>,
         cursor: MirCursor,
         ctx: &Ctx,
@@ -531,7 +646,7 @@ impl<'a> Lowering<'a> {
         // nest them under this let and cycle the nesting relation
         // (Property 2). Nothing droppable is skipped — a func value
         // carries no owned buffers.
-        if let hir::ExprKind::Func(func) = &rhs.kind
+        if let typed_ast::ExprKind::Func(func) = &rhs.kind
             && matches!(symbol, Symbol::DeclaredLocal(..))
             && !ctx.cellable.contains(&symbol)
             && !self.contains_object_type(&self.checker_ty(rhs, ctx))
@@ -615,21 +730,32 @@ impl<'a> Lowering<'a> {
         let root = Place::root(symbol);
         let mut needs_root_flag = false;
 
-        for statement in body.blocks.iter().flat_map(|block| &block.statements) {
-            if let Some(drop) = &statement.ownership.drop
-                && let Some(drop_key_path) = &drop.key_path
-                && drop_key_path.root == symbol
-                && matches!(
-                    drop.kind,
-                    mir::DropElaboration::Conditional | mir::DropElaboration::Open
-                )
-            {
-                needs_root_flag = true;
-                if !drop_key_path.fields.is_empty() {
-                    Self::push_unique_drop_flag_key(&mut keys, drop_key_path.clone());
+        for block in &body.blocks {
+            for statement in &block.statements {
+                if let Some(drop) = &statement.ownership.drop
+                    && let Some(drop_key_path) = &drop.key_path
+                    && drop_key_path.root == symbol
+                    && matches!(
+                        drop.kind,
+                        mir::DropElaboration::Conditional | mir::DropElaboration::Open
+                    )
+                {
+                    needs_root_flag = true;
+                    if !drop_key_path.fields.is_empty() {
+                        Self::push_unique_drop_flag_key(&mut keys, drop_key_path.clone());
+                    }
+                }
+                for source in &statement.ownership.moves {
+                    if source.root != symbol {
+                        continue;
+                    }
+                    needs_root_flag = true;
+                    if !source.fields.is_empty() {
+                        Self::push_unique_drop_flag_key(&mut keys, source.clone());
+                    }
                 }
             }
-            for source in &statement.ownership.moves {
+            for source in &block.terminator_ownership.moves {
                 if source.root != symbol {
                     continue;
                 }
@@ -644,6 +770,48 @@ impl<'a> Lowering<'a> {
             keys.insert(0, root);
         }
         keys
+    }
+
+    fn lower_mir_temp_delivery(
+        &mut self,
+        expr: &Expr,
+        temp: u32,
+        cursor: MirCursor,
+        ctx: &Ctx,
+        k: ExprId,
+        cache: &mut MirBlockCache,
+    ) -> ExprId {
+        let value_ty = self.expr_lambda_ty(expr, ctx);
+        let bot = self.p.ty_bot();
+        let cont = self.p.func("block_temp", value_ty, bot);
+        let value = self.p.var(cont);
+        let mut tctx = ctx.clone();
+        tctx.temps.insert(temp, value);
+        let rest_body = self.lower_mir_statements(cursor.advance(), &tctx, k, cache);
+        self.p.set_body(cont, rest_body);
+        let target = self.p.func_ref(cont);
+
+        let returns_initializing_self = ctx
+            .initializing_self
+            .is_some_and(|self_symbol| Self::expr_root_symbol(expr) == Some(self_symbol));
+        let target = if !self.rhs_is_rvalue(expr, ctx)
+            && !returns_initializing_self
+            && self.contains_object_type(&self.checker_ty(expr, ctx))
+        {
+            self.acquire_before(target, expr, ctx)
+        } else {
+            target
+        };
+        let mut tail_ctx;
+        let value_ctx = if target != ctx.tail_k {
+            tail_ctx = ctx.clone();
+            tail_ctx.tail_k = target;
+            &tail_ctx
+        } else {
+            ctx
+        };
+        let target = self.wrap_moved_value_cont(value_ctx, cursor.statement(), target);
+        self.lower_expr(expr, value_ctx, target)
     }
 
     fn wrap_cont_with_following_drops(
@@ -1169,7 +1337,7 @@ impl<'a> Lowering<'a> {
             effect,
             handling_id: stmt.id,
             scaffold,
-            handler_block: (*handler_block).clone(),
+            handler_args: handler_block.args.clone(),
             install_ctx: ctx.clone(),
         });
         let mut scope_ctx = ctx.clone();
@@ -1178,6 +1346,25 @@ impl<'a> Lowering<'a> {
     }
 
     fn lower_mir_terminator(
+        &mut self,
+        cursor: MirCursor,
+        ctx: &Ctx,
+        k: ExprId,
+        cache: &mut MirBlockCache,
+    ) -> ExprId {
+        let body = self.lower_mir_terminator_inner(cursor.clone(), ctx, k, cache);
+        let moves = cursor.body.blocks[cursor.block.0]
+            .terminator_ownership
+            .moves
+            .clone();
+        let mut result = body;
+        for key_path in moves.iter().rev() {
+            result = self.set_drop_flags_under_then(ctx, key_path, false, result);
+        }
+        result
+    }
+
+    fn lower_mir_terminator_inner(
         &mut self,
         cursor: MirCursor,
         ctx: &Ctx,
@@ -1207,13 +1394,12 @@ impl<'a> Lowering<'a> {
                     let void = self.p.void();
                     return self.p.app(k, void);
                 }
-                if let Some(loop_) = cursor
-                    .loops
-                    .iter()
-                    .rev()
-                    .find(|loop_| loop_.header_block == *target || loop_.exit_block == *target)
+                if let Some(loop_) =
+                    cursor.loops.iter().rev().find(|loop_| {
+                        loop_.continue_block == *target || loop_.exit_block == *target
+                    })
                 {
-                    let jump_to = if loop_.header_block == *target {
+                    let jump_to = if loop_.continue_block == *target {
                         loop_.header
                     } else {
                         loop_.exit
@@ -1285,18 +1471,28 @@ impl<'a> Lowering<'a> {
             mir::Terminator::Switch { .. } => self.dead_end("mir_switch_without_patterns"),
             mir::Terminator::Loop {
                 condition,
+                header_block,
                 body_block,
                 exit_block,
             } => {
+                let header_ref = if *header_block == cursor.block {
+                    cursor.entry
+                } else {
+                    let mut header_ctx = ctx.clone();
+                    header_ctx.temps.clear();
+                    let key = self.block_key(cursor.at_block(*header_block), &header_ctx, k);
+                    cache.blocks.get(&key).copied()
+                };
+                let Some(header_ref) = header_ref else {
+                    return self.dead_end("loop_header_without_block_entry");
+                };
                 let void_ty = self.p.ty_void();
                 let bot = self.p.ty_bot();
-                let header = self.p.func("loop_head", void_ty, bot);
                 let exit = self.p.func("loop_exit", void_ty, bot);
-                let header_ref = self.p.func_ref(header);
                 let exit_ref = self.p.func_ref(exit);
                 let mut next_loops = cursor.loops.to_vec();
                 next_loops.push(MirLoop {
-                    header_block: cursor.block,
+                    continue_block: *header_block,
                     header: header_ref,
                     exit_block: *exit_block,
                     exit: exit_ref,
@@ -1333,17 +1529,14 @@ impl<'a> Lowering<'a> {
                 if let Some(scaffold) = self.scaffold_ctx.last_mut() {
                     scaffold.loops = cursor.loops.to_vec();
                 }
-                let header_body = match condition {
+                match condition {
                     Some(condition) => {
                         let void = self.p.void();
                         let exit_jump = self.p.app(exit_ref, void);
                         self.branch(condition, body_expr, exit_jump, ctx)
                     }
                     None => body_expr,
-                };
-                self.p.set_body(header, header_body);
-                let void = self.p.void();
-                self.p.app(header_ref, void)
+                }
             }
         }
     }
@@ -1373,6 +1566,7 @@ impl<'a> Lowering<'a> {
                 ref condition,
                 body_block,
                 exit_block,
+                ..
             } => body_block == exit || (condition.is_some() && exit_block == exit),
             mir::Terminator::Unset
             | mir::Terminator::Return
@@ -1399,7 +1593,7 @@ impl<'a> Lowering<'a> {
             if cursor
                 .loops
                 .iter()
-                .any(|loop_| loop_.header_block == target || loop_.exit_block == target)
+                .any(|loop_| loop_.continue_block == target || loop_.exit_block == target)
             {
                 continue;
             }

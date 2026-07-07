@@ -13,9 +13,9 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::hir::{self, ExprKind};
 use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
+use crate::typed_ast::{self, ExprKind};
 
 #[derive(Default)]
 pub(crate) struct Liveness {
@@ -24,7 +24,7 @@ pub(crate) struct Liveness {
 }
 
 impl Liveness {
-    pub(crate) fn analyze(nodes: &[hir::Node]) -> Liveness {
+    pub(crate) fn analyze(nodes: &[typed_ast::Node]) -> Liveness {
         let mut pass = Prepass {
             liveness: Liveness::default(),
             declared: FxHashMap::default(),
@@ -89,19 +89,19 @@ impl Prepass {
         }
     }
 
-    fn walk_nodes(&mut self, nodes: &[hir::Node]) {
+    fn walk_nodes(&mut self, nodes: &[typed_ast::Node]) {
         for node in nodes {
             match node {
-                hir::Node::Decl(decl) => self.walk_decl(decl),
-                hir::Node::Stmt(stmt) => self.walk_stmt(stmt),
-                hir::Node::Expr(expr) => self.walk_expr(expr),
+                typed_ast::Node::Decl(decl) => self.walk_decl(decl),
+                typed_ast::Node::Stmt(stmt) => self.walk_stmt(stmt),
+                typed_ast::Node::Expr(expr) => self.walk_expr(expr),
             }
         }
     }
 
-    fn walk_decl(&mut self, decl: &hir::Decl) {
+    fn walk_decl(&mut self, decl: &typed_ast::Decl) {
         match &decl.kind {
-            hir::DeclKind::Let { lhs, rhs, .. } => {
+            typed_ast::DeclKind::Let { lhs, rhs, .. } => {
                 if let Some(rhs) = rhs {
                     self.walk_expr(rhs);
                 }
@@ -110,20 +110,20 @@ impl Prepass {
                     self.declared.insert(binder, position);
                 }
             }
-            hir::DeclKind::Func(func) => self.walk_closure(func),
+            typed_ast::DeclKind::Func(func) => self.walk_closure(func),
             _ => {}
         }
         // The checker prunes loans after each declaration node.
         self.bump(decl.id);
     }
 
-    fn walk_stmt(&mut self, stmt: &hir::Stmt) {
+    fn walk_stmt(&mut self, stmt: &typed_ast::Stmt) {
         match &stmt.kind {
-            hir::StmtKind::Expr(expr) => {
+            typed_ast::StmtKind::Expr(expr) => {
                 self.walk_expr(expr);
                 self.bump(stmt.id);
             }
-            hir::StmtKind::If(cond, then_block, else_block) => {
+            typed_ast::StmtKind::If(cond, then_block, else_block) => {
                 self.walk_expr(cond);
                 self.walk_nodes(&then_block.body);
                 if let Some(else_block) = else_block {
@@ -131,16 +131,16 @@ impl Prepass {
                 }
                 self.bump(stmt.id);
             }
-            hir::StmtKind::Return(value) | hir::StmtKind::Continue(value) => {
+            typed_ast::StmtKind::Return(value) | typed_ast::StmtKind::Continue(value) => {
                 if let Some(value) = value {
                     self.walk_expr(value);
                 }
                 self.bump(stmt.id);
             }
-            hir::StmtKind::Break => {
+            typed_ast::StmtKind::Break => {
                 self.bump(stmt.id);
             }
-            hir::StmtKind::Assignment(lhs, rhs) => {
+            typed_ast::StmtKind::Assignment(lhs, rhs) => {
                 self.walk_expr(rhs);
                 // An assignment through fields reads its root; a whole-root
                 // assignment is a definition, not a use.
@@ -153,7 +153,7 @@ impl Prepass {
                 }
                 self.bump(stmt.id);
             }
-            hir::StmtKind::Loop(cond, body) => {
+            typed_ast::StmtKind::Loop(cond, body) => {
                 self.loop_stack.push(LoopFrame {
                     carried: FxHashSet::default(),
                     start: self.next,
@@ -170,14 +170,14 @@ impl Prepass {
                     self.record_use(symbol, end);
                 }
             }
-            hir::StmtKind::Handling { body, .. } => {
+            typed_ast::StmtKind::Handling { body, .. } => {
                 self.walk_nodes(&body.body);
                 self.bump(stmt.id);
             }
         }
     }
 
-    fn walk_expr(&mut self, expr: &hir::Expr) {
+    fn walk_expr(&mut self, expr: &typed_ast::Expr) {
         match &expr.kind {
             ExprKind::Variable(name) => {
                 if let Ok(symbol) = name.symbol() {
@@ -270,7 +270,7 @@ impl Prepass {
 
     /// A closure's free-variable reads (captures) are uses at the closure's
     /// position in the parent: the closure value carries them.
-    fn walk_closure(&mut self, func: &hir::Func) {
+    fn walk_closure(&mut self, func: &typed_ast::Func) {
         let position = self.bump(func.id);
         let mut bound: FxHashSet<Symbol> = FxHashSet::default();
         for param in &func.params {
@@ -290,14 +290,14 @@ impl Prepass {
         }
     }
 
-    fn walk_member_receivers(&mut self, expr: &hir::Expr) {
+    fn walk_member_receivers(&mut self, expr: &typed_ast::Expr) {
         if let ExprKind::Member(Some(receiver), _) | ExprKind::Proj(receiver, ..) = &expr.kind {
             self.walk_member_receivers(receiver);
         }
     }
 }
 
-fn assignment_root(lhs: &hir::Expr) -> Option<(Symbol, bool)> {
+fn assignment_root(lhs: &typed_ast::Expr) -> Option<(Symbol, bool)> {
     match &lhs.kind {
         ExprKind::Variable(name) => name.symbol().ok().map(|symbol| (symbol, false)),
         ExprKind::Member(Some(receiver), _) | ExprKind::Proj(receiver, ..) => {
@@ -310,21 +310,21 @@ fn assignment_root(lhs: &hir::Expr) -> Option<(Symbol, bool)> {
 
 /// Free-variable reads within a closure body (symbols not bound inside it).
 pub(crate) fn collect_free_reads(
-    block: &hir::Block,
+    block: &typed_ast::Block,
     bound: &mut FxHashSet<Symbol>,
     out: &mut FxHashSet<Symbol>,
 ) {
     use derive_visitor::{Drive, Visitor};
 
     #[derive(Visitor)]
-    #[visitor(hir::Expr(enter), hir::Pattern(enter))]
+    #[visitor(typed_ast::Expr(enter), typed_ast::Pattern(enter))]
     struct FreeReads<'a> {
         bound: &'a mut FxHashSet<Symbol>,
         out: &'a mut FxHashSet<Symbol>,
     }
 
     impl FreeReads<'_> {
-        fn enter_expr(&mut self, expr: &hir::Expr) {
+        fn enter_expr(&mut self, expr: &typed_ast::Expr) {
             match &expr.kind {
                 ExprKind::Variable(name) => {
                     if let Ok(symbol) = name.symbol()
@@ -348,7 +348,7 @@ pub(crate) fn collect_free_reads(
             }
         }
 
-        fn enter_pattern(&mut self, pattern: &hir::Pattern) {
+        fn enter_pattern(&mut self, pattern: &typed_ast::Pattern) {
             for (_, binder) in pattern.collect_binders() {
                 self.bound.insert(binder);
             }

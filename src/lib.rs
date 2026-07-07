@@ -25,11 +25,11 @@ pub mod compiling;
 pub use common::*;
 pub mod desugar;
 pub mod flow;
-pub mod hir;
 pub mod lambda_g;
 pub mod lower;
 pub mod name_resolution;
 pub mod repl;
+pub mod typed_ast;
 pub mod types;
 pub mod vm;
 

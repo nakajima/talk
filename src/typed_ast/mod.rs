@@ -1,6 +1,6 @@
-//! The HIR (high-level IR): an owned, desugared tree the surface AST lowers
-//! into. Ownership checking and lowering consume the HIR instead of the parser
-//! AST, so a single canonical IR (and, later, a single MIR build) serves both.
+//! The typed compiler tree: an owned, desugared tree produced by the typed
+//! program builder. Flow and lowering consume this typed tree instead of the
+//! parser AST, so a single semantic representation serves both.
 //!
 //! Design notes (see the staged plan):
 //! - **Owned, no lifetimes** — built once, freely shared/stored.
@@ -11,10 +11,8 @@
 //!   (LSP-only), `Import` (resolved away), comments/trivia, and `*_span` fields
 //!   (a single `span` is kept for diagnostics).
 
-pub mod build;
-
 #[cfg(test)]
-mod hir_tests;
+mod typed_ast_tests;
 
 use derive_visitor::{Drive, DriveMut};
 
@@ -36,10 +34,11 @@ use crate::{
     parsing::span::Span,
 };
 
-/// One source file lowered to HIR: the analogue of `AST<NameResolved>` for the
-/// downstream phases. Carries the same `file_id` and the lowered roots.
+/// One source file in the typed compiler tree: the analogue of
+/// `AST<NameResolved>` for downstream phases. Carries the same `file_id` and the
+/// lowered roots.
 #[derive(Clone, Debug)]
-pub struct HirFile {
+pub struct TypedFile {
     pub file_id: crate::node_id::FileID,
     pub roots: Vec<Node>,
 }
@@ -55,13 +54,11 @@ pub enum Node {
 
 // ----- Expressions ---------------------------------------------------------
 
-/// Per-expression ownership facts, written onto the tree in place by the
-/// flow checker (`src/flow`); `Default` until that pass runs. Lowering reads
-/// these instead of consulting any side table.
+/// Per-expression clone facts. Runtime moves live on checked MIR statements;
+/// expression nodes keep only the CheapClone marker lowering needs when it
+/// lowers an expression value.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExprOwnership {
-    /// This use consumes (moves) its place; the place is dead afterwards.
-    pub consumes: bool,
     /// This use clones instead of moving/borrowing: lowering retains the
     /// value's buffers (CheapClone). Set by the type checker's borrowed-to-
     /// owned coercion or the flow checker's borrowed-field extraction.
@@ -75,25 +72,28 @@ pub struct Expr {
     pub kind: ExprKind,
     #[drive(skip)]
     pub span: Span,
-    /// Ownership facts for this expression (see [`ExprOwnership`]).
+    /// Clone facts for this expression (see [`ExprOwnership`]).
     #[drive(skip)]
     pub ownership: ExprOwnership,
-    /// This expression's type, baked on by the HirLowerer (read once from the
-    /// checker's tables). Every checked expression has one — `Ty::Error` at
-    /// worst — so downstream stages read it here instead of a NodeID-keyed table.
+    /// This expression's type, baked on by the typed-program builder (read once
+    /// from the checker's tables). Every checked expression has one — `Ty::Error`
+    /// at worst — so downstream stages read it here instead of a NodeID-keyed
+    /// table.
     #[drive(skip)]
     pub ty: crate::types::ty::Ty,
     /// How a member access / construction resolved (the checker's
-    /// `member_resolutions`), baked on by the HirLowerer; `None` where the node
-    /// is not a resolved member.
+    /// `member_resolutions`), baked on by the typed-program builder; `None`
+    /// where the node is not a resolved member.
     #[drive(skip)]
     pub member_resolution: Option<crate::types::output::MemberResolution>,
     /// This call/constructor's per-call-site type instantiation (the checker's
-    /// `instantiations`), baked on by the HirLowerer; read for θ at the call site.
+    /// `instantiations`), baked on by the typed-program builder; read for θ at
+    /// the call site.
     #[drive(skip)]
     pub instantiation: Option<Vec<(Symbol, crate::types::ty::Ty)>>,
     /// The existential pack the checker recorded at this node (the checker's
-    /// `existential_packs`), baked on by the HirLowerer; raw (un-substituted).
+    /// `existential_packs`), baked on by the typed-program builder; raw
+    /// (un-substituted).
     #[drive(skip)]
     pub existential_pack: Option<crate::types::output::ExistentialPack>,
 }
@@ -171,7 +171,7 @@ pub enum ExprKind {
     /// construct's join) stood in a consuming statement's expression.
     /// An atom: no place, no transfer effects (its value's consumption
     /// happened at the arm tails); lowering resolves it from the join
-    /// continuation's parameter. Never appears in the HIR tree itself —
+    /// continuation's parameter. Never appears in the typed tree itself —
     /// only in builder-emitted statement copies.
     Temp(#[drive(skip)] u32),
     RecordLiteral {
@@ -344,7 +344,7 @@ impl Pattern {
 // ----- Parameters ---------------------------------------------------------
 
 /// A function/closure parameter with its checker-assigned type baked on
-/// (`None` when the checker recorded no type for this binder). The HIR carries
+/// (`None` when the checker recorded no type for this binder). The typed tree carries
 /// the type here so downstream stages never look it up by `NodeID`.
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct Parameter {
@@ -371,10 +371,6 @@ pub struct Block {
     pub body: Vec<Node>,
     #[drive(skip)]
     pub span: Span,
-    /// Scope-exit drops for this block's locals (reverse declaration order),
-    /// written by the flow checker; empty until it runs.
-    #[drive(skip)]
-    pub drops: Vec<crate::flow::drops::DropSchedule>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
@@ -384,11 +380,6 @@ pub struct Stmt {
     pub kind: StmtKind,
     #[drive(skip)]
     pub span: Span,
-    /// Drops this statement triggers: the enclosing scopes' locals for an
-    /// early exit (`return`/`break`/`continue`), or the overwritten value
-    /// for an assignment. Written by the flow checker; empty until it runs.
-    #[drive(skip)]
-    pub drops: Vec<crate::flow::drops::DropSchedule>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]

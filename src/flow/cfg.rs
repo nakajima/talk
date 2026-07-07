@@ -11,10 +11,9 @@
 //! (handler bodies, trailing blocks) still walk tree-style inside.
 //!
 //! The engine is the single flow authority (ADR 0010 stage 4): a recording
-//! pass at the converged states produces the editor facts, consume /
-//! auto-clone flags, embedded-block schedules, and per-point candidate
-//! elaborations; the body is then flag/move-annotated; a final pass reports
-//! the errors with the flags in place.
+//! pass at the converged states produces the editor facts, statement/runtime
+//! move sets, auto-clone flags, and per-point candidate elaborations; a final
+//! pass reports the errors with the checked facts in place.
 
 use std::collections::VecDeque;
 
@@ -22,9 +21,9 @@ use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::compiling::driver::Source;
-use crate::hir::{self, HirFile};
 use crate::lower::mir;
 use crate::node_id::NodeID;
+use crate::typed_ast::{self, TypedFile};
 use crate::types::ty::Ty;
 
 use super::drops::{DropElaboration, DropReason};
@@ -37,13 +36,13 @@ use super::place::Place;
 /// uses the combined `main` body — but whose errors are the file's).
 pub(crate) fn check_bodies(
     checker: &mut MoveChecker,
-    hir: &IndexMap<Source, HirFile>,
+    files: &IndexMap<Source, TypedFile>,
     bodies: &mut crate::lower::mir::ModuleBodies,
 ) {
     let saved = (checker.report_errors, checker.recording);
     checker.recording = false;
 
-    for file in hir.values() {
+    for file in files.values() {
         // The file's top level checks as its own body (fresh state, the
         // full roots — declaration members included), errors only: the
         // COMBINED main body below carries the recording.
@@ -58,8 +57,8 @@ pub(crate) fn check_bodies(
             BodyRole::TopLevelErrors,
         );
 
-        // Every function-like body under the roots, in pre-order —
-        // mirroring `build_module_bodies`' enumeration.
+        // Every function-like body under the roots, in pre-order — matching
+        // the structural builder's enumeration.
         let mut walk = BodyWalk { checker, bodies };
         for root in &file.roots {
             use derive_visitor::Drive;
@@ -69,9 +68,9 @@ pub(crate) fn check_bodies(
 
     // The combined `main` body: every file's runnable top-level nodes in
     // order — exactly what lowering executes. Checked with cross-file
-    // state (runtime-faithful) and stored annotated; its errors are the
+    // state (runtime-faithful) and stored as checked MIR; its errors are the
     // per-file walks' (already reported), so this pass only records.
-    let main_nodes = crate::lower::mir::main_body_nodes(hir.values());
+    let main_nodes = crate::lower::mir::main_body_nodes(files.values());
     let mut main_body = mir::build_nodes(checker.types, &main_nodes);
     let liveness = Liveness::analyze(&main_nodes);
     check_body(
@@ -102,22 +101,22 @@ enum BodyRole {
 /// encounters it: closures and named functions (whose params seed from the
 /// expression type or the scheme) and init bodies (which seed nothing).
 #[derive(derive_visitor::Visitor)]
-#[visitor(hir::Expr(enter), hir::Decl(enter))]
+#[visitor(typed_ast::Expr(enter), typed_ast::Decl(enter))]
 struct BodyWalk<'a, 'types> {
     checker: &'a mut MoveChecker<'types>,
     bodies: &'a mut crate::lower::mir::ModuleBodies,
 }
 
 impl BodyWalk<'_, '_> {
-    fn enter_expr(&mut self, expr: &hir::Expr) {
-        if let hir::ExprKind::Func(func) = &expr.kind {
+    fn enter_expr(&mut self, expr: &typed_ast::Expr) {
+        if let typed_ast::ExprKind::Func(func) = &expr.kind {
             self.check_func_body(func, Some(expr.ty.clone()));
         }
     }
 
-    fn enter_decl(&mut self, decl: &hir::Decl) {
+    fn enter_decl(&mut self, decl: &typed_ast::Decl) {
         match &decl.kind {
-            hir::DeclKind::Func(func) => {
+            typed_ast::DeclKind::Func(func) => {
                 let func_ty = func
                     .name
                     .symbol()
@@ -126,7 +125,7 @@ impl BodyWalk<'_, '_> {
                     .map(|scheme| scheme.ty.clone());
                 self.check_func_body(func, func_ty);
             }
-            hir::DeclKind::Method { func, .. } => {
+            typed_ast::DeclKind::Method { func, .. } => {
                 let func_ty = func
                     .name
                     .symbol()
@@ -135,7 +134,7 @@ impl BodyWalk<'_, '_> {
                     .map(|scheme| scheme.ty.clone());
                 self.check_func_body(func, func_ty);
             }
-            hir::DeclKind::Init { body, .. } => {
+            typed_ast::DeclKind::Init { body, .. } => {
                 let Some(stored) = self.bodies.get_mut(body.id) else {
                     return;
                 };
@@ -147,7 +146,7 @@ impl BodyWalk<'_, '_> {
         }
     }
 
-    fn check_func_body(&mut self, func: &hir::Func, func_ty: Option<Ty>) {
+    fn check_func_body(&mut self, func: &typed_ast::Func, func_ty: Option<Ty>) {
         let Some(stored) = self.bodies.get_mut(func.body.id) else {
             return;
         };
@@ -169,7 +168,7 @@ fn check_body(
     checker: &mut MoveChecker,
     body: &mut mir::Body,
     liveness: Liveness,
-    params: &[hir::Parameter],
+    params: &[typed_ast::Parameter],
     func_ty: Option<Ty>,
     role: BodyRole,
 ) {
@@ -205,9 +204,8 @@ fn check_body(
     }
 
     if role != BodyRole::TopLevelErrors {
-        // ----- Recording pass at the converged states: facts, consume /
-        // auto-clone flags, embedded-block schedules, globals, and the
-        // per-point candidate elaborations.
+        // ----- Recording pass at the converged states: facts, runtime moves,
+        // auto-clone flags, globals, and per-point candidate elaborations.
         checker.recording = true;
         for index in 0..body.blocks.len() {
             let Some(entry) = entries.get(&index) else {
@@ -218,15 +216,16 @@ fn check_body(
             // Terminator edge effects (scrutinee consumption, arm-binder
             // seeding) record their facts here too; the edge states are
             // already converged and are discarded.
+            checker.begin_runtime_moves();
             successor_states(checker, body, index, &state);
+            body.blocks[index].terminator_ownership.moves = checker.take_runtime_moves();
         }
         checker.recording = false;
 
-        // ----- Bake the recorded flags and move sets onto this body's
-        // embedded nodes (the error pass and lowering read them there).
+        // ----- Bake recorded expression flags onto embedded nodes. Runtime
+        // move sets and drop elaborations were written directly at their MIR
+        // program points.
         let results = super::mir_annotate::FlowResults {
-            block_drops: &checker.block_drops,
-            stmt_drops: &checker.stmt_drops,
             consumed: &checker.consumed,
             auto_clones: &checker.auto_clones,
         };
@@ -234,7 +233,7 @@ fn check_body(
     }
 
     if role != BodyRole::MainRecording {
-        // ----- Error pass at the same converged states, with the flags in
+        // ----- Error pass at the same converged states, with checked facts in
         // place (the Read-statement use-check consults them).
         checker.report_errors = true;
         for index in 0..body.blocks.len() {
@@ -264,10 +263,16 @@ fn transfer_block(
     annotate: bool,
 ) {
     for index in 0..body.blocks[block].statements.len() {
+        if annotate {
+            checker.begin_runtime_moves();
+        }
         let elaboration = {
             let statement = &body.blocks[block].statements[index];
             transfer_statement(checker, &statement.kind, state, annotate)
         };
+        if annotate {
+            body.blocks[block].statements[index].ownership.moves = checker.take_runtime_moves();
+        }
         if annotate && let Some(elaboration) = elaboration {
             body.blocks[block].statements[index].ownership.drop = elaboration;
         }
@@ -327,9 +332,17 @@ fn transfer_statement(
                     // borrowed match/if result reaches whatever its arm
                     // tails reach (states merging at the join union the
                     // arms' entries).
-                    if let Some(temp) = temp
-                        && checker.grades.contains_borrowed(&expr.ty)
-                    {
+                    if checker.grades.contains_borrowed(&expr.ty) {
+                        let provenance = checker.expr_provenance(expr, state);
+                        state.temp_provenances.insert(*temp, provenance);
+                    }
+                    checker.consume_expr(expr, state);
+                }
+                mir::ValueDestination::Fallthrough => {
+                    checker.consume_expr(expr, state);
+                }
+                mir::ValueDestination::TempThenContinue(temp) => {
+                    if checker.grades.contains_borrowed(&expr.ty) {
                         let provenance = checker.expr_provenance(expr, state);
                         state.temp_provenances.insert(*temp, provenance);
                     }
@@ -374,12 +387,16 @@ fn transfer_statement(
             state.temp_provenances.insert(*temp, provenance);
         }
         mir::Statement::Perform { expr, .. } => {
-            // The effect's arguments are consumed by the perform (their
-            // evaluation statements are plain reads).
-            if let hir::ExprKind::CallEffect { args, .. } = &expr.kind {
-                for arg in args {
-                    checker.consume_expr(&arg.value, state);
-                }
+            // The effect's arguments are source-consumed by the perform, but
+            // the runtime payload remains owned by the performer. Do not
+            // record a runtime transfer or lowering would clear the drop flag
+            // and leak the payload on the performed path.
+            if let typed_ast::ExprKind::CallEffect { args, .. } = &expr.kind {
+                checker.with_runtime_moves_suppressed(|checker| {
+                    for arg in args {
+                        checker.consume_expr(&arg.value, state);
+                    }
+                });
             }
         }
         mir::Statement::Function { decl_func, .. } => {
@@ -392,7 +409,7 @@ fn transfer_statement(
         }
         // The handler body has its own CFG blocks (the `Handler`
         // terminator's edges carry the may-execute semantics); the
-        // statement's embedded copy is lowering's fallback payload only.
+        // statement's embedded copy only carries source metadata.
         mir::Statement::Handling { .. } => {}
         mir::Statement::DeclBody { body } => {
             transfer_decl_body(checker, body, state);
@@ -408,17 +425,23 @@ fn transfer_statement(
 
 /// Type-member property defaults evaluate against the enclosing state (the
 /// bodies themselves are separate jobs).
-fn transfer_decl_body(checker: &mut MoveChecker, body: &crate::hir::Body, state: &mut MoveState) {
+fn transfer_decl_body(
+    checker: &mut MoveChecker,
+    body: &crate::typed_ast::Body,
+    state: &mut MoveState,
+) {
     for decl in &body.decls {
         match &decl.kind {
-            hir::DeclKind::Property {
+            typed_ast::DeclKind::Property {
                 default_value: Some(value),
                 ..
             } => checker.consume_expr(value, state),
-            hir::DeclKind::Struct { body, .. }
-            | hir::DeclKind::Enum { body, .. }
-            | hir::DeclKind::Extend { body, .. }
-            | hir::DeclKind::Protocol { body, .. } => transfer_decl_body(checker, body, state),
+            typed_ast::DeclKind::Struct { body, .. }
+            | typed_ast::DeclKind::Enum { body, .. }
+            | typed_ast::DeclKind::Extend { body, .. }
+            | typed_ast::DeclKind::Protocol { body, .. } => {
+                transfer_decl_body(checker, body, state)
+            }
             _ => {}
         }
     }
@@ -444,8 +467,8 @@ fn classify_candidate(
         // was merely read drops here. Consumption is static per temp, so
         // the checker-level set (complete before the annotate pass)
         // classifies without per-path state.
-        mir::DropTarget::Expr(expr) if matches!(expr.kind, hir::ExprKind::Temp(_)) => {
-            let hir::ExprKind::Temp(temp) = expr.kind else {
+        mir::DropTarget::Expr(expr) if matches!(expr.kind, typed_ast::ExprKind::Temp(_)) => {
+            let typed_ast::ExprKind::Temp(temp) = expr.kind else {
                 unreachable!()
             };
             let generic = matches!(expr.ty, Ty::Param(_) | Ty::Proj(..));
@@ -624,8 +647,8 @@ fn successor_states(
 /// machinery instead of moving.
 fn seed_arm_binders(
     checker: &mut MoveChecker,
-    scrutinee: &hir::Expr,
-    arm: &hir::MatchArm,
+    scrutinee: &typed_ast::Expr,
+    arm: &typed_ast::MatchArm,
     scrutinee_provenance: Option<&super::loans::Provenance>,
     state: &mut MoveState,
 ) {

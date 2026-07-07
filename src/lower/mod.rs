@@ -40,10 +40,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::compiling::driver::Source;
 use crate::flow::Place;
-use crate::hir::{
-    self, Block, Decl, DeclKind, Expr, ExprKind, HirFile, InlineIRInstruction, MatchArm, Node,
-    PatternKind, Stmt, StmtKind,
-};
 use crate::lambda_g::expr::Const;
 use crate::lambda_g::expr::{CmpOp, ExprId, Op, TyId, TyKind};
 use crate::lambda_g::program::{Label, Program};
@@ -54,16 +50,20 @@ use crate::node_kinds::{
     type_annotation::{TypeAnnotation, TypeAnnotationKind},
 };
 use crate::token_kind::TokenKind;
+use crate::typed_ast::{
+    self, Block, Decl, DeclKind, Expr, ExprKind, InlineIRInstruction, MatchArm, Node, PatternKind,
+    Stmt, StmtKind, TypedFile,
+};
 use crate::types::TypeOutput;
 use crate::types::ty::Ty as CheckTy;
 use crate::types::ty::{ProtocolRef, TyFold};
 
-pub struct LowerUnit<'a> {
-    pub asts: &'a IndexMap<Source, HirFile>,
+pub(crate) struct LowerUnit<'a> {
+    pub asts: &'a IndexMap<Source, TypedFile>,
     pub types: &'a TypeOutput,
     pub resolved: &'a ResolvedNames,
-    /// The module's flow-annotated MIR bodies, built pre-flow by the driver.
-    pub bodies: &'a mir::ModuleBodies,
+    /// The module's flow-checked MIR bodies, built behind `mir::build_checked`.
+    pub bodies: &'a mir::CheckedMir,
 }
 
 /// θ: rigid type parameters (including a protocol's Self and associated
@@ -81,7 +81,7 @@ fn theta_key(theta: &Theta) -> ThetaKey {
 
 struct FuncSource<'a> {
     unit: usize,
-    params: &'a [crate::hir::Parameter],
+    params: &'a [crate::typed_ast::Parameter],
     body: &'a Block,
 }
 
@@ -124,11 +124,11 @@ pub struct Lowering<'a> {
     /// them reference the cell directly (a free variable of main; the
     /// closure machinery carries it, exactly like handler capabilities).
     top_level_cells: FxHashMap<Symbol, ExprId>,
-    /// One MIR body per HIR block: fetched from the unit's store (or built
-    /// on miss) on first lowering, shared by every later lowering of the
-    /// same block (each θ-specialization of a generic function re-lowers
-    /// its body but must not rebuild its MIR).
-    mir_bodies: FxHashMap<(usize, crate::node_id::NodeID), std::sync::Arc<mir::Body>>,
+    /// One checked MIR body per typed block: fetched from the unit's store on
+    /// first lowering, shared by every later lowering of the same block (each
+    /// θ-specialization of a generic function re-lowers its body but must not
+    /// rebuild its MIR).
+    checked_bodies: FxHashMap<(usize, crate::node_id::NodeID), std::sync::Arc<mir::Body>>,
     /// Stack of bodies being lowered (innermost last): expression lowering
     /// resolves expression-position constructs' scaffold blocks against the
     /// innermost entry.
@@ -152,8 +152,8 @@ struct HandlerTemplate {
     /// body's blocks in `scaffold`.
     handling_id: crate::node_id::NodeID,
     scaffold: std::sync::Arc<mir::Body>,
-    /// The handler block itself (argument names; standalone fallback).
-    handler_block: Block,
+    /// Handler parameters, kept for argument names and cell conversion.
+    handler_args: Vec<typed_ast::Parameter>,
     /// The installing frame's context: the delimiter (`raw_ret_k`) and
     /// environment the materialized closure captures.
     install_ctx: Ctx,
@@ -192,7 +192,7 @@ struct LoopBinding {
 
 /// A variant constructor's call site, carried from `variant_target` into
 /// evidence-table generation: the node (for diagnostics) and its per-call-site
-/// instantiation (the θ source, baked on the HIR node by the lowerer).
+/// instantiation (the θ source, baked on the typed node by the builder).
 #[derive(Clone)]
 struct VariantSite {
     node: crate::node_id::NodeID,
@@ -219,11 +219,7 @@ struct Ctx {
     /// runtime witness table extracted from the constructor payload.
     local_evidence: FxHashMap<(Symbol, Symbol), EvidenceBinding>,
     /// MIR temporaries in scope: a flattened construct's value, bound by
-    /// its join continuation (`ExprKind::Temp` resolves here). NOT part of
-    /// `mir_key`: a temp's read is adjacent to its definition (same block)
-    /// or inside its construct's single-lowered join closure, so cached
-    /// blocks never read a temp bound differently elsewhere — while
-    /// branch-local (dead) temps must not split the join cache.
+    /// its join continuation (`ExprKind::Temp` resolves here).
     temps: FxHashMap<u32, ExprId>,
     /// The current function's return continuation (a Fn(R, ⊥) value).
     ret_k: ExprId,
@@ -294,11 +290,11 @@ struct MirCtxKey {
     cellable: Vec<Symbol>,
 }
 
-/// An active loop in the MIR→λ_G lowering: the header/exit MIR blocks paired
+/// An active loop in the MIR→λ_G lowering: the continue/exit MIR blocks paired
 /// with the λ_G continuations a back-edge or break jumps to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct MirLoop {
-    header_block: mir::BlockId,
+    continue_block: mir::BlockId,
     header: ExprId,
     exit_block: mir::BlockId,
     exit: ExprId,
@@ -310,6 +306,7 @@ struct MirBlockKey {
     k: ExprId,
     ctx: MirCtxKey,
     loops: Vec<MirLoop>,
+    temps: Vec<(u32, ExprId)>,
 }
 
 #[derive(Default)]
@@ -405,7 +402,7 @@ pub struct LoweredProgram {
     pub diagnostics: Vec<String>,
 }
 
-pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProgram {
+pub(crate) fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProgram {
     let mut lowering = Lowering {
         units,
         entry,
@@ -420,7 +417,7 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
         escaping: FxHashSet::default(),
         local_func_labels: FxHashMap::default(),
         top_level_cells: FxHashMap::default(),
-        mir_bodies: FxHashMap::default(),
+        checked_bodies: FxHashMap::default(),
         scaffold_ctx: vec![],
         handler_templates: vec![],
         materialized_caps: FxHashMap::default(),
@@ -579,7 +576,7 @@ impl<'a> Lowering<'a> {
                     this.embed_acquires_then(&arg_exprs, &values, ctx, body)
                 })
             }
-            ExprKind::Block(block) => self.lower_block(block, &[], ctx, k),
+            ExprKind::Block(block) => self.lower_block(block, ctx, k),
             // A tuple literal with impure items: chain them left to right.
             ExprKind::Tuple(items) => {
                 let item_exprs: Vec<&Expr> = items.iter().collect();
@@ -834,16 +831,14 @@ impl<'a> Lowering<'a> {
     }
 
     /// Like lower_nodes, but the final expression's value goes to ret_k.
-    fn lower_main_nodes(&mut self, nodes: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
-        // The combined main body spans every file's runnable top-level
-        // nodes: the flow checker built, analyzed, and annotated it from
-        // the same node filter (`mir::main_body_nodes`).
-        if let Some(body) = self.units[ctx.unit].bodies.top_level() {
-            return self.lower_mir_body(&body, ctx, k);
-        }
-        // No stored top level (a unit checked before the store existed, or
-        // an empty program): build structurally, unannotated.
-        let body = std::sync::Arc::new(mir::build_nodes(self.units[ctx.unit].types, nodes));
+    fn lower_main_nodes(&mut self, _nodes: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
+        // The combined main body spans every file's runnable top-level nodes:
+        // `mir::build_checked` built and checked it from the same node filter
+        // (`mir::main_body_nodes`).
+        let body = self.units[ctx.unit]
+            .bodies
+            .top_level()
+            .unwrap_or_else(|| panic!("missing checked MIR top-level body"));
         self.lower_mir_body(&body, ctx, k)
     }
 

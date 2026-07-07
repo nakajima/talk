@@ -138,6 +138,32 @@ func first(s: String) -> Substring {
 The same return from an owned local or owned parameter is still rejected if it
 would let a borrow outlive storage owned by the function.
 
+#### Return-borrow provenance
+
+V1 uses the most permissive callee rule: a borrow-derived return value is
+treated as potentially derived from every borrowed parameter of the call,
+shared and `mut` alike. The callee never names which parameter a returned
+borrow comes from, there is no lifetime syntax, and no callee body that
+returns a legal borrow is rejected for provenance reasons.
+
+The caller pays for that permissiveness: while the returned value is live,
+every borrow-mode argument place must stay alive, and any exclusive loan
+created for a `mut` argument stays open.
+
+```talk
+func pick(a: String, b: String) -> Substring { ... }
+
+let s = pick(a: x, b: y)
+// x and y are both borrowed for as long as s is live
+```
+
+For functions with a single borrowed parameter — the common case — this is
+already the precise rule. Functions with several borrowed parameters
+over-constrain their callers, which is the accepted v1 cost. A later
+refinement can add per-parameter provenance (elision rules or explicit
+annotations) without breaking existing code, because added precision only
+ever removes caller restrictions.
+
 ### Mutable parameters: `mut foo: Foo`
 
 `mut` means exclusive borrowed access, not merely "the local binding may be
@@ -186,6 +212,43 @@ func sorted(consume mut values: Array<Int>) -> Array<Int> {
 ```
 
 `consume mut` does not write back to the caller; it owns a local value.
+
+### Initializer parameters: consuming by default
+
+`init` is the exception to borrow-by-default. Storing arguments into the new
+value is an initializer's whole job, so unadorned `init` parameters are
+consuming parameters:
+
+```talk
+struct User {
+    let name: String
+
+    init(name: String) {        // name is consumed
+        self.name = name
+    }
+}
+
+let u = User(name: s)           // moves (or validly copies) s
+```
+
+Synthesized memberwise construction follows the same rule: each field argument
+is consumed. This mirrors Swift, where `init` and setter parameters default to
+consuming (SE-0377) for the same reason.
+
+An initializer parameter that is only read opts out with the explicit `borrow`
+keyword:
+
+```talk
+init(borrow config: Config) {
+    self.retries = config.retries    // reads, does not store
+}
+```
+
+This is why `borrow` is accepted as an explicit parameter-mode keyword rather
+than only as a call-site marker: `init` needs an opt-out spelling. Outside
+`init`, `borrow x: T` is redundant with the default but remains legal, which
+also helps generated code. `mut` and explicit `consume` keep their ordinary
+meanings in `init` position.
 
 ## Call-site behavior
 
@@ -385,8 +448,8 @@ func drain(fn: (consume DirectoryEntry) -> Void) { ... }
 
 ### Constructors and builders
 
-Any parameter stored into a result needs `consume` unless the function intends
-to clone it.
+Initializers consume by default, so construction itself needs no annotation.
+Free builder functions that store a parameter still spell `consume` (or clone):
 
 ```talk
 struct User {
@@ -394,11 +457,11 @@ struct User {
 }
 
 func user(consume name: String) -> User {
-    User(name: name)
+    User(name: name)          // init consumes; name moves through
 }
 
 func cloned_user(name: String) -> User {
-    User(name: copy name)
+    User(name: copy name)     // borrowed parameter, explicit clone at the call
 }
 ```
 
@@ -434,10 +497,15 @@ Parameter declarations:
 
 ```text
 parameter_decl ::= param_mode? identifier (':' type_annotation)?
-param_mode     ::= 'mut'
+param_mode     ::= 'borrow'
+                 | 'mut'
                  | 'consume'
                  | 'consume' 'mut'
 ```
+
+The unadorned default is `borrow` everywhere except `init` declarations, where
+it is `consume`. `borrow` is the explicit opt-out in `init` position and a
+legal no-op elsewhere.
 
 Function type parameters:
 
@@ -460,9 +528,10 @@ arg_mode        ::= 'mut' | 'consume' | 'copy' | 'borrow'
 Legacy compatibility in parameter positions:
 
 ```text
-x: &T       => x: T
+x: &T       => x: T           // in init position: borrow x: T
 x: &mut T   => mut x: T
 x: T        => consume x: T   // only when migration proves ownership is needed
+                              // in init position: stays x: T
 ```
 
 The parser should reject confusing combinations such as `mut consume x: T` and
@@ -497,6 +566,11 @@ lower_param(mode, T):
     Consume    => T
     ConsumeMut => T plus local-mutability permission
 ```
+
+Unadorned parameters resolve to `Borrow` in ordinary declarations and
+`Consume` in `init` declarations (including synthesized memberwise
+initializers) before lowering, so downstream stages never special-case
+`init`.
 
 Do not change the meaning of `let x: T`, fields, enum payloads, return types,
 or type aliases. The default changes only in parameter and function-type
@@ -547,6 +621,9 @@ Updates needed:
   `mut` markers.
 - Record inserted clones/copies in flow facts so diagnostics and tooling can
   explain them.
+- At call sites, treat a borrow-derived result as borrowing from every
+  borrow-mode argument (the v1 provenance rule): keep those argument places
+  live and any exclusive loans open while the result is live.
 
 ### Lowering and runtime
 
@@ -602,9 +679,11 @@ uses so the source retains ownership visibility even when the syntax is quiet.
 3. **Add explicit call-site markers.** Implement `consume`, `copy`, `borrow`,
    and `mut` argument markers as constraints on call resolution and flow.
 4. **Build an ownership migration command.** For every existing `x: T`
-   parameter, decide whether the body needs ownership. If yes, rewrite to
-   `consume x: T`; otherwise leave it as `x: T`. Rewrite `x: &T` to `x: T` and
-   `x: &mut T` to `mut x: T`.
+   parameter outside `init`, decide whether the body needs ownership (the
+   existing flow facts — moves, stores, drops — are the criterion). If yes,
+   rewrite to `consume x: T`; otherwise leave it as `x: T`. Rewrite `x: &T` to
+   `x: T` and `x: &mut T` to `mut x: T`. In `init` position, `x: T` stays as
+   written and `x: &T` becomes `borrow x: T`.
 5. **Migrate core and stdlib.** Start with read-only protocols (`Showable`,
    `Equatable`, `Comparable`), iterator/visitor callback types, and string/path
    APIs. Audit operator protocols separately.
@@ -622,9 +701,10 @@ same stage.
 
 ### Plain `T` becomes context-sensitive
 
-`let x: Foo` still declares an owned local. `func f(x: Foo)` declares a borrowed
-parameter. That is intentional but must be taught clearly and reflected in
-hovers.
+`let x: Foo` still declares an owned local. `func f(x: Foo)` declares a
+borrowed parameter. `init(x: Foo)` declares a consumed parameter. That is
+intentional — each default matches what that position almost always does —
+but it must be taught clearly and reflected in hovers.
 
 ### Identity functions change meaning
 
@@ -646,11 +726,12 @@ or:
 func id<T: Clone>(x: T) -> T { copy x }
 ```
 
-### Constructors need `consume`
+### Free builder functions need `consume`
 
-Any parameter stored into a result must be explicitly owned or explicitly
-cloned. This is the largest migration category and the most useful place for an
-automated fix-it.
+`init` parameters consume by default, so plain construction stays quiet. But
+any free function or method that stores a parameter into a result must still
+be explicitly owned or explicitly cloned. This is the largest migration
+category outside `init` and the most useful place for an automated fix-it.
 
 ### `mut` must not look like local mutability only
 
@@ -694,6 +775,11 @@ it. If a later design wants owned temporary mutation, it should use
 
 - Common read-only APIs become shorter and safer.
 - Ownership transfer becomes visually explicit at the declaration site.
+- Struct construction stays quiet: `init` parameters consume by default,
+  matching what initializers actually do with their arguments.
+- Returned borrows need no lifetime syntax in v1; functions with several
+  borrowed parameters conservatively borrow all of their arguments for the
+  result's lifetime, and later provenance precision only relaxes callers.
 - Existing receiver modes and ordinary parameter modes line up.
 - ADR 0014 generalizes from comparisons to all parameters.
 - More programs will rely on implicit clones for value-semantic types; tooling
@@ -705,9 +791,6 @@ it. If a later design wants owned temporary mutation, it should use
 
 ## Open questions
 
-- Should `borrow` be accepted as an explicit parameter-mode keyword
-  (`borrow x: T`) or only as a call-site marker? The default makes it
-  unnecessary, but an explicit spelling may help generated code and education.
 - Should mode-only overloads be accepted in v1, or should explicit call-site
   markers only constrain ordinary overload resolution?
 - What is the source-level spelling of the clone capability: a `Clone` protocol,

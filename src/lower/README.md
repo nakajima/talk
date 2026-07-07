@@ -1,11 +1,11 @@
 # How the lowerer works
 
 This directory translates typed Talk into lambda-G. Its inputs are
-`LowerUnit`s: HIR files (`src/hir`), the checker's `TypeOutput`,
-`ResolvedNames`, and the flow-annotated MIR body store built in
-`src/lower/mir.rs`. The driver supplies units for Core, bundled stdlib
-modules, and the user program; generic library code is specialized on
-demand together with the program that uses it.
+`LowerUnit`s: a `TypedProgram` view (`src/compiling/typed_program.rs`) and
+the checked MIR store built by `mir::build_checked` in `src/lower/mir.rs`.
+The driver supplies units for Core, bundled stdlib modules, and the user
+program; generic library code is specialized on demand together with the
+program that uses it.
 
 The detailed source-level `@_ir`, printed lambda-G, and `talk ir`
 bytecode formats are documented in
@@ -21,9 +21,8 @@ Main files:
   `lower_program`.
 - `demand.rs`, `functions.rs`, `theta.rs` — indexing lowerable bodies,
   monomorphization, function calling conventions, and type substitution.
-- `mir.rs`, `mir_lowering.rs`, `statements.rs` — the source-near MIR body
-  store and the lowering of blocks, statements, control flow, drops, and
-  temporaries.
+- `mir.rs`, `mir_lowering.rs`, `statements.rs` — checked MIR construction and
+  the lowering of blocks, statements, control flow, drops, and temporaries.
 - `calls.rs`, `values.rs`, `closures.rs` — calls/member dispatch,
   construction/projection/storage, and function values/closures.
 - `patterns.rs`, `matches.rs` — match decision trees, GADT evidence, and

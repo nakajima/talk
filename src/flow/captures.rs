@@ -1,6 +1,6 @@
 //! Closure captures: summaries, mode validation, escape checks, and the
 //! effects captures apply to the parent state — the legacy checker's
-//! capture surface, reimplemented over HIR.
+//! capture surface, reimplemented over the typed tree.
 //!
 //! Rules (legacy-verbatim):
 //! - An implicit capture of an ownership-sensitive value (borrowed-containing
@@ -18,9 +18,9 @@
 use rustc_hash::FxHashSet;
 
 use crate::flow::OwnershipError;
-use crate::hir;
 use crate::node_id::NodeID;
 use crate::node_kinds::func::CaptureMode;
+use crate::typed_ast;
 use crate::types::ty::{Perm, Ty};
 
 use super::liveness::collect_free_reads;
@@ -70,7 +70,7 @@ impl MoveChecker<'_> {
     /// is checked from the store by the CFG engine.
     pub(crate) fn check_closure(
         &mut self,
-        func: &hir::Func,
+        func: &typed_ast::Func,
         state: &mut MoveState,
         context: EscapeContext,
     ) -> CaptureSummary {
@@ -102,6 +102,7 @@ impl MoveChecker<'_> {
                     if !capture.copyable {
                         self.check_move_while_borrowed(func.id, &place, state);
                         state.invalidate_borrows_of(&place);
+                        self.record_runtime_move(&place);
                         state.note_move(place, func.id, capture.ty.clone());
                     }
                 }
@@ -224,7 +225,7 @@ impl MoveChecker<'_> {
 
     /// The closure's captures: free-variable reads of the body plus every
     /// explicitly listed capture, with modes from the `[...]` list.
-    fn capture_summary(&mut self, func: &hir::Func, state: &MoveState) -> CaptureSummary {
+    fn capture_summary(&mut self, func: &typed_ast::Func, state: &MoveState) -> CaptureSummary {
         let mut bound: FxHashSet<crate::name_resolution::symbol::Symbol> = FxHashSet::default();
         for param in &func.params {
             if let Ok(symbol) = param.name.symbol() {

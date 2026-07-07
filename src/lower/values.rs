@@ -352,7 +352,7 @@ impl<'a> Lowering<'a> {
     pub(super) fn record_field_order(
         &mut self,
         expr: &Expr,
-        fields: &[hir::RecordField],
+        fields: &[typed_ast::RecordField],
         ctx: &Ctx,
     ) -> Option<Vec<usize>> {
         let CheckTy::Record(row) = self.checker_ty(expr, ctx) else {

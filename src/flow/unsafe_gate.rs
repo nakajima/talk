@@ -10,20 +10,20 @@ use indexmap::IndexMap;
 use crate::compiling::driver::Source;
 use crate::compiling::module::ModuleId;
 use crate::flow::OwnershipError;
-use crate::hir::{self, HirFile};
 use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
+use crate::typed_ast::{self, TypedFile};
 use crate::types::ty::Ty;
 
 pub(crate) fn check(
-    hir: &IndexMap<Source, HirFile>,
+    files: &IndexMap<Source, TypedFile>,
     module_id: ModuleId,
 ) -> Vec<(OwnershipError, NodeID)> {
     if module_id == ModuleId::Core {
         return vec![];
     }
     let mut errors = vec![];
-    for (source, file) in hir {
+    for (source, file) in files {
         if source_allows_unsafe(source) {
             continue;
         }
@@ -47,14 +47,14 @@ fn source_allows_unsafe(source: &Source) -> bool {
 }
 
 #[derive(derive_visitor::Visitor)]
-#[visitor(hir::Expr(enter))]
+#[visitor(typed_ast::Expr(enter))]
 struct RawPtrVisitor<'a> {
     errors: &'a mut Vec<(OwnershipError, NodeID)>,
 }
 
 impl RawPtrVisitor<'_> {
-    fn enter_expr(&mut self, expr: &hir::Expr) {
-        if let hir::ExprKind::InlineIR(_) = &expr.kind {
+    fn enter_expr(&mut self, expr: &typed_ast::Expr) {
+        if let typed_ast::ExprKind::InlineIR(_) = &expr.kind {
             self.errors.push((
                 OwnershipError::UnsafeRawPointerUsage {
                     ty: "inline IR".to_string(),

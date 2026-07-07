@@ -270,34 +270,34 @@ fn trailing_block_body_move_propagates_to_parent() {
     );
 }
 
-// ----- Drop schedules (HIR annotations) --------------------------------------
+// ----- Drop schedules (checked MIR facts) ------------------------------------
 
 use crate::flow::drops::{DropElaboration, DropReason};
-use crate::hir;
+use crate::typed_ast;
 
-/// The named function's body block in the checked HIR. Top-level `func`
-/// declarations are lowered to `let name = func ...` during name
-/// resolution, so both shapes are searched.
-fn func_body(driver: &Driver<Typed>, name: &str) -> hir::Block {
-    for file in driver.phase.hir.values() {
+/// The named function's typed body block. Top-level `func` declarations are
+/// lowered to `let name = func ...` during name resolution, so both shapes are
+/// searched.
+fn func_body(driver: &Driver<Typed>, name: &str) -> typed_ast::Block {
+    for file in driver.phase.program.files().values() {
         for root in &file.roots {
-            let hir::Node::Decl(decl) = root else {
+            let typed_ast::Node::Decl(decl) = root else {
                 continue;
             };
             match &decl.kind {
-                hir::DeclKind::Func(func) if func.name.name_str() == name => {
+                typed_ast::DeclKind::Func(func) if func.name.name_str() == name => {
                     return func.body.clone();
                 }
-                hir::DeclKind::Let {
+                typed_ast::DeclKind::Let {
                     lhs,
                     rhs: Some(rhs),
                     ..
                 } => {
                     let binds_name = matches!(
                         &lhs.kind,
-                        hir::PatternKind::Bind(bound) if bound.name_str() == name
+                        typed_ast::PatternKind::Bind(bound) if bound.name_str() == name
                     );
-                    if binds_name && let hir::ExprKind::Func(func) = &rhs.kind {
+                    if binds_name && let typed_ast::ExprKind::Func(func) = &rhs.kind {
                         return func.body.clone();
                     }
                 }
@@ -305,16 +305,16 @@ fn func_body(driver: &Driver<Typed>, name: &str) -> hir::Block {
             }
         }
     }
-    panic!("no function named {name} in checked HIR");
+    panic!("no function named {name} in typed program");
 }
 
-/// The named function's STORED, flow-annotated MIR body — the drop
-/// authority lowering consumes.
+/// The named function's stored checked MIR body — the drop authority lowering
+/// consumes.
 fn stored_body(driver: &Driver<Typed>, name: &str) -> std::sync::Arc<crate::lower::mir::Body> {
     let block = func_body(driver, name);
     driver
         .phase
-        .mir_bodies
+        .checked_mir
         .get(block.id)
         .expect("function body stored")
 }
@@ -327,7 +327,7 @@ fn candidate_drops(
     body: &crate::lower::mir::Body,
 ) -> Vec<(String, DropReason, DropElaboration)> {
     use crate::lower::mir;
-    let names = &driver.phase.resolved_names.symbol_names;
+    let names = &driver.phase.program.resolved_names().symbol_names;
     body.blocks
         .iter()
         .flat_map(|block| &block.statements)
@@ -466,32 +466,18 @@ fn assignment_schedules_replace_drop() {
 }
 
 #[test]
-fn consumed_expressions_are_annotated() {
+fn consumed_places_are_recorded_on_checked_mir() {
     let driver = flow_driver(
         "func take(s: String) -> Int {\n\ts.byte_count\n}\nfunc make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}",
     );
-    let body = func_body(&driver, "make");
-    let mut consuming_uses = 0;
-    {
-        use derive_visitor::Drive;
-        let mut visitor = ConsumeCounter(&mut consuming_uses);
-        for node in &body.body {
-            node.drive(&mut visitor);
-        }
-    }
-    assert_eq!(consuming_uses, 1, "the argument use of `s` consumes");
-}
-
-#[derive(derive_visitor::Visitor)]
-#[visitor(hir::Expr(enter))]
-struct ConsumeCounter<'a>(&'a mut usize);
-
-impl ConsumeCounter<'_> {
-    fn enter_expr(&mut self, expr: &hir::Expr) {
-        if expr.ownership.consumes {
-            *self.0 += 1;
-        }
-    }
+    let body = stored_body(&driver, "make");
+    let moved: Vec<_> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .flat_map(|statement| &statement.ownership.moves)
+        .collect();
+    assert_eq!(moved.len(), 1, "the argument use of `s` consumes");
 }
 
 // ----- Linear must-consume ----------------------------------------------------
@@ -522,9 +508,7 @@ fn linear_value_moved_in_one_branch_only_is_rejected() {
 // ----- End-to-end under the Flow flag -----------------------------------------
 
 /// A drop-heavy program compiles and runs (VM + reference evaluator agree)
-/// with the flow checker selected. Lowering still derives its drop plan
-/// internally until P3 re-points it at the HIR annotations; this proves the
-/// pipeline holds together under the flag.
+/// with checked MIR as lowering's ownership input.
 #[test]
 fn vm_and_evaluator_agree_under_flow_checker() {
     let source = "func shout(s: String) -> Int {\n\ts.byte_count\n}\nfunc make(flag: Bool) -> Int {\n\tlet s = \"hello\" + \" world\"\n\tif flag {\n\t\tlet t = s\n\t\tshout(t)\n\t} else {\n\t\t2\n\t}\n}\nmake(true)";
@@ -586,7 +570,7 @@ fn deinit_runs_at_scope_exit() {
 fn heap_struct_classifies_as_object() {
     let typed = flow_driver("struct Node 'heap {\n\tlet value: Int\n}\n0");
     assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
-    let types = &typed.phase.types;
+    let types = &typed.phase.program.types();
     let grades = crate::flow::grades::GradeView::new(types);
     let symbol = types
         .catalog
@@ -614,7 +598,7 @@ fn value_struct_with_heap_field_stays_value() {
         "struct Node 'heap {\n\tlet value: Int\n}\nstruct Wrapper {\n\tlet node: Node\n}\n0",
     );
     assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
-    let types = &typed.phase.types;
+    let types = &typed.phase.program.types();
     let grades = crate::flow::grades::GradeView::new(types);
     let symbol = types
         .catalog
@@ -1152,7 +1136,7 @@ fn variant_construction_shapes_balance_allocations() {
 
 #[test]
 fn stored_field_projection_chain_balances_allocations() {
-    // Field reads are `Proj` nodes from HIR build on — a projection chain
+    // Field reads are `Proj` nodes from typed-program build on — a projection chain
     // through nested structs neither moves the owner nor leaks the leaf.
     let (value, _, live_allocations) = run_heap_eval(
         "struct Name {\n\tlet text: String\n}\nstruct User {\n\tlet name: Name\n}\nfunc check() -> Int {\n\tlet u = User(name: Name(text: \"ada\" + \" lovelace\"))\n\tu.name.text.byte_count\n}\ncheck()",

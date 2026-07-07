@@ -116,7 +116,7 @@ impl ReplSession {
                 .join("\n");
             return ReplEvalResult::Error(message);
         }
-        let names = value_names(&typed.phase.types);
+        let names = value_names(typed.phase.program.types());
         let mut lowered = typed.lower();
         if !lowered.phase.diagnostics.is_empty() {
             return ReplEvalResult::Error(format!(
@@ -164,7 +164,8 @@ impl ReplSession {
             return ReplEvalResult::Error(message);
         }
 
-        let resolved_names = &typed.phase.resolved_names;
+        let resolved_names = typed.phase.program.resolved_names();
+        let types = typed.phase.program.types();
         let _names =
             crate::name_resolution::symbol::set_symbol_names(resolved_names.symbol_names.clone());
 
@@ -175,10 +176,8 @@ impl ReplSession {
             let scheme = resolved_names
                 .symbol_names
                 .iter()
-                .find(|(sym, name)| {
-                    name.as_str() == trimmed && typed.phase.types.schemes.contains_key(sym)
-                })
-                .map(|(sym, _)| typed.phase.types.schemes[sym].render());
+                .find(|(sym, name)| name.as_str() == trimmed && types.schemes.contains_key(sym))
+                .map(|(sym, _)| types.schemes[sym].render());
             if let Some(rendered) = scheme {
                 return ReplEvalResult::Output {
                     stdout: String::new(),
@@ -190,12 +189,13 @@ impl ReplSession {
 
         let last_expr_ty = typed
             .phase
-            .hir
+            .program
+            .files()
             .values()
-            .flat_map(|hir| hir.roots.iter())
+            .flat_map(|file| file.roots.iter())
             .filter_map(|root| match root {
-                crate::hir::Node::Stmt(crate::hir::Stmt {
-                    kind: crate::hir::StmtKind::Expr(expr),
+                crate::typed_ast::Node::Stmt(crate::typed_ast::Stmt {
+                    kind: crate::typed_ast::StmtKind::Expr(expr),
                     ..
                 }) => Some(&expr.ty),
                 _ => None,

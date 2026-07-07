@@ -19,13 +19,15 @@ pub mod tests {
     /// Render the scheme of a named top-level binding. Nominal heads display
     /// with their source names via the symbol-name context.
     pub fn ty_of(driver: &Driver<Typed>, name: &str) -> String {
-        let resolved = &driver.phase.resolved_names;
+        let resolved = &driver.phase.program.resolved_names();
         let _names =
             crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
         let mut candidates: Vec<_> = resolved
             .symbol_names
             .iter()
-            .filter(|(sym, n)| n.as_str() == name && driver.phase.types.schemes.contains_key(sym))
+            .filter(|(sym, n)| {
+                n.as_str() == name && driver.phase.program.types().schemes.contains_key(sym)
+            })
             .map(|(sym, _)| *sym)
             .collect();
         candidates.sort();
@@ -34,14 +36,15 @@ pub mod tests {
                 "no scheme found for {name:?}; schemes: {:?}",
                 driver
                     .phase
-                    .types
+                    .program
+                    .types()
                     .schemes
                     .keys()
                     .map(|k| resolved.symbol_names.get(k))
                     .collect::<Vec<_>>()
             );
         };
-        driver.phase.types.schemes[symbol].render()
+        driver.phase.program.types().schemes[symbol].render()
     }
 
     pub fn type_errors(driver: &Driver<Typed>) -> Vec<String> {
@@ -1237,7 +1240,7 @@ pub mod tests {
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "value"), "any Showable");
-        assert_eq!(t.phase.types.existential_packs.len(), 1);
+        assert_eq!(t.phase.program.types().existential_packs.len(), 1);
     }
 
     #[test]
@@ -1534,7 +1537,7 @@ pub mod tests {
     fn node_types_recorded_for_expressions() {
         let t = check("// no-core\nlet a = 123");
         assert!(
-            !t.phase.types.node_types.is_empty(),
+            !t.phase.program.types().node_types.is_empty(),
             "expected node types to be recorded"
         );
     }
@@ -1949,7 +1952,8 @@ pub mod tests {
         assert_clean(&t);
         let borrowed_exprs: Vec<_> = t
             .phase
-            .types
+            .program
+            .types()
             .node_types
             .values()
             .filter(|ty| ty.render_mono() == "&String")
@@ -2273,7 +2277,7 @@ pub mod tests {
             outer.contains("'oops"),
             "outer's row inherits the callee's unhandled effect: {outer}"
         );
-        let types = &t.phase.types;
+        let types = &t.phase.program.types();
         let (_, sig) = types
             .catalog
             .effects
@@ -3003,7 +3007,7 @@ pub mod tests {
     fn instantiations_recorded_at_call_sites() {
         let t = check("// no-core\nfunc identity(x) { x }\nlet a = identity(123)");
         assert_clean(&t);
-        let instantiations = &t.phase.types.instantiations;
+        let instantiations = &t.phase.program.types().instantiations;
         let int_instantiation = instantiations
             .values()
             .any(|subst| subst.iter().any(|(_, ty)| ty.render_mono() == "Int"));
@@ -3170,18 +3174,19 @@ pub mod tests {
             ",
         );
         assert_clean(&typed);
-        let resolved = &typed.phase.resolved_names;
+        let resolved = &typed.phase.program.resolved_names();
         let _names =
             crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
         let expr = resolved
             .symbol_names
             .iter()
             .find(|(sym, name)| {
-                name.as_str() == "Expr" && typed.phase.types.catalog.enums.contains_key(sym)
+                name.as_str() == "Expr"
+                    && typed.phase.program.types().catalog.enums.contains_key(sym)
             })
             .map(|(sym, _)| *sym)
             .expect("Expr enum");
-        let info = &typed.phase.types.catalog.enums[&expr];
+        let info = &typed.phase.program.types().catalog.enums[&expr];
         assert_eq!(
             info.variants["int"].constructor_scheme.render(),
             "(Int) -> Expr<Int>"
@@ -3779,16 +3784,18 @@ mod with_core {
         // proves the imported types are actually being applied.
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("Hello"), "{errors:?}");
-        let resolved = &typed.phase.resolved_names;
+        let resolved = &typed.phase.program.resolved_names();
         let _names =
             crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
         let v = resolved
             .symbol_names
             .iter()
-            .find(|(sym, n)| n.as_str() == "v" && typed.phase.types.schemes.contains_key(sym))
+            .find(|(sym, n)| {
+                n.as_str() == "v" && typed.phase.program.types().schemes.contains_key(sym)
+            })
             .map(|(sym, _)| *sym)
             .expect("v scheme");
-        assert_eq!(typed.phase.types.schemes[&v].render(), "Int");
+        assert_eq!(typed.phase.program.types().schemes[&v].render(), "Int");
     }
 
     #[test]
@@ -3834,16 +3841,18 @@ mod with_core {
             .type_check();
         let errors = type_errors(&typed);
         assert!(errors.is_empty(), "{errors:?}");
-        let resolved = &typed.phase.resolved_names;
+        let resolved = &typed.phase.program.resolved_names();
         let _names =
             crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
         let symbol = resolved
             .symbol_names
             .iter()
-            .find(|(sym, n)| n.as_str() == "id" && typed.phase.types.schemes.contains_key(sym))
+            .find(|(sym, n)| {
+                n.as_str() == "id" && typed.phase.program.types().schemes.contains_key(sym)
+            })
             .map(|(sym, _)| *sym)
             .expect("id scheme");
-        assert_eq!(typed.phase.types.schemes[&symbol].render(), "Int");
+        assert_eq!(typed.phase.program.types().schemes[&symbol].render(), "Int");
     }
 
     #[test]
@@ -3853,16 +3862,18 @@ mod with_core {
         ));
         let errors = type_errors(&typed);
         assert!(errors.is_empty(), "{errors:?}");
-        let resolved = &typed.phase.resolved_names;
+        let resolved = &typed.phase.program.resolved_names();
         let _names =
             crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
         let symbol = resolved
             .symbol_names
             .iter()
-            .find(|(sym, n)| n.as_str() == "x" && typed.phase.types.schemes.contains_key(sym))
+            .find(|(sym, n)| {
+                n.as_str() == "x" && typed.phase.program.types().schemes.contains_key(sym)
+            })
             .map(|(sym, _)| *sym)
             .expect("x scheme");
-        assert_eq!(typed.phase.types.schemes[&symbol].render(), "Int");
+        assert_eq!(typed.phase.program.types().schemes[&symbol].render(), "Int");
     }
 
     #[test]
@@ -3890,7 +3901,8 @@ mod with_core {
         assert!(errors.is_empty(), "{errors:?}");
         let published = typed
             .phase
-            .types
+            .program
+            .types()
             .member_resolutions
             .iter()
             .filter(|(_, resolution)| {
@@ -3902,7 +3914,8 @@ mod with_core {
             .any(|(node, _)| {
                 typed
                     .phase
-                    .types
+                    .program
+                    .types()
                     .instantiations
                     .get(node)
                     .is_some_and(|pairs| {
@@ -3913,7 +3926,8 @@ mod with_core {
             });
         let dump: Vec<String> = typed
             .phase
-            .types
+            .program
+            .types()
             .member_resolutions
             .iter()
             .filter(|(_, r)| {
@@ -3925,10 +3939,16 @@ mod with_core {
             .map(|(node, r)| {
                 format!(
                     "{node:?} {r:?} => {:?}",
-                    typed.phase.types.instantiations.get(node).map(|pairs| pairs
-                        .iter()
-                        .map(|(s, t)| format!("{s} = {}", t.render_mono()))
-                        .collect::<Vec<_>>())
+                    typed
+                        .phase
+                        .program
+                        .types()
+                        .instantiations
+                        .get(node)
+                        .map(|pairs| pairs
+                            .iter()
+                            .map(|(s, t)| format!("{s} = {}", t.render_mono()))
+                            .collect::<Vec<_>>())
                 )
             })
             .collect();
@@ -4113,17 +4133,19 @@ mod with_core {
     fn unique_annotation_parses_and_renders() {
         let t = check_with_core(Source::from("func pass(x: *String) -> *String {\n\tx\n}"));
         assert_no_errors(&t);
-        let resolved = &t.phase.resolved_names;
+        let resolved = &t.phase.program.resolved_names();
         let _names =
             crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
         let symbol = resolved
             .symbol_names
             .iter()
-            .find(|(sym, n)| n.as_str() == "pass" && t.phase.types.schemes.contains_key(sym))
+            .find(|(sym, n)| {
+                n.as_str() == "pass" && t.phase.program.types().schemes.contains_key(sym)
+            })
             .map(|(sym, _)| *sym)
             .expect("pass scheme");
         assert_eq!(
-            t.phase.types.schemes[&symbol].render(),
+            t.phase.program.types().schemes[&symbol].render(),
             "(*String) -> *String"
         );
     }
@@ -4136,7 +4158,7 @@ mod with_core {
             "struct FileHandle 'linear {\n\tlet fd: Int\n}\nstruct Plain {\n\tlet x: Int\n}\nextend Plain: Copy {}\nstruct Holder {\n\tlet name: String\n}",
         ));
         assert_no_errors(&t);
-        let resolved = &t.phase.resolved_names;
+        let resolved = &t.phase.program.resolved_names();
         let symbol_named = |name: &str| -> Symbol {
             resolved
                 .symbol_names
@@ -4147,7 +4169,7 @@ mod with_core {
                 .map(|(sym, _)| *sym)
                 .unwrap_or_else(|| panic!("no struct symbol named {name}"))
         };
-        let catalog = &t.phase.types.catalog;
+        let catalog = &t.phase.program.types().catalog;
         assert_eq!(catalog.grade_of(symbol_named("FileHandle")), Grade::Linear);
         assert_eq!(catalog.grade_of(symbol_named("Plain")), Grade::Copy);
         assert_eq!(catalog.grade_of(symbol_named("Holder")), Grade::Affine);

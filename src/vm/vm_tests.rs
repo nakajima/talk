@@ -152,7 +152,7 @@ pub mod tests {
 
     #[test]
     fn vm_runs_as_expressions() {
-        // `as` erases at HIR build: the inner expression grafts under the
+        // `as` erases at typed-program build: the inner expression grafts under the
         // As node's annotations (ascribed type; existential pack when the
         // ascription packs).
         assert_eq!(
@@ -381,6 +381,52 @@ pub mod tests {
         assert_eq!(
             run_on_both_engines(
                 "extend String {\n\tconsuming func consume_len() -> Int {\n\t\tself.byte_count\n\t}\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tif flag { s.consume_len() }\n\t1\n}\nf(true)"
+            ),
+            Value::I64(1)
+        );
+    }
+
+    #[test]
+    fn if_condition_call_evaluates_once() {
+        let (_, out) = run_on_both_engines_io(
+            "func truth() -> Bool {\n\tprint(\"called\")\n\ttrue\n}\nif truth() { }",
+        );
+        assert_eq!(out, "called\n");
+    }
+
+    #[test]
+    fn loop_condition_call_evaluates_once_per_iteration() {
+        let (_, out) = run_on_both_engines_io(
+            "let count = 0\nfunc keep() -> Bool {\n\tcount = count + 1\n\tprint(count)\n\tcount < 3\n}\nloop keep() { print(99) }",
+        );
+        assert_eq!(out, "1\n99\n2\n99\n3\n");
+    }
+
+    #[test]
+    fn conditional_owned_match_payload_does_not_double_free() {
+        assert_eq!(
+            run_on_both_engines(
+                "enum Wrapped { case tagged(String) }\nfunc f(flag: Bool) -> Int {\n\tlet w = Wrapped.tagged(\"a\" + \"b\")\n\tif flag {\n\t\tmatch w { .tagged(s) -> s.byte_count }\n\t}\n\t0\n}\nf(true)"
+            ),
+            Value::I64(0)
+        );
+    }
+
+    #[test]
+    fn wildcard_owned_match_payload_does_not_leak() {
+        assert_eq!(
+            run_on_both_engines(
+                "enum Wrapped { case tagged(String) }\nfunc f() -> Int {\n\tlet w = Wrapped.tagged(\"a\" + \"b\")\n\tmatch w { .tagged(_) -> 1 }\n}\nf()"
+            ),
+            Value::I64(1)
+        );
+    }
+
+    #[test]
+    fn default_bind_arm_owns_enum_without_dropping_payload_twice() {
+        assert_eq!(
+            run_on_both_engines(
+                "enum Wrapped { case tagged(String) case empty }\nfunc f() -> Int {\n\tlet w = Wrapped.tagged(\"a\" + \"b\")\n\tmatch w { .empty -> 0, x -> 1 }\n}\nf()"
             ),
             Value::I64(1)
         );
@@ -2171,6 +2217,30 @@ chunk 1: is_even (arity 1, regs 1)
         assert!(colored.contains("\x1b[1;33mmain\x1b[0m"), "{colored:?}");
         assert!(colored.contains("\x1b[1;35mret\x1b[0m"), "{colored:?}");
         assert!(!module.render().contains('\x1b'));
+    }
+
+    #[test]
+    fn conditional_field_scrutinee_match_does_not_double_free() {
+        assert_eq!(
+            run_on_both_engines(
+                r#"
+                struct Holder {
+                    let name: String
+                }
+
+                func f(flag: Bool) -> Int {
+                    let h = Holder(name: "a" + "b")
+                    if flag {
+                        match h.name { s -> s.byte_count }
+                    }
+                    0
+                }
+
+                f(true)
+                "#
+            ),
+            Value::I64(0)
+        );
     }
 
     #[test]

@@ -7,8 +7,8 @@
 //! (`flow::liveness`).
 
 use crate::flow::OwnershipError;
-use crate::hir::{self, ExprKind};
 use crate::node_id::NodeID;
+use crate::typed_ast::{self, ExprKind};
 use crate::types::ty::{Perm, Ty};
 
 use super::moves::{MoveChecker, MoveState};
@@ -241,7 +241,7 @@ impl MoveChecker<'_> {
     /// tier-2 clone applied.
     pub(crate) fn check_move_out_of_borrowed(
         &mut self,
-        expr: &hir::Expr,
+        expr: &typed_ast::Expr,
         place: &Place,
         state: &MoveState,
     ) -> bool {
@@ -320,7 +320,11 @@ impl MoveChecker<'_> {
     // ----- Provenance ---------------------------------------------------------
 
     /// The places a borrowed value produced by `expr` may reach.
-    pub(crate) fn expr_provenance(&mut self, expr: &hir::Expr, state: &MoveState) -> Provenance {
+    pub(crate) fn expr_provenance(
+        &mut self,
+        expr: &typed_ast::Expr,
+        state: &MoveState,
+    ) -> Provenance {
         if let Some(place) = self.place(expr) {
             let root = Place::root(place.root);
             if let Some(provenance) = state
@@ -399,16 +403,16 @@ impl MoveChecker<'_> {
     /// and function types are values, not borrows. Core is exempt (its
     /// iterator machinery stores borrow fields deliberately, like its raw
     /// pointers).
-    pub(crate) fn check_borrow_storage(&mut self, roots: &[hir::Node]) {
+    pub(crate) fn check_borrow_storage(&mut self, roots: &[typed_ast::Node]) {
         if self.module_id == crate::compiling::module::ModuleId::Core {
             return;
         }
         for root in roots {
-            let hir::Node::Decl(decl) = root else {
+            let typed_ast::Node::Decl(decl) = root else {
                 continue;
             };
             match &decl.kind {
-                hir::DeclKind::Struct { name, .. } => {
+                typed_ast::DeclKind::Struct { name, .. } => {
                     let Ok(symbol) = name.symbol() else { continue };
                     let Some(info) = self.types.catalog.structs.get(&symbol) else {
                         continue;
@@ -424,7 +428,7 @@ impl MoveChecker<'_> {
                         }
                     }
                 }
-                hir::DeclKind::Enum { name, .. } => {
+                typed_ast::DeclKind::Enum { name, .. } => {
                     let Ok(symbol) = name.symbol() else { continue };
                     let Some(info) = self.types.catalog.enums.get(&symbol) else {
                         continue;
@@ -455,12 +459,12 @@ impl MoveChecker<'_> {
     /// installs the binding; see `install_provenance`). This type-level
     /// pass keeps only the shapes the walk's provenance rule does not
     /// reach: uninitialized and destructuring binders.
-    pub(crate) fn check_global_storage(&mut self, roots: &[hir::Node]) {
+    pub(crate) fn check_global_storage(&mut self, roots: &[typed_ast::Node]) {
         for root in roots {
-            let hir::Node::Decl(decl) = root else {
+            let typed_ast::Node::Decl(decl) = root else {
                 continue;
             };
-            let hir::DeclKind::Let { lhs, rhs, .. } = &decl.kind else {
+            let typed_ast::DeclKind::Let { lhs, rhs, .. } = &decl.kind else {
                 continue;
             };
             for (binder_id, binder) in lhs.collect_binders() {
@@ -481,7 +485,7 @@ impl MoveChecker<'_> {
                     // installs provenance, which validates global-rooted
                     // loans in `install_provenance`.
                     if rhs.is_some()
-                        && matches!(lhs.kind, crate::hir::PatternKind::Bind(_))
+                        && matches!(lhs.kind, crate::typed_ast::PatternKind::Bind(_))
                         && !self.grades.contains_object(&ty)
                     {
                         continue;
@@ -501,26 +505,26 @@ impl MoveChecker<'_> {
     /// borrows can point into.
     pub(crate) fn seed_return_reach<'f>(
         &mut self,
-        files: impl Iterator<Item = &'f crate::hir::HirFile>,
+        files: impl Iterator<Item = &'f crate::typed_ast::TypedFile>,
     ) {
-        let mut funcs: Vec<(crate::name_resolution::symbol::Symbol, &hir::Func)> = vec![];
+        let mut funcs: Vec<(crate::name_resolution::symbol::Symbol, &typed_ast::Func)> = vec![];
         for file in files {
             for root in &file.roots {
-                let hir::Node::Decl(decl) = root else {
+                let typed_ast::Node::Decl(decl) = root else {
                     continue;
                 };
                 match &decl.kind {
-                    hir::DeclKind::Func(func) => {
+                    typed_ast::DeclKind::Func(func) => {
                         if let Ok(symbol) = func.name.symbol() {
                             funcs.push((symbol, func));
                         }
                     }
-                    hir::DeclKind::Let {
+                    typed_ast::DeclKind::Let {
                         lhs,
                         rhs: Some(rhs),
                         ..
                     } => {
-                        if let crate::hir::PatternKind::Bind(name) = &lhs.kind
+                        if let crate::typed_ast::PatternKind::Bind(name) = &lhs.kind
                             && let ExprKind::Func(func) = &rhs.kind
                             && let Ok(symbol) = name.symbol()
                         {
@@ -544,7 +548,7 @@ impl MoveChecker<'_> {
         }
     }
 
-    fn return_reach_of(&mut self, func: &hir::Func, func_ty: Option<&Ty>) -> Vec<usize> {
+    fn return_reach_of(&mut self, func: &typed_ast::Func, func_ty: Option<&Ty>) -> Vec<usize> {
         let Some(tail) = block_tail_expr(&func.body) else {
             return vec![];
         };
@@ -611,8 +615,8 @@ impl MoveChecker<'_> {
 
     pub(crate) fn call_provenance(
         &mut self,
-        callee: &hir::Expr,
-        args: &[hir::CallArg],
+        callee: &typed_ast::Expr,
+        args: &[typed_ast::CallArg],
         state: &MoveState,
     ) -> Provenance {
         // Method call: a borrowed self parameter means the result borrows
@@ -695,7 +699,7 @@ impl MoveChecker<'_> {
     /// distinct from unknown.
     fn per_param_provenance(
         &mut self,
-        args: &[hir::CallArg],
+        args: &[typed_ast::CallArg],
         params: &[Ty],
         reach: Option<&[usize]>,
         state: &MoveState,
@@ -724,7 +728,7 @@ impl MoveChecker<'_> {
     /// A `&`-typed parameter borrows its argument place at `kind`.
     fn direct_borrow_provenance(
         &mut self,
-        expr: &hir::Expr,
+        expr: &typed_ast::Expr,
         kind: Perm,
         state: &MoveState,
     ) -> Provenance {
@@ -842,7 +846,7 @@ impl MoveChecker<'_> {
 
     /// Returning a borrow-containing value: tier 1 (parameter-derived) is
     /// fine; unknown provenance and function-owned borrows are errors.
-    pub(crate) fn check_return_provenance(&mut self, expr: &hir::Expr, state: &MoveState) {
+    pub(crate) fn check_return_provenance(&mut self, expr: &typed_ast::Expr, state: &MoveState) {
         let provenance = self.expr_provenance(expr, state);
         if provenance.has_unknown() {
             if self.core_raw_ptr_exception(&expr.ty) {
@@ -899,16 +903,16 @@ fn stores_borrow(ty: &Ty) -> bool {
     }
 }
 
-fn callee_param_tys(callee: &hir::Expr) -> Option<Vec<Ty>> {
+fn callee_param_tys(callee: &typed_ast::Expr) -> Option<Vec<Ty>> {
     super::moves::func_params(&callee.ty)
 }
 
 /// The expression a block delivers as its value, if it ends in one.
-fn block_tail_expr(block: &hir::Block) -> Option<&hir::Expr> {
+fn block_tail_expr(block: &typed_ast::Block) -> Option<&typed_ast::Expr> {
     match block.body.last() {
-        Some(hir::Node::Expr(tail)) => Some(tail),
-        Some(hir::Node::Stmt(hir::Stmt {
-            kind: hir::StmtKind::Expr(tail),
+        Some(typed_ast::Node::Expr(tail)) => Some(tail),
+        Some(typed_ast::Node::Stmt(typed_ast::Stmt {
+            kind: typed_ast::StmtKind::Expr(tail),
             ..
         })) => Some(tail),
         _ => None,
