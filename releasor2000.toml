@@ -11,7 +11,6 @@ repo = "nakajima/talk"
 command = "cargo build --release --target {target}"
 artifact = "target/{target}/release/{binary}"
 targets = [
-    "x86_64-apple-darwin",
     "aarch64-apple-darwin",
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",

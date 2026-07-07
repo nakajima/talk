@@ -33,14 +33,11 @@ highlighting, IR/bytecode rendering, and bytecode emission.
 
 The analysis layer gained protocol-independent goto-definition and rename
 entry points so embedders can call the language-service functionality
-directly without running the LSP server. A new GitHub workflow builds
-`libtalk_c.a` plus `talk_c.h` for iOS device and simulator targets and
-publishes compressed per-target tarballs to the `talk-c-ios-archives`
-branch by commit SHA. Another manual release workflow builds
-`TalkC.xcframework.zip`, computes the
-SwiftPM checksum, stamps the root package manifest for the requested
-version tag, pushes that tag, and uploads the XCFramework zip as a GitHub
-Release asset.
+directly without running the LSP server. The release flow now centers on a
+single manual TalkSwift workflow that builds `TalkC.xcframework.zip`,
+computes the SwiftPM checksum, stamps the root package manifest for the
+requested version tag, pushes that tag, and uploads the XCFramework zip as
+a GitHub Release asset.
 
 A heavily WIP `talk-swift` Swift package now wraps the local `talk-c`
 facade. The repository root now also has a SwiftPM `Package.swift` for
