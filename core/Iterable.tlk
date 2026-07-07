@@ -7,7 +7,7 @@ public protocol Iterator {
 	associated Element
 	mut func next() -> Element?
 
-	func map<U>(fn: (&Self.Element) -> U) -> Map<Self, U> {
+	func map<U>(consume fn: (Self.Element) -> U) -> Map<Self, U> {
 		Map(inner: self, fn: fn)
 	}
 
@@ -44,7 +44,7 @@ public protocol Iterable {
 
 public struct Map<T, U> where T: Iterator {
 	let inner: &T
-	let map: (&T.Element) -> U
+	let map: (T.Element) -> U
 }
 
 extend Map<T, U>: Iterable where T: Iterator {

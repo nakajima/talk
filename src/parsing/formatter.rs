@@ -19,7 +19,7 @@ use crate::{
         generic_decl::GenericDecl,
         inline_ir_instruction::InlineIRInstruction,
         match_arm::MatchArm,
-        parameter::Parameter,
+        parameter::{ParamMode, Parameter},
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
         record_field::{RecordField, RecordFieldTypeAnnotation},
         stmt::{Stmt, StmtKind},
@@ -1523,7 +1523,7 @@ impl<'a> Formatter<'a> {
             } => {
                 let param_docs: Vec<_> = params
                     .iter()
-                    .map(|p| self.format_type_annotation(p))
+                    .map(|p| self.format_func_type_param(p))
                     .collect();
 
                 let mut result = concat(
@@ -1721,6 +1721,23 @@ impl<'a> Formatter<'a> {
         concat_space(result, self.format_block(body))
     }
 
+    /// A function-type parameter in the borrow-by-default spelling
+    /// (ADR 0018): a shared borrow is the quiet default, an exclusive
+    /// borrow is `mut T`, and a bare owned type is `consume T`.
+    fn format_func_type_param(&self, annotation: &TypeAnnotation) -> Doc {
+        match &annotation.kind {
+            TypeAnnotationKind::Borrow {
+                mutable: false,
+                inner,
+            } => self.format_type_annotation(inner),
+            TypeAnnotationKind::Borrow {
+                mutable: true,
+                inner,
+            } => concat_space(text("mut"), self.format_type_annotation(inner)),
+            _ => concat_space(text("consume"), self.format_type_annotation(annotation)),
+        }
+    }
+
     fn format_parameter(&self, param: &Parameter) -> Doc {
         let mut result = self.format_name(&param.name);
 
@@ -1731,7 +1748,19 @@ impl<'a> Formatter<'a> {
             );
         }
 
-        result
+        // Only print a mode the source spelled (mode_span is the keyword's
+        // span). Desugar-stamped defaults print as the quiet unadorned form.
+        if param.mode_span.is_none() {
+            return result;
+        }
+        let keyword = match param.mode {
+            None => return result,
+            Some(ParamMode::Borrow) => "borrow",
+            Some(ParamMode::Mut) => "mut",
+            Some(ParamMode::Consume) => "consume",
+            Some(ParamMode::ConsumeMut) => "consume mut",
+        };
+        concat_space(text(keyword), result)
     }
 
     fn format_capture_spec(&self, capture: &CaptureSpec) -> Doc {

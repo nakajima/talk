@@ -36,7 +36,7 @@ public struct Dict<Value> 'heap {
 		self
 	}
 
-	mut func insert(key: String, value: Value) -> Void {
+	mut func insert(consume key: String, consume value: Value) -> Void {
 		self.head = Optional.some(DictNode(key: key, value: value, next: self.head))
 		self.count = self.count + 1
 	}

@@ -11,6 +11,7 @@ pub mod lower_funcs_to_lets;
 pub mod lower_if_to_match;
 pub mod lower_operators;
 pub mod prepend_self_to_methods;
+pub mod resolve_param_modes;
 
 use crate::ast::{AST, Parsed};
 use lower_for_loops::LowerForLoops;
@@ -18,10 +19,15 @@ use lower_funcs_to_lets::LowerFuncsToLets;
 use lower_if_to_match::LowerIfToMatch;
 use lower_operators::LowerOperators;
 use prepend_self_to_methods::PrependSelfToMethods;
+use resolve_param_modes::ResolveParamModes;
 
 /// Run every syntactic transform over each parsed file, in place.
 pub fn desugar(asts: &mut [AST<Parsed>]) {
     for ast in asts.iter_mut() {
+        // First, so user-written parameters get their default modes before
+        // any pass synthesizes parameters of its own (synthesized params
+        // keep `mode: None` = lowered as written).
+        ResolveParamModes::run(ast);
         LowerForLoops::run(ast);
         LowerFuncsToLets::run(ast);
         LowerOperators::run(ast);

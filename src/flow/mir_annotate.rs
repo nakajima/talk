@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn stored_bodies_carry_per_point_candidate_elaborations() {
         let bodies = annotated_bodies(
-            "func take(name: String) -> Int {\n\tname.byte_count\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
+            "func take(consume name: String) -> Int {\n\tname.byte_count\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
         );
         assert_eq!(bodies.len(), 2, "take and check");
         // take: the owned by-value parameter is live at exit → Static.
@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn cfg_flow_records_runtime_move_sets() {
         let bodies = annotated_bodies(
-            "func take(name: String) -> Int {\n\tname.byte_count\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
+            "func take(consume name: String) -> Int {\n\tname.byte_count\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}\ncheck()",
         );
         let moved: Vec<_> = bodies[1]
             .blocks

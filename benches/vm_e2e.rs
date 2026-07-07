@@ -1,11 +1,9 @@
-#![feature(test)]
+use std::{hint::black_box, time::Duration};
 
-extern crate test;
-
-use talk::compiling::driver::{compile_bytecode_from, Driver, DriverConfig, Lowered, Source};
+use criterion::{Criterion, criterion_group, criterion_main};
+use talk::compiling::driver::{Driver, DriverConfig, Lowered, Source, compile_bytecode_from};
 use talk::vm::interp::Value;
-use talk::vm::{interp, io::CaptureIO, Module};
-use test::{black_box, Bencher};
+use talk::vm::{Module, interp, io::CaptureIO};
 
 #[derive(Clone, Copy)]
 struct Program {
@@ -78,25 +76,29 @@ impl Program {
         assert_eq!(stdout, self.expected_stdout, "{}: stdout", self.name);
     }
 
-    fn bench_end_to_end(self, b: &mut Bencher) {
+    fn benchmark(self, c: &mut Criterion) {
+        let mut group = c.benchmark_group(self.name);
+
         let (value, stdout) = self.run_end_to_end();
         self.assert_result(&value, &stdout);
-
-        b.iter(|| {
-            let (value, stdout) = self.run_end_to_end();
-            black_box((value, stdout))
+        group.bench_function("end_to_end", |b| {
+            b.iter(|| {
+                let (value, stdout) = self.run_end_to_end();
+                black_box((value, stdout))
+            })
         });
-    }
 
-    fn bench_scheduled_vm(self, b: &mut Bencher) {
         let module = self.compile_module();
         let (value, stdout) = self.run_scheduled(&module);
         self.assert_result(&value, &stdout);
-
-        b.iter(|| {
-            let (value, stdout) = self.run_scheduled(black_box(&module));
-            black_box((value, stdout))
+        group.bench_function("scheduled_vm", |b| {
+            b.iter(|| {
+                let (value, stdout) = self.run_scheduled(black_box(&module));
+                black_box((value, stdout))
+            })
         });
+
+        group.finish();
     }
 }
 
@@ -210,23 +212,27 @@ sumArray(1000)"#,
     expected_stdout: "",
 };
 
-macro_rules! bench_program {
-    ($end_to_end:ident, $scheduled_vm:ident, $program:expr) => {
-        #[bench]
-        fn $end_to_end(b: &mut Bencher) {
-            $program.bench_end_to_end(b);
-        }
+const PROGRAMS: &[Program] = &[
+    TIGHT_LOOP,
+    RECURSIVE_FIB,
+    CLOSURE_CALLS,
+    EFFECT_RESUME,
+    STRING_CONCAT,
+    ARRAY_FOR,
+];
 
-        #[bench]
-        fn $scheduled_vm(b: &mut Bencher) {
-            $program.bench_scheduled_vm(b);
-        }
-    };
+fn vm_e2e(c: &mut Criterion) {
+    for &program in PROGRAMS {
+        program.benchmark(c);
+    }
 }
 
-bench_program!(e2e_tight_loop, scheduled_vm_tight_loop, TIGHT_LOOP);
-bench_program!(e2e_recursive_fib, scheduled_vm_recursive_fib, RECURSIVE_FIB);
-bench_program!(e2e_closure_calls, scheduled_vm_closure_calls, CLOSURE_CALLS);
-bench_program!(e2e_effect_resume, scheduled_vm_effect_resume, EFFECT_RESUME);
-bench_program!(e2e_string_concat, scheduled_vm_string_concat, STRING_CONCAT);
-bench_program!(e2e_array_for, scheduled_vm_array_for, ARRAY_FOR);
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(3));
+    targets = vm_e2e
+}
+criterion_main!(benches);

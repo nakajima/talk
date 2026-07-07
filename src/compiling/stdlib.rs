@@ -1,9 +1,7 @@
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-
-use lazy_static::lazy_static;
-use rustc_hash::FxHashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::compiling::{
     core::LibraryTyped,
@@ -15,15 +13,13 @@ const TALK_STDLIB_PATH_ENV: &str = "TALK_STDLIB_PATH";
 
 pub const STDLIB_SOURCE_NAMES: &[&str] = &["fs.tlk", "ansi.tlk", "testing.tlk"];
 
-lazy_static! {
-    static ref STDLIB: Vec<Arc<Module>> = compile_all();
-    /// Typed artifacts per (module, assigned id) — `Driver::lower()` asks
-    /// for these on every compile (each REPL line, each test), so the full
-    /// pipeline must run once per module, not once per call. The id is
-    /// part of the key because the environment assigns it.
-    static ref STDLIB_TYPED: Mutex<FxHashMap<(&'static str, ModuleId), Arc<LibraryTyped>>> =
-        Mutex::default();
-}
+static STDLIB: OnceLock<Vec<Arc<Module>>> = OnceLock::new();
+/// Typed artifacts per (module, assigned id) — `Driver::lower()` asks
+/// for these on every compile (each REPL line, each test), so the full
+/// pipeline must run once per module, not once per call. The id is
+/// part of the key because the environment assigns it.
+static STDLIB_TYPED: OnceLock<Mutex<FxHashMap<(&'static str, ModuleId), Arc<LibraryTyped>>>> =
+    OnceLock::new();
 
 pub fn path_override() -> Option<PathBuf> {
     std::env::var_os(TALK_STDLIB_PATH_ENV)
@@ -90,7 +86,7 @@ pub fn source_document(name: &str) -> Option<(PathBuf, String)> {
 }
 
 pub fn modules() -> Vec<Arc<Module>> {
-    STDLIB.clone()
+    STDLIB.get_or_init(compile_all).clone()
 }
 
 pub fn typed_modules(module_env: &ModuleEnvironment) -> Vec<Arc<LibraryTyped>> {
@@ -99,7 +95,7 @@ pub fn typed_modules(module_env: &ModuleEnvironment) -> Vec<Arc<LibraryTyped>> {
         .filter_map(|(name, source)| {
             let module_id = module_env.get_module_id_by_name(name)?;
             #[allow(clippy::unwrap_used)]
-            let mut cache = STDLIB_TYPED.lock().unwrap();
+            let mut cache = STDLIB_TYPED.get_or_init(Mutex::default).lock().unwrap();
             let typed = cache
                 .entry((name, module_id))
                 .or_insert_with(|| Arc::new(compile_typed_module(name, source, module_id)));

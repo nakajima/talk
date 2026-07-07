@@ -18,7 +18,7 @@ extend Path {
 		str.to_string()
 	}
 
-	func appending(component: String) -> Path {
+	func appending(consume component: String) -> Path {
 		let count = self.components.count + 1
 		let storage = _storage<String>(count)
 		let i = 0
@@ -88,7 +88,7 @@ public struct Directory {
 		Array<DirectoryEntry>(storage: storage, count: out, capacity: capacity)
 	}
 
-	func walk(fn: (&DirectoryEntry) -> ()) {
+	func walk(fn: (DirectoryEntry) -> ()) {
 		for entry in self.entries() {
 			match entry {
 				.directory(directory) -> {

@@ -302,6 +302,7 @@ impl TypedTreeBuilder<'_> {
             id: a.id,
             label: a.label.clone(),
             value: self.expr(&a.value),
+            mode: a.mode,
         }
     }
 

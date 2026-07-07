@@ -198,6 +198,10 @@ pub struct CallArg {
     #[drive(skip)]
     pub label: Label,
     pub value: Expr,
+    /// The call-site ownership marker, if the source spelled one
+    /// (ADR 0018): `consume`/`copy`/`borrow`/`mut` on the argument.
+    #[drive(skip)]
+    pub mode: Option<crate::node_kinds::call_arg::ArgMode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]

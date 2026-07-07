@@ -1,4 +1,4 @@
-func line(word: String, n: Int) -> String {
+func line(consume word: String, n: Int) -> String {
 	let out = word
 	let i = 0
 	loop i < n {

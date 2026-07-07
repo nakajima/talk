@@ -221,15 +221,19 @@ impl<'a> Lowering<'a> {
                     &Theta::default(),
                 )?;
                 let add = self.string_add()?;
+                let shown = self.p.func("shown", string_ty, bot);
+                let shown_var = self.p.var(shown);
+
                 let joined = self.p.func("show_acc", string_ty, bot);
                 let joined_var = self.p.var(joined);
                 let joined_body = self.render_rest(protocol, requirement, joined_var, rest, k)?;
+                // `add` borrows both operands: the superseded accumulator
+                // AND the sub-show's temporary are this chain's to free.
                 let joined_body = self.free_shown_acc_then(acc, joined_body);
+                let joined_body = self.free_shown_acc_then(shown_var, joined_body);
                 self.p.set_body(joined, joined_body);
                 let joined_ref = self.p.func_ref(joined);
 
-                let shown = self.p.func("shown", string_ty, bot);
-                let shown_var = self.p.var(shown);
                 let add_ref = self.p.func_ref(add);
                 let add_args = self.p.tuple(&[acc, shown_var, joined_ref]);
                 let shown_body = self.p.app(add_ref, add_args);

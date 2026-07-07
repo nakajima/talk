@@ -1,6 +1,7 @@
-use std::{path::PathBuf, sync::Arc};
-
-use lazy_static::lazy_static;
+use std::{
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 
 use crate::compiling::{
     driver::{CompilationMode, Driver, DriverConfig, Source},
@@ -28,16 +29,14 @@ pub fn path_override() -> Option<PathBuf> {
         })
 }
 
-lazy_static! {
-    static ref CORE: (Arc<Module>, Arc<LibraryTyped>) = _compile();
-}
+static CORE: OnceLock<(Arc<Module>, Arc<LibraryTyped>)> = OnceLock::new();
 
 pub fn compile() -> Arc<Module> {
-    CORE.0.clone()
+    CORE.get_or_init(_compile).0.clone()
 }
 
 pub fn typed() -> Arc<LibraryTyped> {
-    CORE.1.clone()
+    CORE.get_or_init(_compile).1.clone()
 }
 
 /// The filenames of all core source files.

@@ -108,7 +108,7 @@ pub mod tests {
             ),
             (
                 "types::checks_generic_struct_arg",
-                "\n        struct Person {\n            func getAge<T>(t: T) -> T { t }\n        }\n\n        Person().getAge(123)\n        Person().getAge(1.23)\n        ",
+                "\n        struct Person {\n            func getAge<T>(consume t: T) -> T { t }\n        }\n\n        Person().getAge(123)\n        Person().getAge(1.23)\n        ",
                 true,
                 false,
             ),
@@ -240,7 +240,7 @@ pub mod tests {
             ),
             (
                 "types::explicit_generic_function_instantiates",
-                "\n        func id<T>(x: T) -> T { x }\n        id(123)\n        id(true)\n    ",
+                "\n        func id<T>(consume x: T) -> T { x }\n        id(123)\n        id(true)\n    ",
                 true,
                 false,
             ),
@@ -1191,13 +1191,13 @@ pub mod tests {
             "// no-core\nstruct Box<T> {\n  typealias Item = T\n  let value: Item\n}\nfunc get(box: Box<Int>) -> Box<Int>.Item { box.value }",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "get"), "(Box<Int>) -> Int");
+        assert_eq!(ty_of(&t, "get"), "(&Box<Int>) -> Int");
     }
 
     #[test]
     fn type_aliases_can_apply_captured_generics() {
         let t = check(
-            "// no-core\nstruct T<U> { let value: U }\nstruct Box<U> {\n  typealias F = T<U>\n  let value: F\n}\nfunc get(box: Box<Int>) -> T<Int> { box.value }",
+            "// no-core\nstruct T<U> { let value: U }\nstruct Box<U> {\n  typealias F = T<U>\n  let value: F\n}\nfunc get(consume box: Box<Int>) -> T<Int> { box.value }",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "get"), "(Box<Int>) -> T<Int>");
@@ -1227,7 +1227,7 @@ pub mod tests {
     #[test]
     fn any_protocol_type_is_first_class_in_annotations() {
         let t = check(
-            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\ntypealias AnyShowable = any Showable\nfunc idAny(x: AnyShowable) -> AnyShowable { x }",
+            "// no-core\nprotocol Showable {\n  func show() -> Int\n}\ntypealias AnyShowable = any Showable\nfunc idAny(consume x: AnyShowable) -> AnyShowable { x }",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "idAny"), "(any Showable) -> any Showable");
@@ -1249,7 +1249,7 @@ pub mod tests {
             "// no-core\nprotocol Showable {\n  func show() -> Int\n}\nfunc render(value: any Showable) -> Int { value.show() }",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "render"), "(any Showable) -> Int");
+        assert_eq!(ty_of(&t, "render"), "(&any Showable) -> Int");
     }
 
     #[test]
@@ -1258,13 +1258,16 @@ pub mod tests {
             "// no-core\nprotocol Iterator {\n  associated Element\n  func next() -> Element\n}\nfunc nextInt(it: any Iterator<Element = Int>) -> Int { it.next() }",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "nextInt"), "(any Iterator<Element = Int>) -> Int");
+        assert_eq!(
+            ty_of(&t, "nextInt"),
+            "(&any Iterator<Element = Int>) -> Int"
+        );
     }
 
     #[test]
     fn object_safe_any_protocol_satisfies_generic_protocol_bounds() {
         let t = check(
-            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nfunc render<T: Showable>(value: T) -> Int { value.show() }\nlet value: any Showable = 1\nlet rendered = render(value)",
+            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nfunc render<T: Showable>(consume value: T) -> Int { value.show() }\nlet value: any Showable = 1\nlet rendered = render(value)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "rendered"), "Int");
@@ -1273,7 +1276,7 @@ pub mod tests {
     #[test]
     fn expected_any_protocol_rejects_existential_upcasts() {
         let t = check(
-            "// no-core\nprotocol Readable {\n  func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> ()\n}\nfunc upcast(value: any ReadWrite) -> any Readable { value }",
+            "// no-core\nprotocol Readable {\n  func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> ()\n}\nfunc upcast(consume value: any ReadWrite) -> any Readable { value }",
         );
         let errors = type_errors(&t);
         assert!(
@@ -1289,7 +1292,7 @@ pub mod tests {
     #[test]
     fn existential_self_conformance_satisfies_superprotocol_bounds() {
         let t = check(
-            "// no-core\nprotocol Readable {\n  consuming func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> Int\n}\nextend Int: ReadWrite {\n  consuming func read() -> Int { self }\n  func write(value: Int) -> Int { value }\n}\nfunc readIt<T: Readable>(value: T) -> Int { value.read() }\nlet value: any ReadWrite = 1\nlet result = readIt(value)",
+            "// no-core\nprotocol Readable {\n  consuming func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> Int\n}\nextend Int: ReadWrite {\n  consuming func read() -> Int { self }\n  func write(value: Int) -> Int { value }\n}\nfunc readIt<T: Readable>(consume value: T) -> Int { value.read() }\nlet value: any ReadWrite = 1\nlet result = readIt(value)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "result"), "Int");
@@ -1313,7 +1316,7 @@ pub mod tests {
     #[test]
     fn any_protocol_accepts_named_associated_type_bindings() {
         let t = check(
-            "// no-core\nprotocol Iterator {\n  associated Element\n  func next() -> Element\n}\nfunc use(it: any Iterator<Element = Int>) -> any Iterator<Element = Int> { it }",
+            "// no-core\nprotocol Iterator {\n  associated Element\n  func next() -> Element\n}\nfunc use(consume it: any Iterator<Element = Int>) -> any Iterator<Element = Int> { it }",
         );
         assert_clean(&t);
         assert_eq!(
@@ -1657,7 +1660,7 @@ pub mod tests {
             "// no-core\nprotocol Foo {\n\tfunc foo() -> Int\n}\nstruct Thing {}\nextend Thing: Foo {\n\tfunc foo() { 123 }\n}\nfunc fizz<T: Foo>(t: T) { t.foo() }\nlet r = fizz(Thing())",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "fizz"), "<T0: Foo>(T0) -> Int");
+        assert_eq!(ty_of(&t, "fizz"), "<T0: Foo>(&T0) -> Int");
         assert_eq!(ty_of(&t, "r"), "Int");
     }
 
@@ -1934,6 +1937,66 @@ pub mod tests {
     }
 
     #[test]
+    fn unadorned_parameters_borrow_by_default() {
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet count: Int\n}\nfunc read(c: Counter) -> Int {\n\tc.count\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "read"), "(&Counter) -> Int");
+    }
+
+    #[test]
+    fn unadorned_init_parameters_consume_by_default() {
+        // An explicit init that stores its argument: legal without `consume`
+        // because init params default to consuming (ADR 0018).
+        let t = check(
+            "// no-core\nstruct Name {}\nstruct User {\n\tlet name: Name\n\n\tinit(name: Name) {\n\t\tself.name = name\n\t}\n}\nlet u = User(name: Name())",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "u"), "User");
+    }
+
+    #[test]
+    fn unadorned_function_type_parameters_borrow_by_default() {
+        let t = check(
+            "// no-core\nstruct Entry {}\nfunc walk(fn: (Entry) -> ()) {}\nfunc visit(entry: Entry) {}\nwalk(visit)",
+        );
+        assert_clean(&t);
+        // The `fn` parameter is itself unadorned, so it is a borrowed
+        // function value; its own parameters borrow too.
+        assert_eq!(ty_of(&t, "walk"), "(&(&Entry) -> ()) -> ()");
+    }
+
+    #[test]
+    fn borrowed_function_values_are_callable() {
+        // A borrowed parameter of function type can be called: invoking a
+        // function value is a read.
+        let t =
+            check("// no-core\nstruct Entry {}\nfunc walk(fn: (Entry) -> ()) {\n\tfn(Entry())\n}");
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn explicit_parameter_modes_lower_to_borrow_types() {
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet count: Int\n}\nfunc read(borrow c: Counter) -> Int {\n\tc.count\n}\nfunc write(mut c: Counter) -> Int {\n\tc.count\n}\nfunc take(consume c: Counter) -> Counter {\n\tc\n}\nfunc take_mut(consume mut c: Counter) -> Counter {\n\tc\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "read"), "(&Counter) -> Int");
+        assert_eq!(ty_of(&t, "write"), "(&mut Counter) -> Int");
+        assert_eq!(ty_of(&t, "take"), "(Counter) -> Counter");
+        assert_eq!(ty_of(&t, "take_mut"), "(Counter) -> Counter");
+    }
+
+    #[test]
+    fn explicit_parameter_modes_apply_in_protocol_requirements() {
+        let t = check(
+            "// no-core\npublic protocol Levelled {\n\tfunc level(borrow rhs: Self) -> Self\n\tfunc absorb(consume rhs: Self) -> Self\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
     fn borrow_parameters_auto_borrow_owned_arguments() {
         let t = check(
             "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = len(s)\nlet z = s.length",
@@ -1992,7 +2055,7 @@ pub mod tests {
     #[test]
     fn borrowed_return_does_not_satisfy_owned_argument() {
         let t = check(
-            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(s: String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = take(id(s))",
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(consume s: String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = take(id(s))",
         );
         let errors = type_errors(&t);
         assert!(
@@ -2049,7 +2112,7 @@ pub mod tests {
     fn function_with_owned_param_does_not_satisfy_shared_param_argument() {
         // `take` passes a borrow, but `needs_owned` consumes an owned value.
         let t = check(
-            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc needs_owned(s: String) -> Int {\n\ts.length\n}\nfunc take(f: (&String) -> Int) -> Int {\n\t0\n}\nlet y = take(needs_owned)",
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc needs_owned(consume s: String) -> Int {\n\ts.length\n}\nfunc take(f: (&String) -> Int) -> Int {\n\t0\n}\nlet y = take(needs_owned)",
         );
         let errors = type_errors(&t);
         assert!(
@@ -2122,7 +2185,7 @@ pub mod tests {
         // is checked, so the leading dot cannot resolve eagerly — the enum
         // arrives later, through the result unification.
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet y: Opt<Int> = id(.some(1))",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(.some(1))",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "y"), "Opt<Int>");
@@ -2131,7 +2194,7 @@ pub mod tests {
     #[test]
     fn bare_leading_dot_resolves_in_inference_position() {
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet y: Opt<Int> = id(.none)",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(.none)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "y"), "Opt<Int>");
@@ -2140,7 +2203,7 @@ pub mod tests {
     #[test]
     fn nested_leading_dots_resolve_in_inference_position() {
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet y: Opt<Opt<Int>> = id(.some(.some(1)))",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Opt<Int>> = id(.some(.some(1)))",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "y"), "Opt<Opt<Int>>");
@@ -2149,7 +2212,7 @@ pub mod tests {
     #[test]
     fn inferred_leading_dot_unknown_variant_errors() {
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet y: Opt<Int> = id(.nope)",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(.nope)",
         );
         let errors = type_errors(&t);
         assert!(
@@ -2161,7 +2224,7 @@ pub mod tests {
     #[test]
     fn inferred_leading_dot_arity_mismatch_errors() {
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet y: Opt<Int> = id(.some(1, 2))",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(.some(1, 2))",
         );
         let errors = type_errors(&t);
         assert!(
@@ -2461,7 +2524,7 @@ pub mod tests {
     #[test]
     fn generic_methods_instantiate_per_call() {
         let t = check(
-            "// no-core\nstruct Person {\n\tfunc getAge<T>(t: T) -> T { t }\n}\nPerson().getAge(123)\nPerson().getAge(1.23)",
+            "// no-core\nstruct Person {\n\tfunc getAge<T>(consume t: T) -> T { t }\n}\nPerson().getAge(123)\nPerson().getAge(1.23)",
         );
         assert_clean(&t);
     }
@@ -2666,7 +2729,7 @@ pub mod tests {
             "// no-core\nprotocol Defaulted {\n\tassociated D\n\tfunc make() -> D\n}\nextend Int: Defaulted {\n\tfunc make() -> Bool { true }\n}\nfunc mk<T: Defaulted>(t: T) { t.make() }\nlet v = mk(123)",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "mk"), "<T0: Defaulted>(T0) -> T0.D");
+        assert_eq!(ty_of(&t, "mk"), "<T0: Defaulted>(&T0) -> T0.D");
         assert_eq!(ty_of(&t, "v"), "Bool");
     }
 
@@ -3520,7 +3583,7 @@ pub mod tests {
     #[test]
     fn gadt_hidden_payload_can_be_returned_as_existential() {
         let typed = check(
-            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nenum GBox<T> {\n  case hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(box: GBox<Bool>) -> any Showable {\n  match box {\n    .hidden(value) -> value\n  }\n}",
+            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nenum GBox<T> {\n  case hidden<A: Showable>(A) -> GBox<Bool>\n}\nfunc erase(consume box: GBox<Bool>) -> any Showable {\n  match box {\n    .hidden(value) -> value\n  }\n}",
         );
         assert_clean(&typed);
         assert_eq!(ty_of(&typed, "erase"), "(GBox<Bool>) -> any Showable");
@@ -4131,7 +4194,9 @@ mod with_core {
 
     #[test]
     fn unique_annotation_parses_and_renders() {
-        let t = check_with_core(Source::from("func pass(x: *String) -> *String {\n\tx\n}"));
+        let t = check_with_core(Source::from(
+            "func pass(consume x: *String) -> *String {\n\tx\n}",
+        ));
         assert_no_errors(&t);
         let resolved = &t.phase.program.resolved_names();
         let _names =

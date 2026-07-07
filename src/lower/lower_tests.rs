@@ -101,6 +101,40 @@ pub mod tests {
     }
 
     #[test]
+    fn non_first_mut_parameter_is_diagnosed() {
+        // V1 inout supports exactly one write-back slot (the receiver /
+        // first parameter). A `mut` parameter anywhere else would silently
+        // drop its mutations, so lowering rejects it.
+        let driver = Driver::new(
+            vec![Source::from(
+                "struct Counter {\n\tlet count: Int\n}\nfunc bump(tag: Int, mut c: Counter) {\n\tc.count = c.count + 1\n}\nlet c = Counter(count: 1)\nbump(0, c)\nprint(c.count)",
+            )],
+            DriverConfig::new("LowerTest"),
+        );
+        let typed = driver
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
+        let lowered = typed.lower();
+        assert!(
+            lowered
+                .phase
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("mut` parameter")),
+            "expected a mut-parameter diagnostic, got {:?}",
+            lowered.phase.diagnostics
+        );
+    }
+
+    #[test]
     fn arithmetic_through_operator_witnesses() {
         // 2 + 3 * 3: operators desugar to protocol-static calls; lowering
         // resolves them to Int's conformance witnesses, whose bodies are

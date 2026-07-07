@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 
@@ -322,10 +323,17 @@ impl ApiError {
         }
     }
 
-    fn panic() -> Self {
+    fn panic(payload: &(dyn Any + Send)) -> Self {
+        let detail = if let Some(message) = payload.downcast_ref::<&'static str>() {
+            (*message).to_string()
+        } else if let Some(message) = payload.downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "unknown panic payload".to_string()
+        };
         Self {
             status: STATUS_PANIC,
-            message: "talk-c: internal panic".to_string(),
+            message: format!("talk-c: internal panic: {detail}"),
         }
     }
 }
@@ -476,7 +484,7 @@ impl Boundary {
         match catch_unwind(AssertUnwindSafe(call)) {
             Ok(Ok(value)) => TalkResult::ok_string(value),
             Ok(Err(error)) => TalkResult::err(error),
-            Err(_) => TalkResult::err(ApiError::panic()),
+            Err(payload) => TalkResult::err(ApiError::panic(payload.as_ref())),
         }
     }
 
@@ -484,7 +492,7 @@ impl Boundary {
         match catch_unwind(AssertUnwindSafe(call)) {
             Ok(Ok(value)) => TalkResult::ok_bytes(value),
             Ok(Err(error)) => TalkResult::err(error),
-            Err(_) => TalkResult::err(ApiError::panic()),
+            Err(payload) => TalkResult::err(ApiError::panic(payload.as_ref())),
         }
     }
 
@@ -492,7 +500,7 @@ impl Boundary {
         match catch_unwind(AssertUnwindSafe(call)) {
             Ok(Ok(())) => TalkResult::ok_empty(),
             Ok(Err(error)) => TalkResult::err(error),
-            Err(_) => TalkResult::err(ApiError::panic()),
+            Err(payload) => TalkResult::err(ApiError::panic(payload.as_ref())),
         }
     }
 
@@ -504,7 +512,7 @@ impl Boundary {
         match catch_unwind(AssertUnwindSafe(call)) {
             Ok(Ok(value)) => ok(value),
             Ok(Err(error)) => err(error),
-            Err(_) => err(ApiError::panic()),
+            Err(payload) => err(ApiError::panic(payload.as_ref())),
         }
     }
 }

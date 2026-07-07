@@ -78,7 +78,7 @@ fn borrowed_call_argument_does_not_move_owned_value() {
 #[test]
 fn by_value_call_argument_moves_owned_value() {
     assert_error_contains(
-        "func take(s: String) -> Int {\n\ts.byte_count\n}\nlet s = \"hello\" + \" world\"\nlet n = take(s)\ns.byte_count + n",
+        "func take(consume s: String) -> Int {\n\ts.byte_count\n}\nlet s = \"hello\" + \" world\"\nlet n = take(s)\ns.byte_count + n",
         "Use of moved value 's'",
     );
 }
@@ -86,7 +86,7 @@ fn by_value_call_argument_moves_owned_value() {
 #[test]
 fn repeated_owned_call_operand_is_rejected() {
     assert_error_contains(
-        "func take(a: String, b: String) -> Int {\n\ta.byte_count + b.byte_count\n}\nlet s = \"hello\" + \" world\"\ntake(s, s)",
+        "func take(consume a: String, consume b: String) -> Int {\n\ta.byte_count + b.byte_count\n}\nlet s = \"hello\" + \" world\"\ntake(s, s)",
         "Use of moved value 's'",
     );
 }
@@ -117,7 +117,7 @@ fn explicit_consuming_method_receiver_moves_owned_receiver() {
 #[test]
 fn by_value_method_argument_moves_owned_value() {
     assert_error_contains(
-        "struct Sink {\n\tlet id: Int\n\tfunc take(value: String) -> Int {\n\t\tvalue.byte_count\n\t}\n}\nlet sink = Sink(id: 1)\nlet s = \"hello\" + \" world\"\nlet n = sink.take(s)\ns.byte_count + n",
+        "struct Sink {\n\tlet id: Int\n\tfunc take(consume value: String) -> Int {\n\t\tvalue.byte_count\n\t}\n}\nlet sink = Sink(id: 1)\nlet s = \"hello\" + \" world\"\nlet n = sink.take(s)\ns.byte_count + n",
         "Use of moved value 's'",
     );
 }
@@ -247,7 +247,7 @@ fn branch_move_then_use_after_join_is_rejected() {
 #[test]
 fn rejects_loop_carried_move_reuse() {
     assert_error_contains(
-        "func take(s: String) -> Int {\n\ts.byte_count\n}\nlet s = \"hello\" + \" world\"\nlet i = 0\nloop i < 2 {\n\tlet n = take(s)\n\ti = i + 1\n}",
+        "func take(consume s: String) -> Int {\n\ts.byte_count\n}\nlet s = \"hello\" + \" world\"\nlet i = 0\nloop i < 2 {\n\tlet n = take(s)\n\ti = i + 1\n}",
         "Use of moved value 's'",
     );
 }
@@ -468,7 +468,7 @@ fn assignment_schedules_replace_drop() {
 #[test]
 fn consumed_places_are_recorded_on_checked_mir() {
     let driver = flow_driver(
-        "func take(s: String) -> Int {\n\ts.byte_count\n}\nfunc make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}",
+        "func take(consume s: String) -> Int {\n\ts.byte_count\n}\nfunc make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}",
     );
     let body = stored_body(&driver, "make");
     let moved: Vec<_> = body
@@ -1078,7 +1078,7 @@ fn move_inside_handler_body_is_may_moved_after() {
     // inside one is may-moved at the handling construct's join, exactly as
     // the old tree walk's clone+merge concluded.
     assert_error_contains(
-        "func take(s: String) -> Int {\n\ts.byte_count\n}\neffect 'oops(error) -> Never\nfunc check() -> Int {\n\tlet s = \"a\" + \"b\"\n\t@handle 'oops { err in\n\t\ttake(s)\n\t\t0\n\t}\n\ts.byte_count\n}",
+        "func take(consume s: String) -> Int {\n\ts.byte_count\n}\neffect 'oops(error) -> Never\nfunc check() -> Int {\n\tlet s = \"a\" + \"b\"\n\t@handle 'oops { err in\n\t\ttake(s)\n\t\t0\n\t}\n\ts.byte_count\n}",
         "Use of moved value",
     );
 }
@@ -1101,7 +1101,7 @@ fn move_inside_trailing_block_is_may_moved_after() {
     // Trailing blocks are CFG blocks with may-execute edges, like handler
     // bodies: a move inside one is may-moved after the call.
     assert_error_contains(
-        "func take(s: String) -> Int {\n\ts.byte_count\n}\nfunc run(f: () -> Int) -> Int {\n\tf()\n}\nfunc check() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = run {\n\t\ttake(s)\n\t}\n\ts.byte_count\n}",
+        "func take(consume s: String) -> Int {\n\ts.byte_count\n}\nfunc run(f: () -> Int) -> Int {\n\tf()\n}\nfunc check() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = run {\n\t\ttake(s)\n\t}\n\ts.byte_count\n}",
         "Use of moved value",
     );
 }
@@ -1361,7 +1361,7 @@ fn linear_consumed_after_a_loop_with_break_is_accepted() {
 #[test]
 fn move_reassigned_in_every_branch_is_accepted() {
     assert_no_errors(
-        "func consume(s: String) -> Int {\n\ts.byte_count\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = consume(s)\n\tif flag {\n\t\ts = \"c\" + \"d\"\n\t} else {\n\t\ts = \"e\" + \"f\"\n\t}\n\tconsume(s) + n\n}",
+        "func consume(consume s: String) -> Int {\n\ts.byte_count\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = consume(s)\n\tif flag {\n\t\ts = \"c\" + \"d\"\n\t} else {\n\t\ts = \"e\" + \"f\"\n\t}\n\tconsume(s) + n\n}",
     );
 }
 
@@ -1373,7 +1373,7 @@ fn move_reassigned_in_every_branch_is_accepted() {
 #[test]
 fn move_on_conditional_continue_path_is_use_after_move_on_reentry() {
     assert_error_contains(
-        "func consume(s: String) -> Int {\n\ts.byte_count\n}\nfunc f() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet i = 0\n\tlet n = 0\n\tloop i < 2 {\n\t\ti = i + 1\n\t\tif i == 1 {\n\t\t\tn = consume(s)\n\t\t\tcontinue\n\t\t}\n\t}\n\tn\n}\nf()",
+        "func consume(consume s: String) -> Int {\n\ts.byte_count\n}\nfunc f() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet i = 0\n\tlet n = 0\n\tloop i < 2 {\n\t\ti = i + 1\n\t\tif i == 1 {\n\t\t\tn = consume(s)\n\t\t\tcontinue\n\t\t}\n\t}\n\tn\n}\nf()",
         "Use of moved value 's'",
     );
 }
@@ -1386,7 +1386,7 @@ fn move_on_conditional_continue_path_is_use_after_move_on_reentry() {
 #[test]
 fn move_on_conditional_break_path_drops_once() {
     let (value, _, live_allocations) = run_heap_eval(
-        "func consume(s: String) -> Int {\n\ts.byte_count\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = 0\n\tloop {\n\t\tif flag {\n\t\t\tn = consume(s)\n\t\t\tbreak\n\t\t}\n\t\tbreak\n\t}\n\tn\n}\nf(true) + f(false)",
+        "func consume(consume s: String) -> Int {\n\ts.byte_count\n}\nfunc f(flag: Bool) -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = 0\n\tloop {\n\t\tif flag {\n\t\t\tn = consume(s)\n\t\t\tbreak\n\t\t}\n\t\tbreak\n\t}\n\tn\n}\nf(true) + f(false)",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
     assert_eq!(live_allocations, 0, "the moved value drops exactly once");

@@ -370,10 +370,13 @@ impl<'s> Solver<'s> {
                 if expected_perm == found_perm
                     || (expected_perm == Perm::Shared && found_perm == Perm::Exclusive)
                 {
+                    // Peeling the borrow consumes the application boundary:
+                    // the inner equation demotes `Apply` so a nested
+                    // function type unifies invariantly.
                     queue.push(Constraint::Eq(
                         expected_inner,
                         (*found_inner).clone(),
-                        origin,
+                        origin.nested(),
                     ));
                 } else {
                     queue.push(Constraint::Eq(
@@ -384,7 +387,7 @@ impl<'s> Solver<'s> {
                 }
             }
             Ty::Error => {}
-            _ => queue.push(Constraint::Eq(expected_inner, found, origin)),
+            _ => queue.push(Constraint::Eq(expected_inner, found, origin.nested())),
         }
     }
 
@@ -403,7 +406,7 @@ impl<'s> Solver<'s> {
                     origin,
                     ..
                 } if matches!(self.store.shallow(&found), Ty::Var(_)) => {
-                    queue.push(Constraint::Eq(expected_inner, found, origin));
+                    queue.push(Constraint::Eq(expected_inner, found, origin.nested()));
                     defaulted = true;
                 }
                 other => remaining.push(other),

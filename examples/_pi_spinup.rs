@@ -5,10 +5,19 @@ use talk::vm::{interp, io::CaptureIO, schedule};
 
 fn compile_module(source: &str) -> talk::vm::Module {
     let driver = Driver::new(vec![Source::from(source)], DriverConfig::new("Bench"));
-    let typed = driver.parse().unwrap().resolve_names().unwrap().type_check();
+    let typed = driver
+        .parse()
+        .unwrap()
+        .resolve_names()
+        .unwrap()
+        .type_check();
     assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
     let mut lowered = typed.lower();
-    assert!(lowered.phase.diagnostics.is_empty(), "{:?}", lowered.phase.diagnostics);
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "{:?}",
+        lowered.phase.diagnostics
+    );
     schedule::schedule(
         &mut lowered.phase.program,
         lowered.phase.main,

@@ -195,12 +195,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         found: Ty,
         reason: CtReason,
     ) {
+        // Peeling the expected borrow consumes the application boundary:
+        // the inner equation is no longer an application of the value, so
+        // `Apply` demotes — a nested function type unifies invariantly
+        // instead of coercing its contravariant parameters.
+        let inner_reason = reason.nested();
         match self.store.shallow(&found) {
             Ty::Borrow(found_kind, found_inner) if found_kind == expected_kind => {
-                self.emit_eq(expected_inner, (*found_inner).clone(), node, reason);
+                self.emit_eq(expected_inner, (*found_inner).clone(), node, inner_reason);
             }
             Ty::Borrow(Perm::Exclusive, found_inner) if expected_kind == Perm::Shared => {
-                self.emit_eq(expected_inner, (*found_inner).clone(), node, reason);
+                self.emit_eq(expected_inner, (*found_inner).clone(), node, inner_reason);
             }
             Ty::Borrow(..) => self.emit_eq(expected, found, node, reason),
             Ty::Var(_) if reason == CtReason::Apply => {
@@ -211,7 +216,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     origin: CtOrigin::new(node, reason),
                 });
             }
-            _ => self.emit_eq(expected_inner, found, node, reason),
+            _ => self.emit_eq(expected_inner, found, node, inner_reason),
         }
     }
 

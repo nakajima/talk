@@ -59,7 +59,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .iter()
             .map(|param| {
                 let ty = match &param.type_annotation {
-                    Some(annotation) => self.lower_annotation(annotation),
+                    Some(annotation) => {
+                        let ty = self.lower_annotation(annotation);
+                        elaborate::apply_param_mode(self.catalog, param.mode, ty)
+                    }
                     None => Ty::Var(self.store.fresh_ty(self.level, param.id)),
                 };
                 self.bind_param(param, &ty);
@@ -122,6 +125,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let ty = match &param.type_annotation {
                     Some(annotation) => {
                         let annotated = self.lower_annotation(annotation);
+                        let annotated =
+                            elaborate::apply_param_mode(self.catalog, param.mode, annotated);
                         self.emit_eq(
                             expected.clone(),
                             annotated.clone(),
@@ -166,7 +171,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .iter()
             .map(|param| {
                 let ty = match &param.type_annotation {
-                    Some(annotation) => self.lower_annotation(annotation),
+                    Some(annotation) => {
+                        let ty = self.lower_annotation(annotation);
+                        elaborate::apply_param_mode(self.catalog, param.mode, ty)
+                    }
                     None => Ty::Var(self.store.fresh_ty(self.level, param.id)),
                 };
                 self.bind_param(param, &ty);

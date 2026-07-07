@@ -1,5 +1,33 @@
 use super::*;
 
+/// Apply a parameter's ownership mode to its lowered annotation type
+/// (ADR 0018). Explicit `borrow`/`mut` wrap the type in a borrow unless
+/// the annotation already spelled one; `consume` (and unadorned, until
+/// the borrow-by-default flip) lowers as written. Shared borrows of
+/// Copy-grade heads erase (`&Int` never surfaces — ADR 0014): a scalar
+/// borrow IS a value copy, and keeping it bare keeps schemes, flow
+/// provenance, and renderings scalar-shaped.
+pub(super) fn apply_param_mode(catalog: &TypeCatalog, mode: Option<ParamMode>, ty: Ty) -> Ty {
+    let perm = match mode {
+        None | Some(ParamMode::Consume | ParamMode::ConsumeMut) => return ty,
+        Some(ParamMode::Borrow) => Perm::Shared,
+        Some(ParamMode::Mut) => Perm::Exclusive,
+    };
+    if perm == Perm::Shared && copy_grade_head(catalog, &ty) {
+        return ty;
+    }
+    match ty {
+        Ty::Borrow(..) => ty,
+        ty => Ty::Borrow(perm, Box::new(ty)),
+    }
+}
+
+/// A nominal whose grade is `Copy` (borrows of it erase).
+pub(super) fn copy_grade_head(catalog: &TypeCatalog, ty: &Ty) -> bool {
+    matches!(ty, Ty::Nominal(symbol, _)
+        if catalog.grade_of(*symbol) == crate::types::catalog::Grade::Copy)
+}
+
 struct Elaborator<'e> {
     store: &'e mut VarStore,
     catalog: &'e TypeCatalog,
@@ -238,12 +266,18 @@ impl<'e> Elaborator<'e> {
     fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
         match &annotation.kind {
             TypeAnnotationKind::Borrow { mutable, inner } => {
+                let inner = self.lower_annotation(inner);
+                // `&Int` never surfaces (ADR 0014): a shared borrow of a
+                // Copy-grade head lowers to the bare type.
+                if !*mutable && copy_grade_head(self.catalog, &inner) {
+                    return inner;
+                }
                 let kind = if *mutable {
                     Perm::Exclusive
                 } else {
                     Perm::Shared
                 };
-                Ty::Borrow(kind, Box::new(self.lower_annotation(inner)))
+                Ty::Borrow(kind, Box::new(inner))
             }
             TypeAnnotationKind::Unique { inner } => {
                 Ty::Unique(Box::new(self.lower_annotation(inner)))

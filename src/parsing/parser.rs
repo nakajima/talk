@@ -9,7 +9,7 @@ use crate::node::Node;
 use crate::node_id::{FileID, NodeID};
 use crate::node_kinds::block::Block;
 use crate::node_kinds::body::Body;
-use crate::node_kinds::call_arg::CallArg;
+use crate::node_kinds::call_arg::{ArgMode, CallArg};
 use crate::node_kinds::decl::{
     Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, ReceiverMode, Visibility,
 };
@@ -22,7 +22,7 @@ use crate::node_kinds::inline_ir_instruction::{
     InlineIRInstruction, InlineIRInstructionKind, Register, Value,
 };
 use crate::node_kinds::match_arm::MatchArm;
-use crate::node_kinds::parameter::Parameter;
+use crate::node_kinds::parameter::{ParamMode, Parameter};
 use crate::node_kinds::pattern::{
     Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
 };
@@ -2558,6 +2558,34 @@ impl<'a> Parser<'a> {
 
     // MARK: Helpers
 
+    /// An optional call-site ownership marker on an argument (ADR 0018):
+    /// `consume x`, `copy x`, `borrow x`, or `mut x`. `mut` is a hard
+    /// keyword; the rest are contextual and only read as markers when a
+    /// variable-rooted expression follows.
+    fn arg_mode(&mut self) -> Option<(ArgMode, Span)> {
+        if self.peek_is(TokenKind::Mut) {
+            let tok = self.advance().expect("peeked Mut");
+            return Some((ArgMode::Mut, self.token_span(&tok)));
+        }
+        let mode = if self.peek_identifier("consume") {
+            ArgMode::Consume
+        } else if self.peek_identifier("copy") {
+            ArgMode::Copy
+        } else if self.peek_identifier("borrow") {
+            ArgMode::Borrow
+        } else {
+            return None;
+        };
+        if !matches!(
+            self.next.as_ref().map(|token| &token.kind),
+            Some(TokenKind::Identifier)
+        ) {
+            return None;
+        }
+        let tok = self.advance().expect("peeked marker");
+        Some((mode, self.token_span(&tok)))
+    }
+
     fn arguments(&mut self) -> Result<Vec<CallArg>, ParserError> {
         let mut args: Vec<CallArg> = vec![];
         let mut i = 0;
@@ -2590,6 +2618,7 @@ impl<'a> Parser<'a> {
                 };
                 let tok = self.push_source_location();
                 self.consume(TokenKind::Colon)?;
+                let mode = self.arg_mode();
                 let value = self.expr_with_precedence(Precedence::Assignment)?;
                 args.push(self.save_meta(tok, |id, span| CallArg {
                     id,
@@ -2597,8 +2626,11 @@ impl<'a> Parser<'a> {
                     label: label.into(),
                     label_span,
                     value: value.as_expr(),
+                    mode: mode.map(|(mode, _)| mode),
+                    mode_span: mode.map(|(_, span)| span),
                 })?);
             } else {
+                let mode = self.arg_mode();
                 let value = self.expr_with_precedence(Precedence::Assignment)?;
                 args.push(self.save_meta(tok, |id, span| CallArg {
                     id,
@@ -2606,6 +2638,8 @@ impl<'a> Parser<'a> {
                     label: Label::Positional(i),
                     label_span: span,
                     value: value.as_expr(),
+                    mode: mode.map(|(mode, _)| mode),
+                    mode_span: mode.map(|(_, span)| span),
                 })?);
             }
 
@@ -2640,6 +2674,78 @@ impl<'a> Parser<'a> {
         Ok(base)
     }
 
+    /// A parameter of a function TYPE annotation (ADR 0018): an optional
+    /// ownership-mode prefix ahead of the type. The caller wraps once it
+    /// knows the parenthesized list is a function type and not a tuple.
+    fn func_type_param(
+        &mut self,
+        saw_param_mode: &mut bool,
+    ) -> Result<(Option<ParamMode>, TypeAnnotation), ParserError> {
+        self.skip_semicolons_and_newlines();
+
+        if self.peek_is(TokenKind::Mut) {
+            self.consume(TokenKind::Mut)?;
+            *saw_param_mode = true;
+            return Ok((Some(ParamMode::Mut), self.type_annotation()?));
+        }
+
+        if self.peek_identifier("consume") && self.next_starts_type_annotation() {
+            self.advance();
+            let mode = if self.did_match(TokenKind::Mut)? {
+                ParamMode::ConsumeMut
+            } else {
+                ParamMode::Consume
+            };
+            *saw_param_mode = true;
+            return Ok((Some(mode), self.type_annotation()?));
+        }
+
+        Ok((None, self.type_annotation()?))
+    }
+
+    /// Resolve a function-type parameter's mode onto the annotation
+    /// (ADR 0018, borrow-by-default): unadorned parameters become shared
+    /// borrows, `mut` becomes an exclusive borrow, `consume` (and
+    /// `consume mut`, which only differs callee-locally) stays the bare
+    /// owned type. Explicit `&`/`&mut` spellings are left as written.
+    fn apply_func_type_param_mode(
+        &mut self,
+        mode: Option<ParamMode>,
+        annotation: TypeAnnotation,
+    ) -> TypeAnnotation {
+        let mutable = match mode {
+            Some(ParamMode::Consume | ParamMode::ConsumeMut) => return annotation,
+            Some(ParamMode::Mut) => true,
+            None | Some(ParamMode::Borrow) => false,
+        };
+        if matches!(annotation.kind, TypeAnnotationKind::Borrow { .. }) {
+            return annotation;
+        }
+        TypeAnnotation {
+            id: self.next_id(),
+            span: annotation.span,
+            kind: TypeAnnotationKind::Borrow {
+                mutable,
+                inner: Box::new(annotation),
+            },
+        }
+    }
+
+    fn next_starts_type_annotation(&self) -> bool {
+        matches!(
+            self.next.as_ref().map(|token| &token.kind),
+            Some(
+                TokenKind::Identifier
+                    | TokenKind::Mut
+                    | TokenKind::Amp
+                    | TokenKind::Star
+                    | TokenKind::LeftParen
+                    | TokenKind::LeftBrace
+                    | TokenKind::Any
+            )
+        )
+    }
+
     fn type_annotation_base(&mut self) -> Result<TypeAnnotation, ParserError> {
         let tok = self.push_source_location();
 
@@ -2670,8 +2776,9 @@ impl<'a> Parser<'a> {
         if self.did_match(TokenKind::LeftParen)? {
             // it's a func type or tuple repr
             let mut sig_args = vec![];
+            let mut saw_param_mode = false;
             while !self.did_match(TokenKind::RightParen)? {
-                sig_args.push(self.type_annotation()?);
+                sig_args.push(self.func_type_param(&mut saw_param_mode)?);
                 self.consume(TokenKind::Comma).ok();
             }
             let has_effects = self.peek_is(TokenKind::SingleQuote)
@@ -2682,27 +2789,35 @@ impl<'a> Parser<'a> {
             let effects = self.effect_set()?;
             if self.did_match(TokenKind::Arrow)? {
                 let ret = self.type_annotation()?;
+                let params = sig_args
+                    .into_iter()
+                    .map(|(mode, annotation)| self.apply_func_type_param_mode(mode, annotation))
+                    .collect();
                 return self.save_meta(tok, |id, span| TypeAnnotation {
                     id,
                     span,
                     kind: TypeAnnotationKind::Func {
-                        params: sig_args,
+                        params,
                         effects,
                         returns: Box::new(ret),
                     },
                 });
             } else {
-                if has_effects {
+                if has_effects || saw_param_mode {
                     return Err(ParserError::UnexpectedToken {
                         expected: "->".to_string(),
                         actual: format!("{:?}", self.current),
                         token: self.current.clone(),
                     });
                 }
+                let items = sig_args
+                    .into_iter()
+                    .map(|(_, annotation)| annotation)
+                    .collect();
                 return self.save_meta(tok, |id, span| TypeAnnotation {
                     id,
                     span,
-                    kind: TypeAnnotationKind::Tuple(sig_args),
+                    kind: TypeAnnotationKind::Tuple(items),
                 });
             }
         }
@@ -3057,6 +3172,11 @@ impl<'a> Parser<'a> {
         let mut params = vec![];
 
         loop {
+            let Ok(mode) = self.param_mode() else {
+                rollback(self);
+                return Ok(vec![]);
+            };
+
             // Must be identifier
             let Ok((name, name_span)) = self.identifier() else {
                 rollback(self);
@@ -3077,6 +3197,8 @@ impl<'a> Parser<'a> {
                 name: name.into(),
                 name_span,
                 type_annotation,
+                mode: mode.map(|(mode, _)| mode),
+                mode_span: mode.map(|(_, span)| span),
             })?;
 
             params.push(param);
@@ -3290,7 +3412,14 @@ impl<'a> Parser<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn parameters(&mut self) -> Result<Vec<Parameter>, ParserError> {
         let mut params: Vec<Parameter> = vec![];
-        while let Ok((name, name_span)) = self.identifier() {
+        loop {
+            let mode = self.param_mode()?;
+            let (name, name_span) = match self.identifier() {
+                Ok(name) => name,
+                // A mode keyword must be followed by a parameter name.
+                Err(err) if mode.is_some() => return Err(err),
+                Err(_) => break,
+            };
             let tok = self.push_source_location();
             let type_annotation = if self.did_match(TokenKind::Colon)? {
                 Some(self.type_annotation()?)
@@ -3304,6 +3433,8 @@ impl<'a> Parser<'a> {
                 name: name.into(),
                 name_span,
                 type_annotation,
+                mode: mode.map(|(mode, _)| mode),
+                mode_span: mode.map(|(_, span)| span),
             })?;
             params.push(param);
 
@@ -3315,6 +3446,55 @@ impl<'a> Parser<'a> {
         }
 
         Ok(params)
+    }
+
+    /// An optional ownership-mode prefix on a parameter (ADR 0018):
+    /// `mut x`, `consume x`, `consume mut x`, or `borrow x`. `mut` is a
+    /// hard keyword; `consume`/`borrow` are contextual and only read as
+    /// modes when the parameter name follows.
+    fn param_mode(&mut self) -> Result<Option<(ParamMode, Span)>, ParserError> {
+        self.skip_semicolons_and_newlines();
+
+        if self.peek_is(TokenKind::Mut) {
+            let tok = self.advance().expect("peeked Mut");
+            return Ok(Some((ParamMode::Mut, self.token_span(&tok))));
+        }
+
+        if self.peek_identifier("consume") && self.next_is_parameter_name(true) {
+            let tok = self.advance().expect("peeked consume");
+            let mut span = self.token_span(&tok);
+            let mode = if self.peek_is(TokenKind::Mut) {
+                let mut_tok = self.advance().expect("peeked Mut");
+                span.end = mut_tok.end;
+                ParamMode::ConsumeMut
+            } else {
+                ParamMode::Consume
+            };
+            return Ok(Some((mode, span)));
+        }
+
+        if self.peek_identifier("borrow") && self.next_is_parameter_name(false) {
+            let tok = self.advance().expect("peeked borrow");
+            return Ok(Some((ParamMode::Borrow, self.token_span(&tok))));
+        }
+
+        Ok(None)
+    }
+
+    fn token_span(&self, token: &Token) -> Span {
+        Span {
+            file_id: self.file_id,
+            start: token.start,
+            end: token.end,
+        }
+    }
+
+    fn next_is_parameter_name(&self, allow_mut: bool) -> bool {
+        match self.next.as_ref().map(|token| &token.kind) {
+            Some(TokenKind::Identifier) => true,
+            Some(TokenKind::Mut) => allow_mut,
+            _ => false,
+        }
     }
 
     fn effect_name(&mut self) -> Result<(String, Span), ParserError> {

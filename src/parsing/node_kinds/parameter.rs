@@ -5,6 +5,21 @@ use crate::{
     parsing::span::Span,
 };
 
+/// A parameter's ownership mode (ADR 0018). `None` on `Parameter.mode`
+/// means the declaration was unadorned; what that defaults to is decided
+/// during desugaring (`Borrow` ordinarily, `Consume` in `init` position).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ParamMode {
+    /// `borrow x: T` — shared borrow (the explicit spelling of the default).
+    Borrow,
+    /// `mut x: T` — exclusive/inout borrow.
+    Mut,
+    /// `consume x: T` — the callee takes ownership.
+    Consume,
+    /// `consume mut x: T` — owned and locally mutable.
+    ConsumeMut,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct Parameter {
     #[drive(skip)]
@@ -16,6 +31,10 @@ pub struct Parameter {
     pub type_annotation: Option<TypeAnnotation>,
     #[drive(skip)]
     pub span: Span,
+    #[drive(skip)]
+    pub mode: Option<ParamMode>,
+    #[drive(skip)]
+    pub mode_span: Option<Span>,
 }
 
 impl_into_node!(Parameter);
@@ -34,6 +53,8 @@ impl Parameter {
             name_span,
             type_annotation,
             span,
+            mode: None,
+            mode_span: None,
         }
     }
 }

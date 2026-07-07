@@ -134,6 +134,8 @@ impl LowerOperators {
                         type_args: vec![],
                         args: vec![
                             CallArg {
+                                mode: None,
+                                mode_span: None,
                                 id: expr.id,
                                 label: Label::Positional(0),
                                 label_span: expr.span,
@@ -141,6 +143,8 @@ impl LowerOperators {
                                 span: expr.span,
                             },
                             CallArg {
+                                mode: None,
+                                mode_span: None,
                                 id: rhs.id,
                                 label: Label::Positional(1),
                                 label_span: rhs.span,
@@ -184,6 +188,8 @@ pub mod tests {
                 "add",
                 vec![
                     CallArg {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         label: Label::Positional(0),
                         label_span: Span::ANY,
@@ -191,6 +197,8 @@ pub mod tests {
                         span: Span::ANY,
                     },
                     CallArg {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         label: Label::Positional(1),
                         label_span: Span::ANY,
@@ -214,6 +222,8 @@ pub mod tests {
                 "minus",
                 vec![
                     CallArg {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         label: Label::Positional(0),
                         label_span: Span::ANY,
@@ -221,6 +231,8 @@ pub mod tests {
                         span: Span::ANY,
                     },
                     CallArg {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         label: Label::Positional(1),
                         label_span: Span::ANY,
@@ -244,6 +256,8 @@ pub mod tests {
                 "times",
                 vec![
                     CallArg {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         label: Label::Positional(0),
                         label_span: Span::ANY,
@@ -251,6 +265,8 @@ pub mod tests {
                         span: Span::ANY,
                     },
                     CallArg {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         label: Label::Positional(1),
                         label_span: Span::ANY,
@@ -274,6 +290,8 @@ pub mod tests {
                 "divide",
                 vec![
                     CallArg {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         label: Label::Positional(0),
                         label_span: Span::ANY,
@@ -281,6 +299,8 @@ pub mod tests {
                         span: Span::ANY,
                     },
                     CallArg {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         label: Label::Positional(1),
                         label_span: Span::ANY,

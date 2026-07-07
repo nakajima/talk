@@ -1675,7 +1675,7 @@ pub mod tests {
         // of `id` is a variable when the argument is checked), so the
         // variant's artifacts flow to lowering from the deferred path.
         let (_, out) = run_on_both_engines_io(
-            "enum Maybe<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(x: T) -> T { x }\nlet m: Maybe<Int> = id(.some(42))\nmatch m {\n\t.some(x) -> print(x),\n\t.none -> print(0)\n}",
+            "enum Maybe<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet m: Maybe<Int> = id(.some(42))\nmatch m {\n\t.some(x) -> print(x),\n\t.none -> print(0)\n}",
         );
         assert_eq!(out, "42\n");
     }
@@ -1735,6 +1735,41 @@ pub mod tests {
             "func printy<T: Showable>(showable: T) {\n\tprint_raw(showable.show())\n\tprint_raw(\"\\n\")\n}\nprinty([1, 2, 3])",
         );
         assert_eq!(out, "[1, 2, 3]\n");
+    }
+
+    #[test]
+    fn free_function_mut_parameter_writes_back() {
+        // ADR 0018: `mut c: Counter` on a free function is an exclusive
+        // borrow with caller write-back, like a `mut func` receiver.
+        let (_, out) = run_on_both_engines_io(
+            "struct Counter {\n\tlet count: Int\n}\nfunc bump(mut c: Counter) {\n\tc.count = c.count + 1\n}\nlet c = Counter(count: 1)\nbump(c)\nbump(c)\nprint(c.count)",
+        );
+        assert_eq!(out, "3\n");
+    }
+
+    #[test]
+    fn borrowed_generic_rvalue_argument_is_freed_by_the_caller() {
+        // An rvalue passed to a borrowed generic parameter stays the
+        // caller's to free once the call returns (ADR 0018: unadorned
+        // params borrow).
+        let (_, out) = run_on_both_engines_io(
+            "func peek<T>(x: T) -> Int { 0 }\npeek([1, 2, 3])\nprint_raw(\"ok\")",
+        );
+        assert_eq!(out, "ok");
+    }
+
+    #[test]
+    fn borrowed_concrete_rvalue_argument_is_freed_by_the_caller() {
+        let (_, out) = run_on_both_engines_io(
+            "func peek(x: Array<Int>) -> Int { 0 }\npeek([1, 2, 3])\nprint_raw(\"ok\")",
+        );
+        assert_eq!(out, "ok");
+    }
+
+    #[test]
+    fn borrowed_array_show_frees_its_element_string_temps() {
+        let (_, out) = run_on_both_engines_io("print_raw([1, 2].show())\nprint_raw(\"\\n\")");
+        assert_eq!(out, "[1, 2]\n");
     }
 
     // ----- The HTTP server's request handling, scripted (no sockets) ------
@@ -1857,7 +1892,7 @@ pub mod tests {
         // A method's own generics instantiate per call site; each
         // instantiation monomorphizes separately.
         let (value, _) = run_on_both_engines_io(
-            "struct Person {\n\tfunc getAge<T>(t: T) -> T { t }\n}\nlet a = Person().getAge(123)\nlet b = Person().getAge(1.5)\n(a, b)",
+            "struct Person {\n\tfunc getAge<T>(consume t: T) -> T { t }\n}\nlet a = Person().getAge(123)\nlet b = Person().getAge(1.5)\n(a, b)",
         );
         assert_eq!(
             value,

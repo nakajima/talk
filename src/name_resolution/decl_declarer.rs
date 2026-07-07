@@ -20,7 +20,7 @@ use crate::{
         func::Func,
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
-        parameter::Parameter,
+        parameter::{ParamMode, Parameter},
         pattern::PatternKind,
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
@@ -916,6 +916,8 @@ impl<'a> DeclDeclarer<'a> {
             Span::SYNTHESIZED,
         );
         let mut params: Vec<Parameter> = vec![Parameter {
+            mode: None,
+            mode_span: None,
             id: NodeID(file_id, self.node_ids.next_id()),
             span: Span::SYNTHESIZED,
             name: self_param_name.clone(),
@@ -950,6 +952,10 @@ impl<'a> DeclDeclarer<'a> {
                 Span::SYNTHESIZED,
             );
             params.push(Parameter {
+                // Memberwise init params consume their arguments (ADR 0018),
+                // like every other init parameter.
+                mode: Some(ParamMode::Consume),
+                mode_span: None,
                 id: NodeID(file_id, self.node_ids.next_id()),
                 name: name.clone(),
                 name_span: Span::SYNTHESIZED,

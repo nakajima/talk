@@ -128,7 +128,7 @@ fn two_shared_iterators_over_one_array_coexist() {
 #[test]
 fn unique_parameter_value_moves_like_owned() {
     assert_error_contains(
-        "func bad(x: *String) -> Int {\n\tlet y = x\n\tx.byte_count\n}",
+        "func bad(consume x: *String) -> Int {\n\tlet y = x\n\tx.byte_count\n}",
         "Use of moved value 'x'",
     );
 }
@@ -164,7 +164,7 @@ fn rejects_returning_substring_of_local_owned_value() {
 #[test]
 fn rejects_returning_substring_of_owned_parameter() {
     assert_error_contains(
-        "func first(s: String) -> Substring {\n\ts.utf8().slice(0, 1)\n}",
+        "func first(consume s: String) -> Substring {\n\ts.utf8().slice(0, 1)\n}",
         "owned by this function",
     );
 }
@@ -425,7 +425,7 @@ fn cheap_clone_extraction_leaks_nothing() {
 #[test]
 fn rejects_borrowed_non_cheap_clone_argument_to_owned_parameter() {
     let typed = flow_driver(
-        "struct Name {\n\tlet value: String\n}\nfunc take(name: Name) -> Int {\n\t0\n}\nfunc bad(name: &Name) -> Int {\n\ttake(name)\n}",
+        "struct Name {\n\tlet value: String\n}\nfunc take(consume name: Name) -> Int {\n\t0\n}\nfunc bad(name: &Name) -> Int {\n\ttake(name)\n}",
     );
     assert!(typed.has_errors(), "expected a type error");
 }
@@ -661,7 +661,7 @@ fn explicit_borrow_capture_cannot_escape() {
 #[test]
 fn rejects_escaping_generic_capture_returned_through_local() {
     assert_error_contains(
-        "func bad<Value>(value: Value) -> () -> Value {\n\tlet f = func() -> Value {\n\t\tvalue\n\t}\n\treturn f\n}",
+        "func bad<Value>(consume value: Value) -> () -> Value {\n\tlet f = func() -> Value {\n\t\tvalue\n\t}\n\treturn f\n}",
         "Cannot capture ownership-sensitive value 'value'",
     );
 }
@@ -669,15 +669,18 @@ fn rejects_escaping_generic_capture_returned_through_local() {
 #[test]
 fn rejects_escaping_generic_capture_passed_as_argument() {
     assert_error_contains(
-        "func accept<Value>(f: () -> Value) -> Int {\n\t0\n}\nfunc bad<Value>(value: Value) -> Int {\n\taccept(func() -> Value {\n\t\tvalue\n\t})\n}",
+        "func accept<Value>(consume f: () -> Value) -> Int {\n\t0\n}\nfunc bad<Value>(consume value: Value) -> Int {\n\taccept(func() -> Value {\n\t\tvalue\n\t})\n}",
         "Cannot capture ownership-sensitive value 'value'",
     );
 }
 
 #[test]
 fn rejects_escaping_borrow_capture_even_when_referent_is_copy() {
+    // Shared borrows of Copy heads erase at elaboration (`&Int` never
+    // surfaces), so the surviving Copy-referent borrow is the exclusive
+    // one — the escape check must not have a Copy hole for it.
     assert_error_contains(
-        "func bad(value: &Int) -> () -> &Int {\n\treturn func() -> &Int {\n\t\tvalue\n\t}\n}",
+        "func bad(value: &mut Int) -> () -> &mut Int {\n\treturn func() -> &mut Int {\n\t\tvalue\n\t}\n}",
         "Cannot capture ownership-sensitive value 'value'",
     );
 }
@@ -686,5 +689,79 @@ fn rejects_escaping_borrow_capture_even_when_referent_is_copy() {
 fn allows_nonescaping_generic_closure_capture() {
     assert_no_errors(
         "func ok<Value>(value: Value) -> Value {\n\tlet f = func() -> Value {\n\t\tvalue\n\t}\n\tf()\n}",
+    );
+}
+
+// ----- Call-site ownership markers (ADR 0018) -------------------------------
+
+#[test]
+fn consume_marker_forces_a_generic_move() {
+    // Without the marker the earlier consume auto-clones (liveness);
+    // `consume` disables the clone, so the later use is a moved-value error.
+    assert_error_contains(
+        "func take<T>(consume x: T) -> Int { 0 }\nfunc f<T>(consume x: T) -> Int {\n\ttake(consume x) + take(x)\n}",
+        "Use of moved value 'x'",
+    );
+}
+
+#[test]
+fn generic_early_consume_auto_clones_without_marker() {
+    assert_no_errors(
+        "func take<T>(consume x: T) -> Int { 0 }\nfunc f<T>(consume x: T) -> Int {\n\ttake(x) + take(x)\n}",
+    );
+}
+
+#[test]
+fn copy_marker_preserves_the_source() {
+    // `copy` disables last-use move selection: the source stays live.
+    assert_no_errors(
+        "func take(consume s: String) -> Int { 0 }\nfunc f(consume s: String) -> Int {\n\tlet a = take(copy s)\n\tlet b = take(s)\n\ta + b\n}",
+    );
+}
+
+#[test]
+fn copy_marker_on_non_cloneable_errors() {
+    assert_error_contains(
+        "struct Socket 'linear {\n\tlet fd: Int\n}\nfunc close(consume s: Socket) -> Int { 0 }\nfunc f(consume s: Socket) -> Int {\n\tclose(copy s)\n}",
+        "copy",
+    );
+}
+
+#[test]
+fn borrow_marker_requires_a_borrowing_parameter() {
+    assert_error_contains(
+        "func take(consume s: String) -> Int { 0 }\nfunc f(s: String) -> Int {\n\ttake(borrow s)\n}",
+        "borrow",
+    );
+}
+
+#[test]
+fn borrow_marker_on_a_borrowing_parameter_is_quiet() {
+    assert_no_errors(
+        "func read(s: String) -> Int { 0 }\nfunc f(s: String) -> Int {\n\tread(borrow s)\n}",
+    );
+}
+
+#[test]
+fn mut_marker_requires_an_exclusive_parameter() {
+    assert_error_contains(
+        "struct Counter {\n\tlet count: Int\n}\nfunc read(c: Counter) -> Int {\n\tc.count\n}\nfunc f(mut c: Counter) -> Int {\n\tread(mut c)\n}",
+        "mut",
+    );
+}
+
+#[test]
+fn mut_marker_on_an_exclusive_parameter_is_quiet() {
+    assert_no_errors(
+        "struct Counter {\n\tlet count: Int\n}\nfunc bump(mut c: Counter) -> Int {\n\tc.count = c.count + 1\n\tc.count\n}\nfunc f(mut c: Counter) -> Int {\n\tbump(mut c)\n}",
+    );
+}
+
+#[test]
+fn rejects_rvalue_argument_to_a_mut_parameter() {
+    // V1: a `mut` parameter needs an addressable place to write back to.
+    assert_error_contains(
+        "struct Counter {\n\tlet count: Int\n}\nfunc bump(mut c: Counter) -> Int {\n\tc.count = c.count + 1\n\tc.count\n}\nfunc f() -> Int {\n\tbump(Counter(count: 0))\n}",
+        "mutable place",
     );
 }

@@ -1,6 +1,6 @@
 effect 'ask<T>(value: T) -> T
 
-func probe<T>(x: T) -> T {
+func probe<T>(consume x: T) -> T {
 	'ask(x)
 }
 

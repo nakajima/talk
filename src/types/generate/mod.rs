@@ -57,7 +57,7 @@ use crate::node_kinds::{
     expr::{Expr, ExprKind},
     func::{EffectSet, Func},
     match_arm::MatchArm,
-    parameter::Parameter,
+    parameter::{ParamMode, Parameter},
     pattern::{Pattern, PatternKind, RecordFieldPatternKind},
     stmt::{Stmt, StmtKind},
     type_annotation::{AnyAssocBinding, TypeAnnotation, TypeAnnotationKind},

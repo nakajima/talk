@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "talk"
-version = "0.1.31"
+version = "0.1.32"
 edition = "2024"
 default-run = "talk"
 
@@ -13,12 +13,12 @@ default-run = "talk"
 ctor = "0.4.2"
 prettydiff = "0.8.0"
 color-eyre = "0.6"
+criterion = "0.8.2"
 
 [dependencies]
 clap = { version = "4.5.39", features = ["derive"], optional = true }
 clap_complete = { version = "4.5.39", optional = true }
 rustyline = { version = "18.0.0", optional = true }
-lazy_static = "1.5.0"
 async-lsp = { version = "0.2.2", optional = true, features = [
   "async-io",
   "tokio",
@@ -51,6 +51,10 @@ talk-runtime = { path = "talk-runtime" }
 # non-unix stubs in src/vm/io.rs instead.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[[bench]]
+name = "vm_e2e"
+harness = false
 
 [features]
 default = ["cli"]

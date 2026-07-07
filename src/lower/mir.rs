@@ -653,6 +653,41 @@ impl<'types> Builder<'types> {
         }
     }
 
+    /// Materialize a droppable rvalue aggregate (array literal, tuple,
+    /// variant/record construction) used as a call operand into its own
+    /// temp. Parameters borrow by default (ADR 0018), so call operands are
+    /// no longer implicitly consumed by the callee: the caller needs a
+    /// `TemporaryEnd` candidate to free a merely-read operand. Consumed
+    /// operands still classify `Dead`. `'heap`-carrying values are exempt:
+    /// the region ledger owns their lifetime.
+    fn temp_rvalue_aggregate(&mut self, expr: &Expr, current: BlockId, temp_drops: &mut Vec<Expr>) {
+        if !matches!(
+            expr.kind,
+            ExprKind::LiteralArray(_)
+                | ExprKind::Tuple(_)
+                | ExprKind::Con { .. }
+                | ExprKind::RecordLiteral { .. }
+        ) {
+            return;
+        }
+        let ty = expr.ty.clone();
+        let generic = matches!(ty, Ty::Param(_) | Ty::Proj(..));
+        if (!generic && !self.grades.needs_drop(&ty)) || self.grades.contains_object(&ty) {
+            return;
+        }
+        let temp = self.next_temp;
+        self.next_temp += 1;
+        self.push_statement(
+            current,
+            Statement::ReturnValue {
+                expr: expr.clone(),
+                destination: ValueDestination::TempThenContinue(temp),
+            },
+        );
+        self.temp_subs.insert(expr.id, temp);
+        temp_drops.push(self.temp_expr(expr.id, expr.span, temp, ty));
+    }
+
     /// Emit `TemporaryEnd` drop candidates for the current statement's temps
     /// (reverse creation order). Skipped when the block already terminated:
     /// exits consume their value, and unreachable candidates have no register
@@ -1105,8 +1140,14 @@ impl<'types> Builder<'types> {
                 ..
             } => {
                 let mut current = self.lower_expr(callee, current, temp_drops);
+                // An rvalue aggregate receiver (`[1, 2].show()`) is a call
+                // operand like any argument.
+                if let ExprKind::Member(Some(receiver), ..) = &callee.kind {
+                    self.temp_rvalue_aggregate(receiver, current, temp_drops);
+                }
                 for arg in args {
                     current = self.lower_expr(&arg.value, current, temp_drops);
+                    self.temp_rvalue_aggregate(&arg.value, current, temp_drops);
                 }
                 let temp = self.next_temp;
                 self.next_temp += 1;

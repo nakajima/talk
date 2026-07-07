@@ -371,6 +371,18 @@ impl<'a> Lowering<'a> {
         {
             *ret = self_ty.clone();
         }
+        // V1 inout has exactly one write-back slot: the receiver / first
+        // parameter. A `mut` parameter anywhere else would silently drop
+        // its mutations, so reject it until the convention generalizes.
+        for param in params.iter().skip(1) {
+            if matches!(param, CheckTy::Borrow(perm, _) if perm.is_exclusive()) {
+                self.diagnostics.push(format!(
+                    "lowering: a `mut` parameter is only supported as the receiver or first \
+                     parameter for now ({symbol})"
+                ));
+                break;
+            }
+        }
         let param_tys: Vec<TyId> = params.iter().map(|t| self.map_ty(t)).collect();
         let ret_ty = self.map_ty(&ret);
         // Inout self: the ret continuation of a mutating method carries

@@ -13,7 +13,7 @@ public struct TestCase {
 	let block: () -> ()
 }
 
-public func test(name: String, block: () -> ()) 'registerTest {
+public func test(consume name: String, consume block: () -> ()) 'registerTest {
 	'registerTest(TestCase(name: name, block: block))
 }
 

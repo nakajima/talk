@@ -31,7 +31,7 @@ pub mod tests {
             func_signature::FuncSignature,
             generic_decl::GenericDecl,
             match_arm::MatchArm,
-            parameter::Parameter,
+            parameter::{ParamMode, Parameter},
             pattern::{Pattern, PatternKind},
             stmt::{Stmt, StmtKind},
             type_annotation::{TypeAnnotation, TypeAnnotationKind},
@@ -59,6 +59,19 @@ pub mod tests {
     macro_rules! param {
         ($id:expr, $name:expr) => {
             Parameter {
+                mode: None,
+                mode_span: None,
+                id: NodeID::ANY,
+                name: Name::Resolved($id.into(), $name.into()),
+                name_span: Span::ANY,
+                type_annotation: None,
+                span: Span::ANY,
+            }
+        };
+        ($id:expr, $name:expr, mode: $mode:expr) => {
+            Parameter {
+                mode: $mode,
+                mode_span: None,
                 id: NodeID::ANY,
                 name: Name::Resolved($id.into(), $name.into()),
                 name_span: Span::ANY,
@@ -68,6 +81,19 @@ pub mod tests {
         };
         ($id:expr, $name:expr, $ty:expr) => {
             Parameter {
+                mode: None,
+                mode_span: None,
+                id: NodeID::ANY,
+                name: Name::Resolved($id.into(), $name.into()),
+                name_span: Span::ANY,
+                type_annotation: Some($ty),
+                span: Span::ANY,
+            }
+        };
+        ($id:expr, $name:expr, $ty:expr, mode: $mode:expr) => {
+            Parameter {
+                mode: $mode,
+                mode_span: None,
                 id: NodeID::ANY,
                 name: Name::Resolved($id.into(), $name.into()),
                 name_span: Span::ANY,
@@ -448,7 +474,10 @@ pub mod tests {
                     captures: vec![],
                     where_clause: None,
                     effects: Default::default(),
-                    params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y"),],
+                    params: vec![
+                        param!(ParamLocalId(1), "x", mode: Some(ParamMode::Borrow)),
+                        param!(ParamLocalId(2), "y", mode: Some(ParamMode::Borrow)),
+                    ],
                     body: any_block!(vec![
                         any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x")))
                             .try_into()
@@ -564,7 +593,10 @@ pub mod tests {
                     captures: vec![],
                     where_clause: None,
                     effects: Default::default(),
-                    params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y")],
+                    params: vec![
+                        param!(ParamLocalId(1), "x", mode: Some(ParamMode::Borrow)),
+                        param!(ParamLocalId(2), "y", mode: Some(ParamMode::Borrow)),
+                    ],
                     body: any_block!(vec![
                         any_decl!(DeclKind::Let {
                             lhs: Pattern {
@@ -587,7 +619,9 @@ pub mod tests {
                                 captures: vec![],
                                 where_clause: None,
                                 effects: Default::default(),
-                                params: vec![param!(ParamLocalId(3), "x")],
+                                params: vec![
+                                    param!(ParamLocalId(3), "x", mode: Some(ParamMode::Borrow))
+                                ],
                                 body: any_block!(vec![
                                     any_stmt!(StmtKind::Expr(variable!(ParamLocalId(3), "x")))
                                         .into(),
@@ -667,7 +701,9 @@ pub mod tests {
                                 captures: vec![],
                                 where_clause: None,
                                 effects: Default::default(),
-                                params: vec![param!(ParamLocalId(1), "x")],
+                                params: vec![
+                                    param!(ParamLocalId(1), "x", mode: Some(ParamMode::Borrow))
+                                ],
                                 body: any_block!(vec![
                                     any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x")))
                                         .into(),
@@ -800,7 +836,8 @@ pub mod tests {
                             name: Name::Resolved(test_type_param(1), "T".into()),
                             name_span: Span::ANY,
                             generics: vec![]
-                        })
+                        }),
+                        mode: Some(ParamMode::Borrow)
                     ),],
                     body: any_block!(vec![
                         any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "t"))).into(),
@@ -834,6 +871,8 @@ pub mod tests {
                 .into(),
                 type_args: vec![],
                 args: vec![any!(CallArg, {
+                    mode: None,
+                    mode_span: None,
                     label: Label::Positional(0),
                     label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralString("$0 = add int 1 2".into()))
@@ -965,7 +1004,8 @@ pub mod tests {
                                     name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                                     name_span: Span::ANY,
                                     generics: vec![],
-                                })
+                                }),
+                                mode: Some(ParamMode::Consume)
                             )
                         ],
                         body: any_block!(vec![
@@ -1083,7 +1123,8 @@ pub mod tests {
                                     name: Name::Resolved(test_type_param(1), "T".into()),
                                     name_span: Span::ANY,
                                     generics: vec![],
-                                })
+                                }),
+                                mode: Some(ParamMode::Consume)
                             )
                         ],
                         body: any_block!(vec![
@@ -1383,6 +1424,8 @@ pub mod tests {
                         where_clause: None,
                         effects: Default::default(),
                         params: vec![Parameter {
+                            mode: None,
+                            mode_span: None,
                             id: NodeID::ANY,
                             name: Name::Resolved(
                                 Symbol::ParamLocal(ParamLocalId(2)),
@@ -1550,6 +1593,8 @@ pub mod tests {
                         ),
                         effects: Default::default(),
                         params: vec![Parameter {
+                            mode: None,
+                            mode_span: None,
                             id: NodeID::ANY,
                             name: Name::Resolved(ParamLocalId::from(1u32).into(), "self".into()),
                             name_span: Span::ANY,
@@ -1616,6 +1661,8 @@ pub mod tests {
                                 "buzz".into()
                             ),
                             params: vec![Parameter {
+                                mode: None,
+                                mode_span: None,
                                 id: NodeID::ANY,
                                 name: Name::Resolved(
                                     ParamLocalId::from(1u32).into(),
@@ -1790,6 +1837,8 @@ pub mod tests {
         assert_eq!(
             *params,
             vec![any!(Parameter ,{
+                mode: Some(ParamMode::Consume),
+                mode_span: None,
                 name: Name::Resolved(ParamLocalId(1).into(), "x".into()),
                 name_span: Span::ANY,
                 type_annotation: Some(any!(TypeAnnotation, {
@@ -1826,6 +1875,8 @@ pub mod tests {
         assert_eq!(
             *args,
             vec![any!(Parameter, {
+                    mode: Some(ParamMode::Borrow),
+                    mode_span: None,
                 name: Name::Resolved(Symbol::ParamLocal(ParamLocalId(2)), "x".into()),
                 name_span: Span::ANY,
                 type_annotation: None
@@ -1859,6 +1910,8 @@ pub mod tests {
                 effect_name_span: Span::ANY,
                 type_args: vec![],
                 args: vec![any!(CallArg, {
+                    mode: None,
+                    mode_span: None,
                     label: Label::Positional(0),
                     label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralInt("123".into()))

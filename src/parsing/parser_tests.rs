@@ -21,7 +21,7 @@ pub mod tests {
                 InlineIRInstruction, InlineIRInstructionKind, Register, Value,
             },
             match_arm::MatchArm,
-            parameter::Parameter,
+            parameter::{ParamMode, Parameter},
             pattern::{Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind},
             record_field::{RecordField, RecordFieldTypeAnnotation},
             stmt::{Stmt, StmtKind},
@@ -898,6 +898,8 @@ pub mod tests {
                 captures: vec![],
                 where_clause: None,
                 params: vec![Parameter {
+                    mode: None,
+                    mode_span: None,
                     id: NodeID::ANY,
                     span: Span::ANY,
                     name: "a".into(),
@@ -1089,6 +1091,8 @@ pub mod tests {
                 where_clause: None,
                 params: vec![
                     Parameter {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name_span: Span::ANY,
@@ -1096,6 +1100,8 @@ pub mod tests {
                         type_annotation: None,
                     },
                     Parameter {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: "two".into(),
@@ -1129,6 +1135,8 @@ pub mod tests {
                 captures: vec![],
                 where_clause: None,
                 params: vec![Parameter {
+                    mode: None,
+                    mode_span: None,
                     id: NodeID::ANY,
                     span: Span::ANY,
                     name: "name".into(),
@@ -1179,6 +1187,8 @@ pub mod tests {
                 callee: any_expr!(ExprKind::Variable("fizz".into())).into(),
                 type_args: vec![],
                 args: vec![CallArg {
+                    mode: None,
+                    mode_span: None,
                     id: NodeID::ANY,
                     span: Span::ANY,
                     label: "foo".into(),
@@ -1200,6 +1210,8 @@ pub mod tests {
                 callee: any_expr!(ExprKind::Variable("fizz".into())).into(),
                 type_args: vec![],
                 args: vec![CallArg {
+                    mode: None,
+                    mode_span: None,
                     id: NodeID::ANY,
                     span: Span::ANY,
                     label: Label::Positional(0),
@@ -1244,6 +1256,8 @@ pub mod tests {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     args: vec![Parameter {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: "x".into(),
@@ -1782,6 +1796,8 @@ pub mod tests {
                 .into(),
                 type_args: vec![],
                 args: vec![CallArg {
+                    mode: None,
+                    mode_span: None,
                     id: NodeID::ANY,
                     span: Span::ANY,
                     label: Label::Positional(0),
@@ -2151,6 +2167,8 @@ pub mod tests {
                 captures: vec![],
                 where_clause: None,
                 params: vec![Parameter {
+                    mode: None,
+                    mode_span: None,
                     id: NodeID::ANY,
                     span: Span::ANY,
                     name: Name::Raw("using".into()),
@@ -2159,13 +2177,22 @@ pub mod tests {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         kind: TypeAnnotationKind::Func {
+                            // Unadorned function-type params are shared
+                            // borrows (ADR 0018 borrow-by-default).
                             params: vec![TypeAnnotation {
                                 id: NodeID::ANY,
                                 span: Span::ANY,
-                                kind: TypeAnnotationKind::Nominal {
-                                    name: "T".into(),
-                                    name_span: Span::ANY,
-                                    generics: vec![]
+                                kind: TypeAnnotationKind::Borrow {
+                                    mutable: false,
+                                    inner: Box::new(TypeAnnotation {
+                                        id: NodeID::ANY,
+                                        span: Span::ANY,
+                                        kind: TypeAnnotationKind::Nominal {
+                                            name: "T".into(),
+                                            name_span: Span::ANY,
+                                            generics: vec![]
+                                        }
+                                    })
                                 }
                             }],
                             effects: Default::default(),
@@ -2774,6 +2801,8 @@ pub mod tests {
                 body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: Name::Raw("init".into()),
                     params: vec![Parameter {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: Name::Raw("age".into()),
@@ -3267,6 +3296,8 @@ pub mod tests {
                 generics: vec![],
                 where_clause: None,
                 params: vec![any!(Parameter, {
+                    mode: None,
+                    mode_span: None,
                     name: "x".into(),
                     name_span: Span::ANY,
                     type_annotation: Some(nominal_annotation!("Int"))
@@ -3282,6 +3313,8 @@ pub mod tests {
                 effect_name_span: Span::ANY,
                 body: any!(Block, {
                     args: vec![any!(Parameter, {
+                    mode: None,
+                    mode_span: None,
                         name: "x".into(),
                         name_span: Span::ANY,
                         type_annotation: None,
@@ -3303,6 +3336,8 @@ pub mod tests {
                 captures: vec![],
                 where_clause: None,
                 params: vec![any!(Parameter, {
+                    mode: None,
+                    mode_span: None,
                     name: "x".into(),
                     name_span: Span::ANY,
                     type_annotation: None,
@@ -3316,6 +3351,8 @@ pub mod tests {
                     args: Default::default(),
                     body: vec![
                         any_expr_stmt!(ExprKind::CallEffect { effect_name: "fizz".into(), effect_name_span: Span::ANY, type_args: vec![], args: vec![any!(CallArg, {
+                    mode: None,
+                    mode_span: None,
                             label: Label::Positional(0),
                             label_span: Span::ANY,
                             value: any_expr!(ExprKind::Variable("x".into()))
@@ -4454,6 +4491,166 @@ pub mod tests {
             assert!(arms[1].body.body.is_empty());
         } else {
             panic!("expected match expression, got {:?}", stmt.kind);
+        }
+    }
+
+    #[test]
+    fn parses_parameter_modes() {
+        let parsed =
+            parse("func f(a: A, mut b: B, consume c: C, borrow d: D, consume mut e: E) {}");
+
+        let Node::Decl(Decl {
+            kind: DeclKind::Func(func),
+            ..
+        }) = &parsed.roots[0]
+        else {
+            panic!("expected func decl, got {:?}", parsed.roots[0]);
+        };
+
+        let modes: Vec<Option<ParamMode>> = func.params.iter().map(|p| p.mode).collect();
+        assert_eq!(
+            modes,
+            vec![
+                None,
+                Some(ParamMode::Mut),
+                Some(ParamMode::Consume),
+                Some(ParamMode::Borrow),
+                Some(ParamMode::ConsumeMut),
+            ]
+        );
+        let names: Vec<String> = func.params.iter().map(|p| p.name.name_str()).collect();
+        assert_eq!(names, vec!["a", "b", "c", "d", "e"]);
+        assert!(func.params[0].mode_span.is_none());
+        assert!(func.params[1].mode_span.is_some());
+        assert!(func.params[4].mode_span.is_some());
+    }
+
+    #[test]
+    fn parses_init_parameter_modes() {
+        let parsed = parse("struct User { init(borrow config: Config, name: String) {} }");
+
+        let Node::Decl(Decl {
+            kind: DeclKind::Struct { body, .. },
+            ..
+        }) = &parsed.roots[0]
+        else {
+            panic!("expected struct decl, got {:?}", parsed.roots[0]);
+        };
+
+        let Decl {
+            kind: DeclKind::Init { params, .. },
+            ..
+        } = &body.decls[0]
+        else {
+            panic!("expected init decl, got {:?}", body.decls[0]);
+        };
+
+        assert_eq!(params[0].mode, Some(ParamMode::Borrow));
+        assert_eq!(params[0].name.name_str(), "config");
+        assert_eq!(params[1].mode, None);
+    }
+
+    #[test]
+    fn parses_mode_keywords_as_parameter_names() {
+        // `consume` and `borrow` are contextual: not followed by another
+        // identifier, they are ordinary parameter names.
+        let parsed = parse("func f(consume: Int, borrow: Int) { consume }");
+
+        let Node::Decl(Decl {
+            kind: DeclKind::Func(func),
+            ..
+        }) = &parsed.roots[0]
+        else {
+            panic!("expected func decl, got {:?}", parsed.roots[0]);
+        };
+
+        assert_eq!(func.params.len(), 2);
+        assert_eq!(func.params[0].name.name_str(), "consume");
+        assert_eq!(func.params[0].mode, None);
+        assert_eq!(func.params[1].name.name_str(), "borrow");
+        assert_eq!(func.params[1].mode, None);
+    }
+
+    #[test]
+    fn parses_block_arg_modes() {
+        let parsed = parse("xs.each { consume x in x }");
+
+        let Node::Stmt(stmt) = &parsed.roots[0] else {
+            panic!("expected stmt, got {:?}", parsed.roots[0]);
+        };
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Call { trailing_block, .. },
+            ..
+        }) = &stmt.kind
+        else {
+            panic!("expected call, got {:?}", stmt.kind);
+        };
+        let block = trailing_block.as_ref().expect("expected trailing block");
+        assert_eq!(block.args.len(), 1);
+        assert_eq!(block.args[0].name.name_str(), "x");
+        assert_eq!(block.args[0].mode, Some(ParamMode::Consume));
+    }
+
+    #[test]
+    fn parses_function_type_parameter_modes() {
+        // In function TYPE position the modes desugar onto the existing
+        // annotation kinds: `mut T` is an exclusive borrow, `consume T`
+        // (and `consume mut T`) is the bare owned type.
+        let parsed = parse("func f(fn: (mut Foo, consume Bar, consume mut Qux, Baz) -> Baz) {}");
+
+        let Node::Decl(Decl {
+            kind: DeclKind::Func(func),
+            ..
+        }) = &parsed.roots[0]
+        else {
+            panic!("expected func decl, got {:?}", parsed.roots[0]);
+        };
+
+        let Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Func { params, .. },
+            ..
+        }) = &func.params[0].type_annotation
+        else {
+            panic!("expected func type annotation");
+        };
+
+        assert_eq!(params.len(), 4);
+        assert!(matches!(
+            &params[0].kind,
+            TypeAnnotationKind::Borrow { mutable: true, .. }
+        ));
+        assert!(
+            matches!(&params[1].kind, TypeAnnotationKind::Nominal { name, .. } if name.name_str() == "Bar")
+        );
+        assert!(
+            matches!(&params[2].kind, TypeAnnotationKind::Nominal { name, .. } if name.name_str() == "Qux")
+        );
+        // Unadorned function-type params are borrow-by-default (ADR 0018).
+        let TypeAnnotationKind::Borrow {
+            mutable: false,
+            inner,
+        } = &params[3].kind
+        else {
+            panic!("expected shared borrow, got {:?}", params[3].kind);
+        };
+        assert!(
+            matches!(&inner.kind, TypeAnnotationKind::Nominal { name, .. } if name.name_str() == "Baz")
+        );
+    }
+
+    #[test]
+    fn rejects_repeated_or_misordered_parameter_modes() {
+        for source in [
+            "func f(consume consume x: Int) {}",
+            "func f(mut consume x: Int) {}",
+            "func f(borrow consume x: Int) {}",
+        ] {
+            let lexer = Lexer::new(source);
+            let parser = Parser::new("-", FileID(0), lexer);
+            assert!(
+                parser.parse().is_err(),
+                "expected parse error for {source:?}"
+            );
         }
     }
 

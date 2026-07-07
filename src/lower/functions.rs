@@ -265,27 +265,38 @@ impl<'a> Lowering<'a> {
         }
         impl ReceiverScan<'_> {
             fn enter_expr(&mut self, expr: &Expr) {
-                let ExprKind::Call { callee, .. } = &expr.kind else {
+                let ExprKind::Call { callee, args, .. } = &expr.kind else {
                     return;
                 };
-                let (ExprKind::Member(Some(receiver), ..) | ExprKind::Proj(receiver, ..)) =
-                    &callee.kind
-                else {
-                    return;
-                };
-                let Some(symbol) = receiver_root_symbol(receiver) else {
-                    return;
-                };
-                let target = match &callee.member_resolution {
-                    Some(crate::types::output::MemberResolution::Direct(s)) => *s,
-                    Some(crate::types::output::MemberResolution::ViaConformance {
-                        witness,
-                        ..
-                    }) => *witness,
-                    None => return,
-                };
-                if self.mutating.contains(&target) {
-                    self.found.insert(symbol);
+                match &callee.kind {
+                    ExprKind::Member(Some(receiver), ..) | ExprKind::Proj(receiver, ..) => {
+                        let Some(symbol) = receiver_root_symbol(receiver) else {
+                            return;
+                        };
+                        let target = match &callee.member_resolution {
+                            Some(crate::types::output::MemberResolution::Direct(s)) => *s,
+                            Some(crate::types::output::MemberResolution::ViaConformance {
+                                witness,
+                                ..
+                            }) => *witness,
+                            None => return,
+                        };
+                        if self.mutating.contains(&target) {
+                            self.found.insert(symbol);
+                        }
+                    }
+                    // A mutating free function (`mut` first parameter,
+                    // ADR 0018) writes back through its first argument.
+                    ExprKind::Variable(name) => {
+                        if let Ok(symbol) = name.symbol()
+                            && self.mutating.contains(&symbol)
+                            && let Some(arg) = args.first()
+                            && let Some(root) = receiver_root_symbol(&arg.value)
+                        {
+                            self.found.insert(root);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

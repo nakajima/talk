@@ -28,7 +28,7 @@ public struct Array<Element> {
 		_load<Element>(ptr)
 	}
 
-	mut func push(value: Element) -> () {
+	mut func push(consume value: Element) -> () {
 		let new_capacity = if self.capacity == 0 {
 			1
 		} else {
@@ -47,7 +47,7 @@ public struct Array<Element> {
 		self.count = self.count + 1
 	}
 
-	mut func set(index: Int, value: Element) -> Void {
+	mut func set(index: Int, consume value: Element) -> Void {
 		let storage = self.uniqued_storage()
 		storage.set(index, value)
 	}

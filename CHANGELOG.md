@@ -29,7 +29,14 @@ completions are all read through count/get/value accessors. Returned
 strings are borrowed `TalkStringRef` slices tied to the result handle's
 lifetime, so host wrappers should copy them before freeing the handle.
 Raw string/byte APIs still use `TalkResult` for formatting, HTML
-highlighting, IR/bytecode rendering, and bytecode emission.
+highlighting, IR/bytecode rendering, and bytecode emission. The embedded
+facade now reports panic payloads instead of only `talk-c: internal
+panic`, making release-build failures easier to diagnose from Swift.
+
+Core and stdlib caches now use retryable `OnceLock` initialization instead
+of poisonable `lazy_static` cells. A failed embedded initialization no
+longer permanently poisons the process and turns every later call into a
+secondary `Once instance has previously been poisoned` panic.
 
 The analysis layer gained protocol-independent goto-definition and rename
 entry points so embedders can call the language-service functionality

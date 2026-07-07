@@ -73,10 +73,16 @@ impl<'a> Lowering<'a> {
         }
         arg_exprs.extend(args.iter().map(|a| &a.value));
 
-        // Inout self: the callee's ret carries [result, Self]; write Self
-        // back into the receiver's cell, then deliver the result to k.
+        // Inout: the callee's ret carries [result, value]; write the value
+        // back into the caller's place (the receiver, or a free function's
+        // first `mut` argument), then deliver the result to k.
         let k = if self.mutating.contains(&symbol) {
-            match self.writeback_cont(&prefix, label, ctx, k) {
+            let target = match &prefix {
+                Prefix::Receiver(receiver) => Some(*receiver),
+                Prefix::None => args.first().map(|arg| &arg.value),
+                Prefix::Value(_) => None,
+            };
+            match target.and_then(|target| self.writeback_cont(target, label, ctx, k)) {
                 Some(adapter) => adapter,
                 None => {
                     self.diagnostics.push(
@@ -290,20 +296,18 @@ impl<'a> Lowering<'a> {
         )
     }
 
-    /// The write-back adapter for a mutating-method call: receives
-    /// [result, Self], writes Self back through the receiver's assignment
-    /// target, and passes the result on (the "caller performs the
+    /// The write-back adapter for an inout call: receives [result, value],
+    /// writes the value back through the target's assignment place (a
+    /// mutating method's receiver, or a free function's first `mut`
+    /// argument), and passes the result on (the "caller performs the
     /// write-back" half of inout — Racordon et al., JOT 2022).
     pub(super) fn writeback_cont(
         &mut self,
-        prefix: &Prefix<'_>,
+        receiver: &Expr,
         label: Label,
         ctx: &Ctx,
         k: ExprId,
     ) -> Option<ExprId> {
-        let Prefix::Receiver(receiver) = prefix else {
-            return None;
-        };
         // An rvalue receiver has no home: the updated Self dies with the
         // call (e.g. `xs.iter().index(..)`) — unpack the pair and pass the
         // result on without a store.

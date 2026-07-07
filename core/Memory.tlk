@@ -14,7 +14,7 @@ public func _alloc<Element>(count: Int) 'alloc -> RawPtr {
 	@_ir(count) { %? = alloc Element $0 }
 }
 
-public func _store<Element>(ptr: RawPtr, value: Element) 'alloc -> Void {
+public func _store<Element>(ptr: RawPtr, consume value: Element) 'alloc -> Void {
 	@_ir(value, ptr) { store Element $0 $1 }
 }
 
@@ -50,7 +50,7 @@ public struct Storage<Element> {
 		_load<Element>(ptr)
 	}
 
-	func set(index: Int, value: Element) -> Void {
+	func set(index: Int, consume value: Element) -> Void {
 		let ptr: RawPtr = @_ir(self.base, index) { %? = gep Element $0 $1 }
 		_store<Element>(ptr, value)
 	}

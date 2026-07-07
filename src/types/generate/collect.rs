@@ -854,7 +854,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             .params
             .iter()
             .map(|p| match &p.type_annotation {
-                Some(annotation) => self.lower_annotation(annotation),
+                Some(annotation) => {
+                    let ty = self.lower_annotation(annotation);
+                    elaborate::apply_param_mode(self.catalog, p.mode, ty)
+                }
                 None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),
             })
             .collect();
@@ -924,7 +927,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             .params
             .iter()
             .map(|p| match &p.type_annotation {
-                Some(annotation) => self.lower_annotation(annotation),
+                Some(annotation) => {
+                    let ty = self.lower_annotation(annotation);
+                    elaborate::apply_param_mode(self.catalog, p.mode, ty)
+                }
                 None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),
             })
             .collect();
@@ -1089,7 +1095,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         let params = params
             .iter()
             .map(|p| match &p.type_annotation {
-                Some(annotation) => self.lower_annotation(annotation),
+                Some(annotation) => {
+                    let ty = self.lower_annotation(annotation);
+                    elaborate::apply_param_mode(self.catalog, p.mode, ty)
+                }
                 // Unannotated effect params share an outer variable that
                 // perform sites and handlers refine during checking.
                 None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),

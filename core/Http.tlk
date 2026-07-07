@@ -81,7 +81,7 @@ public struct HttpServer 'heap {
 		self
 	}
 
-	public mut func get(path: String, handler: () -> String) -> () {
+	public mut func get(consume path: String, consume handler: () -> String) -> () {
 		let wrapped = RouteHandler(invoke: handler)
 		let node = RouteNode(path: path, handler: wrapped, next: self.routes)
 		self.routes = Optional.some(node)

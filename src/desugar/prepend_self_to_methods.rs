@@ -86,6 +86,8 @@ impl PrependSelfToMethods {
             ReceiverMode::Consuming => self_ty.kind,
         };
         Parameter {
+            mode: None,
+            mode_span: None,
             id: NodeID(self.file_id, self.node_ids.next_id()),
             name: "self".into(),
             name_span,
@@ -148,6 +150,8 @@ pub mod tests {
                         effects: Default::default(),
                         params: vec![
                             Parameter {
+                                mode: None,
+                                mode_span: None,
                                 id: NodeID::ANY,
                                 span: Span::ANY,
                                 name: "self".into(),
@@ -160,6 +164,8 @@ pub mod tests {
                                 }))
                             },
                             Parameter {
+                                mode: None,
+                                mode_span: None,
                                 id: NodeID::ANY,
                                 span: Span::ANY,
                                 name: "x".into(),
@@ -230,6 +236,8 @@ pub mod tests {
                 body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: "init".into(),
                     params: vec![Parameter {
+                        mode: None,
+                        mode_span: None,
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: "self".into(),

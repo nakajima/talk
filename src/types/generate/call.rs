@@ -28,7 +28,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     ) -> Ty {
         let arg_count = args.len() + usize::from(trailing_block.is_some());
 
-        match self.store.shallow(&callee_ty) {
+        // Calling a function value is a read: a borrowed callee (the
+        // borrow-by-default type of a function-typed parameter) peels to
+        // the function it borrows.
+        let mut callee_shallow = self.store.shallow(&callee_ty);
+        while let Ty::Borrow(_, inner) = callee_shallow {
+            callee_shallow = self.store.shallow(&inner);
+        }
+        match callee_shallow {
             Ty::Func(params, ret, eff) => {
                 if params.len() != arg_count {
                     self.diagnostics.errors.push((
