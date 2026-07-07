@@ -29,7 +29,9 @@ public struct Array<Element> {
 	}
 
 	mut func push(value: Element) -> () {
-		let new_capacity = if self.capacity == 0 { 1 } else {
+		let new_capacity = if self.capacity == 0 {
+			1
+		} else {
 			self.capacity * 2
 		}
 
@@ -54,7 +56,9 @@ public struct Array<Element> {
 	// static data) is copied before the first write, so writes never
 	// alias — Arrays keep value semantics.
 	mut func uniqued_storage() -> &mut Storage<Element> {
-		if _is_unique(self.storage.base) { return self.storage } else {
+		if _is_unique(self.storage.base) {
+			return self.storage
+		} else {
 			let fresh = self.allocate_with_capacity(self.capacity)
 			self.storage = fresh
 			return self.storage
@@ -73,6 +77,10 @@ public struct Array<Element> {
 			i = i + 1
 		}
 		fresh
+	}
+
+	func is_empty() -> Bool {
+		self.count == 0
 	}
 }
 

@@ -26,7 +26,9 @@ public protocol Equatable<RHS = Self> {
 	func equals(rhs: &RHS) -> Bool
 
 	func notEquals(rhs: &RHS) -> Bool {
-		if self.equals(rhs: rhs) { false } else {
+		if self.equals(rhs: rhs) {
+			false
+		} else {
 			true
 		}
 	}

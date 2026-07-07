@@ -647,10 +647,14 @@ impl<'a> Formatter<'a> {
                 }
             }
             StmtKind::If(cond, then_block, else_block) => {
-                let mut result = concat_space(
-                    text("if"),
-                    concat_space(self.format_expr(cond), self.format_block(then_block)),
-                );
+                let has_else = else_block.is_some();
+                let then_doc = if has_else {
+                    self.format_block_multiline(then_block)
+                } else {
+                    self.format_block(then_block)
+                };
+                let mut result =
+                    concat_space(text("if"), concat_space(self.format_expr(cond), then_doc));
 
                 if let Some(else_block) = else_block {
                     result = concat_space(
@@ -1064,11 +1068,14 @@ impl<'a> Formatter<'a> {
             );
         }
 
+        let force_trailing_block_multiline = trailing_block.is_some() && Self::is_test_call(callee);
+
         // If we have a trailing block and no args, omit parens
         if let Some(trailing_block) = trailing_block
             && args.is_empty()
         {
-            let block_doc = self.format_block_inner(trailing_block, true);
+            let block_doc =
+                self.format_block_inner(trailing_block, !force_trailing_block_multiline);
             return group(concat(result, concat(text(" "), block_doc)));
         }
 
@@ -1090,11 +1097,15 @@ impl<'a> Formatter<'a> {
 
         // Add trailing block after parens if present
         if let Some(block) = trailing_block {
-            let block_doc = self.format_block_inner(block, true);
+            let block_doc = self.format_block_inner(block, !force_trailing_block_multiline);
             group(concat(call_doc, concat(text(" "), block_doc)))
         } else {
             call_doc
         }
+    }
+
+    fn is_test_call(callee: &Expr) -> bool {
+        matches!(&callee.kind, ExprKind::Variable(name) if name.name_str() == "test")
     }
 
     fn format_call_arg(&self, arg: &CallArg) -> Doc {
@@ -1755,13 +1766,16 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_if(&self, cond: &Expr, then_block: &Block, else_block: &Block) -> Doc {
-        let mut result = concat_space(
-            text("if"),
-            concat_space(self.format_expr(cond), self.format_block(then_block)),
-        );
+        let has_else =
+            !else_block.body.is_empty() || else_block.span != crate::span::Span::SYNTHESIZED;
+        let then_doc = if has_else {
+            self.format_block_multiline(then_block)
+        } else {
+            self.format_block(then_block)
+        };
+        let mut result = concat_space(text("if"), concat_space(self.format_expr(cond), then_doc));
 
-        // Only add else block if it's not empty
-        if !else_block.body.is_empty() {
+        if has_else {
             result = concat_space(
                 result,
                 concat_space(text("else"), self.format_block_inner(else_block, false)),
@@ -2648,7 +2662,19 @@ mod formatter_tests {
         assert_eq!(format_code("if true { 123 }", 80), "if true { 123 }");
         assert_eq!(
             format_code("if true { 123 } else { 456 }", 80),
-            "if true { 123 } else {\n\t456\n}"
+            "if true {\n\t123\n} else {\n\t456\n}"
+        );
+        assert_eq!(
+            format_code("if true {} else {}", 80),
+            "if true {\n} else {\n}"
+        );
+        assert_eq!(
+            format_code("let value = if true { 123 } else { 456 }", 80),
+            "let value = if true {\n\t123\n} else {\n\t456\n}"
+        );
+        assert_eq!(
+            format_code("let value = if true {} else {}", 80),
+            "let value = if true {\n} else {\n}"
         );
         assert_eq!(
             format_code("if let .some(cwd) = optionalthing { cwd }", 80),
@@ -2978,6 +3004,18 @@ mod formatter_tests {
         // Trailing block with args - space before {
         assert_eq!(format_code("foo(1){ 2 }", 80), "foo(1) { 2 }");
         assert_eq!(format_code("foo(1) { 2 }", 80), "foo(1) { 2 }");
+    }
+
+    #[test]
+    fn test_call_trailing_block_is_multiline() {
+        assert_eq!(
+            format_code("test(\"adds\") { assert(1 + 1 == 2, \"did not add\") }", 80),
+            "test(\"adds\") {\n\tassert(1 + 1 == 2, \"did not add\")\n}"
+        );
+        assert_eq!(
+            format_code("other(\"adds\") { assert(true, \"ok\") }", 80),
+            "other(\"adds\") { assert(true, \"ok\") }"
+        );
     }
 
     #[test]

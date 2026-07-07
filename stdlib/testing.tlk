@@ -1,0 +1,36 @@
+use ./ansi.tlk
+
+public effect 'fail(message: String) -> ()
+public effect 'registerTest(testCase: TestCase) -> ()
+
+public struct Failure {
+	let test_name: String
+	let assertion: String
+}
+
+public struct TestCase {
+	let name: String
+	let block: () -> ()
+}
+
+public func test(name: String, block: () -> ()) 'registerTest {
+	'registerTest(TestCase(name: name, block: block))
+}
+
+public func assert(condition: Bool) 'fail {
+	if !condition { 'fail("assertion failed") }
+}
+
+public func assertMessage(condition: Bool, message: String) 'fail {
+	if !condition { 'fail(message) }
+}
+
+public func report(tests: &Array<TestCase>, failures: &Array<Failure>) {
+	if failures.is_empty() {
+		print(tests.count.show() + " tests passed.")
+	} else {
+		for failure in failures {
+			print(ColorfulString.red(failure.test_name) + ": " + failure.assertion)
+		}
+	}
+}

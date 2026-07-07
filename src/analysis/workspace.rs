@@ -212,6 +212,10 @@ impl Workspace {
                 return false;
             };
 
+            if file_name.ends_with("test.tlk") {
+                return true;
+            }
+
             path.parent() == Some(core_dir.as_path())
                 && crate::compiling::core::CORE_SOURCE_NAMES.contains(&file_name)
                 && doc.text.trim_start().starts_with("// no-core")

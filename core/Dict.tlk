@@ -12,7 +12,9 @@ struct DictNode<Value> 'heap {
 func dict_find<Value>(current: DictNode<Value>?, key: &String) -> Value? {
 	match current {
 		.some(node) -> {
-			if node.key == key { Optional.some(node.value) } else {
+			if node.key == key {
+				Optional.some(node.value)
+			} else {
 				dict_find(node.next, key)
 			}
 		},

@@ -61,7 +61,9 @@ struct RouteNode 'heap {
 func route_walk(current: RouteNode?, path: &Substring) -> Response {
 	match current {
 		.some(node) -> {
-			if path.equals_string(node.path) { Response(200, node.handler.invoke()) } else {
+			if path.equals_string(node.path) {
+				Response(200, node.handler.invoke())
+			} else {
 				route_walk(node.next, path)
 			}
 		},

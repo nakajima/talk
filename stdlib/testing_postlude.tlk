@@ -1,0 +1,3 @@
+use { __talktalk_runAllAndReport } from ./testing_prelude.tlk
+
+__talktalk_runAllAndReport()

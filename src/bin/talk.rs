@@ -75,6 +75,11 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
         },
+        /// Discover and run .test.tlk files.
+        Test {
+            #[arg(value_hint = ValueHint::AnyPath)]
+            paths: Vec<String>,
+        },
         /// Compile Talk source to bytecode or a standalone executable.
         Build(BuildArgs),
         /// Run a serialized Talk bytecode image.
@@ -383,6 +388,23 @@ async fn main() {
                 }
             }
         }
+        Commands::Test { paths } => {
+            let runner = talk::testing::Runner::new(paths.iter().map(std::path::PathBuf::from));
+            match runner.run() {
+                Ok(talk::testing::Outcome::NoTests) => eprintln!("no .test.tlk files found"),
+                Ok(talk::testing::Outcome::Finished(summary)) => {
+                    print!("{}", summary.output);
+                    if summary.failed() {
+                        eprintln!("{} test assertion(s) failed", summary.failures);
+                        std::process::exit(1);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Commands::Check { filenames, json } => {
             use talk::{
                 analysis::{DocumentInput, Workspace},
@@ -476,6 +498,7 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
 ## CLI
 
     talk run [files...]       parse, resolve, typecheck, lower, and run; no file reads stdin
+    talk test [paths...]      discover and run .test.tlk files
     talk check [--json] files typecheck and print diagnostics
     talk repl                 interactive declarations and expressions
     talk format [file]        format source from file or stdin

@@ -1,0 +1,32 @@
+use { ColorfulString } from ansi
+use { Failure, TestCase, fail, registerTest, report } from testing
+
+public let __talktalk_tests = Array<TestCase>(capacity: 0)
+public let __talktalk_failures = Array<Failure>(capacity: 0)
+let __talktalk_current_test = ""
+
+@handle 'registerTest { testCase in
+	__talktalk_tests.push(testCase)
+	continue ()
+}
+
+@handle 'fail { message in
+	print_raw(ColorfulString.red("F"))
+
+	__talktalk_failures.push(
+		Failure(test_name: __talktalk_current_test.to_string(), assertion: message)
+	)
+	continue ()
+}
+
+public func __talktalk_runAllAndReport() -> Int {
+	for testCase in __talktalk_tests {
+		__talktalk_current_test = testCase.name.to_string()
+		testCase.block()
+		print_raw(ColorfulString.green("."))
+	}
+
+	print("")
+	report(__talktalk_tests, __talktalk_failures)
+	__talktalk_failures.count
+}

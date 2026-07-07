@@ -10,6 +10,18 @@
 - Const generics
 - Dependent types????????????
 
+# Macros?????
+- Maybe something like #_assert(true) where we force an underscore because this api sucks
+- then the implementation can be like:
+    #macro _assert { args in
+      // args == [true]
+      if args.count == 1 {
+        assert(args[0], "default message")
+      } else {
+        assert(args[0], args[1])
+      }
+    }
+
 # Grammar
 
 - Bitwise operators

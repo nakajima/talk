@@ -486,7 +486,8 @@ impl Symbol {
             | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
             | Symbol::Enum(EnumId { module_id, .. })
             | Symbol::TypeAlias(TypeAliasId { module_id, .. })
-            | Symbol::TypeParameter(TypeParameterId { module_id, .. }) => module_id,
+            | Symbol::TypeParameter(TypeParameterId { module_id, .. })
+            | Symbol::Effect(EffectId { module_id, .. }) => module_id,
             _ => {
                 tracing::warn!("looking up module id for non-module symbol: {self:?}");
                 return None;
@@ -557,6 +558,7 @@ impl Symbol {
             Symbol::MethodRequirement(method_requirement_id) => {
                 Symbol::MethodRequirement(method_requirement_id.import(module_id))
             }
+            Symbol::Effect(effect_id) => Symbol::Effect(effect_id.import(module_id)),
             _ => self,
         }
     }
@@ -592,6 +594,7 @@ impl Symbol {
             Symbol::MethodRequirement(method_requirement_id) => {
                 Symbol::MethodRequirement(method_requirement_id.import(ModuleId::Current))
             }
+            Symbol::Effect(effect_id) => Symbol::Effect(effect_id.import(ModuleId::Current)),
             _ => unreachable!("{self:?} not exportable"),
         }
     }

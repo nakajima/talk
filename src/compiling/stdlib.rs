@@ -13,7 +13,7 @@ use crate::compiling::{
 
 const TALK_STDLIB_PATH_ENV: &str = "TALK_STDLIB_PATH";
 
-pub const STDLIB_SOURCE_NAMES: &[&str] = &["fs.tlk", "ansi.tlk"];
+pub const STDLIB_SOURCE_NAMES: &[&str] = &["fs.tlk", "ansi.tlk", "testing.tlk"];
 
 lazy_static! {
     static ref STDLIB: Vec<Arc<Module>> = compile_all();
@@ -39,6 +39,7 @@ pub fn stdlib_sources() -> Vec<(&'static str, &'static str)> {
     vec![
         ("fs", include_str!("../../stdlib/fs.tlk")),
         ("ansi", include_str!("../../stdlib/ansi.tlk")),
+        ("testing", include_str!("../../stdlib/testing.tlk")),
     ]
 }
 
@@ -193,15 +194,20 @@ fn compilation_sources() -> Vec<(&'static str, Source)> {
             .collect();
     }
 
+    let stdlib_dir = bundled_compilation_dir();
     stdlib_sources()
         .into_iter()
         .map(|(name, content)| {
             (
                 name,
-                Source::in_memory(format!("stdlib/{name}.tlk").into(), content),
+                Source::in_memory(stdlib_dir.join(format!("{name}.tlk")), content),
             )
         })
         .collect()
+}
+
+fn bundled_compilation_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib")
 }
 
 fn compile_driver(name: &'static str, source: Source, module_id: ModuleId) -> Driver<Typed> {

@@ -345,6 +345,24 @@ impl NameResolver {
             let mut file_imports: Vec<(FileID, String, Vec<(Import, NodeID)>)> = Vec::new();
             for ast in &asts {
                 let mut imports = Vec::new();
+                if Path::new(&ast.path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(".test.tlk"))
+                {
+                    imports.push((
+                        Import {
+                            symbols: ImportedSymbols::All,
+                            path: ImportPath::Package("testing".into()),
+                            path_span: Span {
+                                start: 0,
+                                end: 0,
+                                file_id: ast.file_id,
+                            },
+                        },
+                        NodeID(ast.file_id, 0),
+                    ));
+                }
                 for root in &ast.roots {
                     if let Node::Decl(Decl {
                         id,
@@ -397,18 +415,12 @@ impl NameResolver {
                                 resolved.set_extension("tlk");
                             }
                             let target_path = resolved.to_string_lossy().to_string();
-                            let Some(target_key) =
-                                module_path_keys(&target_path).into_iter().next()
-                            else {
-                                self.diagnostic(
-                                    decl_id,
-                                    NameResolverError::ModuleNotFound(target_path.clone()),
-                                );
-                                continue;
-                            };
 
-                            // Look up the target FileID
-                            let Some(&target_file_id) = self.path_to_file_id.get(&target_key)
+                            // Look up the target FileID. Relative paths may contain `..`
+                            // segments that only match the initial source after canonicalization.
+                            let Some(target_file_id) = module_path_keys(&target_path)
+                                .into_iter()
+                                .find_map(|key| self.path_to_file_id.get(&key).copied())
                             else {
                                 self.diagnostic(
                                     decl_id,
@@ -440,10 +452,10 @@ impl NameResolver {
                                 };
                                 let mut symbols = Vec::new();
                                 for (name, &symbol) in &target_scope.values {
-                                    symbols.push((name.clone(), symbol, false));
+                                    symbols.push((name.clone(), symbol, is_type_symbol(&symbol)));
                                 }
                                 for (name, &symbol) in &target_scope.types {
-                                    symbols.push((name.clone(), symbol, true));
+                                    symbols.push((name.clone(), symbol, is_type_symbol(&symbol)));
                                 }
                                 symbols
                             }
@@ -643,11 +655,10 @@ impl NameResolver {
                 resolved.set_extension("tlk");
             }
             let target_path = resolved.to_string_lossy().to_string();
-            let Some(target_key) = module_path_keys(&target_path).into_iter().next() else {
-                self.diagnostic(scope_id, NameResolverError::ModuleNotFound(target_path));
-                return None;
-            };
-            let Some(&target_file_id) = self.path_to_file_id.get(&target_key) else {
+            let Some(target_file_id) = module_path_keys(&target_path)
+                .into_iter()
+                .find_map(|key| self.path_to_file_id.get(&key).copied())
+            else {
                 self.diagnostic(scope_id, NameResolverError::ModuleNotFound(target_path));
                 return None;
             };

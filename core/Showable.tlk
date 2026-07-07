@@ -49,7 +49,9 @@ extend Int: Showable {
 			result = _digit(digit) + result
 			n = n / 10
 		}
-		if self < 0 { "-" + result } else {
+		if self < 0 {
+			"-" + result
+		} else {
 			result
 		}
 	}
@@ -84,7 +86,9 @@ extend Float: Showable {
 
 extend Bool: Showable {
 	func show() -> String {
-		if self.equals(true) { "true" } else {
+		if self.equals(true) {
+			"true"
+		} else {
 			"false"
 		}
 	}
