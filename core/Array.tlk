@@ -1,5 +1,7 @@
 // no-core
 // unsafe
+use ./Optional.tlk
+use { Iterable, IndexIterable, IndexIterator } from ./Iterable.tlk
 use { Storage, _storage, _load, _store, _is_unique } from ./Memory.tlk
 use { String } from ./String.tlk
 use { Add, Subtract, Multiply, Comparable, Equatable } from ./Operators.tlk
@@ -127,5 +129,21 @@ extend Array<Element: Equatable<Element>>: Equatable {
 		}
 
 		true
+	}
+}
+
+extend Array<Element>: Iterable {
+	func iter() -> IndexIterator<Array<Element>> {
+		IndexIterator(inner: self, position: 0)
+	}
+}
+
+extend Array<Element>: IndexIterable {
+	func _index_iterable_count() -> Int {
+		self.count
+	}
+
+	func _index_iterable_get(index: Int) -> Optional<&Element> {
+		.some(self.get(index))
 	}
 }

@@ -149,6 +149,13 @@ pub enum TypeError {
     UnresolvedVariant {
         label: String,
     },
+    /// The solver hit its hard work limit. This is a fail-closed guard: a
+    /// recursive conformance or associated-type cycle must become a diagnostic,
+    /// never an unbounded compiler or LSP hang.
+    SolverOverflow {
+        limit: usize,
+        constraint: String,
+    },
     Unsupported(String),
 }
 
@@ -370,6 +377,12 @@ impl Display for TypeError {
                 write!(
                     f,
                     "Cannot infer the enum for '.{label}'; add a type annotation"
+                )
+            }
+            TypeError::SolverOverflow { limit, constraint } => {
+                write!(
+                    f,
+                    "Recursive protocol conformance while checking `{constraint}`. The type checker stopped at its safety limit ({limit} steps) instead of hanging. This usually means an associated type or default protocol method depends on the conformance currently being checked; add an explicit associated type binding or rewrite the default to break the cycle."
                 )
             }
             TypeError::Unsupported(what) => {

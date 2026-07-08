@@ -1,6 +1,7 @@
 use super::*;
 use crate::compiling::module::ModuleId;
-use crate::name_resolution::symbol::{EffectId, StructId, TypeParameterId};
+use crate::name_resolution::symbol::{EffectId, ProtocolId, StructId, TypeParameterId};
+use crate::types::catalog::Conformance;
 use crate::types::constraint::CtReason;
 use crate::types::ty::Perm;
 
@@ -66,6 +67,39 @@ fn occurs_check_rejects_infinite_type() {
     h.solve(vec![Constraint::Eq(Ty::Var(var), infinite, origin())]);
     assert_eq!(h.errors.len(), 1);
     assert!(matches!(h.errors[0].0, TypeError::InfiniteType { .. }));
+}
+
+#[test]
+fn recursive_conformance_reports_solver_overflow_instead_of_looping() {
+    let mut h = Harness::new();
+    let ty = Symbol::Struct(StructId::new(ModuleId::Current, 1));
+    let protocol = Symbol::Protocol(ProtocolId::new(ModuleId::Current, 1));
+    let protocol_ref = ProtocolRef::bare(protocol);
+
+    h.catalog.conformances.insert(
+        (ty, protocol_ref.clone()),
+        Conformance {
+            context: vec![Predicate::Conforms {
+                ty: Ty::Nominal(ty, vec![]),
+                protocol: protocol_ref.clone(),
+            }],
+            ..Default::default()
+        },
+    );
+
+    h.solve(vec![Constraint::Conforms {
+        ty: Ty::Nominal(ty, vec![]),
+        protocol: protocol_ref,
+        origin: origin(),
+    }]);
+
+    assert!(
+        h.errors
+            .iter()
+            .any(|(error, _)| matches!(error, TypeError::SolverOverflow { .. })),
+        "expected solver overflow diagnostic, got {:?}",
+        h.errors
+    );
 }
 
 #[test]

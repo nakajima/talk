@@ -32,15 +32,11 @@ public struct Response {
 	}
 }
 
-extend Response: Into {
-	typealias Target = Response
-
+extend Response: Into<Response> {
 	consuming func into() -> Response { self }
 }
 
-extend String: Into {
-	typealias Target = Response
-
+extend String: Into<Response> {
 	consuming func into() -> Response {
 		Response(200, self)
 	}

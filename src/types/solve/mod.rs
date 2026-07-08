@@ -53,6 +53,8 @@ use crate::types::ty::{
     RowVar, Scheme, SchemeParam, Ty, TyFold, TyVar, match_pattern,
 };
 
+const SOLVER_STEP_LIMIT: usize = 100_000;
+
 /// The per-binding-group solver. Borrows the checker's tables; owns nothing.
 /// Dropped (with any leftover state) when the group is done.
 pub struct Solver<'s> {
@@ -101,9 +103,24 @@ impl<'s> Solver<'s> {
         // only then has the extent's row content surfaced (LIFO, so an
         // inner handler filters before the outer one it feeds).
         let mut handler_boundaries: Vec<Constraint> = vec![];
+        let mut steps = 0usize;
         loop {
             let generation = self.store.generation();
             while let Some(constraint) = queue.pop() {
+                steps += 1;
+                if steps > SOLVER_STEP_LIMIT {
+                    let node = Self::constraint_origin(&constraint)
+                        .map_or(NodeID::SYNTHESIZED, |origin| origin.node);
+                    let constraint = self.constraint_summary(&constraint);
+                    self.errors.push((
+                        TypeError::SolverOverflow {
+                            limit: SOLVER_STEP_LIMIT,
+                            constraint,
+                        },
+                        node,
+                    ));
+                    return vec![];
+                }
                 match constraint {
                     Constraint::HandleEffect { .. } => handler_boundaries.push(constraint),
                     Constraint::Eq(a, b, origin) => {
@@ -424,6 +441,104 @@ impl<'s> Solver<'s> {
     ) -> Option<Constraint> {
         self.given_mentions_local_params(a, b)
             .map(|_| Constraint::Eq(a.clone(), b.clone(), origin))
+    }
+
+    fn constraint_summary(&mut self, constraint: &Constraint) -> String {
+        match constraint {
+            Constraint::Eq(a, b, _) => {
+                let a = self.store.render(a);
+                let b = self.store.render(b);
+                format!("{a} == {b}")
+            }
+            Constraint::EffEq(a, b, _) => {
+                let a = self.store.render_eff(a);
+                let b = self.store.render_eff(b);
+                format!("effects {a} == {b}")
+            }
+            Constraint::Conforms { ty, protocol, .. } => {
+                let ty = self.store.render(ty);
+                let protocol = self.protocol_summary(protocol);
+                format!("{ty} conforms to {protocol}")
+            }
+            Constraint::HasMember {
+                receiver,
+                label,
+                member,
+                ..
+            } => {
+                let receiver = self.store.render(receiver);
+                let member = self.store.render(member);
+                format!("{receiver} has member `{label}` of type {member}")
+            }
+            Constraint::HasVariant {
+                enum_ty,
+                label,
+                payload,
+                ctor,
+                ..
+            } => {
+                let enum_ty = self.store.render(enum_ty);
+                let payload = payload
+                    .iter()
+                    .map(|ty| self.store.render(ty))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let ctor = ctor
+                    .as_ref()
+                    .map(|ty| format!(" with constructor {}", self.store.render(ty)))
+                    .unwrap_or_default();
+                format!("{enum_ty} has variant `.{label}({payload})`{ctor}")
+            }
+            Constraint::ApplyBorrow {
+                expected_inner,
+                found,
+                ..
+            } => {
+                let expected_inner = self.store.render(expected_inner);
+                let found = self.store.render(found);
+                format!("borrowed argument &{expected_inner} accepts {found}")
+            }
+            Constraint::PatternView {
+                scrutinee, view, ..
+            } => {
+                let scrutinee = self.store.render(scrutinee);
+                let view = self.store.render(view);
+                format!("pattern view of {scrutinee} as {view}")
+            }
+            Constraint::HandleEffect {
+                inner,
+                effects,
+                outer,
+                ..
+            } => {
+                let inner = self.store.render_eff(inner);
+                let effects = effects
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let outer = self.store.render_eff(outer);
+                format!("handler boundary removes [{effects}] from {inner} into {outer}")
+            }
+            Constraint::Implic(implication) => format!(
+                "implication with {} given(s) and {} wanted(s)",
+                implication.givens.len(),
+                implication.wanteds.len()
+            ),
+        }
+    }
+
+    fn protocol_summary(&mut self, protocol: &ProtocolRef) -> String {
+        if protocol.args.is_empty() {
+            return protocol.protocol.to_string();
+        }
+        let args = protocol
+            .args
+            .iter()
+            .map(|arg| self.store.render(arg))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{}<{args}>", protocol.protocol)
     }
 }
 

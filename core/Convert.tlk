@@ -1,10 +1,8 @@
 // no-core
-public protocol From {
-	associated Source
+public protocol From<Source> {
 	func from(value: Source) -> Self
 }
 
-public protocol Into {
-	associated Target
+public protocol Into<Target> {
 	consuming func into() -> Target
 }
