@@ -77,6 +77,27 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_character_literal() {
+        assert_eq!(run_on_both_engines("'😎'.utf8_count()"), Value::I64(4));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_omitted_string_call_parens() {
+        assert_eq!(
+            run_on_both_engines("func len(s: String) -> Int { s.byte_count }\nlen \"abc\""),
+            Value::I64(3)
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_positional_block_args() {
+        assert_eq!(
+            run_on_both_engines("func apply(f) { f(2, 3) }\napply { $0 + $1 }"),
+            Value::I64(5)
+        );
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_sequential_rebinding() {
         // Rule 2 of docs/sequential-scoping-plan.md: a later `let` shadows
         // from its point of declaration on; its rhs sees the earlier

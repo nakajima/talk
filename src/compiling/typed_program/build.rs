@@ -235,6 +235,9 @@ impl TypedTreeBuilder<'_> {
             expr::ExprKind::LiteralString(s) => {
                 typed_ast::ExprKind::Lit(typed_ast::Literal::String(s.clone()))
             }
+            expr::ExprKind::LiteralCharacter(s) => {
+                typed_ast::ExprKind::Lit(typed_ast::Literal::Character(s.clone()))
+            }
             expr::ExprKind::Tuple(items) => {
                 typed_ast::ExprKind::Tuple(items.iter().map(|i| self.expr(i)).collect())
             }

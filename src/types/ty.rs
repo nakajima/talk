@@ -1606,6 +1606,8 @@ fn render_nominal_head(sym: &Symbol) -> String {
         "Never".into()
     } else if *sym == Symbol::String {
         "String".into()
+    } else if *sym == Symbol::Character {
+        "Character".into()
     } else if *sym == Symbol::Array {
         "Array".into()
     } else if *sym == Symbol::RawPtr {

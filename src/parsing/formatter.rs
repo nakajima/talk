@@ -410,6 +410,7 @@ impl<'a> Formatter<'a> {
             }
             ExprKind::LiteralArray(items) => self.format_array_literal(items),
             ExprKind::LiteralString(string) => self.format_string_literal(string),
+            ExprKind::LiteralCharacter(character) => self.format_character_literal(character),
             ExprKind::LiteralInt(val) => text(val),
             ExprKind::LiteralFloat(val) => text(val),
             ExprKind::LiteralTrue => text("true"),
@@ -710,6 +711,10 @@ impl<'a> Formatter<'a> {
 
     fn format_string_literal(&self, string: &str) -> Doc {
         concat(text("\""), concat(text(string), text("\"")))
+    }
+
+    fn format_character_literal(&self, character: &str) -> Doc {
+        concat(text("'"), concat(text(character), text("'")))
     }
 
     fn format_array_literal(&self, items: &[Expr]) -> Doc {

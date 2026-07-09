@@ -3047,12 +3047,11 @@ pub mod tests {
     }
 
     #[test]
-    fn protocol_extension_declaring_conformance_is_unsupported() {
+    fn protocol_extension_declaring_conformance_is_accepted() {
         let t = check(
             "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nprotocol R {\n\tfunc r() -> Int\n}\nextend P: R {\n\tfunc r() -> Int { 1 }\n}",
         );
-        let errors = type_errors(&t);
-        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_clean(&t);
     }
 
     #[test]
@@ -4220,6 +4219,27 @@ mod with_core {
         assert_eq!(
             t.phase.program.types().schemes[&symbol].render(),
             "(*String) -> *String"
+        );
+    }
+
+    #[test]
+    fn character_literal_has_character_type() {
+        let t = check_with_core(Source::from("let c = 'a'"));
+        assert_no_errors(&t);
+        let resolved = &t.phase.program.resolved_names();
+        let _names =
+            crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
+        let symbol = resolved
+            .symbol_names
+            .iter()
+            .find(|(sym, name)| {
+                name.as_str() == "c" && t.phase.program.types().schemes.contains_key(sym)
+            })
+            .map(|(sym, _)| *sym)
+            .expect("c scheme");
+        assert_eq!(
+            t.phase.program.types().schemes[&symbol].render(),
+            "Character"
         );
     }
 

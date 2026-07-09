@@ -141,6 +141,59 @@ impl<'a> Lowering<'a> {
                         .primop(Op::RecordNew(string_symbol), &[storage, len, len], ty),
                 )
             }
+            ExprKind::Lit(typed_ast::Literal::Character(text)) => {
+                let Ok(unescaped) = crate::parsing::lexing::unescape(text) else {
+                    self.diagnostics
+                        .push("lowering: character literal with invalid escape".into());
+                    return None;
+                };
+                let bytes = unescaped.into_bytes();
+                let offset = self.intern_static(&bytes);
+                let CheckTy::Nominal(character_symbol, _) =
+                    Self::borrow_erased_ty(self.checker_ty(expr, ctx))
+                else {
+                    self.diagnostics
+                        .push("lowering: character literal with a non-nominal type".into());
+                    return None;
+                };
+                let Some(character_info) = self
+                    .units
+                    .iter()
+                    .find_map(|unit| unit.types.catalog.structs.get(&character_symbol))
+                else {
+                    self.diagnostics
+                        .push("lowering: character literal without a Character type".into());
+                    return None;
+                };
+                let fields: Vec<(String, CheckTy)> = character_info
+                    .fields
+                    .iter()
+                    .map(|(field, (_, field_ty))| (field.clone(), field_ty.clone()))
+                    .collect();
+                let ptr_ty = self.p.ty_ptr();
+                let base = self.p.constant(Const::StaticPtr(offset), ptr_ty);
+                let start = self.p.int(0);
+                let len = self.p.int(bytes.len() as i64);
+                let mut values = vec![];
+                for (field, field_ty) in fields {
+                    match field.as_str() {
+                        "storage" => {
+                            let storage =
+                                self.storage_wrapper_value(&field_ty, base, "Character")?;
+                            values.push(storage);
+                        }
+                        "start" => values.push(start),
+                        "byte_count" => values.push(len),
+                        other => {
+                            self.diagnostics
+                                .push(format!("lowering: unsupported Character field '{other}'"));
+                            return None;
+                        }
+                    }
+                }
+                let ty = self.p.ty(TyKind::Boxed(character_symbol));
+                Some(self.p.primop(Op::RecordNew(character_symbol), &values, ty))
+            }
             // Field read on a pure receiver: GetField (records are pure
             // values). A member that resolves to a payload-less enum case
             // (`.none`, `Optional.none`) is a variant value instead.

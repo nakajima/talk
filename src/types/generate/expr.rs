@@ -521,6 +521,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             ExprKind::LiteralFloat(_) => Ty::Nominal(Symbol::Float, vec![]),
             ExprKind::LiteralTrue | ExprKind::LiteralFalse => Ty::Nominal(Symbol::Bool, vec![]),
             ExprKind::LiteralString(_) => Ty::Nominal(Symbol::String, vec![]),
+            ExprKind::LiteralCharacter(_) => Ty::Nominal(Symbol::Character, vec![]),
 
             ExprKind::LiteralArray(items) => {
                 let element = Ty::Var(self.store.fresh_ty(self.level, expr.id));

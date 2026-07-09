@@ -23,6 +23,7 @@ pub fn unescape(raw: &str) -> Result<String, LexerError> {
                 Some('r') => result.push('\r'),
                 Some('\\') => result.push('\\'),
                 Some('"') => result.push('"'),
+                Some('\'') => result.push('\''),
                 Some('u') => {
                     // Unicode escape: \u{1F600}
                     if chars.next() != Some('{') {

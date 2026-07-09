@@ -40,6 +40,20 @@ extend Iterator {
 			i = i + 1
 		}
 	}
+
+	consuming func to_array() -> Array<Element> {
+		let result = []
+
+		loop {
+			if let .some(element) = self.next() {
+				result.push(element)
+			} else {
+				break
+			}
+		}
+
+		result
+	}
 }
 
 // MARK: Iterable

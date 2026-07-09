@@ -5,6 +5,8 @@ on:
     tags:
       - "**"
   create:
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -25,7 +27,7 @@ jobs:
   release:
     name: Build and publish TalkC.xcframework
     runs-on: macos-14
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !endsWith(github.ref_name, '-swift')) || (github.event_name == 'create' && github.event.ref_type == 'tag' && !endsWith(github.event.ref, '-swift')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !endsWith(github.ref_name, '-swift')) || (github.event_name == 'create' && github.event.ref_type == 'tag' && !endsWith(github.event.ref, '-swift')) || (github.event_name == 'release' && !endsWith(github.event.release.tag_name, '-swift')) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -39,12 +41,16 @@ jobs:
           BASE_TAG_INPUT: ${{ github.event.inputs.tag }}
           CREATE_REF: ${{ github.event.ref }}
           CREATE_REF_TYPE: ${{ github.event.ref_type }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
           git fetch --force --tags origin
           base_tag="${BASE_TAG_INPUT:-${GITHUB_REF_NAME}}"
           if [[ "${GITHUB_EVENT_NAME}" == "create" && "${CREATE_REF_TYPE}" == "tag" ]]; then
             base_tag="${CREATE_REF}"
+          fi
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            base_tag="${RELEASE_TAG}"
           fi
           if [[ "$base_tag" == *-swift ]]; then
             echo "::error::base tag must not end with -swift: ${base_tag}"

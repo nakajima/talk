@@ -40,6 +40,7 @@ pub enum ExprKind {
     LiteralTrue,
     LiteralFalse,
     LiteralString(#[drive(skip)] String),
+    LiteralCharacter(#[drive(skip)] String),
 
     Unary(#[drive(skip)] TokenKind, Box<Expr>),
     Binary(Box<Expr>, #[drive(skip)] TokenKind, Box<Expr>),
@@ -119,6 +120,7 @@ impl ExprKind {
             ExprKind::LiteralTrue => true,
             ExprKind::LiteralFalse => true,
             ExprKind::LiteralString(..) => true,
+            ExprKind::LiteralCharacter(..) => true,
             ExprKind::Variable(..) => true,
             ExprKind::Constructor(..) => true,
         }

@@ -75,6 +75,45 @@ It is a single OutsideIn-aligned model of:
 top-level axiom schemes + local givens + generated wanteds + evidence
 ```
 
+### What already exists
+
+Much of this model is already implemented under other names (verified against
+the tree at 0.1.38, 2026-07-08):
+
+- `Conformance` in `src/types/catalog.rs` is an axiom scheme in substance:
+  `params` (the forall), `context: Vec<Predicate>` (the premises), a head
+  pattern (`self_args` + `protocol_args`), and an evidence template
+  (`witnesses` + `assoc`).
+- `try_conforms` in `src/types/solve/conformance.rs` already performs the
+  OutsideIn instance reaction for nominal heads: givens are consulted first,
+  a unique matching conformance is required (multiple matches error rather
+  than picking the first viable one), and the instance context is re-emitted
+  as new wanteds.
+- Derived `Showable` already solves by emitting structural wanteds
+  coinductively (`try_derive`).
+- `MemberResolution::ViaConformance { protocol, witness }` already records
+  the selected witness per node — a degenerate evidence term.
+- `Into` and `From` are already protocol-argument protocols
+  (`core/Convert.tlk`).
+- Commit bd1f98bc landed *collection* of protocol-head extends
+  (`extend Iterator: Into<...>` is stored as a `Conformance` keyed by the
+  protocol symbol) and a `matching_protocol_head_conformances` matcher — but
+  nothing calls the matcher yet, and the solver's `Ty::Param` / `Ty::Proj`
+  cases consult only `param_bounds` and superprotocol closure, so a wanted
+  like `T: Into<Array<Element>>` given `T: Iterator` dead-ends at
+  `NotConforming`.
+
+The remaining gap is therefore not the data model. It is:
+
+1. the axiom reaction for non-nominal wanted heads — matching a
+   protocol-head axiom's conclusion against a wanted whose head is a type
+   parameter, projection, or existential, and discharging the substituted
+   premises against local givens;
+2. evidence recorded on the typed program for conformances lowering cannot
+   rediscover by nominal-head lookup (protocol-head witnesses in
+   particular);
+3. declaration-time overlap rejection and explicit recursion detection.
+
 ## Research basis
 
 This ADR follows the terminology and split in Vytiniotis, Peyton Jones,
@@ -296,6 +335,12 @@ pub struct AssocEquation {
 
 The exact Rust names may change. The important architectural point is that the
 semantic rule is the axiom scheme, not a nominal-head catalog entry.
+
+Note that `Conformance` in `src/types/catalog.rs` already carries exactly
+these fields (`params`, `context`, head pattern, `witnesses` + `assoc`), and
+since bd1f98bc its key admits protocol heads. V1 should evolve that struct
+into this role rather than introduce a parallel `AxiomScheme` type — two
+representations of the same rule is the smearing this ADR exists to avoid.
 
 ### Given evidence
 
@@ -604,7 +649,8 @@ conformance lookup.
 
 ## Conversion protocols
 
-`Into` should become a protocol-argument protocol:
+`Into` and `From` are already protocol-argument protocols in
+`core/Convert.tlk`:
 
 ```talk
 public protocol Into<Target> {
@@ -614,19 +660,13 @@ public protocol Into<Target> {
 
 The target is an input to conformance selection, not an output uniquely determined
 by `Self`. This follows ADR 0016 and permits one source type to support multiple
-conversions.
-
-Then the motivating axiom scheme is natural:
+conversions. The motivating axiom scheme is therefore natural as-is:
 
 ```talk
 extend Iterator: Into<Array<Element>> {
     consuming func into() -> Array<Element> { ... }
 }
 ```
-
-If `Into` remains temporarily associated-type based, evidence can still model it,
-but the long-term library design should migrate `Into` and `From` to protocol
-arguments.
 
 ## Source syntax
 
@@ -660,47 +700,72 @@ protocol-extension conformance when the head predicate is a single protocol.
 
 ## Implementation plan
 
-1. Replace the conformance-clause draft terminology with OutsideIn terminology:
-   axiom schemes, givens, wanteds, and evidence.
-2. Introduce `AxiomSchemeId`, `AxiomScheme`, `Given`, `Wanted`, and `Evidence`
-   in the type layer.
-3. Generate axiom schemes for existing nominal conformances without changing
+The plan is split into a core unit that finishes the motivating feature on
+this architecture, and a consolidation tail. The core is one unit of work.
+Each deferred step is a relabeling or migration of a mechanism that already
+solves correctly today; each is re-evaluated on its own before starting, and
+none blocks the motivating feature.
+
+### Core (v1)
+
+1. Adopt OutsideIn terminology in the conformance layer: `Conformance`
+   already carries the axiom-scheme fields (params, premises, conclusion
+   head, evidence template), so this is a rename-and-tighten pass, not new
+   construction. Nominal conformances become axiom schemes without changing
    source behavior.
-4. Change conformance solving to solve wanted predicates against local givens and
-   top-level axiom schemes, returning evidence.
+2. Introduce `Evidence` in the type layer, produced by conformance solving.
+   `MemberResolution::ViaConformance` already stores a selected witness per
+   node; evidence generalizes it to carry the axiom instantiation and
+   premise proofs.
+3. Add the axiom reaction for non-nominal wanted heads: extend
+   `try_conforms`'s `Ty::Param` / `Ty::Proj` / existential cases to react
+   against `matching_protocol_head_conformances` (landed in bd1f98bc,
+   currently uncalled), substituting the axiom premises and discharging them
+   as new wanteds against local givens.
+4. Member lookup through a protocol-head conformance stores evidence-backed
+   witness selection, so lowering can compile witnesses it cannot rediscover
+   by nominal-head lookup.
 5. Preserve existing diagnostics and tests for nominal and conditional
    conformances.
-6. Move associated-type projection reduction to evidence-backed reduction.
-7. Replace `MemberResolution::ViaConformance` with an evidence-backed call
-   resolution.
-8. Represent superprotocols as axiom schemes.
-9. Represent associated type bounds as axiom schemes or evidence-template
-   entailments.
-10. Move protocol defaults into evidence templates.
-11. Represent derived conformances as synthetic axiom schemes.
-12. Make existential packing carry evidence.
-13. Remove lowerer-side witness rediscovery; lowering consumes typed evidence.
-14. Add explicit recursive axiom/goal detection.
-15. Add conservative overlap checks for axiom schemes.
-16. Migrate `Into` and `From` to protocol-argument protocols.
-17. Enable protocol-extension axiom schemes, including:
+6. Add explicit recursive axiom/goal detection.
+7. Add conservative declaration-time overlap checks for axiom schemes
+   (use-site uniqueness is already enforced by `try_conforms`).
+8. Enable protocol-extension axiom schemes end to end:
 
     ```talk
     extend Iterator: Into<Array<Element>> { ... }
     ```
 
-18. Add end-to-end tests for:
+9. Add end-to-end tests for:
     - existing nominal conformances;
     - existing conditional conformances;
-    - superprotocol entailment;
-    - associated type bounds;
-    - protocol defaults;
-    - derived `Showable`;
-    - existential packing;
-    - `Iterator: Into<Array<Element>>`;
+    - `Iterator: Into<Array<Element>>` for concrete, generic, and
+      existential receivers;
     - ambiguous overlapping axioms;
     - recursive axioms with a normal diagnostic;
     - LSP and `talk check` agreeing.
+
+### Deferred consolidation
+
+These migrate remaining mechanisms onto the axiom/evidence model. They are
+hygiene, not enablement, and land only when each demonstrably deletes a
+mechanism rather than relabeling one:
+
+- Move associated-type projection reduction to evidence-backed reduction.
+- Replace `MemberResolution::ViaConformance` wholesale with evidence-backed
+  call resolution.
+- Represent superprotocols as axiom schemes (replacing the closure helper).
+- Represent associated type bounds as axiom schemes or evidence-template
+  entailments.
+- Move protocol defaults into evidence templates.
+- Relabel derived conformances as synthetic axiom schemes (solving is
+  already unified in `try_derive`).
+- Make existential packing carry evidence.
+- Reduce lowerer-side witness rediscovery to evidence consumption. Caution:
+  ADR 0015 already established typing-publishes-lowering-reads with a
+  deliberate, documented monomorphization carve-out (two selector sites).
+  This step must be scoped against that decision, not assumed to delete the
+  lowerer's catalog walk wholesale.
 
 ## Consequences
 
@@ -717,9 +782,15 @@ Benefits:
 
 Costs:
 
-- This is larger than adding a one-off `Iterator -> Into<Array<Element>>` path.
-- Several current tables and side channels must migrate or disappear.
-- The type checker/lowerer boundary changes: typed output must carry evidence.
+- This is larger than adding a one-off `Iterator -> Into<Array<Element>>`
+  path, though smaller than it first appears: the solver already performs
+  the instance reaction for nominal heads, and `Conformance` already has the
+  axiom-scheme shape. The genuinely new work is the non-nominal-head
+  reaction, evidence, overlap, and recursion detection.
+- Several current tables and side channels must migrate or disappear — over
+  time, via the deferred consolidation steps.
+- The type checker/lowerer boundary changes: typed output must carry evidence
+  for conformances lowering cannot rediscover by nominal-head lookup.
 - Initial axiom lookup is linear by design; performance work is deferred.
 
 ## Rejected alternatives

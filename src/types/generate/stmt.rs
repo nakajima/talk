@@ -486,6 +486,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             | ExprKind::LiteralTrue
             | ExprKind::LiteralFalse
             | ExprKind::LiteralString(_)
+            | ExprKind::LiteralCharacter(_)
             | ExprKind::Variable(_)
             | ExprKind::Constructor(_) => false,
         }

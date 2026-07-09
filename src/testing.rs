@@ -128,7 +128,7 @@ impl Runner {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("");
-            if path.is_dir() {
+            if path.is_dir() && !file_name.starts_with(".") {
                 if matches!(file_name, ".git" | "target") {
                     continue;
                 }

@@ -236,6 +236,7 @@ impl Symbol {
     const WELL_KNOWN_CORE_COPY_ID: u32 = u32::MAX - 27;
     const WELL_KNOWN_CORE_CHEAP_CLONE_ID: u32 = u32::MAX - 26;
     const WELL_KNOWN_CORE_DEINIT_ID: u32 = u32::MAX - 25;
+    const WELL_KNOWN_CORE_CHARACTER_ID: u32 = u32::MAX - 24;
 
     pub const Int: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
@@ -286,6 +287,10 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: Self::WELL_KNOWN_CORE_STORAGE_ID,
     });
+    pub const Character: Symbol = Symbol::Struct(StructId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_CHARACTER_ID,
+    });
     pub const Borrowed: Symbol = Symbol::Protocol(ProtocolId {
         module_id: ModuleId::Core,
         local_id: Self::WELL_KNOWN_CORE_BORROWED_ID,
@@ -312,6 +317,7 @@ impl Symbol {
             "String" => Some(Symbol::String),
             "Array" => Some(Symbol::Array),
             "Storage" => Some(Symbol::Storage),
+            "Character" => Some(Symbol::Character),
             _ => None,
         }
     }
@@ -916,6 +922,7 @@ mod tests {
             Symbol::RawPtr,
             Symbol::Byte,
             Symbol::String,
+            Symbol::Character,
         ] {
             let bytes = symbol.as_bytes();
             let recovered = Symbol::from_bytes(&bytes);

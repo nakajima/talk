@@ -112,6 +112,7 @@ pub enum Literal {
     Float(String),
     Bool(bool),
     String(String),
+    Character(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]

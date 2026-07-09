@@ -121,7 +121,7 @@ impl Precedence {
                 precedence: Precedence::Call,
             },
 
-            TokenKind::StringLiteral => ParseHandler {
+            TokenKind::StringLiteral | TokenKind::CharacterLiteral => ParseHandler {
                 prefix: Some(Parser::literal),
                 infix: None,
                 precedence: Precedence::Primary,
@@ -255,6 +255,12 @@ impl Precedence {
 
             TokenKind::Identifier => ParseHandler {
                 prefix: Some(Parser::variable),
+                infix: None,
+                precedence: Precedence::None,
+            },
+
+            TokenKind::BoundVar => ParseHandler {
+                prefix: Some(Parser::bound_var),
                 infix: None,
                 precedence: Precedence::None,
             },

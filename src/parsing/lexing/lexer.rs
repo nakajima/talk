@@ -15,6 +15,8 @@ pub enum LexerError {
     InvalidEscape(char),
     UnexpectedEOF,
     InvalidUnicodeEscape,
+    EmptyCharacterLiteral,
+    UnterminatedCharacterLiteral,
     UnterminatedString,
 }
 
@@ -28,6 +30,8 @@ impl LexerError {
             Self::UnexpectedEOF => "Unexpected end of file".to_string(),
             Self::InvalidEscape(ch) => format!("Invalid escape: {ch:?}"),
             Self::InvalidUnicodeEscape => "Invalid unicode escape".to_string(),
+            Self::EmptyCharacterLiteral => "Empty character literal".to_string(),
+            Self::UnterminatedCharacterLiteral => "Unterminated character literal".to_string(),
             Self::UnterminatedString => "Unterminated string".to_string(),
         }
     }
@@ -129,7 +133,7 @@ impl<'a> Lexer<'a> {
             '@' => self.at(),
             '$' => self.dollar(),
             '"' => self.string(),
-            '\'' => self.effect_name(),
+            '\'' => self.single_quote(),
             '\n' => self.newline(),
             '_' => {
                 if let Some(next) = self.peek()
@@ -259,6 +263,93 @@ impl<'a> Lexer<'a> {
         }
 
         self.make(TokenKind::EffectName)
+    }
+
+    fn single_quote(&mut self) -> Result<Token, LexerError> {
+        // A leading tick can be an effect name (`'io`), an effect row
+        // opener (`'[...]`), or a character literal (`'a'`). When the tick
+        // is followed by an identifier and that identifier is not closed by
+        // another tick, it is an effect name, not a character literal that
+        // happens to end at a later tick.
+        if self
+            .peek()
+            .map(|ch| ch.is_alphanumeric() || ch == '_')
+            .unwrap_or(false)
+        {
+            let mut ident_probe = self.clone();
+            while let Some(ch) = ident_probe.peek() {
+                if ch.is_alphanumeric() || ch == '_' {
+                    ident_probe.advance();
+                } else {
+                    break;
+                }
+            }
+            if ident_probe.peek() != Some('\'') {
+                return self.effect_name();
+            }
+        }
+
+        let mut probe = self.clone();
+        match probe.character_literal_candidate() {
+            Ok(true) => {
+                *self = probe;
+                self.make(TokenKind::CharacterLiteral)
+            }
+            Ok(false) => self.effect_name(),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn character_literal_candidate(&mut self) -> Result<bool, LexerError> {
+        let mut saw_content = false;
+
+        loop {
+            let Some(ch) = self.advance() else {
+                return Ok(false);
+            };
+
+            match ch {
+                '\'' => {
+                    if saw_content {
+                        return Ok(true);
+                    }
+                    return Err(LexerError::EmptyCharacterLiteral);
+                }
+                '\\' => {
+                    saw_content = true;
+                    self.scan_literal_escape()?;
+                }
+                '\n' => return Ok(false),
+                _ => saw_content = true,
+            }
+        }
+    }
+
+    fn scan_literal_escape(&mut self) -> Result<(), LexerError> {
+        let esc = self.advance().ok_or(LexerError::UnexpectedEOF)?;
+        match esc {
+            'n' | 't' | 'r' | '"' | '\'' | '\\' => Ok(()),
+            'u' => {
+                self.expect_char('{')?;
+                let digits = self.take_hex_digits(1..=6)?;
+                self.expect_char('}')?;
+                let valid = u32::from_str_radix(&digits, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .is_some();
+                if valid {
+                    Ok(())
+                } else {
+                    Err(LexerError::InvalidUnicodeEscape)
+                }
+            }
+            '\n' => {
+                self.line += 1;
+                self.col = 0;
+                Ok(())
+            }
+            other => Err(LexerError::InvalidEscape(other)),
+        }
     }
 
     fn string(&mut self) -> Result<Token, LexerError> {
@@ -723,6 +814,32 @@ mod tests {
         // Raw lexeme still has escape sequence
         assert_eq!(tok.lexeme(source), r#""smile: \u{1F600}""#);
         assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn character_literals() {
+        let source = r"'a' '😎' '\n' '\''";
+        let mut lexer = Lexer::new(source);
+        assert_token(source, &lexer.next().unwrap(), CharacterLiteral, "'a'");
+        assert_token(source, &lexer.next().unwrap(), CharacterLiteral, "'😎'");
+        assert_token(source, &lexer.next().unwrap(), CharacterLiteral, r"'\n'");
+        assert_token(source, &lexer.next().unwrap(), CharacterLiteral, r"'\''");
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn effect_names_still_start_with_tick() {
+        let source = "'boom 'a";
+        let mut lexer = Lexer::new(source);
+        assert_token(source, &lexer.next().unwrap(), EffectName, "boom");
+        assert_token(source, &lexer.next().unwrap(), EffectName, "a");
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn rejects_empty_character_literal() {
+        let mut lexer = Lexer::new("''");
+        assert_eq!(lexer.next(), Err(LexerError::EmptyCharacterLiteral));
     }
 
     #[test]

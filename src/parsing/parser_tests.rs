@@ -205,6 +205,18 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_character_literal() {
+        let parsed = parse("'a'");
+        assert!(matches!(
+            parsed.roots[0].as_stmt().kind,
+            StmtKind::Expr(Expr {
+                kind: ExprKind::LiteralCharacter(_),
+                ..
+            },)
+        ));
+    }
+
+    #[test]
     fn surfaces_lexer_error_with_position() {
         use crate::{lexer::LexerError, parser_error::ParserError};
         let lexer = Lexer::new("let s = \"\\u{D800}\"");
@@ -1198,6 +1210,107 @@ pub mod tests {
                 trailing_block: None,
             })
         );
+    }
+
+    #[test]
+    fn parses_call_with_omitted_parens_for_string_arg() {
+        let parsed = parse("say \"hello\"");
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Call {
+                callee: any_expr!(ExprKind::Variable("say".into())).into(),
+                type_args: vec![],
+                args: vec![CallArg {
+                    mode: None,
+                    mode_span: None,
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    label: Label::Positional(0),
+                    label_span: Span::ANY,
+                    value: any_expr!(ExprKind::LiteralString("hello".into()))
+                }],
+                trailing_block: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_call_with_string_arg_and_trailing_block() {
+        let parsed = parse("say \"hello\" { 123 }");
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Call {
+                callee: any_expr!(ExprKind::Variable("say".into())).into(),
+                type_args: vec![],
+                args: vec![CallArg {
+                    mode: None,
+                    mode_span: None,
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    label: Label::Positional(0),
+                    label_span: Span::ANY,
+                    value: any_expr!(ExprKind::LiteralString("hello".into()))
+                }],
+                trailing_block: Some(any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
+                    "123".into()
+                ))])),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_parenthesized_trailing_block_arg() {
+        let parsed = parse("map({ x in x })");
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Call {
+                callee: any_expr!(ExprKind::Variable("map".into())).into(),
+                type_args: vec![],
+                args: vec![],
+                trailing_block: Some(Block {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    args: vec![Parameter {
+                        mode: None,
+                        mode_span: None,
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        name: "x".into(),
+                        name_span: Span::ANY,
+                        type_annotation: None,
+                    }],
+                    body: vec![Node::Stmt(any_expr_stmt!(ExprKind::Variable("x".into())))],
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_positional_block_args() {
+        let parsed = parse("map { $0 * $1 }");
+        let StmtKind::Expr(Expr {
+            kind:
+                ExprKind::Call {
+                    trailing_block: Some(block),
+                    ..
+                },
+            ..
+        }) = &parsed.roots[0].as_stmt().kind
+        else {
+            panic!("expected call with trailing block");
+        };
+        let names: Vec<String> = block.args.iter().map(|arg| arg.name.name_str()).collect();
+        assert_eq!(names, vec!["$0", "$1"]);
+        assert!(matches!(
+            block.body[0],
+            Node::Stmt(Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::Binary(_, TokenKind::Star, _),
+                    ..
+                }),
+                ..
+            })
+        ));
     }
 
     #[test]

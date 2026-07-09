@@ -161,6 +161,10 @@ mod tests {
             Some(Symbol::Storage)
         );
         assert_eq!(
+            module.exports.get("Character").copied(),
+            Some(Symbol::Character)
+        );
+        assert_eq!(
             module.exports.get("Borrowed").copied(),
             Some(Symbol::Borrowed)
         );
@@ -170,6 +174,7 @@ mod tests {
         assert!(types.catalog.structs.contains_key(&Symbol::String));
         assert!(types.catalog.structs.contains_key(&Symbol::Array));
         assert!(types.catalog.structs.contains_key(&Symbol::Storage));
+        assert!(types.catalog.structs.contains_key(&Symbol::Character));
         assert!(types.catalog.protocols.contains_key(&Symbol::Borrowed));
         assert!(types.catalog.protocols.contains_key(&Symbol::Owner));
     }

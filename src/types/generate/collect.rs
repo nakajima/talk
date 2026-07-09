@@ -110,8 +110,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 }
                 DeclKind::Let { .. } => destructuring_lets.push(decl),
                 DeclKind::Extend { conformances, .. } => {
-                    let protocol_default_extension = self.protocol_extension_head(decl).is_some()
-                        && conformances.is_empty();
+                    let protocol_default_extension =
+                        self.protocol_extension_head(decl).is_some() && conformances.is_empty();
                     if !protocol_default_extension
                         && let Some(work) = self.register_extend(decl, None)
                     {
@@ -1215,7 +1215,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     protocol: head_protocol.clone(),
                 },
             );
-            for (_, owner, assoc) in self.catalog.declared_associated_types_in_ref(&head_protocol) {
+            for (_, owner, assoc) in self
+                .catalog
+                .declared_associated_types_in_ref(&head_protocol)
+            {
                 context.push(Predicate::TypeEq(
                     Ty::Param(assoc),
                     Ty::Proj(Box::new(self_ty.clone()), owner, assoc),

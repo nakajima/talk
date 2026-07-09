@@ -2234,6 +2234,11 @@ impl<'a> Parser<'a> {
                 let inner = &lexeme[1..lexeme.len() - 1];
                 self.add_expr(ExprKind::LiteralString(inner.to_string()), tok)
             }
+            TokenKind::CharacterLiteral => {
+                // Strip surrounding quotes but keep escape sequences intact
+                let inner = &lexeme[1..lexeme.len() - 1];
+                self.add_expr(ExprKind::LiteralCharacter(inner.to_string()), tok)
+            }
             _ => unreachable!(),
         };
 
@@ -2269,6 +2274,16 @@ impl<'a> Parser<'a> {
         } else {
             Ok(variable.into())
         }
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub(crate) fn bound_var(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        let current = self.advance().expect("peeked bound var");
+        let name = format!("${}", self.lexeme(&current));
+        Ok(self
+            .add_expr(ExprKind::Variable(Name::Raw(name)), tok)?
+            .into())
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -2485,6 +2500,14 @@ impl<'a> Parser<'a> {
             return Ok(Some(self.call(can_assign, vec![], callee.clone())?));
         }
 
+        // Call parens may be omitted when the first argument starts with a
+        // string literal: `foo "sup"` and `foo "sup" { ... }`.
+        if self.peek_is(TokenKind::StringLiteral) && !self.previous_token_was_newline() {
+            return Ok(Some(
+                self.call_with_leading_string_arg(can_assign, callee.clone())?,
+            ));
+        }
+
         // Check for trailing-block-only call: `foo { block }` without parens
         if self.current_context().allows_trailing_blocks() && self.peek_is(TokenKind::LeftBrace) {
             return Ok(Some(self.call_with_trailing_block_only(callee.clone())?));
@@ -2496,7 +2519,7 @@ impl<'a> Parser<'a> {
     /// Parse a call with only a trailing block (no parens): `foo { block }`
     fn call_with_trailing_block_only(&mut self, callee: Expr) -> Result<Expr, ParserError> {
         let tok = self.push_lhs_location(callee.id);
-        let trailing_block = self.block(BlockContext::None, true)?;
+        let trailing_block = self.closure_block(BlockContext::None, true)?;
 
         self.add_expr(
             ExprKind::Call {
@@ -2509,6 +2532,46 @@ impl<'a> Parser<'a> {
         )
     }
 
+    fn call_with_leading_string_arg(
+        &mut self,
+        can_assign: bool,
+        callee: Expr,
+    ) -> Result<Expr, ParserError> {
+        let tok = self.push_lhs_location(callee.id);
+        let mut args = vec![self.argument(0)?];
+        let mut i = 1;
+        while self.did_match(TokenKind::Comma)? {
+            args.push(self.argument(i)?);
+            i += 1;
+        }
+
+        let trailing_block = if self.current_context().allows_trailing_blocks()
+            && self.peek_is(TokenKind::LeftBrace)
+        {
+            Some(self.closure_block(BlockContext::None, true)?)
+        } else {
+            None
+        };
+
+        let call = self.add_expr(
+            ExprKind::Call {
+                callee: Box::new(callee),
+                type_args: vec![],
+                args,
+                trailing_block,
+            },
+            tok,
+        )?;
+
+        if self.peek_is(TokenKind::LeftParen)
+            && let Some(next_call) = self.check_call(&call, can_assign)?
+        {
+            Ok(next_call)
+        } else {
+            Ok(call)
+        }
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn call(
         &mut self,
@@ -2519,7 +2582,7 @@ impl<'a> Parser<'a> {
         let tok = self.push_lhs_location(callee.id);
         self.skip_newlines();
 
-        let args = if self.did_match(TokenKind::RightParen)? {
+        let mut args = if self.did_match(TokenKind::RightParen)? {
             vec![]
         } else if self.at_delimiter_recovery_boundary() {
             self.record_diagnostic(self.expected_token_error(TokenKind::RightParen));
@@ -2536,9 +2599,9 @@ impl<'a> Parser<'a> {
         let trailing_block = if self.current_context().allows_trailing_blocks()
             && self.peek_is(TokenKind::LeftBrace)
         {
-            Some(self.block(BlockContext::None, true)?)
+            Some(self.closure_block(BlockContext::None, true)?)
         } else {
-            None
+            self.take_parenthesized_trailing_block_arg(&mut args)
         };
 
         let call = self.add_expr(
@@ -2601,51 +2664,7 @@ impl<'a> Parser<'a> {
             if self.peek_is(TokenKind::RightParen) || self.at_delimiter_recovery_boundary() {
                 return Ok(args);
             }
-            let tok = self.push_source_location();
-
-            if matches!(
-                &self.current,
-                Some(Token {
-                    kind: TokenKind::Identifier,
-                    ..
-                })
-            ) && matches!(
-                &self.next,
-                Some(Token {
-                    kind: TokenKind::Colon,
-                    ..
-                })
-            ) {
-                // we've got an argument label
-                let Some((label, label_span)) = self.identifier().ok() else {
-                    return Err(ParserError::ExpectedIdentifier(self.current.clone()));
-                };
-                let tok = self.push_source_location();
-                self.consume(TokenKind::Colon)?;
-                let mode = self.arg_mode();
-                let value = self.expr_with_precedence(Precedence::Assignment)?;
-                args.push(self.save_meta(tok, |id, span| CallArg {
-                    id,
-                    span,
-                    label: label.into(),
-                    label_span,
-                    value: value.as_expr(),
-                    mode: mode.map(|(mode, _)| mode),
-                    mode_span: mode.map(|(_, span)| span),
-                })?);
-            } else {
-                let mode = self.arg_mode();
-                let value = self.expr_with_precedence(Precedence::Assignment)?;
-                args.push(self.save_meta(tok, |id, span| CallArg {
-                    id,
-                    span,
-                    label: Label::Positional(i),
-                    label_span: span,
-                    value: value.as_expr(),
-                    mode: mode.map(|(mode, _)| mode),
-                    mode_span: mode.map(|(_, span)| span),
-                })?);
-            }
+            args.push(self.argument(i)?);
 
             i += 1;
             let more = self.did_match(TokenKind::Comma)?;
@@ -2656,6 +2675,54 @@ impl<'a> Parser<'a> {
         } {}
 
         Ok(args)
+    }
+
+    fn argument(&mut self, positional_index: usize) -> Result<CallArg, ParserError> {
+        let tok = self.push_source_location();
+
+        if matches!(
+            &self.current,
+            Some(Token {
+                kind: TokenKind::Identifier,
+                ..
+            })
+        ) && matches!(
+            &self.next,
+            Some(Token {
+                kind: TokenKind::Colon,
+                ..
+            })
+        ) {
+            // we've got an argument label
+            let Some((label, label_span)) = self.identifier().ok() else {
+                return Err(ParserError::ExpectedIdentifier(self.current.clone()));
+            };
+            let tok = self.push_source_location();
+            self.consume(TokenKind::Colon)?;
+            let mode = self.arg_mode();
+            let value = self.expr_with_precedence(Precedence::Assignment)?;
+            self.save_meta(tok, |id, span| CallArg {
+                id,
+                span,
+                label: label.into(),
+                label_span,
+                value: value.as_expr(),
+                mode: mode.map(|(mode, _)| mode),
+                mode_span: mode.map(|(_, span)| span),
+            })
+        } else {
+            let mode = self.arg_mode();
+            let value = self.expr_with_precedence(Precedence::Assignment)?;
+            self.save_meta(tok, |id, span| CallArg {
+                id,
+                span,
+                label: Label::Positional(positional_index),
+                label_span: span,
+                value: value.as_expr(),
+                mode: mode.map(|(mode, _)| mode),
+                mode_span: mode.map(|(_, span)| span),
+            })
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -3074,6 +3141,195 @@ impl<'a> Parser<'a> {
 
     fn body_block(&mut self, context: BlockContext) -> Result<Body, ParserError> {
         self.body(context, true)
+    }
+
+    fn closure_block(
+        &mut self,
+        context: BlockContext,
+        consumes_left_brace: bool,
+    ) -> Result<Block, ParserError> {
+        let block = self.block(context, consumes_left_brace)?;
+        Ok(self.prepare_closure_block(block))
+    }
+
+    fn prepare_closure_block(&mut self, mut block: Block) -> Block {
+        if block.args.is_empty()
+            && let Some(max_index) = Self::max_positional_block_arg(&block)
+        {
+            block.args = (0..=max_index)
+                .map(|index| Parameter {
+                    id: self.next_id(),
+                    span: Span::SYNTHESIZED,
+                    name: Name::Raw(format!("${index}")),
+                    name_span: Span::SYNTHESIZED,
+                    type_annotation: None,
+                    mode: None,
+                    mode_span: None,
+                })
+                .collect();
+        }
+        block
+    }
+
+    fn take_parenthesized_trailing_block_arg(&mut self, args: &mut Vec<CallArg>) -> Option<Block> {
+        let arg = args.pop()?;
+        if !matches!(arg.label, Label::Positional(_)) || arg.mode.is_some() {
+            args.push(arg);
+            return None;
+        }
+        match arg.value.kind {
+            ExprKind::Block(block) => Some(self.prepare_closure_block(block)),
+            _ => {
+                args.push(arg);
+                None
+            }
+        }
+    }
+
+    fn max_positional_block_arg(block: &Block) -> Option<usize> {
+        block
+            .body
+            .iter()
+            .filter_map(Self::max_positional_block_arg_in_node)
+            .max()
+    }
+
+    fn max_positional_block_arg_in_node(node: &Node) -> Option<usize> {
+        match node {
+            Node::Stmt(stmt) => Self::max_positional_block_arg_in_stmt(stmt),
+            Node::Expr(expr) => Self::max_positional_block_arg_in_expr(expr),
+            Node::Decl(decl) => Self::max_positional_block_arg_in_decl(decl),
+            _ => None,
+        }
+    }
+
+    fn max_positional_block_arg_in_stmt(stmt: &Stmt) -> Option<usize> {
+        match &stmt.kind {
+            StmtKind::Expr(expr)
+            | StmtKind::Return(Some(expr))
+            | StmtKind::Continue(Some(expr)) => Self::max_positional_block_arg_in_expr(expr),
+            StmtKind::If(condition, then_block, else_block) => [
+                Self::max_positional_block_arg_in_expr(condition),
+                Self::max_positional_block_arg(then_block),
+                else_block.as_ref().and_then(Self::max_positional_block_arg),
+            ]
+            .into_iter()
+            .flatten()
+            .max(),
+            StmtKind::Assignment(lhs, rhs) => [
+                Self::max_positional_block_arg_in_expr(lhs),
+                Self::max_positional_block_arg_in_expr(rhs),
+            ]
+            .into_iter()
+            .flatten()
+            .max(),
+            StmtKind::Loop(condition, body) => [
+                condition
+                    .as_ref()
+                    .and_then(Self::max_positional_block_arg_in_expr),
+                Self::max_positional_block_arg(body),
+            ]
+            .into_iter()
+            .flatten()
+            .max(),
+            StmtKind::For { iterable, body, .. } => [
+                Self::max_positional_block_arg_in_expr(iterable),
+                Self::max_positional_block_arg(body),
+            ]
+            .into_iter()
+            .flatten()
+            .max(),
+            StmtKind::Handling { body, .. } => Self::max_positional_block_arg(body),
+            StmtKind::Return(None) | StmtKind::Continue(None) | StmtKind::Break => None,
+        }
+    }
+
+    fn max_positional_block_arg_in_decl(decl: &Decl) -> Option<usize> {
+        match &decl.kind {
+            DeclKind::Let { rhs, .. } => rhs
+                .as_ref()
+                .and_then(Self::max_positional_block_arg_in_expr),
+            DeclKind::Property { default_value, .. } => default_value
+                .as_ref()
+                .and_then(Self::max_positional_block_arg_in_expr),
+            _ => None,
+        }
+    }
+
+    fn max_positional_block_arg_in_expr(expr: &Expr) -> Option<usize> {
+        match &expr.kind {
+            ExprKind::Variable(name) => {
+                let name = name.name_str();
+                name.strip_prefix('$')
+                    .and_then(|index| index.parse::<usize>().ok())
+            }
+            ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => items
+                .iter()
+                .filter_map(Self::max_positional_block_arg_in_expr)
+                .max(),
+            ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
+                Self::max_positional_block_arg_in_expr(inner)
+            }
+            ExprKind::Binary(lhs, _, rhs) => [
+                Self::max_positional_block_arg_in_expr(lhs),
+                Self::max_positional_block_arg_in_expr(rhs),
+            ]
+            .into_iter()
+            .flatten()
+            .max(),
+            ExprKind::Block(block) => Self::max_positional_block_arg(block),
+            ExprKind::Call { callee, args, .. } => {
+                std::iter::once(Self::max_positional_block_arg_in_expr(callee))
+                    .chain(
+                        args.iter()
+                            .map(|arg| Self::max_positional_block_arg_in_expr(&arg.value)),
+                    )
+                    .flatten()
+                    .max()
+            }
+            ExprKind::Member(receiver, ..) => receiver
+                .as_ref()
+                .and_then(|receiver| Self::max_positional_block_arg_in_expr(receiver)),
+            ExprKind::If(condition, then_block, else_block) => [
+                Self::max_positional_block_arg_in_expr(condition),
+                Self::max_positional_block_arg(then_block),
+                Self::max_positional_block_arg(else_block),
+            ]
+            .into_iter()
+            .flatten()
+            .max(),
+            ExprKind::Match(scrutinee, arms) => {
+                std::iter::once(Self::max_positional_block_arg_in_expr(scrutinee))
+                    .chain(
+                        arms.iter()
+                            .map(|arm| Self::max_positional_block_arg(&arm.body)),
+                    )
+                    .flatten()
+                    .max()
+            }
+            ExprKind::RecordLiteral { fields, spread } => fields
+                .iter()
+                .map(|field| Self::max_positional_block_arg_in_expr(&field.value))
+                .chain(std::iter::once(spread.as_ref().and_then(|spread| {
+                    Self::max_positional_block_arg_in_expr(spread)
+                })))
+                .flatten()
+                .max(),
+            ExprKind::CallEffect { args, .. } => args
+                .iter()
+                .filter_map(|arg| Self::max_positional_block_arg_in_expr(&arg.value))
+                .max(),
+            ExprKind::Func(_)
+            | ExprKind::Incomplete(_)
+            | ExprKind::InlineIR(_)
+            | ExprKind::LiteralInt(_)
+            | ExprKind::LiteralFloat(_)
+            | ExprKind::LiteralTrue
+            | ExprKind::LiteralFalse
+            | ExprKind::LiteralString(_)
+            | ExprKind::LiteralCharacter(_)
+            | ExprKind::Constructor(_) => None,
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
