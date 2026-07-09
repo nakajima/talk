@@ -150,6 +150,41 @@ impl<'a> TypecheckSession<'a> {
                     .sanitize_for_export(owner);
             }
         });
+        // Protocol-head rows use Ty::Param(protocol) as the axiom Self
+        // placeholder. Default-body normalization collapses that projection
+        // to the associated param, but axiom contexts must keep the projection
+        // so use-site substitution ties target args back to the receiver.
+        let protocol_head_assoc: FxHashMap<Symbol, Vec<(ProtocolRef, Symbol)>> = catalog
+            .protocols
+            .iter()
+            .map(|(protocol, info)| {
+                let protocol_ref = ProtocolRef {
+                    protocol: *protocol,
+                    args: info.params.iter().copied().map(Ty::Param).collect(),
+                };
+                let assocs = info
+                    .assoc
+                    .values()
+                    .copied()
+                    .map(|assoc| (protocol_ref.clone(), assoc))
+                    .collect();
+                (*protocol, assocs)
+            })
+            .collect();
+        for ((head, _), conformance) in catalog.conformances.iter_mut() {
+            let Some(assocs) = protocol_head_assoc.get(head) else {
+                continue;
+            };
+            for (owner, assoc) in assocs {
+                let lhs = Ty::Param(*assoc);
+                let rhs = Ty::Proj(Box::new(Ty::Param(*head)), owner.clone(), *assoc);
+                if let Some(predicate) = conformance.context.iter_mut().find(|predicate| {
+                    matches!(predicate, Predicate::TypeEq(a, b) if *a == lhs && *b == lhs)
+                }) {
+                    *predicate = Predicate::TypeEq(lhs, rhs);
+                }
+            }
+        }
         self.catalog = catalog;
         let mut existential_packs = FxHashMap::default();
         for (node, pack) in std::mem::take(&mut self.artifacts.existential_packs) {

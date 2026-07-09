@@ -66,17 +66,8 @@ impl<'s> Solver<'s> {
         match candidates.as_slice() {
             [] => MemberDispatch::NoCandidate,
             [(protocol, owner, requirement)] => {
-                let witness = head
-                    .and_then(|h| {
-                        let Ty::Nominal(_, args) = self.store.shallow(lookup_receiver) else {
-                            return None;
-                        };
-                        self.catalog
-                            .matching_conformances(h, &args, protocol)
-                            .into_iter()
-                            .next()
-                            .and_then(|matched| matched.conformance.witnesses.get(label).copied())
-                    })
+                let witness = self
+                    .witness_for_requirement(head, lookup_receiver, protocol, label)
                     .unwrap_or(requirement.symbol);
                 self.bind_requirement(
                     owner.clone(),
@@ -112,6 +103,57 @@ impl<'s> Solver<'s> {
                 MemberDispatch::Handled
             }
         }
+    }
+
+    fn witness_for_requirement(
+        &mut self,
+        head: Option<Symbol>,
+        lookup_receiver: &Ty,
+        protocol: &ProtocolRef,
+        label: &str,
+    ) -> Option<Symbol> {
+        let receiver = self.store.shallow(lookup_receiver);
+        if let Some(h) = head
+            && let Ty::Nominal(_, args) = &receiver
+            && let Some(witness) = self
+                .catalog
+                .matching_conformances(h, args, protocol)
+                .into_iter()
+                .find_map(|matched| matched.conformance.witnesses.get(label).copied())
+        {
+            return Some(witness);
+        }
+        self.catalog
+            .matching_protocol_head_conformances(&receiver, protocol)
+            .into_iter()
+            .find_map(|matched| matched.conformance.witnesses.get(label).copied())
+    }
+
+    fn protocol_owner_refs(&mut self, label: &str, node: NodeID) -> Vec<ProtocolRef> {
+        let Some(owners) = self.catalog.member_owners.get(label) else {
+            return vec![];
+        };
+        owners
+            .iter()
+            .filter_map(|owner| match owner {
+                MemberOwner::Protocol(protocol) => Some(*protocol),
+                MemberOwner::Nominal(_) => None,
+            })
+            .map(|protocol| {
+                let args = self
+                    .catalog
+                    .protocols
+                    .get(&protocol)
+                    .map(|info| {
+                        info.params
+                            .iter()
+                            .map(|_| Ty::Var(self.store.fresh_ty(self.level, node)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                ProtocolRef { protocol, args }
+            })
+            .collect()
     }
 
     fn requirement_accepts_member_shape(
@@ -217,6 +259,30 @@ impl<'s> Solver<'s> {
                     }
                     MemberDispatch::NoCandidate => {}
                 }
+                let owner_protocols = self.protocol_owner_refs(&label_str, origin.node);
+                if !owner_protocols.is_empty() {
+                    match self.dispatch_member_through(
+                        &owner_protocols,
+                        None,
+                        &member_receiver,
+                        &self_receiver,
+                        &label_str,
+                        &member,
+                        origin,
+                        queue,
+                    ) {
+                        MemberDispatch::Handled => return None,
+                        MemberDispatch::Stuck => {
+                            return Some(Constraint::HasMember {
+                                receiver,
+                                label,
+                                member,
+                                origin,
+                            });
+                        }
+                        MemberDispatch::NoCandidate => {}
+                    }
+                }
                 let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
                     TypeError::UnknownMember {
@@ -268,6 +334,30 @@ impl<'s> Solver<'s> {
                     }
                     MemberDispatch::NoCandidate => {}
                 }
+                let owner_protocols = self.protocol_owner_refs(&label_str, origin.node);
+                if !owner_protocols.is_empty() {
+                    match self.dispatch_member_through(
+                        &owner_protocols,
+                        None,
+                        &member_receiver,
+                        &self_receiver,
+                        &label_str,
+                        &member,
+                        origin,
+                        queue,
+                    ) {
+                        MemberDispatch::Handled => return None,
+                        MemberDispatch::Stuck => {
+                            return Some(Constraint::HasMember {
+                                receiver,
+                                label,
+                                member,
+                                origin,
+                            });
+                        }
+                        MemberDispatch::NoCandidate => {}
+                    }
+                }
                 let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
                     TypeError::UnknownMember {
@@ -279,30 +369,54 @@ impl<'s> Solver<'s> {
                 None
             }
             Ty::Any { protocol, .. } => {
-                let Some((owner, requirement)) =
+                if let Some((owner, requirement)) =
                     self.catalog.requirement_in_ref(&protocol, &label_str)
-                else {
-                    let rendered = self.store.render(&diagnostic_receiver);
-                    self.errors.push((
-                        TypeError::UnknownMember {
-                            receiver: rendered,
-                            label: label_str,
-                        },
-                        origin.node,
-                    ));
+                {
+                    let requirement = requirement.clone();
+                    self.bind_requirement(
+                        owner,
+                        &requirement,
+                        &member_receiver,
+                        &self_receiver,
+                        &member,
+                        origin,
+                        queue,
+                        requirement.symbol,
+                    );
                     return None;
-                };
-                let requirement = requirement.clone();
-                self.bind_requirement(
-                    owner,
-                    &requirement,
-                    &member_receiver,
-                    &self_receiver,
-                    &member,
-                    origin,
-                    queue,
-                    requirement.symbol,
-                );
+                }
+                let owner_protocols = self.protocol_owner_refs(&label_str, origin.node);
+                if !owner_protocols.is_empty() {
+                    match self.dispatch_member_through(
+                        &owner_protocols,
+                        None,
+                        &member_receiver,
+                        &self_receiver,
+                        &label_str,
+                        &member,
+                        origin,
+                        queue,
+                    ) {
+                        MemberDispatch::Handled => return None,
+                        MemberDispatch::Stuck => {
+                            return Some(Constraint::HasMember {
+                                receiver,
+                                label,
+                                member,
+                                origin,
+                            });
+                        }
+                        MemberDispatch::NoCandidate => {}
+                    }
+                }
+                let rendered = self.store.render(&diagnostic_receiver);
+                self.errors.push((
+                    TypeError::UnknownMember {
+                        receiver: rendered,
+                        label: label_str,
+                    },
+                    origin.node,
+                ));
                 None
             }
             Ty::Nominal(symbol, args) => {
@@ -501,6 +615,30 @@ impl<'s> Solver<'s> {
                             .insert(origin.node, MemberResolution::Direct(inherent.symbol));
                     }
                     return None;
+                }
+                let owner_protocols = self.protocol_owner_refs(&label_str, origin.node);
+                if !owner_protocols.is_empty() {
+                    match self.dispatch_member_through(
+                        &owner_protocols,
+                        Some(symbol),
+                        &member_receiver,
+                        &self_receiver,
+                        &label_str,
+                        &member,
+                        origin,
+                        queue,
+                    ) {
+                        MemberDispatch::Handled => return None,
+                        MemberDispatch::Stuck => {
+                            return Some(Constraint::HasMember {
+                                receiver,
+                                label,
+                                member,
+                                origin,
+                            });
+                        }
+                        MemberDispatch::NoCandidate => {}
+                    }
                 }
                 let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((
@@ -848,13 +986,19 @@ impl<'s> Solver<'s> {
             other => other.clone(),
         };
         if witness != requirement.symbol {
-            if let Ty::Nominal(head, head_args) = &head_for_witness
-                && let Some(matched) = self
+            let matched = match &head_for_witness {
+                Ty::Nominal(head, head_args) => self
                     .catalog
                     .matching_conformances(*head, head_args, &protocol)
                     .into_iter()
-                    .next()
-            {
+                    .next(),
+                other => self
+                    .catalog
+                    .matching_protocol_head_conformances(other, &protocol)
+                    .into_iter()
+                    .next(),
+            };
+            if let Some(matched) = matched {
                 let bound = matched.substitution;
                 self.instantiations
                     .entry(origin.node)

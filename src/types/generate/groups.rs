@@ -180,6 +180,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             touchable_level: None,
             local_params: vec![],
             derived_seen: Default::default(),
+            conformance_edges: Default::default(),
         };
         solver.solve(wanteds)
     }

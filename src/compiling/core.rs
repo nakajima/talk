@@ -178,4 +178,25 @@ mod tests {
         assert!(types.catalog.protocols.contains_key(&Symbol::Borrowed));
         assert!(types.catalog.protocols.contains_key(&Symbol::Owner));
     }
+
+    #[test]
+    fn core_iterator_into_array_conformance_is_exported() {
+        let (module, typed) = _compile();
+        let array_into_iterator = module.exports["ArrayIntoIterator"];
+        let into = module.exports["Into"];
+        let target = crate::types::ty::ProtocolRef {
+            protocol: into,
+            args: vec![crate::types::ty::Ty::Nominal(
+                Symbol::Array,
+                vec![crate::types::ty::Ty::Nominal(Symbol::Int, vec![])],
+            )],
+        };
+        let catalog = &typed.program.types().catalog;
+        let matches = catalog.matching_conformances(
+            array_into_iterator,
+            &[crate::types::ty::Ty::Nominal(Symbol::Int, vec![])],
+            &target,
+        );
+        assert_eq!(matches.len(), 1);
+    }
 }

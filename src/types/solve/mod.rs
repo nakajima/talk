@@ -55,6 +55,12 @@ use crate::types::ty::{
 
 const SOLVER_STEP_LIMIT: usize = 100_000;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ConformanceGoal {
+    pub ty: Ty,
+    pub protocol: ProtocolRef,
+}
+
 /// The per-binding-group solver. Borrows the checker's tables; owns nothing.
 /// Dropped (with any leftover state) when the group is done.
 pub struct Solver<'s> {
@@ -89,6 +95,9 @@ pub struct Solver<'s> {
     /// In-flight auto-derived conformances, so recursive nominals resolve
     /// coinductively instead of looping.
     pub derived_seen: rustc_hash::FxHashSet<(Symbol, Symbol)>,
+    /// Axiom-premise dependency edges seen during this solve. A new edge
+    /// that reaches back to its source is a recursive conformance cycle.
+    pub(crate) conformance_edges: FxHashMap<ConformanceGoal, FxHashSet<ConformanceGoal>>,
 }
 
 impl<'s> Solver<'s> {

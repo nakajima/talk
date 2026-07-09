@@ -24,6 +24,15 @@ pub fn normalize_ty(store: &mut VarStore, catalog: &TypeCatalog, ty: &Ty) -> Ty 
             {
                 return normalize_ty(store, catalog, &reduced);
             }
+            if let Ty::Any {
+                protocol: existential_protocol,
+                assoc: overrides,
+            } = &projection_base
+                && existential_protocol == &protocol
+                && let Some((_, reduced)) = overrides.iter().find(|(symbol, _)| *symbol == assoc)
+            {
+                return normalize_ty(store, catalog, reduced);
+            }
             if projection_base == Ty::Param(protocol.protocol) {
                 return Ty::Param(assoc);
             }

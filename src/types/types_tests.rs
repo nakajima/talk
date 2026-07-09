@@ -3047,11 +3047,68 @@ pub mod tests {
     }
 
     #[test]
-    fn protocol_extension_declaring_conformance_is_accepted() {
+    fn protocol_extension_conformance_solves_wanted_conformance() {
         let t = check(
-            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nprotocol R {\n\tfunc r() -> Int\n}\nextend P: R {\n\tfunc r() -> Int { 1 }\n}",
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nprotocol R {\n\tfunc r() -> Int\n}\nextend P: R {\n\tfunc r() -> Int { self.base() }\n}\nfunc takeR<T: R>(x: T) {}\nfunc useP<T: P>(x: T) { takeR(x) }",
         );
         assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_extension_conformance_binds_head_associated_type_for_concrete_receiver() {
+        let t = check(
+            "// no-core\nstruct Sink<T> {}\nprotocol Iterator {\n\tassociated Element\n\tfunc current() -> Element\n}\nprotocol Into<Target> {\n\tconsuming func into() -> Target\n}\nextend Iterator: Into<Sink<Element>> {\n\tconsuming func into() -> Sink<Element> { Sink<Element>() }\n}\nstruct IntIter {}\nextend IntIter: Iterator<Int> {\n\tfunc current() -> Int { 1 }\n}\nlet sink: Sink<Int> = IntIter().into()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "sink"), "Sink<Int>");
+    }
+
+    #[test]
+    fn protocol_extension_conformance_binds_head_associated_type_for_generic_receiver() {
+        let t = check(
+            "// no-core\nstruct Sink<T> {}\nprotocol Iterator {\n\tassociated Element\n\tfunc current() -> Element\n}\nprotocol Into<Target> {\n\tconsuming func into() -> Target\n}\nextend Iterator: Into<Sink<Element>> {\n\tconsuming func into() -> Sink<Element> { Sink<Element>() }\n}\nfunc collect<T: Iterator<Int>>(consume x: T) -> Sink<Int> { x.into() }",
+        );
+        assert_clean(&t);
+        assert_eq!(
+            ty_of(&t, "collect"),
+            "<T0: Iterator>(T0) -> Sink<Int> where Int == T0.Element"
+        );
+    }
+
+    #[test]
+    fn protocol_extension_conformance_binds_head_associated_type_for_existential_receiver() {
+        let t = check(
+            "// no-core\nstruct Sink<T> {}\nprotocol Iterator {\n\tassociated Element\n\tfunc current() -> Element\n}\nprotocol Into<Target> {\n\tconsuming func into() -> Target\n}\nextend Iterator: Into<Sink<Element>> {\n\tconsuming func into() -> Sink<Element> { Sink<Element>() }\n}\nfunc collect(consume x: any Iterator<Element = Int>) -> Sink<Int> { x.into() }",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn overlapping_protocol_head_axiom_is_reported_at_use_site() {
+        let t = check(
+            "// no-core\nprotocol P {}\nprotocol R {\n\tfunc r() -> Int\n}\nstruct S {}\nextend S: P {}\nextend P: R {\n\tfunc r() -> Int { 1 }\n}\nextend S: R {\n\tfunc r() -> Int { 2 }\n}\nlet value = S().r()",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Overlapping conformance")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn recursive_protocol_head_axiom_reports_cycle() {
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc p() -> Int\n}\nprotocol R {\n\tfunc r() -> Int\n}\nextend P: R where Self: R {\n\tfunc r() -> Int { self.p() }\n}\nfunc takeR<T: R>(x: T) {}\nfunc use<T: P>(x: T) { takeR(x) }",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Recursive protocol conformance")),
+            "{errors:?}"
+        );
     }
 
     #[test]

@@ -54,6 +54,7 @@ impl Harness {
             touchable_level: None,
             local_params: vec![],
             derived_seen: Default::default(),
+            conformance_edges: Default::default(),
         };
         solver.solve(wanteds)
     }
@@ -70,7 +71,7 @@ fn occurs_check_rejects_infinite_type() {
 }
 
 #[test]
-fn recursive_conformance_reports_solver_overflow_instead_of_looping() {
+fn recursive_conformance_reports_cycle_diagnostic() {
     let mut h = Harness::new();
     let ty = Symbol::Struct(StructId::new(ModuleId::Current, 1));
     let protocol = Symbol::Protocol(ProtocolId::new(ModuleId::Current, 1));
@@ -96,8 +97,8 @@ fn recursive_conformance_reports_solver_overflow_instead_of_looping() {
     assert!(
         h.errors
             .iter()
-            .any(|(error, _)| matches!(error, TypeError::SolverOverflow { .. })),
-        "expected solver overflow diagnostic, got {:?}",
+            .any(|(error, _)| matches!(error, TypeError::RecursiveConformance { .. })),
+        "expected recursive conformance diagnostic, got {:?}",
         h.errors
     );
 }
