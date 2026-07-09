@@ -1,16 +1,8 @@
 name: TalkSwift XCFramework release
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "SemVer tag to create, for example 0.1.23-swift.1"
-        required: true
-      prerelease:
-        description: "Mark the GitHub release as a prerelease"
-        required: true
-        default: true
-        type: boolean
+  push:
+    tags: ["v*"]
 
 permissions:
   contents: write
