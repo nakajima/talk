@@ -193,6 +193,7 @@ pub struct Formatter<'a> {
     meta_storage: &'a NodeMetaStorage,
     decorators: Vec<Box<dyn FormatterDecorator>>,
     comments: Option<RefCell<CommentStore>>,
+    source: Option<&'a str>,
 }
 
 impl<'a> Formatter<'a> {
@@ -201,6 +202,7 @@ impl<'a> Formatter<'a> {
             meta_storage,
             decorators: vec![],
             comments: None,
+            source: None,
         }
     }
 }
@@ -214,17 +216,20 @@ impl<'a> Formatter<'a> {
             meta_storage,
             decorators,
             comments: None,
+            source: None,
         }
     }
 
     fn new_with_comments(
         meta_storage: &'a NodeMetaStorage,
         comments: Vec<Comment>,
+        source: Option<&'a str>,
     ) -> Formatter<'a> {
         Formatter {
             meta_storage,
             decorators: vec![],
             comments: Some(RefCell::new(CommentStore::new(comments))),
+            source,
         }
     }
 
@@ -424,7 +429,7 @@ impl<'a> Formatter<'a> {
                 type_args,
                 args,
                 trailing_block,
-            } => self.format_call(callee, type_args, args, trailing_block.as_ref()),
+            } => self.format_call(expr, callee, type_args, args, trailing_block.as_ref()),
             ExprKind::Member(receiver, property, ..) => self.format_member(receiver, property),
             ExprKind::Func(func) => self.format_func(func),
             ExprKind::Variable(name) | ExprKind::Constructor(name) => self.format_name(name),
@@ -1052,6 +1057,7 @@ impl<'a> Formatter<'a> {
 
     fn format_call(
         &self,
+        call: &Expr,
         callee: &Expr,
         type_args: &[TypeAnnotation],
         args: &[CallArg],
@@ -1076,6 +1082,24 @@ impl<'a> Formatter<'a> {
 
         let force_trailing_block_multiline = trailing_block.is_some() && Self::is_test_call(callee);
 
+        let arg_docs: Vec<_> = args.iter().map(|arg| self.format_call_arg(arg)).collect();
+
+        if type_args.is_empty() && self.can_omit_call_parens(call, callee, args) {
+            let call_doc = group(concat(
+                result,
+                nest(
+                    1,
+                    concat(text(" "), join(arg_docs, concat(text(","), line()))),
+                ),
+            ));
+            return if let Some(block) = trailing_block {
+                let block_doc = self.format_block_inner(block, !force_trailing_block_multiline);
+                group(concat(call_doc, concat(text(" "), block_doc)))
+            } else {
+                call_doc
+            };
+        }
+
         // If we have a trailing block and no args, omit parens
         if let Some(trailing_block) = trailing_block
             && args.is_empty()
@@ -1084,8 +1108,6 @@ impl<'a> Formatter<'a> {
                 self.format_block_inner(trailing_block, !force_trailing_block_multiline);
             return group(concat(result, concat(text(" "), block_doc)));
         }
-
-        let arg_docs: Vec<_> = args.iter().map(|arg| self.format_call_arg(arg)).collect();
 
         let call_doc = group(concat(
             result,
@@ -1108,6 +1130,30 @@ impl<'a> Formatter<'a> {
         } else {
             call_doc
         }
+    }
+
+    fn can_omit_call_parens(&self, _call: &Expr, callee: &Expr, args: &[CallArg]) -> bool {
+        let Some(CallArg {
+            label: Label::Positional(_),
+            mode: None,
+            value:
+                Expr {
+                    kind: ExprKind::LiteralString(_),
+                    span,
+                    ..
+                },
+            ..
+        }) = args.first()
+        else {
+            return false;
+        };
+        let Some(source) = self.source else {
+            return false;
+        };
+        let Some(between) = source.get(callee.span.end as usize..span.start as usize) else {
+            return false;
+        };
+        !between.contains('(')
     }
 
     fn is_test_call(callee: &Expr) -> bool {
@@ -2454,12 +2500,13 @@ fn comments_from_tokens(tokens: Vec<Token>, source: &str) -> Vec<Comment> {
     comments
 }
 
-fn format_with_comments<Phase: ASTPhase>(
-    ast: &AST<Phase>,
+fn format_with_comments<'a, Phase: ASTPhase>(
+    ast: &'a AST<Phase>,
     width: usize,
     comments: Vec<Comment>,
+    source: Option<&'a str>,
 ) -> String {
-    let formatter = Formatter::new_with_comments(&ast.meta, comments);
+    let formatter = Formatter::new_with_comments(&ast.meta, comments, source);
     formatter.format(&ast.roots, width)
 }
 
@@ -2470,7 +2517,12 @@ pub fn format_string(string: &str) -> String {
             let formatted = if ast.roots.is_empty() {
                 string.to_string()
             } else {
-                format_with_comments(&ast, 80, comments_from_tokens(comments, string))
+                format_with_comments(
+                    &ast,
+                    80,
+                    comments_from_tokens(comments, string),
+                    Some(string),
+                )
             };
             adjust_trailing_newlines(string, formatted)
         }
@@ -2485,7 +2537,12 @@ pub fn format_string_with_width(string: &str, width: usize) -> String {
             let formatted = if ast.roots.is_empty() {
                 string.to_string()
             } else {
-                format_with_comments(&ast, width, comments_from_tokens(comments, string))
+                format_with_comments(
+                    &ast,
+                    width,
+                    comments_from_tokens(comments, string),
+                    Some(string),
+                )
             };
             adjust_trailing_newlines(string, formatted)
         }
@@ -2523,7 +2580,7 @@ mod formatter_tests {
         let formatted = if ast.roots.is_empty() {
             input.to_string()
         } else {
-            format(&ast, width)
+            format_with_comments(&ast, width, vec![], Some(input))
         };
         adjust_trailing_newlines(input, formatted)
     }
@@ -2697,6 +2754,10 @@ mod formatter_tests {
         assert_eq!(format_code("foo()", 80), "foo()");
         assert_eq!(format_code("foo(1)", 80), "foo(1)");
         assert_eq!(format_code("foo(1, 2)", 80), "foo(1, 2)");
+        assert_eq!(format_code("foo\"bar\"", 80), "foo \"bar\"");
+        assert_eq!(format_code("foo \"bar\"", 80), "foo \"bar\"");
+        assert_eq!(format_code("foo(\"bar\")", 80), "foo(\"bar\")");
+        assert_eq!(format_code("foo\"bar\"{ 1 }", 80), "foo \"bar\" { 1 }");
 
         // With generics
         assert_eq!(format_code("foo<Int>()", 80), "foo<Int>()");
@@ -3073,6 +3134,10 @@ mod formatter_tests {
         assert_eq!(
             format_code("test(\"adds\") { assert(1 + 1 == 2, \"did not add\") }", 80),
             "test(\"adds\") {\n\tassert(1 + 1 == 2, \"did not add\")\n}"
+        );
+        assert_eq!(
+            format_code("test\"adds\"{ assert(1 + 1 == 2, \"did not add\") }", 80),
+            "test \"adds\" {\n\tassert(1 + 1 == 2, \"did not add\")\n}"
         );
         assert_eq!(
             format_code("other(\"adds\") { assert(true, \"ok\") }", 80),

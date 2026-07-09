@@ -1,9 +1,9 @@
-test("maps") {
+test "maps" {
 	let a = [1, 2, 3, 4]
 	assert(a.iter().map { i in i.show() }.to_array() == ["1", "2", "3", "4"])
 }
 
-test("skips") {
+test "skips" {
 	let a = [1, 2, 3, 4]
 	assert(a.into_iter().skip(2).to_array() == [3, 4])
 }

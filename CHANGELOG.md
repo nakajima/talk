@@ -1,5 +1,92 @@
 # Changelog
 
+## Unreleased (2026-07-08) — Protocol-head conformance axioms (ADR 0020)
+
+Protocol-head conformance extensions are now first-class conformance axiom
+schemes. An extension such as:
+
+```talk
+extend Iterator: Into<Array<Element>> {
+	consuming func into() -> Array<Element> { ... }
+}
+```
+
+means `forall Self. Self: Iterator => Self: Into<Array<Self.Element>>`,
+rather than a nominal conformance for a type literally named `Iterator`.
+Default-only `extend P { ... }` still registers protocol extension methods as
+requirements, while `extend P: Q { ... }` now goes through the same conformance
+row machinery as other conformances.
+
+The collector binds a protocol head's `Self`, protocol parameters, and declared
+associated types as row parameters. The solver can now satisfy non-nominal
+`Conforms` wanteds by matching protocol-head axiom conclusions, substituting
+premises, and carrying the selected witness/member instantiation into the typed
+output. Member lookup dispatches through these axioms for concrete, generic,
+existential, and projection receivers, and the published instantiations carry
+protocol `Self`, protocol arguments, and associated projections to lowering.
+Existential associated-type overrides now normalize through projection reads.
+
+Overlapping candidates are reported as overlapping conformances instead of
+choosing the first table row. Recursive conformance applications now produce a
+`Recursive protocol conformance` diagnostic rather than looping until overflow,
+and the solver has a hard step limit with rendered constraint summaries as a
+last-resort guard.
+
+## Unreleased (2026-07-08) — First-class iteration and access-marked for loops (ADR 0021)
+
+`for` loops are no longer erased by a pre-resolution syntactic desugar. The
+parser and resolver keep `StmtKind::For` as a real source construct, including
+its iterable access marker:
+
+```talk
+for item in items { ... }          // shared, calls iter()
+for item in mut items { ... }      // exclusive, calls iter_mut()
+for item in consume items { ... }  // consuming, calls into_iter()
+```
+
+The type checker resolves the implicit `iter`/`iter_mut`/`into_iter`, `next`,
+and mut-mode `write_back`/`finish` calls on checker-minted node ids and
+publishes a `ForPlan`. Typed-program building then elaborates the checked loop
+into ordinary typed nodes at those ids, so flow and lowering see real calls with
+normal member resolutions, instantiations, effects, drops, and ownership facts.
+The loop binder's type comes from the selected iterator's `Element` through the
+`.some` payload of `next()`, not from a synthetic pre-check declaration.
+
+Mut iteration moves the source into an iterator, writes a single-name binder
+back after each completed iteration, and restores the source with `finish()` at
+loop exit; unsupported markers, non-variable mut sources, and mut destructuring
+are diagnosed. Flow/lowering learned the resulting loop, borrow, write-back,
+and body-value drop shapes instead of rediscovering them from resolver-made
+source.
+
+Core iteration was reshaped around this model. `Iterator` now provides default
+`iter()`/`into_iter()`, consuming `map`/`skip`, `index`, and `to_array()`, plus a
+blanket `Into<Array<Element>>` conformance through the protocol-head axiom
+scheme. `Array` has borrowed `iter()`, consuming `into_iter()`, mut
+`iter_mut()` with `write_back`/`finish`, and `_replace` for write-back. The
+`From` and `Into` protocols now use protocol inputs (`From<Source>`,
+`Into<Target>`) instead of associated outputs.
+
+## Unreleased (2026-07-08) — Character literals and syntax sugar (ADR 0022)
+
+Single-quoted character literals now have their own token and expression form:
+`'a'`, `'😎'`, `'\n'`, and `'\''` type as `Character`. The lexer distinguishes
+them from effect names/effect rows, validates literal escapes and Unicode
+escapes, and reports empty or invalid character literals. Formatting,
+highlighting, typed-AST construction, checking, and lowering now preserve them;
+lowering builds a `Character` value over interned literal bytes using the same
+unescape path as string literals.
+
+Several small call/closure sugars also landed:
+
+- calls may omit parentheses when the first argument is a string literal:
+  `say "hello"` and `say "hello" { ... }`;
+- a parenthesized final block argument is treated as the trailing block:
+  `map({ x in x })` parses like `map { x in x }`;
+- trailing closure blocks can synthesize positional block parameters from
+  `$0`, `$1`, ... usages, so `map { $0 * $1 }` works without an explicit
+  argument list.
+
 ## Unreleased (2026-07-07) — Borrow-by-default parameters (ADR 0018)
 
 Function parameters are now borrow-by-default. An unadorned `x: T`
