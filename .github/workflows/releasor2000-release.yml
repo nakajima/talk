@@ -1,0 +1,112 @@
+name: Releasor2000 release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASOR2000_VERSION: "0.1.8"
+
+concurrency:
+  group: releasor2000-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Run releasor2000 release
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Cargo.toml version change
+        id: version
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          read_package_version() {
+            awk '
+              /^\[package\]/ { in_package = 1; next }
+              /^\[/ { in_package = 0 }
+              in_package && /^[[:space:]]*version[[:space:]]*=/ {
+                sub(/^[^=]*=[[:space:]]*/, "", $0)
+                gsub(/["[:space:]]/, "", $0)
+                print
+                exit
+              }
+            '
+          }
+
+          current_version="$(read_package_version < Cargo.toml)"
+          if [[ -z "$current_version" ]]; then
+            echo "::error::could not read package.version from Cargo.toml"
+            exit 1
+          fi
+
+          old_version=""
+          before="${BEFORE_SHA:-}"
+          if [[ -n "$before" && ! "$before" =~ ^0+$ ]] && git cat-file -e "${before}:Cargo.toml" 2>/dev/null; then
+            old_version="$(git show "${before}:Cargo.toml" | read_package_version)"
+          fi
+
+          echo "version=${current_version}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$old_version" == "$current_version" ]]; then
+            echo "Cargo.toml package.version unchanged (${current_version}); skipping release"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ -z "$old_version" ]]; then
+            echo "No previous Cargo.toml package.version found; releasing ${current_version}"
+          else
+            echo "Cargo.toml package.version changed: ${old_version} -> ${current_version}"
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@nightly
+        if: steps.version.outputs.changed == 'true'
+        with:
+          targets: aarch64-apple-darwin,x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+
+      - name: Configure git user
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install Linux cross-build tools
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install zig
+          cargo install cargo-zigbuild --locked
+
+      - name: Install releasor2000
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL "https://github.com/nakajima/releasor2000/releases/download/v${RELEASOR2000_VERSION}/install.sh" -o "$RUNNER_TEMP/releasor2000-install.sh"
+          INSTALL_DIR="$HOME/.local/bin" sh "$RUNNER_TEMP/releasor2000-install.sh"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run releasor2000 release
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: releasor2000 release

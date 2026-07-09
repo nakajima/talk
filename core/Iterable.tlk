@@ -10,7 +10,6 @@ public protocol Iterator {
 	mut func next() -> Element?
 
 	consuming func iter() -> Self { self }
-
 	consuming func into_iter() -> Self { self }
 
 	consuming func map<U>(consume fn: (Self.Element) -> U) -> Map<Self, U> {
@@ -79,12 +78,12 @@ public protocol Iterable {
 
 // MARK: Map
 
-public struct Map<T, U> where T: Iterator {
-	let inner: T
-	let map: (T.Element) -> U
+public struct Map<I, U> where I: Iterator {
+	let inner: I
+	let map: (I.Element) -> U
 }
 
-extend Map<T, U>: Iterator where T: Iterator {
+extend Map<I, U>: Iterator where I: Iterator {
 	mut func next() -> U? {
 		if let .some(elem) = self.inner.next() {
 			return .some(self.map(elem))
@@ -93,6 +92,14 @@ extend Map<T, U>: Iterator where T: Iterator {
 		}
 	}
 }
+
+// MARK: Skip
+
+struct Skip<I: Iterator> {
+	let inner: I
+}
+
+// MARK: IndexIterable
 
 public protocol IndexIterable {
 	associated Element
