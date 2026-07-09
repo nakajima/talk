@@ -25,10 +25,6 @@ targets = [
 [channels.git]
 enabled = true
 
-[channels.homebrew]
-tap = "nakajima/homebrew-tap"
-formula-name = "talktalk"
-
 # [channels.cargo]
 # crate-name = "talk"
 
