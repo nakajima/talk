@@ -864,35 +864,81 @@ impl TypeCatalog {
         self_args: &[Ty],
         target: &ProtocolRef,
     ) -> Vec<ConformanceMatch<'a>> {
+        let self_ty = Ty::Nominal(head, self_args.to_vec());
         self.conformances
             .iter()
             .filter_map(|((candidate_head, candidate_protocol), conformance)| {
-                if *candidate_head != head || candidate_protocol.protocol != target.protocol {
-                    return None;
-                }
-                if conformance.self_args.len() != self_args.len()
-                    || conformance.protocol_args.len() != target.args.len()
-                {
-                    return None;
-                }
-                let mut substitution = FxHashMap::default();
-                let self_matches = conformance
+                self.match_conformance_row(
+                    *candidate_head,
+                    candidate_protocol,
+                    conformance,
+                    Some((head, self_args)),
+                    &self_ty,
+                    target,
+                )
+            })
+            .collect()
+    }
+
+    pub fn matching_protocol_head_conformances<'a>(
+        &'a self,
+        self_ty: &Ty,
+        target: &ProtocolRef,
+    ) -> Vec<ConformanceMatch<'a>> {
+        self.conformances
+            .iter()
+            .filter_map(|((candidate_head, candidate_protocol), conformance)| {
+                self.match_conformance_row(
+                    *candidate_head,
+                    candidate_protocol,
+                    conformance,
+                    None,
+                    self_ty,
+                    target,
+                )
+            })
+            .collect()
+    }
+
+    fn match_conformance_row<'a>(
+        &'a self,
+        candidate_head: Symbol,
+        candidate_protocol: &'a ProtocolRef,
+        conformance: &'a Conformance,
+        nominal_head: Option<(Symbol, &[Ty])>,
+        self_ty: &Ty,
+        target: &ProtocolRef,
+    ) -> Option<ConformanceMatch<'a>> {
+        if candidate_protocol.protocol != target.protocol
+            || conformance.protocol_args.len() != target.args.len()
+        {
+            return None;
+        }
+        let mut substitution = FxHashMap::default();
+        let self_matches = if matches!(candidate_head, Symbol::Protocol(_)) {
+            conformance.self_args.is_empty()
+                && match_pattern(&Ty::Param(candidate_head), self_ty, &mut substitution)
+        } else if let Some((head, self_args)) = nominal_head {
+            candidate_head == head
+                && conformance.self_args.len() == self_args.len()
+                && conformance
                     .self_args
                     .iter()
                     .zip(self_args)
-                    .all(|(pattern, actual)| match_pattern(pattern, actual, &mut substitution));
-                let protocol_matches = conformance
-                    .protocol_args
-                    .iter()
-                    .zip(&target.args)
-                    .all(|(pattern, actual)| match_key_pattern(pattern, actual, &mut substitution));
-                (self_matches && protocol_matches).then_some(ConformanceMatch {
-                    protocol: candidate_protocol,
-                    conformance,
-                    substitution,
-                })
-            })
-            .collect()
+                    .all(|(pattern, actual)| match_pattern(pattern, actual, &mut substitution))
+        } else {
+            false
+        };
+        let protocol_matches = conformance
+            .protocol_args
+            .iter()
+            .zip(&target.args)
+            .all(|(pattern, actual)| match_key_pattern(pattern, actual, &mut substitution));
+        (self_matches && protocol_matches).then_some(ConformanceMatch {
+            protocol: candidate_protocol,
+            conformance,
+            substitution,
+        })
     }
 
     /// All associated types reachable from a protocol (through supers), in a

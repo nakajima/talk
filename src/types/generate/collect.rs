@@ -68,10 +68,13 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         self.register_catalog_type_aliases();
         self.collect_explicit_conformance_claims(&top_decls, &struct_decls);
 
-        // Protocol extensions register before conforming extends so their
-        // defaulted requirements are witnessable regardless of decl order.
+        // Default-only protocol extensions register before conforming extends so their
+        // requirements are witnessable regardless of declaration order. Protocol-head
+        // conformance extends use the normal conformance-row path below.
         for decl in &top_decls {
-            if let Some(protocol) = self.protocol_extension_head(decl) {
+            if let Some(protocol) = self.protocol_extension_head(decl)
+                && matches!(&decl.kind, DeclKind::Extend { conformances, .. } if conformances.is_empty())
+            {
                 self.register_protocol_extension(protocol, decl, &mut protocol_defaults);
             }
         }
@@ -106,8 +109,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     }
                 }
                 DeclKind::Let { .. } => destructuring_lets.push(decl),
-                DeclKind::Extend { .. } => {
-                    if self.protocol_extension_head(decl).is_none()
+                DeclKind::Extend { conformances, .. } => {
+                    let protocol_default_extension = self.protocol_extension_head(decl).is_some()
+                        && conformances.is_empty();
+                    if !protocol_default_extension
                         && let Some(work) = self.register_extend(decl, None)
                     {
                         extends.push(work);
@@ -1144,6 +1149,11 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             (Name::SelfType(_), Some(parent)) | (_, Some(parent)) => parent,
             _ => name.symbol().ok()?,
         };
+        let protocol_head = enclosing.is_none() && self.catalog.protocols.contains_key(&head);
+        if protocol_head && (!row_generics.is_empty() || !generics.is_empty()) {
+            self.unsupported(decl.id, "generic protocol extensions");
+            return None;
+        }
         self.register_generic_bounds(row_generics);
         self.register_generic_bounds(generics);
         self.register_where_bounds(where_clause.as_ref());
@@ -1151,8 +1161,12 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         // The row's own rigid params and the head application they index:
         // a nested extend uses the enclosing struct's generics; a top-level
         // `extend Array<Element>` uses its declared generics; plain heads
-        // (`extend Int`) have none.
-        let self_params: Vec<Symbol> = if enclosing.is_some() || generics.is_empty() {
+        // (`extend Int`) have none. A protocol head is already a quantified
+        // Self, so the conformance row's self pattern is empty and the
+        // protocol's Self/params/associated types become row parameters.
+        let self_params: Vec<Symbol> = if protocol_head {
+            vec![]
+        } else if enclosing.is_some() || generics.is_empty() {
             self.catalog
                 .structs
                 .get(&head)
@@ -1164,15 +1178,50 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         };
         let mut params = generic_symbols(row_generics);
         params.extend(self_params.iter().copied());
+        if protocol_head {
+            params.push(head);
+            if let Some(info) = self.catalog.protocols.get(&head) {
+                params.extend(info.params.iter().copied());
+                params.extend(info.assoc.values().copied());
+            }
+        }
         let self_args: Vec<Ty> = self_params.iter().map(|p| Ty::Param(*p)).collect();
-        let self_ty = Ty::Nominal(head, self_args.clone());
+        let self_ty = if protocol_head {
+            Ty::Param(head)
+        } else {
+            Ty::Nominal(head, self_args.clone())
+        };
         self.self_types.push(self_ty.clone());
         let context_generics: Vec<GenericDecl> = row_generics
             .iter()
             .cloned()
             .chain(generics.iter().cloned())
             .collect();
-        let context = self.declared_predicates(&context_generics, where_clause.as_ref());
+        let mut context = self.declared_predicates(&context_generics, where_clause.as_ref());
+        if protocol_head {
+            let head_protocol = ProtocolRef {
+                protocol: head,
+                args: self
+                    .catalog
+                    .protocols
+                    .get(&head)
+                    .map(|info| info.params.iter().copied().map(Ty::Param).collect())
+                    .unwrap_or_default(),
+            };
+            context.insert(
+                0,
+                Predicate::Conforms {
+                    ty: self_ty.clone(),
+                    protocol: head_protocol.clone(),
+                },
+            );
+            for (_, owner, assoc) in self.catalog.declared_associated_types_in_ref(&head_protocol) {
+                context.push(Predicate::TypeEq(
+                    Ty::Param(assoc),
+                    Ty::Proj(Box::new(self_ty.clone()), owner, assoc),
+                ));
+            }
+        }
         self.self_types.pop();
 
         // Collect declared members (witnesses and inherent methods).
@@ -1330,6 +1379,23 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             if !by_head.contains(&protocol) {
                 by_head.push(protocol.clone());
             }
+        }
+
+        if protocol_head {
+            for label in members.keys() {
+                if !witnessed.contains(label) {
+                    self.unsupported(
+                        decl.id,
+                        "methods in a protocol-extension conformance must witness a target protocol requirement",
+                    );
+                }
+            }
+            return Some(ExtendWork {
+                self_ty,
+                context,
+                decl,
+                protocols,
+            });
         }
 
         // Members that witness no requirement are inherent: register their
