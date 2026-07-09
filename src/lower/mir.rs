@@ -134,6 +134,11 @@ pub(crate) enum Statement {
         lhs: Pattern,
         type_annotation: Option<TypeAnnotation>,
         rhs: Option<Expr>,
+        /// A marked `for` source (ADR 0021). `consume` rejects the silent
+        /// clone a later use or a borrowed root would take; `mut` rejects
+        /// borrowed roots only (the loop restores the place at its end, so
+        /// later uses are fine).
+        for_source_mode: Option<crate::node_kinds::call_arg::ArgMode>,
     },
     Assign {
         lhs: Expr,
@@ -819,6 +824,7 @@ impl<'types> Builder<'types> {
                 lhs,
                 type_annotation,
                 rhs,
+                source_mode,
             } => {
                 let function_owner = match (rhs.as_ref().map(|rhs| &rhs.kind), &lhs.kind) {
                     (Some(ExprKind::Func(_)), PatternKind::Bind(name)) => name.symbol().ok(),
@@ -857,6 +863,7 @@ impl<'types> Builder<'types> {
                         lhs: lhs.clone(),
                         type_annotation: type_annotation.clone(),
                         rhs: rhs.clone(),
+                        for_source_mode: *source_mode,
                     },
                 );
                 current
@@ -1245,7 +1252,15 @@ impl<'types> Builder<'types> {
                 current
             }
             ExprKind::Match(scrutinee, arms) => {
-                self.lower_match(expr.id, scrutinee, arms, current, temp_drops)
+                // The result type reads off the node (build bakes it),
+                // never the checker's table — elaborated matches (`for`
+                // desugaring) have no table entry.
+                let result_ty = expr
+                    .existential_pack
+                    .as_ref()
+                    .map(|pack| pack.payload.clone())
+                    .unwrap_or_else(|| expr.ty.clone());
+                self.lower_match(expr.id, scrutinee, arms, result_ty, current, temp_drops)
             }
             ExprKind::RecordLiteral { fields, spread } => {
                 let mut current = current;
@@ -1416,6 +1431,7 @@ impl<'types> Builder<'types> {
         expr_id: NodeID,
         scrutinee: &Expr,
         arms: &[MatchArm],
+        result_ty: Ty,
         current: BlockId,
         temp_drops: &mut Vec<Expr>,
     ) -> BlockId {
@@ -1428,13 +1444,6 @@ impl<'types> Builder<'types> {
         let temp = self.next_temp;
         self.next_temp += 1;
         self.temp_subs.insert(expr_id, temp);
-        let result_ty = self
-            .types
-            .existential_packs
-            .get(&expr_id)
-            .map(|pack| pack.payload.clone())
-            .or_else(|| self.types.node_types.get(&expr_id).cloned())
-            .unwrap_or(Ty::Error);
         temp_drops.push(self.temp_expr(expr_id, scrutinee.span, temp, result_ty.clone()));
         let mut scrutinee_sub = scrutinee.clone();
         self.substitute_temps_expr(&mut scrutinee_sub);

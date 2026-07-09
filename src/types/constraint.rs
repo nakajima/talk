@@ -120,6 +120,17 @@ pub enum Constraint {
         found: Ty,
         origin: CtOrigin,
     },
+    /// Application-position owned-`Param` slot whose argument type is not
+    /// known yet (a call result still being solved). If `found` later
+    /// resolves to a borrow, the argument satisfies the owned slot by a
+    /// clone recorded at the origin node — elided or emitted per
+    /// instantiation by lowering (ADR 0021). Otherwise it is the plain
+    /// equality this deferral replaced.
+    CoerceOwned {
+        expected: Ty,
+        found: Ty,
+        origin: CtOrigin,
+    },
     /// The type a match's patterns check against: `scrutinee` with a
     /// top-level borrow stripped — patterns match through borrows
     /// (the runtime erases them; binders alias the borrowed payloads).

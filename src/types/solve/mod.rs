@@ -165,6 +165,11 @@ impl<'s> Solver<'s> {
                         &mut queue,
                         &mut stuck,
                     ),
+                    Constraint::CoerceOwned {
+                        expected,
+                        found,
+                        origin,
+                    } => self.solve_coerce_owned(expected, found, origin, &mut queue, &mut stuck),
                     Constraint::Conforms {
                         ty,
                         protocol,
@@ -347,6 +352,9 @@ impl<'s> Solver<'s> {
                         origin,
                     });
                 }
+                coerce @ Constraint::CoerceOwned { .. } => {
+                    residual.push(coerce);
+                }
                 _ => {}
             }
         }
@@ -408,6 +416,74 @@ impl<'s> Solver<'s> {
         }
     }
 
+    /// The owned twin of `solve_apply_borrow`: an owned slot fed a
+    /// still-unsolved argument. A borrow-resolved argument satisfies an
+    /// owned `Param` (per-instantiation clone) or a Copy/CheapClone
+    /// nominal (the eager tier-2 rule's deferred form); anything else is
+    /// the plain equality this deferral replaced.
+    fn solve_coerce_owned(
+        &mut self,
+        expected: Ty,
+        found: Ty,
+        origin: CtOrigin,
+        queue: &mut Vec<Constraint>,
+        stuck: &mut Vec<Constraint>,
+    ) {
+        let found = normalize_ty(self.store, self.catalog, &found);
+        match self.store.shallow(&found) {
+            Ty::Var(_) => stuck.push(Constraint::CoerceOwned {
+                expected,
+                found,
+                origin,
+            }),
+            Ty::Borrow(_, found_inner) => {
+                let coerces = match self.store.shallow(&expected) {
+                    // The slot's own type is still unsolved: whether this
+                    // is a coercion (owned slot) or a plain borrow payload
+                    // (e.g. `Optional<&T>`) is not decidable yet. Wait; the
+                    // fixpoint default turns leftovers into the plain
+                    // equality (today's inference).
+                    Ty::Var(_) => {
+                        stuck.push(Constraint::CoerceOwned {
+                            expected,
+                            found,
+                            origin,
+                        });
+                        return;
+                    }
+                    Ty::Param(_) => true,
+                    Ty::Nominal(symbol, _) => {
+                        if self.catalog.copies_out_of_borrow(symbol) {
+                            if self.catalog.grade_of(symbol) != crate::types::catalog::Grade::Copy {
+                                self.coerce_clones.insert(origin.node);
+                            }
+                            queue.push(Constraint::Eq(
+                                expected,
+                                (*found_inner).clone(),
+                                origin.nested(),
+                            ));
+                            return;
+                        }
+                        false
+                    }
+                    _ => false,
+                };
+                if coerces {
+                    self.coerce_clones.insert(origin.node);
+                    queue.push(Constraint::Eq(
+                        expected,
+                        (*found_inner).clone(),
+                        origin.nested(),
+                    ));
+                } else {
+                    queue.push(Constraint::Eq(expected, found, origin.nested()));
+                }
+            }
+            Ty::Error => {}
+            _ => queue.push(Constraint::Eq(expected, found, origin.nested())),
+        }
+    }
+
     fn default_apply_borrows(
         &mut self,
         stuck: &mut Vec<Constraint>,
@@ -417,6 +493,16 @@ impl<'s> Solver<'s> {
         let mut defaulted = false;
         for constraint in stuck.drain(..) {
             match constraint {
+                Constraint::CoerceOwned {
+                    expected,
+                    found,
+                    origin,
+                } if matches!(self.store.shallow(&found), Ty::Var(_))
+                    || matches!(self.store.shallow(&expected), Ty::Var(_)) =>
+                {
+                    queue.push(Constraint::Eq(expected, found, origin.nested()));
+                    defaulted = true;
+                }
                 Constraint::ApplyBorrow {
                     expected_inner,
                     found,
@@ -497,6 +583,13 @@ impl<'s> Solver<'s> {
                 let expected_inner = self.store.render(expected_inner);
                 let found = self.store.render(found);
                 format!("borrowed argument &{expected_inner} accepts {found}")
+            }
+            Constraint::CoerceOwned {
+                expected, found, ..
+            } => {
+                let expected = self.store.render(expected);
+                let found = self.store.render(found);
+                format!("owned slot {expected} accepts {found}")
             }
             Constraint::PatternView {
                 scrutinee, view, ..

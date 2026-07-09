@@ -470,6 +470,11 @@ pub enum DeclKind {
         #[drive(skip)]
         type_annotation: Option<TypeAnnotation>,
         rhs: Option<Expr>,
+        /// A `consume`/`mut` mark on the binding's source (a `for`
+        /// statement's elaborated hidden-source bind): flow checks the
+        /// rhs place with the marker's move semantics.
+        #[drive(skip)]
+        source_mode: Option<crate::node_kinds::call_arg::ArgMode>,
     },
     Protocol {
         #[drive(skip)]

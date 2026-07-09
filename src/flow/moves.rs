@@ -221,6 +221,7 @@ pub(crate) struct BodyContext {
     param_tys: FxHashMap<crate::name_resolution::symbol::Symbol, Ty>,
     /// Temp numbering restarts per body; the consumed set must too.
     consumed_temps: rustc_hash::FxHashSet<u32>,
+    ret_is_borrow: bool,
 }
 
 /// One scope's tracked locals, in declaration order.
@@ -253,6 +254,10 @@ pub(crate) struct MoveChecker<'a> {
     liveness: Liveness,
     /// `&`-typed (borrow-containing) parameters of the current body.
     pub(crate) borrowed_params: FxHashSet<crate::name_resolution::symbol::Symbol>,
+    /// Whether the current body's declared return type is a borrow: its
+    /// returns borrow (provenance-checked) instead of consuming, even when
+    /// the returned expression's own type is owned.
+    pub(crate) ret_is_borrow: bool,
     /// Parameter types of the current body (for borrowed-root queries).
     pub(crate) param_tys: FxHashMap<crate::name_resolution::symbol::Symbol, Ty>,
     /// Which parameter indices a free function's returned borrow reaches.
@@ -304,6 +309,7 @@ impl<'a> MoveChecker<'a> {
             liveness: Liveness::default(),
             consumed_temps: rustc_hash::FxHashSet::default(),
             borrowed_params: FxHashSet::default(),
+            ret_is_borrow: false,
             param_tys: FxHashMap::default(),
             return_reach: FxHashMap::default(),
             consumed: FxHashSet::default(),
@@ -398,6 +404,12 @@ impl<'a> MoveChecker<'a> {
                 continue;
             }
             self.borrowed_params.insert(symbol);
+            // A borrowed parameter's storage arrives initialized like any
+            // other: without this, an `AssignmentReplace` drop for one of
+            // its fields (`self.storage = fresh` in a `mut func`) classifies
+            // Dead and the replaced value leaks. No scope-exit candidates
+            // exist for borrows, so this only feeds replace classification.
+            state.restore(&Place::root(symbol));
             let place = Place::root(symbol);
             let kind = match &ty {
                 Ty::Borrow(perm, _) => *perm,
@@ -420,8 +432,16 @@ impl<'a> MoveChecker<'a> {
     /// returns consume (which also checks move-out-of-borrowed and closure
     /// escapes).
     pub(crate) fn check_return_value(&mut self, expr: &typed_ast::Expr, state: &mut MoveState) {
-        if self.grades.contains_borrowed(&expr.ty) {
+        // A borrow-typed function return is a borrow even when the
+        // returned expression's own type is owned (`-> &mut Storage {
+        // self.storage }`): consuming it would extract — a tier-2 clone
+        // whose retain nothing ever releases.
+        if self.ret_is_borrow || self.grades.contains_borrowed(&expr.ty) {
+            // Embedded rvalue temps are still delivered: unmarked, their
+            // `TemporaryEnd` candidates would classify live and free the
+            // returned value out from under the caller.
             self.check_return_provenance(expr, state);
+            self.mark_rvalue_temps_consumed(expr);
             self.walk_expr(expr, state);
         } else {
             self.consume_expr(expr, state);
@@ -557,6 +577,7 @@ impl<'a> MoveChecker<'a> {
             borrowed_params: std::mem::take(&mut self.borrowed_params),
             param_tys: std::mem::take(&mut self.param_tys),
             consumed_temps: std::mem::take(&mut self.consumed_temps),
+            ret_is_borrow: std::mem::take(&mut self.ret_is_borrow),
         };
         if is_function {
             self.fn_depth += 1;
@@ -573,6 +594,7 @@ impl<'a> MoveChecker<'a> {
         self.borrowed_params = outer.borrowed_params;
         self.param_tys = outer.param_tys;
         self.consumed_temps = outer.consumed_temps;
+        self.ret_is_borrow = outer.ret_is_borrow;
     }
 
     /// Open the body's root scope frame, adopting any pending locals the
@@ -870,6 +892,44 @@ impl<'a> MoveChecker<'a> {
     /// `consume`-marked argument: like `consume_expr`, but a place moves
     /// even when a later use is live (no liveness auto-clone) and a
     /// borrowed extraction never falls back to a tier-2 clone.
+    /// A marked `for` source is a real move: both `consume` and `mut`
+    /// reject sources reached through borrows (the silent clone would
+    /// mutate or drain a copy); `consume` additionally rejects sources
+    /// used again after the loop, while `mut` restores the place at loop
+    /// end so later uses are fine. Rvalue sources are already owned;
+    /// nothing to check.
+    pub(crate) fn check_marked_for_source(
+        &mut self,
+        mode: crate::node_kinds::call_arg::ArgMode,
+        rhs: &typed_ast::Expr,
+    ) {
+        use crate::node_kinds::call_arg::ArgMode;
+        let marker = match mode {
+            ArgMode::Consume => "consume",
+            ArgMode::Mut => "mut",
+            ArgMode::Borrow | ArgMode::Copy => return,
+        };
+        let Some(place) = self.place(rhs) else { return };
+        if let Some(Ty::Borrow(..)) = self.root_ty(place.root) {
+            let error = OwnershipError::ArgumentMarker {
+                marker: marker.into(),
+                reason: "cannot take a value reached through a borrow".into(),
+            };
+            self.error(error, rhs.id);
+            return;
+        }
+        if mode == ArgMode::Consume
+            && !self.grades.is_copy(&rhs.ty)
+            && !self.liveness.dead_after(rhs.id, place.root)
+        {
+            let error = OwnershipError::ArgumentMarker {
+                marker: marker.into(),
+                reason: "the value is used again later".into(),
+            };
+            self.error(error, rhs.id);
+        }
+    }
+
     fn consume_expr_forced(&mut self, expr: &typed_ast::Expr, state: &mut MoveState) {
         if let Some(place) = self.place(expr) {
             if let Some(summary) = state.closure_captures.get(&place).cloned() {
@@ -970,6 +1030,9 @@ impl<'a> MoveChecker<'a> {
                     let perm = *perm;
                     self.walk_expr(receiver, state);
                     if !is_object && let Some(receiver_place) = self.place(receiver) {
+                        if perm.is_exclusive() {
+                            self.check_exclusive_root(receiver.id, &receiver_place);
+                        }
                         let owner = state.loan_owner_for(&receiver_place);
                         let perm = state.rebased_perm(&receiver_place, perm);
                         self.check_borrow_conflicts(
@@ -1012,6 +1075,9 @@ impl<'a> MoveChecker<'a> {
                     let perm = *perm;
                     self.walk_expr(&arg.value, state);
                     if !is_object && let Some(arg_place) = self.place(&arg.value) {
+                        if perm.is_exclusive() {
+                            self.check_exclusive_root(arg.value.id, &arg_place);
+                        }
                         let owner = state.loan_owner_for(&arg_place);
                         let perm = state.rebased_perm(&arg_place, perm);
                         self.check_borrow_conflicts(

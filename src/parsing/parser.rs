@@ -1390,6 +1390,7 @@ impl<'a> Parser<'a> {
         let pattern = self.parse_pattern()?;
         self.consume(TokenKind::In)?;
         self.push_context(ParseContext::For);
+        let source_mode = self.arg_mode();
         let iterable = self.expr()?.as_expr();
         self.pop_context();
         let body = self.block(BlockContext::Loop, true)?;
@@ -1398,9 +1399,12 @@ impl<'a> Parser<'a> {
             id,
             span,
             kind: StmtKind::For {
-                pattern,
                 iterable: Box::new(iterable),
+                source_mode: source_mode.map(|(mode, _)| mode),
+                pattern,
                 body,
+                hidden_source: format!("__for_src_{}", id.1).into(),
+                hidden_iter: format!("__for_iter_{}", id.1).into(),
             },
         })
     }

@@ -600,6 +600,201 @@ pub mod tests {
         assert_eq!(value, Value::I64(1));
     }
 
+    // ----- Iteration/access regression matrix (ADR 0021) ----------------------
+
+    #[test]
+    fn vm_for_loop_over_named_array_of_droppable_strings() {
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [\"a\" + \"b\", \"c\" + \"d\"]\n\tfor x in xs {\n\t\tprint(x)\n\t}\n\tprint(xs.count)\n\t0\n}",
+        );
+        assert_eq!(out, "ab\ncd\n2\n");
+    }
+
+    #[test]
+    fn vm_for_loop_over_rvalue_array() {
+        // The rvalue source must live for the whole loop and drop once.
+        let (_, out) = run_on_both_engines_io(
+            "func make() -> Array<String> {\n\t[\"a\" + \"b\", \"c\" + \"d\"]\n}\nfunc main() -> Int {\n\tfor x in make() {\n\t\tprint(x)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "ab\ncd\n");
+    }
+
+    #[test]
+    fn vm_for_loop_over_nested_droppable_elements() {
+        // Element is itself a droppable container: no double drop of the
+        // inner buffer, no leak of the outer one.
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet a = [[\"x\" + \"y\"]]\n\tfor row in a {\n\t\tprint(row.count)\n\t}\n\tprint(a.count)\n\t0\n}",
+        );
+        assert_eq!(out, "1\n1\n");
+    }
+
+    #[test]
+    fn vm_for_loop_break_drops_per_iteration_binders() {
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [\"a\" + \"b\", \"c\" + \"d\", \"e\" + \"f\"]\n\tlet i = 0\n\tfor x in xs {\n\t\tif i == 1 {\n\t\t\tbreak\n\t\t}\n\t\tprint(x)\n\t\ti = i + 1\n\t}\n\tprint(xs.count)\n\t0\n}",
+        );
+        assert_eq!(out, "ab\n3\n");
+    }
+
+    #[test]
+    fn vm_for_loop_continue_drops_per_iteration_binders() {
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [\"a\" + \"b\", \"c\" + \"d\"]\n\tlet i = 0\n\tfor x in xs {\n\t\ti = i + 1\n\t\tif i == 1 {\n\t\t\tcontinue\n\t\t}\n\t\tprint(x)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "cd\n");
+    }
+
+    #[test]
+    fn vm_two_shared_iterators_over_one_array_interleave() {
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet a = [7, 8]\n\tlet it1 = a.iter()\n\tlet it2 = a.iter()\n\tif let .some(v) = it1.next() { print(v) }\n\tif let .some(v) = it2.next() { print(v) }\n\tif let .some(v) = it1.next() { print(v) }\n\t0\n}",
+        );
+        assert_eq!(out, "7\n7\n8\n");
+    }
+
+    #[test]
+    fn vm_match_on_borrowed_loop_element_leaves_source_intact() {
+        // Matching through the borrowed element must not move or drop the
+        // array's payload; the source stays usable after the loop.
+        let (_, out) = run_on_both_engines_io(
+            "enum Entry {\n\tcase doc(String)\n}\nfunc main() -> Int {\n\tlet entries = [Entry.doc(\"a\" + \"b\")]\n\tfor entry in entries {\n\t\tmatch entry {\n\t\t\t.doc(s) -> print(s)\n\t\t}\n\t}\n\tprint(entries.count)\n\t0\n}",
+        );
+        assert_eq!(out, "ab\n1\n");
+    }
+
+    #[test]
+    fn vm_mut_receiver_method_through_owned_field() {
+        // `self.inner.bump()` inside a `mut func`: exclusive access via
+        // projection through the exclusive root, written back per call.
+        let (_, out) = run_on_both_engines_io(
+            "struct Inner {\n\tlet value: Int\n\tmut func bump() -> Int {\n\t\tself.value = self.value + 1\n\t\tself.value\n\t}\n}\nstruct Outer {\n\tlet inner: Inner\n\tmut func poke() -> Int {\n\t\tself.inner.bump()\n\t}\n}\nfunc main() -> Int {\n\tlet o = Outer(inner: Inner(value: 1))\n\tprint(o.poke())\n\tprint(o.poke())\n\t0\n}",
+        );
+        assert_eq!(out, "2\n3\n");
+    }
+
+    #[test]
+    fn vm_manual_iterator_next_over_droppable_strings() {
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [\"a\" + \"b\"]\n\tlet it = xs.iter()\n\tif let .some(s) = it.next() { print(s) }\n\tmatch it.next() {\n\t\t.some(s) -> print(s),\n\t\t.none -> print(0 - 1)\n\t}\n\tprint(xs.count)\n\t0\n}",
+        );
+        assert_eq!(out, "ab\n-1\n1\n");
+    }
+
+    #[test]
+    fn vm_for_loop_element_feeds_borrow_callback() {
+        let (_, out) = run_on_both_engines_io(
+            "func each(entries: Array<String>, fn: (&String) -> ()) {\n\tfor e in entries {\n\t\tfn(e)\n\t}\n}\nfunc main() -> Int {\n\tlet xs = [\"a\" + \"b\", \"c\" + \"d\"]\n\teach(xs) { e in\n\t\tprint(e)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "ab\ncd\n");
+    }
+
+    #[test]
+    fn vm_for_loop_over_skip_adapter_chain() {
+        // An adapter chain is already an Iterator: `for` consumes it into
+        // the hidden iterator via the Iterator protocol's identity iter().
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet a = [1, 2, 3]\n\tfor i in a.iter().skip(1) {\n\t\tprint(i)\n\t}\n\tprint(a.count)\n\t0\n}",
+        );
+        assert_eq!(out, "2\n3\n3\n");
+    }
+
+    #[test]
+    fn vm_for_loop_over_map_adapter() {
+        // `map` consumes its upstream iterator and stores it by value; the
+        // Map iterator yields owned mapped values.
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet a = [1, 2, 3]\n\tlet doubled = a.iter().map() { i in i * 2 }\n\tfor i in doubled {\n\t\tprint(i)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "2\n4\n6\n");
+    }
+
+    #[test]
+    fn vm_consume_for_loop_moves_elements_out() {
+        // `for x in consume xs`: xs moves into the loop-owned iterator and
+        // is dead afterwards; elements come out owned (a per-instantiation
+        // clone balanced against the array's deep-drop deinit).
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [\"a\" + \"b\", \"c\" + \"d\"]\n\tfor x in consume xs {\n\t\tprint(x)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "ab\ncd\n");
+    }
+
+    #[test]
+    fn vm_consume_for_loop_elements_feed_consuming_callback() {
+        // Owned elements can move into a `consume` parameter.
+        let (_, out) = run_on_both_engines_io(
+            "func takes(consume s: String) {\n\tprint(s)\n}\nfunc main() -> Int {\n\tlet xs = [\"a\" + \"b\"]\n\tfor x in consume xs {\n\t\ttakes(consume x)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "ab\n");
+    }
+
+    #[test]
+    fn vm_generic_borrowed_payload_coerces_into_owned_slot() {
+        // The per-instantiation clone coercion end-to-end: a borrowed
+        // argument fills an owned generic enum payload by retaining.
+        let (_, out) = run_on_both_engines_io(
+            "enum Box2<T> {\n\tcase full(T)\n}\nfunc wrap<T>(v: &T) -> Box2<T> {\n\tBox2.full(v)\n}\nfunc main() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet b = wrap(s)\n\tmatch b {\n\t\t.full(v) -> print(v)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "ab\n");
+    }
+
+    #[test]
+    fn vm_mutated_array_local_drops_balanced() {
+        // A mutated (celled) array local: push reallocs, the old buffer is
+        // released by the storage-field replacement, the new one by the
+        // final drop.
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [5]\n\txs.push(6)\n\tprint(xs.count)\n\t0\n}",
+        );
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
+    fn vm_reassigned_shared_array_keeps_sharer_alive() {
+        // ys shares xs's buffer; reassigning xs must not free what ys
+        // still reads.
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [5]\n\txs.push(6)\n\tlet ys = xs\n\txs = [7]\n\tprint(xs.count)\n\tprint(ys.count)\n\t0\n}",
+        );
+        assert_eq!(out, "1\n2\n");
+    }
+
+    #[test]
+    fn vm_mut_for_loop_writes_back_ints() {
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [1, 2, 3]\n\tfor x in mut xs {\n\t\tx = x * 2\n\t}\n\tfor x in xs {\n\t\tprint(x)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "2\n4\n6\n");
+    }
+
+    #[test]
+    fn vm_mut_for_loop_writes_back_droppable_strings() {
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [\"a\" + \"b\", \"c\" + \"d\"]\n\tfor s in mut xs {\n\t\ts = s + \"!\"\n\t}\n\tfor s in xs {\n\t\tprint(s)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "ab!\ncd!\n");
+    }
+
+    #[test]
+    fn vm_mut_for_loop_source_usable_after() {
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [5]\n\tfor x in mut xs {\n\t\tx = x + 1\n\t}\n\tprint(xs.count)\n\tprint(xs.get(0))\n\t0\n}",
+        );
+        assert_eq!(out, "1\n6\n");
+    }
+
+    #[test]
+    fn vm_consuming_protocol_default_on_borrowed_projection() {
+        // Paint.daub(item.name) consumes a String projected out of the
+        // borrowed loop binder; the copy-out-of-borrow retain must be
+        // emitted or the array's deep-drop releases the name twice.
+        let (_, out) = run_on_both_engines_io(
+            "protocol Paint where Self: Showable {\n\tconsuming func daub() -> String {\n\t\t\"*\" + self.show()\n\t}\n}\nextend String: Paint {}\nstruct Item {\n\tlet name: String\n}\nfunc main() -> Int {\n\tlet items = [Item(name: \"ab\".to_string())]\n\tfor item in items {\n\t\tprint(Paint.daub(item.name))\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "*ab\n");
+    }
+
     #[test]
     fn vm_matches_evaluator_on_array_iterator_next() {
         // ArrayIterator.next() is a mutating witness: inout self writes

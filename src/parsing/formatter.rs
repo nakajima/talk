@@ -685,6 +685,7 @@ impl<'a> Formatter<'a> {
                 pattern,
                 iterable,
                 body,
+                ..
             } => concat_space(
                 text("for"),
                 concat_space(

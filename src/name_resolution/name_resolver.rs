@@ -178,6 +178,9 @@ pub struct NameResolver {
 
     // For figuring out child types
     pub(super) nominal_stack: Vec<(Symbol, NodeID)>,
+    // Pattern roots of in-flight `for` statements: a loop binder pattern
+    // declares fresh locals on entry (there is no `let` to declare them).
+    for_pattern_roots: Vec<NodeID>,
 }
 
 #[allow(clippy::expect_used)]
@@ -192,6 +195,7 @@ impl NameResolver {
             current_scope_id: None,
             pending_locals: Default::default(),
             nominal_stack: Default::default(),
+            for_pattern_roots: Default::default(),
             modules,
             path_to_file_id: Default::default(),
             file_path_by_id: Default::default(),
@@ -1101,6 +1105,10 @@ impl NameResolver {
     }
 
     fn enter_pattern(&mut self, pattern: &mut Pattern) {
+        if self.for_pattern_roots.last().copied() == Some(pattern.id) {
+            self.declare_pattern(pattern, some!(PatternBindLocal));
+        }
+
         match &mut pattern.kind {
             PatternKind::Bind(name @ Name::Raw(_)) => {
                 *name = self.lookup(name).unwrap_or_else(|| {
@@ -1258,6 +1266,28 @@ impl NameResolver {
     }
 
     fn enter_stmt(&mut self, stmt: &mut Stmt) {
+        if let StmtKind::For {
+            pattern,
+            hidden_source,
+            hidden_iter,
+            source_mode,
+            iterable,
+            ..
+        } = &mut stmt.kind
+        {
+            // The whole loop is a scope: the hidden source/iterator bindings
+            // and the loop binder live in it and die with it.
+            self.push_scope(stmt.id);
+            self.for_pattern_roots.push(pattern.id);
+            *hidden_source = self.mint(hidden_source, some!(DeclaredLocal), stmt.id, stmt.span);
+            *hidden_iter = self.mint(hidden_iter, some!(DeclaredLocal), stmt.id, stmt.span);
+            // `for x in mut xs` restores its source at loop end — the
+            // source is mutated exactly as an assignment target is.
+            if matches!(source_mode, Some(crate::node_kinds::call_arg::ArgMode::Mut)) {
+                self.track_assignment_mutation(iterable);
+            }
+        }
+
         on!(&mut stmt.kind, StmtKind::Handling { effect_name, .. }, {
             let Some(Name::Resolved(effect_sym, _)) = self.lookup(effect_name) else {
                 self.diagnostic(stmt.id, NameResolverError::Unresolved(effect_name.clone()));
@@ -1300,7 +1330,12 @@ impl NameResolver {
         }
     }
 
-    fn exit_stmt(&mut self, _stmt: &mut Stmt) {}
+    fn exit_stmt(&mut self, stmt: &mut Stmt) {
+        if matches!(stmt.kind, StmtKind::For { .. }) {
+            self.for_pattern_roots.pop();
+            self.exit_scope(stmt.id);
+        }
+    }
 
     fn track_assignment_mutation(&mut self, expr: &mut Expr) {
         let Some((name, id, _span)) = Self::assignment_base_name(expr) else {

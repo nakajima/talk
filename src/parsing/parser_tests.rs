@@ -1700,54 +1700,38 @@ pub mod tests {
     #[test]
     fn parses_for_loop() {
         let parsed = parse("for x in items { 123 }");
-        assert_eq!(
-            *parsed.roots[0].as_stmt(),
-            Stmt {
-                id: NodeID::ANY,
-                span: Span::ANY,
-                kind: StmtKind::For {
-                    pattern: Pattern {
-                        id: NodeID::ANY,
-                        span: Span::ANY,
-                        kind: PatternKind::Bind("x".into()),
-                    },
-                    iterable: Box::new(any_expr!(ExprKind::Variable("items".into()))),
-                    body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))])
-                }
-            }
-        );
+        let StmtKind::For {
+            pattern,
+            iterable,
+            body,
+            hidden_source,
+            hidden_iter,
+            ..
+        } = &parsed.roots[0].as_stmt().kind
+        else {
+            panic!("expected a for statement");
+        };
+        assert!(matches!(&pattern.kind, PatternKind::Bind(name) if name.name_str() == "x"));
+        assert!(matches!(&iterable.kind, ExprKind::Variable(name) if name.name_str() == "items"));
+        assert_eq!(body.body.len(), 1);
+        assert!(hidden_source.name_str().starts_with("__for_src_"));
+        assert!(hidden_iter.name_str().starts_with("__for_iter_"));
     }
 
     #[test]
     fn parses_for_loop_with_tuple_pattern() {
         let parsed = parse("for (a, b) in pairs { 123 }");
-        assert_eq!(
-            *parsed.roots[0].as_stmt(),
-            Stmt {
-                id: NodeID::ANY,
-                span: Span::ANY,
-                kind: StmtKind::For {
-                    pattern: Pattern {
-                        id: NodeID::ANY,
-                        span: Span::ANY,
-                        kind: PatternKind::Tuple(vec![
-                            Pattern {
-                                id: NodeID::ANY,
-                                span: Span::ANY,
-                                kind: PatternKind::Bind("a".into()),
-                            },
-                            Pattern {
-                                id: NodeID::ANY,
-                                span: Span::ANY,
-                                kind: PatternKind::Bind("b".into()),
-                            },
-                        ]),
-                    },
-                    iterable: Box::new(any_expr!(ExprKind::Variable("pairs".into()))),
-                    body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))])
-                }
-            }
-        );
+        let StmtKind::For {
+            pattern, iterable, ..
+        } = &parsed.roots[0].as_stmt().kind
+        else {
+            panic!("expected a for statement");
+        };
+        let PatternKind::Tuple(fields) = &pattern.kind else {
+            panic!("expected a tuple pattern");
+        };
+        assert_eq!(fields.len(), 2);
+        assert!(matches!(&iterable.kind, ExprKind::Variable(name) if name.name_str() == "pairs"));
     }
 
     #[test]

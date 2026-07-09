@@ -109,6 +109,12 @@ pub enum OwnershipError {
         marker: String,
         reason: String,
     },
+    /// An exclusive (`mut`) receiver or parameter reached through a place
+    /// whose root is a shared borrow: a shared borrow cannot be upgraded
+    /// to exclusive access.
+    ExclusiveThroughSharedBorrow {
+        name: String,
+    },
 }
 
 impl Error for OwnershipError {}
@@ -237,6 +243,12 @@ impl Display for OwnershipError {
             }
             OwnershipError::ArgumentMarker { marker, reason } => {
                 write!(f, "Cannot pass this argument as `{marker}`; {reason}")
+            }
+            OwnershipError::ExclusiveThroughSharedBorrow { name } => {
+                write!(
+                    f,
+                    "Cannot get `mut` access to '{name}'; it is reached through a shared borrow"
+                )
             }
         }
     }

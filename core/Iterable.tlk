@@ -3,12 +3,17 @@ use ./Convert.tlk
 use { Optional } from ./Optional.tlk
 use { Array } from ./Array.tlk
 use { Add, Subtract, Comparable, Equatable } from ./Operators.tlk
+use { Borrowed } from ./Ownership.tlk
 
 public protocol Iterator {
 	associated Element
 	mut func next() -> Element?
 
-	func map<U>(consume fn: (Self.Element) -> U) -> Map<Self, U> {
+	consuming func iter() -> Self { self }
+
+	consuming func into_iter() -> Self { self }
+
+	consuming func map<U>(consume fn: (Self.Element) -> U) -> Map<Self, U> {
 		Map(inner: self, fn: fn)
 	}
 
@@ -48,12 +53,18 @@ public protocol Iterable {
 // MARK: Map
 
 public struct Map<T, U> where T: Iterator {
-	let inner: &T
+	let inner: T
 	let map: (T.Element) -> U
 }
 
-extend Map<T, U>: Iterable where T: Iterator {
-	func iter() -> &Self<T, U> { self }
+extend Map<T, U>: Iterator where T: Iterator {
+	mut func next() -> U? {
+		if let .some(elem) = self.inner.next() {
+			return .some(self.map(elem))
+		} else {
+			return .none
+		}
+	}
 }
 
 public protocol IndexIterable {
@@ -66,6 +77,8 @@ public struct IndexIterator<T: IndexIterable> {
 	let inner: &T
 	let position: Int
 }
+
+extend IndexIterator<T: IndexIterable>: Borrowed {}
 
 extend IndexIterator<T: IndexIterable>: Iterator {
 	mut func next() -> T.Element? {

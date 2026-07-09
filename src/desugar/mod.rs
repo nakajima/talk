@@ -6,7 +6,6 @@
 //! Owning these here (rather than inside the name resolver) keeps each phase to
 //! one job: the resolver binds names, it does not rewrite the tree.
 
-pub mod lower_for_loops;
 pub mod lower_funcs_to_lets;
 pub mod lower_if_to_match;
 pub mod lower_operators;
@@ -14,7 +13,6 @@ pub mod prepend_self_to_methods;
 pub mod resolve_param_modes;
 
 use crate::ast::{AST, Parsed};
-use lower_for_loops::LowerForLoops;
 use lower_funcs_to_lets::LowerFuncsToLets;
 use lower_if_to_match::LowerIfToMatch;
 use lower_operators::LowerOperators;
@@ -28,7 +26,6 @@ pub fn desugar(asts: &mut [AST<Parsed>]) {
         // any pass synthesizes parameters of its own (synthesized params
         // keep `mode: None` = lowered as written).
         ResolveParamModes::run(ast);
-        LowerForLoops::run(ast);
         LowerFuncsToLets::run(ast);
         LowerOperators::run(ast);
         // After LowerOperators, which emits `if` expressions for `&&`/`||`.

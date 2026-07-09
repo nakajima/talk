@@ -174,6 +174,13 @@ fn check_body(
 ) {
     let is_function = role == BodyRole::Stored;
     let outer = checker.enter_body(liveness, is_function);
+    // A borrow-returning body (`-> &mut T { self.field }`) hands the
+    // caller a borrow: the returned expression must not tier-2-clone
+    // (nothing would release the retain).
+    checker.ret_is_borrow = matches!(
+        &func_ty,
+        Some(Ty::Func(_, ret, _)) if matches!(&**ret, Ty::Borrow(..))
+    );
     let mut entry_state = MoveState::default();
     if !params.is_empty() {
         checker.seed_params(params, func_ty.as_ref(), &mut entry_state);
@@ -359,8 +366,13 @@ fn transfer_statement(
             lhs,
             type_annotation,
             rhs,
-            ..
+            for_source_mode,
         } => {
+            if let Some(mode) = for_source_mode
+                && let Some(rhs) = rhs
+            {
+                checker.check_marked_for_source(*mode, rhs);
+            }
             checker.check_let(lhs, type_annotation.as_ref(), rhs.as_ref(), state);
             if let Some(rhs) = rhs {
                 checker.prune_at(state, rhs.id);
@@ -492,7 +504,17 @@ fn classify_candidate(
             // The assignment-replace target: classified at the
             // pre-assignment state (this candidate precedes the Assign).
             let place = checker.place(expr)?;
-            let kind = classify(&place, state);
+            // A `'heap`-carrying field replaced through a borrowed
+            // receiver keeps the ledger's centralized cleanup: the region
+            // is the caller's value's; releasing here kills it while the
+            // owner still holds handles. Owned (non-object) replaced
+            // values drop normally.
+            let borrowed_root = matches!(checker.root_ty(place.root), Some(Ty::Borrow(..)));
+            let kind = if borrowed_root && checker.grades.contains_object(&expr.ty) {
+                DropElaboration::Dead
+            } else {
+                classify(&place, state)
+            };
             return annotate.then_some(mir::DropElaborationResult {
                 key_path: Some(place),
                 kind,
@@ -658,12 +680,12 @@ fn seed_arm_binders(
     };
     if let Some(provenance) = scrutinee_provenance {
         for (binder_id, binder) in arm.pattern.collect_binders() {
-            let binder_ty = checker
-                .types
-                .node_types
-                .get(&binder_id)
-                .cloned()
-                .unwrap_or(Ty::Error);
+            // Binder types live in `local_tys` (keyed by symbol — typing's
+            // `mono` map), not `node_types`: an owned scrutinee that
+            // CONTAINS borrows (`Optional<&T>` from an iterator) must still
+            // register its borrow-typed binders, or extracting a field out
+            // of one silently moves instead of tier-2 cloning.
+            let binder_ty = local_ty(checker, binder_id, binder);
             if checker.grades.contains_borrowed(&binder_ty) || borrowed_scrutinee_perm.is_some() {
                 checker.install_provenance(
                     binder_id,

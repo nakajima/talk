@@ -530,11 +530,16 @@ impl<'a> Lowering<'a> {
     fn retain_then(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
         let ty = self.checker_ty(expr, ctx);
         let value_ty = self.map_ty(&ty);
+        // The retain walk sees through a borrow-typed value: cloning a
+        // `&String` argument into an owned slot retains the String's
+        // buffers (a bare borrow type has no owned parts of its own, and
+        // the walk would silently emit nothing).
+        let retain_ty = Self::borrow_erased_ty(ty);
         let bot = self.p.ty_bot();
         let cont = self.p.func("retain", value_ty, bot);
         let value = self.p.var(cont);
         let next = self.p.app(k, value);
-        let body = self.lower_retain_value_then(ctx, value, &ty, next);
+        let body = self.lower_retain_value_then(ctx, value, &retain_ty, next);
         self.p.set_body(cont, body);
         self.p.func_ref(cont)
     }

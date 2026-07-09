@@ -558,6 +558,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     }
                 }
                 Constraint::ApplyBorrow { .. } => self.deferred.push(residual),
+                Constraint::CoerceOwned { .. } => self.deferred.push(residual),
                 // A leading-dot use whose enum this group never determined:
                 // a later group (or the final solve's error) owns it. It
                 // never qualifies a scheme — lowering needs one concrete

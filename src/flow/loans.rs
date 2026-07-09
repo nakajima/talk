@@ -218,6 +218,24 @@ impl MoveChecker<'_> {
         }
     }
 
+    /// An exclusive access reaches storage through its place's root. A
+    /// root that is itself a shared borrow cannot grant it: the write
+    /// would go through the borrow (`inner.bump()` on `inner: &Inner`).
+    /// Owned roots are fine — an exclusive touch of a borrow-containing
+    /// local (an iterator advancing its own cursor) mutates the local's
+    /// storage, and `rebased_perm` caps its conflict footprint to shared
+    /// separately.
+    pub(crate) fn check_exclusive_root(&mut self, node: NodeID, place: &Place) {
+        if let Some(Ty::Borrow(perm, _)) = self.root_ty(place.root)
+            && !perm.is_exclusive()
+        {
+            let error = OwnershipError::ExclusiveThroughSharedBorrow {
+                name: self.render(place),
+            };
+            self.error(error, node);
+        }
+    }
+
     /// The legacy `check_move_while_borrowed`.
     pub(crate) fn check_move_while_borrowed(
         &mut self,
@@ -400,16 +418,13 @@ impl MoveChecker<'_> {
         }
     }
 
-    /// A declared struct field or enum payload cannot store a plain `&T`:
-    /// the borrow would outlive its owner unseen. Borrowed-marker view
-    /// nominals (e.g. `Substring`) stay legal — provenance tracks those —
-    /// and function types are values, not borrows. Core is exempt (its
-    /// iterator machinery stores borrow fields deliberately, like its raw
-    /// pointers).
+    /// A declared struct field or enum payload cannot store a plain `&T`
+    /// unless the type declares itself `Borrowed`: an unmarked borrow
+    /// would outlive its owner unseen, while a `Borrowed` type is a
+    /// borrow-containing *value* whose loans provenance tracks (like the
+    /// `Substring` view type, or an iterator storing its source).
+    /// Function types are values, not borrows.
     pub(crate) fn check_borrow_storage(&mut self, roots: &[typed_ast::Node]) {
-        if self.module_id == crate::compiling::module::ModuleId::Core {
-            return;
-        }
         for root in roots {
             let typed_ast::Node::Decl(decl) = root else {
                 continue;
@@ -417,6 +432,12 @@ impl MoveChecker<'_> {
             match &decl.kind {
                 typed_ast::DeclKind::Struct { name, .. } => {
                     let Ok(symbol) = name.symbol() else { continue };
+                    if self.types.catalog.has_bare_conformance(
+                        symbol,
+                        crate::name_resolution::symbol::Symbol::Borrowed,
+                    ) {
+                        continue;
+                    }
                     let Some(info) = self.types.catalog.structs.get(&symbol) else {
                         continue;
                     };
@@ -433,6 +454,12 @@ impl MoveChecker<'_> {
                 }
                 typed_ast::DeclKind::Enum { name, .. } => {
                     let Ok(symbol) = name.symbol() else { continue };
+                    if self.types.catalog.has_bare_conformance(
+                        symbol,
+                        crate::name_resolution::symbol::Symbol::Borrowed,
+                    ) {
+                        continue;
+                    }
                     let Some(info) = self.types.catalog.enums.get(&symbol) else {
                         continue;
                     };

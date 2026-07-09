@@ -654,7 +654,24 @@ impl<'s> Solver<'s> {
             ));
         } else {
             for (expected, found) in instantiation.argument_types.iter().zip(&payload) {
-                queue.push(Constraint::Eq(expected.clone(), found.clone(), origin));
+                // A borrow-typed (or still-solving) payload argument against
+                // an owned/unsolved slot defers (ADR 0021): eager equality
+                // would bind the slot to the borrow — or the argument var
+                // owned — before the coercion can be judged.
+                let defer = match (self.store.shallow(expected), self.store.shallow(found)) {
+                    (_, Ty::Borrow(..)) => true,
+                    (Ty::Param(_), Ty::Var(_)) => true,
+                    _ => false,
+                };
+                if defer {
+                    queue.push(Constraint::CoerceOwned {
+                        expected: expected.clone(),
+                        found: found.clone(),
+                        origin,
+                    });
+                } else {
+                    queue.push(Constraint::Eq(expected.clone(), found.clone(), origin));
+                }
             }
         }
         if let Some(ctor) = ctor {

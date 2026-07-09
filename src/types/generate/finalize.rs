@@ -108,6 +108,19 @@ impl<'a> TypecheckSession<'a> {
             };
             member_resolutions.insert(node, resolution);
         }
+        let mut for_plans = FxHashMap::default();
+        for (node, plan) in std::mem::take(&mut self.artifacts.for_plans) {
+            for_plans.insert(
+                node,
+                ForPlan {
+                    iterator_ty: self.final_ty(&plan.iterator_ty),
+                    element_ty: self.final_ty(&plan.element_ty),
+                    next_result_ty: self.final_ty(&plan.next_result_ty),
+                    body_ty: self.final_ty(&plan.body_ty),
+                    ..plan
+                },
+            );
+        }
         // Catalog types outlive this module's solver store (importers'
         // stores don't share its ids): bake in everything solving
         // inferred, then degrade genuine leftovers per the export
@@ -163,6 +176,8 @@ impl<'a> TypecheckSession<'a> {
                 schemes,
                 instantiations,
                 member_resolutions,
+                for_plans,
+                synthetic_floors: self.artifacts.synthetic_next,
                 coerce_clones: self.artifacts.coerce_clones,
                 local_tys,
                 existential_packs,

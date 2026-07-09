@@ -859,23 +859,25 @@ impl<'a> Lowering<'a> {
                         PayloadAction::Drop,
                     );
                 }
-                // A `Deinit` conformance runs the user's destructor, which
-                // consumes the value; its own body then drops the fields
-                // (its scope-exit drops), so no structural teardown follows
-                // here. Inside the deinit body itself, dropping self skips
-                // the dispatch (fields only) — no recursion.
+                // A `Deinit` conformance dispatches exactly like the static
+                // drop path: the witness ranges over the CONFORMANCE row's
+                // rigid params (`deinit_theta`, NOT the struct's declared
+                // params — a nominal θ leaves the witness body's own
+                // generics unbound, so its element loads run erased), and
+                // the destructor body never owns field teardown — the
+                // structural glue follows it.
+                let value_theta = self.deinit_theta(symbol, &args);
                 if let Some(witness) = self.deinit_witness(symbol)
-                    && ctx.owner != Some(witness)
-                    && let Some(label) = {
-                        let theta = self.nominal_theta(symbol, &args);
-                        self.demand(witness, theta)
-                    }
+                    && (ctx.owner != Some(witness) || value_theta != ctx.theta)
+                    && let Some(label) = self.demand(witness, value_theta)
                 {
                     let fn_ref = self.p.func_ref(label);
                     let void_ty = self.p.ty_void();
                     let bot = self.p.ty_bot();
+                    let teardown =
+                        self.lower_structural_teardown_then(ctx, value, symbol, &args, next);
                     let cont = self.p.func("after_deinit", void_ty, bot);
-                    self.p.set_body(cont, next);
+                    self.p.set_body(cont, teardown);
                     let cont_ref = self.p.func_ref(cont);
                     let args_tuple = self.p.tuple(&[value, cont_ref]);
                     return self.p.app(fn_ref, args_tuple);

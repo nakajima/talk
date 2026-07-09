@@ -102,6 +102,15 @@ impl PatternRefinement {
                 found: found.substitute(&tys, &effs, &rows),
                 origin,
             },
+            Constraint::CoerceOwned {
+                expected,
+                found,
+                origin,
+            } => Constraint::CoerceOwned {
+                expected: expected.substitute(&tys, &effs, &rows),
+                found: found.substitute(&tys, &effs, &rows),
+                origin,
+            },
             Constraint::PatternView {
                 scrutinee,
                 view,

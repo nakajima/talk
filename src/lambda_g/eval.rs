@@ -945,10 +945,11 @@ impl Evaluator {
             | TyKind::Existential(_)
             | TyKind::Erased => {
                 let handle = self.read_word(addr)? as usize;
-                self.boxed
-                    .get(handle)
-                    .cloned()
-                    .ok_or_else(|| EvalError::Unsupported("load of a bad arena handle".into()))
+                self.boxed.get(handle).cloned().ok_or_else(|| {
+                    EvalError::Unsupported(format!(
+                        "load of a bad arena handle {handle} at addr {addr}"
+                    ))
+                })
             }
             other => Err(EvalError::Unsupported(format!("load of type {other:?}"))),
         }

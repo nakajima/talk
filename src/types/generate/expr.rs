@@ -208,7 +208,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.emit_eq(expected_inner, (*found_inner).clone(), node, inner_reason);
             }
             Ty::Borrow(..) => self.emit_eq(expected, found, node, reason),
-            Ty::Var(_) if reason == CtReason::Apply => {
+            // An unresolved found (a call result whose member is still
+            // being solved) defers under EVERY reason: eagerly equating
+            // the peeled inner would rigidly bind the result var owned,
+            // then conflict with the member scheme's borrow-typed return
+            // once it resolves (ADR 0021's first-class borrow results).
+            Ty::Var(_) => {
                 self.wanteds.push(Constraint::ApplyBorrow {
                     expected_perm: expected_kind,
                     expected_inner,
@@ -263,6 +268,26 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // keeps `Apply` so the solver's tier-2 coercion (borrowed argument satisfied by a
         // free copy or an O(1) clone) can fire even when either side resolves late.
         let copies = |symbol: Symbol| self.catalog.copies_out_of_borrow(symbol);
+        // An owned rigid-`Param` slot fed a still-unsolved argument (a call
+        // result whose member is being solved) defers: eagerly equating
+        // would bind the result var owned, then conflict with the member
+        // scheme's borrow-typed return once it resolves. A rigid param
+        // never drives the var's inference, so the deferral loses nothing
+        // (ADR 0021's per-instantiation clone coercion).
+        let defer_coercion = reason == CtReason::Apply
+            && match (self.store.shallow(expected), self.store.shallow(&found)) {
+                (Ty::Param(_), Ty::Var(_) | Ty::Borrow(..)) => true,
+                (Ty::Var(_), Ty::Borrow(..)) => true,
+                _ => false,
+            };
+        if defer_coercion {
+            self.wanteds.push(Constraint::CoerceOwned {
+                expected: expected.clone(),
+                found,
+                origin: CtOrigin::new(node, reason),
+            });
+            return;
+        }
         let keeps_apply = reason == CtReason::Apply
             && (matches!(self.store.shallow(expected), Ty::Nominal(symbol, _) if copies(symbol))
                 || matches!(

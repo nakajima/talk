@@ -74,10 +74,203 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 StmtValue::divergent()
             }
 
-            StmtKind::For { .. } => {
-                // for-loops are desugared by the name resolver; reaching one
-                // is a transform bug.
-                self.unsupported(stmt.id, "raw for loop");
+            StmtKind::For {
+                iterable,
+                source_mode,
+                pattern,
+                body,
+                hidden_source,
+                hidden_iter,
+                ..
+            } => {
+                // `for` is checked, not desugared: the implicit `iter()` and
+                // `next()` calls resolve through the ordinary member/call
+                // machinery on checker-minted ids, and the loop binder is
+                // the payload of `next()`'s `.some` — exactly
+                // `Iterator.Element`. The resolved facts are published as
+                // this statement's ForPlan; the typed-tree build elaborates
+                // the loop into ordinary nodes at those ids.
+                use crate::node_kinds::call_arg::ArgMode;
+                let file = stmt.id.0;
+                let iter_callee_id = self.artifacts.synthetic_id(file);
+                let iter_call_id = self.artifacts.synthetic_id(file);
+                let next_callee_id = self.artifacts.synthetic_id(file);
+                let next_call_id = self.artifacts.synthetic_id(file);
+                let write_back_callee_id = self.artifacts.synthetic_id(file);
+                let write_back_call_id = self.artifacts.synthetic_id(file);
+                let write_back_arg_id = self.artifacts.synthetic_id(file);
+                let finish_callee_id = self.artifacts.synthetic_id(file);
+                let finish_call_id = self.artifacts.synthetic_id(file);
+                let iter_label = match source_mode {
+                    Some(ArgMode::Consume) => "into_iter",
+                    Some(ArgMode::Mut) => "iter_mut",
+                    Some(ArgMode::Copy | ArgMode::Borrow) => {
+                        self.unsupported(stmt.id, "this marker on a `for` source");
+                        "iter"
+                    }
+                    None => "iter",
+                };
+                // Mut iteration takes the source and restores it at loop
+                // end: the source must be an assignable place, and the
+                // binder a single name (the write-back reads it).
+                if matches!(source_mode, Some(ArgMode::Mut)) {
+                    if !matches!(
+                        iterable.kind,
+                        crate::node_kinds::expr::ExprKind::Variable(_)
+                    ) {
+                        self.unsupported(stmt.id, "`mut` iteration over a non-variable source");
+                    }
+                    if pattern.collect_binders().len() != 1 {
+                        self.unsupported(stmt.id, "`mut` iteration with a destructuring binder");
+                    }
+                }
+                let iterable_ty = self.infer_expr(iterable, ctx);
+                if let Ok(symbol) = hidden_source.symbol() {
+                    self.mono.insert(symbol, iterable_ty.clone());
+                }
+
+                let iter_member = Ty::Var(self.store.fresh_ty(self.level, iter_callee_id));
+                self.artifacts
+                    .node_types
+                    .insert(iter_callee_id, iter_member.clone());
+                let iterator_ty =
+                    self.finish_call(iter_call_id, iter_member.clone(), &[], &None, ctx);
+                self.artifacts
+                    .node_types
+                    .insert(iter_call_id, iterator_ty.clone());
+                self.wanteds.push(Constraint::HasMember {
+                    receiver: iterable_ty,
+                    label: Label::Named(iter_label.into()),
+                    member: iter_member,
+                    origin: CtOrigin::new(iter_callee_id, CtReason::Apply),
+                });
+                if let Ok(symbol) = hidden_iter.symbol() {
+                    self.mono.insert(symbol, iterator_ty.clone());
+                }
+
+                let next_member = Ty::Var(self.store.fresh_ty(self.level, next_callee_id));
+                self.artifacts
+                    .node_types
+                    .insert(next_callee_id, next_member.clone());
+                let next_result_ty =
+                    self.finish_call(next_call_id, next_member.clone(), &[], &None, ctx);
+                self.artifacts
+                    .node_types
+                    .insert(next_call_id, next_result_ty.clone());
+                self.wanteds.push(Constraint::HasMember {
+                    receiver: Ty::Borrow(Perm::Exclusive, Box::new(iterator_ty.clone())),
+                    label: Label::Named("next".into()),
+                    member: next_member,
+                    origin: CtOrigin::new(next_callee_id, CtReason::Apply),
+                });
+
+                // The element is `.some`'s payload — the same deferred
+                // variant machinery `if let .some(x) = it.next()` uses, so
+                // no compiler-level knowledge of Optional is needed.
+                let element_ty = Ty::Var(self.store.fresh_ty(self.level, pattern.id));
+                self.wanteds.push(Constraint::HasVariant {
+                    enum_ty: next_result_ty.clone(),
+                    label: Label::Named("some".into()),
+                    payload: vec![element_ty.clone()],
+                    ctor: None,
+                    origin: CtOrigin::new(pattern.id, CtReason::Pattern),
+                });
+                self.check_pattern(pattern, &element_ty);
+                let body_ty = self.infer_block_value(body, ctx);
+
+                if matches!(source_mode, Some(ArgMode::Mut)) {
+                    // write_back(value): checked as a real call so its
+                    // effects join the ambient row; the argument is a
+                    // phantom read of the loop binder.
+                    if let Some((_, binder)) = pattern.collect_binders().first().copied() {
+                        let binder_name = crate::name::Name::Resolved(
+                            binder,
+                            self.resolved
+                                .symbol_names
+                                .get(&binder)
+                                .cloned()
+                                .unwrap_or_default(),
+                        );
+                        let phantom = crate::node_kinds::expr::Expr {
+                            id: write_back_arg_id,
+                            span: pattern.span,
+                            kind: crate::node_kinds::expr::ExprKind::Variable(binder_name),
+                        };
+                        let arg = crate::node_kinds::call_arg::CallArg {
+                            id: write_back_arg_id,
+                            label: Label::Positional(0),
+                            label_span: pattern.span,
+                            value: phantom,
+                            span: pattern.span,
+                            mode: None,
+                            mode_span: None,
+                        };
+                        let wb_member =
+                            Ty::Var(self.store.fresh_ty(self.level, write_back_callee_id));
+                        self.artifacts
+                            .node_types
+                            .insert(write_back_callee_id, wb_member.clone());
+                        let wb_result = self.finish_call(
+                            write_back_call_id,
+                            wb_member.clone(),
+                            std::slice::from_ref(&arg),
+                            &None,
+                            ctx,
+                        );
+                        self.artifacts
+                            .node_types
+                            .insert(write_back_call_id, wb_result);
+                        self.wanteds.push(Constraint::HasMember {
+                            receiver: Ty::Borrow(Perm::Exclusive, Box::new(iterator_ty.clone())),
+                            label: Label::Named("write_back".into()),
+                            member: wb_member,
+                            origin: CtOrigin::new(write_back_callee_id, CtReason::Apply),
+                        });
+                    }
+
+                    // finish(): the consuming restore; its result assigns
+                    // back to the source place.
+                    let finish_member = Ty::Var(self.store.fresh_ty(self.level, finish_callee_id));
+                    self.artifacts
+                        .node_types
+                        .insert(finish_callee_id, finish_member.clone());
+                    let finish_result =
+                        self.finish_call(finish_call_id, finish_member.clone(), &[], &None, ctx);
+                    self.artifacts
+                        .node_types
+                        .insert(finish_call_id, finish_result.clone());
+                    self.wanteds.push(Constraint::HasMember {
+                        receiver: iterator_ty.clone(),
+                        label: Label::Named("finish".into()),
+                        member: finish_member,
+                        origin: CtOrigin::new(finish_callee_id, CtReason::Apply),
+                    });
+                    let source_ty = self.infer_assignment_target(iterable, ctx);
+                    self.emit_eq(
+                        source_ty,
+                        finish_result,
+                        finish_call_id,
+                        CtReason::Assignment,
+                    );
+                }
+                self.artifacts.for_plans.insert(
+                    stmt.id,
+                    ForPlan {
+                        iter_callee_id: iter_callee_id,
+                        iter_call_id: iter_call_id,
+                        next_callee_id: next_callee_id,
+                        next_call_id: next_call_id,
+                        write_back_callee_id: write_back_callee_id,
+                        write_back_call_id: write_back_call_id,
+                        write_back_arg_id: write_back_arg_id,
+                        finish_callee_id: finish_callee_id,
+                        finish_call_id: finish_call_id,
+                        iterator_ty,
+                        element_ty,
+                        next_result_ty,
+                        body_ty,
+                    },
+                );
                 StmtValue::Unit
             }
 

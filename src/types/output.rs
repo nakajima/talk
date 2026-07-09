@@ -9,6 +9,34 @@ use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
 use crate::types::ty::{ProtocolRef, Scheme, Ty};
 
+/// The checker's published plan for one `for` statement: the resolved
+/// `iter()`/`next()` call nodes (their member resolutions and
+/// instantiations live in the ordinary tables under these ids) and the
+/// finished iterator/element types. The typed-tree build consumes the
+/// plan, elaborating the loop into ordinary nodes at these ids; nothing
+/// downstream of the typed tree sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForPlan {
+    pub iter_callee_id: NodeID,
+    pub iter_call_id: NodeID,
+    pub next_callee_id: NodeID,
+    pub next_call_id: NodeID,
+    /// Mut-mode (`for x in mut xs`) extras: the per-iteration
+    /// `write_back(value)` call, its argument node (the binder read), and
+    /// the loop-end `finish()` restore call. Unused for other modes.
+    pub write_back_callee_id: NodeID,
+    pub write_back_call_id: NodeID,
+    pub write_back_arg_id: NodeID,
+    pub finish_callee_id: NodeID,
+    pub finish_call_id: NodeID,
+    pub iterator_ty: Ty,
+    pub element_ty: Ty,
+    pub next_result_ty: Ty,
+    /// The body block's value type: the per-iteration match join discards
+    /// it, and the discard must drop droppable tails.
+    pub body_ty: Ty,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExistentialPack {
     pub existential: Ty,
@@ -60,6 +88,13 @@ pub struct TypeOutput {
     /// monomorphization or dictionary passing.
     pub instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    /// Per-`for`-statement iteration plans (keyed by the statement node).
+    /// Consumed only by the typed-tree build, which elaborates the loop
+    /// into ordinary nodes at the plan's ids.
+    pub for_plans: FxHashMap<NodeID, ForPlan>,
+    /// Per-file low-water mark of the checker's descending id mint: the
+    /// typed-tree build mints its elaborated-node ids below this.
+    pub synthetic_floors: FxHashMap<crate::node_id::FileID, u32>,
     /// Argument nodes where a borrowed value satisfies an owned CheapClone
     /// parameter by cloning (an O(1) buffer retain, emitted by lowering).
     pub coerce_clones: rustc_hash::FxHashSet<NodeID>,

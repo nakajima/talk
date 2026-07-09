@@ -75,6 +75,7 @@ impl<'s> Solver<'s> {
             | Constraint::HasMember { origin, .. }
             | Constraint::HasVariant { origin, .. }
             | Constraint::ApplyBorrow { origin, .. }
+            | Constraint::CoerceOwned { origin, .. }
             | Constraint::PatternView { origin, .. }
             | Constraint::HandleEffect { origin, .. } => Some(*origin),
             Constraint::Implic(_) => None,
@@ -147,6 +148,11 @@ impl<'s> Solver<'s> {
                 ..
             } => self
                 .ty_mentions_params(expected_inner, params)
+                .or_else(|| self.ty_mentions_params(found, params)),
+            Constraint::CoerceOwned {
+                expected, found, ..
+            } => self
+                .ty_mentions_params(expected, params)
                 .or_else(|| self.ty_mentions_params(found, params)),
             Constraint::PatternView {
                 scrutinee, view, ..

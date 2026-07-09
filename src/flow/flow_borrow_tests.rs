@@ -765,3 +765,172 @@ fn rejects_rvalue_argument_to_a_mut_parameter() {
         "mutable place",
     );
 }
+
+// ----- Iteration/access regression matrix (ADR 0021) --------------------------
+
+/// Every error diagnostic's rendered message, any phase. The matrix cares
+/// that a program is rejected; which phase rejects it is an
+/// implementation detail (typing catches direct perm mismatches, flow
+/// catches place-level upgrades).
+fn all_error_messages(source: &str) -> Vec<String> {
+    flow_driver(source)
+        .phase
+        .diagnostics
+        .iter()
+        .map(|diagnostic| format!("{diagnostic:?}"))
+        .collect()
+}
+
+fn assert_rejected(source: &str, needle: &str) {
+    let errors = all_error_messages(source);
+    assert!(
+        errors.iter().any(|error| error.contains(needle)),
+        "expected a rejection mentioning {needle:?}, got {errors:?}"
+    );
+}
+
+#[test]
+fn allows_mut_receiver_call_through_owned_field_in_mut_func() {
+    // `self` is an exclusive place inside a `mut func`; `self.inner` is a
+    // projection through that exclusive root, so the nested mutating call
+    // is legal.
+    assert_no_errors(
+        "struct Inner {\n\tlet value: Int\n\tmut func bump() -> Int {\n\t\tself.value = self.value + 1\n\t\tself.value\n\t}\n}\nstruct Outer {\n\tlet inner: Inner\n\tmut func poke() -> Int {\n\t\tself.inner.bump()\n\t}\n}",
+    );
+}
+
+#[test]
+fn rejects_mut_receiver_call_on_shared_borrow_parameter() {
+    // A `&Inner` parameter grants shared access only; typing rejects the
+    // exclusive receiver directly.
+    assert_rejected(
+        "struct Inner {\n\tlet value: Int\n\tmut func bump() -> Int {\n\t\tself.value = self.value + 1\n\t\tself.value\n\t}\n}\nfunc f(inner: &Inner) -> Int {\n\tinner.bump()\n}",
+        "&mut Inner",
+    );
+}
+
+#[test]
+fn rejects_mut_receiver_call_through_field_of_shared_borrow() {
+    // `outer.inner` types as owned `Inner`, so unification cannot see the
+    // upgrade; the place's root is a shared borrow, and exclusive access
+    // through it must fail at the flow level.
+    assert_error_contains(
+        "struct Inner {\n\tlet value: Int\n\tmut func bump() -> Int {\n\t\tself.value = self.value + 1\n\t\tself.value\n\t}\n}\nstruct Outer {\n\tlet inner: Inner\n}\nfunc f(outer: &Outer) -> Int {\n\touter.inner.bump()\n}",
+        "shared borrow",
+    );
+}
+
+#[test]
+fn rejects_borrowed_loop_element_passed_to_consuming_callback() {
+    // The loop element is borrowed from the array; a `consume` callback
+    // parameter demands ownership.
+    assert_rejected(
+        "enum Entry {\n\tcase doc(String)\n}\nfunc drain(entries: Array<Entry>, fn: (consume Entry) -> ()) {\n\tfor entry in entries {\n\t\tfn(entry)\n\t}\n}",
+        "Entry",
+    );
+}
+
+// ----- Borrow-storing structs (ADR 0021 stage 3) ------------------------------
+
+#[test]
+fn rejects_borrow_field_in_unmarked_struct() {
+    assert_error_contains("struct Ref {\n\tlet inner: &String\n}", "cannot be stored");
+}
+
+#[test]
+fn borrowed_marker_legalizes_borrow_storing_struct() {
+    // A struct that spells its stored borrow and declares itself Borrowed
+    // is a borrow-containing value, tracked by provenance like Substring.
+    assert_no_errors(
+        "struct Ref {\n\tlet inner: &String\n}\nextend Ref: Borrowed {}\nfunc peek(s: &String) -> Int {\n\tlet r = Ref(inner: s)\n\tr.inner.byte_count\n}",
+    );
+}
+
+#[test]
+fn borrowed_marker_struct_cannot_escape_its_loan() {
+    // The Ref borrows a local; returning it would dangle. Provenance
+    // (not the storage rule — Ref is marked) must reject it.
+    assert_error_contains(
+        "struct Ref {\n\tlet inner: &String\n}\nextend Ref: Borrowed {}\nfunc escape() -> Ref {\n\tlet s = \"a\" + \"b\"\n\tRef(inner: s)\n}",
+        "owned by this function",
+    );
+}
+
+// ----- Consuming iteration (ADR 0021 stage 6) ---------------------------------
+
+#[test]
+fn consume_for_source_used_after_loop_is_rejected() {
+    assert_error_contains(
+        "func f() -> Int {\n\tlet xs = [1, 2]\n\tfor x in consume xs {\n\t}\n\txs.count\n}",
+        "used again",
+    );
+}
+
+#[test]
+fn consume_for_source_through_borrow_is_rejected() {
+    assert_error_contains(
+        "func f(xs: &Array<Int>) -> Int {\n\tfor x in consume xs {\n\t}\n\t0\n}",
+        "borrow",
+    );
+}
+
+#[test]
+fn consume_for_dead_source_is_quiet() {
+    assert_no_errors("func f() -> Int {\n\tlet xs = [1, 2]\n\tfor x in consume xs {\n\t}\n\t0\n}");
+}
+
+// ----- First-class borrow-typed call results (ADR 0021 prerequisite) ---------
+
+/// No diagnostics of ANY kind (typing included — `assert_no_errors` only
+/// filters ownership).
+fn assert_clean_all(source: &str) {
+    let errors = all_error_messages(source);
+    assert!(errors.is_empty(), "expected no diagnostics, got {errors:?}");
+}
+
+#[test]
+fn borrow_result_binds_against_borrow_annotation() {
+    assert_clean_all(
+        "func first(xs: &Array<String>) -> Int {\n\tlet e: &String = xs.get(0)\n\t0\n}",
+    );
+}
+
+#[test]
+fn borrow_result_returns_through_borrowed_param() {
+    assert_clean_all("func first(xs: &Array<String>) -> &String {\n\txs.get(0)\n}");
+}
+
+#[test]
+fn generic_borrow_result_binds_against_borrow_annotation() {
+    assert_clean_all("func first<T>(xs: &Array<T>) -> Int {\n\tlet e: &T = xs.get(0)\n\t0\n}");
+}
+
+#[test]
+fn returning_borrow_result_of_local_array_is_rejected() {
+    // First-class borrow results still cannot dangle: provenance roots
+    // the element borrow in the local array.
+    assert_error_contains(
+        "func bad() -> &String {\n\tlet xs = [\"a\" + \"b\"]\n\txs.get(0)\n}",
+        "owned by this function",
+    );
+}
+
+// ----- Mutable iteration (ADR 0021 stage 7) -----------------------------------
+
+#[test]
+fn mut_for_source_through_borrow_is_rejected() {
+    // Typing rejects the restore: `finish()`'s owned array cannot assign
+    // into the borrowed parameter (flow's borrow-rooted source check is
+    // defense-in-depth behind it).
+    assert_rejected(
+        "func f(xs: &Array<Int>) -> Int {\n\tfor x in mut xs {\n\t\tx = x + 1\n\t}\n\t0\n}",
+        "&Array",
+    );
+}
+
+#[test]
+fn mut_for_over_owned_local_is_quiet() {
+    assert_clean_all(
+        "func f() -> Int {\n\tlet xs = [1, 2]\n\tfor x in mut xs {\n\t\tx = x + 1\n\t}\n\txs.count\n}",
+    );
+}

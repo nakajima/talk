@@ -1,7 +1,7 @@
 // no-core
 // unsafe
 use ./Optional.tlk
-use { Iterable, IndexIterable, IndexIterator } from ./Iterable.tlk
+use { Iterable, Iterator, IndexIterable, IndexIterator } from ./Iterable.tlk
 use { Storage, _storage, _load, _store, _is_unique } from ./Memory.tlk
 use { String } from ./String.tlk
 use { Add, Subtract, Multiply, Comparable, Equatable } from ./Operators.tlk
@@ -52,6 +52,13 @@ public struct Array<Element> {
 	mut func set(index: Int, consume value: Element) -> Void {
 		let storage = self.uniqued_storage()
 		storage.set(index, value)
+	}
+
+	mut func _replace(index: Int, consume value: Element) -> Void {
+		self.uniqued_storage()
+		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
+		let old: Element = _load<Element>(ptr)
+		_store<Element>(ptr, value)
 	}
 
 	// Copy-on-write: a buffer shared with another Array (or with
@@ -146,4 +153,56 @@ extend Array<Element>: IndexIterable {
 	func _index_iterable_get(index: Int) -> Optional<&Element> {
 		.some(self.get(index))
 	}
+}
+
+// MARK: Consuming iteration
+
+public struct ArrayIntoIterator<T> {
+	let inner: Array<T>
+	let position: Int
+}
+
+extend Array<Element> {
+	consuming func into_iter() -> ArrayIntoIterator<Element> {
+		ArrayIntoIterator(inner: self, position: 0)
+	}
+}
+
+extend ArrayIntoIterator<T>: Iterator {
+	mut func next() -> T? {
+		if self.position > self.inner.count - 1 { return Optional.none }
+		let index = self.position
+		self.position = self.position + 1
+		let element: &T = self.inner.get(index)
+		return .some(element)
+	}
+}
+
+// MARK: Mutable iteration
+
+public struct ArrayMutIterator<T> {
+	let inner: Array<T>
+	let position: Int
+}
+
+extend Array<Element> {
+	consuming func iter_mut() -> ArrayMutIterator<Element> {
+		ArrayMutIterator(inner: self, position: 0)
+	}
+}
+
+extend ArrayMutIterator<T> {
+	mut func next() -> T? {
+		if self.position > self.inner.count - 1 { return Optional.none }
+		let index = self.position
+		self.position = self.position + 1
+		let element: &T = self.inner.get(index)
+		return .some(element)
+	}
+
+	mut func write_back(consume value: T) -> Void {
+		self.inner._replace(self.position - 1, value)
+	}
+
+	consuming func finish() -> Array<T> { self.inner }
 }

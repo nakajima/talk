@@ -70,7 +70,7 @@ use crate::types::catalog::{
 };
 use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
-use crate::types::output::{ExistentialPack, MemberResolution, TypeOutput};
+use crate::types::output::{ExistentialPack, ForPlan, MemberResolution, TypeOutput};
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
     EffTail, EffectEntry, EffectRow, Perm, Predicate, ProtocolRef, Row, RowTail, Scheme,

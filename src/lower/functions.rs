@@ -258,12 +258,24 @@ impl<'a> Lowering<'a> {
         use derive_visitor::Visitor;
 
         #[derive(Visitor)]
-        #[visitor(Expr(enter))]
+        #[visitor(Expr(enter), Stmt(enter))]
         struct ReceiverScan<'s> {
             mutating: &'s FxHashSet<Symbol>,
             found: FxHashSet<Symbol>,
         }
         impl ReceiverScan<'_> {
+            // Any assignment target needs a cell. User assignments are
+            // already in `mutated_symbols` (resolution tracks them); this
+            // catches assignments elaborated after resolution (`for x in
+            // mut xs` restores its source with one).
+            fn enter_stmt(&mut self, stmt: &crate::typed_ast::Stmt) {
+                if let crate::typed_ast::StmtKind::Assignment(lhs, _) = &stmt.kind
+                    && let Some(root) = receiver_root_symbol(lhs)
+                {
+                    self.found.insert(root);
+                }
+            }
+
             fn enter_expr(&mut self, expr: &Expr) {
                 let ExprKind::Call { callee, args, .. } = &expr.kind else {
                     return;

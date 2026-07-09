@@ -14,11 +14,24 @@ use crate::types::TypeOutput;
 
 /// Lower one name-resolved, type-checked source file to a `TypedFile`.
 pub fn build_file(ast: &AST<NameResolved>, types: &TypeOutput) -> typed_ast::TypedFile {
-    TypedTreeBuilder { types }.file(ast)
+    // Elaborated-node ids continue below the checker's descending mint
+    // (`synthetic_floors`), so neither range meets the parser's.
+    let floor = types
+        .synthetic_floors
+        .get(&ast.file_id)
+        .copied()
+        .unwrap_or(u32::MAX);
+    TypedTreeBuilder {
+        types,
+        synthetic_next: std::cell::Cell::new(floor),
+    }
+    .file(ast)
 }
 
 struct TypedTreeBuilder<'a> {
     types: &'a TypeOutput,
+    /// Descending id mint for elaborated nodes (`elaborate_for`).
+    synthetic_next: std::cell::Cell<u32>,
 }
 
 impl TypedTreeBuilder<'_> {
@@ -420,12 +433,16 @@ impl TypedTreeBuilder<'_> {
     fn stmt(&self, s: &stmt::Stmt) -> typed_ast::Stmt {
         typed_ast::Stmt {
             id: s.id,
-            kind: self.stmt_kind(&s.kind),
+            kind: self.stmt_kind(s.id, &s.kind),
             span: s.span,
         }
     }
 
-    fn stmt_kind(&self, k: &stmt::StmtKind) -> typed_ast::StmtKind {
+    fn stmt_kind(
+        &self,
+        stmt_id: crate::node_id::NodeID,
+        k: &stmt::StmtKind,
+    ) -> typed_ast::StmtKind {
         match k {
             stmt::StmtKind::Expr(e) => typed_ast::StmtKind::Expr(self.expr(e)),
             stmt::StmtKind::If(cond, then, els) => typed_ast::StmtKind::If(
@@ -452,9 +469,358 @@ impl TypedTreeBuilder<'_> {
                 effect_name: effect_name.clone(),
                 body: self.block(body),
             },
-            stmt::StmtKind::For { .. } => {
-                unreachable!("For should be desugared by LowerForLoops before typed-program build")
-            }
+            stmt::StmtKind::For { .. } => self.elaborate_for(stmt_id, k),
+        }
+    }
+
+    /// Elaborate a first-class `for` into ordinary typed nodes — the same
+    /// program Rust's HIR desugar would produce, built once here so every
+    /// later pass (liveness, flow, MIR, lowering) sees real code:
+    ///
+    /// ```text
+    /// {                                       // scope: hidden locals die here
+    ///     let __for_src = <source>            // rvalue/consume/mut sources only
+    ///     let __for_iter = <recv>.iter()      // into_iter/iter_mut by mode
+    ///     loop {
+    ///         match __for_iter.next() {
+    ///             .some(pattern) -> { <body> [__for_iter.write_back(pattern)] },
+    ///             .none -> break
+    ///         }
+    ///     }
+    ///     [<source> = __for_iter.finish()]    // mut: take-and-restore
+    /// }
+    /// ```
+    ///
+    /// The `iter()`/`next()`/`write_back()`/`finish()` calls are rebuilt at
+    /// the checker's ForPlan ids, so their member resolutions and
+    /// instantiations bake on exactly like source-written calls. A `for`
+    /// with no plan was rejected by typing: only the source expression
+    /// survives (flow still sees its reads).
+    fn elaborate_for(
+        &self,
+        stmt_id: crate::node_id::NodeID,
+        k: &stmt::StmtKind,
+    ) -> typed_ast::StmtKind {
+        use crate::node_kinds::call_arg::ArgMode;
+        let stmt::StmtKind::For {
+            iterable,
+            source_mode,
+            pattern,
+            body,
+            hidden_source,
+            hidden_iter,
+            ..
+        } = k
+        else {
+            unreachable!("elaborate_for on a non-for statement");
+        };
+        let Some(plan) = self.types.for_plans.get(&stmt_id) else {
+            return typed_ast::StmtKind::Expr(self.expr(iterable));
+        };
+        let span = iterable.span;
+        let file = stmt_id.0;
+        let consume = matches!(source_mode, Some(ArgMode::Consume));
+        let mutate = matches!(source_mode, Some(ArgMode::Mut));
+        let iter_label = if consume {
+            "into_iter"
+        } else if mutate {
+            "iter_mut"
+        } else {
+            "iter"
+        };
+        let source = self.expr(iterable);
+        let mut nodes: Vec<typed_ast::Node> = vec![];
+
+        // A named source is borrowed as written; an rvalue source — or a
+        // `consume`/`mut`-marked one, which moves in (`mut` moves back out
+        // through `finish()` below) — binds to the hidden source local so
+        // its buffers get ordinary scope-exit drops when the loop ends.
+        let needs_bind =
+            consume || mutate || !matches!(source.kind, typed_ast::ExprKind::Variable(_));
+        let iter_receiver = if needs_bind {
+            let source_ty = source.ty.clone();
+            nodes.push(typed_ast::Node::Decl(self.syn_let(
+                file,
+                span,
+                hidden_source.clone(),
+                source.clone(),
+                source_mode.filter(|_| consume || mutate),
+            )));
+            self.syn_variable(self.syn_id(file), span, hidden_source.clone(), source_ty)
+        } else {
+            source.clone()
+        };
+
+        // let __for_iter = <recv>.iter()
+        let iter_call = self.syn_member_call(
+            plan.iter_call_id,
+            plan.iter_callee_id,
+            span,
+            iter_receiver,
+            iter_label,
+            vec![],
+        );
+        nodes.push(typed_ast::Node::Decl(self.syn_let(
+            file,
+            span,
+            hidden_iter.clone(),
+            iter_call,
+            None,
+        )));
+
+        // loop { match __for_iter.next() { .some(pattern) body, .none break } }
+        let iterator_ty = plan.iterator_ty.erase_eff_args();
+        let next_receiver = self.syn_variable(
+            self.syn_id(file),
+            span,
+            hidden_iter.clone(),
+            iterator_ty.clone(),
+        );
+        let next_call = self.syn_member_call(
+            plan.next_call_id,
+            plan.next_callee_id,
+            span,
+            next_receiver,
+            "next",
+            vec![],
+        );
+
+        // Mut iteration writes the (possibly reassigned) binder back into
+        // the iterator at the end of each iteration; `break`/`continue`
+        // skip that iteration's write-back (v1).
+        let mut arm_body = self.block(body);
+        if mutate && let pattern::PatternKind::Bind(binder_name) = &pattern.kind {
+            let binder_read = self.syn_variable(
+                plan.write_back_arg_id,
+                pattern.span,
+                binder_name.clone(),
+                plan.element_ty.erase_eff_args(),
+            );
+            let wb_receiver = self.syn_variable(
+                self.syn_id(file),
+                span,
+                hidden_iter.clone(),
+                iterator_ty.clone(),
+            );
+            let wb_call = self.syn_member_call(
+                plan.write_back_call_id,
+                plan.write_back_callee_id,
+                span,
+                wb_receiver,
+                "write_back",
+                vec![typed_ast::CallArg {
+                    id: plan.write_back_arg_id,
+                    label: crate::label::Label::Positional(0),
+                    value: binder_read,
+                    mode: None,
+                }],
+            );
+            arm_body.body.push(typed_ast::Node::Stmt(typed_ast::Stmt {
+                id: self.syn_id(file),
+                span,
+                kind: typed_ast::StmtKind::Expr(wb_call),
+            }));
+        }
+        let some_arm = typed_ast::MatchArm {
+            id: self.syn_id(file),
+            pattern: typed_ast::Pattern {
+                id: self.syn_id(file),
+                span: pattern.span,
+                kind: typed_ast::PatternKind::Variant {
+                    enum_name: None,
+                    variant_name: "some".to_string(),
+                    fields: vec![self.pattern(pattern)],
+                },
+            },
+            body: arm_body,
+        };
+        let none_arm = typed_ast::MatchArm {
+            id: self.syn_id(file),
+            pattern: typed_ast::Pattern {
+                id: self.syn_id(file),
+                span,
+                kind: typed_ast::PatternKind::Variant {
+                    enum_name: None,
+                    variant_name: "none".to_string(),
+                    fields: vec![],
+                },
+            },
+            body: typed_ast::Block {
+                id: self.syn_id(file),
+                args: vec![],
+                span,
+                body: vec![typed_ast::Node::Stmt(typed_ast::Stmt {
+                    id: self.syn_id(file),
+                    span,
+                    kind: typed_ast::StmtKind::Break,
+                })],
+            },
+        };
+        let match_expr = typed_ast::Expr {
+            id: self.syn_id(file),
+            kind: typed_ast::ExprKind::Match(Box::new(next_call), vec![some_arm, none_arm]),
+            span,
+            ownership: Default::default(),
+            ty: plan.body_ty.erase_eff_args(),
+            member_resolution: None,
+            instantiation: None,
+            existential_pack: None,
+        };
+        nodes.push(typed_ast::Node::Stmt(typed_ast::Stmt {
+            id: self.syn_id(file),
+            span,
+            kind: typed_ast::StmtKind::Loop(
+                None,
+                typed_ast::Block {
+                    id: self.syn_id(file),
+                    args: vec![],
+                    span,
+                    body: vec![typed_ast::Node::Stmt(typed_ast::Stmt {
+                        id: self.syn_id(file),
+                        span,
+                        kind: typed_ast::StmtKind::Expr(match_expr),
+                    })],
+                },
+            ),
+        }));
+
+        // Mut iteration restores the source: `foos = __for_iter.finish()`
+        // — an ordinary assignment, so flow re-initializes the moved
+        // source place and the consumed iterator's scope-exit drop
+        // classifies dead.
+        if mutate {
+            let finish_receiver =
+                self.syn_variable(self.syn_id(file), span, hidden_iter.clone(), iterator_ty);
+            let finish_call = self.syn_member_call(
+                plan.finish_call_id,
+                plan.finish_callee_id,
+                span,
+                finish_receiver,
+                "finish",
+                vec![],
+            );
+            nodes.push(typed_ast::Node::Stmt(typed_ast::Stmt {
+                id: self.syn_id(file),
+                span,
+                kind: typed_ast::StmtKind::Assignment(Box::new(source), Box::new(finish_call)),
+            }));
+        }
+
+        typed_ast::StmtKind::Expr(typed_ast::Expr {
+            id: self.syn_id(file),
+            kind: typed_ast::ExprKind::Block(typed_ast::Block {
+                id: self.syn_id(file),
+                args: vec![],
+                span,
+                body: nodes,
+            }),
+            span,
+            ownership: Default::default(),
+            ty: crate::types::ty::Ty::unit(),
+            member_resolution: None,
+            instantiation: None,
+            existential_pack: None,
+        })
+    }
+
+    /// Mint a fresh id for an elaborated node, descending from `u32::MAX`
+    /// (parser ids ascend from zero, so the ranges never meet).
+    fn syn_id(&self, file: crate::node_id::FileID) -> crate::node_id::NodeID {
+        let next = self.synthetic_next.get() - 1;
+        self.synthetic_next.set(next);
+        crate::node_id::NodeID(file, next)
+    }
+
+    fn syn_variable(
+        &self,
+        id: crate::node_id::NodeID,
+        span: crate::span::Span,
+        name: crate::name::Name,
+        ty: crate::types::ty::Ty,
+    ) -> typed_ast::Expr {
+        typed_ast::Expr {
+            id,
+            kind: typed_ast::ExprKind::Variable(name),
+            span,
+            ownership: Default::default(),
+            ty,
+            member_resolution: None,
+            instantiation: None,
+            existential_pack: None,
+        }
+    }
+
+    /// A method call rebuilt at the checker's ids: types, member
+    /// resolutions, and instantiations bake on from the same tables as
+    /// source-written calls.
+    fn syn_member_call(
+        &self,
+        call_id: crate::node_id::NodeID,
+        callee_id: crate::node_id::NodeID,
+        span: crate::span::Span,
+        receiver: typed_ast::Expr,
+        label: &str,
+        args: Vec<typed_ast::CallArg>,
+    ) -> typed_ast::Expr {
+        let baked_ty = |id: &crate::node_id::NodeID| {
+            self.types
+                .node_types
+                .get(id)
+                .map(|ty| ty.erase_eff_args())
+                .unwrap_or(crate::types::ty::Ty::Error)
+        };
+        let callee = typed_ast::Expr {
+            id: callee_id,
+            kind: typed_ast::ExprKind::Member(
+                Some(Box::new(receiver)),
+                crate::label::Label::Named(label.into()),
+            ),
+            span,
+            ownership: Default::default(),
+            ty: baked_ty(&callee_id),
+            member_resolution: self.types.member_resolutions.get(&callee_id).cloned(),
+            instantiation: self.types.instantiations.get(&callee_id).cloned(),
+            existential_pack: None,
+        };
+        typed_ast::Expr {
+            id: call_id,
+            kind: typed_ast::ExprKind::Call {
+                callee: Box::new(callee),
+                type_args: vec![],
+                args,
+                trailing_block: None,
+            },
+            span,
+            ownership: Default::default(),
+            ty: baked_ty(&call_id),
+            member_resolution: self.types.member_resolutions.get(&call_id).cloned(),
+            instantiation: self.types.instantiations.get(&call_id).cloned(),
+            existential_pack: None,
+        }
+    }
+
+    fn syn_let(
+        &self,
+        file: crate::node_id::FileID,
+        span: crate::span::Span,
+        name: crate::name::Name,
+        rhs: typed_ast::Expr,
+        source_mode: Option<crate::node_kinds::call_arg::ArgMode>,
+    ) -> typed_ast::Decl {
+        typed_ast::Decl {
+            id: self.syn_id(file),
+            span,
+            visibility: crate::node_kinds::decl::Visibility::Private,
+            kind: typed_ast::DeclKind::Let {
+                lhs: typed_ast::Pattern {
+                    id: self.syn_id(file),
+                    span,
+                    kind: typed_ast::PatternKind::Bind(name),
+                },
+                type_annotation: None,
+                rhs: Some(rhs),
+                source_mode,
+            },
         }
     }
 
@@ -548,6 +914,7 @@ impl TypedTreeBuilder<'_> {
                 lhs: self.pattern(lhs),
                 type_annotation: type_annotation.clone(),
                 rhs: rhs.as_ref().map(|e| self.expr(e)),
+                source_mode: None,
             },
             decl::DeclKind::Protocol {
                 name,
