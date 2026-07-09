@@ -2,7 +2,8 @@ name: TalkSwift XCFramework release
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "*"
 
 permissions:
   contents: write
@@ -10,24 +11,45 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: talk-swift-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Build and publish TalkC.xcframework
     runs-on: macos-14
+    if: ${{ !endsWith(github.ref_name, '-swift') }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Reject existing tag
+      - name: Derive Swift release tag
+        id: tags
         shell: bash
-        env:
-          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "::error::tag already exists: ${TAG}"
+          base_tag="${GITHUB_REF_NAME}"
+          swift_tag="${base_tag}-swift"
+          base_sha="$(git rev-list -n 1 "$base_tag")"
+          git checkout --detach "$base_sha"
+          echo "base_tag=${base_tag}" >> "$GITHUB_OUTPUT"
+          echo "swift_tag=${swift_tag}" >> "$GITHUB_OUTPUT"
+          echo "base_sha=${base_sha}" >> "$GITHUB_OUTPUT"
+          echo "Base tag: ${base_tag}"
+          echo "Base SHA: ${base_sha}"
+          echo "Swift tag: ${swift_tag}"
+
+      - name: Reject existing Swift tag
+        shell: bash
+        env:
+          SWIFT_TAG: ${{ steps.tags.outputs.swift_tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${SWIFT_TAG}" >/dev/null 2>&1; then
+            echo "::error::tag already exists: ${SWIFT_TAG}"
             exit 1
           fi
 
@@ -51,10 +73,10 @@ jobs:
           echo "checksum=${checksum}" >> "$GITHUB_OUTPUT"
           echo "TalkC.xcframework.zip checksum: ${checksum}"
 
-      - name: Stamp root Package.swift for the release tag
+      - name: Stamp root Package.swift for the Swift release tag
         shell: bash
         env:
-          TAG: ${{ inputs.tag }}
+          SWIFT_TAG: ${{ steps.tags.outputs.swift_tag }}
           REPOSITORY: ${{ github.repository }}
           CHECKSUM: ${{ steps.checksum.outputs.checksum }}
         run: |
@@ -66,7 +88,7 @@ jobs:
 
           package = Path("Package.swift")
           text = package.read_text()
-          url = f"https://github.com/{os.environ['REPOSITORY']}/releases/download/{os.environ['TAG']}/TalkC.xcframework.zip"
+          url = f"https://github.com/{os.environ['REPOSITORY']}/releases/download/{os.environ['SWIFT_TAG']}/TalkC.xcframework.zip"
           checksum = os.environ["CHECKSUM"]
           text = re.sub(
               r'let talkCReleaseURL = "[^"]*"',
@@ -82,30 +104,30 @@ jobs:
           PY
           git diff -- Package.swift
 
-      - name: Create version tag commit
+      - name: Create and push Swift tag commit
         shell: bash
         env:
-          TAG: ${{ inputs.tag }}
+          SWIFT_TAG: ${{ steps.tags.outputs.swift_tag }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Package.swift
-          git commit -m "TalkSwift package ${TAG}"
-          git tag "${TAG}"
-          git push origin "refs/tags/${TAG}"
+          git commit -m "TalkSwift package ${SWIFT_TAG}"
+          git tag "${SWIFT_TAG}"
+          git push origin "refs/tags/${SWIFT_TAG}"
 
       - name: Create GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          BASE_TAG: ${{ steps.tags.outputs.base_tag }}
+          SWIFT_TAG: ${{ steps.tags.outputs.swift_tag }}
           CHECKSUM: ${{ steps.checksum.outputs.checksum }}
-          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
           cat > dist/release-notes.md <<EOF
-          TalkSwift binary dependency for ${TAG}.
+          TalkSwift binary dependency for ${BASE_TAG}.
 
           SwiftPM checksum:
 
@@ -114,8 +136,9 @@ jobs:
           \`\`\`
           EOF
 
-          args=("${TAG}" "dist/TalkC.xcframework.zip" --title "TalkSwift ${TAG}" --notes-file "dist/release-notes.md")
-          if [[ "${PRERELEASE}" == "true" ]]; then
-            args+=(--prerelease)
-          fi
-          gh release create "${args[@]}"
+          gh release create \
+            "${SWIFT_TAG}" \
+            "dist/TalkC.xcframework.zip" \
+            --title "TalkSwift ${SWIFT_TAG}" \
+            --notes-file "dist/release-notes.md" \
+            --prerelease

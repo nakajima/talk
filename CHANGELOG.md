@@ -79,11 +79,11 @@ such as `testing.tlk` importing `ansi.tlk` work from XCFramework builds.
 
 The analysis layer gained protocol-independent goto-definition and rename
 entry points so embedders can call the language-service functionality
-directly without running the LSP server. The release flow now centers on a
-single manual TalkSwift workflow that builds `TalkC.xcframework.zip`,
-computes the SwiftPM checksum, stamps the root package manifest for the
-requested version tag, pushes that tag, and uploads the XCFramework zip as
-a GitHub Release asset.
+directly without running the LSP server. The TalkSwift release workflow now
+runs automatically when a non-`-swift` tag is pushed: it builds
+`TalkC.xcframework.zip`, computes the SwiftPM checksum, stamps the root
+package manifest, creates a derived `<tag>-swift` tag, and uploads the
+XCFramework zip as a GitHub Release asset for that Swift tag.
 
 A heavily WIP `talk-swift` Swift package now wraps the local `talk-c`
 facade. The repository root now also has a SwiftPM `Package.swift` for
