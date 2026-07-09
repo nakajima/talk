@@ -1,17 +1,13 @@
 test "maps" {
 	let a = [1, 2, 3, 4]
-	assert(a.iter().map { i in i.show() }.to_array() == ["1", "2", "3", "4"])
+	assert(a.map { i in i.show() }.to_array() == ["1", "2", "3", "4"])
 }
 
 test "skips" {
 	let a = [1, 2, 3, 4]
-	assert(a.into_iter().skip(2).to_array() == [3, 4])
-}
-
-func collect_into_array<T: IntoIterator>(consume xs: T) -> Array<T.Element> {
-	xs.into_iter().to_array()
+	assert(a.skip(2).to_array() == [3, 4])
 }
 
 test "generic into iterator" {
-	assert(collect_into_array([1, 2, 3]) == [1, 2, 3])
+	assert([1, 2, 3].into_iter().to_array() == [1, 2, 3])
 }

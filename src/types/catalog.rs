@@ -918,14 +918,13 @@ impl TypeCatalog {
         let self_matches = if matches!(candidate_head, Symbol::Protocol(_)) {
             conformance.self_args.is_empty()
                 && match_pattern(&Ty::Param(candidate_head), self_ty, &mut substitution)
-        } else if let Some((head, self_args)) = nominal_head {
+        } else if let Some((head, _)) = nominal_head {
             candidate_head == head
-                && conformance.self_args.len() == self_args.len()
-                && conformance
-                    .self_args
-                    .iter()
-                    .zip(self_args)
-                    .all(|(pattern, actual)| match_pattern(pattern, actual, &mut substitution))
+                && match_pattern(
+                    &Ty::Nominal(candidate_head, conformance.self_args.clone()),
+                    self_ty,
+                    &mut substitution,
+                )
         } else {
             false
         };

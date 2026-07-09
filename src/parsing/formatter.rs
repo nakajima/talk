@@ -842,7 +842,7 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_block_args(&self, args: &[Parameter]) -> Option<Doc> {
-        if args.is_empty() {
+        if args.is_empty() || Self::is_synthesized_positional_block_args(args) {
             return None;
         }
 
@@ -851,6 +851,16 @@ impl<'a> Formatter<'a> {
             join(arg_docs, concat(text(","), text(" "))),
             text(" in"),
         ))
+    }
+
+    fn is_synthesized_positional_block_args(args: &[Parameter]) -> bool {
+        !args.is_empty()
+            && args.iter().enumerate().all(|(index, arg)| {
+                arg.span == crate::span::Span::SYNTHESIZED
+                    && arg.name.name_str() == format!("${index}")
+                    && arg.type_annotation.is_none()
+                    && arg.mode.is_none()
+            })
     }
 
     fn append_comments_until(&self, end: u32, mut acc: Doc, last_line: &mut Option<u32>) -> Doc {
@@ -3050,6 +3060,10 @@ mod formatter_tests {
 
     #[test]
     fn test_block_args_formatting() {
+        assert_eq!(format_code("map { $0 }", 80), "map { $0 }");
+        assert_eq!(format_code("map { $0 * $1 }", 80), "map { $0 * $1 }");
+        assert_eq!(format_code("map({ $0 })", 80), "map { $0 }");
+
         assert_eq!(
             format_code("@handle 'fizz { x in x }", 80),
             "@handle 'fizz { x in x }"

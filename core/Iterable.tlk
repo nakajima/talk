@@ -101,7 +101,7 @@ extend Map<I, U>: Iterator where I: Iterator {
 
 // MARK: Skip
 
-struct Skip<I: Iterator> {
+public struct Skip<I: Iterator> {
 	let inner: I
 }
 

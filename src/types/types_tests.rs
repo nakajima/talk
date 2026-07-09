@@ -4100,6 +4100,15 @@ mod with_core {
     }
 
     #[test]
+    fn map_to_array_uses_iterator_conformance_with_effect_row_arg() {
+        let typed = check_with_core(Source::from(
+            "let xs = [1, 2, 3]\nlet ys: Array<String> = xs.map { x in x.show() }.to_array()",
+        ));
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
     fn chained_iterator_index_terminates() {
         // Dispatching a requirement whose where clause binds an assoc type
         // (`index`'s `Equatable<Element>`) at Element = &Int produces the
