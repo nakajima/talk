@@ -690,23 +690,34 @@ impl<'a> Formatter<'a> {
             StmtKind::For {
                 pattern,
                 iterable,
+                source_mode,
                 body,
                 ..
-            } => concat_space(
-                text("for"),
+            } => {
+                let iterable = match source_mode {
+                    Some(ArgMode::Borrow) => {
+                        concat_space(text("borrow"), self.format_expr(iterable))
+                    }
+                    Some(ArgMode::Mut) => concat_space(text("mut"), self.format_expr(iterable)),
+                    Some(ArgMode::Consume) => {
+                        concat_space(text("consume"), self.format_expr(iterable))
+                    }
+                    Some(ArgMode::Copy) => concat_space(text("copy"), self.format_expr(iterable)),
+                    None => self.format_expr(iterable),
+                };
                 concat_space(
-                    self.format_pattern(pattern),
+                    text("for"),
                     concat_space(
-                        text("in"),
-                        // A `for` body always formats multi-line; collapsing it to
-                        // `for x in xs { ... }` hurts readability of the loop.
+                        self.format_pattern(pattern),
                         concat_space(
-                            self.format_expr(iterable),
-                            self.format_block_multiline(body),
+                            text("in"),
+                            // A `for` body always formats multi-line; collapsing it to
+                            // `for x in xs { ... }` hurts readability of the loop.
+                            concat_space(iterable, self.format_block_multiline(body)),
                         ),
                     ),
-                ),
-            ),
+                )
+            }
         };
 
         self.decorators
@@ -3022,6 +3033,18 @@ mod formatter_tests {
         assert_eq!(
             format_code("for x in xs { print(x) }", 80),
             "for x in xs {\n\tprint(x)\n}"
+        );
+    }
+
+    #[test]
+    fn test_for_loop_preserves_source_mode() {
+        assert_eq!(
+            format_code("for x in consume xs { print(x) }", 80),
+            "for x in consume xs {\n\tprint(x)\n}"
+        );
+        assert_eq!(
+            format_code("for x in mut xs { print(x) }", 80),
+            "for x in mut xs {\n\tprint(x)\n}"
         );
     }
 

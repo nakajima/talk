@@ -482,19 +482,18 @@ impl TypedTreeBuilder<'_> {
     ///
     /// ```text
     /// {                                       // scope: hidden locals die here
-    ///     let __for_src = <source>            // rvalue/consume/mut sources only
+    ///     let __for_src = <source>            // rvalue/consume sources only
     ///     let __for_iter = <recv>.iter()      // into_iter/iter_mut by mode
     ///     loop {
     ///         match __for_iter.next() {
-    ///             .some(pattern) -> { <body> [__for_iter.write_back(pattern)] },
+    ///             .some(pattern) -> { <body> [__for_iter._store_current(pattern)] },
     ///             .none -> break
     ///         }
     ///     }
-    ///     [<source> = __for_iter.finish()]    // mut: take-and-restore
     /// }
     /// ```
     ///
-    /// The `iter()`/`next()`/`write_back()`/`finish()` calls are rebuilt at
+    /// The `iter()`/`next()`/mut-store calls are rebuilt at
     /// the checker's ForPlan ids, so their member resolutions and
     /// instantiations bake on exactly like source-written calls. A `for`
     /// with no plan was rejected by typing: only the source expression
@@ -535,11 +534,12 @@ impl TypedTreeBuilder<'_> {
         let mut nodes: Vec<typed_ast::Node> = vec![];
 
         // A named source is borrowed as written; an rvalue source — or a
-        // `consume`/`mut`-marked one, which moves in (`mut` moves back out
-        // through `finish()` below) — binds to the hidden source local so
-        // its buffers get ordinary scope-exit drops when the loop ends.
+        // `consume`-marked one — binds to the hidden source local so its
+        // buffers get ordinary scope-exit drops when the loop ends. `mut`
+        // iteration borrows its source in place for the hidden iterator's
+        // scope.
         let needs_bind =
-            consume || mutate || !matches!(source.kind, typed_ast::ExprKind::Variable(_));
+            consume || (!mutate && !matches!(source.kind, typed_ast::ExprKind::Variable(_)));
         let iter_receiver = if needs_bind {
             let source_ty = source.ty.clone();
             nodes.push(typed_ast::Node::Decl(self.syn_let(
@@ -547,7 +547,7 @@ impl TypedTreeBuilder<'_> {
                 span,
                 hidden_source.clone(),
                 source.clone(),
-                source_mode.filter(|_| consume || mutate),
+                source_mode.filter(|_| consume),
             )));
             self.syn_variable(self.syn_id(file), span, hidden_source.clone(), source_ty)
         } else {
@@ -588,13 +588,12 @@ impl TypedTreeBuilder<'_> {
             vec![],
         );
 
-        // Mut iteration writes the (possibly reassigned) binder back into
-        // the iterator at the end of each iteration; `break`/`continue`
-        // skip that iteration's write-back (v1).
+        // Mut iteration stores the (possibly reassigned) binder back into
+        // the current iterator slot at the end of each normal iteration.
         let mut arm_body = self.block(body);
         if mutate && let pattern::PatternKind::Bind(binder_name) = &pattern.kind {
             let binder_read = self.syn_variable(
-                plan.write_back_arg_id,
+                plan.mut_store_arg_id,
                 pattern.span,
                 binder_name.clone(),
                 plan.element_ty.erase_eff_args(),
@@ -605,14 +604,14 @@ impl TypedTreeBuilder<'_> {
                 hidden_iter.clone(),
                 iterator_ty.clone(),
             );
-            let wb_call = self.syn_member_call(
-                plan.write_back_call_id,
-                plan.write_back_callee_id,
+            let store_call = self.syn_member_call(
+                plan.mut_store_call_id,
+                plan.mut_store_callee_id,
                 span,
                 wb_receiver,
-                "write_back",
+                "_store_current",
                 vec![typed_ast::CallArg {
-                    id: plan.write_back_arg_id,
+                    id: plan.mut_store_arg_id,
                     label: crate::label::Label::Positional(0),
                     value: binder_read,
                     mode: None,
@@ -621,7 +620,7 @@ impl TypedTreeBuilder<'_> {
             arm_body.body.push(typed_ast::Node::Stmt(typed_ast::Stmt {
                 id: self.syn_id(file),
                 span,
-                kind: typed_ast::StmtKind::Expr(wb_call),
+                kind: typed_ast::StmtKind::Expr(store_call),
             }));
         }
         let some_arm = typed_ast::MatchArm {
@@ -686,28 +685,6 @@ impl TypedTreeBuilder<'_> {
                 },
             ),
         }));
-
-        // Mut iteration restores the source: `foos = __for_iter.finish()`
-        // — an ordinary assignment, so flow re-initializes the moved
-        // source place and the consumed iterator's scope-exit drop
-        // classifies dead.
-        if mutate {
-            let finish_receiver =
-                self.syn_variable(self.syn_id(file), span, hidden_iter.clone(), iterator_ty);
-            let finish_call = self.syn_member_call(
-                plan.finish_call_id,
-                plan.finish_callee_id,
-                span,
-                finish_receiver,
-                "finish",
-                vec![],
-            );
-            nodes.push(typed_ast::Node::Stmt(typed_ast::Stmt {
-                id: self.syn_id(file),
-                span,
-                kind: typed_ast::StmtKind::Assignment(Box::new(source), Box::new(finish_call)),
-            }));
-        }
 
         typed_ast::StmtKind::Expr(typed_ast::Expr {
             id: self.syn_id(file),

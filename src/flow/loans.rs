@@ -156,8 +156,17 @@ impl MoveState {
 
     /// Mark every borrow whose owner overlaps `owner` as invalidated.
     pub(crate) fn invalidate_borrows_of(&mut self, owner: &Place) {
+        self.invalidate_borrows_of_except(owner, None);
+    }
+
+    /// Mark every borrow whose owner overlaps `owner` as invalidated, except
+    /// for the borrower currently exercising that access.
+    pub(crate) fn invalidate_borrows_of_except(&mut self, owner: &Place, except: Option<&Place>) {
         let mut invalid: Vec<(Place, Place)> = vec![];
         for (borrower, provenance) in &self.provenances {
+            if except.is_some_and(|except| except.overlaps(borrower)) {
+                continue;
+            }
             for loan in &provenance.loans {
                 if let Some(loan_owner) = &loan.owner
                     && loan_owner.overlaps(owner)
@@ -288,15 +297,23 @@ impl MoveChecker<'_> {
                 }
                 return true;
             }
-            // A type-parameter extraction from a heap object: the grade is
-            // the instantiation's, so the clone/no-op/error decision moves
-            // to lowering (which holds θ). Mark it and let each
-            // monomorphization resolve.
-            if !forced && root_is_object && matches!(expr.ty, Ty::Param(_)) {
-                if self.recording {
-                    self.auto_clones.insert(expr.id);
+            // A type-parameter extraction from a heap object is legal only
+            // when the generic declaration proves every instantiation can
+            // copy out of the object's storage.
+            if !forced && root_is_object {
+                let param = match &expr.ty {
+                    Ty::Param(symbol) => Some(*symbol),
+                    Ty::Proj(_, _, symbol) => Some(*symbol),
+                    _ => None,
+                };
+                if let Some(param) = param
+                    && self.grades.param_copies_out_of_borrow(param)
+                {
+                    if self.recording {
+                        self.auto_clones.insert(expr.id);
+                    }
+                    return true;
                 }
-                return true;
             }
             let error = OwnershipError::MoveOutOfBorrowedValue {
                 name: self.render(place),
@@ -652,12 +669,15 @@ impl MoveChecker<'_> {
         // Method call: a borrowed self parameter means the result borrows
         // from the receiver.
         if let ExprKind::Member(Some(receiver), _) = &callee.kind {
-            let self_is_borrow = self
+            let self_borrow_perm = self
                 .member_callable_params(callee)
                 .as_ref()
                 .and_then(|params| params.first())
-                .is_some_and(|param| matches!(param, Ty::Borrow(..)));
-            if self_is_borrow {
+                .and_then(|param| match param {
+                    Ty::Borrow(perm, _) => Some(*perm),
+                    _ => None,
+                });
+            if let Some(self_borrow_perm) = self_borrow_perm {
                 if let Some(receiver_place) = self.place(receiver) {
                     let root = Place::root(receiver_place.root);
                     if let Some(provenance) = state
@@ -670,7 +690,7 @@ impl MoveChecker<'_> {
                     return Provenance::direct(
                         self.origin_of_root(receiver_place.root),
                         Some(receiver_place),
-                        Perm::Shared,
+                        self_borrow_perm,
                     );
                 }
                 // A chained receiver (itself a call) carries its own

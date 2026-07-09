@@ -8,11 +8,6 @@ resolver itself only declares and binds names.
 
 The transforms run in this order:
 
-- `lower_for_loops` — `for pattern in xs { ... }` becomes a block that
-  creates an iterator, loops, calls `.next()`, and matches
-  `Optional.some(pattern)` / `Optional.none` (`break`). Rvalue iterables
-  are first bound to a synthetic source binding so their storage lives for
-  the loop.
 - `lower_funcs_to_lets` — a top-level `func f(...) { ... }` becomes
   `let f = func f(...) { ... }`, so later stages have one kind of
   top-level value binding.
@@ -28,5 +23,5 @@ The transforms run in this order:
 
 This is why the type checker has no operator rules, no expression-`if`
 rule, and no implicit-method-receiver rule. Statement-level control flow
-(`if`, `loop`, `break`, `continue`, `return`, handler scopes) remains for
-HIR/MIR, flow analysis, and lowering to handle explicitly.
+(`if`, `for`, `loop`, `break`, `continue`, `return`, handler scopes)
+remains for HIR/MIR, flow analysis, and lowering to handle explicitly.

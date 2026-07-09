@@ -733,12 +733,20 @@ pub mod tests {
     #[test]
     fn vm_consume_for_loop_moves_elements_out() {
         // `for x in consume xs`: xs moves into the loop-owned iterator and
-        // is dead afterwards; elements come out owned (a per-instantiation
-        // clone balanced against the array's deep-drop deinit).
+        // is dead afterwards; elements are drained out of the array's
+        // storage as owned values.
         let (_, out) = run_on_both_engines_io(
             "func main() -> Int {\n\tlet xs = [\"a\" + \"b\", \"c\" + \"d\"]\n\tfor x in consume xs {\n\t\tprint(x)\n\t}\n\t0\n}",
         );
         assert_eq!(out, "ab\ncd\n");
+    }
+
+    #[test]
+    fn vm_consume_for_loop_moves_non_cheap_clone_elements_out() {
+        let (_, out) = run_on_both_engines_io(
+            "struct Item {\n\tlet name: String\n}\nfunc main() -> Int {\n\tlet xs = [Item(name: \"a\" + \"b\")]\n\tfor item in consume xs {\n\t\tprint(item.name)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "ab\n");
     }
 
     #[test]
@@ -755,7 +763,7 @@ pub mod tests {
         // The per-instantiation clone coercion end-to-end: a borrowed
         // argument fills an owned generic enum payload by retaining.
         let (_, out) = run_on_both_engines_io(
-            "enum Box2<T> {\n\tcase full(T)\n}\nfunc wrap<T>(v: &T) -> Box2<T> {\n\tBox2.full(v)\n}\nfunc main() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet b = wrap(s)\n\tmatch b {\n\t\t.full(v) -> print(v)\n\t}\n\t0\n}",
+            "enum Box2<T> {\n\tcase full(T)\n}\nfunc wrap<T: CheapClone>(v: &T) -> Box2<T> {\n\tBox2.full(v)\n}\nfunc main() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet b = wrap(s)\n\tmatch b {\n\t\t.full(v) -> print(v)\n\t}\n\t0\n}",
         );
         assert_eq!(out, "ab\n");
     }
@@ -798,11 +806,27 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_mut_for_loop_writes_back_non_cheap_clone_elements() {
+        let (_, out) = run_on_both_engines_io(
+            "struct Item {\n\tlet name: String\n}\nfunc main() -> Int {\n\tlet xs = [Item(name: \"a\" + \"b\")]\n\tfor item in mut xs {\n\t\titem = Item(name: item.name + \"!\")\n\t}\n\tfor item in xs {\n\t\tprint(item.name)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "ab!\n");
+    }
+
+    #[test]
     fn vm_mut_for_loop_source_usable_after() {
         let (_, out) = run_on_both_engines_io(
             "func main() -> Int {\n\tlet xs = [5]\n\tfor x in mut xs {\n\t\tx = x + 1\n\t}\n\tprint(xs.count)\n\tprint(xs.get(0))\n\t0\n}",
         );
         assert_eq!(out, "1\n6\n");
+    }
+
+    #[test]
+    fn vm_mut_for_loop_source_can_be_mut_borrowed_again_after() {
+        let (_, out) = run_on_both_engines_io(
+            "func touch(xs: &mut Array<Int>) -> Int {\n\txs.push(9)\n\txs.count\n}\nfunc main() -> Int {\n\tlet xs = [5]\n\tfor x in mut xs {\n\t\tx = x + 1\n\t}\n\tprint(touch(xs))\n\tprint(xs.get(0))\n\tprint(xs.get(1))\n\t0\n}",
+        );
+        assert_eq!(out, "2\n6\n9\n");
     }
 
     #[test]

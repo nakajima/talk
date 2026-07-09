@@ -96,11 +96,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let iter_call_id = self.artifacts.synthetic_id(file);
                 let next_callee_id = self.artifacts.synthetic_id(file);
                 let next_call_id = self.artifacts.synthetic_id(file);
-                let write_back_callee_id = self.artifacts.synthetic_id(file);
-                let write_back_call_id = self.artifacts.synthetic_id(file);
-                let write_back_arg_id = self.artifacts.synthetic_id(file);
-                let finish_callee_id = self.artifacts.synthetic_id(file);
-                let finish_call_id = self.artifacts.synthetic_id(file);
+                let mut_store_callee_id = self.artifacts.synthetic_id(file);
+                let mut_store_call_id = self.artifacts.synthetic_id(file);
+                let mut_store_arg_id = self.artifacts.synthetic_id(file);
                 let iter_label = match source_mode {
                     Some(ArgMode::Consume) => "into_iter",
                     Some(ArgMode::Mut) => "iter_mut",
@@ -110,9 +108,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     }
                     None => "iter",
                 };
-                // Mut iteration takes the source and restores it at loop
-                // end: the source must be an assignable place, and the
-                // binder a single name (the write-back reads it).
+                // Mut iteration borrows the source for the loop scope and
+                // commits the single-name binder back into the current slot
+                // at the end of each normal iteration.
                 if matches!(source_mode, Some(ArgMode::Mut)) {
                     if !matches!(
                         iterable.kind,
@@ -122,6 +120,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     }
                     if pattern.collect_binders().len() != 1 {
                         self.unsupported(stmt.id, "`mut` iteration with a destructuring binder");
+                    }
+                    if Self::block_exits_mut_iteration(body, 0) {
+                        self.unsupported(
+                            stmt.id,
+                            "`break`, `continue`, and `return` inside `mut` iteration",
+                        );
                     }
                 }
                 let iterable_ty = self.infer_expr(iterable, ctx);
@@ -179,9 +183,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let body_ty = self.infer_block_value(body, ctx);
 
                 if matches!(source_mode, Some(ArgMode::Mut)) {
-                    // write_back(value): checked as a real call so its
-                    // effects join the ambient row; the argument is a
-                    // phantom read of the loop binder.
+                    // _store_current(value): checked as a real compiler-owned
+                    // call so its effects join the ambient row; the argument
+                    // is a phantom read of the loop binder.
                     if let Some((_, binder)) = pattern.collect_binders().first().copied() {
                         let binder_name = crate::name::Name::Resolved(
                             binder,
@@ -192,12 +196,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                                 .unwrap_or_default(),
                         );
                         let phantom = crate::node_kinds::expr::Expr {
-                            id: write_back_arg_id,
+                            id: mut_store_arg_id,
                             span: pattern.span,
                             kind: crate::node_kinds::expr::ExprKind::Variable(binder_name),
                         };
                         let arg = crate::node_kinds::call_arg::CallArg {
-                            id: write_back_arg_id,
+                            id: mut_store_arg_id,
                             label: Label::Positional(0),
                             label_span: pattern.span,
                             value: phantom,
@@ -205,53 +209,28 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                             mode: None,
                             mode_span: None,
                         };
-                        let wb_member =
-                            Ty::Var(self.store.fresh_ty(self.level, write_back_callee_id));
+                        let store_member =
+                            Ty::Var(self.store.fresh_ty(self.level, mut_store_callee_id));
                         self.artifacts
                             .node_types
-                            .insert(write_back_callee_id, wb_member.clone());
-                        let wb_result = self.finish_call(
-                            write_back_call_id,
-                            wb_member.clone(),
+                            .insert(mut_store_callee_id, store_member.clone());
+                        let store_result = self.finish_call(
+                            mut_store_call_id,
+                            store_member.clone(),
                             std::slice::from_ref(&arg),
                             &None,
                             ctx,
                         );
                         self.artifacts
                             .node_types
-                            .insert(write_back_call_id, wb_result);
+                            .insert(mut_store_call_id, store_result);
                         self.wanteds.push(Constraint::HasMember {
                             receiver: Ty::Borrow(Perm::Exclusive, Box::new(iterator_ty.clone())),
-                            label: Label::Named("write_back".into()),
-                            member: wb_member,
-                            origin: CtOrigin::new(write_back_callee_id, CtReason::Apply),
+                            label: Label::Named("_store_current".into()),
+                            member: store_member,
+                            origin: CtOrigin::new(mut_store_callee_id, CtReason::Apply),
                         });
                     }
-
-                    // finish(): the consuming restore; its result assigns
-                    // back to the source place.
-                    let finish_member = Ty::Var(self.store.fresh_ty(self.level, finish_callee_id));
-                    self.artifacts
-                        .node_types
-                        .insert(finish_callee_id, finish_member.clone());
-                    let finish_result =
-                        self.finish_call(finish_call_id, finish_member.clone(), &[], &None, ctx);
-                    self.artifacts
-                        .node_types
-                        .insert(finish_call_id, finish_result.clone());
-                    self.wanteds.push(Constraint::HasMember {
-                        receiver: iterator_ty.clone(),
-                        label: Label::Named("finish".into()),
-                        member: finish_member,
-                        origin: CtOrigin::new(finish_callee_id, CtReason::Apply),
-                    });
-                    let source_ty = self.infer_assignment_target(iterable, ctx);
-                    self.emit_eq(
-                        source_ty,
-                        finish_result,
-                        finish_call_id,
-                        CtReason::Assignment,
-                    );
                 }
                 self.artifacts.for_plans.insert(
                     stmt.id,
@@ -260,11 +239,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         iter_call_id: iter_call_id,
                         next_callee_id: next_callee_id,
                         next_call_id: next_call_id,
-                        write_back_callee_id: write_back_callee_id,
-                        write_back_call_id: write_back_call_id,
-                        write_back_arg_id: write_back_arg_id,
-                        finish_callee_id: finish_callee_id,
-                        finish_call_id: finish_call_id,
+                        mut_store_callee_id: mut_store_callee_id,
+                        mut_store_call_id: mut_store_call_id,
+                        mut_store_arg_id: mut_store_arg_id,
                         iterator_ty,
                         element_ty,
                         next_result_ty,
@@ -479,6 +456,131 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             ExprKind::CallEffect { args, .. } => args
                 .iter()
                 .any(|arg| Self::expr_breaks_current_loop(&arg.value)),
+            ExprKind::Incomplete(_)
+            | ExprKind::InlineIR(_)
+            | ExprKind::LiteralInt(_)
+            | ExprKind::LiteralFloat(_)
+            | ExprKind::LiteralTrue
+            | ExprKind::LiteralFalse
+            | ExprKind::LiteralString(_)
+            | ExprKind::LiteralCharacter(_)
+            | ExprKind::Variable(_)
+            | ExprKind::Constructor(_) => false,
+        }
+    }
+
+    fn block_exits_mut_iteration(block: &Block, loop_depth: usize) -> bool {
+        block
+            .body
+            .iter()
+            .any(|node| Self::node_exits_mut_iteration(node, loop_depth))
+    }
+
+    fn node_exits_mut_iteration(node: &Node, loop_depth: usize) -> bool {
+        match node {
+            Node::Decl(decl) => Self::decl_exits_mut_iteration(decl, loop_depth),
+            Node::Stmt(stmt) => Self::stmt_exits_mut_iteration(stmt, loop_depth),
+            Node::Expr(expr) => Self::expr_exits_mut_iteration(expr, loop_depth),
+            Node::Block(block) => Self::block_exits_mut_iteration(block, loop_depth),
+            Node::MatchArm(arm) => Self::block_exits_mut_iteration(&arm.body, loop_depth),
+            Node::RecordField(field) => Self::expr_exits_mut_iteration(&field.value, loop_depth),
+            Node::CallArg(arg) => Self::expr_exits_mut_iteration(&arg.value, loop_depth),
+            Node::Func(_) => false,
+            _ => false,
+        }
+    }
+
+    fn decl_exits_mut_iteration(decl: &Decl, loop_depth: usize) -> bool {
+        match &decl.kind {
+            DeclKind::Let { rhs, .. } => rhs
+                .as_ref()
+                .is_some_and(|rhs| Self::expr_exits_mut_iteration(rhs, loop_depth)),
+            _ => false,
+        }
+    }
+
+    fn stmt_exits_mut_iteration(stmt: &Stmt, loop_depth: usize) -> bool {
+        match &stmt.kind {
+            StmtKind::Break if loop_depth == 0 => true,
+            StmtKind::Continue(None) if loop_depth == 0 => true,
+            StmtKind::Return(_) => true,
+            StmtKind::Expr(expr) | StmtKind::Continue(Some(expr)) => {
+                Self::expr_exits_mut_iteration(expr, loop_depth)
+            }
+            StmtKind::If(condition, then_block, else_block) => {
+                Self::expr_exits_mut_iteration(condition, loop_depth)
+                    || Self::block_exits_mut_iteration(then_block, loop_depth)
+                    || else_block
+                        .as_ref()
+                        .is_some_and(|block| Self::block_exits_mut_iteration(block, loop_depth))
+            }
+            StmtKind::Assignment(lhs, rhs) => {
+                Self::expr_exits_mut_iteration(lhs, loop_depth)
+                    || Self::expr_exits_mut_iteration(rhs, loop_depth)
+            }
+            StmtKind::Loop(condition, body) => {
+                condition
+                    .as_ref()
+                    .is_some_and(|condition| Self::expr_exits_mut_iteration(condition, loop_depth))
+                    || Self::block_exits_mut_iteration(body, loop_depth + 1)
+            }
+            StmtKind::For { iterable, body, .. } => {
+                Self::expr_exits_mut_iteration(iterable, loop_depth)
+                    || Self::block_exits_mut_iteration(body, loop_depth + 1)
+            }
+            StmtKind::Handling { body, .. } => Self::block_exits_mut_iteration(body, loop_depth),
+            StmtKind::Break | StmtKind::Continue(None) => false,
+        }
+    }
+
+    fn expr_exits_mut_iteration(expr: &Expr, loop_depth: usize) -> bool {
+        match &expr.kind {
+            ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => items
+                .iter()
+                .any(|item| Self::expr_exits_mut_iteration(item, loop_depth)),
+            ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
+                Self::expr_exits_mut_iteration(inner, loop_depth)
+            }
+            ExprKind::Binary(lhs, _, rhs) => {
+                Self::expr_exits_mut_iteration(lhs, loop_depth)
+                    || Self::expr_exits_mut_iteration(rhs, loop_depth)
+            }
+            ExprKind::Block(block) => Self::block_exits_mut_iteration(block, loop_depth),
+            ExprKind::Call {
+                callee,
+                args,
+                trailing_block: _,
+                ..
+            } => {
+                Self::expr_exits_mut_iteration(callee, loop_depth)
+                    || args
+                        .iter()
+                        .any(|arg| Self::expr_exits_mut_iteration(&arg.value, loop_depth))
+            }
+            ExprKind::Member(receiver, ..) => receiver
+                .as_ref()
+                .is_some_and(|receiver| Self::expr_exits_mut_iteration(receiver, loop_depth)),
+            ExprKind::Func(_) => false,
+            ExprKind::If(..) => {
+                unreachable!("if expressions are desugared to match before type checking")
+            }
+            ExprKind::Match(scrutinee, arms) => {
+                Self::expr_exits_mut_iteration(scrutinee, loop_depth)
+                    || arms
+                        .iter()
+                        .any(|arm| Self::block_exits_mut_iteration(&arm.body, loop_depth))
+            }
+            ExprKind::RecordLiteral { fields, spread } => {
+                fields
+                    .iter()
+                    .any(|field| Self::expr_exits_mut_iteration(&field.value, loop_depth))
+                    || spread
+                        .as_ref()
+                        .is_some_and(|spread| Self::expr_exits_mut_iteration(spread, loop_depth))
+            }
+            ExprKind::CallEffect { args, .. } => args
+                .iter()
+                .any(|arg| Self::expr_exits_mut_iteration(&arg.value, loop_depth)),
             ExprKind::Incomplete(_)
             | ExprKind::InlineIR(_)
             | ExprKind::LiteralInt(_)

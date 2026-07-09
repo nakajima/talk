@@ -9,7 +9,7 @@ struct DictNode<Value> 'heap {
 	let next: DictNode<Value>?
 }
 
-func dict_find<Value>(current: DictNode<Value>?, key: String) -> Value? {
+func dict_find<Value>(current: DictNode<Value>?, key: String) -> Optional<&Value> {
 	match current {
 		.some(node) -> {
 			if node.key == key {
@@ -40,8 +40,10 @@ public struct Dict<Value> 'heap {
 		self.head = Optional.some(DictNode(key: key, value: value, next: self.head))
 		self.count = self.count + 1
 	}
+}
 
-	func get(key: String) -> Value? {
+extend Dict<Value> {
+	func get(key: String) -> Optional<&Value> {
 		dict_find(self.head, key)
 	}
 }

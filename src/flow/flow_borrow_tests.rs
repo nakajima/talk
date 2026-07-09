@@ -790,6 +790,22 @@ fn assert_rejected(source: &str, needle: &str) {
 }
 
 #[test]
+fn borrowed_generic_payload_requires_copy_or_cheap_clone_bound() {
+    assert_rejected(
+        "struct Item {\n\tlet name: String\n}\nenum Box2<T> {\n\tcase full(T)\n}\nfunc wrap<T>(v: &T) -> Box2<T> {\n\tBox2.full(v)\n}\nfunc main() -> Int {\n\tlet item = Item(name: \"a\" + \"b\")\n\tlet b = wrap(item)\n\t0\n}",
+        "Copy or CheapClone",
+    );
+}
+
+#[test]
+fn borrowed_generic_payload_accepts_cheap_clone_bound() {
+    let typed = flow_driver(
+        "enum Box2<T> {\n\tcase full(T)\n}\nfunc wrap<T: CheapClone>(v: &T) -> Box2<T> {\n\tBox2.full(v)\n}\nfunc main() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet b = wrap(s)\n\t0\n}",
+    );
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+}
+
+#[test]
 fn allows_mut_receiver_call_through_owned_field_in_mut_func() {
     // `self` is an exclusive place inside a `mut func`; `self.inner` is a
     // projection through that exclusive root, so the nested mutating call
@@ -919,9 +935,7 @@ fn returning_borrow_result_of_local_array_is_rejected() {
 
 #[test]
 fn mut_for_source_through_borrow_is_rejected() {
-    // Typing rejects the restore: `finish()`'s owned array cannot assign
-    // into the borrowed parameter (flow's borrow-rooted source check is
-    // defense-in-depth behind it).
+    // `for mut` needs exclusive access to the source for the iterator scope.
     assert_rejected(
         "func f(xs: &Array<Int>) -> Int {\n\tfor x in mut xs {\n\t\tx = x + 1\n\t}\n\t0\n}",
         "&Array",
@@ -932,5 +946,20 @@ fn mut_for_source_through_borrow_is_rejected() {
 fn mut_for_over_owned_local_is_quiet() {
     assert_clean_all(
         "func f() -> Int {\n\tlet xs = [1, 2]\n\tfor x in mut xs {\n\t\tx = x + 1\n\t}\n\txs.count\n}",
+    );
+}
+
+#[test]
+fn mut_for_source_can_be_mut_borrowed_after_loop() {
+    assert_clean_all(
+        "func touch(xs: &mut Array<Int>) -> Int {\n\txs.push(3)\n\txs.count\n}\nfunc f() -> Int {\n\tlet xs = [1, 2]\n\tfor x in mut xs {\n\t\tx = x + 1\n\t}\n\ttouch(xs)\n}",
+    );
+}
+
+#[test]
+fn mut_for_rejects_early_exit_until_commit_is_on_exit() {
+    assert_rejected(
+        "func f() -> Int {\n\tlet xs = [1, 2]\n\tfor x in mut xs {\n\t\tbreak\n\t}\n\t0\n}",
+        "`break`, `continue`, and `return` inside `mut` iteration",
     );
 }

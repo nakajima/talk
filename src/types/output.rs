@@ -21,14 +21,12 @@ pub struct ForPlan {
     pub iter_call_id: NodeID,
     pub next_callee_id: NodeID,
     pub next_call_id: NodeID,
-    /// Mut-mode (`for x in mut xs`) extras: the per-iteration
-    /// `write_back(value)` call, its argument node (the binder read), and
-    /// the loop-end `finish()` restore call. Unused for other modes.
-    pub write_back_callee_id: NodeID,
-    pub write_back_call_id: NodeID,
-    pub write_back_arg_id: NodeID,
-    pub finish_callee_id: NodeID,
-    pub finish_call_id: NodeID,
+    /// Mut-mode (`for x in mut xs`) extras: the compiler-owned
+    /// `_store_current(value)` call and its argument node (the binder read).
+    /// Unused for other modes.
+    pub mut_store_callee_id: NodeID,
+    pub mut_store_call_id: NodeID,
+    pub mut_store_arg_id: NodeID,
     pub iterator_ty: Ty,
     pub element_ty: Ty,
     pub next_result_ty: Ty,

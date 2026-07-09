@@ -14,9 +14,23 @@ impl<'a> Lowering<'a> {
         let source_params = source.params;
         let source_body = source.body;
 
+        let is_mutating = self.mutating.contains(&symbol);
+        let is_init = self.is_init(symbol);
+        // An init's self is constructed and delivered to the caller, never
+        // dropped in the body — the flow checker seeds no init params.
+        let self_symbol = source_params
+            .first()
+            .and_then(|param| param.name.symbol().ok());
+
         // Symbols that must live in cells: assigned-to (resolver) plus
-        // receivers of mutating-method calls (write-back targets).
-        let cellable = self.cellable_symbols(unit, source_body);
+        // receivers of mutating-method calls (write-back targets). A mutating
+        // method's own `self` must always be cell-backed so its inout return
+        // wrapper can deliver the current receiver, even if the body mutates
+        // through raw storage rather than assigning a `self` field.
+        let mut cellable = self.cellable_symbols(unit, source_body);
+        if is_mutating && let Some(self_symbol) = self_symbol {
+            cellable.insert(self_symbol);
+        }
 
         let self_var = self.p.var(label);
         let mut env = FxHashMap::default();
@@ -83,13 +97,6 @@ impl<'a> Lowering<'a> {
         for (symbol, extract) in mutated_params {
             prologue.push((symbol, extract));
         }
-        let is_mutating = self.mutating.contains(&symbol);
-        let is_init = self.is_init(symbol);
-        // An init's self is constructed and delivered to the caller, never
-        // dropped in the body — the flow checker seeds no init params.
-        let self_symbol = source_params
-            .first()
-            .and_then(|param| param.name.symbol().ok());
         if is_init {
             ctx.initializing_self = self_symbol;
         }

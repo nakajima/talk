@@ -1832,6 +1832,16 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_for_loop_body_arg_as_pattern() {
+        let parsed = parse("for x in items { y in print(y) }");
+        let StmtKind::For { pattern, body, .. } = &parsed.roots[0].as_stmt().kind else {
+            panic!("expected a for statement");
+        };
+        assert!(matches!(&pattern.kind, PatternKind::Bind(name) if name.name_str() == "y"));
+        assert!(body.args.is_empty(), "for body args are loop binders");
+    }
+
+    #[test]
     fn parses_for_loop_with_tuple_pattern() {
         let parsed = parse("for (a, b) in pairs { 123 }");
         let StmtKind::For {

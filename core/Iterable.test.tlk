@@ -7,3 +7,11 @@ test "skips" {
 	let a = [1, 2, 3, 4]
 	assert(a.into_iter().skip(2).to_array() == [3, 4])
 }
+
+func collect_into_array<T: IntoIterator>(consume xs: T) -> Array<T.Element> {
+	xs.into_iter().to_array()
+}
+
+test "generic into iterator" {
+	assert(collect_into_array([1, 2, 3]) == [1, 2, 3])
+}

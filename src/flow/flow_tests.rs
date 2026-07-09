@@ -905,7 +905,7 @@ fn heap_linked_regions_free_together() {
 #[test]
 fn dict_inserts_and_looks_up() {
     let value = run_heap_vm(
-        "func check() -> Int {\n\tlet d = Dict<Int>()\n\td.insert(\"one\", 1)\n\td.insert(\"two\", 2)\n\td.insert(\"three\", 3)\n\tlet two: Int? = d.get(\"two\")\n\tlet four: Int? = d.get(\"four\")\n\tlet hit = match two {\n\t\t.some(v) -> v,\n\t\t.none -> 0 - 1\n\t}\n\tlet miss = match four {\n\t\t.some(v) -> v,\n\t\t.none -> 0 - 1\n\t}\n\thit * 10 + miss\n}\ncheck()",
+        "func check() -> Int {\n\tlet d = Dict<Int>()\n\td.insert(\"one\", 1)\n\td.insert(\"two\", 2)\n\td.insert(\"three\", 3)\n\tlet two = d.get(\"two\")\n\tlet four = d.get(\"four\")\n\tlet hit = match two {\n\t\t.some(v) -> v + 0,\n\t\t.none -> 0 - 1\n\t}\n\tlet miss = match four {\n\t\t.some(v) -> v + 0,\n\t\t.none -> 0 - 1\n\t}\n\thit * 10 + miss\n}\ncheck()",
     );
     assert_eq!(value, crate::vm::interp::Value::I64(19), "hit=2, miss=-1");
 }
@@ -943,33 +943,30 @@ fn http_router_misses_cleanly() {
 }
 
 #[test]
-fn dict_with_string_values_shares_buffers_safely() {
-    // The generic body extracts node.value with Value = String: the
-    // instantiation must retain the buffer (tier-2 decided at lowering).
+fn dict_with_string_values_borrows_safely() {
+    // `Dict.get` returns a borrow into the heap node instead of cloning the
+    // stored value.
     let (value, live_objects, live_allocations) = run_heap_eval(
-        "func check() -> Int {\n\tlet d = Dict<String>()\n\td.insert(\"greet\", \"hello\" + \" world\")\n\tlet got: String? = d.get(\"greet\")\n\tmatch got {\n\t\t.some(s) -> s.byte_count,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()",
+        "func check() -> Int {\n\tlet d = Dict<String>()\n\td.insert(\"greet\", \"hello\" + \" world\")\n\tlet got: Optional<&String> = d.get(\"greet\")\n\tmatch got {\n\t\t.some(s) -> s.byte_count,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()",
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
     assert_eq!(live_objects, 0);
-    assert_eq!(
-        live_allocations, 0,
-        "extracted String must retain, not share"
-    );
+    assert_eq!(live_allocations, 0);
 }
 
 #[test]
 fn dict_with_string_values_runs_on_vm() {
     let value = run_heap_vm(
-        "func check() -> Int {\n\tlet d = Dict<String>()\n\td.insert(\"greet\", \"hello\" + \" world\")\n\tlet got: String? = d.get(\"greet\")\n\tmatch got {\n\t\t.some(s) -> s.byte_count,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()",
+        "func check() -> Int {\n\tlet d = Dict<String>()\n\td.insert(\"greet\", \"hello\" + \" world\")\n\tlet got: Optional<&String> = d.get(\"greet\")\n\tmatch got {\n\t\t.some(s) -> s.byte_count,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()",
     );
     assert_eq!(value, crate::vm::interp::Value::I64(11), "no double free");
 }
 
 #[test]
 fn generic_heap_extraction_clones_per_instantiation() {
-    // The generic body can't know Value's grade; lowering decides at the
-    // instantiation: String retains its buffer, Int does nothing.
-    let source = "struct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: \"hello\" + \" world\")\n\tlet s = extract(h)\n\tlet i = Holder(value: 41)\n\tlet n = extract(i)\n\ts.byte_count + n\n}\ncheck()";
+    // The generic bound proves extraction is legal; lowering still decides
+    // per instantiation: String retains its buffer, Int does nothing.
+    let source = "struct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract_clone<Value: CheapClone>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc extract_copy<Value: Copy>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: \"hello\" + \" world\")\n\tlet s = extract_clone(h)\n\tlet i = Holder(value: 41)\n\tlet n = extract_copy(i)\n\ts.byte_count + n\n}\ncheck()";
     let (value, live_objects, live_allocations) = run_heap_eval(source);
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(52));
     assert_eq!(live_objects, 0);
@@ -985,7 +982,7 @@ fn generic_heap_extraction_retains_cheap_clone_enum_payloads() {
     // does: extracting a CheapClone enum whose payload owns a buffer has
     // to bump that buffer's rc, or the copy and the object's teardown
     // both free it.
-    let source = "enum Wrapped {\n\tcase tagged(String)\n}\nextend Wrapped: CheapClone {}\nstruct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: Wrapped.tagged(\"hello\" + \" world\"))\n\tlet w = extract(h)\n\tmatch w {\n\t\t.tagged(s) -> s.byte_count\n\t}\n}\ncheck()";
+    let source = "enum Wrapped {\n\tcase tagged(String)\n}\nextend Wrapped: CheapClone {}\nstruct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value: CheapClone>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: Wrapped.tagged(\"hello\" + \" world\"))\n\tlet w = extract(h)\n\tmatch w {\n\t\t.tagged(s) -> s.byte_count\n\t}\n}\ncheck()";
     let (value, live_objects, live_allocations) = run_heap_eval(source);
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
     assert_eq!(live_objects, 0);
@@ -997,20 +994,17 @@ fn generic_heap_extraction_retains_cheap_clone_enum_payloads() {
 
 #[test]
 fn generic_heap_extraction_rejects_non_cheap_owned_instantiation() {
-    // Wrap { name: String } is owned but not CheapClone: the instantiation
-    // cannot decide between clone and move, so lowering reports it.
-    let source = "struct Wrap {\n\tlet name: String\n}\nstruct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: Wrap(name: \"hi\" + \"!\"))\n\tlet w = extract(h)\n\t0\n}\ncheck()";
+    // Wrap { name: String } is owned but not CheapClone, so the required
+    // generic extraction bound rejects the call before lowering.
+    let source = "struct Wrap {\n\tlet name: String\n}\nstruct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value: CheapClone>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: Wrap(name: \"hi\" + \"!\"))\n\tlet w = extract(h)\n\t0\n}\ncheck()";
     let typed = flow_driver(source);
-    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
-    let lowered = typed.lower();
     assert!(
-        lowered
-            .phase
-            .diagnostics
+        typed
+            .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.contains("CheapClone")),
+            .any(|diagnostic| format!("{diagnostic:?}").contains("CheapClone")),
         "expected the unsupported-instantiation diagnostic: {:?}",
-        lowered.phase.diagnostics
+        typed.diagnostics()
     );
 }
 

@@ -9,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::name_resolution::symbol::Symbol;
 use crate::types::TypeOutput;
-use crate::types::ty::Ty;
+use crate::types::ty::{ProtocolRef, Ty};
 
 pub(crate) struct GradeView<'a> {
     types: &'a TypeOutput,
@@ -92,6 +92,19 @@ impl<'a> GradeView<'a> {
             Ty::Nominal(symbol, _) => self.has_marker(*symbol, Symbol::CheapClone),
             _ => false,
         }
+    }
+
+    pub(crate) fn param_copies_out_of_borrow(&self, symbol: Symbol) -> bool {
+        let Some(bounds) = self.types.catalog.param_bounds.get(&symbol) else {
+            return false;
+        };
+        self.types
+            .catalog
+            .bounds_satisfy(bounds, &ProtocolRef::bare(Symbol::Copy))
+            || self
+                .types
+                .catalog
+                .bounds_satisfy(bounds, &ProtocolRef::bare(Symbol::CheapClone))
     }
 
     /// A borrowed *value* type: `Substring` and friends (the `Borrowed`

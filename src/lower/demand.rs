@@ -374,13 +374,15 @@ impl<'a> Lowering<'a> {
         // V1 inout has exactly one write-back slot: the receiver / first
         // parameter. A `mut` parameter anywhere else would silently drop
         // its mutations, so reject it until the convention generalizes.
-        for param in params.iter().skip(1) {
-            if matches!(param, CheckTy::Borrow(perm, _) if perm.is_exclusive()) {
-                self.diagnostics.push(format!(
-                    "lowering: a `mut` parameter is only supported as the receiver or first \
-                     parameter for now ({symbol})"
-                ));
-                break;
+        if !self.is_init(symbol) {
+            for param in params.iter().skip(1) {
+                if matches!(param, CheckTy::Borrow(perm, _) if perm.is_exclusive()) {
+                    self.diagnostics.push(format!(
+                        "lowering: a `mut` parameter is only supported as the receiver or first \
+                         parameter for now ({symbol})"
+                    ));
+                    break;
+                }
             }
         }
         let param_tys: Vec<TyId> = params.iter().map(|t| self.map_ty(t)).collect();

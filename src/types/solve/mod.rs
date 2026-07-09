@@ -427,9 +427,10 @@ impl<'s> Solver<'s> {
 
     /// The owned twin of `solve_apply_borrow`: an owned slot fed a
     /// still-unsolved argument. A borrow-resolved argument satisfies an
-    /// owned `Param` (per-instantiation clone) or a Copy/CheapClone
-    /// nominal (the eager tier-2 rule's deferred form); anything else is
-    /// the plain equality this deferral replaced.
+    /// owned `Param` only when its declared bounds prove it is Copy or
+    /// CheapClone, or a concrete Copy/CheapClone nominal (the eager tier-2
+    /// rule's deferred form); anything else is the plain equality this
+    /// deferral replaced.
     fn solve_coerce_owned(
         &mut self,
         expected: Ty,
@@ -460,7 +461,40 @@ impl<'s> Solver<'s> {
                         });
                         return;
                     }
-                    Ty::Param(_) => true,
+                    Ty::Param(param) => {
+                        let bounds = self
+                            .catalog
+                            .param_bounds
+                            .get(&param)
+                            .cloned()
+                            .unwrap_or_default();
+                        let copy = self
+                            .catalog
+                            .bounds_satisfy(&bounds, &ProtocolRef::bare(Symbol::Copy));
+                        let cheap_clone = self
+                            .catalog
+                            .bounds_satisfy(&bounds, &ProtocolRef::bare(Symbol::CheapClone));
+                        if copy || cheap_clone {
+                            if !copy {
+                                self.coerce_clones.insert(origin.node);
+                            }
+                            queue.push(Constraint::Eq(
+                                expected,
+                                (*found_inner).clone(),
+                                origin.nested(),
+                            ));
+                        } else {
+                            let rendered = self.store.render(&expected);
+                            self.errors.push((
+                                TypeError::NotConforming {
+                                    ty: rendered,
+                                    protocol: "Copy or CheapClone".to_string(),
+                                },
+                                origin.node,
+                            ));
+                        }
+                        return;
+                    }
                     Ty::Nominal(symbol, _) => {
                         if self.catalog.copies_out_of_borrow(symbol) {
                             if self.catalog.grade_of(symbol) != crate::types::catalog::Grade::Copy {

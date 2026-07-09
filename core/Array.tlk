@@ -1,12 +1,12 @@
 // no-core
 // unsafe
 use ./Optional.tlk
-use { Iterable, Iterator, IndexIterable, IndexIterator } from ./Iterable.tlk
+use { Iterable, Iterator, IntoIterator, IndexIterable, IndexIterator } from ./Iterable.tlk
 use { Storage, _storage, _load, _store, _is_unique } from ./Memory.tlk
 use { String } from ./String.tlk
 use { Add, Subtract, Multiply, Comparable, Equatable } from ./Operators.tlk
 use { Showable } from ./Showable.tlk
-use { CheapClone, Deinit } from ./Ownership.tlk
+use { Borrowed, CheapClone, Deinit } from ./Ownership.tlk
 
 public struct Array<Element> {
 	let storage: Storage<Element>
@@ -158,51 +158,74 @@ extend Array<Element>: IndexIterable {
 // MARK: Consuming iteration
 
 public struct ArrayIntoIterator<T> {
-	let inner: Array<T>
+	let storage: Storage<T>
+	let count: Int
 	let position: Int
 }
 
-extend Array<Element> {
+extend Array<Element>: IntoIterator<Element, ArrayIntoIterator<Element>> {
 	consuming func into_iter() -> ArrayIntoIterator<Element> {
-		ArrayIntoIterator(inner: self, position: 0)
+		self.uniqued_storage()
+		let storage = self.storage
+		let count = self.count
+		self.storage = _storage<Element>(0)
+		self.count = 0
+		self.capacity = 0
+		ArrayIntoIterator(storage: storage, count: count, position: 0)
 	}
 }
 
 extend ArrayIntoIterator<T>: Iterator {
 	mut func next() -> T? {
-		if self.position > self.inner.count - 1 { return Optional.none }
+		if self.position > self.count - 1 { return Optional.none }
 		let index = self.position
 		self.position = self.position + 1
-		let element: &T = self.inner.get(index)
+		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep T $0 $1 }
+		let element: T = _load<T>(ptr)
 		return .some(element)
+	}
+}
+
+extend ArrayIntoIterator<T>: Deinit {
+	consuming func deinit() -> Void {
+		let i = self.position
+		loop i < self.count {
+			let ptr: RawPtr = @_ir(self.storage.base, i) { %? = gep T $0 $1 }
+			let element: T = _load<T>(ptr)
+			i = i + 1
+		}
 	}
 }
 
 // MARK: Mutable iteration
 
 public struct ArrayMutIterator<T> {
-	let inner: Array<T>
+	let storage: &mut Storage<T>
+	let count: Int
 	let position: Int
 }
 
+extend ArrayMutIterator<T>: Borrowed {}
+
 extend Array<Element> {
-	consuming func iter_mut() -> ArrayMutIterator<Element> {
-		ArrayMutIterator(inner: self, position: 0)
+	mut func iter_mut() -> ArrayMutIterator<Element> {
+		let storage = self.uniqued_storage()
+		ArrayMutIterator(storage: storage, count: self.count, position: 0)
 	}
 }
 
 extend ArrayMutIterator<T> {
 	mut func next() -> T? {
-		if self.position > self.inner.count - 1 { return Optional.none }
+		if self.position > self.count - 1 { return Optional.none }
 		let index = self.position
 		self.position = self.position + 1
-		let element: &T = self.inner.get(index)
+		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep T $0 $1 }
+		let element: T = _load<T>(ptr)
 		return .some(element)
 	}
 
-	mut func write_back(consume value: T) -> Void {
-		self.inner._replace(self.position - 1, value)
+	mut func _store_current(consume value: T) -> Void {
+		let ptr: RawPtr = @_ir(self.storage.base, self.position - 1) { %? = gep T $0 $1 }
+		_store<T>(ptr, value)
 	}
-
-	consuming func finish() -> Array<T> { self.inner }
 }

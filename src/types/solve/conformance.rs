@@ -129,6 +129,12 @@ impl<'s> Solver<'s> {
                         origin,
                     });
                 }
+                if protocol.args.is_empty()
+                    && protocol.protocol == Symbol::Copy
+                    && self.catalog.grade_of(symbol) == crate::types::catalog::Grade::Copy
+                {
+                    return None;
+                }
                 let matches = self.catalog.matching_conformances(symbol, &args, &protocol);
                 match matches.as_slice() {
                     [matched] => {

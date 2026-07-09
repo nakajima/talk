@@ -1387,13 +1387,21 @@ impl<'a> Parser<'a> {
     fn for_stmt(&mut self) -> Result<Stmt, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::For)?;
-        let pattern = self.parse_pattern()?;
+        let mut pattern = self.parse_pattern()?;
         self.consume(TokenKind::In)?;
         self.push_context(ParseContext::For);
         let source_mode = self.arg_mode();
         let iterable = self.expr()?.as_expr();
         self.pop_context();
-        let body = self.block(BlockContext::Loop, true)?;
+        let mut body = self.block(BlockContext::Loop, true)?;
+        if let Some(arg) = body.args.first() {
+            pattern = Pattern {
+                id: arg.id,
+                span: arg.name_span,
+                kind: PatternKind::Bind(arg.name.clone()),
+            };
+            body.args.clear();
+        }
 
         self.save_meta(tok, |id, span| Stmt {
             id,

@@ -70,6 +70,12 @@ extend Iterator: Into<Array<Element>> {
 
 // MARK: Iterable
 
+public protocol IntoIterator {
+	associated Element
+	associated IntoIter: Iterator where IntoIter.Element == Element
+	consuming func into_iter() -> IntoIter
+}
+
 public protocol Iterable {
 	associated Element
 	associated T: Iterator

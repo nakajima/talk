@@ -1043,7 +1043,7 @@ impl<'a> MoveChecker<'a> {
                             state,
                         );
                         if perm.is_exclusive() {
-                            state.invalidate_borrows_of(&owner);
+                            state.invalidate_borrows_of_except(&owner, Some(&receiver_place));
                         }
                     }
                 }
@@ -1088,7 +1088,7 @@ impl<'a> MoveChecker<'a> {
                             state,
                         );
                         if perm.is_exclusive() {
-                            state.invalidate_borrows_of(&owner);
+                            state.invalidate_borrows_of_except(&owner, Some(&arg_place));
                         }
                     } else if !is_object && perm.is_exclusive() && self.place(&arg.value).is_none()
                     {
