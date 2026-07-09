@@ -101,7 +101,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.local/bin"
-          curl -fsSL "https://github.com/nakajima/releasor2000/releases/download/v${RELEASOR2000_VERSION}/install.sh" -o "$RUNNER_TEMP/releasor2000-install.sh"
+          curl -fsSL \
+            --connect-timeout 20 \
+            --max-time 300 \
+            --retry 5 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            "https://github.com/nakajima/releasor2000/releases/download/v${RELEASOR2000_VERSION}/install.sh" \
+            -o "$RUNNER_TEMP/releasor2000-install.sh"
           INSTALL_DIR="$HOME/.local/bin" sh "$RUNNER_TEMP/releasor2000-install.sh"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
