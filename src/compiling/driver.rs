@@ -1,6 +1,9 @@
 use crate::{
     ast::{self, AST},
-    compiling::module::{Module, ModuleEnvironment, ModuleId, ModuleTypes, StableModuleId},
+    compiling::{
+        module::{Module, ModuleEnvironment, ModuleId, ModuleTypes, StableModuleId},
+        module_path::LocalModulePaths,
+    },
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     lexer::Lexer,
     name::Name,
@@ -110,6 +113,7 @@ pub struct DriverConfig {
     pub parse_mode: ParseMode,
     pub preserve_comments: bool,
     pub workspace_root: Option<PathBuf>,
+    pub source_root: Option<PathBuf>,
     pub(crate) libraries: Vec<std::sync::Arc<super::core::LibraryTyped>>,
 }
 
@@ -123,6 +127,7 @@ impl std::fmt::Debug for DriverConfig {
             .field("parse_mode", &self.parse_mode)
             .field("preserve_comments", &self.preserve_comments)
             .field("workspace_root", &self.workspace_root)
+            .field("source_root", &self.source_root)
             .field("library_count", &self.libraries.len())
             .finish()
     }
@@ -138,12 +143,18 @@ impl DriverConfig {
             parse_mode: ParseMode::default(),
             preserve_comments: false,
             workspace_root: None,
+            source_root: None,
             libraries: vec![],
         }
     }
 
     pub fn workspace_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.workspace_root = Some(root.into());
+        self
+    }
+
+    pub fn source_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.source_root = Some(root.into());
         self
     }
 
@@ -247,6 +258,13 @@ impl Source {
         }
     }
 
+    pub fn source_path(&self) -> Option<&Path> {
+        match &self.kind {
+            SourceKind::File(path) | SourceKind::InMemory { path, .. } => Some(path),
+            SourceKind::String(_) => None,
+        }
+    }
+
     pub fn read(&self) -> Result<String, CompileError> {
         match &self.kind {
             SourceKind::File(path) => std::fs::read_to_string(path).map_err(|e| {
@@ -283,9 +301,9 @@ fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
     let mut expr_collector =
         derive_visitor::visitor_enter_fn(|expr: &crate::node_kinds::expr::Expr| {
             if let ExprKind::Variable(Name::Raw(raw)) = &expr.kind
-                && let Some(path) = qualified_relative_module_path(raw)
+                && let Some(path) = qualified_local_module_path(raw)
             {
-                paths.push(ImportPath::Relative(path));
+                paths.push(ImportPath::Local(path));
             }
         });
     for root in &ast.roots {
@@ -299,9 +317,9 @@ fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
                 name: Name::Raw(raw),
                 ..
             } = &ty.kind
-                && let Some(path) = qualified_relative_module_path(raw)
+                && let Some(path) = qualified_local_module_path(raw)
             {
-                paths.push(ImportPath::Relative(path));
+                paths.push(ImportPath::Local(path));
             }
         },
     );
@@ -313,60 +331,42 @@ fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
     paths
 }
 
-fn qualified_relative_module_path(raw: &str) -> Option<String> {
+fn qualified_local_module_path(raw: &str) -> Option<String> {
     let (module_path, _) = raw.rsplit_once("::")?;
-    if module_path.starts_with("./") || module_path.starts_with("../") {
-        Some(module_path.to_string())
-    } else {
-        None
-    }
+    LocalModulePaths::is_local(module_path).then(|| module_path.to_string())
 }
 
-/// Resolve an import path relative to a source file path.
-/// Returns a tuple of (normalized_path for tracking, resolved_path for the source).
-/// The resolved_path preserves the relative/absolute nature of the source_path.
+/// Resolves a local module import to its source path.
 fn resolve_import_path(
     source_path: &str,
     import_path: &ImportPath,
+    local_modules: &LocalModulePaths,
     workspace_root: Option<&Path>,
 ) -> Result<Option<(PathBuf, PathBuf)>, CompileError> {
-    match import_path {
-        ImportPath::Relative(rel_path) => {
-            // source_path is the file containing the import
-            let source = PathBuf::from(source_path);
-            let Some(parent) = source.parent() else {
-                return Ok(None);
-            };
+    let ImportPath::Local(module_path) = import_path else {
+        // Package imports are handled by the module system, not file discovery.
+        return Ok(None);
+    };
+    let Some(resolved) = local_modules.resolve(source_path, module_path) else {
+        return Ok(None);
+    };
 
-            // Strip leading "./" from relative path before joining (to match name resolver)
-            let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
-            let mut resolved = parent.join(clean_rel);
-            if resolved.extension().is_none() {
-                resolved.set_extension("tlk");
-            }
-
-            // Canonicalize for cycle detection (normalizes .. and symlinks).
-            let Ok(canonical) = resolved.canonicalize() else {
-                return Ok(None);
-            };
-            if let Some(root) = workspace_root
-                && !canonical.starts_with(root)
-            {
-                return Err(CompileError::ImportOutsideWorkspace {
-                    source: source_path.to_string(),
-                    import_path: rel_path.clone(),
-                    workspace_root: root.to_path_buf(),
-                });
-            }
-
-            // Return both the canonical path (for tracking) and the resolved path for source.
-            Ok(Some((canonical, resolved)))
-        }
-        ImportPath::Package(_) => {
-            // Package imports are handled by the module system, not file discovery.
-            Ok(None)
-        }
+    // Canonicalize for cycle detection (normalizes symlinks).
+    let Ok(canonical) = resolved.canonicalize() else {
+        return Ok(None);
+    };
+    if let Some(root) = workspace_root
+        && !canonical.starts_with(root)
+    {
+        return Err(CompileError::ImportOutsideWorkspace {
+            source: source_path.to_string(),
+            import_path: module_path.clone(),
+            workspace_root: root.to_path_buf(),
+        });
     }
+
+    // Return both the canonical path (for tracking) and the resolved path for source.
+    Ok(Some((canonical, resolved)))
 }
 
 impl Driver {
@@ -404,7 +404,16 @@ impl Driver {
         }
     }
 
-    pub fn parse(self) -> Result<Driver<Parsed>, CompileError> {
+    pub fn parse(mut self) -> Result<Driver<Parsed>, CompileError> {
+        if self.config.source_root.is_none() {
+            self.config.source_root = LocalModulePaths::infer_source_root(
+                self.files
+                    .iter()
+                    .filter_map(|source| source.source_path().map(Path::to_path_buf)),
+            );
+        }
+        let local_modules =
+            LocalModulePaths::new(self.config.source_root.clone().unwrap_or_default());
         let mut asts: IndexMap<Source, AST<_>> = IndexMap::default();
         let mut diagnostics = vec![];
 
@@ -458,6 +467,7 @@ impl Driver {
                         if let Some((canonical, resolved)) = resolve_import_path(
                             source_path.as_ref(),
                             &import_path,
+                            &local_modules,
                             self.config.workspace_root.as_deref(),
                         )? && !processed_paths.contains(&canonical)
                         {
@@ -508,7 +518,11 @@ impl Driver {
 
 impl Driver<Parsed> {
     pub fn resolve_names(mut self) -> Result<Driver<NameResolved>, CompileError> {
-        let mut resolver = NameResolver::new(self.config.modules.clone(), self.config.module_id);
+        let mut resolver = NameResolver::with_source_root(
+            self.config.modules.clone(),
+            self.config.module_id,
+            self.config.source_root.clone().unwrap_or_default(),
+        );
 
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
         crate::desugar::desugar(&mut asts);
@@ -1177,6 +1191,7 @@ pub mod tests {
             parse_mode: ParseMode::Strict,
             preserve_comments: false,
             workspace_root: None,
+            source_root: None,
             libraries: vec![],
         };
 
@@ -1225,11 +1240,12 @@ pub mod tests {
             parse_mode: ParseMode::Strict,
             preserve_comments: false,
             workspace_root: None,
+            source_root: None,
             libraries: vec![],
         };
 
         let driver_b = Driver::new(
-            vec![Source::from("use { Hello } from A\nHello(x: 123).x")],
+            vec![Source::from("use A::{ Hello }\nHello(x: 123).x")],
             config,
         );
 
@@ -1245,7 +1261,7 @@ pub mod tests {
     fn imports_stdlib_modules_by_package_name() {
         let driver = Driver::new(
             vec![Source::from(
-                "use { Directory, File, DirectoryEntry } from fs\nlet dir: Directory\nlet file: File\nlet entry: DirectoryEntry\n",
+                "use fs::{ Directory, File, DirectoryEntry }\nlet dir: Directory\nlet file: File\nlet entry: DirectoryEntry\n",
             )],
             DriverConfig::new("TestDriver"),
         );
@@ -1260,13 +1276,13 @@ pub mod tests {
     }
 
     #[test]
-    fn auto_discovers_qualified_relative_paths() {
+    fn auto_discovers_qualified_local_paths() {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let importer_path = current_dir.join("dev/fixtures/qualified_importer.tlk");
         let exportee_path = current_dir.join("dev/fixtures/qualified_exportee.tlk");
 
         std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
-        std::fs::write(&importer_path, "./qualified_exportee::exported\n").unwrap();
+        std::fs::write(&importer_path, "crate::qualified_exportee::exported\n").unwrap();
 
         let driver = Driver::new(
             vec![Source::from(importer_path.clone())],
@@ -1284,6 +1300,40 @@ pub mod tests {
     }
 
     #[test]
+    fn resolves_super_module_imports_and_qualified_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "talk-super-module-path-test-{}",
+            std::process::id()
+        ));
+        let feature = root.join("feature");
+        std::fs::create_dir_all(&feature).unwrap();
+        let consumer = feature.join("consumer.tlk");
+        let sibling = feature.join("sibling.tlk");
+        std::fs::write(&sibling, "public struct Token {}\n").unwrap();
+        std::fs::write(
+            &consumer,
+            "use super::sibling::{ Token }\nToken()\nsuper::sibling::Token()\n",
+        )
+        .unwrap();
+
+        let config = DriverConfig::new("TestDriver")
+            .source_root(root.clone())
+            .workspace_root(root.clone());
+        let resolved = Driver::new(vec![Source::from(consumer)], config)
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap();
+        assert!(
+            !resolved.has_errors(),
+            "no diagnostics: {:?}",
+            resolved.phase.diagnostics
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn auto_discovers_imports() {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let importer_path = current_dir.join("dev/fixtures/importer.tlk");
@@ -1293,7 +1343,7 @@ pub mod tests {
         std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
         std::fs::write(
             &importer_path,
-            "use { exported } from ./exportee.tlk\nexported\n",
+            "use crate::exportee::{ exported }\nexported\n",
         )
         .unwrap();
 

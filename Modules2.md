@@ -1,18 +1,19 @@
-# new module system
+# Module paths
 
 ```tlk
-// Import symbol from a relative path
-use { hello } from ./peer
+// Import all public symbols from a local source module.
+use crate::peer
 
-// Import top-level exported symbol from a module
-use { hello } from some-module
+// Import selected local symbols.
+use crate::peer::{ hello }
 
-// Import non-top level exported symbol from a module
-use { world } from some-module/world
+// Import a sibling module.
+use super::sibling::{ hello }
 
-// Qualify a relative symbol
-./peer/hello
+// Import selected exports from an external package.
+use some_module::{ hello }
 
-// Qualify a module symbol
-some-module/world
+// Qualify a local or package symbol.
+crate::peer::hello
+some_module::hello
 ```

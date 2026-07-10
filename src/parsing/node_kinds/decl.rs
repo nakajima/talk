@@ -31,9 +31,9 @@ pub enum ReceiverMode {
 /// Path in an import statement
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum ImportPath {
-    /// Relative path like ./utils.tlk or ../other.tlk
-    Relative(#[drive(skip)] String),
-    /// Package name like collections or http
+    /// Local source module path rooted at crate, self, or super.
+    Local(#[drive(skip)] String),
+    /// External package name like collections or http.
     Package(#[drive(skip)] String),
 }
 

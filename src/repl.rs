@@ -69,7 +69,7 @@ impl ReplSession {
             };
         }
 
-        if repl_input.should_persist() {
+        if repl_input.is_declaration() {
             self.persist(input);
             return ReplEvalResult::Output {
                 stdout: String::new(),
@@ -78,7 +78,14 @@ impl ReplSession {
             };
         }
 
-        Self::run(&source)
+        let result = Self::run(&source);
+        // The session is source-backed, so replay every successful input
+        // with later evaluations. This rebuilds mutable top-level values
+        // and reapplies mutations in their original order.
+        if matches!(result, ReplEvalResult::Output { .. }) {
+            self.persist(input);
+        }
+        result
     }
 
     /// Evaluate a complete program: no REPL persistence — declarations
@@ -407,7 +414,7 @@ impl<'a> ReplInput<'a> {
         matches!(parser.parse(), Err(ParserError::UnexpectedEndOfInput(_)))
     }
 
-    fn should_persist(&self) -> bool {
+    fn is_declaration(&self) -> bool {
         let mut lexer = Lexer::new(self.source);
         let mut saw_public = false;
 
@@ -486,6 +493,26 @@ mod tests {
                 stderr: String::new(),
                 value: Some("5".to_string()),
             }
+        );
+    }
+
+    #[test]
+    fn mutation_of_a_persisted_declaration_is_replayed() {
+        let mut session = session();
+        assert!(matches!(
+            session.eval("let dictionary = Dict()"),
+            ReplEvalResult::Output { value: None, .. }
+        ));
+        assert_eq!(
+            value_of(session.eval("dictionary.insert \"fizz\", \"buzz\"")),
+            "()"
+        );
+        assert!(session
+            .persistent_source()
+            .contains("dictionary.insert \"fizz\", \"buzz\""));
+        assert_eq!(
+            value_of(session.eval("dictionary.get \"fizz\"")),
+            "Optional.some(\"buzz\")"
         );
     }
 

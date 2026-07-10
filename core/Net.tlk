@@ -1,8 +1,8 @@
 // no-core
-use { _io_read, _io_write, _io_close, IORequest, io } from ./IO.tlk
-use { _alloc } from ./Memory.tlk
-use { String } from ./String.tlk
-use { Comparable } from ./Operators.tlk
+use crate::IO::{ _io_read, _io_write, _io_close, IORequest, io }
+use crate::Memory::{ _alloc }
+use crate::String::{ String }
+use crate::Operators::{ Comparable }
 
 public let AF_INET: Int = 2
 public let SOCK_STREAM: Int = 1

@@ -10,14 +10,14 @@
 // prefix is one error unit, a lone continuation or invalid lead is one
 // byte. Error units decode as U+FFFD for classification, but callers keep
 // viewing the raw bytes — iteration over any byte string is lossless.
-use { Add, Comparable, Divide, Equatable, Multiply, Subtract } from ./Operators.tlk
-use { ByteStorage } from ./Memory.tlk
-use { String, Substring } from ./String.tlk
-use { Borrowed } from ./Ownership.tlk
-use { Optional } from ./Optional.tlk
-use { Iterable, Iterator } from ./Iterable.tlk
-use { Showable } from ./Showable.tlk
-use { _GC_CONTROL, _GC_CR, _GC_EXTEND, _GC_EXTEND_INCB_EXTEND, _GC_EXTEND_INCB_LINKER, _GC_EXT_PICT, _GC_HANGUL_L, _GC_HANGUL_LV, _GC_HANGUL_LVT, _GC_HANGUL_T, _GC_HANGUL_V, _GC_INCB_CONSONANT, _GC_LF, _GC_OTHER, _GC_PREPEND, _GC_REGIONAL_INDICATOR, _GC_SPACINGMARK, _GC_ZWJ, _gcb_table } from ./UnicodeData.tlk
+use crate::Operators::{ Add, Comparable, Divide, Equatable, Multiply, Subtract }
+use crate::Memory::{ ByteStorage }
+use crate::String::{ String, Substring }
+use crate::Ownership::{ Borrowed }
+use crate::Optional::{ Optional }
+use crate::Iterable::{ Iterable, Iterator }
+use crate::Showable::{ Showable }
+use crate::UnicodeData::{ _GC_CONTROL, _GC_CR, _GC_EXTEND, _GC_EXTEND_INCB_EXTEND, _GC_EXTEND_INCB_LINKER, _GC_EXT_PICT, _GC_HANGUL_L, _GC_HANGUL_LV, _GC_HANGUL_LVT, _GC_HANGUL_T, _GC_HANGUL_V, _GC_INCB_CONSONANT, _GC_LF, _GC_OTHER, _GC_PREPEND, _GC_REGIONAL_INDICATOR, _GC_SPACINGMARK, _GC_ZWJ, _gcb_table }
 
 // talk has no bitwise operators; UTF-8's masks and shifts are powers of
 // two, so / and * and - do the same work.

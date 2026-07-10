@@ -1,4 +1,9 @@
-use std::{error::Error, fmt::Display, path::Path, rc::Rc};
+use std::{
+    error::Error,
+    fmt::Display,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use derive_visitor::{DriveMut, VisitorMut};
 use indexmap::{IndexMap, IndexSet};
@@ -11,6 +16,7 @@ use crate::{
     compiling::{
         driver::Exports,
         module::{ModuleEnvironment, ModuleId},
+        module_path::LocalModulePaths,
     },
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     label::Label,
@@ -167,6 +173,7 @@ pub struct NameResolver {
     pub(super) modules: Rc<ModuleEnvironment>,
     path_to_file_id: FxHashMap<String, FileID>,
     file_path_by_id: FxHashMap<FileID, String>,
+    local_modules: LocalModulePaths,
 
     // Scope stuff
     pub(super) scopes: FxHashMap<NodeID, Scope>,
@@ -186,6 +193,14 @@ pub struct NameResolver {
 #[allow(clippy::expect_used)]
 impl NameResolver {
     pub fn new(modules: Rc<ModuleEnvironment>, current_module_id: ModuleId) -> Self {
+        Self::with_source_root(modules, current_module_id, PathBuf::new())
+    }
+
+    pub fn with_source_root(
+        modules: Rc<ModuleEnvironment>,
+        current_module_id: ModuleId,
+        source_root: PathBuf,
+    ) -> Self {
         let mut resolver = Self {
             symbols: Default::default(),
             diagnostics: Default::default(),
@@ -199,6 +214,7 @@ impl NameResolver {
             modules,
             path_to_file_id: Default::default(),
             file_path_by_id: Default::default(),
+            local_modules: LocalModulePaths::new(source_root),
         };
 
         resolver.init_root_scope();
@@ -211,7 +227,7 @@ impl NameResolver {
     }
 
     /// Create a root scope for a specific file and import builtins into it
-    fn init_file_scope(&mut self, file_id: FileID, skip_core_prelude: bool) {
+    fn init_file_scope(&mut self, file_id: FileID, path: &str, skip_core_prelude: bool) {
         let scope_id = NodeID(file_id, 0);
         // Always create fresh scope with builtins
         let mut scope = Scope::new(scope_id, None, 1);
@@ -220,6 +236,18 @@ impl NameResolver {
         // Import Core module exports as prelude (unless the file opts out)
         if !skip_core_prelude && let Some(core_module) = self.modules.get_module_by_name("Core") {
             for (name, &symbol) in &core_module.exports {
+                if is_type_symbol(&symbol) {
+                    scope.types.insert(name.clone(), symbol);
+                } else {
+                    scope.values.insert(name.clone(), symbol);
+                }
+            }
+        }
+
+        if Path::new(path).file_name().and_then(|name| name.to_str()) == Some("package.tlk")
+            && let Some(package_module) = self.modules.get_module_by_name("Package")
+        {
+            for (name, &symbol) in &package_module.exports {
                 if is_type_symbol(&symbol) {
                     scope.types.insert(name.clone(), symbol);
                 } else {
@@ -238,7 +266,7 @@ impl NameResolver {
     ) -> (Vec<AST<NameResolved>>, ResolvedNames) {
         // Create per-file scopes with builtins for module isolation
         for ast in &asts {
-            self.init_file_scope(ast.file_id, ast.skip_core_prelude);
+            self.init_file_scope(ast.file_id, &ast.path, ast.skip_core_prelude);
         }
 
         // Predeclare module-scope nominals across all ASTs first, so `extend` resolution
@@ -408,27 +436,25 @@ impl NameResolver {
                                 })
                                 .collect()
                         }
-                        ImportPath::Relative(rel_path) => {
-                            // Resolve relative to the source file's directory
-                            let source_dir =
-                                Path::new(&source_path).parent().unwrap_or(Path::new("."));
-                            // Strip leading "./" from relative path before joining
-                            let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
-                            let mut resolved = source_dir.join(clean_rel);
-                            if resolved.extension().is_none() {
-                                resolved.set_extension("tlk");
-                            }
+                        ImportPath::Local(module_path) => {
+                            let Some(resolved) =
+                                self.local_modules.resolve(&source_path, module_path)
+                            else {
+                                self.diagnostic(
+                                    decl_id,
+                                    NameResolverError::ModuleNotFound(module_path.clone()),
+                                );
+                                continue;
+                            };
                             let target_path = resolved.to_string_lossy().to_string();
 
-                            // Look up the target FileID. Relative paths may contain `..`
-                            // segments that only match the initial source after canonicalization.
                             let Some(target_file_id) = module_path_keys(&target_path)
                                 .into_iter()
                                 .find_map(|key| self.path_to_file_id.get(&key).copied())
                             else {
                                 self.diagnostic(
                                     decl_id,
-                                    NameResolverError::ModuleNotFound(target_path.clone()),
+                                    NameResolverError::ModuleNotFound(module_path.clone()),
                                 );
                                 continue;
                             };
@@ -649,21 +675,25 @@ impl NameResolver {
 
     fn lookup_qualified(&mut self, raw: &str, scope_id: NodeID) -> Option<Symbol> {
         let (module_path, symbol_name) = raw.rsplit_once("::")?;
-        let target_symbols = if module_path.starts_with("./") || module_path.starts_with("../") {
+        let target_symbols = if LocalModulePaths::is_local(module_path) {
             let source_file = scope_id.0;
             let source_path = self.file_path_by_id.get(&source_file)?.clone();
-            let source_dir = Path::new(&source_path).parent().unwrap_or(Path::new("."));
-            let clean_rel = module_path.strip_prefix("./").unwrap_or(module_path);
-            let mut resolved = source_dir.join(clean_rel);
-            if resolved.extension().is_none() {
-                resolved.set_extension("tlk");
-            }
+            let Some(resolved) = self.local_modules.resolve(&source_path, module_path) else {
+                self.diagnostic(
+                    scope_id,
+                    NameResolverError::ModuleNotFound(module_path.to_string()),
+                );
+                return None;
+            };
             let target_path = resolved.to_string_lossy().to_string();
             let Some(target_file_id) = module_path_keys(&target_path)
                 .into_iter()
                 .find_map(|key| self.path_to_file_id.get(&key).copied())
             else {
-                self.diagnostic(scope_id, NameResolverError::ModuleNotFound(target_path));
+                self.diagnostic(
+                    scope_id,
+                    NameResolverError::ModuleNotFound(module_path.to_string()),
+                );
                 return None;
             };
             let target_scope_id = NodeID(target_file_id, 0);

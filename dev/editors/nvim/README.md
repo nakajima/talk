@@ -53,7 +53,7 @@ require("neotest").setup({
 })
 ```
 
-The adapter discovers `test "name" { ... }` and `test("name") { ... }` in `*.test.tlk` files and runs them through `talk test --json`.
+The adapter discovers `test "name" { ... }` and `test("name") { ... }` in `*.test.tlk` files. File runs use `talk test --json`; single-test runs add `--filter NAME`.
 
 ## Notes
 

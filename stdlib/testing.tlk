@@ -1,4 +1,4 @@
-use ./ansi.tlk
+use crate::ansi
 
 public effect 'fail(message: String) -> ()
 public effect 'registerTest(testCase: TestCase) -> ()

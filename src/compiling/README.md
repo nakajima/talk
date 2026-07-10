@@ -31,9 +31,9 @@ source-faithful ASTs for editor queries. `talk run`, `talk lower`,
 `talk ir`, `talk build`, and the REPL go on to lowering and scheduling.
 
 `parse()` also does **import discovery**. After parsing each file it
-scans explicit `use ... from ./path` declarations and relative
-qualified references such as `./path::Name`, queues those files (adding
-`.tlk` when needed), and keeps going until the reachable file closure is
+scans explicit local `use crate::path` declarations and qualified references
+such as `crate::path::Name`, queues those files (adding `.tlk` when needed),
+and keeps going until the reachable file closure is
 parsed. Later stages therefore see the whole program, not one file at a
 time.
 
@@ -69,8 +69,12 @@ two compilations' id spaces touch.
 ## Packages (`package.rs`)
 
 `package.rs` owns package manifests, lockfiles, source installation, and
-package compilation. It resolves Git revisions to commits and verifies tarball
-SHA-256 values before storing remote source in a content-addressed cache.
+package compilation. `stdlib/Package.tlk` defines the manifest schema and is
+implicitly imported into `package.tlk` files only, so manifests use the normal
+parser, resolver, and type checker. It resolves Git revisions to commits and
+verifies tarball SHA-256 values before safely extracting tar or tar.gz source
+into a content-addressed cache. The CLI uses the built-in Git/curl provider;
+embedders can provide tar archives through `PackageSourceProvider` instead.
 Local `.path` dependencies resolve relative to their declaring manifest and
 remain at that location.
 Each resolved package receives one module id for the whole graph. Its public
@@ -100,8 +104,9 @@ setup and is used for compiling core itself and for deliberately small
 tests.
 
 `Driver::new` also imports the stdlib modules into the module
-environment. Today that stdlib contains the `fs` package module; it is
-available through package-style `use` imports rather than as a prelude.
+environment. The `fs`, `ansi`, `testing`, and `Package` modules are available
+through package-style `use` imports rather than as a general prelude. `Package`
+is additionally imported implicitly into files named `package.tlk`.
 
 Core and stdlib keep typed artifacts beside their module exports:
 `LibraryTyped` stores the `TypedProgram` and `CheckedMir`. Lowering needs

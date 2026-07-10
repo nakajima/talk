@@ -86,6 +86,9 @@ async fn main() {
             /// Emit machine-readable JSON.
             #[arg(long)]
             json: bool,
+            /// Run only tests whose name exactly matches this value.
+            #[arg(long, value_name = "NAME")]
+            filter: Option<String>,
             #[arg(long)]
             offline: bool,
         },
@@ -466,6 +469,7 @@ async fn main() {
         Commands::Test {
             paths,
             json,
+            filter,
             offline,
         } => {
             if paths.is_empty() && package_exists_here() {
@@ -484,7 +488,7 @@ async fn main() {
                     }
                 };
                 if *json {
-                    match project.run_tests_json() {
+                    match project.run_tests_json(filter.clone()) {
                         Ok(outcome) => {
                             println!("{}", outcome.to_json());
                             if outcome.failed() {
@@ -500,7 +504,7 @@ async fn main() {
                         }
                     }
                 } else {
-                    match project.run_tests() {
+                    match project.run_tests_with_filter(filter.clone()) {
                         Ok(talk::testing::Outcome::NoTests) => {
                             eprintln!("no .test.tlk files found")
                         }
@@ -518,7 +522,8 @@ async fn main() {
                     }
                 }
             } else {
-                let runner = talk::testing::Runner::new(paths.iter().map(std::path::PathBuf::from));
+                let runner = talk::testing::Runner::new(paths.iter().map(std::path::PathBuf::from))
+                    .with_filter(filter.clone());
                 if *json {
                     match runner.run_json() {
                         Ok(outcome) => {
@@ -695,7 +700,7 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
 ## CLI
 
     talk run [files...]       parse, resolve, typecheck, lower, and run; no file reads stdin
-    talk test [--json] [paths...] discover and run .test.tlk files
+    talk test [--json] [--filter NAME] [paths...] discover and run .test.tlk files
     talk check [--json] files typecheck and print diagnostics
     talk repl                 interactive declarations and expressions
     talk format [file]        format source from file or stdin
@@ -711,7 +716,7 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
 
 ## Lexical and module basics
 
-Comments are `//` line comments. Identifiers are ordinary words; type names are conventionally upper camel case. Semicolons are not used. Blocks are `{ ... }`. Top-level declarations may be prefixed with `public` to export them. Imports are explicit: `use { Foo, bar } from ./path.tlk`, `use { Foo: LocalFoo } from ./path.tlk`, `use ./path.tlk`, or package-style `use { Foo } from package` / `use package`.
+Comments are `//` line comments. Identifiers are ordinary words; type names are conventionally upper camel case. Semicolons are not used. Blocks are `{ ... }`. Top-level declarations may be prefixed with `public` to export them. Imports are explicit: `use crate::path::{ Foo, bar }`, `use crate::path::{ Foo as LocalFoo }`, `use crate::path`, or package-style `use package::{ Foo }` / `use package`.
 
 ## Declarations
 

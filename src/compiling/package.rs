@@ -1,7 +1,8 @@
 use std::{
     collections::HashSet,
     fmt::{Display, Formatter},
-    fs, io,
+    fs,
+    io::{self, Cursor},
     path::{Component, Path, PathBuf},
     process::{Command, Output},
     rc::Rc,
@@ -11,15 +12,16 @@ use std::{
     },
 };
 
+use flate2::read::GzDecoder;
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sha2::{Digest, Sha256};
+use tar::Archive;
 
 use crate::{
     label::Label,
     lexer::Lexer,
     lexing::unescape,
-    name::Name,
     node::Node,
     node_id::FileID,
     node_kinds::{
@@ -108,6 +110,22 @@ impl std::error::Error for PackageError {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PackageSourceCapabilities(u8);
+
+impl PackageSourceCapabilities {
+    pub const TAR: Self = Self(1);
+
+    pub fn contains(self, capability: Self) -> bool {
+        self.0 & capability.0 == capability.0
+    }
+}
+
+pub trait PackageSourceProvider {
+    fn capabilities(&self) -> PackageSourceCapabilities;
+    fn fetch_tar(&self, url: &str, sha256: &str) -> Result<Vec<u8>, String>;
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PackageArtifact {
     Library { from: String },
@@ -142,22 +160,50 @@ impl PackageManifest {
             context: format!("failed to read {}", path.display()),
             source,
         })?;
-        Self::parse(&path, &source)
+        let manifest = Self::parse(&path, &source)?;
+        manifest.validate_targets(root)?;
+        Ok(manifest)
     }
 
     fn parse(path: &Path, source: &str) -> Result<Self, PackageError> {
-        let parser = Parser::new(path.to_string_lossy(), FileID(0), Lexer::new(source));
-        let (ast, diagnostics) = parser.parse().map_err(|error| PackageError::Manifest {
+        let driver = Driver::new(
+            vec![Source::in_memory(path.to_path_buf(), source)],
+            DriverConfig::new("PackageManifest"),
+        );
+        let parsed = driver.parse().map_err(|error| PackageError::Manifest {
             path: path.to_path_buf(),
-            message: error.to_string(),
+            message: format!("{error:?}"),
         })?;
-        if !diagnostics.is_empty() {
-            return Err(PackageError::Manifest {
+        let ast = parsed
+            .phase
+            .asts
+            .values()
+            .next()
+            .cloned()
+            .ok_or_else(|| Self::manifest_error(path, "the manifest has no parsed source"))?;
+        let resolved = parsed
+            .resolve_names()
+            .map_err(|error| PackageError::Manifest {
                 path: path.to_path_buf(),
-                message: format!("{diagnostics:?}"),
-            });
+                message: format!("{error:?}"),
+            })?;
+        let typed = resolved.type_check();
+        if typed.has_errors() {
+            return Err(Self::manifest_error(
+                path,
+                typed
+                    .diagnostics()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ));
         }
-        let [Node::Stmt(statement)] = ast.roots.as_slice() else {
+        Self::from_roots(path, &ast.roots)
+    }
+
+    pub(crate) fn from_roots(path: &Path, roots: &[Node]) -> Result<Self, PackageError> {
+        let [Node::Stmt(statement)] = roots else {
             return Err(PackageError::Manifest {
                 path: path.to_path_buf(),
                 message: "the manifest must contain exactly one Package(...) expression".into(),
@@ -281,6 +327,16 @@ impl PackageManifest {
                 "package has multiple binary targets; pass --bin <name>".into(),
             )),
         }
+    }
+
+    pub(crate) fn validate_targets(&self, root: &Path) -> Result<(), PackageError> {
+        for artifact in &self.builds {
+            let source = match artifact {
+                PackageArtifact::Library { from } | PackageArtifact::Binary { from, .. } => from,
+            };
+            self.source_path(root, source)?;
+        }
+        Ok(())
     }
 
     pub fn source_path(&self, root: &Path, source: &str) -> Result<PathBuf, PackageError> {
@@ -437,7 +493,7 @@ impl PackageManifest {
         };
         if !type_args.is_empty()
             || trailing_block.is_some()
-            || Self::variable_name(callee) != Some(expected)
+            || Self::variable_name(callee).as_deref() != Some(expected)
         {
             return Err(Self::manifest_error(
                 path,
@@ -478,11 +534,11 @@ impl PackageManifest {
         Ok((name, args))
     }
 
-    fn variable_name(expression: &Expr) -> Option<&str> {
-        let ExprKind::Variable(Name::Raw(name)) = &expression.kind else {
+    fn variable_name(expression: &Expr) -> Option<String> {
+        let (ExprKind::Variable(name) | ExprKind::Constructor(name)) = &expression.kind else {
             return None;
         };
-        Some(name)
+        Some(name.name_str())
     }
 
     fn only_fields(path: &Path, args: &[CallArg], allowed: &[&str]) -> Result<(), PackageError> {
@@ -1038,10 +1094,17 @@ impl PackageLock {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
+enum SourceProvider {
+    System,
+    Custom(Arc<dyn PackageSourceProvider>),
+}
+
+#[derive(Clone)]
 struct PackageStore {
     root: PathBuf,
     offline: bool,
+    provider: SourceProvider,
 }
 
 impl PackageStore {
@@ -1064,7 +1127,20 @@ impl PackageStore {
             context: format!("failed to create package cache {}", root.display()),
             source,
         })?;
-        Ok(Self { root, offline })
+        Ok(Self {
+            root,
+            offline,
+            provider: SourceProvider::System,
+        })
+    }
+
+    fn with_provider(
+        offline: bool,
+        provider: Arc<dyn PackageSourceProvider>,
+    ) -> Result<Self, PackageError> {
+        let mut store = Self::new(offline)?;
+        store.provider = SourceProvider::Custom(provider);
+        Ok(store)
     }
 
     fn fetch(
@@ -1144,6 +1220,11 @@ impl PackageStore {
         url: &str,
         revision: &str,
     ) -> Result<(LockedSource, PathBuf), PackageError> {
+        if matches!(self.provider, SourceProvider::Custom(_)) {
+            return Err(PackageError::Cache(
+                "package source provider does not support Git dependencies".into(),
+            ));
+        }
         if self.offline {
             let exact_key = Self::git_key(url, revision);
             let exact_path = self.root.join("git").join(exact_key);
@@ -1248,45 +1329,14 @@ impl PackageStore {
         }
         let temporary = self.temporary_dir("tar")?;
         let result = (|| {
-            let archive = temporary.join("package.tar");
-            self.command(
-                "curl",
-                &[
-                    "--fail",
-                    "--location",
-                    "--silent",
-                    "--show-error",
-                    "--output",
-                    &archive.to_string_lossy(),
-                    "--",
-                    url,
-                ],
-                None,
-            )?;
-            let bytes = fs::read(&archive).map_err(|source| PackageError::Io {
-                context: format!("failed to read downloaded archive {}", archive.display()),
-                source,
-            })?;
+            let bytes = self.download_tar(url, &sha256, &temporary)?;
             let actual = hex_digest(Sha256::digest(&bytes));
             if actual != sha256 {
                 return Err(PackageError::Cache(format!(
                     "downloaded archive checksum for {url} was {actual}, expected {sha256}"
                 )));
             }
-            let listing = self.command("tar", &["-tf", &archive.to_string_lossy()], None)?;
-            let listing = String::from_utf8_lossy(&listing.stdout);
-            for entry in listing.lines() {
-                let entry_path = Path::new(entry);
-                if entry_path.is_absolute()
-                    || entry_path
-                        .components()
-                        .any(|component| matches!(component, Component::ParentDir))
-                {
-                    return Err(PackageError::Cache(format!(
-                        "archive {url} contains unsafe path {entry:?}"
-                    )));
-                }
-            }
+
             let extracted = temporary.join("extracted");
             fs::create_dir_all(&extracted).map_err(|source| PackageError::Io {
                 context: format!(
@@ -1295,17 +1345,7 @@ impl PackageStore {
                 ),
                 source,
             })?;
-            self.command(
-                "tar",
-                &[
-                    "-xf",
-                    &archive.to_string_lossy(),
-                    "-C",
-                    &extracted.to_string_lossy(),
-                ],
-                None,
-            )?;
-            self.reject_symlinks(&extracted, url)?;
+            self.extract_tar(&bytes, &extracted, url)?;
             let source_root = self.archive_package_root(&extracted, url)?;
             let parent = destination.parent().ok_or_else(|| {
                 PackageError::Cache(format!(
@@ -1334,6 +1374,96 @@ impl PackageStore {
         })();
         let _ = fs::remove_dir_all(&temporary);
         result
+    }
+
+    fn download_tar(
+        &self,
+        url: &str,
+        sha256: &str,
+        temporary: &Path,
+    ) -> Result<Vec<u8>, PackageError> {
+        match &self.provider {
+            SourceProvider::System => {
+                let archive = temporary.join("package.tar");
+                self.command(
+                    "curl",
+                    &[
+                        "--fail",
+                        "--location",
+                        "--silent",
+                        "--show-error",
+                        "--output",
+                        &archive.to_string_lossy(),
+                        "--",
+                        url,
+                    ],
+                    None,
+                )?;
+                fs::read(&archive).map_err(|source| PackageError::Io {
+                    context: format!("failed to read downloaded archive {}", archive.display()),
+                    source,
+                })
+            }
+            SourceProvider::Custom(provider) => {
+                if !provider
+                    .capabilities()
+                    .contains(PackageSourceCapabilities::TAR)
+                {
+                    return Err(PackageError::Cache(
+                        "package source provider does not support tar dependencies".into(),
+                    ));
+                }
+                provider.fetch_tar(url, sha256).map_err(PackageError::Cache)
+            }
+        }
+    }
+
+    fn extract_tar(&self, bytes: &[u8], extracted: &Path, url: &str) -> Result<(), PackageError> {
+        let reader: Box<dyn io::Read> = if bytes.starts_with(&[0x1f, 0x8b]) {
+            Box::new(GzDecoder::new(Cursor::new(bytes)))
+        } else {
+            Box::new(Cursor::new(bytes))
+        };
+        let mut archive = Archive::new(reader);
+        let entries = archive.entries().map_err(|source| {
+            PackageError::Cache(format!("failed to read tar archive {url}: {source}"))
+        })?;
+        for entry in entries {
+            let mut entry = entry.map_err(|source| {
+                PackageError::Cache(format!("failed to read tar archive {url}: {source}"))
+            })?;
+            let path = entry
+                .path()
+                .map_err(|source| {
+                    PackageError::Cache(format!("failed to read tar entry in {url}: {source}"))
+                })?
+                .into_owned();
+            if path.as_os_str().is_empty()
+                || path.is_absolute()
+                || path
+                    .components()
+                    .any(|component| matches!(component, Component::ParentDir))
+            {
+                return Err(PackageError::Cache(format!(
+                    "archive {url} contains unsafe path {}",
+                    path.display()
+                )));
+            }
+            let kind = entry.header().entry_type();
+            if !kind.is_file() && !kind.is_dir() {
+                return Err(PackageError::Cache(format!(
+                    "archive {url} contains unsupported entry {}",
+                    path.display()
+                )));
+            }
+            entry.unpack_in(extracted).map_err(|source| {
+                PackageError::Cache(format!(
+                    "failed to extract {} from {url}: {source}",
+                    path.display()
+                ))
+            })?;
+        }
+        Ok(())
     }
 
     fn git_commit(&self, checkout: &Path, revision: &str) -> Result<String, PackageError> {
@@ -1373,33 +1503,6 @@ impl PackageStore {
             ));
         }
         Ok(commit.to_string())
-    }
-
-    fn reject_symlinks(&self, root: &Path, url: &str) -> Result<(), PackageError> {
-        let entries = fs::read_dir(root).map_err(|source| PackageError::Io {
-            context: format!("failed to inspect extracted archive {url}"),
-            source,
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|source| PackageError::Io {
-                context: format!("failed to inspect extracted archive {url}"),
-                source,
-            })?;
-            let file_type = entry.file_type().map_err(|source| PackageError::Io {
-                context: format!("failed to inspect extracted archive {url}"),
-                source,
-            })?;
-            if file_type.is_symlink() {
-                return Err(PackageError::Cache(format!(
-                    "archive {url} contains a symlink at {}",
-                    entry.path().display()
-                )));
-            }
-            if file_type.is_dir() {
-                self.reject_symlinks(&entry.path(), url)?;
-            }
-        }
-        Ok(())
     }
 
     fn archive_package_root(&self, extracted: &Path, url: &str) -> Result<PathBuf, PackageError> {
@@ -1749,6 +1852,27 @@ impl PackageProject {
         offline: bool,
         update: bool,
     ) -> Result<Self, PackageError> {
+        Self::install_with_store(root, update, PackageStore::new(offline)?)
+    }
+
+    pub fn install_at_with_provider(
+        root: impl AsRef<Path>,
+        offline: bool,
+        update: bool,
+        provider: Arc<dyn PackageSourceProvider>,
+    ) -> Result<Self, PackageError> {
+        Self::install_with_store(
+            root,
+            update,
+            PackageStore::with_provider(offline, provider)?,
+        )
+    }
+
+    fn install_with_store(
+        root: impl AsRef<Path>,
+        update: bool,
+        store: PackageStore,
+    ) -> Result<Self, PackageError> {
         let root = root
             .as_ref()
             .canonicalize()
@@ -1761,7 +1885,6 @@ impl PackageProject {
             })?;
         let manifest = PackageManifest::read(&root)?;
         let lock_path = root.join(LOCK_FILE);
-        let store = PackageStore::new(offline)?;
         let lock = if lock_path.is_file() && !update {
             let lock = PackageLock::read(&lock_path)?;
             if !lock.matches(&manifest) {
@@ -1849,6 +1972,18 @@ impl PackageProject {
     }
 
     pub fn open_at(root: impl AsRef<Path>, offline: bool) -> Result<Self, PackageError> {
+        Self::open_with_store(root, PackageStore::new(offline)?)
+    }
+
+    pub fn open_at_with_provider(
+        root: impl AsRef<Path>,
+        offline: bool,
+        provider: Arc<dyn PackageSourceProvider>,
+    ) -> Result<Self, PackageError> {
+        Self::open_with_store(root, PackageStore::with_provider(offline, provider)?)
+    }
+
+    fn open_with_store(root: impl AsRef<Path>, store: PackageStore) -> Result<Self, PackageError> {
         let root = root
             .as_ref()
             .canonicalize()
@@ -1872,7 +2007,7 @@ impl PackageProject {
                 "package.tlk dependencies changed; run talk update to refresh package.lock".into(),
             ));
         }
-        Self::from_lock(root, manifest, lock, PackageStore::new(offline)?)
+        Self::from_lock(root, manifest, lock, store)
     }
 
     pub fn exists_at(root: impl AsRef<Path>) -> bool {
@@ -1914,14 +2049,22 @@ impl PackageProject {
                 })?;
         let mut config = DriverConfig::new(format!("{} binary", self.manifest.name)).executable();
         config.modules = Rc::new(environment);
-        config.workspace_root = Some(workspace_root);
+        config.workspace_root = Some(workspace_root.clone());
+        config.source_root = Some(workspace_root);
         config.libraries = libraries;
         let driver = Driver::new_bare(vec![Source::from(source)], config);
         self.lower(driver)
     }
 
     pub fn run_tests(&self) -> Result<crate::testing::Outcome, PackageError> {
-        let Some(runner) = self.test_runner()? else {
+        self.run_tests_with_filter(None)
+    }
+
+    pub fn run_tests_with_filter(
+        &self,
+        filter: Option<String>,
+    ) -> Result<crate::testing::Outcome, PackageError> {
+        let Some(runner) = self.test_runner(filter)? else {
             return Ok(crate::testing::Outcome::NoTests);
         };
         runner
@@ -1929,8 +2072,11 @@ impl PackageProject {
             .map_err(|error| PackageError::Compile(error.to_string()))
     }
 
-    pub fn run_tests_json(&self) -> Result<crate::testing::JsonOutcome, PackageError> {
-        let Some(runner) = self.test_runner()? else {
+    pub fn run_tests_json(
+        &self,
+        filter: Option<String>,
+    ) -> Result<crate::testing::JsonOutcome, PackageError> {
+        let Some(runner) = self.test_runner(filter)? else {
             return Ok(crate::testing::JsonOutcome::NoTests);
         };
         runner
@@ -1938,7 +2084,10 @@ impl PackageProject {
             .map_err(|error| PackageError::Compile(error.to_string()))
     }
 
-    fn test_runner(&self) -> Result<Option<crate::testing::Runner>, PackageError> {
+    fn test_runner(
+        &self,
+        filter: Option<String>,
+    ) -> Result<Option<crate::testing::Runner>, PackageError> {
         let tests_root = self.root.join("tests");
         if !tests_root.is_dir() {
             return Ok(None);
@@ -1960,11 +2109,11 @@ impl PackageProject {
         let mut config = DriverConfig::new(format!("{} tests", self.manifest.name));
         config.modules = Rc::new(environment);
         config.workspace_root = Some(self.root.clone());
+        config.source_root = Some(tests_root.clone());
         config.libraries = libraries;
-        Ok(Some(crate::testing::Runner::with_config(
-            [tests_root],
-            config,
-        )))
+        Ok(Some(
+            crate::testing::Runner::with_config([tests_root], config).with_filter(filter),
+        ))
     }
 
     fn from_lock(
@@ -2072,7 +2221,8 @@ impl PackageProject {
         config.module_id = module_id;
         config.mode = CompilationMode::Library;
         config.modules = Rc::new(environment);
-        config.workspace_root = Some(workspace_root);
+        config.workspace_root = Some(workspace_root.clone());
+        config.source_root = Some(workspace_root);
         let driver = Driver::new_bare(vec![Source::from(source)], config);
         let parsed = driver.parse().map_err(|error| {
             PackageError::Compile(format!("failed to parse {}: {error:?}", manifest.name))
@@ -2290,6 +2440,24 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_manifest_with_a_missing_target() {
+        let root = std::env::temp_dir().join(format!(
+            "talk-package-missing-target-test-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(root.join("src")).expect("create source directory");
+        fs::write(
+            root.join(MANIFEST_FILE),
+            "Package(name: \"demo\", version: \"0.1.0\", builds: [.bin(named: \"main\", from: \"src/missing.tlk\")], dependencies: [])",
+        )
+        .expect("write manifest");
+        let error = PackageManifest::read(&root).expect_err("missing target fails validation");
+        assert!(error.to_string().contains("failed to find package target"));
+        fs::remove_dir_all(root).expect("remove package root");
+    }
+
+    #[test]
     fn installs_a_relative_path_dependency_without_network_access() {
         let temporary = std::env::temp_dir().join(format!(
             "talk-package-path-test-{}-{}",
@@ -2326,6 +2494,87 @@ mod tests {
             }
         ));
         assert!(root.join(LOCK_FILE).is_file());
+        fs::remove_dir_all(temporary).expect("remove temporary directory");
+    }
+
+    #[test]
+    fn installs_a_gzip_tar_dependency_from_a_source_provider() {
+        use flate2::{Compression, write::GzEncoder};
+
+        struct StaticTarProvider {
+            archive: Vec<u8>,
+        }
+
+        impl PackageSourceProvider for StaticTarProvider {
+            fn capabilities(&self) -> PackageSourceCapabilities {
+                PackageSourceCapabilities::TAR
+            }
+
+            fn fetch_tar(&self, url: &str, sha256: &str) -> Result<Vec<u8>, String> {
+                if url != "https://example.test/remote-lib.tar.gz" {
+                    return Err(format!("unexpected tar URL {url}"));
+                }
+                if sha256 != hex_digest(Sha256::digest(&self.archive)) {
+                    return Err("unexpected tar checksum".into());
+                }
+                Ok(self.archive.clone())
+            }
+        }
+
+        let temporary = std::env::temp_dir().join(format!(
+            "talk-package-tar-provider-test-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let root = temporary.join("root");
+        let cache = temporary.join("cache");
+        fs::create_dir_all(&root).expect("create root package");
+
+        let encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        for (path, source) in [
+            (
+                "remote-lib/package.tlk",
+                "Package(name: \"remote-lib\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+            ),
+            (
+                "remote-lib/src/lib.tlk",
+                "public func answer() -> Int { 42 }",
+            ),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(source.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, path, source.as_bytes())
+                .expect("append tar entry");
+        }
+        let encoder = archive.into_inner().expect("finish tar archive");
+        let archive = encoder.finish().expect("compress tar archive");
+        let sha256 = hex_digest(Sha256::digest(&archive));
+
+        fs::write(
+            root.join(MANIFEST_FILE),
+            format!(
+                "Package(name: \"root\", version: \"0.1.0\", builds: [], dependencies: [.tar(package: \"remote-lib\", url: \"https://example.test/remote-lib.tar.gz\", sha256: \"{sha256}\")])"
+            ),
+        )
+        .expect("write root manifest");
+        let provider = Arc::new(StaticTarProvider { archive });
+        let project = PackageProject::install_with_store(
+            &root,
+            false,
+            PackageStore {
+                root: cache.clone(),
+                offline: false,
+                provider: SourceProvider::Custom(provider),
+            },
+        )
+        .expect("install tar dependency through provider");
+
+        assert_eq!(project.lock.packages.len(), 1);
+        assert!(cache.join("tar").join(sha256).join(MANIFEST_FILE).is_file());
         fs::remove_dir_all(temporary).expect("remove temporary directory");
     }
 
@@ -2413,6 +2662,7 @@ mod tests {
         let lock = PackageResolver::new(PackageStore {
             root: cache.clone(),
             offline: false,
+            provider: SourceProvider::System,
         })
         .resolve(&manifest, &temporary)
         .expect("resolve git dependency");

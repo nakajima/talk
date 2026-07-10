@@ -22,7 +22,10 @@ source workspace.
 A directory containing a `package.tlk` manifest is a package. A manifest is
 restricted declarative data: it is not evaluated as arbitrary Talk code. It
 may contain only the literal fields and dependency/target forms defined by the
-package manifest schema.
+package manifest schema. `stdlib/Package.tlk` defines that schema. The compiler
+implicitly imports its exports into `package.tlk` files only, so normal parsing,
+name resolution, and type checking validate a manifest before the package
+loader structurally reads its literal data.
 
 Packages are source packages. V1 installs remote Git repositories and remote
 tarballs, or resolves local path dependencies, records the complete transitive
@@ -122,7 +125,7 @@ characters such as `-`. Its Talk import name is derived from that identity:
 For example, `talk-html` imports as `talk_html`:
 
 ```tlk
-use { encode } from talk_wasm
+use talk_wasm::{ encode }
 ```
 
 The package identity remains `talk-wasm`; normalization only determines its
@@ -189,9 +192,12 @@ dependencies remain at their declared locations. Installation never copies
 dependencies into the project or makes them globally importable. The cache is
 an implementation detail, not a replacement for `package.lock`.
 
-V1 uses the host `git` executable for Git sources and `curl` plus `tar` for
-remote archives. A missing tool is an installation error. This avoids adding a
-network or archive dependency to the compiler.
+The built-in CLI provider uses the host `git` executable for Git sources and
+`curl` for tarball transport. Talk verifies and safely extracts plain tar and
+gzip-compressed tar archives in process. Embedders may supply a tar-only source
+provider; it receives the URL and expected SHA-256, returns the archive bytes,
+and cannot resolve Git dependencies. A missing required provider capability is
+an installation error.
 
 The CLI surface is:
 
@@ -257,8 +263,8 @@ The implementation is complete when tests cover:
 1. Git resolution records an exact commit and a later locked install does not
    advance a branch or tag;
 2. tarball checksum mismatches fail before extraction;
-3. fetched manifest-name mismatches and normalized-import collisions fail
-   clearly;
+3. manifest target paths must name existing files under `src/`, and fetched
+   manifest-name mismatches and normalized-import collisions fail clearly;
 4. path dependencies resolve relative to both root and transitive package
    manifests without network or cache access;
 5. offline installation succeeds from a populated cache and fails for a

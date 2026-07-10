@@ -304,7 +304,7 @@ There are modules too. This one isn't runnable in the browser because it spans m
 public let a = "we can export this string"
 
 // Main.tlk
-import { a } from ./Exports.tlk
+use crate::Exports::{ a }
 
 print(a)
 ```

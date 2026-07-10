@@ -1,3 +1,3 @@
-use { __talktalk_runAllAndReport } from ./testing_prelude.tlk
+use super::testing_prelude::{ __talktalk_runAllAndReport }
 
 __talktalk_runAllAndReport()

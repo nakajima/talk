@@ -1,0 +1,17 @@
+public enum PackageDependency {
+	case git(package: String, url: String, rev: String)
+	case tar(package: String, url: String, sha256: String)
+	case path(package: String, path: String)
+}
+
+public enum PackageArtifact {
+	case lib(from: String)
+	case bin(named: String, from: String)
+}
+
+public struct Package {
+	let name: String
+	let version: String
+	let builds: Array<PackageArtifact>
+	let dependencies: Array<PackageDependency>
+}

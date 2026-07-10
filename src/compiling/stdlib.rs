@@ -11,7 +11,7 @@ use crate::compiling::{
 
 const TALK_STDLIB_PATH_ENV: &str = "TALK_STDLIB_PATH";
 
-pub const STDLIB_SOURCE_NAMES: &[&str] = &["fs.tlk", "ansi.tlk", "testing.tlk"];
+pub const STDLIB_SOURCE_NAMES: &[&str] = &["fs.tlk", "ansi.tlk", "testing.tlk", "Package.tlk"];
 
 static STDLIB: OnceLock<Vec<Arc<Module>>> = OnceLock::new();
 /// Typed artifacts per (module, assigned id) — `Driver::lower()` asks
@@ -36,6 +36,7 @@ pub fn stdlib_sources() -> Vec<(&'static str, &'static str)> {
         ("fs", include_str!("../../stdlib/fs.tlk")),
         ("ansi", include_str!("../../stdlib/ansi.tlk")),
         ("testing", include_str!("../../stdlib/testing.tlk")),
+        ("Package", include_str!("../../stdlib/Package.tlk")),
     ]
 }
 

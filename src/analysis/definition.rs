@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::analysis::workspace::Workspace;
 use crate::analysis::{DocumentId, TextRange, node_ids_at_offset, span_contains};
-use crate::compiling::module::ModuleId;
+use crate::compiling::{module::ModuleId, module_path::LocalModulePaths};
 use crate::name_resolution::symbol::Symbol;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,8 +128,9 @@ fn goto_definition_from_import(
 
     if span_contains(import.path_span, byte_offset) {
         return match &import.path {
-            crate::node_kinds::decl::ImportPath::Relative(_) => {
-                let target_path = resolve_import_path(&ast.path, &import.path)?;
+            crate::node_kinds::decl::ImportPath::Local(_) => {
+                let target_path =
+                    resolve_import_path(&module.source_root, &ast.path, &import.path)?;
                 let document_id = document_id_for_path(module, &target_path)?;
                 Some(Location {
                     document_id,
@@ -149,8 +150,9 @@ fn goto_definition_from_import(
                 continue;
             }
             match &import.path {
-                crate::node_kinds::decl::ImportPath::Relative(_) => {
-                    let target_path = resolve_import_path(&ast.path, &import.path)?;
+                crate::node_kinds::decl::ImportPath::Local(_) => {
+                    let target_path =
+                        resolve_import_path(&module.source_root, &ast.path, &import.path)?;
                     let target_doc_id = document_id_for_path(module, &target_path)?;
                     let target_file_id = *module.document_to_file_id.get(&target_doc_id)?;
                     let target_scope_id = crate::node_id::NodeID(target_file_id, 0);
@@ -187,21 +189,15 @@ fn module_start_location(module: &Workspace) -> Option<Location> {
 }
 
 fn resolve_import_path(
+    source_root: &Path,
     source_path: &str,
     import_path: &crate::node_kinds::decl::ImportPath,
 ) -> Option<PathBuf> {
     use crate::node_kinds::decl::ImportPath;
 
     match import_path {
-        ImportPath::Relative(rel_path) => {
-            let source_path = Path::new(source_path);
-            let source_dir = source_path.parent()?;
-            let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
-            let mut target_path = source_dir.join(clean_rel);
-            if target_path.extension().is_none() {
-                target_path.set_extension("tlk");
-            }
-            Some(target_path)
+        ImportPath::Local(module_path) => {
+            LocalModulePaths::new(source_root).resolve(source_path, module_path)
         }
         ImportPath::Package(_) => None,
     }

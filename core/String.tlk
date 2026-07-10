@@ -4,11 +4,11 @@
 // not user-perceived characters. Equality is byte equality: canonically
 // equivalent strings in different normal forms (NFC "é" vs NFD "é")
 // compare unequal.
-use { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
-use { ByteStorage, _alloc, _copy, _ptr_add } from ./Memory.tlk
-use { Borrowed, CheapClone } from ./Ownership.tlk
-use { Optional } from ./Optional.tlk
-use { IndexIterable } from ./Iterable.tlk
+use crate::Operators::{ Add, Comparable, Equatable, Subtract }
+use crate::Memory::{ ByteStorage, _alloc, _copy, _ptr_add }
+use crate::Ownership::{ Borrowed, CheapClone }
+use crate::Optional::{ Optional }
+use crate::Iterable::{ IndexIterable }
 
 public struct String {
 	let storage: ByteStorage

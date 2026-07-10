@@ -18,7 +18,15 @@ final class TalkSwiftTests: XCTestCase {
             .appendingPathComponent("talk-swift-package-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
+        final class TarProvider: PackageSourceProvider {
+            func fetchTar(_ request: PackageTarRequest) throws -> Data {
+                XCTFail("the starter package has no remote dependencies")
+                return Data()
+            }
+        }
+
         try TalkPackage.create(at: directory, name: "sample")
+        try TalkPackage.install(at: directory, provider: TarProvider(), offline: true)
 
         let run = try TalkPackage.run(at: directory, offline: true)
         guard case .output(let stdout, _, _) = run else {

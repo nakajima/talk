@@ -1,12 +1,18 @@
-use { ColorfulString } from ansi
-use { Failure, TestCase, fail, registerTest, report } from testing
+use ansi::{ ColorfulString }
+use testing::{ Failure, TestCase, fail, registerTest, report }
 
 public let __talktalk_tests = Array<TestCase>(capacity: 0)
 public let __talktalk_failures = Array<Failure>(capacity: 0)
 let __talktalk_current_test = ""
+let __talktalk_filter_enabled = false
+let __talktalk_filter_name = ""
 
 @handle 'registerTest { testCase in
-	__talktalk_tests.push(testCase)
+	if __talktalk_filter_enabled {
+		if testCase.name == __talktalk_filter_name { __talktalk_tests.push(testCase) }
+	} else {
+		__talktalk_tests.push(testCase)
+	}
 	continue ()
 }
 

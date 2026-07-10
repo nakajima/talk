@@ -158,6 +158,35 @@ public enum PackageTestResult: Equatable, Sendable {
     }
 }
 
+public struct PackageSourceCapabilities: OptionSet, Sendable {
+    public let rawValue: Int32
+
+    public init(rawValue: Int32) {
+        self.rawValue = rawValue
+    }
+
+    public static let tar = Self(rawValue: Int32(TALK_PACKAGE_SOURCE_TAR))
+}
+
+public struct PackageTarRequest: Equatable, Sendable {
+    public let url: String
+    public let sha256: String
+
+    public init(url: String, sha256: String) {
+        self.url = url
+        self.sha256 = sha256
+    }
+}
+
+public protocol PackageSourceProvider: AnyObject {
+    var capabilities: PackageSourceCapabilities { get }
+    func fetchTar(_ request: PackageTarRequest) throws -> Data
+}
+
+public extension PackageSourceProvider {
+    var capabilities: PackageSourceCapabilities { [.tar] }
+}
+
 public struct ReplCompletion: Equatable, Sendable {
     public var display: String
     public var replacement: String
@@ -281,37 +310,86 @@ public enum TalkPackage {
         }
     }
 
-    public static func run(
+    public static func install(
         at directory: URL,
-        binaryName: String? = nil,
-        offline: Bool = false
-    ) throws -> EvaluationResult {
-        try withBytes(directory.path) { directoryPointer, directoryLength in
-            try withBytes(binaryName ?? "") { binaryNamePointer, binaryNameLength in
-                let result = try requireHandle(
-                    talk_package_run_utf8(
+        provider: (any PackageSourceProvider)? = nil,
+        offline: Bool = false,
+        update: Bool = false
+    ) throws {
+        try withPackageProvider(provider) { provider in
+            try withBytes(directory.path) { directoryPointer, directoryLength in
+                let result = if let provider {
+                    talk_package_install_with_provider_utf8(
+                        provider,
                         directoryPointer,
                         directoryLength,
-                        binaryNamePointer,
-                        binaryNameLength,
-                        offline
-                    ),
-                    name: "package evaluation result"
-                )
-                defer { talk_eval_result_free(result) }
-                return try readEvaluationResult(result)
+                        offline,
+                        update
+                    )
+                } else {
+                    talk_package_install_utf8(directoryPointer, directoryLength, offline, update)
+                }
+                try emptyResult(result)
             }
         }
     }
 
-    public static func test(at directory: URL, offline: Bool = false) throws -> PackageTestResult {
-        try withBytes(directory.path) { directoryPointer, directoryLength in
-            let result = try requireHandle(
-                talk_package_test_utf8(directoryPointer, directoryLength, offline),
-                name: "package test result"
-            )
-            defer { talk_test_result_free(result) }
-            return try readPackageTestResult(result)
+    public static func run(
+        at directory: URL,
+        binaryName: String? = nil,
+        provider: (any PackageSourceProvider)? = nil,
+        offline: Bool = false
+    ) throws -> EvaluationResult {
+        try withPackageProvider(provider) { provider in
+            try withBytes(directory.path) { directoryPointer, directoryLength in
+                try withBytes(binaryName ?? "") { binaryNamePointer, binaryNameLength in
+                    let result = if let provider {
+                        talk_package_run_with_provider_utf8(
+                            provider,
+                            directoryPointer,
+                            directoryLength,
+                            binaryNamePointer,
+                            binaryNameLength,
+                            offline
+                        )
+                    } else {
+                        talk_package_run_utf8(
+                            directoryPointer,
+                            directoryLength,
+                            binaryNamePointer,
+                            binaryNameLength,
+                            offline
+                        )
+                    }
+                    let handle = try requireHandle(result, name: "package evaluation result")
+                    defer { talk_eval_result_free(handle) }
+                    return try readEvaluationResult(handle)
+                }
+            }
+        }
+    }
+
+    public static func test(
+        at directory: URL,
+        provider: (any PackageSourceProvider)? = nil,
+        offline: Bool = false
+    ) throws -> PackageTestResult {
+        try withPackageProvider(provider) { provider in
+            try withBytes(directory.path) { directoryPointer, directoryLength in
+                let result = if let provider {
+                    talk_package_test_with_provider_utf8(
+                        provider,
+                        directoryPointer,
+                        directoryLength,
+                        offline
+                    )
+                } else {
+                    talk_package_test_utf8(directoryPointer, directoryLength, offline)
+                }
+                let handle = try requireHandle(result, name: "package test result")
+                defer { talk_test_result_free(handle) }
+                return try readPackageTestResult(handle)
+            }
         }
     }
 }
@@ -522,6 +600,70 @@ public final class ReplSession {
     public static func needsMoreInput(_ input: String) -> Bool {
         withBytes(input) { inputPointer, inputLength in
             talk_repl_needs_more_input_utf8(inputPointer, inputLength)
+        }
+    }
+}
+
+private final class PackageSourceProviderBridge {
+    let provider: any PackageSourceProvider
+
+    init(provider: any PackageSourceProvider) {
+        self.provider = provider
+    }
+}
+
+private func withPackageProvider<R>(
+    _ provider: (any PackageSourceProvider)?,
+    _ body: (OpaquePointer?) throws -> R
+) throws -> R {
+    guard let provider else {
+        return try body(nil)
+    }
+    guard provider.capabilities == [.tar] else {
+        throw TalkError.invalidInput("package source providers currently support only the tar capability")
+    }
+
+    let bridge = Unmanaged.passRetained(PackageSourceProviderBridge(provider: provider))
+    defer { bridge.release() }
+    guard let handle = talk_package_provider_new(
+        provider.capabilities.rawValue,
+        talkPackageFetchTar,
+        bridge.toOpaque()
+    ) else {
+        throw TalkError.nullHandle("talk-c returned a null package source provider handle")
+    }
+    defer { talk_package_provider_free(handle) }
+    return try body(handle)
+}
+
+private func talkPackageFetchTar(
+    context: UnsafeMutableRawPointer?,
+    url: TalkStringRef,
+    sha256: TalkStringRef,
+    sink: OpaquePointer?
+) {
+    guard let context, let sink else {
+        return
+    }
+    let provider = Unmanaged<PackageSourceProviderBridge>
+        .fromOpaque(context)
+        .takeUnretainedValue()
+    do {
+        let archive = try provider.provider.fetchTar(
+            PackageTarRequest(url: string(url), sha256: string(sha256))
+        )
+        archive.withUnsafeBytes { buffer in
+            talk_package_archive_sink_write(
+                sink,
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                buffer.count
+            )
+        }
+        talk_package_archive_sink_finish(sink)
+    } catch {
+        let message = String(describing: error)
+        withBytes(message) { messagePointer, messageLength in
+            talk_package_archive_sink_fail_utf8(sink, messagePointer, messageLength)
         }
     }
 }

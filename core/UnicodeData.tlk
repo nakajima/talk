@@ -5,7 +5,7 @@
 // The table is a sorted boundary list: entries of four base-128
 // septets encoding start_codepoint * 32 + category. See
 // src/bin/gen_unicode.rs for the encoding and regeneration story.
-use { String } from ./String.tlk
+use crate::String::{ String }
 
 public let _GC_OTHER: Int = 0
 public let _GC_CR: Int = 1

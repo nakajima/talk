@@ -1073,6 +1073,14 @@ fn compute_code_actions(
         if doc_id == document_id {
             continue; // Skip current file
         }
+        let Some(source_path) = workspace
+            .asts
+            .get(idx)
+            .and_then(|ast| ast.as_ref())
+            .map(|ast| ast.path.clone())
+        else {
+            continue;
+        };
 
         let target_file_id = crate::node_id::FileID(idx as u32);
         let scope_id = crate::node_id::NodeID(target_file_id, 0);
@@ -1083,7 +1091,7 @@ fn compute_code_actions(
                     public_exports
                         .entry(name.clone())
                         .or_default()
-                        .push((doc_id.clone(), symbol));
+                        .push((source_path.clone(), symbol));
                 }
             }
             for (name, &symbol) in &scope.types {
@@ -1091,7 +1099,7 @@ fn compute_code_actions(
                     public_exports
                         .entry(name.clone())
                         .or_default()
-                        .push((doc_id.clone(), symbol));
+                        .push((source_path.clone(), symbol));
                 }
             }
         }
@@ -1168,25 +1176,26 @@ fn compute_code_actions(
         // Look up if this name exists as a public export
         if let Some(sources) = public_exports.get(name) {
             for (source_path, _symbol) in sources {
-                // Compute relative path from current file to source file
-                let current_path = std::path::Path::new(document_id);
-                let source_path_obj = std::path::Path::new(source_path);
-
-                let relative_path = if let (Some(current_dir), Some(source_file)) =
-                    (current_path.parent(), source_path_obj.file_name())
-                {
-                    // Simple case: both files in same directory
-                    if current_dir == source_path_obj.parent().unwrap_or(std::path::Path::new("")) {
-                        format!("./{}", source_file.to_string_lossy())
-                    } else {
-                        source_path.clone()
-                    }
-                } else {
-                    source_path.clone()
+                let source_path = std::path::Path::new(source_path);
+                let Some(relative_path) = source_path.strip_prefix(&workspace.source_root).ok()
+                else {
+                    continue;
                 };
+                let relative_module = relative_path.with_extension("");
+                let segments: Vec<_> = relative_module
+                    .components()
+                    .filter_map(|component| match component {
+                        std::path::Component::Normal(segment) => segment.to_str(),
+                        _ => None,
+                    })
+                    .collect();
+                if segments.is_empty() {
+                    continue;
+                }
+                let module_path = format!("crate::{}", segments.join("::"));
 
-                // Create the import statement
-                let import_stmt = format!("use {}\n", relative_path);
+                // Create the import statement.
+                let import_stmt = format!("use {module_path}::{{ {name} }}\n");
 
                 // Find where to insert (at the start of the file, after any existing imports)
                 let insert_position = Position::new(0, 0);
@@ -1198,7 +1207,7 @@ fn compute_code_actions(
                 changes.insert(uri.clone(), vec![edit]);
 
                 let action = CodeAction {
-                    title: format!("Import '{}' from {}", name, relative_path),
+                    title: format!("Import '{}' from {}", name, module_path),
                     kind: Some(CodeActionKind::QUICKFIX),
                     diagnostics: Some(vec![Diagnostic {
                         range: diag_range,
@@ -1774,7 +1783,10 @@ mod tests {
             panic!("not a code action");
         };
         let rewritten = apply_edits(main_code, action.edit.as_ref().expect("edit"), &uri_main);
-        assert_eq!(rewritten, "use ./auto_import_path_only_lib.tlk\nfoo\n");
+        assert_eq!(
+            rewritten,
+            "use crate::auto_import_path_only_lib::{ foo }\nfoo\n"
+        );
     }
 
     #[test]
@@ -2061,7 +2073,7 @@ mod tests {
         let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_across_files_b.tlk"))
             .expect("file uri");
         let code_a = "public let foo = 1\n";
-        let code_b = "use { foo } from ./rename_across_files_a.tlk\nfoo\n";
+        let code_b = "use crate::rename_across_files_a::{ foo }\nfoo\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
 
@@ -2112,7 +2124,7 @@ mod tests {
         let uri_b =
             Url::from_file_path(std::env::temp_dir().join("rename_alias_b.tlk")).expect("file uri");
         let code_a = "public struct Point {}\n";
-        let code_b = "use { Point: Pt } from ./rename_alias_a.tlk\nlet p = Pt()\n";
+        let code_b = "use crate::rename_alias_a::{ Point as Pt }\nlet p = Pt()\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
         let alias_use = code_b.rfind("Pt").expect("alias use");
@@ -2148,7 +2160,10 @@ mod tests {
         );
 
         let rewritten_b = apply_edits(code_b, &edit, &uri_b);
-        assert!(rewritten_b.contains("use { Vec3: Pt }"), "{rewritten_b}");
+        assert!(
+            rewritten_b.contains("use crate::rename_alias_a::{ Vec3 as Pt }"),
+            "{rewritten_b}"
+        );
         assert!(rewritten_b.contains("let p = Pt()"), "{rewritten_b}");
     }
 
@@ -2159,7 +2174,7 @@ mod tests {
         let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_mixed_alias_b.tlk"))
             .expect("file uri");
         let code_a = "public struct Point {}\n";
-        let code_b = "use { Point: Pt, Point } from ./rename_mixed_alias_a.tlk\nlet a = Point()\nlet b = Pt()\n";
+        let code_b = "use crate::rename_mixed_alias_a::{ Point as Pt, Point }\nlet a = Point()\nlet b = Pt()\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
         let unaliased_use = code_b.rfind("Point").expect("unaliased use");
@@ -2180,7 +2195,7 @@ mod tests {
 
         let rewritten_b = apply_edits(code_b, &edit, &uri_b);
         assert!(
-            rewritten_b.contains("use { Vec3: Pt, Vec3 }"),
+            rewritten_b.contains("use crate::rename_mixed_alias_a::{ Vec3 as Pt, Vec3 }"),
             "{rewritten_b}"
         );
         assert!(rewritten_b.contains("let a = Vec3()"), "{rewritten_b}");
@@ -2276,7 +2291,7 @@ mod tests {
 
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
-        let code_a = "use { foo } from ./b.tlk\nfoo\n";
+        let code_a = "use crate::b::{ foo }\nfoo\n";
         let code_b = "public let foo = 1\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
@@ -2310,6 +2325,77 @@ mod tests {
         let target = super::goto_definition(&workspace, None, &uri_a, byte_offset)
             .expect("definition location");
         assert_eq!(target.uri, uri_b);
+    }
+
+    #[test]
+    fn diagnostics_accept_package_manifest() {
+        let code = r#"Package(
+    name: "demo",
+    version: "0.1.0",
+    builds: [.bin(named: "main", from: "src/main.tlk")],
+    dependencies: [.path(package: "local", path: "../local")]
+)
+"#;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "talk_lsp_package_manifest_test_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(root.join("src")).expect("create source directory");
+        std::fs::write(root.join("src/main.tlk"), "print(42)\n").expect("write source");
+        let uri = Url::from_file_path(root.join("package.tlk")).expect("file uri");
+        let workspace = workspace_for_docs(vec![(uri.clone(), code)]);
+        let doc_id = super::document_id_for_uri(&uri);
+        let diagnostics = workspace
+            .diagnostics
+            .get(&doc_id)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn diagnostics_report_missing_package_target() {
+        let code = r#"Package(
+    name: "demo",
+    version: "0.1.0",
+    builds: [.bin(named: "main", from: "src/missing.tlk")],
+    dependencies: []
+)
+"#;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "talk_lsp_package_target_test_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(root.join("src")).expect("create source directory");
+        let uri = Url::from_file_path(root.join("package.tlk")).expect("file uri");
+        let workspace = workspace_for_docs(vec![(uri.clone(), code)]);
+        let doc_id = super::document_id_for_uri(&uri);
+        let diagnostics = workspace
+            .diagnostics
+            .get(&doc_id)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("failed to find package target")),
+            "expected missing-target diagnostic, got: {diagnostics:?}"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
     }
 
     #[test]
@@ -2353,7 +2439,7 @@ mod tests {
         let uri_b = Url::from_file_path(std::env::temp_dir().join("extend_before_struct_b.tlk"))
             .expect("file uri");
 
-        let code_a = r#"use { Person } from ./extend_before_struct_b.tlk
+        let code_a = r#"use crate::extend_before_struct_b::{ Person }
 extend Person {
   func foo() {}
 }
@@ -2445,7 +2531,7 @@ extend Person {
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
         let code_a = "public let foo = 1\n";
-        let code_b = "use { foo } from ./a.tlk\nfoo\n";
+        let code_b = "use crate::a::{ foo }\nfoo\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
 
@@ -2454,7 +2540,7 @@ extend Person {
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
 
-        // Click on "foo" in "use { foo }" - should navigate to definition in a.tlk
+        // Click on "foo" in the import - should navigate to definition in a.tlk
         let import_foo_offset = code_b.find("{ foo }").expect("import foo") + 2;
         let target = super::goto_definition(&module, None, &uri_b, import_foo_offset as u32)
             .expect("target");
@@ -2466,7 +2552,7 @@ extend Person {
 
     #[test]
     fn goto_definition_on_stdlib_imported_symbol_navigates_to_definition() {
-        let code = "use { Directory } from fs\nlet dir: Directory\n";
+        let code = "use fs::{ Directory }\nlet dir: Directory\n";
         let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_stdlib_import.tlk"))
             .expect("file uri");
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
@@ -2485,7 +2571,7 @@ extend Person {
 
     #[test]
     fn goto_definition_on_stdlib_symbol_inside_call_argument_navigates_to_definition() {
-        let code = "use { Directory } from fs\nfunc walk(directory: &Directory) {}\nfunc main() { walk(Directory(path: Path([\".\"]))) }\n";
+        let code = "use fs::{ Directory }\nfunc walk(directory: &Directory) {}\nfunc main() { walk(Directory(path: Path([\".\"]))) }\n";
         let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_stdlib_call_arg.tlk"))
             .expect("file uri");
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
@@ -2504,7 +2590,7 @@ extend Person {
 
     #[test]
     fn goto_definition_on_stdlib_qualified_type_annotation_navigates_to_definition() {
-        let code = "use { Directory } from fs\nfunc walk(directory: &fs::Directory) {}\n";
+        let code = "use fs::{ Directory }\nfunc walk(directory: &fs::Directory) {}\n";
         let uri =
             Url::from_file_path(std::env::temp_dir().join("goto_def_stdlib_qualified_type.tlk"))
                 .expect("file uri");
@@ -2538,7 +2624,7 @@ extend Person {
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
         let code_a = "public let foo = 1\n";
-        let code_b = "use { foo } from ./a.tlk\nfoo\n";
+        let code_b = "use crate::a::{ foo }\nfoo\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
 
@@ -2547,8 +2633,8 @@ extend Person {
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
 
-        // Click on "./a.tlk" in "from ./a.tlk" - should navigate to a.tlk
-        let path_offset = code_b.find("./a.tlk").expect("import path") as u32;
+        // Click on "crate::a" in the import path - should navigate to a.tlk
+        let path_offset = code_b.find("crate::a").expect("import path") as u32;
         let target = super::goto_definition(&module, None, &uri_b, path_offset).expect("target");
 
         assert_eq!(target.uri, uri_a, "should navigate to a.tlk");
@@ -2647,7 +2733,7 @@ extend Person {
     #[test]
     fn goto_definition_on_cross_file_function_call() {
         let code_a = "public func helper() -> Int { 1 }\n";
-        let code_b = "use { helper } from ./goto_cross_a.tlk\nhelper()\n";
+        let code_b = "use crate::goto_cross_a::{ helper }\nhelper()\n";
         let uri_a =
             Url::from_file_path(std::env::temp_dir().join("goto_cross_a.tlk")).expect("file uri");
         let uri_b =

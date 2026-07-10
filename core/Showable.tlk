@@ -1,6 +1,6 @@
 // no-core
-use { String } from ./String.tlk
-use { Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable } from ./Operators.tlk
+use crate::String::{ String }
+use crate::Operators::{ Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable }
 
 public protocol Showable {
 	func show() -> String

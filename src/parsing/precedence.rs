@@ -310,11 +310,7 @@ impl Precedence {
             TokenKind::Colon => ParseHandler::NONE,
             TokenKind::DoubleColon => ParseHandler::NONE,
             TokenKind::Arrow => ParseHandler::NONE,
-            TokenKind::DotDot => ParseHandler {
-                prefix: Some(Parser::relative_parent_path_prefix),
-                infix: None,
-                precedence: Precedence::Primary,
-            },
+            TokenKind::DotDot => ParseHandler::NONE,
             TokenKind::DotDotDot => ParseHandler::NONE,
             _ => ParseHandler::NONE,
         })

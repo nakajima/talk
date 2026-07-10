@@ -361,59 +361,41 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Use)?;
 
-        // Parse imported symbols. `use path` imports every public symbol from path,
-        // while `use { a, b } from path` imports specific symbols.
-        let (symbols, path_start, path) = if self.did_match(TokenKind::Underscore)? {
-            // Legacy import-all syntax.
-            self.consume_import_from()?;
-            let path_start = self.current.as_ref().map(|t| t.start).unwrap_or(0);
-            (ImportedSymbols::All, path_start, self.module_path()?)
-        } else if self.did_match(TokenKind::LeftBrace)? {
+        let path_start = self.current.as_ref().map(|token| token.start).unwrap_or(0);
+        let path = self.module_path()?;
+        let path_end = self
+            .current
+            .as_ref()
+            .map(|token| token.start)
+            .unwrap_or(path_start);
+        let symbols = if self.peek_is(TokenKind::DoubleColon)
+            && self
+                .next
+                .as_ref()
+                .is_some_and(|token| token.kind == TokenKind::LeftBrace)
+        {
+            self.consume_double_colon()?;
+            self.consume(TokenKind::LeftBrace)?;
             let mut imported = vec![];
 
-            loop {
-                if matches!(
-                    self.current.as_ref().map(|t| &t.kind),
-                    Some(TokenKind::RightBrace)
-                ) {
-                    break;
-                }
-
-                let (name, name_span) = self.identifier()?;
-
-                // Check for alias: { Point: Pt }
-                let alias = if self.did_match(TokenKind::Colon)? {
-                    let (alias_name, _) = self.identifier()?;
-                    Some(alias_name)
+            while !self.peek_is(TokenKind::RightBrace) {
+                let (name, span) = self.identifier()?;
+                let alias = if self.did_match(TokenKind::As)? {
+                    Some(self.identifier()?.0)
                 } else {
                     None
                 };
-
-                imported.push(ImportedSymbol {
-                    name,
-                    alias,
-                    span: name_span,
-                });
+                imported.push(ImportedSymbol { name, alias, span });
 
                 if !self.did_match(TokenKind::Comma)? {
                     break;
                 }
             }
-
             self.consume(TokenKind::RightBrace)?;
-            self.consume_import_from()?;
-            let path_start = self.current.as_ref().map(|t| t.start).unwrap_or(0);
-            (
-                ImportedSymbols::Named(imported),
-                path_start,
-                self.module_path()?,
-            )
+            ImportedSymbols::Named(imported)
         } else {
-            let path_start = self.current.as_ref().map(|t| t.start).unwrap_or(0);
-            (ImportedSymbols::All, path_start, self.module_path()?)
+            ImportedSymbols::All
         };
-
-        let path_end = self.current.as_ref().map(|t| t.start).unwrap_or(path_start);
         let path_span = Span {
             start: path_start,
             end: path_end,
@@ -432,64 +414,25 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn consume_import_from(&mut self) -> Result<(), ParserError> {
-        // Expect 'from' keyword (as contextual keyword)
-        match &self.current {
-            Some(tok) if tok.kind == TokenKind::Identifier && self.lexeme(tok) == "from" => {
-                self.advance();
-                Ok(())
-            }
-            _ => Err(ParserError::UnexpectedToken {
-                expected: "from".into(),
-                actual: format!("{:?}", self.current),
-                token: self.current.clone(),
-            }),
-        }
-    }
-
     fn module_path(&mut self) -> Result<ImportPath, ParserError> {
-        if matches!(
-            self.current.as_ref().map(|t| &t.kind),
-            Some(TokenKind::Dot | TokenKind::DotDot)
-        ) {
-            return Ok(ImportPath::Relative(self.relative_module_path_string()?));
-        }
-
-        let (mut pkg_name, _) = self.identifier()?;
-        while self.did_match_double_colon()? {
+        let (mut path, _) = self.identifier()?;
+        while self.peek_is(TokenKind::DoubleColon)
+            && !self
+                .next
+                .as_ref()
+                .is_some_and(|token| token.kind == TokenKind::LeftBrace)
+        {
+            self.consume_double_colon()?;
             let (segment, _) = self.identifier()?;
-            pkg_name.push_str("::");
-            pkg_name.push_str(&segment);
-        }
-        Ok(ImportPath::Package(pkg_name))
-    }
-
-    fn relative_module_path_string(&mut self) -> Result<String, ParserError> {
-        let mut path_str = String::new();
-
-        while let Some(current) = self.current.clone() {
-            match current.kind {
-                TokenKind::Dot => {
-                    path_str.push('.');
-                    self.advance();
-                }
-                TokenKind::DotDot => {
-                    path_str.push_str("..");
-                    self.advance();
-                }
-                TokenKind::Slash => {
-                    path_str.push('/');
-                    self.advance();
-                }
-                TokenKind::Identifier => {
-                    path_str.push_str(self.lexeme(&current));
-                    self.advance();
-                }
-                _ => break,
-            }
+            path.push_str("::");
+            path.push_str(&segment);
         }
 
-        Ok(path_str)
+        if matches!(path.split("::").next(), Some("crate" | "self" | "super")) {
+            Ok(ImportPath::Local(path))
+        } else {
+            Ok(ImportPath::Package(path))
+        }
     }
 
     fn did_match_double_colon(&mut self) -> Result<bool, ParserError> {
@@ -2024,55 +1967,9 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub(crate) fn relative_parent_path_prefix(
-        &mut self,
-        can_assign: bool,
-    ) -> Result<Node, ParserError> {
-        let tok = self.push_source_location();
-        self.consume(TokenKind::DotDot)?;
-        let mut name = String::from("..");
-        name.push_str(&self.relative_module_path_string()?);
-        self.consume_double_colon()?;
-        let (symbol_name, _) = self.identifier()?;
-        name.push_str("::");
-        name.push_str(&symbol_name);
-        while self.did_match_double_colon()? {
-            let (segment, _) = self.identifier()?;
-            name.push_str("::");
-            name.push_str(&segment);
-        }
-        let variable = self.add_expr(ExprKind::Variable(Name::Raw(name)), tok)?;
-        self.skip_newlines();
-        if let Some(call_expr) = self.check_call(&variable, can_assign)? {
-            return Ok(call_expr.into());
-        }
-        Ok(variable.into())
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Dot)?;
-
-        if self.peek_is(TokenKind::Slash) {
-            let mut name = String::from(".");
-            name.push_str(&self.relative_module_path_string()?);
-            self.consume_double_colon()?;
-            let (symbol_name, _) = self.identifier()?;
-            name.push_str("::");
-            name.push_str(&symbol_name);
-            while self.did_match_double_colon()? {
-                let (segment, _) = self.identifier()?;
-                name.push_str("::");
-                name.push_str(&segment);
-            }
-            let variable = self.add_expr(ExprKind::Variable(Name::Raw(name)), tok)?;
-            self.skip_newlines();
-            if let Some(call_expr) = self.check_call(&variable, can_assign)? {
-                return Ok(call_expr.into());
-            }
-            return Ok(variable.into());
-        }
 
         let (name, name_span) = match self.current.clone() {
             Some(cur) if cur.kind == TokenKind::Identifier => match self.identifier() {
@@ -2849,6 +2746,7 @@ impl<'a> Parser<'a> {
                     | TokenKind::Star
                     | TokenKind::LeftParen
                     | TokenKind::LeftBrace
+                    | TokenKind::LeftBracket
                     | TokenKind::Any
             )
         )
@@ -2934,6 +2832,22 @@ impl<'a> Parser<'a> {
             return self.any_type_annotation(tok);
         }
 
+        if self.did_match(TokenKind::LeftBracket)? {
+            let element = self.type_annotation()?;
+            self.consume(TokenKind::RightBracket)?;
+            let base = self.save_meta(tok, |id, span| TypeAnnotation {
+                id,
+                span,
+                kind: TypeAnnotationKind::Nominal {
+                    name: "Array".into(),
+                    // Array is implied by the brackets, so it has no source name.
+                    name_span: Span::SYNTHESIZED,
+                    generics: vec![element],
+                },
+            })?;
+            return self.nominal_type_path(base);
+        }
+
         // // Check for record type: {x: Int, y: Int, ..R}
         if self.did_match(TokenKind::LeftBrace)? {
             let mut fields: Vec<RecordFieldTypeAnnotation> = vec![];
@@ -2962,30 +2876,12 @@ impl<'a> Parser<'a> {
         }
 
         // It's a nominal.
-        let (name, name_span) = if matches!(
-            self.current.as_ref().map(|t| &t.kind),
-            Some(TokenKind::Dot | TokenKind::DotDot)
-        ) {
-            let mut name = self.relative_module_path_string()?;
-            self.consume_double_colon()?;
-            let (symbol_name, symbol_span) = self.identifier()?;
+        let (mut name, name_span) = self.identifier()?;
+        while self.did_match_double_colon()? {
+            let (segment, _) = self.identifier()?;
             name.push_str("::");
-            name.push_str(&symbol_name);
-            while self.did_match_double_colon()? {
-                let (segment, _) = self.identifier()?;
-                name.push_str("::");
-                name.push_str(&segment);
-            }
-            (name, symbol_span)
-        } else {
-            let (mut name, name_span) = self.identifier()?;
-            while self.did_match_double_colon()? {
-                let (segment, _) = self.identifier()?;
-                name.push_str("::");
-                name.push_str(&segment);
-            }
-            (name, name_span)
-        };
+            name.push_str(&segment);
+        }
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
             while !self.did_match(TokenKind::Greater)? {
@@ -2995,7 +2891,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let mut base = self.save_meta(tok, |id, span| TypeAnnotation {
+        let base = self.save_meta(tok, |id, span| TypeAnnotation {
             id,
             span,
             kind: TypeAnnotationKind::Nominal {
@@ -3005,6 +2901,13 @@ impl<'a> Parser<'a> {
             },
         })?;
 
+        self.nominal_type_path(base)
+    }
+
+    fn nominal_type_path(
+        &mut self,
+        mut base: TypeAnnotation,
+    ) -> Result<TypeAnnotation, ParserError> {
         if !self.did_match(TokenKind::Dot)? {
             return Ok(base);
         }
@@ -3034,10 +2937,8 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            break;
+            return Ok(base);
         }
-
-        Ok(base)
     }
 
     fn any_type_annotation(&mut self, tok: LocToken) -> Result<TypeAnnotation, ParserError> {

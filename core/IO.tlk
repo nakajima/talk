@@ -1,8 +1,8 @@
 // no-core
-use { _alloc, _copy, _free } from ./Memory.tlk
-use { Add, Comparable, Equatable } from ./Operators.tlk
-use { String } from ./String.tlk
-use { Showable } from ./Showable.tlk
+use crate::Memory::{ _alloc, _copy, _free }
+use crate::Operators::{ Add, Comparable, Equatable }
+use crate::String::{ String }
+use crate::Showable::{ Showable }
 
 public enum IORequest {
 	case read(Int, RawPtr, Int)

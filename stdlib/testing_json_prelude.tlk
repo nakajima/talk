@@ -1,8 +1,10 @@
-use { Failure, TestCase, fail, registerTest } from testing
+use testing::{ Failure, TestCase, fail, registerTest }
 
 public let __talktalk_tests = Array<TestCase>(capacity: 0)
 public let __talktalk_failures = Array<Failure>(capacity: 0)
 let __talktalk_current_test = ""
+let __talktalk_filter_enabled = false
+let __talktalk_filter_name = ""
 
 func __talktalk_hex_digit(value: Int) -> String {
 	if value == 0 { return "0" }
@@ -54,7 +56,11 @@ func __talktalk_event_end(status: String) {
 }
 
 @handle 'registerTest { testCase in
-	__talktalk_tests.push(testCase)
+	if __talktalk_filter_enabled {
+		if testCase.name == __talktalk_filter_name { __talktalk_tests.push(testCase) }
+	} else {
+		__talktalk_tests.push(testCase)
+	}
 	continue ()
 }
 

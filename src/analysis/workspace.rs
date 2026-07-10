@@ -8,6 +8,7 @@ use crate::analysis::{Diagnostic, DiagnosticSeverity, DocumentId, DocumentInput,
 use crate::ast::{AST, NameResolved};
 use crate::compiling::driver::{CompilationMode, Driver, DriverConfig, Source};
 use crate::compiling::module::{ModuleEnvironment, ModuleId};
+use crate::compiling::module_path::LocalModulePaths;
 use crate::diagnostic::AnyDiagnostic;
 use crate::name_resolution::symbol::set_symbol_names;
 use crate::node_id::FileID;
@@ -23,6 +24,7 @@ enum WorkspaceCompileContext {
 #[derive(Clone)]
 pub struct Workspace {
     pub local_module_id: ModuleId,
+    pub source_root: PathBuf,
     pub versions: FxHashMap<DocumentId, i32>,
     pub file_id_to_document: Vec<DocumentId>,
     pub document_to_file_id: FxHashMap<DocumentId, FileID>,
@@ -48,6 +50,29 @@ impl Workspace {
         let compile_context = Self::compile_context(&docs);
         if compile_context == WorkspaceCompileContext::Core {
             docs = Self::core_documents_with_overrides(&docs);
+        } else if Self::has_test_document(&docs) {
+            let harness_root = LocalModulePaths::infer_source_root(
+                docs.iter().map(|doc| PathBuf::from(&doc.path)),
+            )
+            .unwrap_or_default();
+            let [prelude, postlude] = crate::testing::Harness::human_sources(&harness_root);
+            let prelude_path = prelude.path().into_owned();
+            let postlude_path = postlude.path().into_owned();
+            docs.insert(
+                0,
+                DocumentInput {
+                    id: prelude_path.clone(),
+                    path: prelude_path,
+                    version: 0,
+                    text: prelude.read().expect("test harness prelude is in memory"),
+                },
+            );
+            docs.push(DocumentInput {
+                id: postlude_path.clone(),
+                path: postlude_path,
+                version: 0,
+                text: postlude.read().expect("test harness postlude is in memory"),
+            });
         }
 
         let mut file_id_to_document: Vec<DocumentId> =
@@ -75,12 +100,17 @@ impl Workspace {
             .map(|doc| Source::in_memory(PathBuf::from(&doc.path), doc.text.clone()))
             .collect();
 
+        let source_root =
+            LocalModulePaths::infer_source_root(docs.iter().map(|doc| PathBuf::from(&doc.path)))
+                .unwrap_or_default();
+
         let module_name = match compile_context {
             WorkspaceCompileContext::Core => "Core",
             WorkspaceCompileContext::Stdlib(name) => name,
             WorkspaceCompileContext::Normal => "Workspace",
         };
         let mut config = DriverConfig::new(module_name)
+            .source_root(source_root.clone())
             .lenient_parsing()
             .preserve_comments(true);
         match compile_context {
@@ -162,12 +192,42 @@ impl Workspace {
             }
         }
 
+        for ast in asts.iter().flatten() {
+            let manifest_path = Path::new(&ast.path);
+            if manifest_path.file_name().and_then(|name| name.to_str()) != Some("package.tlk") {
+                continue;
+            }
+            let Some(root) = manifest_path.parent() else {
+                continue;
+            };
+            let Ok(manifest) =
+                crate::compiling::package::PackageManifest::from_roots(manifest_path, &ast.roots)
+            else {
+                continue;
+            };
+            let Err(error) = manifest.validate_targets(root) else {
+                continue;
+            };
+            let Some(doc_id) = file_id_to_document.get(ast.file_id.0 as usize) else {
+                continue;
+            };
+            diagnostics
+                .entry(doc_id.clone())
+                .or_default()
+                .push(Diagnostic {
+                    range: TextRange::new(0, 0),
+                    severity: DiagnosticSeverity::Error,
+                    message: error.to_string(),
+                });
+        }
+
         for diagnostics in diagnostics.values_mut() {
             diagnostics.sort_by_key(|d| (d.range.start, d.range.end, d.message.clone()));
         }
 
         Some(Self {
             local_module_id,
+            source_root,
             versions,
             file_id_to_document,
             document_to_file_id,
@@ -178,6 +238,15 @@ impl Workspace {
             flow,
             diagnostics,
             stdlib_module_ids,
+        })
+    }
+
+    fn has_test_document(docs: &[DocumentInput]) -> bool {
+        docs.iter().any(|doc| {
+            Path::new(&doc.path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".test.tlk"))
         })
     }
 
@@ -328,7 +397,12 @@ impl Workspace {
             .map(|(path, text)| Source::in_memory(path.clone(), text.clone()))
             .collect();
 
-        let mut config = DriverConfig::new("Core").preserve_comments(true);
+        let source_root =
+            LocalModulePaths::infer_source_root(core_files.iter().map(|(path, _)| path.clone()))
+                .unwrap_or_default();
+        let mut config = DriverConfig::new("Core")
+            .source_root(source_root.clone())
+            .preserve_comments(true);
         config.module_id = ModuleId::Core;
 
         let driver = Driver::new_bare(sources, config);
@@ -346,6 +420,7 @@ impl Workspace {
 
         Some(Self {
             local_module_id: ModuleId::Core,
+            source_root,
             versions: FxHashMap::default(),
             file_id_to_document,
             document_to_file_id,
@@ -377,11 +452,14 @@ impl Workspace {
     fn stdlib_module(name: &str, module_id: ModuleId) -> Option<Self> {
         let (path, text) = crate::compiling::stdlib::source_document(name)?;
         let document_id = path.to_string_lossy().into_owned();
+        let source_root = path.parent()?.to_path_buf();
 
         let mut modules = ModuleEnvironment::default();
         modules.import_core(crate::compiling::core::compile());
 
-        let mut config = DriverConfig::new(name).preserve_comments(true);
+        let mut config = DriverConfig::new(name)
+            .source_root(source_root.clone())
+            .preserve_comments(true);
         config.module_id = module_id;
         config.mode = CompilationMode::Library;
         config.modules = Rc::new(modules);
@@ -403,6 +481,7 @@ impl Workspace {
 
         Some(Self {
             local_module_id: module_id,
+            source_root,
             versions: FxHashMap::default(),
             file_id_to_document,
             document_to_file_id,
@@ -679,6 +758,28 @@ mod tests {
     }
 
     #[test]
+    fn test_files_are_checked_with_the_test_harness() {
+        let path = "example.test.tlk".to_string();
+        let workspace = Workspace::new(vec![DocumentInput {
+            id: path.clone(),
+            path,
+            version: 0,
+            text: "test(\"example\") {\n\tassert(1 + 1 == 2)\n}\n".to_string(),
+        }])
+        .expect("workspace");
+        let diagnostics = workspace
+            .diagnostics
+            .get("example.test.tlk")
+            .cloned()
+            .unwrap_or_default();
+
+        assert!(
+            diagnostics.is_empty(),
+            "test file should type-check with the harness: {diagnostics:?}"
+        );
+    }
+
+    #[test]
     fn import_discovered_files_report_diagnostics() {
         // A file pulled in by `use ... from` gets a FileID past the input
         // docs; its diagnostics must still reach the workspace instead of
@@ -688,7 +789,7 @@ mod tests {
         let lib_path = dir.join("lib.tlk");
         let main_path = dir.join("main.tlk");
         std::fs::write(&lib_path, "public let broken: Int = \"not an int\"\n").expect("lib");
-        let main_text = "use { broken } from ./lib.tlk\nprint(broken)\n";
+        let main_text = "use crate::lib::{ broken }\nprint(broken)\n";
         std::fs::write(&main_path, main_text).expect("main");
 
         let main_id = main_path.to_string_lossy().into_owned();

@@ -58,6 +58,10 @@ enum {
 };
 
 enum {
+    TALK_PACKAGE_SOURCE_TAR = 1
+};
+
+enum {
     TALK_HIGHLIGHT_DECORATOR = 1,
     TALK_HIGHLIGHT_NAMESPACE = 2,
     TALK_HIGHLIGHT_TYPE = 3,
@@ -177,6 +181,15 @@ typedef struct TalkWorkspaceEditResult TalkWorkspaceEditResult;
 typedef struct TalkEvalResult TalkEvalResult;
 typedef struct TalkTestResult TalkTestResult;
 typedef struct TalkReplCompletions TalkReplCompletions;
+typedef struct TalkPackageProvider TalkPackageProvider;
+typedef struct TalkPackageArchiveSink TalkPackageArchiveSink;
+
+typedef void (*TalkPackageFetchTarCallback)(
+    void *context,
+    TalkStringRef url,
+    TalkStringRef sha256,
+    TalkPackageArchiveSink *sink
+);
 
 void talk_result_free(TalkResult result);
 void talk_buffer_free(TalkBuffer buffer);
@@ -204,6 +217,40 @@ TalkEvalResult *talk_run_program_utf8(
     size_t source_len
 );
 
+TalkPackageProvider *talk_package_provider_new(
+    int32_t capabilities,
+    TalkPackageFetchTarCallback fetch_tar,
+    void *context
+);
+void talk_package_provider_free(TalkPackageProvider *provider);
+
+void talk_package_archive_sink_write(
+    TalkPackageArchiveSink *sink,
+    const uint8_t *bytes_ptr,
+    size_t bytes_len
+);
+void talk_package_archive_sink_finish(TalkPackageArchiveSink *sink);
+void talk_package_archive_sink_fail_utf8(
+    TalkPackageArchiveSink *sink,
+    const uint8_t *message_ptr,
+    size_t message_len
+);
+
+TalkResult talk_package_install_utf8(
+    const uint8_t *root_ptr,
+    size_t root_len,
+    bool offline,
+    bool update
+);
+
+TalkResult talk_package_install_with_provider_utf8(
+    const TalkPackageProvider *provider,
+    const uint8_t *root_ptr,
+    size_t root_len,
+    bool offline,
+    bool update
+);
+
 TalkResult talk_package_create_utf8(
     const uint8_t *root_ptr,
     size_t root_len,
@@ -223,7 +270,23 @@ TalkEvalResult *talk_package_run_utf8(
     bool offline
 );
 
+TalkEvalResult *talk_package_run_with_provider_utf8(
+    const TalkPackageProvider *provider,
+    const uint8_t *root_ptr,
+    size_t root_len,
+    const uint8_t *binary_name_ptr,
+    size_t binary_name_len,
+    bool offline
+);
+
 TalkTestResult *talk_package_test_utf8(
+    const uint8_t *root_ptr,
+    size_t root_len,
+    bool offline
+);
+
+TalkTestResult *talk_package_test_with_provider_utf8(
+    const TalkPackageProvider *provider,
     const uint8_t *root_ptr,
     size_t root_len,
     bool offline

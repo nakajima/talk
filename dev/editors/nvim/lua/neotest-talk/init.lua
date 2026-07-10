@@ -160,12 +160,6 @@ end
 
 local current_config = adapter_config({})
 
-local function output_file(text)
-  local path = vim.fn.tempname()
-  vim.fn.writefile(vim.split(text or "", "\n", { plain = true }), path)
-  return path
-end
-
 local function decode_json(text)
   if vim.json and vim.json.decode then
     local ok, decoded = pcall(vim.json.decode, text)
@@ -259,6 +253,10 @@ function M.build_spec(args)
   local position = args.tree:data()
   local command = { config.command, "test", "--json" }
   vim.list_extend(command, config.args)
+  if position.type == "test" then
+    table.insert(command, "--filter")
+    table.insert(command, position.name)
+  end
   vim.list_extend(command, args.extra_args or {})
   table.insert(command, position.path)
 
@@ -277,7 +275,7 @@ function M.results(_, result, tree)
   local raw_output = ok and table.concat(lines, "\n") or ""
   local report = decode_json(raw_output)
   local output_text = report and report.output or raw_output
-  local output_path = output_file(output_text ~= "" and output_text or raw_output)
+  local output_path = result.output
   local results = {}
 
   if not report then

@@ -2010,7 +2010,11 @@ pub mod tests {
         use crate::parser::Parser;
 
         let modules = ModuleEnvironment::default();
-        let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
+        let mut name_resolver = NameResolver::with_source_root(
+            Rc::new(modules),
+            ModuleId::Current,
+            std::path::PathBuf::from("."),
+        );
         let mut parseds = Vec::new();
 
         for (i, (path, code)) in files.iter().enumerate() {
@@ -2028,7 +2032,7 @@ pub mod tests {
     fn resolves_named_import() {
         let (asts, resolved) = resolve_multi(&[
             ("./utils.tlk", "public let helper = 42"),
-            ("./main.tlk", "use { helper } from ./utils.tlk\nhelper"),
+            ("./main.tlk", "use crate::utils::{ helper }\nhelper"),
         ]);
 
         // Check that the main file resolved 'helper' to the symbol from utils
@@ -2063,7 +2067,7 @@ pub mod tests {
     fn resolves_import_all() {
         let (asts, resolved) = resolve_multi(&[
             ("./lib.tlk", "public let a = 1\npublic let b = 2"),
-            ("./main.tlk", "use ./lib.tlk\na\nb"),
+            ("./main.tlk", "use crate::lib\na\nb"),
         ]);
 
         assert!(
@@ -2081,7 +2085,7 @@ pub mod tests {
     fn import_nonexistent_symbol_errors() {
         let (_, resolved) = resolve_multi(&[
             ("./lib.tlk", "let existing = 1"),
-            ("./main.tlk", "use { nonexistent } from ./lib.tlk"),
+            ("./main.tlk", "use crate::lib::{ nonexistent }"),
         ]);
 
         assert!(
@@ -2092,7 +2096,7 @@ pub mod tests {
 
     #[test]
     fn import_nonexistent_module_errors() {
-        let (_, resolved) = resolve_multi(&[("./main.tlk", "use { a } from ./missing.tlk")]);
+        let (_, resolved) = resolve_multi(&[("./main.tlk", "use crate::missing::{ a }")]);
 
         assert!(
             !resolved.diagnostics.is_empty(),
@@ -2104,7 +2108,7 @@ pub mod tests {
     fn import_private_symbol_errors() {
         let (_, resolved) = resolve_multi(&[
             ("./lib.tlk", "let private_val = 42"),
-            ("./main.tlk", "use { private_val } from ./lib.tlk"),
+            ("./main.tlk", "use crate::lib::{ private_val }"),
         ]);
 
         assert!(

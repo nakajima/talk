@@ -1,6 +1,8 @@
 use std::any::Any;
+use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use talk::analysis::{
     CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentId, DocumentInput,
@@ -8,7 +10,7 @@ use talk::analysis::{
 };
 use talk::compiling::{
     driver::{Driver, DriverConfig, Source},
-    package::PackageProject,
+    package::{PackageProject, PackageSourceCapabilities, PackageSourceProvider},
 };
 use talk::repl::{ReplCompletions, ReplEvalResult, ReplSession};
 
@@ -50,6 +52,8 @@ const EVAL_ERROR: i32 = 3;
 
 const TEST_NO_TESTS: i32 = 1;
 const TEST_FINISHED: i32 = 2;
+
+const PACKAGE_SOURCE_TAR: i32 = 1;
 
 const HIGHLIGHT_DECORATOR: i32 = 1;
 const HIGHLIGHT_NAMESPACE: i32 = 2;
@@ -254,6 +258,28 @@ pub struct TalkReplCompletions {
     items: Vec<ReplCompletionRecord>,
 }
 
+pub struct TalkPackageProvider {
+    provider: Arc<CPackageSourceProvider>,
+}
+
+pub struct TalkPackageArchiveSink {
+    bytes: Vec<u8>,
+    error: Option<String>,
+    finished: bool,
+}
+
+type PackageFetchTarCallback = unsafe extern "C" fn(
+    context: *mut c_void,
+    url: TalkStringRef,
+    sha256: TalkStringRef,
+    sink: *mut TalkPackageArchiveSink,
+);
+
+struct CPackageSourceProvider {
+    fetch_tar: PackageFetchTarCallback,
+    context: *mut c_void,
+}
+
 struct ApiError {
     status: i32,
     message: String,
@@ -456,6 +482,63 @@ impl TalkBuffer {
     }
 }
 
+impl TalkPackageArchiveSink {
+    fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            error: None,
+            finished: false,
+        }
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        if self.error.is_none() && !self.finished {
+            self.bytes.extend_from_slice(bytes);
+        }
+    }
+
+    fn finish(&mut self) {
+        if self.error.is_none() {
+            self.finished = true;
+        }
+    }
+
+    fn fail(&mut self, message: String) {
+        if !self.finished {
+            self.error = Some(message);
+        }
+    }
+
+    fn into_result(self) -> Result<Vec<u8>, String> {
+        match (self.error, self.finished) {
+            (Some(error), _) => Err(error),
+            (None, true) => Ok(self.bytes),
+            (None, false) => Err("package source provider did not finish the tar download".into()),
+        }
+    }
+}
+
+impl PackageSourceProvider for CPackageSourceProvider {
+    fn capabilities(&self) -> PackageSourceCapabilities {
+        PackageSourceCapabilities::TAR
+    }
+
+    fn fetch_tar(&self, url: &str, sha256: &str) -> Result<Vec<u8>, String> {
+        let mut sink = TalkPackageArchiveSink::new();
+        // SAFETY: The callback, context, and sink were supplied by the host
+        // provider and are valid for this synchronous invocation.
+        unsafe {
+            (self.fetch_tar)(
+                self.context,
+                TalkStringRef::from_str(url),
+                TalkStringRef::from_str(sha256),
+                &mut sink,
+            );
+        }
+        sink.into_result()
+    }
+}
+
 impl TalkResult {
     fn ok_bytes(bytes: Vec<u8>) -> Self {
         Self {
@@ -582,6 +665,25 @@ impl WorkspacePtr {
 }
 
 struct ReplPtr(*mut TalkReplSession);
+
+struct PackageProviderPtr(*const TalkPackageProvider);
+
+impl PackageProviderPtr {
+    fn new(ptr: *const TalkPackageProvider) -> Self {
+        Self(ptr)
+    }
+
+    fn get(&self) -> ApiResult<&TalkPackageProvider> {
+        if self.0.is_null() {
+            return Err(ApiError::invalid_input(
+                "package source provider pointer is null",
+            ));
+        }
+        // SAFETY: The C API requires a pointer returned by
+        // talk_package_provider_new that remains alive during this call.
+        Ok(unsafe { &*self.0 })
+    }
+}
 
 impl ReplPtr {
     fn new(ptr: *mut TalkReplSession) -> Self {
@@ -1036,10 +1138,33 @@ impl PackageRunner {
             .map_err(|error| ApiError::failed(error.to_string()))
     }
 
-    fn run(root: String, binary_name: Option<String>, offline: bool) -> ApiResult<TalkEvalResult> {
+    fn install(
+        root: String,
+        offline: bool,
+        update: bool,
+        provider: Option<&TalkPackageProvider>,
+    ) -> ApiResult<()> {
         let root = Self::root(root)?;
-        let project = PackageProject::open_at(root, offline)
-            .map_err(|error| ApiError::failed(error.to_string()))?;
+        match provider {
+            Some(provider) => PackageProject::install_at_with_provider(
+                root,
+                offline,
+                update,
+                provider.provider.clone(),
+            ),
+            None => PackageProject::install_at(root, offline, update),
+        }
+        .map(|_| ())
+        .map_err(|error| ApiError::failed(error.to_string()))
+    }
+
+    fn run(
+        root: String,
+        binary_name: Option<String>,
+        offline: bool,
+        provider: Option<&TalkPackageProvider>,
+    ) -> ApiResult<TalkEvalResult> {
+        let project = Self::open(root, offline, provider)?;
         let mut lowered = project
             .compile_binary(binary_name.as_deref())
             .map_err(|error| ApiError::failed(error.to_string()))?;
@@ -1060,10 +1185,12 @@ impl PackageRunner {
         }
     }
 
-    fn test(root: String, offline: bool) -> ApiResult<TalkTestResult> {
-        let root = Self::root(root)?;
-        let project = PackageProject::open_at(root, offline)
-            .map_err(|error| ApiError::failed(error.to_string()))?;
+    fn test(
+        root: String,
+        offline: bool,
+        provider: Option<&TalkPackageProvider>,
+    ) -> ApiResult<TalkTestResult> {
+        let project = Self::open(root, offline, provider)?;
         match project
             .run_tests()
             .map_err(|error| ApiError::failed(error.to_string()))?
@@ -1073,6 +1200,21 @@ impl PackageRunner {
                 Ok(TalkTestResult::finished(summary.output, summary.failures))
             }
         }
+    }
+
+    fn open(
+        root: String,
+        offline: bool,
+        provider: Option<&TalkPackageProvider>,
+    ) -> ApiResult<PackageProject> {
+        let root = Self::root(root)?;
+        match provider {
+            Some(provider) => {
+                PackageProject::open_at_with_provider(root, offline, provider.provider.clone())
+            }
+            None => PackageProject::open_at(root, offline),
+        }
+        .map_err(|error| ApiError::failed(error.to_string()))
     }
 
     fn root(root: String) -> ApiResult<PathBuf> {
@@ -1415,6 +1557,99 @@ pub extern "C" fn talk_run_program_utf8(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn talk_package_provider_new(
+    capabilities: i32,
+    fetch_tar: Option<PackageFetchTarCallback>,
+    context: *mut c_void,
+) -> *mut TalkPackageProvider {
+    if capabilities != PACKAGE_SOURCE_TAR {
+        return std::ptr::null_mut();
+    }
+    let Some(fetch_tar) = fetch_tar else {
+        return std::ptr::null_mut();
+    };
+    Box::into_raw(Box::new(TalkPackageProvider {
+        provider: Arc::new(CPackageSourceProvider { fetch_tar, context }),
+    }))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_package_provider_free(provider: *mut TalkPackageProvider) {
+    // SAFETY: The pointer must have been returned by talk_package_provider_new
+    // and not already freed.
+    unsafe { free_box(provider) };
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_package_archive_sink_write(
+    sink: *mut TalkPackageArchiveSink,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+) {
+    // SAFETY: The sink is valid only for the duration of its fetch callback.
+    let Some(sink) = (unsafe { sink.as_mut() }) else {
+        return;
+    };
+    match RawBytes::new(bytes_ptr, bytes_len, "package archive").bytes() {
+        Ok(bytes) => sink.write(bytes),
+        Err(error) => sink.fail(error.message),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_package_archive_sink_finish(sink: *mut TalkPackageArchiveSink) {
+    // SAFETY: The sink is valid only for the duration of its fetch callback.
+    if let Some(sink) = unsafe { sink.as_mut() } {
+        sink.finish();
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_package_archive_sink_fail_utf8(
+    sink: *mut TalkPackageArchiveSink,
+    message_ptr: *const u8,
+    message_len: usize,
+) {
+    // SAFETY: The sink is valid only for the duration of its fetch callback.
+    let Some(sink) = (unsafe { sink.as_mut() }) else {
+        return;
+    };
+    match RawBytes::new(message_ptr, message_len, "package source provider error").string() {
+        Ok(message) => sink.fail(message),
+        Err(error) => sink.fail(error.message),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_package_install_utf8(
+    root_ptr: *const u8,
+    root_len: usize,
+    offline: bool,
+    update: bool,
+) -> TalkResult {
+    Boundary::empty(|| {
+        let root = RawBytes::new(root_ptr, root_len, "package root").string()?;
+        PackageRunner::install(root, offline, update, None)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_package_install_with_provider_utf8(
+    provider: *const TalkPackageProvider,
+    root_ptr: *const u8,
+    root_len: usize,
+    offline: bool,
+    update: bool,
+) -> TalkResult {
+    Boundary::empty(|| {
+        let root = RawBytes::new(root_ptr, root_len, "package root").string()?;
+        let provider_ptr = PackageProviderPtr::new(provider);
+        let provider = provider_ptr.get()?;
+        PackageRunner::install(root, offline, update, Some(provider))
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn talk_package_create_utf8(
     root_ptr: *const u8,
     root_len: usize,
@@ -1452,6 +1687,35 @@ pub extern "C" fn talk_package_run_utf8(
                 root,
                 (!binary_name.is_empty()).then_some(binary_name),
                 offline,
+                None,
+            )
+        },
+        TalkEvalResult::boxed,
+        TalkEvalResult::err,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_package_run_with_provider_utf8(
+    provider: *const TalkPackageProvider,
+    root_ptr: *const u8,
+    root_len: usize,
+    binary_name_ptr: *const u8,
+    binary_name_len: usize,
+    offline: bool,
+) -> *mut TalkEvalResult {
+    Boundary::handle(
+        || {
+            let root = RawBytes::new(root_ptr, root_len, "package root").string()?;
+            let binary_name =
+                RawBytes::new(binary_name_ptr, binary_name_len, "binary name").string()?;
+            let provider_ptr = PackageProviderPtr::new(provider);
+            let provider = provider_ptr.get()?;
+            PackageRunner::run(
+                root,
+                (!binary_name.is_empty()).then_some(binary_name),
+                offline,
+                Some(provider),
             )
         },
         TalkEvalResult::boxed,
@@ -1468,7 +1732,26 @@ pub extern "C" fn talk_package_test_utf8(
     Boundary::handle(
         || {
             let root = RawBytes::new(root_ptr, root_len, "package root").string()?;
-            PackageRunner::test(root, offline)
+            PackageRunner::test(root, offline, None)
+        },
+        TalkTestResult::boxed,
+        TalkTestResult::err,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_package_test_with_provider_utf8(
+    provider: *const TalkPackageProvider,
+    root_ptr: *const u8,
+    root_len: usize,
+    offline: bool,
+) -> *mut TalkTestResult {
+    Boundary::handle(
+        || {
+            let root = RawBytes::new(root_ptr, root_len, "package root").string()?;
+            let provider_ptr = PackageProviderPtr::new(provider);
+            let provider = provider_ptr.get()?;
+            PackageRunner::test(root, offline, Some(provider))
         },
         TalkTestResult::boxed,
         TalkTestResult::err,

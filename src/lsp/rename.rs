@@ -4,6 +4,7 @@ use rustc_hash::FxHashSet;
 
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
 use crate::analysis::{node_ids_at_offset, span_contains};
+use crate::compiling::module_path::LocalModulePaths;
 use crate::lexer::Lexer;
 use crate::name_resolution::symbol::{EffectId, Symbol};
 use crate::node_kinds::{
@@ -501,11 +502,8 @@ fn target_file_id_for_import(
     use crate::node_kinds::decl::ImportPath;
 
     let target_path = match import_path {
-        ImportPath::Relative(rel_path) => {
-            let source_path = std::path::Path::new(source_path);
-            let source_dir = source_path.parent()?;
-            let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
-            source_dir.join(clean_rel)
+        ImportPath::Local(module_path) => {
+            LocalModulePaths::new(&module.source_root).resolve(source_path, module_path)?
         }
         ImportPath::Package(_) => return None,
     };

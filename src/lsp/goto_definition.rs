@@ -2,7 +2,7 @@ use async_lsp::lsp_types::{Location, Position, Range, Url};
 
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
 use crate::analysis::{node_ids_at_offset, span_contains};
-use crate::compiling::module::ModuleId;
+use crate::compiling::{module::ModuleId, module_path::LocalModulePaths};
 use crate::name_resolution::symbol::Symbol;
 
 use super::server::{byte_span_to_range_utf16, document_id_for_uri, url_from_document_id};
@@ -141,8 +141,8 @@ fn goto_definition_from_import(
     // Check if cursor is on the import path - navigate to the file
     if span_contains(import.path_span, byte_offset) {
         return match &import.path {
-            crate::node_kinds::decl::ImportPath::Relative(_) => {
-                let target_path = resolve_import_path(uri, &import.path)?;
+            crate::node_kinds::decl::ImportPath::Local(_) => {
+                let target_path = resolve_import_path(&module.source_root, uri, &import.path)?;
                 let target_uri = Url::from_file_path(&target_path).ok()?;
                 Some(Location {
                     uri: target_uri,
@@ -170,9 +170,10 @@ fn goto_definition_from_import(
         for imported in symbols {
             if span_contains(imported.span, byte_offset) {
                 match &import.path {
-                    crate::node_kinds::decl::ImportPath::Relative(_) => {
+                    crate::node_kinds::decl::ImportPath::Local(_) => {
                         // Find the target file and look up the symbol there
-                        let target_path = resolve_import_path(uri, &import.path)?;
+                        let target_path =
+                            resolve_import_path(&module.source_root, uri, &import.path)?;
                         let target_uri = Url::from_file_path(&target_path).ok()?;
                         let target_doc_id = document_id_for_uri(&target_uri);
                         let target_file_id = *module.document_to_file_id.get(&target_doc_id)?;
@@ -226,18 +227,16 @@ fn module_start_location(module: &AnalysisWorkspace) -> Option<Location> {
 
 /// Resolve an import path relative to the importing file's URI.
 fn resolve_import_path(
+    source_root: &std::path::Path,
     uri: &Url,
     import_path: &crate::node_kinds::decl::ImportPath,
 ) -> Option<std::path::PathBuf> {
     use crate::node_kinds::decl::ImportPath;
 
     match import_path {
-        ImportPath::Relative(rel_path) => {
+        ImportPath::Local(module_path) => {
             let source_path = uri.to_file_path().ok()?;
-            let source_dir = source_path.parent()?;
-            // Strip leading "./" if present
-            let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
-            Some(source_dir.join(clean_rel))
+            LocalModulePaths::new(source_root).resolve(&source_path.to_string_lossy(), module_path)
         }
         ImportPath::Package(_) => {
             // Package imports not yet supported for go-to-definition

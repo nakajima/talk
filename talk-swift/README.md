@@ -27,6 +27,8 @@ swift build
 
 The Swift API copies borrowed C strings into Swift values before freeing result handles. Public editor APIs use byte offsets/ranges to match the Rust analysis layer.
 
-`TalkPackage.create(at:name:version:binaryName:)` creates a package directory with a `main` binary, lockfile, and starter test. `TalkPackage.run(at:binaryName:offline:)` and `TalkPackage.test(at:offline:)` run that package from a file URL. Remote package dependencies still require the host tools used by the package resolver (`git`, or `curl` and `tar`), so iOS apps should use dependency-free or local-path packages.
+`TalkPackage.create(at:name:version:binaryName:)` creates a package directory with a `main` binary, lockfile, and starter test. `TalkPackage.install(at:provider:offline:update:)` installs dependencies, while `TalkPackage.run(at:binaryName:provider:offline:)` and `TalkPackage.test(at:provider:offline:)` run a package from a file URL.
+
+For iOS, implement `PackageSourceProvider` with the `.tar` capability. Its synchronous `fetchTar(_:)` method returns tar or tar.gz bytes downloaded or retrieved from an app-managed cache; Talk verifies the SHA-256 and safely extracts the archive. Git dependencies require the built-in host provider and are unavailable through the Swift tar-only provider. Prefetch archive data asynchronously with `URLSession` before invoking the synchronous package operation.
 
 This package is heavily WIP. The C ABI, Swift names, result shapes, and packaging flow are expected to change.

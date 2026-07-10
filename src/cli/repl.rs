@@ -219,7 +219,7 @@ impl Repl {
 
     fn print_help<W: Write>(&self, output: &mut W) -> io::Result<()> {
         output.write_all(
-            b"commands:\n  /help         show this help\n  /quit         exit\n  exit, quit    exit\n  /reset        clear persisted declarations\n  /type <expr>  print the inferred type\n",
+            b"commands:\n  /help         show this help\n  /quit         exit\n  exit, quit    exit\n  /reset        clear the session\n  /type <expr>  print the inferred type\n",
         )
     }
 

@@ -78,20 +78,21 @@ analysis is also a type-checker concern (`src/types/generate/support.rs`).
 File imports use Talk's `use` syntax:
 
 ```talk
-use { name } from ./file.tlk
-use { OldName: LocalName } from ./file.tlk
-use ./file.tlk
+use crate::file::{ name }
+use crate::file::{ OldName as LocalName }
+use crate::file
 ```
 
-A relative import resolves against the target file's public symbols. The
-driver discovers and parses relative imports before name resolution; the
-resolver checks that each named import exists and is public, applies
-aliases, and inserts the imported symbol into the importing file's root
-scope. A path-only `use` imports all public, non-builtin symbols from the
-target. Package-style imports (`use { name } from package` or `use package`)
-resolve against the `ModuleEnvironment` instead of a source file.
+A local import resolves against the target file's public symbols. `crate`
+is rooted at the source root, while `self` and `super` are relative to the
+current source module. The driver discovers and parses local imports before
+name resolution; the resolver checks that each named import exists and is
+public, applies aliases, and inserts the imported symbol into the importing
+file's root scope. A path-only `use` imports all public, non-builtin symbols
+from the target. Package-style imports (`use package::{ name }` or `use
+package`) resolve against the `ModuleEnvironment` instead of a source file.
 
-Qualified names such as `./file::Thing`, `../lib::Thing`, and
+Qualified names such as `crate::file::Thing`, `super::lib::Thing`, and
 `Package::Thing` are resolved through the same public-symbol rules. Core
 library names arrive as a prelude from the compiled Core module unless
 the file opted out with `// no-core`; explicit imports from core source

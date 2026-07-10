@@ -17,14 +17,14 @@ use crate::{
 const HARNESS_PRELUDE_SOURCE: &str = include_str!("../stdlib/testing_prelude.tlk");
 const HARNESS_JSON_PRELUDE_SOURCE: &str = include_str!("../stdlib/testing_json_prelude.tlk");
 const HARNESS_POSTLUDE_SOURCE: &str = include_str!("../stdlib/testing_postlude.tlk");
-const HARNESS_PRELUDE_PATH: &str = "/talk-test-harness/testing_prelude.tlk";
-const HARNESS_POSTLUDE_PATH: &str = "/talk-test-harness/testing_postlude.tlk";
+const HARNESS_DIR: &str = "__talk_test_harness";
 const JSON_EVENT_PREFIX: &str = "__TALKTEST_EVENT_V1__\t";
 
 #[derive(Debug)]
 pub struct Runner {
     roots: Vec<PathBuf>,
     config: Option<DriverConfig>,
+    filter: Option<String>,
 }
 
 #[derive(Debug)]
@@ -415,6 +415,7 @@ impl Runner {
         Self {
             roots: roots.into_iter().collect(),
             config: None,
+            filter: None,
         }
     }
 
@@ -422,7 +423,13 @@ impl Runner {
         Self {
             roots: roots.into_iter().collect(),
             config: Some(config),
+            filter: None,
         }
+    }
+
+    pub fn with_filter(mut self, filter: Option<String>) -> Self {
+        self.filter = filter;
+        self
     }
 
     pub fn run(&self) -> Result<Outcome, TestError> {
@@ -520,10 +527,15 @@ impl Runner {
             .parse()
             .map_err(|err| TestError::Compile(format!("{err:?}")))?;
 
+        let source_root = parsed.config.source_root.clone().unwrap_or_default();
         let mut sources = Vec::with_capacity(parsed.phase.asts.len() + 2);
-        sources.push(Harness::prelude_source(harness_mode));
+        sources.push(Harness::prelude_source(
+            &source_root,
+            harness_mode,
+            self.filter.as_deref(),
+        ));
         sources.extend(parsed.phase.asts.keys().cloned());
-        sources.push(Harness::postlude_source());
+        sources.push(Harness::postlude_source(&source_root));
         Ok(sources)
     }
 
@@ -656,20 +668,58 @@ enum HarnessMode {
     Json,
 }
 
-struct Harness;
+pub(crate) struct Harness;
 
 impl Harness {
-    fn prelude_source(mode: HarnessMode) -> Source {
+    pub(crate) fn human_sources(source_root: &Path) -> [Source; 2] {
+        [
+            Self::prelude_source(source_root, HarnessMode::Human, None),
+            Self::postlude_source(source_root),
+        ]
+    }
+
+    fn prelude_source(source_root: &Path, mode: HarnessMode, filter: Option<&str>) -> Source {
         let source = match mode {
             HarnessMode::Human => HARNESS_PRELUDE_SOURCE,
             HarnessMode::Json => HARNESS_JSON_PRELUDE_SOURCE,
         };
-        Source::in_memory(PathBuf::from(HARNESS_PRELUDE_PATH), source)
+        let text = match filter {
+            Some(filter) => source.replace(
+                "let __talktalk_filter_enabled = false\nlet __talktalk_filter_name = \"\"",
+                &format!(
+                    "let __talktalk_filter_enabled = true\nlet __talktalk_filter_name = \"{}\"",
+                    Self::string_literal_contents(filter)
+                ),
+            ),
+            None => source.to_string(),
+        };
+        Source::in_memory(
+            source_root.join(HARNESS_DIR).join("testing_prelude.tlk"),
+            text,
+        )
     }
 
-    fn postlude_source() -> Source {
+    fn string_literal_contents(value: &str) -> String {
+        let mut escaped = String::new();
+        for ch in value.chars() {
+            match ch {
+                '"' => escaped.push_str("\\\""),
+                '\\' => escaped.push_str("\\\\"),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                ch if ch <= '\u{1f}' => {
+                    let _ = write!(&mut escaped, "\\u{{{:x}}}", ch as u32);
+                }
+                ch => escaped.push(ch),
+            }
+        }
+        escaped
+    }
+
+    fn postlude_source(source_root: &Path) -> Source {
         Source::in_memory(
-            PathBuf::from(HARNESS_POSTLUDE_PATH),
+            source_root.join(HARNESS_DIR).join("testing_postlude.tlk"),
             HARNESS_POSTLUDE_SOURCE,
         )
     }
@@ -694,7 +744,10 @@ mod tests {
     fn harness_sources_type_check() {
         for mode in [HarnessMode::Human, HarnessMode::Json] {
             let typed = Driver::new(
-                vec![Harness::prelude_source(mode), Harness::postlude_source()],
+                vec![
+                    Harness::prelude_source(Path::new("/talk-test-harness"), mode, None),
+                    Harness::postlude_source(Path::new("/talk-test-harness")),
+                ],
                 DriverConfig::new("Harness"),
             )
             .parse()
@@ -779,27 +832,49 @@ test(\"ok\") {\n\tassert(1 + 1 == 2)\n}\n",
     }
 
     #[test]
+    fn runner_filter_runs_only_the_named_test() {
+        let project = temp_project("filtered-test-runner");
+        std::fs::write(
+            project.join("math.test.tlk"),
+            "test \"selected\" {\n\tassert(true)\n}\n\n\
+test(\"not selected\") {\n\tassertMessage(false, \"nope\")\n}\n",
+        )
+        .expect("test file");
+
+        let outcome = Runner::new([project])
+            .with_filter(Some("selected".into()))
+            .run()
+            .expect("runner");
+        let Outcome::Finished(summary) = outcome else {
+            panic!("expected tests to run");
+        };
+        assert_eq!(summary.failures, 0);
+        assert_eq!(summary.output, "\u{1b}[32m.\u{1b}[0m\n1 tests passed.\n");
+    }
+
+    #[test]
     fn runner_json_reports_tests_and_preserves_user_output() {
         let project = temp_project("json-test-runner");
         std::fs::write(
             project.join("math.test.tlk"),
             "test \"prints\" {\n\tprint_raw(\"hello\")\n\tassert(true)\n}\n\n\
-test(\"bad \\\"quote\\\"\") {\n\tassertMessage(false, \"nope\\nline\")\n}\n",
+test(\"bad \\\"quote\\\"\") {\n\tprint_raw(\"hello\")\n\tassertMessage(false, \"nope\\nline\")\n}\n",
         )
         .expect("test file");
 
-        let outcome = Runner::new([project]).run_json().expect("runner");
+        let outcome = Runner::new([project])
+            .with_filter(Some("bad \"quote\"".into()))
+            .run_json()
+            .expect("runner");
         let JsonOutcome::Finished(summary) = outcome else {
             panic!("expected tests to run");
         };
         assert_eq!(summary.failures, 1);
         assert_eq!(summary.output, "hello");
-        assert_eq!(summary.tests.len(), 2);
-        assert_eq!(summary.tests[0].name, "prints");
-        assert_eq!(summary.tests[0].status, JsonStatus::Passed);
-        assert_eq!(summary.tests[1].name, "bad \"quote\"");
-        assert_eq!(summary.tests[1].status, JsonStatus::Failed);
-        assert_eq!(summary.tests[1].failures, ["nope\nline"]);
+        assert_eq!(summary.tests.len(), 1);
+        assert_eq!(summary.tests[0].name, "bad \"quote\"");
+        assert_eq!(summary.tests[0].status, JsonStatus::Failed);
+        assert_eq!(summary.tests[0].failures, ["nope\nline"]);
         let json = JsonOutcome::Finished(summary).to_json();
         assert!(json.contains("\"status\":\"finished\""));
         assert!(json.contains("nope\\nline"));

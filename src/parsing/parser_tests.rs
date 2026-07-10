@@ -798,6 +798,43 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_array_type_sugar() {
+        let parsed = parse("func c(a: [Int], b: [[String]]) { a }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("didn't get func");
+        };
+
+        assert_eq!(
+            params[0].type_annotation.clone().unwrap().kind,
+            TypeAnnotationKind::Nominal {
+                name: "Array".into(),
+                name_span: Span::ANY,
+                generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                    name: "Int".into(),
+                    name_span: Span::ANY,
+                    generics: vec![]
+                })]
+            }
+        );
+        assert_eq!(
+            params[1].type_annotation.clone().unwrap().kind,
+            TypeAnnotationKind::Nominal {
+                name: "Array".into(),
+                name_span: Span::ANY,
+                generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                    name: "Array".into(),
+                    name_span: Span::ANY,
+                    generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                        name: "String".into(),
+                        name_span: Span::ANY,
+                        generics: vec![]
+                    })]
+                })]
+            }
+        );
+    }
+
+    #[test]
     fn parses_borrow_type_annotations() {
         let parsed = parse("func c(a: &String, b: &mut Array<Int>) { a }");
         let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
@@ -4399,16 +4436,16 @@ pub mod tests {
 
     #[test]
     fn rejects_old_import_syntax() {
-        let lexer = Lexer::new("import { greet } from ./utils.tlk");
+        let lexer = Lexer::new("use { greet } from ./utils.tlk");
         let parser = Parser::new("test", FileID(0), lexer);
         assert!(parser.parse().is_err());
     }
 
     #[test]
-    fn parses_named_import() {
+    fn parses_named_local_import() {
         use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
 
-        let parsed = parse("use { greet, Point } from ./utils.tlk");
+        let parsed = parse("use crate::utils::{ greet, Point as LocalPoint }");
 
         let decl = parsed.roots[0].as_decl();
         let DeclKind::Import(import) = &decl.kind else {
@@ -4420,21 +4457,22 @@ pub mod tests {
                 assert_eq!(symbols.len(), 2);
                 assert_eq!(symbols[0].name, "greet");
                 assert_eq!(symbols[1].name, "Point");
+                assert_eq!(symbols[1].alias.as_deref(), Some("LocalPoint"));
             }
             _ => panic!("Expected named imports"),
         }
 
         match &import.path {
-            ImportPath::Relative(p) => assert_eq!(p, "./utils.tlk"),
-            _ => panic!("Expected relative path"),
+            ImportPath::Local(path) => assert_eq!(path, "crate::utils"),
+            _ => panic!("Expected local module path"),
         }
     }
 
     #[test]
-    fn parses_import_all() {
+    fn parses_import_all_from_parent_module() {
         use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
 
-        let parsed = parse("use ./utils.tlk");
+        let parsed = parse("use super::utils");
 
         let decl = parsed.roots[0].as_decl();
         let DeclKind::Import(import) = &decl.kind else {
@@ -4443,26 +4481,8 @@ pub mod tests {
 
         assert!(matches!(import.symbols, ImportedSymbols::All));
         match &import.path {
-            ImportPath::Relative(p) => assert_eq!(p, "./utils.tlk"),
-            _ => panic!("Expected relative path"),
-        }
-    }
-
-    #[test]
-    fn parses_legacy_import_all() {
-        use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
-
-        let parsed = parse("use _ from ./utils.tlk");
-
-        let decl = parsed.roots[0].as_decl();
-        let DeclKind::Import(import) = &decl.kind else {
-            panic!("Expected import, got {:?}", decl.kind);
-        };
-
-        assert!(matches!(import.symbols, ImportedSymbols::All));
-        match &import.path {
-            ImportPath::Relative(p) => assert_eq!(p, "./utils.tlk"),
-            _ => panic!("Expected relative path"),
+            ImportPath::Local(path) => assert_eq!(path, "super::utils"),
+            _ => panic!("Expected local module path"),
         }
     }
 
@@ -4470,7 +4490,7 @@ pub mod tests {
     fn parses_package_import() {
         use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
 
-        let parsed = parse("use { HashMap } from collections");
+        let parsed = parse("use collections::{ HashMap }");
 
         let decl = parsed.roots[0].as_decl();
         let DeclKind::Import(import) = &decl.kind else {

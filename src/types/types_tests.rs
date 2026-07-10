@@ -3882,11 +3882,12 @@ mod with_core {
             parse_mode: crate::compiling::driver::ParseMode::Strict,
             preserve_comments: false,
             workspace_root: None,
+            source_root: None,
             libraries: vec![],
         };
         let driver_b = Driver::new(
             vec![Source::from(
-                "use { Wrapper } from A\neffect 'ping() -> Void\nfunc pure_use() -> Int {\n\tlet w = Wrapper(f: func() { 1 })\n\tw.f()\n}\nfunc pingy_use() -> Int {\n\tlet w = Wrapper(f: func() {\n\t\t'ping()\n\t\t1\n\t})\n\tw.f()\n}\npure_use()\npingy_use()",
+                "use A::{ Wrapper }\neffect 'ping() -> Void\nfunc pure_use() -> Int {\n\tlet w = Wrapper(f: func() { 1 })\n\tw.f()\n}\nfunc pingy_use() -> Int {\n\tlet w = Wrapper(f: func() {\n\t\t'ping()\n\t\t1\n\t})\n\tw.f()\n}\npure_use()\npingy_use()",
             )],
             config,
         );
@@ -3935,11 +3936,12 @@ mod with_core {
             parse_mode: crate::compiling::driver::ParseMode::Strict,
             preserve_comments: false,
             workspace_root: None,
+            source_root: None,
             libraries: vec![],
         };
         let driver_b = Driver::new(
             vec![Source::from(
-                "use { make } from A\nlet v = make(3).x\nlet bad: Int = make(3)",
+                "use A::{ make }\nlet v = make(3).x\nlet bad: Int = make(3)",
             )],
             config,
         );
@@ -3997,11 +3999,12 @@ mod with_core {
             parse_mode: crate::compiling::driver::ParseMode::Strict,
             preserve_comments: false,
             workspace_root: None,
+            source_root: None,
             libraries: vec![],
         };
         let driver_b = Driver::new(
             vec![Source::from(
-                "use { UserId, make } from A\nlet id: UserId = make()",
+                "use A::{ UserId, make }\nlet id: UserId = make()",
             )],
             config,
         );
@@ -4147,7 +4150,7 @@ mod with_core {
     #[test]
     fn map_to_array_uses_iterator_conformance_with_effect_row_arg() {
         let typed = check_with_core(Source::from(
-            "let xs = [1, 2, 3]\nlet ys: Array<String> = xs.map { x in x.show() }.to_array()",
+            "let xs = [1, 2, 3]\nlet ys: [String] = xs.map { x in x.show() }.to_array()",
         ));
         let errors = type_errors(&typed);
         assert!(errors.is_empty(), "{errors:?}");

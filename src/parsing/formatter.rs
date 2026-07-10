@@ -292,13 +292,14 @@ impl<'a> Formatter<'a> {
         doc: Doc,
         item_start_line: u32,
         item_end_line: u32,
+        force_blank_line_before: bool,
         width: usize,
     ) {
         if let Some(last) = *last_line
             && item_start_line != last
         {
             output.push('\n');
-            if item_start_line > last + 1 {
+            if force_blank_line_before || item_start_line > last + 1 {
                 output.push('\n');
             }
         }
@@ -309,8 +310,17 @@ impl<'a> Formatter<'a> {
     pub fn format(&self, roots: &[Node], width: usize) -> String {
         let mut output = String::new();
         let mut last_line: Option<u32> = None;
+        let mut previous_root_was_import = false;
 
         for root in roots {
+            let root_is_import = matches!(
+                root,
+                Node::Decl(Decl {
+                    kind: DeclKind::Import(_),
+                    ..
+                })
+            );
+            let mut force_blank_line_before = previous_root_was_import && !root_is_import;
             let meta = self.get_meta_for_node(root);
             let start_pos = meta
                 .map(|node_meta| node_meta.start.start)
@@ -325,7 +335,16 @@ impl<'a> Formatter<'a> {
             for comment in self.take_comments_before(start_pos) {
                 let line = comment.line;
                 let doc = Self::comment_doc(comment);
-                Self::push_doc_output(&mut output, &mut last_line, doc, line, line, width);
+                Self::push_doc_output(
+                    &mut output,
+                    &mut last_line,
+                    doc,
+                    line,
+                    line,
+                    force_blank_line_before,
+                    width,
+                );
+                force_blank_line_before = false;
             }
 
             let mut doc = self.format_node(root);
@@ -341,14 +360,16 @@ impl<'a> Formatter<'a> {
                 doc,
                 start_line,
                 end_line,
+                force_blank_line_before,
                 width,
             );
+            previous_root_was_import = root_is_import;
         }
 
         for comment in self.take_comments_before(u32::MAX) {
             let line = comment.line;
             let doc = Self::comment_doc(comment);
-            Self::push_doc_output(&mut output, &mut last_line, doc, line, line, width);
+            Self::push_doc_output(&mut output, &mut last_line, doc, line, line, false, width);
         }
 
         output
@@ -1351,8 +1372,7 @@ impl<'a> Formatter<'a> {
 
     fn format_import(&self, import: &Import) -> Doc {
         let path = match &import.path {
-            ImportPath::Relative(p) => text(p),
-            ImportPath::Package(p) => text(p),
+            ImportPath::Local(p) | ImportPath::Package(p) => text(p),
         };
 
         match &import.symbols {
@@ -1362,7 +1382,7 @@ impl<'a> Formatter<'a> {
                     .iter()
                     .map(|s| {
                         if let Some(alias) = &s.alias {
-                            concat(text(&s.name), concat(text(": "), text(alias)))
+                            concat(text(&s.name), concat(text(" as "), text(alias)))
                         } else {
                             text(&s.name)
                         }
@@ -1372,7 +1392,7 @@ impl<'a> Formatter<'a> {
                     text("{ "),
                     concat(join(symbol_docs, text(", ")), text(" }")),
                 );
-                join(vec![text("use"), symbols, text("from"), path], text(" "))
+                concat(concat(text("use "), path), concat(text("::"), symbols))
             }
         }
     }
@@ -1638,6 +1658,15 @@ impl<'a> Formatter<'a> {
                 } else {
                     concat(self.format_type_annotation(&generics[0]), text("?"))
                 }
+            }
+            TypeAnnotationKind::Nominal { name, generics, .. }
+                if name.name_str() == "Array" && generics.len() == 1 =>
+            {
+                wrap(
+                    text("["),
+                    self.format_type_annotation(&generics[0]),
+                    text("]"),
+                )
             }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 self.format_nominal_type_annotation(name.name_str(), generics)
@@ -2632,6 +2661,25 @@ mod formatter_tests {
     }
 
     #[test]
+    fn inserts_blank_line_after_imports() {
+        assert_eq!(
+            format_code("use crate::foo\nlet value=1", 80),
+            "use crate::foo\n\nlet value = 1"
+        );
+        assert_eq!(
+            format_code(
+                "use crate::foo::{ Foo }\nuse crate::bar::{ Bar }\nFoo()",
+                80
+            ),
+            "use crate::foo::{ Foo }\nuse crate::bar::{ Bar }\n\nFoo()"
+        );
+        assert_eq!(
+            format_string("use crate::foo\n// The first value.\nlet value=1"),
+            "use crate::foo\n\n// The first value.\nlet value = 1"
+        );
+    }
+
+    #[test]
     fn formats_parameter_modes_and_argument_markers() {
         // ADR 0018 spellings round-trip.
         assert_eq!(
@@ -2644,8 +2692,8 @@ mod formatter_tests {
         let call = "f(consume a, copy b, borrow c, mut d, label: consume e)";
         assert_eq!(format_code(call, 100), call);
         assert_eq!(
-            format_code("func f(fn: (Foo, mut Bar, consume Baz) -> Void) {}", 100),
-            "func f(fn: (Foo, mut Bar, consume Baz) -> Void) {\n}"
+            format_code("func f(fn: (Foo, mut Bar, consume [Baz]) -> Void) {}", 100),
+            "func f(fn: (Foo, mut Bar, consume [Baz]) -> Void) {\n}"
         );
         // Legacy borrow spellings canonicalize in function-type position.
         assert_eq!(
@@ -2981,6 +3029,12 @@ mod formatter_tests {
     #[test]
     fn test_type_annotations() {
         assert_eq!(format_code("let x: Int?", 80), "let x: Int?");
+        assert_eq!(format_code("let xs: Array<Int>", 80), "let xs: [Int]");
+        assert_eq!(format_code("let xs: [[String]]", 80), "let xs: [[String]]");
+        assert_eq!(
+            format_code("let element: [Int].Element", 80),
+            "let element: [Int].Element"
+        );
         assert_eq!(format_code("let x: (Int, Bool)", 80), "let x: (Int, Bool)");
         assert_eq!(
             format_code("let f: (Int) -> Bool", 80),

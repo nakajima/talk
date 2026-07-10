@@ -1,12 +1,12 @@
 // no-core
 // unsafe
-use ./Optional.tlk
-use { Iterable, Iterator, IntoIterator, IndexIterable, IndexIterator, Skip, Map } from ./Iterable.tlk
-use { Storage, _storage, _load, _store, _swap, _is_unique } from ./Memory.tlk
-use { String } from ./String.tlk
-use { Add, Subtract, Multiply, Comparable, Equatable } from ./Operators.tlk
-use { Showable } from ./Showable.tlk
-use { Borrowed, CheapClone, Deinit } from ./Ownership.tlk
+use crate::Optional
+use crate::Iterable::{ Iterable, Iterator, IntoIterator, IndexIterable, IndexIterator, Skip, Map }
+use crate::Memory::{ Storage, _storage, _load, _store, _swap, _is_unique }
+use crate::String::{ String }
+use crate::Operators::{ Add, Subtract, Multiply, Comparable, Equatable }
+use crate::Showable::{ Showable }
+use crate::Ownership::{ Borrowed, CheapClone, Deinit }
 
 public struct Array<Element> {
 	let storage: Storage<Element>

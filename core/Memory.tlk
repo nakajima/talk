@@ -1,5 +1,5 @@
 // no-core
-use { CheapClone, Owner } from ./Ownership.tlk
+use crate::Ownership::{ CheapClone, Owner }
 
 public enum Allocation {
 	case allocate(Int)

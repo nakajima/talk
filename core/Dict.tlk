@@ -1,7 +1,7 @@
 // no-core
-use { Optional } from ./Optional.tlk
-use { Add, Equatable } from ./Operators.tlk
-use { String } from ./String.tlk
+use crate::Optional::{ Optional }
+use crate::Operators::{ Add, Equatable }
+use crate::String::{ String }
 
 struct DictNode<Value> 'heap {
 	let key: String

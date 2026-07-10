@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (2026-07-09) — Neotest and machine-readable test output
+
+`talk test` now supports `--json` for machine-readable results. The JSON report
+includes suite status, failure count, captured program output, and one record per
+executed test with its name, status, and assertion failures. Compile, runtime,
+discovery, and no-test outcomes also render as JSON when requested.
+
+`talk test --filter NAME` runs only tests whose registered name exactly matches
+`NAME`, for both human and JSON reporters. The filter is applied by the harness
+while tests register, so skipped tests are not executed.
+
+The Neovim runtime now includes a `neotest-talk` adapter. It discovers
+`*.test.tlk` files, maps `test "name" { ... }` and `test("name") { ... }`
+positions into Neotest, runs files via `talk test --json`, and uses
+`--filter NAME` for single-test runs. `talk setup nvim` installs the adapter
+alongside the existing filetype, syntax, indent, and ftplugin files.
+
 ## Unreleased (2026-07-09) — Packages and `talk new`
 
 Talk now supports directory-based source packages declared by `package.tlk`.
@@ -13,7 +30,10 @@ relative `.path` sources. `talk install` resolves the full graph into a checked-
 while path dependencies remain mutable local development inputs.
 
 `talk new <name>` creates a runnable binary package with `package.tlk`,
-`package.lock`, `src/main.tlk`, and `tests/<name>.test.tlk`.
+`package.lock`, `src/main.tlk`, and `tests/<name>.test.tlk`. Package manifests
+are type-checked through `stdlib/Package.tlk`, so the LSP recognizes manifest
+constructors and reports normal semantic diagnostics rather than an undefined
+`Package` name.
 
 ## Unreleased (2026-07-09) — Labeled enum payloads
 
