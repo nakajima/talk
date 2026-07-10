@@ -3881,6 +3881,8 @@ mod with_core {
             module_name: "B".to_string(),
             parse_mode: crate::compiling::driver::ParseMode::Strict,
             preserve_comments: false,
+            workspace_root: None,
+            libraries: vec![],
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -3932,6 +3934,8 @@ mod with_core {
             module_name: "B".to_string(),
             parse_mode: crate::compiling::driver::ParseMode::Strict,
             preserve_comments: false,
+            workspace_root: None,
+            libraries: vec![],
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -3992,6 +3996,8 @@ mod with_core {
             module_name: "B".to_string(),
             parse_mode: crate::compiling::driver::ParseMode::Strict,
             preserve_comments: false,
+            workspace_root: None,
+            libraries: vec![],
         };
         let driver_b = Driver::new(
             vec![Source::from(

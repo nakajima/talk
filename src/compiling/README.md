@@ -61,10 +61,25 @@ else.
 `ModuleEnvironment` is the registry of compiled modules. A `Module`
 carries its exported names (name -> symbol), display names for its
 symbols, and its type payload (`ModuleTypes`: exported schemes plus the
-module's slice of the type catalog). Its stable id is derived from the
-exported surface names. When a program imports a module, `import_as`
-retags the module's symbols into the importer's module-id space; that is
-the point where two compilations' id spaces touch.
+module's slice of the type catalog). Its stable id is derived from its name
+and exported surface. When a program imports a module, `import_as` retags the
+module's symbols into the importer's module-id space; that is the point where
+two compilations' id spaces touch.
+
+## Packages (`package.rs`)
+
+`package.rs` owns package manifests, lockfiles, remote source installation,
+and package compilation. It resolves Git revisions to commits and verifies
+tarball SHA-256 values before storing source in a content-addressed cache.
+Each resolved package receives one module id for the whole graph. Its public
+module interface and retained `LibraryTyped` body therefore use the same
+cross-module symbols when the root binary or tests are lowered.
+
+The root compiler environment receives only direct dependency interfaces;
+transitive dependencies remain private to their declaring package. Lowering
+receives typed library bodies for the complete graph, which is necessary for
+whole-program specialization without making transitive package names
+importable in source.
 
 ## The core library and stdlib (`core.rs`, `stdlib.rs`)
 

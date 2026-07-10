@@ -22,6 +22,7 @@ const HARNESS_POSTLUDE_PATH: &str = "/talk-test-harness/testing_postlude.tlk";
 #[derive(Debug)]
 pub struct Runner {
     roots: Vec<PathBuf>,
+    config: Option<DriverConfig>,
 }
 
 #[derive(Debug)]
@@ -108,6 +109,14 @@ impl Runner {
     pub fn new(roots: impl IntoIterator<Item = PathBuf>) -> Self {
         Self {
             roots: roots.into_iter().collect(),
+            config: None,
+        }
+    }
+
+    pub fn with_config(roots: impl IntoIterator<Item = PathBuf>, config: DriverConfig) -> Self {
+        Self {
+            roots: roots.into_iter().collect(),
+            config: Some(config),
         }
     }
 
@@ -187,7 +196,11 @@ impl Runner {
     }
 
     fn suite_sources(&self, test_sources: Vec<Source>) -> Result<Vec<Source>, TestError> {
-        let parsed = Driver::new(test_sources, Self::compile_config())
+        let driver = match &self.config {
+            Some(config) => Driver::new_bare(test_sources, config.clone()),
+            None => Driver::new(test_sources, Self::compile_config()),
+        };
+        let parsed = driver
             .parse()
             .map_err(|err| TestError::Compile(format!("{err:?}")))?;
 
@@ -202,7 +215,10 @@ impl Runner {
         &self,
         sources: Vec<Source>,
     ) -> Result<Driver<crate::compiling::driver::Lowered>, TestError> {
-        let driver = Driver::new(sources, Self::compile_config());
+        let driver = match &self.config {
+            Some(config) => Driver::new_bare(sources, config.clone()),
+            None => Driver::new(sources, Self::compile_config()),
+        };
         let parsed = driver
             .parse()
             .map_err(|err| TestError::Compile(format!("{err:?}")))?;

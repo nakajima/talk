@@ -80,9 +80,14 @@ pub struct Typed {
 pub enum CompileError {
     IO(io::Error),
     Parsing(ParserError),
+    ImportOutsideWorkspace {
+        source: String,
+        import_path: String,
+        workspace_root: PathBuf,
+    },
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum CompilationMode {
     Executable,
     #[default]
@@ -96,7 +101,7 @@ pub enum ParseMode {
     Lenient,
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct DriverConfig {
     pub module_id: ModuleId,
     pub modules: Rc<ModuleEnvironment>,
@@ -104,6 +109,23 @@ pub struct DriverConfig {
     pub module_name: String,
     pub parse_mode: ParseMode,
     pub preserve_comments: bool,
+    pub workspace_root: Option<PathBuf>,
+    pub(crate) libraries: Vec<std::sync::Arc<super::core::LibraryTyped>>,
+}
+
+impl std::fmt::Debug for DriverConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DriverConfig")
+            .field("module_id", &self.module_id)
+            .field("modules", &self.modules)
+            .field("mode", &self.mode)
+            .field("module_name", &self.module_name)
+            .field("parse_mode", &self.parse_mode)
+            .field("preserve_comments", &self.preserve_comments)
+            .field("workspace_root", &self.workspace_root)
+            .field("library_count", &self.libraries.len())
+            .finish()
+    }
 }
 
 impl DriverConfig {
@@ -115,7 +137,14 @@ impl DriverConfig {
             module_name: module_name.into(),
             parse_mode: ParseMode::default(),
             preserve_comments: false,
+            workspace_root: None,
+            libraries: vec![],
         }
+    }
+
+    pub fn workspace_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.workspace_root = Some(root.into());
+        self
     }
 
     pub fn preserve_comments(mut self, should_preserve: bool) -> Self {
@@ -296,12 +325,18 @@ fn qualified_relative_module_path(raw: &str) -> Option<String> {
 /// Resolve an import path relative to a source file path.
 /// Returns a tuple of (normalized_path for tracking, resolved_path for the source).
 /// The resolved_path preserves the relative/absolute nature of the source_path.
-fn resolve_import_path(source_path: &str, import_path: &ImportPath) -> Option<(PathBuf, PathBuf)> {
+fn resolve_import_path(
+    source_path: &str,
+    import_path: &ImportPath,
+    workspace_root: Option<&Path>,
+) -> Result<Option<(PathBuf, PathBuf)>, CompileError> {
     match import_path {
         ImportPath::Relative(rel_path) => {
             // source_path is the file containing the import
             let source = PathBuf::from(source_path);
-            let parent = source.parent()?;
+            let Some(parent) = source.parent() else {
+                return Ok(None);
+            };
 
             // Strip leading "./" from relative path before joining (to match name resolver)
             let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
@@ -310,15 +345,26 @@ fn resolve_import_path(source_path: &str, import_path: &ImportPath) -> Option<(P
                 resolved.set_extension("tlk");
             }
 
-            // Canonicalize for cycle detection (normalizes .. and symlinks)
-            let canonical = resolved.canonicalize().ok()?;
+            // Canonicalize for cycle detection (normalizes .. and symlinks).
+            let Ok(canonical) = resolved.canonicalize() else {
+                return Ok(None);
+            };
+            if let Some(root) = workspace_root
+                && !canonical.starts_with(root)
+            {
+                return Err(CompileError::ImportOutsideWorkspace {
+                    source: source_path.to_string(),
+                    import_path: rel_path.clone(),
+                    workspace_root: root.to_path_buf(),
+                });
+            }
 
-            // Return both the canonical path (for tracking) and the resolved path (for source)
-            Some((canonical, resolved))
+            // Return both the canonical path (for tracking) and the resolved path for source.
+            Ok(Some((canonical, resolved)))
         }
         ImportPath::Package(_) => {
-            // Package imports are handled by the module system, not file discovery
-            None
+            // Package imports are handled by the module system, not file discovery.
+            Ok(None)
         }
     }
 }
@@ -409,9 +455,11 @@ impl Driver {
                     // Discover imports and queue them for parsing
                     let source_path = file.path();
                     for import_path in extract_import_paths(&parsed) {
-                        if let Some((canonical, resolved)) =
-                            resolve_import_path(source_path.as_ref(), &import_path)
-                            && !processed_paths.contains(&canonical)
+                        if let Some((canonical, resolved)) = resolve_import_path(
+                            source_path.as_ref(),
+                            &import_path,
+                            self.config.workspace_root.as_deref(),
+                        )? && !processed_paths.contains(&canonical)
                         {
                             processed_paths.insert(canonical);
                             to_parse.push_back(Source::from(resolved));
@@ -523,10 +571,11 @@ impl Driver<NameResolved> {
     }
 
     pub fn module<T: Into<String>>(self, name: T) -> Module {
+        let name = name.into();
         let exports = self.phase.resolved_names.exports();
         Module {
-            id: StableModuleId::generate(&exports),
-            name: name.into(),
+            id: StableModuleId::generate(&name, &exports),
+            name,
             symbol_names: self.phase.resolved_names.symbol_names,
             exports,
             types: ModuleTypes::default(),
@@ -612,6 +661,14 @@ impl Driver<Typed> {
                 bodies: &module.checked_mir,
             });
         }
+        for library in &self.config.libraries {
+            units.push(LowerUnit {
+                asts: library.program.files(),
+                types: library.program.types(),
+                resolved: library.program.resolved_names(),
+                bodies: &library.checked_mir,
+            });
+        }
         units.push(LowerUnit {
             asts: program.files(),
             types: program.types(),
@@ -654,6 +711,7 @@ impl Driver<Typed> {
     /// symbol and an own symbol sharing a local id would collapse onto
     /// one key, with hash order deciding which scheme survives.
     pub fn module<T: Into<String>>(self, name: T) -> Module {
+        let name = name.into();
         // Own symbols carry no module tag (Current) or the id this
         // compile ran under (core compiles as ModuleId::Core).
         let compiled_as = self.config.module_id;
@@ -688,8 +746,8 @@ impl Driver<Typed> {
         #[cfg(debug_assertions)]
         catalog.debug_assert_portable();
         Module {
-            id: StableModuleId::generate(&exports),
-            name: name.into(),
+            id: StableModuleId::generate(&name, &exports),
+            name,
             symbol_names,
             exports,
             types: ModuleTypes { schemes, catalog },
@@ -781,6 +839,12 @@ impl Driver<Lowered> {
             String::from_utf8_lossy(&io.out).into_owned(),
             display,
         ))
+    }
+
+    pub fn encode_bytecode(&mut self) -> Result<Vec<u8>, String> {
+        self.schedule()?
+            .encode_bytecode()
+            .map_err(|err| err.to_string())
     }
 
     fn schedule(&mut self) -> Result<crate::vm::Module, String> {
@@ -1112,6 +1176,8 @@ pub mod tests {
             module_name: "Test".to_string(),
             parse_mode: ParseMode::Strict,
             preserve_comments: false,
+            workspace_root: None,
+            libraries: vec![],
         };
 
         let driver_b = Driver::new(
@@ -1158,6 +1224,8 @@ pub mod tests {
             module_name: "Test".to_string(),
             parse_mode: ParseMode::Strict,
             preserve_comments: false,
+            workspace_root: None,
+            libraries: vec![],
         };
 
         let driver_b = Driver::new(

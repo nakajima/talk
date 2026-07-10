@@ -70,15 +70,32 @@ async fn main() {
             #[arg(long)]
             json: bool,
         },
-        /// Run the input
+        /// Run the input or a package binary in the current directory.
         Run {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
+            #[arg(long)]
+            bin: Option<String>,
+            #[arg(long)]
+            offline: bool,
         },
-        /// Discover and run .test.tlk files.
+        /// Discover and run .test.tlk files, or package tests in the current directory.
         Test {
             #[arg(value_hint = ValueHint::AnyPath)]
             paths: Vec<String>,
+            #[arg(long)]
+            offline: bool,
+        },
+        /// Install package dependencies in the current directory.
+        Install {
+            #[arg(long)]
+            offline: bool,
+        },
+        /// Refresh the package lockfile in the current directory.
+        Update {
+            packages: Vec<String>,
+            #[arg(long)]
+            offline: bool,
         },
         /// Compile Talk source to bytecode or a standalone executable.
         Build(BuildArgs),
@@ -138,6 +155,10 @@ async fn main() {
         keep_temps: bool,
         #[arg(long)]
         no_strip: bool,
+        #[arg(long)]
+        bin: Option<String>,
+        #[arg(long)]
+        offline: bool,
     }
 
     #[derive(Debug, Args)]
@@ -311,20 +332,47 @@ async fn main() {
             }
         }
         Commands::Build(args) => {
-            let module_name = args
-                .filenames
-                .first()
-                .cloned()
-                .unwrap_or_else(|| STDIN_NAME.to_string());
-            let sources = sources_for_filenames(&args.filenames);
-            let bytecode =
+            let bytecode = if args.filenames.is_empty() && package_exists_here() {
+                let project = match current_package(args.offline) {
+                    Ok(project) => project,
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
+                };
+                let mut lowered = match project.compile_binary(args.bin.as_deref()) {
+                    Ok(lowered) => lowered,
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
+                };
+                match lowered.encode_bytecode() {
+                    Ok(bytecode) => bytecode,
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                if args.bin.is_some() {
+                    eprintln!("error: --bin is only valid when building a package");
+                    std::process::exit(1);
+                }
+                let module_name = args
+                    .filenames
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| STDIN_NAME.to_string());
+                let sources = sources_for_filenames(&args.filenames);
                 match talk::compiling::driver::compile_bytecode_sources(&module_name, sources) {
                     Ok(bytecode) => bytecode,
                     Err(err) => {
                         eprintln!("{err}");
                         std::process::exit(1);
                     }
-                };
+                }
+            };
             if args.emit_bytecode {
                 if let Err(err) = std::fs::write(&args.output, &bytecode) {
                     eprintln!("error: {err}");
@@ -342,9 +390,35 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Run { filenames } => {
+        Commands::Run {
+            filenames,
+            bin,
+            offline,
+        } => {
             use talk::compiling::driver::Driver;
 
+            if filenames.is_empty() && package_exists_here() {
+                let project = match current_package(*offline) {
+                    Ok(project) => project,
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
+                };
+                let mut lowered = match project.compile_binary(bin.as_deref()) {
+                    Ok(lowered) => lowered,
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
+                };
+                run_lowered(&mut lowered);
+                return;
+            }
+            if bin.is_some() {
+                eprintln!("error: --bin is only valid when running a package");
+                std::process::exit(1);
+            }
             let module_name = filenames
                 .first()
                 .cloned()
@@ -379,33 +453,66 @@ async fn main() {
                 }
                 std::process::exit(1);
             }
-            match lowered.run_vm() {
-                Ok(talk::vm::interp::Value::Void) => {}
-                Ok(value) => println!("{value:?}"),
-                Err(err) => {
-                    eprintln!("{err}");
-                    std::process::exit(1);
-                }
-            }
+            run_lowered(&mut lowered);
         }
-        Commands::Test { paths } => {
-            let runner = talk::testing::Runner::new(paths.iter().map(std::path::PathBuf::from));
-            match runner.run() {
-                Ok(talk::testing::Outcome::NoTests) => eprintln!("no .test.tlk files found"),
-                Ok(talk::testing::Outcome::Finished(summary)) => {
-                    print!("{}", summary.output);
-                    if summary.failed() {
-                        eprintln!("{} test assertion(s) failed", summary.failures);
+        Commands::Test { paths, offline } => {
+            if paths.is_empty() && package_exists_here() {
+                let project = match current_package(*offline) {
+                    Ok(project) => project,
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
+                };
+                match project.run_tests() {
+                    Ok(talk::testing::Outcome::NoTests) => eprintln!("no .test.tlk files found"),
+                    Ok(talk::testing::Outcome::Finished(summary)) => {
+                        print!("{}", summary.output);
+                        if summary.failed() {
+                            eprintln!("{} test assertion(s) failed", summary.failures);
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("error: {err}");
                         std::process::exit(1);
                     }
                 }
-                Err(talk::testing::TestError::CompileDiagnostics(diagnostics)) => {
-                    eprint!(
-                        "{}",
-                        diagnostics.render_text(talk::cli::diagnostics::ColorMode::Auto)
-                    );
-                    std::process::exit(1);
+            } else {
+                let runner = talk::testing::Runner::new(paths.iter().map(std::path::PathBuf::from));
+                match runner.run() {
+                    Ok(talk::testing::Outcome::NoTests) => eprintln!("no .test.tlk files found"),
+                    Ok(talk::testing::Outcome::Finished(summary)) => {
+                        print!("{}", summary.output);
+                        if summary.failed() {
+                            eprintln!("{} test assertion(s) failed", summary.failures);
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(talk::testing::TestError::CompileDiagnostics(diagnostics)) => {
+                        eprint!(
+                            "{}",
+                            diagnostics.render_text(talk::cli::diagnostics::ColorMode::Auto)
+                        );
+                        std::process::exit(1);
+                    }
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
                 }
+            }
+        }
+        Commands::Install { offline } => match install_current_package(*offline, false) {
+            Ok(_) => println!("installed package dependencies"),
+            Err(err) => {
+                eprintln!("error: {err}");
+                std::process::exit(1);
+            }
+        },
+        Commands::Update { packages, offline } => {
+            match update_current_package(*offline, packages) {
+                Ok(_) => println!("updated package dependencies"),
                 Err(err) => {
                     eprintln!("error: {err}");
                     std::process::exit(1);
@@ -1061,6 +1168,63 @@ impl BuildTemp {
     fn clean(&self) -> Result<(), String> {
         std::fs::remove_dir_all(&self.dir)
             .map_err(|err| format!("failed to remove temp dir: {err}"))
+    }
+}
+
+#[cfg(feature = "cli")]
+fn package_exists_here() -> bool {
+    std::env::current_dir()
+        .map(talk::compiling::package::PackageProject::exists_at)
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "cli")]
+fn current_package(
+    offline: bool,
+) -> Result<talk::compiling::package::PackageProject, talk::compiling::package::PackageError> {
+    let root =
+        std::env::current_dir().map_err(|source| talk::compiling::package::PackageError::Io {
+            context: "failed to determine the current directory".into(),
+            source,
+        })?;
+    talk::compiling::package::PackageProject::open_at(root, offline)
+}
+
+#[cfg(feature = "cli")]
+fn install_current_package(
+    offline: bool,
+    update: bool,
+) -> Result<talk::compiling::package::PackageProject, talk::compiling::package::PackageError> {
+    let root =
+        std::env::current_dir().map_err(|source| talk::compiling::package::PackageError::Io {
+            context: "failed to determine the current directory".into(),
+            source,
+        })?;
+    talk::compiling::package::PackageProject::install_at(root, offline, update)
+}
+
+#[cfg(feature = "cli")]
+fn update_current_package(
+    offline: bool,
+    packages: &[String],
+) -> Result<talk::compiling::package::PackageProject, talk::compiling::package::PackageError> {
+    let root =
+        std::env::current_dir().map_err(|source| talk::compiling::package::PackageError::Io {
+            context: "failed to determine the current directory".into(),
+            source,
+        })?;
+    talk::compiling::package::PackageProject::update_at(root, offline, packages)
+}
+
+#[cfg(feature = "cli")]
+fn run_lowered(lowered: &mut talk::compiling::driver::Driver<talk::compiling::driver::Lowered>) {
+    match lowered.run_vm() {
+        Ok(talk::vm::interp::Value::Void) => {}
+        Ok(value) => println!("{value:?}"),
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
     }
 }
 

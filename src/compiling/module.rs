@@ -20,9 +20,12 @@ impl Display for StableModuleId {
 }
 
 impl StableModuleId {
-    pub fn generate(exports: &Exports) -> Self {
-        let hash = Sha256::digest(exports.keys().join("\n").as_bytes());
-        Self(hash.into())
+    pub fn generate(name: &str, exports: &Exports) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(name.as_bytes());
+        hasher.update([0]);
+        hasher.update(exports.keys().join("\n").as_bytes());
+        Self(hasher.finalize().into())
     }
 }
 
@@ -125,12 +128,40 @@ impl ModuleEnvironment {
     }
 
     pub fn import(&mut self, module: Module) -> ModuleId {
-        let id = ModuleId::External(self.modules.len() as u16);
+        let id = self.next_module_id();
         self.modules_by_local.insert(id, module.id);
         self.modules_by_name.insert(module.name.clone(), id);
         self.modules
             .insert(module.id, Arc::new(module.import_as(id)));
         id
+    }
+
+    /// Register a module that was compiled with `module_id` already assigned.
+    /// Package compilation assigns one id to each resolved package graph, so
+    /// its typed body and exported interface keep the same cross-module ids.
+    pub fn import_compiled(&mut self, module: Module, module_id: ModuleId) -> Result<(), String> {
+        if self.modules_by_local.contains_key(&module_id) {
+            return Err(format!("module id {module_id} is already registered"));
+        }
+        if self.modules_by_name.contains_key(&module.name) {
+            return Err(format!("module name {} is already registered", module.name));
+        }
+        self.modules_by_local.insert(module_id, module.id);
+        self.modules_by_name.insert(module.name.clone(), module_id);
+        self.modules.insert(module.id, Arc::new(module));
+        Ok(())
+    }
+
+    pub fn next_module_id(&self) -> ModuleId {
+        let next = self
+            .modules_by_local
+            .keys()
+            .map(|id| id.0)
+            .max()
+            .unwrap_or(ModuleId::Core.0)
+            .checked_add(1)
+            .unwrap_or(ModuleId::Core.0);
+        ModuleId(next)
     }
 }
 
