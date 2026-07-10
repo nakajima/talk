@@ -125,6 +125,7 @@ extend IndexIterator<T: IndexIterable>: Borrowed {}
 extend IndexIterator<T: IndexIterable>: Iterator {
 	mut func next() -> T.Element? {
 		if self.position > self.inner._index_iterable_count() - 1 { return Optional.none }
+
 		if let .some(value) = self.inner._index_iterable_get(self.position) {
 			self.position = self.position + 1
 			return .some(value)
@@ -132,4 +133,18 @@ extend IndexIterator<T: IndexIterable>: Iterator {
 
 		.none
 	}
+}
+
+// MARK: Peek!
+
+public struct Peek<T: Iterator> {
+	let inner: T
+	let peeked: T.Element?
+
+	init(inner: T) {
+		self.inner = inner
+		self.peeked = .none
+	}
+
+	public func peek() -> T.Element? {}
 }
