@@ -162,7 +162,7 @@ extend Array<Element: Equatable<Element>>: Equatable {
 }
 
 extend Array<Element>: Iterable {
-	func iter() -> IndexIterator<Array<Element>> {
+	func iter() -> IndexIterator<[Element]> {
 		IndexIterator(inner: self, position: 0)
 	}
 }

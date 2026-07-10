@@ -7,7 +7,7 @@ use package::Operators::{ Add, Comparable }
 use package::String::{ String }
 
 public struct Path {
-	let components: Array<String>
+	let components: [String]
 }
 
 public enum FileMode {

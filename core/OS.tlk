@@ -29,7 +29,7 @@ public struct OS {
 		Optional.some(String(buf, copied, copied))
 	}
 
-	public static func argc() -> Array<String> {
+	public static func argc() -> [String] {
 		let count = _io_argc()
 		let result = Array<String>(capacity: count)
 		let i = 0

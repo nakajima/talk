@@ -42,7 +42,7 @@ extend Iterator {
 		}
 	}
 
-	consuming func to_array() -> Array<Element> {
+	consuming func to_array() -> [Element] {
 		let result = []
 
 		loop {
@@ -57,8 +57,8 @@ extend Iterator {
 	}
 }
 
-extend Iterator: Into<Array<Element>> {
-	consuming func into() -> Array<Element> {
+extend Iterator: Into<[Element]> {
+	consuming func into() -> [Element] {
 		let result = Array<Element>(capacity: 0)
 		loop {
 			if let .some(value) = self.next() {
