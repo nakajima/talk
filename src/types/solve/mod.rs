@@ -93,8 +93,9 @@ pub struct Solver<'s> {
     /// that mentioned these before local-given rewriting must not float out.
     pub local_params: Vec<Symbol>,
     /// In-flight auto-derived conformances, so recursive nominals resolve
-    /// coinductively instead of looping.
-    pub derived_seen: rustc_hash::FxHashSet<(Symbol, Symbol)>,
+    /// coinductively instead of looping. The complete goal matters: two
+    /// applications of the same generic nominal can have different premises.
+    pub(crate) derived_seen: rustc_hash::FxHashSet<ConformanceGoal>,
     /// Axiom-premise dependency edges seen during this solve. A new edge
     /// that reaches back to its source is a recursive conformance cycle.
     pub(crate) conformance_edges: FxHashMap<ConformanceGoal, FxHashSet<ConformanceGoal>>,

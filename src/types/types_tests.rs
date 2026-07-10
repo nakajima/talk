@@ -4063,6 +4063,28 @@ mod with_core {
     }
 
     #[test]
+    fn equatable_is_derived_structurally_for_same_type_structs_and_enums() {
+        let typed = check_with_core(Source::from(
+            "struct Point {\n\tlet x: Int\n\tlet y: Int\n}\nenum Choice<T> {\n\tcase none\n\tcase value(T)\n}\nlet point = Point(x: 1, y: 2) == Point(x: 1, y: 2)\nlet choice = Choice.value(3) != Choice.value(4)",
+        ));
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn derived_equatable_does_not_supply_cross_type_or_heap_conformance() {
+        let cross_type = check_with_core(Source::from(
+            "struct Point {\n\tlet x: Int\n}\nlet invalid = Point(x: 1) == 1",
+        ));
+        assert!(!type_errors(&cross_type).is_empty());
+
+        let heap = check_with_core(Source::from(
+            "struct Node 'heap {\n\tlet value: Int\n}\nlet invalid = Node(value: 1) == Node(value: 1)",
+        ));
+        assert!(!type_errors(&heap).is_empty());
+    }
+
+    #[test]
     fn conformance_dispatch_publishes_receiver_theta_on_node() {
         // Swift model: the node carries the complete θ. A ViaConformance
         // callee's instantiation must include the receiver-derived

@@ -154,9 +154,7 @@ impl<'s> Solver<'s> {
                         None
                     }
                     [] => {
-                        if protocol.args.is_empty()
-                            && self.try_derive(symbol, &args, protocol.protocol, origin, queue)
-                        {
+                        if self.try_derive(symbol, &args, &protocol, origin, queue) {
                             return None;
                         }
                         self.not_conforming(&ty, protocol, origin)
@@ -357,28 +355,43 @@ impl<'s> Solver<'s> {
         None
     }
 
-    /// Auto-derived conformance (today: Showable) for structs and enums
-    /// without an explicit row. The derived instance's context is
-    /// structural: every field/payload conforms, checked coinductively so
-    /// recursive nominals terminate.
+    /// Auto-derived conformance for structs and enums without an explicit
+    /// row. The derived instance's context is structural: every field or
+    /// payload conforms to the corresponding defaulted protocol application,
+    /// checked coinductively so recursive nominals terminate.
     pub(super) fn try_derive(
         &mut self,
         symbol: Symbol,
         args: &[Ty],
-        protocol: Symbol,
+        protocol: &ProtocolRef,
         origin: CtOrigin,
         queue: &mut Vec<Constraint>,
     ) -> bool {
-        if !self.catalog.derivable.contains(&protocol) {
+        if !self.catalog.derivable.contains(&protocol.protocol)
+            || self.catalog.is_heap(symbol)
+            || !(self.catalog.structs.contains_key(&symbol)
+                || self.catalog.enums.contains_key(&symbol))
+        {
             return false;
         }
-        if self.catalog.is_heap(symbol) {
+        let self_ty = Ty::Nominal(symbol, args.to_vec());
+        let Some(derived_protocol) = self
+            .catalog
+            .derived_protocol_ref(protocol.protocol, &self_ty)
+        else {
+            return false;
+        };
+        if &derived_protocol != protocol {
             return false;
         }
-        if !self.derived_seen.insert((symbol, protocol)) {
+        let goal = ConformanceGoal {
+            ty: self_ty.clone(),
+            protocol: derived_protocol,
+        };
+        if !self.derived_seen.insert(goal) {
             return true;
         }
-        let protocol_ref = ProtocolRef::bare(protocol);
+
         if let Some(info) = self.catalog.structs.get(&symbol) {
             let substitution: FxHashMap<Symbol, Ty> = info
                 .params
@@ -389,9 +402,15 @@ impl<'s> Solver<'s> {
             for (_, (_, field_ty)) in &info.fields {
                 let field_ty =
                     field_ty.substitute(&substitution, &Default::default(), &Default::default());
+                let Some(protocol) = self
+                    .catalog
+                    .derived_protocol_ref(protocol.protocol, &field_ty)
+                else {
+                    return false;
+                };
                 queue.push(Constraint::Conforms {
                     ty: field_ty,
-                    protocol: protocol_ref.clone(),
+                    protocol,
                     origin,
                 });
             }
@@ -404,7 +423,6 @@ impl<'s> Solver<'s> {
                 .copied()
                 .zip(args.iter().cloned())
                 .collect();
-            let self_ty = Ty::Nominal(symbol, args.to_vec());
             for variant in info.variants.values() {
                 let Some(instantiation) = variant
                     .instantiate(&substitution, &Default::default(), &Default::default())
@@ -413,9 +431,15 @@ impl<'s> Solver<'s> {
                     continue;
                 };
                 for payload in instantiation.argument_types {
+                    let Some(protocol) = self
+                        .catalog
+                        .derived_protocol_ref(protocol.protocol, &payload)
+                    else {
+                        return false;
+                    };
                     queue.push(Constraint::Conforms {
                         ty: payload,
-                        protocol: protocol_ref.clone(),
+                        protocol,
                         origin,
                     });
                 }

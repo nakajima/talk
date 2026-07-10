@@ -252,9 +252,8 @@ pub struct TypeCatalog {
     #[serde(default)]
     pub type_aliases: FxHashMap<Symbol, TypeAliasInfo>,
     /// Protocols auto-derived for structs and enums when no explicit
-    /// conformance exists (today: Showable, matching the previous
-    /// implementation's show-derivation). The derived instance's context is
-    /// structural: every field/payload must conform too.
+    /// conformance exists. The derived instance's context is structural:
+    /// every field/payload must conform too.
     pub derivable: Vec<Symbol>,
 }
 
@@ -467,6 +466,24 @@ impl TypeCatalog {
                 .map(|arg| self.canonical_conformance_arg(arg))
                 .collect(),
         }
+    }
+
+    /// The application an auto-derived protocol has for `Self`. Derivation
+    /// only applies when every protocol input has a default; each default is
+    /// instantiated left-to-right so `Equatable<RHS = Self>` becomes
+    /// `Equatable<Self>` while a parameterless protocol remains bare.
+    pub fn derived_protocol_ref(&self, protocol: Symbol, self_ty: &Ty) -> Option<ProtocolRef> {
+        let info = self.protocols.get(&protocol)?;
+        let mut substitution = FxHashMap::default();
+        substitution.insert(protocol, self_ty.clone());
+        let mut args = Vec::with_capacity(info.params.len());
+        for (param, default) in info.params.iter().zip(&info.param_defaults) {
+            let default = default.as_ref()?;
+            let arg = default.substitute(&substitution, &Default::default(), &Default::default());
+            substitution.insert(*param, arg.clone());
+            args.push(arg);
+        }
+        Some(self.canonical_protocol_ref(ProtocolRef { protocol, args }))
     }
 
     /// Remap every symbol for an importer (the catalog half of

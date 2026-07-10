@@ -14,7 +14,7 @@
 //! call on a payload/field, folded left through the `String: Add` witness
 //! — a continuation chain, since every concat and sub-show is a CPS call.
 
-use crate::lambda_g::expr::{Const, ExprId, Op, TyKind};
+use crate::lambda_g::expr::{CmpOp, Const, ExprId, Op, TyKind};
 use crate::lambda_g::program::Label;
 use crate::name_resolution::symbol::Symbol;
 use crate::types::ty::Ty as CheckTy;
@@ -157,6 +157,196 @@ impl<'a> Lowering<'a> {
 
         self.p.set_body(label, body);
         Some(label)
+    }
+
+    /// The derived same-type `equals` specialization for `head`. Structs
+    /// compare fields in declaration order. Enums compare tags first, then
+    /// compare only the selected variant's payloads. Every component uses
+    /// its own `Equatable<Component>` witness and short-circuits on false.
+    pub(super) fn demand_derived_equals(
+        &mut self,
+        protocol: Symbol,
+        requirement: Symbol,
+        head: &CheckTy,
+    ) -> Option<Label> {
+        let CheckTy::Nominal(head_symbol, head_args) = head else {
+            return None;
+        };
+        let derived_protocol = self
+            .units
+            .iter()
+            .find_map(|unit| unit.types.catalog.derived_protocol_ref(protocol, head))?;
+        let protocol_params = self
+            .units
+            .iter()
+            .find_map(|unit| unit.types.catalog.protocols.get(&protocol))
+            .map(|info| info.params.clone())
+            .unwrap_or_default();
+        let mut key_theta = Theta::default();
+        key_theta.insert(protocol, head.clone());
+        key_theta.extend(
+            protocol_params
+                .iter()
+                .copied()
+                .zip(derived_protocol.args.iter().cloned()),
+        );
+        let key = (requirement, theta_key(&key_theta));
+        if let Some(&label) = self.done.get(&key) {
+            return Some(label);
+        }
+
+        let type_name = self
+            .units
+            .iter()
+            .find_map(|unit| unit.resolved.symbol_names.get(head_symbol).cloned())
+            .unwrap_or_else(|| format!("{head_symbol}"));
+        let self_ty = self.map_ty(head);
+        let bool_ty = self.p.ty_bool();
+        let bot = self.p.ty_bot();
+        let ret_k_ty = self.p.ty_fn(bool_ty, bot);
+        let dom = self.p.ty_tuple(&[self_ty, self_ty, ret_k_ty]);
+        let label = self.p.func(&format!("equals_{type_name}"), dom, bot);
+        self.done.insert(key, label);
+
+        let var = self.p.var(label);
+        let lhs = self.p.extract(var, 0);
+        let rhs = self.p.extract(var, 1);
+        let k = self.p.extract(var, 2);
+
+        let body = if let Some(info) = self.enum_info(*head_symbol) {
+            let substitution: Theta = info
+                .params
+                .iter()
+                .copied()
+                .zip(head_args.iter().cloned())
+                .collect();
+            let self_check_ty = CheckTy::Nominal(*head_symbol, head_args.to_vec());
+            let void_ty = self.p.ty_void();
+            let trap = self.p.func("derived_equals_failed", void_ty, bot);
+            let trap_ref = self.p.func_ref(trap);
+            let mut arms = Vec::with_capacity(info.variants.len());
+            for (variant_name, variant) in &info.variants {
+                let Some(instantiation) = variant
+                    .instantiate(&substitution, &Default::default(), &Default::default())
+                    .refined_by_result(&self_check_ty)
+                else {
+                    arms.push(trap_ref);
+                    continue;
+                };
+                let mut comparisons = Vec::with_capacity(instantiation.argument_types.len());
+                for (index, payload_ty) in instantiation.argument_types.into_iter().enumerate() {
+                    let lambda_ty = self.map_ty(&payload_ty);
+                    let left = self
+                        .p
+                        .primop(Op::GetPayload(index as u32), &[lhs], lambda_ty);
+                    let right = self
+                        .p
+                        .primop(Op::GetPayload(index as u32), &[rhs], lambda_ty);
+                    comparisons.push((left, right, payload_ty));
+                }
+                let arm_body =
+                    self.compare_derived_values(protocol, requirement, &comparisons, k)?;
+                let arm = self.p.func(&format!("equals_{variant_name}"), void_ty, bot);
+                self.p.set_body(arm, arm_body);
+                arms.push(self.p.func_ref(arm));
+            }
+
+            let i64_ty = self.p.ty_i64();
+            let left_tag = self.p.primop(Op::GetTag, &[lhs], i64_ty);
+            let right_tag = self.p.primop(Op::GetTag, &[rhs], i64_ty);
+            let tags_equal = self.p.cmp(CmpOp::Eq, left_tag, right_tag);
+
+            let matching = self.p.func("equals_matching_tag", void_ty, bot);
+            let matching_body = self.p.switch(left_tag, &arms, trap_ref, bot);
+            self.p.set_body(matching, matching_body);
+            let matching_ref = self.p.func_ref(matching);
+
+            let different = self.p.func("equals_different_tag", void_ty, bot);
+            let false_value = self.p.bool(false);
+            let different_body = self.p.app(k, false_value);
+            self.p.set_body(different, different_body);
+            let different_ref = self.p.func_ref(different);
+            let thunk_ty = self.p.expr_ty(matching_ref);
+            self.p.br(tags_equal, matching_ref, different_ref, thunk_ty)
+        } else if let Some(info) = self
+            .units
+            .iter()
+            .find_map(|unit| unit.types.catalog.structs.get(head_symbol).cloned())
+        {
+            let substitution: Theta = info
+                .params
+                .iter()
+                .copied()
+                .zip(head_args.iter().cloned())
+                .collect();
+            let mut comparisons = Vec::with_capacity(info.fields.len());
+            for (index, (_, (_, field_ty))) in info.fields.iter().enumerate() {
+                let field_ty =
+                    field_ty.substitute(&substitution, &Default::default(), &Default::default());
+                let lambda_ty = self.map_ty(&field_ty);
+                let left = self.p.primop(Op::GetField(index as u32), &[lhs], lambda_ty);
+                let right = self.p.primop(Op::GetField(index as u32), &[rhs], lambda_ty);
+                comparisons.push((left, right, field_ty));
+            }
+            self.compare_derived_values(protocol, requirement, &comparisons, k)?
+        } else {
+            self.diagnostics.push(format!(
+                "lowering: cannot derive equality for {type_name} (not a struct or enum)"
+            ));
+            return None;
+        };
+
+        self.p.set_body(label, body);
+        Some(label)
+    }
+
+    fn compare_derived_values(
+        &mut self,
+        protocol: Symbol,
+        requirement: Symbol,
+        comparisons: &[(ExprId, ExprId, CheckTy)],
+        k: ExprId,
+    ) -> Option<ExprId> {
+        let Some(((left, right, ty), rest)) = comparisons.split_first() else {
+            let true_value = self.p.bool(true);
+            return Some(self.p.app(k, true_value));
+        };
+        let protocol_ref = self
+            .units
+            .iter()
+            .find_map(|unit| unit.types.catalog.derived_protocol_ref(protocol, ty))?;
+        let (equals, _, _) = self.resolve_witness(
+            protocol_ref,
+            requirement,
+            "equals".into(),
+            ty,
+            &Theta::default(),
+        )?;
+
+        let void_ty = self.p.ty_void();
+        let bool_ty = self.p.ty_bool();
+        let bot = self.p.ty_bot();
+        let pass = self.p.func("equals_next", void_ty, bot);
+        let pass_body = self.compare_derived_values(protocol, requirement, rest, k)?;
+        self.p.set_body(pass, pass_body);
+        let pass_ref = self.p.func_ref(pass);
+
+        let fail = self.p.func("equals_false", void_ty, bot);
+        let false_value = self.p.bool(false);
+        let fail_body = self.p.app(k, false_value);
+        self.p.set_body(fail, fail_body);
+        let fail_ref = self.p.func_ref(fail);
+
+        let compared = self.p.func("equals_component", bool_ty, bot);
+        let compared_value = self.p.var(compared);
+        let thunk_ty = self.p.expr_ty(pass_ref);
+        let compared_body = self.p.br(compared_value, pass_ref, fail_ref, thunk_ty);
+        self.p.set_body(compared, compared_body);
+        let compared_ref = self.p.func_ref(compared);
+
+        let equals_ref = self.p.func_ref(equals);
+        let args = self.p.tuple(&[*left, *right, compared_ref]);
+        Some(self.p.app(equals_ref, args))
     }
 
     /// Fold the pieces left-to-right into a continuation chain delivering

@@ -520,14 +520,19 @@ impl<'s> Solver<'s> {
                         MemberDispatch::NoCandidate => {}
                     }
                 }
-                // Auto-derived protocol members (`optional.show()` without
-                // an explicit conformance): dispatch through the requirement
-                // when the head is a struct/enum and the protocol derives.
+                // Auto-derived protocol members (`optional.show()` or
+                // `point.equals(rhs:)` without an explicit conformance):
+                // dispatch through the requirement at the protocol's
+                // defaulted application for this concrete Self type.
                 let is_derivable_head = self.catalog.structs.contains_key(&symbol)
                     || self.catalog.enums.contains_key(&symbol);
                 if is_derivable_head {
+                    let self_ty = Ty::Nominal(symbol, args.clone());
                     for protocol in self.catalog.derivable.clone() {
-                        let protocol = ProtocolRef::bare(protocol);
+                        let Some(protocol) = self.catalog.derived_protocol_ref(protocol, &self_ty)
+                        else {
+                            continue;
+                        };
                         if let Some((owner, requirement)) =
                             self.catalog.requirement_in_ref(&protocol, &label_str)
                         {

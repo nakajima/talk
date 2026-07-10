@@ -2106,25 +2106,19 @@ impl PackageProject {
         filter: Option<String>,
     ) -> Result<Option<crate::testing::Runner>, PackageError> {
         let tests_root = self.root.join("tests");
-        if !tests_root.is_dir() {
-            if paths.is_empty() {
+        let (roots, source_root) = if paths.is_empty() {
+            if !tests_root.is_dir() {
                 return Ok(None);
             }
-            return Err(PackageError::Resolution(format!(
-                "package {} has no tests/ directory",
-                self.manifest.name
-            )));
-        }
-        let tests_root = tests_root
-            .canonicalize()
-            .map_err(|source| PackageError::Io {
-                context: format!("failed to find package tests under {}", self.root.display()),
-                source,
-            })?;
-        let roots = if paths.is_empty() {
-            vec![tests_root.clone()]
+            let tests_root = tests_root
+                .canonicalize()
+                .map_err(|source| PackageError::Io {
+                    context: format!("failed to find package tests under {}", self.root.display()),
+                    source,
+                })?;
+            (vec![tests_root.clone()], Some(tests_root))
         } else {
-            paths
+            let roots = paths
                 .iter()
                 .map(|path| {
                     let candidate = if path.is_absolute() {
@@ -2132,25 +2126,17 @@ impl PackageProject {
                     } else {
                         self.root.join(path)
                     };
-                    let candidate =
-                        candidate
-                            .canonicalize()
-                            .map_err(|source| PackageError::Io {
-                                context: format!(
-                                    "failed to find package test path {}",
-                                    path.display()
-                                ),
-                                source,
-                            })?;
-                    if !candidate.starts_with(&tests_root) {
-                        return Err(PackageError::Resolution(format!(
-                            "package test path {} must be under tests/",
-                            path.display()
-                        )));
-                    }
-                    Ok(candidate)
+                    candidate.canonicalize().map_err(|source| PackageError::Io {
+                        context: format!("failed to find package test path {}", path.display()),
+                        source,
+                    })
                 })
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            let source_root = tests_root
+                .canonicalize()
+                .ok()
+                .filter(|tests_root| roots.iter().all(|root| root.starts_with(tests_root)));
+            (roots, source_root)
         };
         let graph = self.compile_graph()?;
         let mut environment =
@@ -2169,7 +2155,7 @@ impl PackageProject {
         let mut config = DriverConfig::new(format!("{} tests", self.manifest.name));
         config.modules = Rc::new(environment);
         config.workspace_root = Some(self.root.clone());
-        config.source_root = Some(tests_root.clone());
+        config.source_root = source_root;
         config.libraries = libraries;
         Ok(Some(
             crate::testing::Runner::with_config(roots, config).with_filter(filter),
@@ -2518,14 +2504,14 @@ mod tests {
     }
 
     #[test]
-    fn selected_package_tests_can_import_the_package_library() {
+    fn selected_package_tests_outside_tests_can_import_the_package_library() {
         let temporary = std::env::temp_dir().join(format!(
             "talk-package-selected-test-{}-{}",
             std::process::id(),
             TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(temporary.join("src")).expect("create source directory");
-        fs::create_dir_all(temporary.join("tests")).expect("create tests directory");
+        fs::create_dir_all(temporary.join("spec")).expect("create spec directory");
         fs::write(
             temporary.join(MANIFEST_FILE),
             "Package(name: \"sample-package\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
@@ -2537,13 +2523,13 @@ mod tests {
         )
         .expect("write library");
         fs::write(
-            temporary.join("tests/interface.test.tlk"),
+            temporary.join("spec/interface.test.tlk"),
             "use sample_package::{ answer }\n\ntest(\"package interface\") {\n    assert(answer() == 42)\n}\n",
         )
         .expect("write test");
 
         let project = PackageProject::install_at(&temporary, true, false).expect("install package");
-        let selected_test = temporary.join("tests/interface.test.tlk");
+        let selected_test = PathBuf::from("spec/interface.test.tlk");
         let outcome = project
             .run_tests_at_paths_with_filter(&[selected_test], None)
             .expect("run selected package test");

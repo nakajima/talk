@@ -852,10 +852,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         for label in info.requirements.keys() {
             self.catalog.add_owner(label, MemberOwner::Protocol(symbol));
         }
-        // Showable is auto-derived for structs and enums (the lowerer
-        // synthesizes the bodies, as the previous implementation did).
+        // Showable and same-type Equatable are auto-derived for structs and
+        // enums. The lowerer synthesizes their required witnesses.
         if let DeclKind::Protocol { name, .. } = &decl.kind
-            && name.name_str() == "Showable"
+            && matches!(name.name_str().as_str(), "Showable" | "Equatable")
             && !self.catalog.derivable.contains(&symbol)
         {
             self.catalog.derivable.push(symbol);

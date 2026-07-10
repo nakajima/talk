@@ -895,6 +895,14 @@ pub mod tests {
         assert_eq!(out, "Optional.some(5)\nOptional.none\n");
     }
 
+    #[test]
+    fn vm_matches_evaluator_on_derived_equatable() {
+        let (_, out) = run_on_both_engines_io(
+            "struct Point {\n\tlet x: Int\n\tlet y: Int\n}\nenum Choice {\n\tcase none\n\tcase value(Int)\n\tcase pair(Int, Bool)\n}\nenum Chain {\n\tcase end\n\tcase link(Int, Chain)\n}\nprint(Point(x: 1, y: 2) == Point(x: 1, y: 2))\nprint(Point(x: 1, y: 2).equals(rhs: Point(x: 1, y: 2)))\nprint(Point(x: 1, y: 2) != Point(x: 1, y: 3))\nprint(Choice.value(4) == Choice.value(4))\nprint(Choice.value(4) == Choice.value(5))\nprint(Choice.value(4) == Choice.none)\nprint(Choice.pair(4, true) != Choice.pair(4, false))\nprint(Chain.link(1, Chain.end) == Chain.link(1, Chain.end))",
+        );
+        assert_eq!(out, "true\ntrue\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\n");
+    }
+
     // ----- Drop schedules on early exits and match joins ----------------------
 
     #[test]

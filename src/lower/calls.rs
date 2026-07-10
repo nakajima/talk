@@ -554,16 +554,14 @@ impl<'a> Lowering<'a> {
                                 })
                                 .map(|(_, protocol)| protocol.clone())
                                 .collect();
-                            protocols.extend(
-                                owner_protocols
+                            protocols.extend(owner_protocols.iter().filter_map(|p| {
+                                let derivable = self
+                                    .units
                                     .iter()
-                                    .filter(|p| {
-                                        self.units
-                                            .iter()
-                                            .any(|u| u.types.catalog.derivable.contains(p))
-                                    })
-                                    .map(|p| ProtocolRef::bare(*p)),
-                            );
+                                    .any(|u| u.types.catalog.derivable.contains(p));
+                                derivable
+                                    .then(|| catalog.derived_protocol_ref(*p, head_ty.as_ref()?))?
+                            }));
                             for protocol in protocols {
                                 let Some((_, requirement)) = self.units[self.entry]
                                     .types
@@ -887,20 +885,67 @@ impl<'a> Lowering<'a> {
             let target = self.demand(requirement_or_witness, theta.clone())?;
             return Some((target, requirement_or_witness, theta));
         }
-        // No explicit row: an auto-derived protocol (today: Showable)
-        // synthesizes its witness in λ_G — the checker discharged the
-        // conformance structurally (`solve/conformance.rs::try_derive`).
+        // No explicit row: an auto-derived protocol synthesizes its required
+        // witness in lambda-G, or uses a declared protocol default. The
+        // checker already discharged the same conformance structurally.
         let protocol_symbol = protocol.protocol;
-        let derivable = self
+        let derived_protocol = self
             .units
             .iter()
-            .any(|u| u.types.catalog.derivable.contains(&protocol_symbol));
-        if derivable
-            && label == "show"
-            && let Some(synth) =
-                self.demand_derived_show(protocol_symbol, requirement_or_witness, head_for_witness)
-        {
-            return Some((synth, requirement_or_witness, Theta::default()));
+            .find_map(|u| {
+                u.types
+                    .catalog
+                    .derivable
+                    .contains(&protocol_symbol)
+                    .then(|| {
+                        u.types
+                            .catalog
+                            .derived_protocol_ref(protocol_symbol, head_for_witness)
+                    })?
+            })
+            .filter(|derived| derived == &protocol);
+        if derived_protocol.is_some() {
+            let (has_default, protocol_params) = catalog
+                .protocols
+                .get(&protocol_symbol)
+                .map(|info| {
+                    (
+                        info.requirements
+                            .get(&label)
+                            .is_some_and(|requirement| requirement.has_default),
+                        info.params.clone(),
+                    )
+                })
+                .unwrap_or_default();
+            if label == "show"
+                && let Some(synth) = self.demand_derived_show(
+                    protocol_symbol,
+                    requirement_or_witness,
+                    head_for_witness,
+                )
+            {
+                return Some((synth, requirement_or_witness, Theta::default()));
+            }
+            if label == "equals"
+                && let Some(synth) = self.demand_derived_equals(
+                    protocol_symbol,
+                    requirement_or_witness,
+                    head_for_witness,
+                )
+            {
+                return Some((synth, requirement_or_witness, Theta::default()));
+            }
+            if is_requirement && has_default {
+                let mut theta = Theta::default();
+                theta.insert(protocol_symbol, head_for_witness.clone());
+                theta.extend(
+                    protocol_params
+                        .into_iter()
+                        .zip(protocol.args.iter().cloned()),
+                );
+                let target = self.demand(requirement_or_witness, theta.clone())?;
+                return Some((target, requirement_or_witness, theta));
+            }
         }
         self.diagnostics.push(format!(
             "lowering: no conformance ({head_symbol}, {protocol}) for '{label}'"

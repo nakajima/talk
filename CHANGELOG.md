@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (2026-07-10) — Derived `Equatable`
+
+Talk now automatically derives same-type `Equatable` conformance for value
+structs and enums when every stored field or reachable enum payload also
+conforms. Derived equality compares struct fields in declaration order and enum
+tags before payloads, short-circuiting on the first mismatch. Generic and
+recursive types are supported, and the protocol's default `notEquals`
+implementation provides `!=` from the synthesized `equals` witness.
+
+Explicit conformances continue to take precedence. Cross-type `Equatable`
+applications and `'heap` structs are not derived automatically.
+
 ## Unreleased (2026-07-09) — Neotest and machine-readable test output
 
 `talk test` now supports `--json` for machine-readable results. The JSON report
@@ -14,8 +26,10 @@ while tests register, so skipped tests are not executed.
 The Neovim runtime now includes a `neotest-talk` adapter. It discovers
 `*.test.tlk` files, maps `test "name" { ... }` and `test("name") { ... }`
 positions into Neotest, runs files via `talk test --json`, and uses
-`--filter NAME` for single-test runs. `talk setup nvim` installs the adapter
-alongside the existing filetype, syntax, indent, and ftplugin files.
+`--filter NAME` for single-test runs. Explicit package test paths may be
+outside `tests/`, while pathless package test discovery still defaults there.
+`talk setup nvim` installs the adapter alongside the existing filetype, syntax,
+indent, and ftplugin files.
 
 ## Unreleased (2026-07-09) — Packages and `talk new`
 

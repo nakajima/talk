@@ -164,7 +164,8 @@ package import.
 
 A binary is compiled with its package library, when present, and its direct
 dependencies in the module environment. It may import its package library
-using the derived import name. Tests under `tests/` are compiled with the same
+using the derived import name. By default, `talk test` discovers tests under
+`tests/`. Explicit test paths may be elsewhere and are compiled with the same
 library and dependency environment. Test files follow the existing
 `*.test.tlk` convention.
 
