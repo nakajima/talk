@@ -1,6 +1,6 @@
 use std::{
     error::Error as StdError,
-    fmt::{Display, Formatter},
+    fmt::{Display, Formatter, Write as _},
     path::{Path, PathBuf},
 };
 
@@ -15,9 +15,11 @@ use crate::{
 };
 
 const HARNESS_PRELUDE_SOURCE: &str = include_str!("../stdlib/testing_prelude.tlk");
+const HARNESS_JSON_PRELUDE_SOURCE: &str = include_str!("../stdlib/testing_json_prelude.tlk");
 const HARNESS_POSTLUDE_SOURCE: &str = include_str!("../stdlib/testing_postlude.tlk");
 const HARNESS_PRELUDE_PATH: &str = "/talk-test-harness/testing_prelude.tlk";
 const HARNESS_POSTLUDE_PATH: &str = "/talk-test-harness/testing_postlude.tlk";
+const JSON_EVENT_PREFIX: &str = "__TALKTEST_EVENT_V1__\t";
 
 #[derive(Debug)]
 pub struct Runner {
@@ -40,6 +42,130 @@ pub struct Summary {
 impl Summary {
     pub fn failed(&self) -> bool {
         self.failures > 0
+    }
+}
+
+#[derive(Debug)]
+pub enum JsonOutcome {
+    NoTests,
+    Finished(JsonSummary),
+}
+
+#[derive(Debug)]
+pub struct JsonSummary {
+    pub output: String,
+    pub failures: i64,
+    pub tests: Vec<JsonTest>,
+}
+
+#[derive(Debug)]
+pub struct JsonTest {
+    pub name: String,
+    pub status: JsonStatus,
+    pub failures: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum JsonStatus {
+    Passed,
+    Failed,
+}
+
+impl JsonOutcome {
+    pub fn failed(&self) -> bool {
+        match self {
+            Self::NoTests => false,
+            Self::Finished(summary) => summary.failed(),
+        }
+    }
+
+    pub fn to_json(&self) -> String {
+        match self {
+            Self::NoTests => {
+                "{\"status\":\"no_tests\",\"failures\":0,\"tests\":[],\"output\":\"\"}".to_string()
+            }
+            Self::Finished(summary) => summary.to_json(),
+        }
+    }
+
+    pub fn error_json(kind: &str, message: &str) -> String {
+        let mut json = String::new();
+        json.push_str("{\"status\":\"error\",\"error\":{\"kind\":\"");
+        let _ = write!(&mut json, "{}", JsonEscaped(kind));
+        json.push_str("\",\"message\":\"");
+        let _ = write!(&mut json, "{}", JsonEscaped(message));
+        json.push_str("\"},\"failures\":0,\"tests\":[],\"output\":\"\"}");
+        json
+    }
+}
+
+impl JsonSummary {
+    pub fn failed(&self) -> bool {
+        self.failures > 0
+    }
+
+    fn to_json(&self) -> String {
+        let mut json = String::new();
+        json.push_str("{\"status\":\"finished\",\"failures\":");
+        let _ = write!(&mut json, "{}", self.failures);
+        json.push_str(",\"tests\":[");
+        for (index, test) in self.tests.iter().enumerate() {
+            if index > 0 {
+                json.push(',');
+            }
+            test.push_json(&mut json);
+        }
+        json.push_str("],\"output\":\"");
+        let _ = write!(&mut json, "{}", JsonEscaped(&self.output));
+        json.push_str("\"}");
+        json
+    }
+}
+
+impl JsonTest {
+    fn push_json(&self, json: &mut String) {
+        json.push_str("{\"name\":\"");
+        let _ = write!(json, "{}", JsonEscaped(&self.name));
+        json.push_str("\",\"status\":\"");
+        json.push_str(self.status.as_str());
+        json.push_str("\",\"failures\":[");
+        for (index, failure) in self.failures.iter().enumerate() {
+            if index > 0 {
+                json.push(',');
+            }
+            json.push('"');
+            let _ = write!(json, "{}", JsonEscaped(failure));
+            json.push('"');
+        }
+        json.push_str("]}");
+    }
+}
+
+impl JsonStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+struct JsonEscaped<'a>(&'a str);
+
+impl Display for JsonEscaped<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for ch in self.0.chars() {
+            match ch {
+                '"' => f.write_str("\\\"")?,
+                '\\' => f.write_str("\\\\")?,
+                '\n' => f.write_str("\\n")?,
+                '\r' => f.write_str("\\r")?,
+                '\t' => f.write_str("\\t")?,
+                ch if ch <= '\u{1f}' => write!(f, "\\u{:04x}", ch as u32)?,
+                ch => f.write_char(ch)?,
+            }
+        }
+        Ok(())
     }
 }
 
@@ -103,7 +229,186 @@ impl Display for TestError {
     }
 }
 
+impl TestError {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Discovery(_) => "discovery",
+            Self::Compile(_) | Self::CompileDiagnostics(_) => "compile",
+            Self::Runtime(_) => "runtime",
+            Self::UnexpectedReturn(_) => "unexpected_return",
+        }
+    }
+
+    pub fn to_json(&self) -> String {
+        JsonOutcome::error_json(self.kind(), &self.to_string())
+    }
+}
+
 impl StdError for TestError {}
+
+struct JsonEventParser {
+    tests: Vec<JsonTest>,
+    output: String,
+    active: Option<usize>,
+}
+
+impl JsonEventParser {
+    fn parse(output: &str) -> Result<Self, TestError> {
+        let mut parser = Self {
+            tests: Vec::new(),
+            output: String::new(),
+            active: None,
+        };
+        let mut remaining = output;
+        while let Some(prefix_index) = remaining.find(JSON_EVENT_PREFIX) {
+            parser.output.push_str(&remaining[..prefix_index]);
+            let after_prefix = &remaining[prefix_index + JSON_EVENT_PREFIX.len()..];
+            if let Some(newline_index) = after_prefix.find('\n') {
+                let event = after_prefix[..newline_index]
+                    .strip_suffix('\r')
+                    .unwrap_or(&after_prefix[..newline_index]);
+                parser.parse_event(event)?;
+                remaining = &after_prefix[newline_index + 1..];
+            } else {
+                let event = after_prefix.strip_suffix('\r').unwrap_or(after_prefix);
+                parser.parse_event(event)?;
+                remaining = "";
+            }
+        }
+        parser.output.push_str(remaining);
+        if parser.active.is_some() {
+            return Err(TestError::UnexpectedReturn(
+                "test event stream ended during a test".into(),
+            ));
+        }
+        Ok(parser)
+    }
+
+    fn into_summary(self, failures: i64) -> JsonSummary {
+        JsonSummary {
+            output: self.output,
+            failures,
+            tests: self.tests,
+        }
+    }
+
+    fn parse_event(&mut self, event: &str) -> Result<(), TestError> {
+        let mut parts = event.split('\t');
+        let kind = parts.next().unwrap_or_default();
+        match kind {
+            "start" => {
+                let name = Self::decode_hex(Self::next_part(&mut parts, "start name")?)?;
+                Self::finish_parts(parts)?;
+                if self.active.is_some() {
+                    return Err(TestError::UnexpectedReturn(
+                        "test event stream started a test before ending the previous test".into(),
+                    ));
+                }
+                self.tests.push(JsonTest {
+                    name,
+                    status: JsonStatus::Passed,
+                    failures: Vec::new(),
+                });
+                self.active = self.tests.len().checked_sub(1);
+                Ok(())
+            }
+            "failure" => {
+                let message = Self::decode_hex(Self::next_part(&mut parts, "failure message")?)?;
+                Self::finish_parts(parts)?;
+                let active = self.active.ok_or_else(|| {
+                    TestError::UnexpectedReturn("test failure event had no active test".into())
+                })?;
+                let test = self.tests.get_mut(active).ok_or_else(|| {
+                    TestError::UnexpectedReturn(
+                        "test failure event pointed outside the test list".into(),
+                    )
+                })?;
+                test.status = JsonStatus::Failed;
+                test.failures.push(message);
+                Ok(())
+            }
+            "end" => {
+                let status = Self::next_part(&mut parts, "end status")?;
+                let status = match status {
+                    "passed" => JsonStatus::Passed,
+                    "failed" => JsonStatus::Failed,
+                    other => {
+                        return Err(TestError::UnexpectedReturn(format!(
+                            "test end event had invalid status {other:?}"
+                        )));
+                    }
+                };
+                Self::finish_parts(parts)?;
+                let active = self.active.ok_or_else(|| {
+                    TestError::UnexpectedReturn("test end event had no active test".into())
+                })?;
+                let test = self.tests.get_mut(active).ok_or_else(|| {
+                    TestError::UnexpectedReturn(
+                        "test end event pointed outside the test list".into(),
+                    )
+                })?;
+                if status == JsonStatus::Failed || !test.failures.is_empty() {
+                    test.status = JsonStatus::Failed;
+                } else {
+                    test.status = JsonStatus::Passed;
+                }
+                self.active = None;
+                Ok(())
+            }
+            other => Err(TestError::UnexpectedReturn(format!(
+                "unknown test event kind {other:?}"
+            ))),
+        }
+    }
+
+    fn next_part<'a>(
+        parts: &mut impl Iterator<Item = &'a str>,
+        field: &str,
+    ) -> Result<&'a str, TestError> {
+        parts
+            .next()
+            .ok_or_else(|| TestError::UnexpectedReturn(format!("test event missing {field}")))
+    }
+
+    fn finish_parts<'a>(mut parts: impl Iterator<Item = &'a str>) -> Result<(), TestError> {
+        if parts.next().is_some() {
+            return Err(TestError::UnexpectedReturn(
+                "test event had too many fields".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn decode_hex(value: &str) -> Result<String, TestError> {
+        let bytes = value.as_bytes();
+        if bytes.len() % 2 != 0 {
+            return Err(TestError::UnexpectedReturn(
+                "test event had odd-length hex data".into(),
+            ));
+        }
+        let mut decoded = Vec::with_capacity(bytes.len() / 2);
+        let mut index = 0;
+        while index < bytes.len() {
+            let high = Self::hex_value(bytes[index])?;
+            let low = Self::hex_value(bytes[index + 1])?;
+            decoded.push(high * 16 + low);
+            index += 2;
+        }
+        String::from_utf8(decoded)
+            .map_err(|_| TestError::UnexpectedReturn("test event had invalid utf-8 data".into()))
+    }
+
+    fn hex_value(byte: u8) -> Result<u8, TestError> {
+        match byte {
+            b'0'..=b'9' => Ok(byte - b'0'),
+            b'a'..=b'f' => Ok(byte - b'a' + 10),
+            b'A'..=b'F' => Ok(byte - b'A' + 10),
+            _ => Err(TestError::UnexpectedReturn(
+                "test event had non-hex data".into(),
+            )),
+        }
+    }
+}
 
 impl Runner {
     pub fn new(roots: impl IntoIterator<Item = PathBuf>) -> Self {
@@ -126,18 +431,25 @@ impl Runner {
             return Ok(Outcome::NoTests);
         }
 
-        let sources = self.suite_sources(test_sources)?;
+        let sources = self.suite_sources(test_sources, HarnessMode::Human)?;
         let mut lowered = self.compile_sources(sources)?;
         let (value, output) = lowered.run_vm_with_output().map_err(TestError::Runtime)?;
-        let failures = match value {
-            Value::I64(failures) => failures,
-            other => {
-                return Err(TestError::UnexpectedReturn(format!(
-                    "test harness returned {other:?}, expected Int"
-                )));
-            }
-        };
+        let failures = Self::harness_failures(value)?;
         Ok(Outcome::Finished(Summary { output, failures }))
+    }
+
+    pub fn run_json(&self) -> Result<JsonOutcome, TestError> {
+        let test_sources = self.discover_sources()?;
+        if test_sources.is_empty() {
+            return Ok(JsonOutcome::NoTests);
+        }
+
+        let sources = self.suite_sources(test_sources, HarnessMode::Json)?;
+        let mut lowered = self.compile_sources(sources)?;
+        let (value, output) = lowered.run_vm_with_output().map_err(TestError::Runtime)?;
+        let failures = Self::harness_failures(value)?;
+        let events = JsonEventParser::parse(&output)?;
+        Ok(JsonOutcome::Finished(events.into_summary(failures)))
     }
 
     fn discover_sources(&self) -> Result<Vec<Source>, TestError> {
@@ -195,7 +507,11 @@ impl Runner {
         Ok(())
     }
 
-    fn suite_sources(&self, test_sources: Vec<Source>) -> Result<Vec<Source>, TestError> {
+    fn suite_sources(
+        &self,
+        test_sources: Vec<Source>,
+        harness_mode: HarnessMode,
+    ) -> Result<Vec<Source>, TestError> {
         let driver = match &self.config {
             Some(config) => Driver::new_bare(test_sources, config.clone()),
             None => Driver::new(test_sources, Self::compile_config()),
@@ -205,10 +521,19 @@ impl Runner {
             .map_err(|err| TestError::Compile(format!("{err:?}")))?;
 
         let mut sources = Vec::with_capacity(parsed.phase.asts.len() + 2);
-        sources.push(Harness::prelude_source());
+        sources.push(Harness::prelude_source(harness_mode));
         sources.extend(parsed.phase.asts.keys().cloned());
         sources.push(Harness::postlude_source());
         Ok(sources)
+    }
+
+    fn harness_failures(value: Value) -> Result<i64, TestError> {
+        match value {
+            Value::I64(failures) => Ok(failures),
+            other => Err(TestError::UnexpectedReturn(format!(
+                "test harness returned {other:?}, expected Int"
+            ))),
+        }
     }
 
     fn compile_sources(
@@ -325,11 +650,21 @@ impl Runner {
     }
 }
 
+#[derive(Clone, Copy)]
+enum HarnessMode {
+    Human,
+    Json,
+}
+
 struct Harness;
 
 impl Harness {
-    fn prelude_source() -> Source {
-        Source::in_memory(PathBuf::from(HARNESS_PRELUDE_PATH), HARNESS_PRELUDE_SOURCE)
+    fn prelude_source(mode: HarnessMode) -> Source {
+        let source = match mode {
+            HarnessMode::Human => HARNESS_PRELUDE_SOURCE,
+            HarnessMode::Json => HARNESS_JSON_PRELUDE_SOURCE,
+        };
+        Source::in_memory(PathBuf::from(HARNESS_PRELUDE_PATH), source)
     }
 
     fn postlude_source() -> Source {
@@ -357,16 +692,18 @@ mod tests {
 
     #[test]
     fn harness_sources_type_check() {
-        let typed = Driver::new(
-            vec![Harness::prelude_source(), Harness::postlude_source()],
-            DriverConfig::new("Harness"),
-        )
-        .parse()
-        .expect("parse")
-        .resolve_names()
-        .expect("resolve")
-        .type_check();
-        assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+        for mode in [HarnessMode::Human, HarnessMode::Json] {
+            let typed = Driver::new(
+                vec![Harness::prelude_source(mode), Harness::postlude_source()],
+                DriverConfig::new("Harness"),
+            )
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+            assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+        }
     }
 
     #[test]
@@ -439,5 +776,32 @@ test(\"ok\") {\n\tassert(1 + 1 == 2)\n}\n",
             summary.output,
             "\u{1b}[31mF\u{1b}[0m\u{1b}[32m.\u{1b}[0m\n\u{1b}[31mbad\u{1b}[0m: nope\n"
         );
+    }
+
+    #[test]
+    fn runner_json_reports_tests_and_preserves_user_output() {
+        let project = temp_project("json-test-runner");
+        std::fs::write(
+            project.join("math.test.tlk"),
+            "test \"prints\" {\n\tprint_raw(\"hello\")\n\tassert(true)\n}\n\n\
+test(\"bad \\\"quote\\\"\") {\n\tassertMessage(false, \"nope\\nline\")\n}\n",
+        )
+        .expect("test file");
+
+        let outcome = Runner::new([project]).run_json().expect("runner");
+        let JsonOutcome::Finished(summary) = outcome else {
+            panic!("expected tests to run");
+        };
+        assert_eq!(summary.failures, 1);
+        assert_eq!(summary.output, "hello");
+        assert_eq!(summary.tests.len(), 2);
+        assert_eq!(summary.tests[0].name, "prints");
+        assert_eq!(summary.tests[0].status, JsonStatus::Passed);
+        assert_eq!(summary.tests[1].name, "bad \"quote\"");
+        assert_eq!(summary.tests[1].status, JsonStatus::Failed);
+        assert_eq!(summary.tests[1].failures, ["nope\nline"]);
+        let json = JsonOutcome::Finished(summary).to_json();
+        assert!(json.contains("\"status\":\"finished\""));
+        assert!(json.contains("nope\\nline"));
     }
 }

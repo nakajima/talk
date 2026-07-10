@@ -53,6 +53,11 @@ enum {
 };
 
 enum {
+    TALK_TEST_NO_TESTS = 1,
+    TALK_TEST_FINISHED = 2
+};
+
+enum {
     TALK_HIGHLIGHT_DECORATOR = 1,
     TALK_HIGHLIGHT_NAMESPACE = 2,
     TALK_HIGHLIGHT_TYPE = 3,
@@ -170,6 +175,7 @@ typedef struct TalkHighlightTokens TalkHighlightTokens;
 typedef struct TalkLocationResult TalkLocationResult;
 typedef struct TalkWorkspaceEditResult TalkWorkspaceEditResult;
 typedef struct TalkEvalResult TalkEvalResult;
+typedef struct TalkTestResult TalkTestResult;
 typedef struct TalkReplCompletions TalkReplCompletions;
 
 void talk_result_free(TalkResult result);
@@ -196,6 +202,31 @@ TalkEvalResult *talk_run_program_utf8(
     size_t path_len,
     const uint8_t *source_ptr,
     size_t source_len
+);
+
+TalkResult talk_package_create_utf8(
+    const uint8_t *root_ptr,
+    size_t root_len,
+    const uint8_t *name_ptr,
+    size_t name_len,
+    const uint8_t *version_ptr,
+    size_t version_len,
+    const uint8_t *binary_name_ptr,
+    size_t binary_name_len
+);
+
+TalkEvalResult *talk_package_run_utf8(
+    const uint8_t *root_ptr,
+    size_t root_len,
+    const uint8_t *binary_name_ptr,
+    size_t binary_name_len,
+    bool offline
+);
+
+TalkTestResult *talk_package_test_utf8(
+    const uint8_t *root_ptr,
+    size_t root_len,
+    bool offline
 );
 
 TalkResult talk_render_lowered_utf8(
@@ -377,6 +408,13 @@ TalkOptionalStringRef talk_eval_result_message(const TalkEvalResult *ptr);
 size_t talk_eval_result_diagnostic_count(const TalkEvalResult *ptr);
 TalkDiagnosticView talk_eval_result_diagnostic(const TalkEvalResult *ptr, size_t index);
 void talk_eval_result_free(TalkEvalResult *ptr);
+
+int32_t talk_test_result_status(const TalkTestResult *ptr);
+TalkStringRef talk_test_result_error(const TalkTestResult *ptr);
+int32_t talk_test_result_kind(const TalkTestResult *ptr);
+TalkStringRef talk_test_result_output(const TalkTestResult *ptr);
+int64_t talk_test_result_failures(const TalkTestResult *ptr);
+void talk_test_result_free(TalkTestResult *ptr);
 
 int32_t talk_repl_completions_status(const TalkReplCompletions *ptr);
 TalkStringRef talk_repl_completions_error(const TalkReplCompletions *ptr);

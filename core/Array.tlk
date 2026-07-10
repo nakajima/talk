@@ -109,6 +109,12 @@ public struct Array<Element> {
 	}
 }
 
+extend Array<Element> where Element: Comparable<Element> {
+	consuming func sort_by(fn: (Element, Element) -> Bool) -> Self {
+		self
+	}
+}
+
 extend Array<Element>: CheapClone {}
 
 // Elements die with the buffer: only the LAST reference tears them

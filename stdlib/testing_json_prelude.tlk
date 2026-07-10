@@ -1,0 +1,83 @@
+use { Failure, TestCase, fail, registerTest } from testing
+
+public let __talktalk_tests = Array<TestCase>(capacity: 0)
+public let __talktalk_failures = Array<Failure>(capacity: 0)
+let __talktalk_current_test = ""
+
+func __talktalk_hex_digit(value: Int) -> String {
+	if value == 0 { return "0" }
+	if value == 1 { return "1" }
+	if value == 2 { return "2" }
+	if value == 3 { return "3" }
+	if value == 4 { return "4" }
+	if value == 5 { return "5" }
+	if value == 6 { return "6" }
+	if value == 7 { return "7" }
+	if value == 8 { return "8" }
+	if value == 9 { return "9" }
+	if value == 10 { return "a" }
+	if value == 11 { return "b" }
+	if value == 12 { return "c" }
+	if value == 13 { return "d" }
+	if value == 14 { return "e" }
+	"f"
+}
+
+func __talktalk_print_hex_string(value: String) {
+	let bytes = value.utf8()
+	let i = 0
+	loop i < bytes.count() {
+		let byte_value: Int = bytes.at(i)._toInt()
+		let high: Int = byte_value / 16
+		let low: Int = byte_value - high * 16
+		print_raw(__talktalk_hex_digit(high))
+		print_raw(__talktalk_hex_digit(low))
+		i = i + 1
+	}
+}
+
+func __talktalk_event_start(name: String) {
+	print_raw("__TALKTEST_EVENT_V1__\tstart\t")
+	__talktalk_print_hex_string(name)
+	print("")
+}
+
+func __talktalk_event_failure(message: String) {
+	print_raw("__TALKTEST_EVENT_V1__\tfailure\t")
+	__talktalk_print_hex_string(message)
+	print("")
+}
+
+func __talktalk_event_end(status: String) {
+	print_raw("__TALKTEST_EVENT_V1__\tend\t")
+	print(status)
+}
+
+@handle 'registerTest { testCase in
+	__talktalk_tests.push(testCase)
+	continue ()
+}
+
+@handle 'fail { message in
+	__talktalk_event_failure(message.to_string())
+	__talktalk_failures.push(
+		Failure(test_name: __talktalk_current_test.to_string(), assertion: message)
+	)
+	continue ()
+}
+
+public func __talktalk_runAllAndReport() -> Int {
+	for testCase in __talktalk_tests {
+		__talktalk_current_test = testCase.name.to_string()
+		let failures_before = __talktalk_failures.count
+		__talktalk_event_start(__talktalk_current_test.to_string())
+		testCase.block()
+		if __talktalk_failures.count == failures_before {
+			__talktalk_event_end("passed")
+		} else {
+			__talktalk_event_end("failed")
+		}
+	}
+
+	__talktalk_failures.count
+}

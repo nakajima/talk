@@ -25,8 +25,9 @@ may contain only the literal fields and dependency/target forms defined by the
 package manifest schema.
 
 Packages are source packages. V1 installs remote Git repositories and remote
-tarballs, resolves their complete transitive dependency graph, records the
-result in `package.lock`, and compiles every package as an external module.
+tarballs, or resolves local path dependencies, records the complete transitive
+dependency graph in `package.lock`, and compiles every package as an external
+module.
 There is no package registry, package publication protocol, or semantic-version
 constraint solver.
 
@@ -50,6 +51,10 @@ Package(
             package: "talk-json",
             url: "https://example.com/talk-json-0.1.0.tar.gz",
             sha256: "..."
+        ),
+        .path(
+            package: "talk-local",
+            path: "../talk-local"
         )
     ]
 )
@@ -66,6 +71,7 @@ enum PackageArtifact {
 enum PackageDependency {
     case git(package: String, url: String, rev: String)
     case tar(package: String, url: String, sha256: String)
+    case path(package: String, path: String)
 }
 
 struct Package {
@@ -93,6 +99,13 @@ visible before compilation and avoids treating a URL as a package identity.
 `rev` selects a Git revision and may name a commit, tag, or branch. Resolution
 pins it to an exact commit in the lockfile. A tar dependency must specify its
 SHA-256 in the manifest; the downloaded bytes must match before extraction.
+
+A `.path` dependency is a local development dependency. Its path is relative
+to the declaring `package.tlk`, must name a directory containing `package.tlk`,
+and is never fetched or copied into the package cache. The lockfile retains
+the relative path and its declaring package so a transitive path remains
+relative to its own package. Path dependency source contents are intentionally
+mutable; the lockfile records the dependency graph, not a content hash.
 
 There is deliberately no `as:` field on dependencies.
 
@@ -162,18 +175,19 @@ tree.
 graph. For every package it records at least:
 
 - manifest name and declared version;
-- source kind and source URL;
-- exact Git commit, or tarball SHA-256; and
+- source kind and source URL or relative path;
+- exact Git commit, tarball SHA-256, or path-dependency base; and
 - resolved direct dependency edges.
 
 The lockfile format is versioned. The source identity, rather than only the
 manifest name, identifies a locked package, so different revisions of the
 same named package can exist in different dependency subgraphs.
 
-Installed package sources live in a content-addressed user cache. Installing a
-package materializes verified locked sources into that cache; it does not copy
-dependencies into the project and does not make them globally importable. The
-cache is an implementation detail, not a replacement for `package.lock`.
+Installed remote package sources live in a content-addressed user cache.
+Installing materializes verified Git and tarball sources into that cache; path
+dependencies remain at their declared locations. Installation never copies
+dependencies into the project or makes them globally importable. The cache is
+an implementation detail, not a replacement for `package.lock`.
 
 V1 uses the host `git` executable for Git sources and `curl` plus `tar` for
 remote archives. A missing tool is an installation error. This avoids adding a
@@ -182,6 +196,7 @@ network or archive dependency to the compiler.
 The CLI surface is:
 
 ```sh
+talk new <name>
 talk install
 talk update [package ...]
 talk build
@@ -189,6 +204,8 @@ talk run
 talk test
 ```
 
+- `talk new <name>` creates `<name>/` with a runnable `main` binary target
+  and an example test.
 - With no lockfile, `talk install` resolves the manifest graph, fetches and
   verifies its sources, and writes `package.lock`.
 - With a valid lockfile, `talk install` uses only its exact locked sources and
@@ -242,9 +259,11 @@ The implementation is complete when tests cover:
 2. tarball checksum mismatches fail before extraction;
 3. fetched manifest-name mismatches and normalized-import collisions fail
    clearly;
-4. offline installation succeeds from a populated cache and fails for a
-   missing entry;
-5. a package can import a direct remote dependency but not an undeclared
-   transitive dependency; and
-6. package library, binary, and test compilation preserve the behavior of the
+4. path dependencies resolve relative to both root and transitive package
+   manifests without network or cache access;
+5. offline installation succeeds from a populated cache and fails for a
+   missing remote entry;
+6. a package can import a direct dependency but not an undeclared transitive
+   dependency; and
+7. package library, binary, and test compilation preserve the behavior of the
    existing module compiler.

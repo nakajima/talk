@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased (2026-07-09) — Packages and `talk new`
+
+Talk now supports directory-based source packages declared by `package.tlk`.
+Packages can expose one library and one or more binary targets, and dependencies
+compile as external modules rather than being flattened into consumer source.
+
+Dependencies support pinned Git revisions, SHA-256-verified tarballs, and local
+relative `.path` sources. `talk install` resolves the full graph into a checked-in
+`package.lock`; `talk update` refreshes it; and `talk run`, `talk build`, and
+`talk test` use the locked graph. Remote sources are cached by content identity,
+while path dependencies remain mutable local development inputs.
+
+`talk new <name>` creates a runnable binary package with `package.tlk`,
+`package.lock`, `src/main.tlk`, and `tests/<name>.test.tlk`.
+
 ## Unreleased (2026-07-09) — Labeled enum payloads
 
 Enum cases can now label their fixed positional payloads:

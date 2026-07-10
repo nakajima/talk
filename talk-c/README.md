@@ -27,16 +27,20 @@ Most language-service APIs return typed opaque result handles, not JSON:
 - highlighting: `TalkHighlightTokens *`
 - goto definition: `TalkLocationResult *`
 - rename: `TalkWorkspaceEditResult *`
-- program/REPL evaluation: `TalkEvalResult *`
+- program/package/REPL evaluation: `TalkEvalResult *`
+- package tests: `TalkTestResult *`
 
 Each handle has status/error accessors plus typed count/get/value accessors. String fields are returned as `TalkStringRef` slices borrowed from the handle and remain valid only until the handle is freed. Swift wrappers should copy them into Swift `String` values immediately.
 
 String/raw-byte APIs still use `TalkResult`:
 
+- `talk_package_create_utf8`
 - `talk_format_utf8`
 - `talk_highlight_html_utf8`
 - `talk_render_lowered_utf8`
 - `talk_render_bytecode_utf8`
 - `talk_compile_bytecode_utf8`
 
-Always free returned values with the matching free function, e.g. `talk_diagnostics_free`, `talk_hover_free`, or `talk_result_free`.
+`talk_package_create_utf8` creates a new package directory with an executable `main` target, an empty lockfile, and a passing starter test. `talk_package_run_utf8` and `talk_package_test_utf8` operate on an existing package root; an empty binary name selects the package's only binary.
+
+Always free returned values with the matching free function, e.g. `talk_diagnostics_free`, `talk_test_result_free`, `talk_hover_free`, or `talk_result_free`.

@@ -83,8 +83,16 @@ async fn main() {
         Test {
             #[arg(value_hint = ValueHint::AnyPath)]
             paths: Vec<String>,
+            /// Emit machine-readable JSON.
+            #[arg(long)]
+            json: bool,
             #[arg(long)]
             offline: bool,
+        },
+        /// Create a new package directory.
+        New {
+            #[arg(value_hint = ValueHint::DirPath)]
+            name: String,
         },
         /// Install package dependencies in the current directory.
         Install {
@@ -455,51 +463,126 @@ async fn main() {
             }
             run_lowered(&mut lowered);
         }
-        Commands::Test { paths, offline } => {
+        Commands::Test {
+            paths,
+            json,
+            offline,
+        } => {
             if paths.is_empty() && package_exists_here() {
                 let project = match current_package(*offline) {
                     Ok(project) => project,
                     Err(err) => {
-                        eprintln!("error: {err}");
+                        if *json {
+                            println!(
+                                "{}",
+                                talk::testing::JsonOutcome::error_json("package", &err.to_string())
+                            );
+                        } else {
+                            eprintln!("error: {err}");
+                        }
                         std::process::exit(1);
                     }
                 };
-                match project.run_tests() {
-                    Ok(talk::testing::Outcome::NoTests) => eprintln!("no .test.tlk files found"),
-                    Ok(talk::testing::Outcome::Finished(summary)) => {
-                        print!("{}", summary.output);
-                        if summary.failed() {
-                            eprintln!("{} test assertion(s) failed", summary.failures);
+                if *json {
+                    match project.run_tests_json() {
+                        Ok(outcome) => {
+                            println!("{}", outcome.to_json());
+                            if outcome.failed() {
+                                std::process::exit(1);
+                            }
+                        }
+                        Err(err) => {
+                            println!(
+                                "{}",
+                                talk::testing::JsonOutcome::error_json("package", &err.to_string())
+                            );
                             std::process::exit(1);
                         }
                     }
-                    Err(err) => {
-                        eprintln!("error: {err}");
-                        std::process::exit(1);
+                } else {
+                    match project.run_tests() {
+                        Ok(talk::testing::Outcome::NoTests) => {
+                            eprintln!("no .test.tlk files found")
+                        }
+                        Ok(talk::testing::Outcome::Finished(summary)) => {
+                            print!("{}", summary.output);
+                            if summary.failed() {
+                                eprintln!("{} test assertion(s) failed", summary.failures);
+                                std::process::exit(1);
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("error: {err}");
+                            std::process::exit(1);
+                        }
                     }
                 }
             } else {
                 let runner = talk::testing::Runner::new(paths.iter().map(std::path::PathBuf::from));
-                match runner.run() {
-                    Ok(talk::testing::Outcome::NoTests) => eprintln!("no .test.tlk files found"),
-                    Ok(talk::testing::Outcome::Finished(summary)) => {
-                        print!("{}", summary.output);
-                        if summary.failed() {
-                            eprintln!("{} test assertion(s) failed", summary.failures);
+                if *json {
+                    match runner.run_json() {
+                        Ok(outcome) => {
+                            println!("{}", outcome.to_json());
+                            if outcome.failed() {
+                                std::process::exit(1);
+                            }
+                        }
+                        Err(err) => {
+                            println!("{}", err.to_json());
                             std::process::exit(1);
                         }
                     }
-                    Err(talk::testing::TestError::CompileDiagnostics(diagnostics)) => {
-                        eprint!(
-                            "{}",
-                            diagnostics.render_text(talk::cli::diagnostics::ColorMode::Auto)
-                        );
-                        std::process::exit(1);
+                } else {
+                    match runner.run() {
+                        Ok(talk::testing::Outcome::NoTests) => {
+                            eprintln!("no .test.tlk files found")
+                        }
+                        Ok(talk::testing::Outcome::Finished(summary)) => {
+                            print!("{}", summary.output);
+                            if summary.failed() {
+                                eprintln!("{} test assertion(s) failed", summary.failures);
+                                std::process::exit(1);
+                            }
+                        }
+                        Err(talk::testing::TestError::CompileDiagnostics(diagnostics)) => {
+                            eprint!(
+                                "{}",
+                                diagnostics.render_text(talk::cli::diagnostics::ColorMode::Auto)
+                            );
+                            std::process::exit(1);
+                        }
+                        Err(err) => {
+                            eprintln!("error: {err}");
+                            std::process::exit(1);
+                        }
                     }
-                    Err(err) => {
-                        eprintln!("error: {err}");
-                        std::process::exit(1);
-                    }
+                }
+            }
+        }
+        Commands::New { name } => {
+            let valid_name = matches!(
+                std::path::Path::new(name).components().next(),
+                Some(std::path::Component::Normal(_))
+            ) && std::path::Path::new(name).components().count() == 1;
+            if !valid_name {
+                eprintln!("error: package name must be one directory name, not a path");
+                std::process::exit(1);
+            }
+            let parent = match std::env::current_dir() {
+                Ok(parent) => parent,
+                Err(err) => {
+                    eprintln!("error: failed to determine the current directory: {err}");
+                    std::process::exit(1);
+                }
+            };
+            let root = parent.join(name);
+            match talk::compiling::package::PackageProject::create_executable_at(
+                &root, name, "0.1.0", "main",
+            ) {
+                Ok(()) => println!("created package {}", root.display()),
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    std::process::exit(1);
                 }
             }
         }
@@ -612,7 +695,7 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
 ## CLI
 
     talk run [files...]       parse, resolve, typecheck, lower, and run; no file reads stdin
-    talk test [paths...]      discover and run .test.tlk files
+    talk test [--json] [paths...] discover and run .test.tlk files
     talk check [--json] files typecheck and print diagnostics
     talk repl                 interactive declarations and expressions
     talk format [file]        format source from file or stdin
@@ -712,6 +795,7 @@ const NVIM_RUNTIME_FILES: &[&str] = &[
     "ftdetect/talktalk.lua",
     "ftplugin/talktalk.lua",
     "indent/talktalk.vim",
+    "lua/neotest-talk/init.lua",
     "syntax/talktalk.vim",
 ];
 

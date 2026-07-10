@@ -6,7 +6,10 @@ use talk::analysis::{
     CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentId, DocumentInput,
     Hover, Location, OwnershipInlayHint, OwnershipInlayHintKind, TextRange, Workspace,
 };
-use talk::compiling::driver::{Driver, DriverConfig, Source};
+use talk::compiling::{
+    driver::{Driver, DriverConfig, Source},
+    package::PackageProject,
+};
 use talk::repl::{ReplCompletions, ReplEvalResult, ReplSession};
 
 const STATUS_OK: i32 = 0;
@@ -44,6 +47,9 @@ const INLAY_CLONE: i32 = 4;
 const EVAL_OUTPUT: i32 = 1;
 const EVAL_DIAGNOSTICS: i32 = 2;
 const EVAL_ERROR: i32 = 3;
+
+const TEST_NO_TESTS: i32 = 1;
+const TEST_FINISHED: i32 = 2;
 
 const HIGHLIGHT_DECORATOR: i32 = 1;
 const HIGHLIGHT_NAMESPACE: i32 = 2;
@@ -233,6 +239,13 @@ pub struct TalkEvalResult {
     source: String,
     message: Option<String>,
     diagnostics: Vec<DiagnosticRecord>,
+}
+
+pub struct TalkTestResult {
+    status: HandleStatus,
+    kind: i32,
+    output: String,
+    failures: i64,
 }
 
 pub struct TalkReplCompletions {
@@ -848,6 +861,39 @@ impl TalkEvalResult {
     }
 }
 
+impl TalkTestResult {
+    fn no_tests() -> Self {
+        Self {
+            status: HandleStatus::ok(),
+            kind: TEST_NO_TESTS,
+            output: String::new(),
+            failures: 0,
+        }
+    }
+
+    fn finished(output: String, failures: i64) -> Self {
+        Self {
+            status: HandleStatus::ok(),
+            kind: TEST_FINISHED,
+            output,
+            failures,
+        }
+    }
+
+    fn boxed(value: Self) -> *mut Self {
+        Box::into_raw(Box::new(value))
+    }
+
+    fn err(error: ApiError) -> *mut Self {
+        Box::into_raw(Box::new(Self {
+            status: error.into(),
+            kind: 0,
+            output: String::new(),
+            failures: 0,
+        }))
+    }
+}
+
 impl TalkReplCompletions {
     fn ok(value: ReplCompletions) -> *mut Self {
         Box::into_raw(Box::new(Self {
@@ -978,6 +1024,62 @@ impl ProgramRunner {
             names.types.insert(runtime_symbol, display);
         }
         names
+    }
+}
+
+struct PackageRunner;
+
+impl PackageRunner {
+    fn create(root: String, name: String, version: String, binary_name: String) -> ApiResult<()> {
+        let root = Self::root(root)?;
+        PackageProject::create_executable_at(root, &name, &version, &binary_name)
+            .map_err(|error| ApiError::failed(error.to_string()))
+    }
+
+    fn run(root: String, binary_name: Option<String>, offline: bool) -> ApiResult<TalkEvalResult> {
+        let root = Self::root(root)?;
+        let project = PackageProject::open_at(root, offline)
+            .map_err(|error| ApiError::failed(error.to_string()))?;
+        let mut lowered = project
+            .compile_binary(binary_name.as_deref())
+            .map_err(|error| ApiError::failed(error.to_string()))?;
+        match lowered.run_vm_with_output() {
+            Ok((value, stdout)) => Ok(TalkEvalResult::from_repl_result(
+                HandleStatus::ok(),
+                ReplEvalResult::Output {
+                    stdout,
+                    stderr: String::new(),
+                    value: (!matches!(value, talk::vm::interp::Value::Void))
+                        .then(|| format!("{value:?}")),
+                },
+            )),
+            Err(error) => Ok(TalkEvalResult::from_repl_result(
+                HandleStatus::ok(),
+                ReplEvalResult::Error(format!("evaluation failed: {error}")),
+            )),
+        }
+    }
+
+    fn test(root: String, offline: bool) -> ApiResult<TalkTestResult> {
+        let root = Self::root(root)?;
+        let project = PackageProject::open_at(root, offline)
+            .map_err(|error| ApiError::failed(error.to_string()))?;
+        match project
+            .run_tests()
+            .map_err(|error| ApiError::failed(error.to_string()))?
+        {
+            talk::testing::Outcome::NoTests => Ok(TalkTestResult::no_tests()),
+            talk::testing::Outcome::Finished(summary) => {
+                Ok(TalkTestResult::finished(summary.output, summary.failures))
+            }
+        }
+    }
+
+    fn root(root: String) -> ApiResult<PathBuf> {
+        if root.is_empty() {
+            return Err(ApiError::invalid_input("package root must not be empty"));
+        }
+        Ok(PathBuf::from(root))
     }
 }
 
@@ -1309,6 +1411,67 @@ pub extern "C" fn talk_run_program_utf8(
         },
         TalkEvalResult::boxed,
         TalkEvalResult::err,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_package_create_utf8(
+    root_ptr: *const u8,
+    root_len: usize,
+    name_ptr: *const u8,
+    name_len: usize,
+    version_ptr: *const u8,
+    version_len: usize,
+    binary_name_ptr: *const u8,
+    binary_name_len: usize,
+) -> TalkResult {
+    Boundary::empty(|| {
+        let root = RawBytes::new(root_ptr, root_len, "package root").string()?;
+        let name = RawBytes::new(name_ptr, name_len, "package name").string()?;
+        let version = RawBytes::new(version_ptr, version_len, "package version").string()?;
+        let binary_name =
+            RawBytes::new(binary_name_ptr, binary_name_len, "binary name").string()?;
+        PackageRunner::create(root, name, version, binary_name)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_package_run_utf8(
+    root_ptr: *const u8,
+    root_len: usize,
+    binary_name_ptr: *const u8,
+    binary_name_len: usize,
+    offline: bool,
+) -> *mut TalkEvalResult {
+    Boundary::handle(
+        || {
+            let root = RawBytes::new(root_ptr, root_len, "package root").string()?;
+            let binary_name =
+                RawBytes::new(binary_name_ptr, binary_name_len, "binary name").string()?;
+            PackageRunner::run(
+                root,
+                (!binary_name.is_empty()).then_some(binary_name),
+                offline,
+            )
+        },
+        TalkEvalResult::boxed,
+        TalkEvalResult::err,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_package_test_utf8(
+    root_ptr: *const u8,
+    root_len: usize,
+    offline: bool,
+) -> *mut TalkTestResult {
+    Boundary::handle(
+        || {
+            let root = RawBytes::new(root_ptr, root_len, "package root").string()?;
+            PackageRunner::test(root, offline)
+        },
+        TalkTestResult::boxed,
+        TalkTestResult::err,
     )
 }
 
@@ -2097,6 +2260,46 @@ pub extern "C" fn talk_eval_result_diagnostic(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn talk_eval_result_free(ptr: *mut TalkEvalResult) {
+    // SAFETY: The pointer was allocated by this crate or is null.
+    unsafe { free_box(ptr) };
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_test_result_status(ptr: *const TalkTestResult) -> i32 {
+    // SAFETY: The pointer is only read if non-null.
+    unsafe { status_of(handle_ref(ptr).map(|handle| &handle.status)) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_test_result_error(ptr: *const TalkTestResult) -> TalkStringRef {
+    // SAFETY: The pointer is only read if non-null.
+    unsafe { error_of(handle_ref(ptr).map(|handle| &handle.status)) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_test_result_kind(ptr: *const TalkTestResult) -> i32 {
+    // SAFETY: The pointer is only read if non-null.
+    unsafe { handle_ref(ptr).map(|handle| handle.kind).unwrap_or(0) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_test_result_output(ptr: *const TalkTestResult) -> TalkStringRef {
+    // SAFETY: The pointer is only read if non-null.
+    unsafe {
+        handle_ref(ptr)
+            .map(|handle| TalkStringRef::from_str(&handle.output))
+            .unwrap_or_else(TalkStringRef::empty)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_test_result_failures(ptr: *const TalkTestResult) -> i64 {
+    // SAFETY: The pointer is only read if non-null.
+    unsafe { handle_ref(ptr).map(|handle| handle.failures).unwrap_or(0) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn talk_test_result_free(ptr: *mut TalkTestResult) {
     // SAFETY: The pointer was allocated by this crate or is null.
     unsafe { free_box(ptr) };
 }

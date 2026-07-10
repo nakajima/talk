@@ -144,6 +144,20 @@ public enum EvaluationResult: Equatable, Sendable {
     case error(message: String?)
 }
 
+public enum PackageTestResult: Equatable, Sendable {
+    case noTests
+    case finished(output: String, failures: Int64)
+
+    public var failed: Bool {
+        switch self {
+        case .noTests:
+            false
+        case .finished(_, let failures):
+            failures > 0
+        }
+    }
+}
+
 public struct ReplCompletion: Equatable, Sendable {
     public var display: String
     public var replacement: String
@@ -234,6 +248,70 @@ public enum Talk {
             try withBytes(source) { sourcePointer, sourceLength in
                 try dataResult(talk_compile_bytecode_utf8(pathPointer, pathLength, sourcePointer, sourceLength))
             }
+        }
+    }
+}
+
+public enum TalkPackage {
+    public static func create(
+        at directory: URL,
+        name: String,
+        version: String = "0.1.0",
+        binaryName: String = "main"
+    ) throws {
+        try withBytes(directory.path) { directoryPointer, directoryLength in
+            try withBytes(name) { namePointer, nameLength in
+                try withBytes(version) { versionPointer, versionLength in
+                    try withBytes(binaryName) { binaryNamePointer, binaryNameLength in
+                        try emptyResult(
+                            talk_package_create_utf8(
+                                directoryPointer,
+                                directoryLength,
+                                namePointer,
+                                nameLength,
+                                versionPointer,
+                                versionLength,
+                                binaryNamePointer,
+                                binaryNameLength
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    public static func run(
+        at directory: URL,
+        binaryName: String? = nil,
+        offline: Bool = false
+    ) throws -> EvaluationResult {
+        try withBytes(directory.path) { directoryPointer, directoryLength in
+            try withBytes(binaryName ?? "") { binaryNamePointer, binaryNameLength in
+                let result = try requireHandle(
+                    talk_package_run_utf8(
+                        directoryPointer,
+                        directoryLength,
+                        binaryNamePointer,
+                        binaryNameLength,
+                        offline
+                    ),
+                    name: "package evaluation result"
+                )
+                defer { talk_eval_result_free(result) }
+                return try readEvaluationResult(result)
+            }
+        }
+    }
+
+    public static func test(at directory: URL, offline: Bool = false) throws -> PackageTestResult {
+        try withBytes(directory.path) { directoryPointer, directoryLength in
+            let result = try requireHandle(
+                talk_package_test_utf8(directoryPointer, directoryLength, offline),
+                name: "package test result"
+            )
+            defer { talk_test_result_free(result) }
+            return try readPackageTestResult(result)
         }
     }
 }
@@ -620,6 +698,21 @@ private func readEvaluationResult(_ handle: OpaquePointer) throws -> EvaluationR
         return .error(message: optionalString(talk_eval_result_message(handle)))
     default:
         return .error(message: "unknown evaluation result kind")
+    }
+}
+
+private func readPackageTestResult(_ handle: OpaquePointer) throws -> PackageTestResult {
+    try checkStatus(talk_test_result_status(handle), error: talk_test_result_error(handle))
+    switch talk_test_result_kind(handle) {
+    case Int32(TALK_TEST_NO_TESTS):
+        return .noTests
+    case Int32(TALK_TEST_FINISHED):
+        return .finished(
+            output: string(talk_test_result_output(handle)),
+            failures: talk_test_result_failures(handle)
+        )
+    default:
+        throw TalkError.failed("unknown package test result kind")
     }
 }
 

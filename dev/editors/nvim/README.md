@@ -8,6 +8,7 @@ Plain Neovim runtime support for `.tlk` files. This does not configure LSP.
 - `ftplugin/talktalk.lua`: buffer-local editing defaults
 - `syntax/talktalk.vim`: regex syntax highlighting
 - `indent/talktalk.vim`: brace, bracket, and paren indentation
+- `lua/neotest-talk/init.lua`: Neotest adapter for `.test.tlk` files
 
 ## Install
 
@@ -37,6 +38,22 @@ vim.opt.runtimepath:prepend(vim.fn.expand("~/apps/talk/dev/editors/nvim"))
 ```
 
 Then open a `.tlk` file. Neovim should set `filetype=talktalk`.
+
+## Neotest
+
+After adding this directory to `runtimepath`, configure Neotest with:
+
+```lua
+require("neotest").setup({
+  adapters = {
+    require("neotest-talk")({
+      command = "talk",
+    }),
+  },
+})
+```
+
+The adapter discovers `test "name" { ... }` and `test("name") { ... }` in `*.test.tlk` files and runs them through `talk test --json`.
 
 ## Notes
 

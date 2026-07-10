@@ -118,6 +118,7 @@ pub enum PackageArtifact {
 pub enum PackageSource {
     Git { url: String, rev: String },
     Tar { url: String, sha256: String },
+    Path { path: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -333,6 +334,10 @@ impl PackageManifest {
                     hasher.update([0]);
                     hasher.update(sha256.as_bytes());
                 }
+                PackageSource::Path { path } => {
+                    hasher.update(b"path\0");
+                    hasher.update(path.as_bytes());
+                }
             }
             hasher.update([0]);
         }
@@ -392,6 +397,20 @@ impl PackageManifest {
                     },
                 })
             }
+            "path" => {
+                Self::only_fields(path, args, &["package", "path"])?;
+                let local_path = Self::string_field(path, args, "path")?;
+                if Path::new(&local_path).is_absolute() {
+                    return Err(Self::manifest_error(
+                        path,
+                        "path dependencies must use a path relative to package.tlk",
+                    ));
+                }
+                Ok(PackageDependency {
+                    package: Self::string_field(path, args, "package")?,
+                    source: PackageSource::Path { path: local_path },
+                })
+            }
             other => Err(Self::manifest_error(
                 path,
                 format!("unknown package dependency source .{other}"),
@@ -441,7 +460,7 @@ impl PackageManifest {
         else {
             return Err(Self::manifest_error(
                 path,
-                "expected a .git(...), .tar(...), .lib(...), or .bin(...) form",
+                "expected a .git(...), .tar(...), .path(...), .lib(...), or .bin(...) form",
             ));
         };
         let ExprKind::Member(None, Label::Named(name), _) = &callee.kind else {
@@ -544,6 +563,16 @@ enum LockedSource {
         url: String,
         sha256: String,
     },
+    Path {
+        path: String,
+        base: PathBase,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PathBase {
+    Root,
+    Package(String),
 }
 
 impl LockedSource {
@@ -561,6 +590,15 @@ impl LockedSource {
                 hasher.update(url.as_bytes());
                 hasher.update([0]);
                 hasher.update(sha256.as_bytes());
+            }
+            Self::Path { path, base } => {
+                hasher.update(b"path\0");
+                match base {
+                    PathBase::Root => hasher.update(b"root"),
+                    PathBase::Package(package) => hasher.update(package.as_bytes()),
+                }
+                hasher.update([0]);
+                hasher.update(path.as_bytes());
             }
         }
         hex_digest(hasher.finalize())
@@ -694,6 +732,17 @@ impl PackageLock {
                     format!("package {} has an invalid source id", package.name),
                 ));
             }
+            if let LockedSource::Path {
+                base: PathBase::Package(base),
+                ..
+            } = &package.source
+                && !ids.contains(base.as_str())
+            {
+                return Err(Self::error(
+                    path,
+                    format!("path package {} has a missing base package", package.name),
+                ));
+            }
             for dependency in &package.dependencies {
                 if !ids.contains(dependency.as_str()) {
                     return Err(Self::error(
@@ -730,6 +779,57 @@ impl PackageLock {
             .retain(|package| reachable.contains(&package.id));
     }
 
+    fn package_roots(
+        &self,
+        root: &Path,
+        store: &PackageStore,
+    ) -> Result<FxHashMap<String, PathBuf>, PackageError> {
+        let mut package_roots = FxHashMap::default();
+        let mut resolving = FxHashSet::default();
+        for package in &self.packages {
+            self.package_root(&package.id, root, store, &mut package_roots, &mut resolving)?;
+        }
+        Ok(package_roots)
+    }
+
+    fn package_root(
+        &self,
+        id: &str,
+        root: &Path,
+        store: &PackageStore,
+        package_roots: &mut FxHashMap<String, PathBuf>,
+        resolving: &mut FxHashSet<String>,
+    ) -> Result<PathBuf, PackageError> {
+        if let Some(package_root) = package_roots.get(id) {
+            return Ok(package_root.clone());
+        }
+        if !resolving.insert(id.to_string()) {
+            return Err(PackageError::Resolution(format!(
+                "path dependency bases form a cycle at {id}"
+            )));
+        }
+        let package = self
+            .packages
+            .iter()
+            .find(|package| package.id == id)
+            .ok_or_else(|| PackageError::Resolution(format!("missing locked package {id}")))?;
+        let path_base = match &package.source {
+            LockedSource::Path {
+                base: PathBase::Root,
+                ..
+            } => Some(root.to_path_buf()),
+            LockedSource::Path {
+                base: PathBase::Package(base),
+                ..
+            } => Some(self.package_root(base, root, store, package_roots, resolving)?),
+            LockedSource::Git { .. } | LockedSource::Tar { .. } => None,
+        };
+        let package_root = store.materialize(&package.source, path_base.as_deref())?;
+        resolving.remove(id);
+        package_roots.insert(id.to_string(), package_root.clone());
+        Ok(package_root)
+    }
+
     fn locked_package(path: &Path, expression: &Expr) -> Result<LockedPackage, PackageError> {
         let (kind, args) = PackageManifest::member_call(path, expression)
             .map_err(|error| Self::from_manifest_error(path, error))?;
@@ -762,6 +862,30 @@ impl PackageLock {
                 },
                 &["id", "package", "version", "url", "sha256", "dependencies"][..],
             ),
+            "path" => {
+                let path_value = PackageManifest::string_field(path, args, "path")
+                    .map_err(|error| Self::from_manifest_error(path, error))?;
+                if Path::new(&path_value).is_absolute() {
+                    return Err(Self::error(
+                        path,
+                        "locked path dependencies must be relative",
+                    ));
+                }
+                let base = PackageManifest::string_field(path, args, "base")
+                    .map_err(|error| Self::from_manifest_error(path, error))?;
+                let base = if base == "root" {
+                    PathBase::Root
+                } else {
+                    PathBase::Package(base)
+                };
+                (
+                    LockedSource::Path {
+                        path: path_value,
+                        base,
+                    },
+                    &["id", "package", "version", "path", "base", "dependencies"][..],
+                )
+            }
             other => return Err(Self::error(path, format!("unknown locked source .{other}"))),
         };
         PackageManifest::only_fields(path, args, expected_fields)
@@ -847,6 +971,24 @@ impl PackageLock {
                     rendered.push_str(&format!("            url: {},\n", Self::quote(url)));
                     rendered.push_str(&format!("            sha256: {},\n", Self::quote(sha256)));
                 }
+                LockedSource::Path { path, base } => {
+                    rendered.push_str("        .path(\n");
+                    rendered.push_str(&format!("            id: {},\n", Self::quote(&package.id)));
+                    rendered.push_str(&format!(
+                        "            package: {},\n",
+                        Self::quote(&package.name)
+                    ));
+                    rendered.push_str(&format!(
+                        "            version: {},\n",
+                        Self::quote(&package.version)
+                    ));
+                    rendered.push_str(&format!("            path: {},\n", Self::quote(path)));
+                    let base = match base {
+                        PathBase::Root => "root",
+                        PathBase::Package(package) => package,
+                    };
+                    rendered.push_str(&format!("            base: {},\n", Self::quote(base)));
+                }
             }
             rendered.push_str("            dependencies: [");
             Self::render_strings(&mut rendered, &package.dependencies);
@@ -928,20 +1070,73 @@ impl PackageStore {
     fn fetch(
         &self,
         dependency: &PackageDependency,
+        base_root: &Path,
+        base: PathBase,
     ) -> Result<(LockedSource, PathBuf), PackageError> {
         match &dependency.source {
             PackageSource::Git { url, rev } => self.fetch_git(url, rev),
             PackageSource::Tar { url, sha256 } => self.fetch_tar(url, sha256),
+            PackageSource::Path { path } => self.fetch_path(path, base_root, base),
         }
     }
 
-    fn materialize(&self, source: &LockedSource) -> Result<PathBuf, PackageError> {
+    fn materialize(
+        &self,
+        source: &LockedSource,
+        path_base: Option<&Path>,
+    ) -> Result<PathBuf, PackageError> {
         match source {
             LockedSource::Git { url, commit, .. } => {
                 self.fetch_git(url, commit).map(|(_, path)| path)
             }
             LockedSource::Tar { url, sha256 } => self.fetch_tar(url, sha256).map(|(_, path)| path),
+            LockedSource::Path { path, .. } => {
+                let base = path_base.ok_or_else(|| {
+                    PackageError::Cache(format!("path dependency {path:?} has no resolution base"))
+                })?;
+                self.local_path(path, base)
+            }
         }
+    }
+
+    fn fetch_path(
+        &self,
+        path: &str,
+        base_root: &Path,
+        base: PathBase,
+    ) -> Result<(LockedSource, PathBuf), PackageError> {
+        let root = self.local_path(path, base_root)?;
+        Ok((
+            LockedSource::Path {
+                path: path.to_string(),
+                base,
+            },
+            root,
+        ))
+    }
+
+    fn local_path(&self, path: &str, base: &Path) -> Result<PathBuf, PackageError> {
+        if Path::new(path).is_absolute() {
+            return Err(PackageError::Resolution(format!(
+                "path dependency {path:?} must be relative"
+            )));
+        }
+        let root = base
+            .join(path)
+            .canonicalize()
+            .map_err(|source| PackageError::Io {
+                context: format!(
+                    "failed to find path dependency {path:?} from {}",
+                    base.display()
+                ),
+                source,
+            })?;
+        if !root.is_dir() {
+            return Err(PackageError::Resolution(format!(
+                "path dependency {path:?} is not a directory"
+            )));
+        }
+        Ok(root)
     }
 
     fn fetch_git(
@@ -1304,6 +1499,7 @@ struct PackageResolver {
     store: PackageStore,
     packages: IndexMap<String, LockedPackage>,
     resolving: FxHashSet<String>,
+    resolving_roots: FxHashSet<PathBuf>,
 }
 
 impl PackageResolver {
@@ -1312,14 +1508,19 @@ impl PackageResolver {
             store,
             packages: IndexMap::new(),
             resolving: FxHashSet::default(),
+            resolving_roots: FxHashSet::default(),
         }
     }
 
-    fn resolve(mut self, manifest: &PackageManifest) -> Result<PackageLock, PackageError> {
+    fn resolve(
+        mut self,
+        manifest: &PackageManifest,
+        root: &Path,
+    ) -> Result<PackageLock, PackageError> {
         let root_dependencies = manifest
             .dependencies
             .iter()
-            .map(|dependency| self.resolve_dependency(dependency))
+            .map(|dependency| self.resolve_dependency(dependency, root, PathBase::Root))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(PackageLock {
             fingerprint: manifest.dependency_fingerprint(),
@@ -1331,10 +1532,12 @@ impl PackageResolver {
     fn resolve_dependency(
         &mut self,
         dependency: &PackageDependency,
+        base_root: &Path,
+        base: PathBase,
     ) -> Result<String, PackageError> {
-        let (source, root) = self.store.fetch(dependency)?;
+        let (source, root) = self.store.fetch(dependency, base_root, base)?;
         let id = source.id();
-        if self.packages.contains_key(&id) {
+        if self.packages.contains_key(&id) && !matches!(&source, LockedSource::Path { .. }) {
             return Ok(id);
         }
         if !self.resolving.insert(id.clone()) {
@@ -1343,9 +1546,16 @@ impl PackageResolver {
                 dependency.package
             )));
         }
+        if !self.resolving_roots.insert(root.clone()) {
+            return Err(PackageError::Resolution(format!(
+                "package dependency cycle includes {}",
+                dependency.package
+            )));
+        }
         let manifest = PackageManifest::read(&root)?;
         if manifest.name != dependency.package {
             self.resolving.remove(&id);
+            self.resolving_roots.remove(&root);
             return Err(PackageError::Resolution(format!(
                 "dependency at {} declares package {:?}, expected {:?}",
                 root.display(),
@@ -1356,9 +1566,10 @@ impl PackageResolver {
         let dependencies = manifest
             .dependencies
             .iter()
-            .map(|child| self.resolve_dependency(child))
+            .map(|child| self.resolve_dependency(child, &root, PathBase::Package(id.clone())))
             .collect::<Result<Vec<_>, _>>()?;
         self.resolving.remove(&id);
+        self.resolving_roots.remove(&root);
         self.packages.insert(
             id.clone(),
             LockedPackage {
@@ -1388,6 +1599,151 @@ pub struct PackageProject {
 }
 
 impl PackageProject {
+    pub fn create_executable_at(
+        root: impl AsRef<Path>,
+        name: &str,
+        version: &str,
+        binary_name: &str,
+    ) -> Result<(), PackageError> {
+        let root = root.as_ref();
+        if root.as_os_str().is_empty() {
+            return Err(PackageError::Resolution(
+                "package directory must not be empty".into(),
+            ));
+        }
+        if root.exists() {
+            return Err(PackageError::Resolution(format!(
+                "package directory {} already exists",
+                root.display()
+            )));
+        }
+        if version.is_empty() {
+            return Err(PackageError::Manifest {
+                path: root.join(MANIFEST_FILE),
+                message: "version must not be empty".into(),
+            });
+        }
+        if binary_name.is_empty() {
+            return Err(PackageError::Manifest {
+                path: root.join(MANIFEST_FILE),
+                message: "binary name must not be empty".into(),
+            });
+        }
+
+        let parent = root.parent().ok_or_else(|| {
+            PackageError::Resolution(format!(
+                "package directory {} has no parent",
+                root.display()
+            ))
+        })?;
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|source| PackageError::Io {
+                context: format!("failed to create package parent {}", parent.display()),
+                source,
+            })?;
+        }
+        let directory_name = root
+            .file_name()
+            .ok_or_else(|| {
+                PackageError::Resolution(format!(
+                    "package directory {} has no name",
+                    root.display()
+                ))
+            })?
+            .to_string_lossy();
+        let temporary = root.with_file_name(format!(
+            ".{directory_name}-{}-{}.tmp",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&temporary).map_err(|source| PackageError::Io {
+            context: format!(
+                "failed to create temporary package directory {}",
+                temporary.display()
+            ),
+            source,
+        })?;
+
+        let result = (|| {
+            let manifest_path = temporary.join(MANIFEST_FILE);
+            let manifest_source = Self::new_manifest_source(name, version, binary_name);
+            let manifest = PackageManifest::parse(&manifest_path, &manifest_source)?;
+            fs::write(&manifest_path, manifest_source).map_err(|source| PackageError::Io {
+                context: format!("failed to write {}", manifest_path.display()),
+                source,
+            })?;
+
+            let source_directory = temporary.join("src");
+            fs::create_dir(&source_directory).map_err(|source| PackageError::Io {
+                context: format!("failed to create {}", source_directory.display()),
+                source,
+            })?;
+            let main_source = source_directory.join("main.tlk");
+            fs::write(&main_source, "print(\"Hello, Talk!\")\n").map_err(|source| {
+                PackageError::Io {
+                    context: format!("failed to write {}", main_source.display()),
+                    source,
+                }
+            })?;
+
+            let tests_directory = temporary.join("tests");
+            fs::create_dir(&tests_directory).map_err(|source| PackageError::Io {
+                context: format!("failed to create {}", tests_directory.display()),
+                source,
+            })?;
+            let test_source = tests_directory.join(format!("{name}.test.tlk"));
+            fs::write(
+                &test_source,
+                "test(\"example\") {\n    assert(1 + 1 == 2)\n}\n",
+            )
+            .map_err(|source| PackageError::Io {
+                context: format!("failed to write {}", test_source.display()),
+                source,
+            })?;
+
+            PackageLock {
+                fingerprint: manifest.dependency_fingerprint(),
+                root_dependencies: Vec::new(),
+                packages: Vec::new(),
+            }
+            .write(&temporary.join(LOCK_FILE))
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_dir_all(&temporary);
+            return Err(error);
+        }
+
+        fs::rename(&temporary, root).map_err(|source| PackageError::Io {
+            context: format!("failed to create package directory {}", root.display()),
+            source,
+        })
+    }
+
+    fn new_manifest_source(name: &str, version: &str, binary_name: &str) -> String {
+        format!(
+            "Package(\n    name: {},\n    version: {},\n    builds: [.bin(named: {}, from: \"src/main.tlk\")],\n    dependencies: []\n)\n",
+            Self::quote_manifest_string(name),
+            Self::quote_manifest_string(version),
+            Self::quote_manifest_string(binary_name),
+        )
+    }
+
+    fn quote_manifest_string(value: &str) -> String {
+        let mut quoted = String::from("\"");
+        for ch in value.chars() {
+            match ch {
+                '\\' => quoted.push_str("\\\\"),
+                '\"' => quoted.push_str("\\\""),
+                '\n' => quoted.push_str("\\n"),
+                '\r' => quoted.push_str("\\r"),
+                '\t' => quoted.push_str("\\t"),
+                _ => quoted.push(ch),
+            }
+        }
+        quoted.push('\"');
+        quoted
+    }
+
     pub fn install_at(
         root: impl AsRef<Path>,
         offline: bool,
@@ -1416,7 +1772,7 @@ impl PackageProject {
             }
             lock
         } else {
-            let lock = PackageResolver::new(store.clone()).resolve(&manifest)?;
+            let lock = PackageResolver::new(store.clone()).resolve(&manifest, &root)?;
             lock.write(&lock_path)?;
             lock
         };
@@ -1472,7 +1828,11 @@ impl PackageProject {
         let mut root_dependencies = Vec::with_capacity(manifest.dependencies.len());
         for (index, dependency) in manifest.dependencies.iter().enumerate() {
             if selected.contains(dependency.package.as_str()) {
-                root_dependencies.push(resolver.resolve_dependency(dependency)?);
+                root_dependencies.push(resolver.resolve_dependency(
+                    dependency,
+                    &root,
+                    PathBase::Root,
+                )?);
             } else {
                 root_dependencies.push(previous.root_dependencies[index].clone());
             }
@@ -1561,9 +1921,27 @@ impl PackageProject {
     }
 
     pub fn run_tests(&self) -> Result<crate::testing::Outcome, PackageError> {
+        let Some(runner) = self.test_runner()? else {
+            return Ok(crate::testing::Outcome::NoTests);
+        };
+        runner
+            .run()
+            .map_err(|error| PackageError::Compile(error.to_string()))
+    }
+
+    pub fn run_tests_json(&self) -> Result<crate::testing::JsonOutcome, PackageError> {
+        let Some(runner) = self.test_runner()? else {
+            return Ok(crate::testing::JsonOutcome::NoTests);
+        };
+        runner
+            .run_json()
+            .map_err(|error| PackageError::Compile(error.to_string()))
+    }
+
+    fn test_runner(&self) -> Result<Option<crate::testing::Runner>, PackageError> {
         let tests_root = self.root.join("tests");
         if !tests_root.is_dir() {
-            return Ok(crate::testing::Outcome::NoTests);
+            return Ok(None);
         }
         let graph = self.compile_graph()?;
         let mut environment =
@@ -1583,9 +1961,10 @@ impl PackageProject {
         config.modules = Rc::new(environment);
         config.workspace_root = Some(self.root.clone());
         config.libraries = libraries;
-        crate::testing::Runner::with_config([tests_root], config)
-            .run()
-            .map_err(|error| PackageError::Compile(error.to_string()))
+        Ok(Some(crate::testing::Runner::with_config(
+            [tests_root],
+            config,
+        )))
     }
 
     fn from_lock(
@@ -1594,10 +1973,15 @@ impl PackageProject {
         lock: PackageLock,
         store: PackageStore,
     ) -> Result<Self, PackageError> {
-        let mut package_roots = FxHashMap::default();
+        let package_roots = lock.package_roots(&root, &store)?;
         for package in &lock.packages {
-            let package_root = store.materialize(&package.source)?;
-            let installed = PackageManifest::read(&package_root)?;
+            let package_root = package_roots.get(&package.id).ok_or_else(|| {
+                PackageError::Resolution(format!(
+                    "missing source root for locked package {}",
+                    package.name
+                ))
+            })?;
+            let installed = PackageManifest::read(package_root)?;
             if installed.name != package.name || installed.version != package.version {
                 return Err(PackageError::Resolution(format!(
                     "cached package at {} does not match locked {} {}",
@@ -1606,7 +1990,6 @@ impl PackageProject {
                     package.version
                 )));
             }
-            package_roots.insert(package.id.clone(), package_root);
         }
         Ok(Self {
             root,
@@ -1884,6 +2267,69 @@ mod tests {
     }
 
     #[test]
+    fn creates_a_runnable_package_scaffold() {
+        let parent = std::env::temp_dir().join(format!(
+            "talk-package-new-test-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&parent).expect("create package parent");
+        let root = parent.join("hello-world");
+        PackageProject::create_executable_at(&root, "hello-world", "0.1.0", "main")
+            .expect("create package");
+        let manifest = PackageManifest::read(&root).expect("read generated manifest");
+        assert_eq!(manifest.name, "hello-world");
+        assert_eq!(manifest.library(), None);
+        assert!(matches!(
+            manifest.binary(None),
+            Ok(PackageArtifact::Binary { name, from }) if name == "main" && from == "src/main.tlk"
+        ));
+        assert!(root.join("src/main.tlk").is_file());
+        assert!(root.join("tests/hello-world.test.tlk").is_file());
+        fs::remove_dir_all(parent).expect("remove package parent");
+    }
+
+    #[test]
+    fn installs_a_relative_path_dependency_without_network_access() {
+        let temporary = std::env::temp_dir().join(format!(
+            "talk-package-path-test-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let dependency = temporary.join("dependency");
+        let root = temporary.join("root");
+        fs::create_dir_all(dependency.join("src")).expect("create dependency source");
+        fs::create_dir_all(root.join("src")).expect("create root source");
+        fs::write(
+            dependency.join(MANIFEST_FILE),
+            "Package(name: \"local-lib\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        )
+        .expect("write dependency manifest");
+        fs::write(
+            dependency.join("src/lib.tlk"),
+            "public func answer() -> Int { 42 }",
+        )
+        .expect("write dependency source");
+        fs::write(
+            root.join(MANIFEST_FILE),
+            "Package(name: \"root\", version: \"0.1.0\", builds: [], dependencies: [.path(package: \"local-lib\", path: \"../dependency\")])",
+        )
+        .expect("write root manifest");
+        PackageProject::install_at(&root, true, false).expect("install path dependency");
+        let project = PackageProject::open_at(&root, true).expect("open locked path dependency");
+        assert_eq!(project.lock.packages.len(), 1);
+        assert!(matches!(
+            project.lock.packages[0].source,
+            LockedSource::Path {
+                base: PathBase::Root,
+                ..
+            }
+        ));
+        assert!(root.join(LOCK_FILE).is_file());
+        fs::remove_dir_all(temporary).expect("remove temporary directory");
+    }
+
+    #[test]
     fn lockfile_round_trips() {
         let root = std::env::temp_dir().join(format!(
             "talk-package-lock-test-{}-{}",
@@ -1968,7 +2414,7 @@ mod tests {
             root: cache.clone(),
             offline: false,
         })
-        .resolve(&manifest)
+        .resolve(&manifest, &temporary)
         .expect("resolve git dependency");
         let [package] = lock.packages.as_slice() else {
             panic!("expected one locked package");

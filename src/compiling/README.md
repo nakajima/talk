@@ -68,9 +68,11 @@ two compilations' id spaces touch.
 
 ## Packages (`package.rs`)
 
-`package.rs` owns package manifests, lockfiles, remote source installation,
-and package compilation. It resolves Git revisions to commits and verifies
-tarball SHA-256 values before storing source in a content-addressed cache.
+`package.rs` owns package manifests, lockfiles, source installation, and
+package compilation. It resolves Git revisions to commits and verifies tarball
+SHA-256 values before storing remote source in a content-addressed cache.
+Local `.path` dependencies resolve relative to their declaring manifest and
+remain at that location.
 Each resolved package receives one module id for the whole graph. Its public
 module interface and retained `LibraryTyped` body therefore use the same
 cross-module symbols when the root binary or tests are lowered.
@@ -112,8 +114,9 @@ on demand together with the using program.
 The thin layers that drive the driver live elsewhere but are worth
 mapping here:
 
-- `src/bin/talk.rs` — the CLI (`run`, `check` (`--json`), `parse`,
-  `lower`, `ir`, `bytecode`, `build`, `run-bytecode`, `hover`,
+- `src/bin/talk.rs` — the CLI (`new`, `install`, `update`, `run`, `test`,
+  `check` (`--json`), `parse`, `lower`, `ir`, `bytecode`, `build`,
+  `run-bytecode`, `hover`,
   `format`, `html`, `repl`, `lsp`, `setup`, `completions`, `llm`, ...),
   each command a short wrapper over a driver or analysis workspace at the
   right stage. The printed `lower`/`ir` formats, plus source-level
