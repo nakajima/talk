@@ -2064,7 +2064,15 @@ impl PackageProject {
         &self,
         filter: Option<String>,
     ) -> Result<crate::testing::Outcome, PackageError> {
-        let Some(runner) = self.test_runner(filter)? else {
+        self.run_tests_at_paths_with_filter(&[], filter)
+    }
+
+    pub fn run_tests_at_paths_with_filter(
+        &self,
+        paths: &[PathBuf],
+        filter: Option<String>,
+    ) -> Result<crate::testing::Outcome, PackageError> {
+        let Some(runner) = self.test_runner(paths, filter)? else {
             return Ok(crate::testing::Outcome::NoTests);
         };
         runner
@@ -2076,7 +2084,15 @@ impl PackageProject {
         &self,
         filter: Option<String>,
     ) -> Result<crate::testing::JsonOutcome, PackageError> {
-        let Some(runner) = self.test_runner(filter)? else {
+        self.run_tests_json_at_paths(&[], filter)
+    }
+
+    pub fn run_tests_json_at_paths(
+        &self,
+        paths: &[PathBuf],
+        filter: Option<String>,
+    ) -> Result<crate::testing::JsonOutcome, PackageError> {
+        let Some(runner) = self.test_runner(paths, filter)? else {
             return Ok(crate::testing::JsonOutcome::NoTests);
         };
         runner
@@ -2086,12 +2102,56 @@ impl PackageProject {
 
     fn test_runner(
         &self,
+        paths: &[PathBuf],
         filter: Option<String>,
     ) -> Result<Option<crate::testing::Runner>, PackageError> {
         let tests_root = self.root.join("tests");
         if !tests_root.is_dir() {
-            return Ok(None);
+            if paths.is_empty() {
+                return Ok(None);
+            }
+            return Err(PackageError::Resolution(format!(
+                "package {} has no tests/ directory",
+                self.manifest.name
+            )));
         }
+        let tests_root = tests_root
+            .canonicalize()
+            .map_err(|source| PackageError::Io {
+                context: format!("failed to find package tests under {}", self.root.display()),
+                source,
+            })?;
+        let roots = if paths.is_empty() {
+            vec![tests_root.clone()]
+        } else {
+            paths
+                .iter()
+                .map(|path| {
+                    let candidate = if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        self.root.join(path)
+                    };
+                    let candidate =
+                        candidate
+                            .canonicalize()
+                            .map_err(|source| PackageError::Io {
+                                context: format!(
+                                    "failed to find package test path {}",
+                                    path.display()
+                                ),
+                                source,
+                            })?;
+                    if !candidate.starts_with(&tests_root) {
+                        return Err(PackageError::Resolution(format!(
+                            "package test path {} must be under tests/",
+                            path.display()
+                        )));
+                    }
+                    Ok(candidate)
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
         let graph = self.compile_graph()?;
         let mut environment =
             self.environment_for(&self.lock.root_dependencies, &graph.dependencies)?;
@@ -2112,7 +2172,7 @@ impl PackageProject {
         config.source_root = Some(tests_root.clone());
         config.libraries = libraries;
         Ok(Some(
-            crate::testing::Runner::with_config([tests_root], config).with_filter(filter),
+            crate::testing::Runner::with_config(roots, config).with_filter(filter),
         ))
     }
 
@@ -2455,6 +2515,43 @@ mod tests {
         let error = PackageManifest::read(&root).expect_err("missing target fails validation");
         assert!(error.to_string().contains("failed to find package target"));
         fs::remove_dir_all(root).expect("remove package root");
+    }
+
+    #[test]
+    fn selected_package_tests_can_import_the_package_library() {
+        let temporary = std::env::temp_dir().join(format!(
+            "talk-package-selected-test-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(temporary.join("src")).expect("create source directory");
+        fs::create_dir_all(temporary.join("tests")).expect("create tests directory");
+        fs::write(
+            temporary.join(MANIFEST_FILE),
+            "Package(name: \"sample-package\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        )
+        .expect("write manifest");
+        fs::write(
+            temporary.join("src/lib.tlk"),
+            "public func answer() -> Int { 42 }\n",
+        )
+        .expect("write library");
+        fs::write(
+            temporary.join("tests/interface.test.tlk"),
+            "use sample_package::{ answer }\n\ntest(\"package interface\") {\n    assert(answer() == 42)\n}\n",
+        )
+        .expect("write test");
+
+        let project = PackageProject::install_at(&temporary, true, false).expect("install package");
+        let selected_test = temporary.join("tests/interface.test.tlk");
+        let outcome = project
+            .run_tests_at_paths_with_filter(&[selected_test], None)
+            .expect("run selected package test");
+        let crate::testing::Outcome::Finished(summary) = outcome else {
+            panic!("expected selected package test to run");
+        };
+        assert_eq!(summary.failures, 0);
+        fs::remove_dir_all(temporary).expect("remove package root");
     }
 
     #[test]

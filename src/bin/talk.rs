@@ -472,7 +472,7 @@ async fn main() {
             filter,
             offline,
         } => {
-            if paths.is_empty() && package_exists_here() {
+            if package_exists_here() {
                 let project = match current_package(*offline) {
                     Ok(project) => project,
                     Err(err) => {
@@ -487,8 +487,12 @@ async fn main() {
                         std::process::exit(1);
                     }
                 };
+                let package_test_paths = paths
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect::<Vec<_>>();
                 if *json {
-                    match project.run_tests_json(filter.clone()) {
+                    match project.run_tests_json_at_paths(&package_test_paths, filter.clone()) {
                         Ok(outcome) => {
                             println!("{}", outcome.to_json());
                             if outcome.failed() {
@@ -504,7 +508,9 @@ async fn main() {
                         }
                     }
                 } else {
-                    match project.run_tests_with_filter(filter.clone()) {
+                    match project
+                        .run_tests_at_paths_with_filter(&package_test_paths, filter.clone())
+                    {
                         Ok(talk::testing::Outcome::NoTests) => {
                             eprintln!("no .test.tlk files found")
                         }
