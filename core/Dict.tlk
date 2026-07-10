@@ -1,7 +1,7 @@
 // no-core
-use crate::Optional::{ Optional }
-use crate::Operators::{ Add, Equatable }
-use crate::String::{ String }
+use package::Optional::{ Optional }
+use package::Operators::{ Add, Equatable }
+use package::String::{ String }
 
 struct DictNode<Value> 'heap {
 	let key: String

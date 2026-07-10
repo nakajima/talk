@@ -789,7 +789,7 @@ mod tests {
         let lib_path = dir.join("lib.tlk");
         let main_path = dir.join("main.tlk");
         std::fs::write(&lib_path, "public let broken: Int = \"not an int\"\n").expect("lib");
-        let main_text = "use crate::lib::{ broken }\nprint(broken)\n";
+        let main_text = "use package::lib::{ broken }\nprint(broken)\n";
         std::fs::write(&main_path, main_text).expect("main");
 
         let main_id = main_path.to_string_lossy().into_owned();

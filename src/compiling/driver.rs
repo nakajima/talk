@@ -1282,7 +1282,7 @@ pub mod tests {
         let exportee_path = current_dir.join("dev/fixtures/qualified_exportee.tlk");
 
         std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
-        std::fs::write(&importer_path, "crate::qualified_exportee::exported\n").unwrap();
+        std::fs::write(&importer_path, "package::qualified_exportee::exported\n").unwrap();
 
         let driver = Driver::new(
             vec![Source::from(importer_path.clone())],
@@ -1343,7 +1343,7 @@ pub mod tests {
         std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
         std::fs::write(
             &importer_path,
-            "use crate::exportee::{ exported }\nexported\n",
+            "use package::exportee::{ exported }\nexported\n",
         )
         .unwrap();
 

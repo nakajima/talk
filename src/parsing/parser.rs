@@ -428,7 +428,7 @@ impl<'a> Parser<'a> {
             path.push_str(&segment);
         }
 
-        if matches!(path.split("::").next(), Some("crate" | "self" | "super")) {
+        if matches!(path.split("::").next(), Some("package" | "self" | "super")) {
             Ok(ImportPath::Local(path))
         } else {
             Ok(ImportPath::Package(path))

@@ -1,6 +1,6 @@
 // no-core
-use crate::String::{ String }
-use crate::Operators::{ Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable }
+use package::String::{ String }
+use package::Operators::{ Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable }
 
 public protocol Showable {
 	func show() -> String

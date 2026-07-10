@@ -1,5 +1,5 @@
 // no-core
-use crate::Ownership::{ CheapClone, Owner }
+use package::Ownership::{ CheapClone, Owner }
 
 public enum Allocation {
 	case allocate(Int)

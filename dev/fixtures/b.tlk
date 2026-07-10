@@ -1,4 +1,4 @@
-use crate::a::{ A }
+use package::a::{ A }
 
 struct B {
   let a: A

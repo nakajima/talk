@@ -1,8 +1,8 @@
 // no-core
-use crate::Memory::{ _alloc, _copy, _free }
-use crate::Operators::{ Add, Comparable, Equatable }
-use crate::String::{ String }
-use crate::Showable::{ Showable }
+use package::Memory::{ _alloc, _copy, _free }
+use package::Operators::{ Add, Comparable, Equatable }
+use package::String::{ String }
+use package::Showable::{ Showable }
 
 public enum IORequest {
 	case read(Int, RawPtr, Int)

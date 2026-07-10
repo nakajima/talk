@@ -18,10 +18,10 @@ impl LocalModulePaths {
     }
 
     pub fn is_local(path: &str) -> bool {
-        matches!(path.split("::").next(), Some("crate" | "self" | "super"))
+        matches!(path.split("::").next(), Some("package" | "self" | "super"))
     }
 
-    /// Resolves a `crate`, `self`, or `super` path to a `.tlk` source file.
+    /// Resolves a `package`, `self`, or `super` path to a `.tlk` source file.
     pub fn resolve(&self, source_path: &str, module_path: &str) -> Option<PathBuf> {
         let mut segments = module_path.split("::");
         let anchor = segments.next()?;
@@ -32,7 +32,7 @@ impl LocalModulePaths {
 
         let source = Path::new(source_path);
         let mut target = match anchor {
-            "crate" => self.source_root.clone(),
+            "package" => self.source_root.clone(),
             "self" | "super" => {
                 let source_relative =
                     source.strip_prefix(&self.source_root).ok().or_else(|| {

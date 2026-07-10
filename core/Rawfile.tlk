@@ -1,10 +1,10 @@
 // no-core
 
-use crate::Array::{ Array }
-use crate::IO::{ open_path, _io_read, _io_write, _io_close, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, S_IRUSR, S_IWUSR, EAGAIN, POLLIN, POLLOUT }
-use crate::Memory::{ _alloc }
-use crate::Operators::{ Add, Comparable }
-use crate::String::{ String }
+use package::Array::{ Array }
+use package::IO::{ open_path, _io_read, _io_write, _io_close, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, S_IRUSR, S_IWUSR, EAGAIN, POLLIN, POLLOUT }
+use package::Memory::{ _alloc }
+use package::Operators::{ Add, Comparable }
+use package::String::{ String }
 
 public struct Path {
 	let components: Array<String>

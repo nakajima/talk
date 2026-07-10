@@ -1,12 +1,12 @@
 // no-core
-use crate::Memory::{ _alloc }
-use crate::IO::{ _io_read, _io_write, _io_close }
-use crate::Net::{ _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM }
-use crate::Convert::{ From, Into }
-use crate::Operators::{ Add, Comparable, Equatable, Subtract }
-use crate::Showable::{ Showable }
-use crate::String::{ String, Substring, UTF8View }
-use crate::Optional::{ Optional }
+use package::Memory::{ _alloc }
+use package::IO::{ _io_read, _io_write, _io_close }
+use package::Net::{ _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM }
+use package::Convert::{ From, Into }
+use package::Operators::{ Add, Comparable, Equatable, Subtract }
+use package::Showable::{ Showable }
+use package::String::{ String, Substring, UTF8View }
+use package::Optional::{ Optional }
 
 public struct Request {
 	let raw: String

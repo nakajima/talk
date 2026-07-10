@@ -4445,7 +4445,7 @@ pub mod tests {
     fn parses_named_local_import() {
         use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
 
-        let parsed = parse("use crate::utils::{ greet, Point as LocalPoint }");
+        let parsed = parse("use package::utils::{ greet, Point as LocalPoint }");
 
         let decl = parsed.roots[0].as_decl();
         let DeclKind::Import(import) = &decl.kind else {
@@ -4463,7 +4463,7 @@ pub mod tests {
         }
 
         match &import.path {
-            ImportPath::Local(path) => assert_eq!(path, "crate::utils"),
+            ImportPath::Local(path) => assert_eq!(path, "package::utils"),
             _ => panic!("Expected local module path"),
         }
     }

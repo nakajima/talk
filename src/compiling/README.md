@@ -31,8 +31,8 @@ source-faithful ASTs for editor queries. `talk run`, `talk lower`,
 `talk ir`, `talk build`, and the REPL go on to lowering and scheduling.
 
 `parse()` also does **import discovery**. After parsing each file it
-scans explicit local `use crate::path` declarations and qualified references
-such as `crate::path::Name`, queues those files (adding `.tlk` when needed),
+scans explicit local `use package::path` declarations and qualified references
+such as `package::path::Name`, queues those files (adding `.tlk` when needed),
 and keeps going until the reachable file closure is
 parsed. Later stages therefore see the whole program, not one file at a
 time.

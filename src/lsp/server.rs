@@ -1039,6 +1039,72 @@ fn byte_offset_to_utf16_position(text: &str, byte_offset: u32) -> Option<Positio
 }
 
 /// Compute code actions for a document, including auto-import suggestions
+fn is_import(node: &crate::node::Node) -> bool {
+    matches!(
+        node,
+        crate::node::Node::Decl(crate::node_kinds::decl::Decl {
+            kind: crate::node_kinds::decl::DeclKind::Import(_),
+            ..
+        })
+    )
+}
+
+fn auto_import_edit(
+    text: &str,
+    roots: &[crate::node::Node],
+    import_statement: &str,
+) -> Option<TextEdit> {
+    let import_count = roots.iter().take_while(|root| is_import(root)).count();
+    let next_root_exists = import_count < roots.len();
+
+    let (insert_offset, mut new_text) = if let Some(last_import) = import_count
+        .checked_sub(1)
+        .and_then(|index| roots.get(index))
+    {
+        let import_end = last_import.span().end as usize;
+        let line_end = text[import_end..]
+            .find('\n')
+            .map(|offset| import_end + offset + 1)
+            .unwrap_or(text.len());
+        let suffix = text.get(line_end..)?;
+        let mut new_text = import_statement.to_string();
+        if next_root_exists {
+            new_text.push('\n');
+            if !suffix.starts_with('\n') {
+                new_text.push('\n');
+            }
+        } else if text.ends_with('\n') {
+            new_text.push('\n');
+        }
+        (line_end, new_text)
+    } else {
+        let no_core_end = text
+            .starts_with("// no-core")
+            .then(|| {
+                text.find('\n')
+                    .map(|offset| offset + 1)
+                    .unwrap_or(text.len())
+            })
+            .unwrap_or(0);
+        let suffix = text.get(no_core_end..)?;
+        let mut new_text = String::new();
+        if no_core_end > 0 && !text[..no_core_end].ends_with('\n') {
+            new_text.push('\n');
+        }
+        new_text.push_str(import_statement);
+        if !suffix.is_empty() {
+            new_text.push('\n');
+            if !suffix.starts_with('\n') {
+                new_text.push('\n');
+            }
+        }
+        (no_core_end, new_text)
+    };
+
+    let range = byte_span_to_range_utf16(text, insert_offset as u32, insert_offset as u32)?;
+    Some(TextEdit::new(range, std::mem::take(&mut new_text)))
+}
+
 fn compute_code_actions(
     workspace: &AnalysisWorkspace,
     document_id: &DocumentId,
@@ -1192,15 +1258,20 @@ fn compute_code_actions(
                 if segments.is_empty() {
                     continue;
                 }
-                let module_path = format!("crate::{}", segments.join("::"));
+                let module_path = format!("package::{}", segments.join("::"));
 
-                // Create the import statement.
-                let import_stmt = format!("use {module_path}::{{ {name} }}\n");
-
-                // Find where to insert (at the start of the file, after any existing imports)
-                let insert_position = Position::new(0, 0);
-
-                let edit = TextEdit::new(Range::new(insert_position, insert_position), import_stmt);
+                let Some(roots) = workspace
+                    .asts
+                    .get(file_id.0 as usize)
+                    .and_then(|ast| ast.as_ref())
+                    .map(|ast| ast.roots.as_slice())
+                else {
+                    continue;
+                };
+                let import_stmt = format!("use {module_path}::{{ {name} }}");
+                let Some(edit) = auto_import_edit(text, roots, &import_stmt) else {
+                    continue;
+                };
 
                 let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
                     std::collections::HashMap::new();
@@ -1754,7 +1825,7 @@ mod tests {
     }
 
     #[test]
-    fn undefined_name_quick_fix_uses_path_only_import() {
+    fn undefined_name_quick_fix_inserts_separated_import() {
         let main_code = "foo\n";
         let lib_code = "public let foo = 1\n";
         let uri_main =
@@ -1785,7 +1856,87 @@ mod tests {
         let rewritten = apply_edits(main_code, action.edit.as_ref().expect("edit"), &uri_main);
         assert_eq!(
             rewritten,
-            "use crate::auto_import_path_only_lib::{ foo }\nfoo\n"
+            "use package::auto_import_path_only_lib::{ foo }\n\nfoo\n"
+        );
+    }
+
+    #[test]
+    fn undefined_name_quick_fix_follows_no_core_comment() {
+        let main_code = "// no-core\nfoo\n";
+        let lib_code = "public let foo = 1\n";
+        let uri_main =
+            Url::from_file_path(std::env::temp_dir().join("auto_import_no_core_main.tlk"))
+                .expect("main uri");
+        let uri_lib = Url::from_file_path(std::env::temp_dir().join("auto_import_no_core_lib.tlk"))
+            .expect("lib uri");
+        let module = workspace_for_docs(vec![(uri_main.clone(), main_code), (uri_lib, lib_code)]);
+        let document_id = super::document_id_for_uri(&uri_main);
+        let everywhere = Range::new(
+            async_lsp::lsp_types::Position::new(0, 0),
+            async_lsp::lsp_types::Position::new(999, 0),
+        );
+        let actions = super::compute_code_actions(&module, &document_id, &uri_main, everywhere);
+        let async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) = actions
+            .iter()
+            .find(|action| match action {
+                async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) => {
+                    action.title.contains("Import 'foo'")
+                }
+                _ => false,
+            })
+            .expect("import quick-fix")
+        else {
+            panic!("not a code action");
+        };
+
+        let rewritten = apply_edits(main_code, action.edit.as_ref().expect("edit"), &uri_main);
+        assert_eq!(
+            rewritten,
+            "// no-core\nuse package::auto_import_no_core_lib::{ foo }\n\nfoo\n"
+        );
+    }
+
+    #[test]
+    fn undefined_name_quick_fix_appends_to_import_block() {
+        let main_code = "use package::auto_import_existing::{ existing }\n\nfoo\n";
+        let existing_code = "public let existing = 1\n";
+        let foo_code = "public let foo = 2\n";
+        let uri_main =
+            Url::from_file_path(std::env::temp_dir().join("auto_import_existing_main.tlk"))
+                .expect("main uri");
+        let uri_existing =
+            Url::from_file_path(std::env::temp_dir().join("auto_import_existing.tlk"))
+                .expect("existing uri");
+        let uri_foo = Url::from_file_path(std::env::temp_dir().join("auto_import_appended.tlk"))
+            .expect("foo uri");
+        let module = workspace_for_docs(vec![
+            (uri_main.clone(), main_code),
+            (uri_existing, existing_code),
+            (uri_foo, foo_code),
+        ]);
+        let document_id = super::document_id_for_uri(&uri_main);
+        let everywhere = Range::new(
+            async_lsp::lsp_types::Position::new(0, 0),
+            async_lsp::lsp_types::Position::new(999, 0),
+        );
+        let actions = super::compute_code_actions(&module, &document_id, &uri_main, everywhere);
+        let async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) = actions
+            .iter()
+            .find(|action| match action {
+                async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) => {
+                    action.title.contains("Import 'foo'")
+                }
+                _ => false,
+            })
+            .expect("import quick-fix")
+        else {
+            panic!("not a code action");
+        };
+
+        let rewritten = apply_edits(main_code, action.edit.as_ref().expect("edit"), &uri_main);
+        assert_eq!(
+            rewritten,
+            "use package::auto_import_existing::{ existing }\nuse package::auto_import_appended::{ foo }\n\nfoo\n"
         );
     }
 
@@ -2073,7 +2224,7 @@ mod tests {
         let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_across_files_b.tlk"))
             .expect("file uri");
         let code_a = "public let foo = 1\n";
-        let code_b = "use crate::rename_across_files_a::{ foo }\nfoo\n";
+        let code_b = "use package::rename_across_files_a::{ foo }\nfoo\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
 
@@ -2124,7 +2275,7 @@ mod tests {
         let uri_b =
             Url::from_file_path(std::env::temp_dir().join("rename_alias_b.tlk")).expect("file uri");
         let code_a = "public struct Point {}\n";
-        let code_b = "use crate::rename_alias_a::{ Point as Pt }\nlet p = Pt()\n";
+        let code_b = "use package::rename_alias_a::{ Point as Pt }\nlet p = Pt()\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
         let alias_use = code_b.rfind("Pt").expect("alias use");
@@ -2161,7 +2312,7 @@ mod tests {
 
         let rewritten_b = apply_edits(code_b, &edit, &uri_b);
         assert!(
-            rewritten_b.contains("use crate::rename_alias_a::{ Vec3 as Pt }"),
+            rewritten_b.contains("use package::rename_alias_a::{ Vec3 as Pt }"),
             "{rewritten_b}"
         );
         assert!(rewritten_b.contains("let p = Pt()"), "{rewritten_b}");
@@ -2174,7 +2325,7 @@ mod tests {
         let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_mixed_alias_b.tlk"))
             .expect("file uri");
         let code_a = "public struct Point {}\n";
-        let code_b = "use crate::rename_mixed_alias_a::{ Point as Pt, Point }\nlet a = Point()\nlet b = Pt()\n";
+        let code_b = "use package::rename_mixed_alias_a::{ Point as Pt, Point }\nlet a = Point()\nlet b = Pt()\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
         let unaliased_use = code_b.rfind("Point").expect("unaliased use");
@@ -2195,7 +2346,7 @@ mod tests {
 
         let rewritten_b = apply_edits(code_b, &edit, &uri_b);
         assert!(
-            rewritten_b.contains("use crate::rename_mixed_alias_a::{ Vec3 as Pt, Vec3 }"),
+            rewritten_b.contains("use package::rename_mixed_alias_a::{ Vec3 as Pt, Vec3 }"),
             "{rewritten_b}"
         );
         assert!(rewritten_b.contains("let a = Vec3()"), "{rewritten_b}");
@@ -2291,7 +2442,7 @@ mod tests {
 
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
-        let code_a = "use crate::b::{ foo }\nfoo\n";
+        let code_a = "use package::b::{ foo }\nfoo\n";
         let code_b = "public let foo = 1\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
@@ -2439,7 +2590,7 @@ mod tests {
         let uri_b = Url::from_file_path(std::env::temp_dir().join("extend_before_struct_b.tlk"))
             .expect("file uri");
 
-        let code_a = r#"use crate::extend_before_struct_b::{ Person }
+        let code_a = r#"use package::extend_before_struct_b::{ Person }
 extend Person {
   func foo() {}
 }
@@ -2531,7 +2682,7 @@ extend Person {
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
         let code_a = "public let foo = 1\n";
-        let code_b = "use crate::a::{ foo }\nfoo\n";
+        let code_b = "use package::a::{ foo }\nfoo\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
 
@@ -2624,7 +2775,7 @@ extend Person {
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
         let code_a = "public let foo = 1\n";
-        let code_b = "use crate::a::{ foo }\nfoo\n";
+        let code_b = "use package::a::{ foo }\nfoo\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
 
@@ -2633,8 +2784,8 @@ extend Person {
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
 
-        // Click on "crate::a" in the import path - should navigate to a.tlk
-        let path_offset = code_b.find("crate::a").expect("import path") as u32;
+        // Click on "package::a" in the import path - should navigate to a.tlk
+        let path_offset = code_b.find("package::a").expect("import path") as u32;
         let target = super::goto_definition(&module, None, &uri_b, path_offset).expect("target");
 
         assert_eq!(target.uri, uri_a, "should navigate to a.tlk");
@@ -2733,7 +2884,7 @@ extend Person {
     #[test]
     fn goto_definition_on_cross_file_function_call() {
         let code_a = "public func helper() -> Int { 1 }\n";
-        let code_b = "use crate::goto_cross_a::{ helper }\nhelper()\n";
+        let code_b = "use package::goto_cross_a::{ helper }\nhelper()\n";
         let uri_a =
             Url::from_file_path(std::env::temp_dir().join("goto_cross_a.tlk")).expect("file uri");
         let uri_b =

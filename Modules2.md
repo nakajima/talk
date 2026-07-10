@@ -2,10 +2,10 @@
 
 ```tlk
 // Import all public symbols from a local source module.
-use crate::peer
+use package::peer
 
 // Import selected local symbols.
-use crate::peer::{ hello }
+use package::peer::{ hello }
 
 // Import a sibling module.
 use super::sibling::{ hello }
@@ -14,6 +14,6 @@ use super::sibling::{ hello }
 use some_module::{ hello }
 
 // Qualify a local or package symbol.
-crate::peer::hello
+package::peer::hello
 some_module::hello
 ```

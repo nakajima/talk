@@ -1,9 +1,9 @@
 // no-core
-use crate::Convert
-use crate::Optional::{ Optional }
-use crate::Array::{ Array }
-use crate::Operators::{ Add, Subtract, Comparable, Equatable }
-use crate::Ownership::{ Borrowed }
+use package::Convert
+use package::Optional::{ Optional }
+use package::Array::{ Array }
+use package::Operators::{ Add, Subtract, Comparable, Equatable }
+use package::Ownership::{ Borrowed }
 
 public protocol Iterator {
 	associated Element

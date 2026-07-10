@@ -2663,19 +2663,19 @@ mod formatter_tests {
     #[test]
     fn inserts_blank_line_after_imports() {
         assert_eq!(
-            format_code("use crate::foo\nlet value=1", 80),
-            "use crate::foo\n\nlet value = 1"
+            format_code("use package::foo\nlet value=1", 80),
+            "use package::foo\n\nlet value = 1"
         );
         assert_eq!(
             format_code(
-                "use crate::foo::{ Foo }\nuse crate::bar::{ Bar }\nFoo()",
+                "use package::foo::{ Foo }\nuse package::bar::{ Bar }\nFoo()",
                 80
             ),
-            "use crate::foo::{ Foo }\nuse crate::bar::{ Bar }\n\nFoo()"
+            "use package::foo::{ Foo }\nuse package::bar::{ Bar }\n\nFoo()"
         );
         assert_eq!(
-            format_string("use crate::foo\n// The first value.\nlet value=1"),
-            "use crate::foo\n\n// The first value.\nlet value = 1"
+            format_string("use package::foo\n// The first value.\nlet value=1"),
+            "use package::foo\n\n// The first value.\nlet value = 1"
         );
     }
 

@@ -4,11 +4,11 @@
 // not user-perceived characters. Equality is byte equality: canonically
 // equivalent strings in different normal forms (NFC "é" vs NFD "é")
 // compare unequal.
-use crate::Operators::{ Add, Comparable, Equatable, Subtract }
-use crate::Memory::{ ByteStorage, _alloc, _copy, _ptr_add }
-use crate::Ownership::{ Borrowed, CheapClone }
-use crate::Optional::{ Optional }
-use crate::Iterable::{ IndexIterable }
+use package::Operators::{ Add, Comparable, Equatable, Subtract }
+use package::Memory::{ ByteStorage, _alloc, _copy, _ptr_add }
+use package::Ownership::{ Borrowed, CheapClone }
+use package::Optional::{ Optional }
+use package::Iterable::{ IndexIterable }
 
 public struct String {
 	let storage: ByteStorage

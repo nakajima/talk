@@ -31,7 +31,7 @@ pub enum ReceiverMode {
 /// Path in an import statement
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum ImportPath {
-    /// Local source module path rooted at crate, self, or super.
+    /// Local source module path rooted at package, self, or super.
     Local(#[drive(skip)] String),
     /// External package name like collections or http.
     Package(#[drive(skip)] String),

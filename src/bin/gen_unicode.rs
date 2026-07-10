@@ -236,7 +236,7 @@ fn render_unicode_data(entries: &[(u32, u8)]) -> String {
          // The table is a sorted boundary list: entries of four base-128\n\
          // septets encoding start_codepoint * 32 + category. See\n\
          // src/bin/gen_unicode.rs for the encoding and regeneration story.\n\
-         use crate::String::{ String }\n\n",
+         use package::String::{ String }\n\n",
     );
     for (name, value) in CAT_NAMES {
         let _ = writeln!(out, "public let _GC_{name}: Int = {value}");

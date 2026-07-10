@@ -1284,7 +1284,7 @@ fn rejects_auto_derived_showable_on_heap_struct() {
 #[test]
 fn cross_file_global_move_drops_once() {
     let file_a = "public let shared = \"hello\" + \" world\"";
-    let file_b = "use crate::a::{ shared }\nlet taken = shared\ntaken.byte_count";
+    let file_b = "use package::a::{ shared }\nlet taken = shared\ntaken.byte_count";
     let typed = Driver::new(
         vec![
             Source::in_memory("a.tlk".into(), file_a),

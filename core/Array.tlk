@@ -1,12 +1,12 @@
 // no-core
 // unsafe
-use crate::Optional
-use crate::Iterable::{ Iterable, Iterator, IntoIterator, IndexIterable, IndexIterator, Skip, Map }
-use crate::Memory::{ Storage, _storage, _load, _store, _swap, _is_unique }
-use crate::String::{ String }
-use crate::Operators::{ Add, Subtract, Multiply, Comparable, Equatable }
-use crate::Showable::{ Showable }
-use crate::Ownership::{ Borrowed, CheapClone, Deinit }
+use package::Optional
+use package::Iterable::{ Iterable, Iterator, IntoIterator, IndexIterable, IndexIterator, Skip, Map }
+use package::Memory::{ Storage, _storage, _load, _store, _swap, _is_unique }
+use package::String::{ String }
+use package::Operators::{ Add, Subtract, Multiply, Comparable, Equatable }
+use package::Showable::{ Showable }
+use package::Ownership::{ Borrowed, CheapClone, Deinit }
 
 public struct Array<Element> {
 	let storage: Storage<Element>
