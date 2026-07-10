@@ -181,7 +181,11 @@ pub enum DeclKind {
         #[drive(skip)]
         name_span: Span,
         generics: Vec<GenericDecl>,
+        /// Payload types stay positional. A label, when present, is metadata
+        /// for constructing and matching that payload slot.
         payloads: Vec<TypeAnnotation>,
+        #[drive(skip)]
+        payload_labels: Vec<Option<Name>>,
         result: Option<TypeAnnotation>,
     },
 

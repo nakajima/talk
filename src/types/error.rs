@@ -79,6 +79,13 @@ pub enum TypeError {
     RedundantVariantResultType {
         variant: String,
     },
+    InvalidVariantPayloadLabels {
+        variant: String,
+    },
+    DuplicateVariantPayloadLabel {
+        variant: String,
+        label: String,
+    },
     IncompatibleOrPatternRefinements,
     AmbiguousGadtMatchResult,
     InvalidExistentialProtocol {
@@ -273,6 +280,18 @@ impl Display for TypeError {
             }
             TypeError::RedundantVariantResultType { variant } => {
                 write!(f, "Variant result type for '{variant}' is redundant")
+            }
+            TypeError::InvalidVariantPayloadLabels { variant } => {
+                write!(
+                    f,
+                    "Payload labels for variant '{variant}' must match its declaration order"
+                )
+            }
+            TypeError::DuplicateVariantPayloadLabel { variant, label } => {
+                write!(
+                    f,
+                    "Variant '{variant}' declares payload label '{label}' more than once"
+                )
             }
             TypeError::IncompatibleOrPatternRefinements => {
                 write!(

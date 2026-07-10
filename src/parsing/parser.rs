@@ -661,10 +661,10 @@ impl<'a> Parser<'a> {
         }
         let (name, name_span) = self.identifier()?;
         let generics = self.generics()?;
-        let payloads = if self.did_match(TokenKind::LeftParen)? {
-            self.type_annotations(TokenKind::RightParen)?
+        let (payloads, payload_labels) = if self.did_match(TokenKind::LeftParen)? {
+            self.variant_payloads()?
         } else {
-            vec![]
+            (vec![], vec![])
         };
         let result = if self.did_match(TokenKind::Arrow)? {
             Some(self.type_annotation()?)
@@ -681,6 +681,7 @@ impl<'a> Parser<'a> {
                 name_span,
                 generics,
                 payloads,
+                payload_labels,
                 result,
             },
         })
@@ -1857,12 +1858,13 @@ impl<'a> Parser<'a> {
                 self.advance();
                 if self.did_match(TokenKind::Dot)? {
                     let (member_name, member_name_span) = self.identifier()?;
-                    let fields = self.pattern_fields()?;
+                    let (fields, field_labels) = self.pattern_fields()?;
                     PatternKind::Variant {
                         enum_name: Some(name.into()),
                         variant_name: member_name.to_string(),
                         variant_name_span: member_name_span,
                         fields,
+                        field_labels,
                     }
                 } else {
                     PatternKind::Bind(name.into())
@@ -1875,13 +1877,14 @@ impl<'a> Parser<'a> {
             TokenKind::Dot => {
                 self.advance();
                 let (member_name, member_name_span) = self.identifier()?;
-                let fields = self.pattern_fields()?;
+                let (fields, field_labels) = self.pattern_fields()?;
 
                 PatternKind::Variant {
                     enum_name: None,
                     variant_name: member_name.to_string(),
                     variant_name_span: member_name_span,
                     fields,
+                    field_labels,
                 }
             }
             TokenKind::LeftParen => {
@@ -1995,15 +1998,29 @@ impl<'a> Parser<'a> {
         Ok(PatternKind::Record { fields })
     }
 
-    fn pattern_fields(&mut self) -> Result<Vec<Pattern>, ParserError> {
+    fn pattern_fields(&mut self) -> Result<(Vec<Pattern>, Vec<Option<Name>>), ParserError> {
         let mut fields = vec![];
+        let mut labels = vec![];
         if self.did_match(TokenKind::LeftParen)? {
             while !self.did_match(TokenKind::RightParen)? {
-                fields.push(self.parse_pattern()?);
+                if self.peek_is(TokenKind::Identifier)
+                    && matches!(
+                        self.next.as_ref().map(|token| token.kind),
+                        Some(TokenKind::Colon)
+                    )
+                {
+                    let (label, _) = self.identifier()?;
+                    self.consume(TokenKind::Colon)?;
+                    fields.push(self.parse_pattern()?);
+                    labels.push(Some(label.into()));
+                } else {
+                    fields.push(self.parse_pattern()?);
+                    labels.push(None);
+                }
                 self.consume(TokenKind::Comma).ok();
             }
         };
-        Ok(fields)
+        Ok((fields, labels))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -3148,6 +3165,33 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn variant_payloads(
+        &mut self,
+    ) -> Result<(Vec<TypeAnnotation>, Vec<Option<Name>>), ParserError> {
+        let mut payloads = vec![];
+        let mut labels = vec![];
+
+        while !self.did_match(TokenKind::RightParen)? {
+            if self.peek_is(TokenKind::Identifier)
+                && matches!(
+                    self.next.as_ref().map(|token| token.kind),
+                    Some(TokenKind::Colon)
+                )
+            {
+                let (label, _) = self.identifier()?;
+                self.consume(TokenKind::Colon)?;
+                payloads.push(self.type_annotation()?);
+                labels.push(Some(label.into()));
+            } else {
+                payloads.push(self.type_annotation()?);
+                labels.push(None);
+            }
+            self.consume(TokenKind::Comma).ok();
+        }
+
+        Ok((payloads, labels))
+    }
+
     fn type_annotations(&mut self, closer: TokenKind) -> Result<Vec<TypeAnnotation>, ParserError> {
         let mut annotations: Vec<TypeAnnotation> = vec![];
 

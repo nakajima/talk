@@ -86,7 +86,7 @@ impl PatternRefinement {
                 label,
                 payload: payload
                     .into_iter()
-                    .map(|ty| ty.substitute(&tys, &effs, &rows))
+                    .map(|(label, ty)| (label, ty.substitute(&tys, &effs, &rows)))
                     .collect(),
                 ctor: ctor.map(|ty| ty.substitute(&tys, &effs, &rows)),
                 origin,
@@ -404,7 +404,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 variant_name,
                 variant_name_span: _,
                 fields,
-            } => self.check_variant_pattern(pattern, enum_name, variant_name, fields, expected),
+                field_labels,
+                ..
+            } => self.check_variant_pattern(
+                pattern,
+                enum_name,
+                variant_name,
+                fields,
+                field_labels,
+                expected,
+            ),
             PatternKind::Record { fields } => {
                 let mut row_fields: Vec<(Label, Ty)> = vec![];
                 let mut open = false;
@@ -463,6 +472,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         enum_name: &Option<Name>,
         variant_name: &str,
         fields: &[Pattern],
+        field_labels: &[Option<Name>],
         expected: &Ty,
     ) -> PatternRefinement {
         let shallow = self.store.shallow(expected);
@@ -536,6 +546,18 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 theta
             }
         };
+
+        let labels: Vec<Label> = fields
+            .iter()
+            .enumerate()
+            .map(
+                |(index, _)| match field_labels.get(index).and_then(Option::as_ref) {
+                    Some(label) => Label::Named(label.name_str()),
+                    None => Label::Positional(index),
+                },
+            )
+            .collect();
+        self.validate_variant_payload_labels(variant_name, variant, &labels, pattern.id);
 
         let substitution = param_subst(&info.params, &theta);
         let (instantiation, local_params) =

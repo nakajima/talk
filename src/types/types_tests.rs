@@ -1611,6 +1611,45 @@ pub mod tests {
     }
 
     #[test]
+    fn labeled_enum_payloads_construct_and_match() {
+        let t = check(
+            "// no-core\nenum Foo {\n\tcase bar(fizz: Int, buzz: Int)\n\tcase ok(Int)\n}\nlet foo = Foo.bar(fizz: 123, buzz: 456)\nlet result = match foo {\n\t.bar(fizz: _, buzz: value) -> value,\n\t.ok(value) -> value\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "foo"), "Foo");
+        assert_eq!(ty_of(&t, "result"), "Int");
+    }
+
+    #[test]
+    fn labeled_leading_dot_payloads_resolve_after_inference() {
+        let t = check(
+            "// no-core\nenum Foo {\n\tcase bar(fizz: Int, buzz: Int)\n}\nfunc id<T>(consume value: T) -> T { value }\nlet foo: Foo = id(.bar(fizz: 123, buzz: 456))",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "foo"), "Foo");
+    }
+
+    #[test]
+    fn labeled_enum_payloads_require_declared_labels_in_order() {
+        let t = check(
+            "// no-core\nenum Foo {\n\tcase bar(fizz: Int, buzz: Int)\n}\nFoo.bar(buzz: 1, fizz: 2)",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("Payload labels"), "{errors:?}");
+    }
+
+    #[test]
+    fn labeled_enum_patterns_require_declared_labels_in_order() {
+        let t = check(
+            "// no-core\nenum Foo {\n\tcase bar(fizz: Int, buzz: Int)\n}\nmatch Foo.bar(fizz: 1, buzz: 2) {\n\t.bar(buzz: _, fizz: _) -> 1\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("Payload labels"), "{errors:?}");
+    }
+
+    #[test]
     fn variant_payload_arity_mismatch_errors() {
         let t = check(
             "// no-core\nenum Maybe<T> {\n\tcase definitely(T)\n\tcase nope\n}\nlet maybe = Maybe.definitely(1, 2)",

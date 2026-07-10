@@ -609,7 +609,10 @@ impl<'s> Solver<'s> {
                 let enum_ty = self.store.render(enum_ty);
                 let payload = payload
                     .iter()
-                    .map(|ty| self.store.render(ty))
+                    .map(|(payload_label, ty)| match payload_label {
+                        Label::Named(label) => format!("{label}: {}", self.store.render(ty)),
+                        Label::Positional(_) | Label::_Symbol(_) => self.store.render(ty),
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 let ctor = ctor

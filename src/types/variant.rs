@@ -7,6 +7,7 @@
 
 use rustc_hash::FxHashMap;
 
+use crate::label::Label;
 use crate::name_resolution::symbol::Symbol;
 use crate::types::catalog::Variant;
 use crate::types::ty::{EffTail, Predicate, RowTail, Ty, match_pattern};
@@ -71,6 +72,20 @@ impl Variant {
 
     pub fn result_type(&self) -> &Ty {
         self.constructor_parts().1
+    }
+
+    /// Whether source argument labels name the fixed payload slots in
+    /// declaration order. Empty metadata means every payload is positional.
+    pub fn payload_labels_match(&self, labels: &[Label]) -> bool {
+        if labels.len() != self.argument_types().len() {
+            return true;
+        }
+        labels.iter().enumerate().all(|(index, label)| {
+            match self.payload_labels.get(index).and_then(Option::as_ref) {
+                Some(expected) => matches!(label, Label::Named(found) if found == expected),
+                None => matches!(label, Label::Positional(_)),
+            }
+        })
     }
 
     pub fn instantiate(

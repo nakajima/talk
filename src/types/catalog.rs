@@ -55,6 +55,10 @@ pub struct StructInfo {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Variant {
     pub symbol: Symbol,
+    /// Labels are source metadata for fixed payload positions. They never
+    /// contribute to the constructor scheme or enum representation.
+    #[serde(default)]
+    pub payload_labels: Vec<Option<String>>,
     /// The constructor's qualified function type. Payload-less variants are
     /// still recorded as nullary functions here; source member lookup unwraps
     /// them back to bare values.
@@ -524,6 +528,7 @@ impl TypeCatalog {
                                         l,
                                         Variant {
                                             symbol: imp(variant.symbol, target),
+                                            payload_labels: variant.payload_labels,
                                             constructor_scheme: variant
                                                 .constructor_scheme
                                                 .import_symbols(target),

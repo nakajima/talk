@@ -673,7 +673,7 @@ impl<'s> Solver<'s> {
         &mut self,
         enum_ty: Ty,
         label: Label,
-        payload: Vec<Ty>,
+        payload: Vec<(Label, Ty)>,
         ctor: Option<Ty>,
         origin: CtOrigin,
         queue: &mut Vec<Constraint>,
@@ -739,6 +739,15 @@ impl<'s> Solver<'s> {
         };
         self.member_resolutions
             .insert(origin.node, MemberResolution::Direct(variant.symbol));
+        let payload_labels: Vec<Label> = payload.iter().map(|(label, _)| label.clone()).collect();
+        if !variant.payload_labels_match(&payload_labels) {
+            self.errors.push((
+                TypeError::InvalidVariantPayloadLabels {
+                    variant: label.to_string(),
+                },
+                origin.node,
+            ));
+        }
         let mut tys: FxHashMap<Symbol, Ty> = info
             .params
             .iter()
@@ -791,7 +800,7 @@ impl<'s> Solver<'s> {
                 origin.node,
             ));
         } else {
-            for (expected, found) in instantiation.argument_types.iter().zip(&payload) {
+            for (expected, (_, found)) in instantiation.argument_types.iter().zip(&payload) {
                 // A borrow-typed (or still-solving) payload argument against
                 // an owned/unsolved slot defers (ADR 0021): eager equality
                 // would bind the slot to the borrow — or the argument var

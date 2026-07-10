@@ -41,6 +41,7 @@ pub mod tests {
             name,
             name_span,
             generics: vec![],
+            payload_labels: vec![None; payloads.len()],
             payloads,
             result: None,
         }
@@ -2124,6 +2125,30 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_labeled_enum_payloads() {
+        let parsed = parse("enum Foo { case bar(fizz: Int, buzz: String) }");
+        let DeclKind::Enum { body, .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected enum");
+        };
+        let DeclKind::EnumVariant {
+            payloads,
+            payload_labels,
+            ..
+        } = &body.decls[0].kind
+        else {
+            panic!("expected enum variant");
+        };
+        assert_eq!(payloads.len(), 2);
+        assert_eq!(
+            payload_labels,
+            &vec![
+                Some(Name::Raw("fizz".into())),
+                Some(Name::Raw("buzz".into()))
+            ]
+        );
+    }
+
+    #[test]
     fn parses_basic_match() {
         let parsed = parse(
             "match fizz {
@@ -2225,6 +2250,7 @@ pub mod tests {
                                 enum_name: None,
                                 variant_name: "foo".into(),
                                 variant_name_span: Span::ANY,
+                                field_labels: vec![None],
                                 fields: vec![Pattern {
                                     id: NodeID::ANY,
                                     span: Span::ANY,
@@ -2246,7 +2272,8 @@ pub mod tests {
                                 enum_name: None,
                                 variant_name: "bar".into(),
                                 variant_name_span: Span::ANY,
-                                fields: vec![]
+                                fields: vec![],
+                                field_labels: vec![]
                             }
                         },
                         body: any_block!(vec![any_expr_stmt!(ExprKind::Variable("fizz".into()))])
@@ -2476,7 +2503,8 @@ pub mod tests {
                 enum_name: Some(Name::Raw("Fizz".into())),
                 variant_name: "buzz".into(),
                 variant_name_span: Span::ANY,
-                fields: vec![]
+                fields: vec![],
+                field_labels: vec![]
             }
         );
 
@@ -2486,8 +2514,26 @@ pub mod tests {
                 enum_name: None,
                 variant_name: "foo".into(),
                 variant_name_span: Span::ANY,
-                fields: vec![]
+                fields: vec![],
+                field_labels: vec![]
             }
+        );
+
+        let PatternKind::Variant {
+            fields,
+            field_labels,
+            ..
+        } = parse_pattern(".bar(fizz: _, buzz: value)").kind
+        else {
+            panic!("expected variant pattern");
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(
+            field_labels,
+            vec![
+                Some(Name::Raw("fizz".into())),
+                Some(Name::Raw("buzz".into()))
+            ]
         );
     }
 

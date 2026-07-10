@@ -606,9 +606,12 @@ impl<'a> Formatter<'a> {
                 name,
                 generics,
                 payloads,
+                payload_labels,
                 result,
                 ..
-            } => self.format_enum_variant(name, generics, payloads, result.as_ref()),
+            } => {
+                self.format_enum_variant(name, generics, payloads, payload_labels, result.as_ref())
+            }
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
             DeclKind::MethodRequirement {
                 signature,
@@ -1222,6 +1225,7 @@ impl<'a> Formatter<'a> {
                 enum_name,
                 variant_name,
                 fields,
+                field_labels,
                 ..
             } => {
                 let mut result = if let Some(name) = enum_name {
@@ -1234,8 +1238,19 @@ impl<'a> Formatter<'a> {
                 };
 
                 if !fields.is_empty() {
-                    let field_docs: Vec<_> =
-                        fields.iter().map(|p| self.format_pattern(p)).collect();
+                    let field_docs: Vec<_> = fields
+                        .iter()
+                        .enumerate()
+                        .map(|(index, pattern)| {
+                            match field_labels.get(index).and_then(Option::as_ref) {
+                                Some(label) => concat(
+                                    concat(self.format_name(label), text(": ")),
+                                    self.format_pattern(pattern),
+                                ),
+                                None => self.format_pattern(pattern),
+                            }
+                        })
+                        .collect();
 
                     result = concat(
                         result,
@@ -1979,6 +1994,7 @@ impl<'a> Formatter<'a> {
         name: &Name,
         generics: &[GenericDecl],
         types: &[TypeAnnotation],
+        payload_labels: &[Option<Name>],
         case_result: Option<&TypeAnnotation>,
     ) -> Doc {
         let mut result = concat_space(text("case"), self.format_name(name));
@@ -2000,7 +2016,16 @@ impl<'a> Formatter<'a> {
         if !types.is_empty() {
             let type_docs: Vec<_> = types
                 .iter()
-                .map(|ty| self.format_type_annotation(ty))
+                .enumerate()
+                .map(
+                    |(index, ty)| match payload_labels.get(index).and_then(Option::as_ref) {
+                        Some(label) => concat(
+                            concat(self.format_name(label), text(": ")),
+                            self.format_type_annotation(ty),
+                        ),
+                        None => self.format_type_annotation(ty),
+                    },
+                )
                 .collect();
 
             result = concat(
@@ -2874,6 +2899,10 @@ mod formatter_tests {
             format_code("enum Option<T> { case some(T) case none }", 80),
             "enum Option<T> {\n\tcase some(T)\n\tcase none\n}"
         );
+        assert_eq!(
+            format_code("enum Foo { case bar(fizz: Int,buzz: String) }", 80),
+            "enum Foo {\n\tcase bar(fizz: Int, buzz: String)\n}"
+        );
     }
 
     #[test]
@@ -2894,6 +2923,11 @@ mod formatter_tests {
 
         let expected_enum = "match x {\n\tOption.some(val) -> val,\n\tOption.none -> 0\n}";
         assert_eq!(format_code(match_with_enum, 80), expected_enum);
+
+        assert_eq!(
+            format_code("match foo { .bar(fizz: _,buzz: value) -> value }", 80),
+            "match foo {\n\t.bar(fizz: _, buzz: value) -> value\n}"
+        );
     }
 
     #[test]

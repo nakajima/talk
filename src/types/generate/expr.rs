@@ -498,6 +498,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             CtReason::Apply,
         );
         let args = args.unwrap_or(&[]);
+        self.validate_variant_payload_labels(
+            &label.to_string(),
+            &variant,
+            &args.iter().map(|arg| arg.label.clone()).collect::<Vec<_>>(),
+            expr.id,
+        );
         if args.len() != instantiation.argument_types.len() {
             self.diagnostics.errors.push((
                 TypeError::ArityMismatch {
@@ -513,6 +519,23 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
         self.artifacts.node_types.insert(expr.id, expected.clone());
         true
+    }
+
+    pub(super) fn validate_variant_payload_labels(
+        &mut self,
+        variant_name: &str,
+        variant: &Variant,
+        labels: &[Label],
+        node: NodeID,
+    ) {
+        if !variant.payload_labels_match(labels) {
+            self.diagnostics.errors.push((
+                TypeError::InvalidVariantPayloadLabels {
+                    variant: variant_name.into(),
+                },
+                node,
+            ));
+        }
     }
 
     pub(super) fn infer_expr_kind(&mut self, expr: &Expr, ctx: &Ctx) -> Ty {
@@ -589,6 +612,23 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     );
                 }
                 if let ExprKind::Member(Some(receiver), label, _) = &callee.kind
+                    && let ExprKind::Constructor(name) = &receiver.kind
+                    && let Ok(symbol) = name.symbol()
+                    && let Some(variant) = self
+                        .catalog
+                        .enums
+                        .get(&symbol)
+                        .and_then(|info| info.variants.get(&label.to_string()))
+                        .cloned()
+                {
+                    self.validate_variant_payload_labels(
+                        &label.to_string(),
+                        &variant,
+                        &args.iter().map(|arg| arg.label.clone()).collect::<Vec<_>>(),
+                        expr.id,
+                    );
+                }
+                if let ExprKind::Member(Some(receiver), label, _) = &callee.kind
                     && !matches!(receiver.kind, ExprKind::Constructor(_))
                 {
                     if !type_args.is_empty() {
@@ -612,9 +652,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     && type_args.is_empty()
                     && trailing_block.is_none()
                 {
-                    let payload: Vec<Ty> = args
+                    let payload: Vec<(Label, Ty)> = args
                         .iter()
-                        .map(|arg| self.infer_expr(&arg.value, ctx))
+                        .map(|arg| (arg.label.clone(), self.infer_expr(&arg.value, ctx)))
                         .collect();
                     let result = Ty::Var(self.store.fresh_ty(self.level, expr.id));
                     let ctor = Ty::Var(self.store.fresh_ty(self.level, callee.id));

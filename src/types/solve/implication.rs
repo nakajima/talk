@@ -136,7 +136,7 @@ impl<'s> Solver<'s> {
                 .or_else(|| {
                     payload
                         .iter()
-                        .find_map(|ty| self.ty_mentions_params(ty, params))
+                        .find_map(|(_, ty)| self.ty_mentions_params(ty, params))
                 })
                 .or_else(|| {
                     ctor.as_ref()

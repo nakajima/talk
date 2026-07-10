@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (2026-07-09) — Labeled enum payloads
+
+Enum cases can now label their fixed positional payloads:
+
+```talk
+enum Foo {
+	case bar(fizz: Int, buzz: String)
+}
+
+let foo = Foo.bar(fizz: 123, buzz: "sup")
+match foo {
+	.bar(fizz: _, buzz: value) -> value
+}
+```
+
+Labels are enum-case metadata rather than record-row fields. They are checked
+at construction and pattern sites, must match declaration order, and lower to
+the existing positional enum payload representation.
+
 ## Unreleased (2026-07-09) — Array.swap and typed raw-memory swap
 
 `Array` now has `swap(i, j)`, implemented with copy-on-write uniqueness and a

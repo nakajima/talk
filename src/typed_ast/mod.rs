@@ -541,6 +541,8 @@ pub enum DeclKind {
         #[drive(skip)]
         payloads: Vec<TypeAnnotation>,
         #[drive(skip)]
+        payload_labels: Vec<Option<Name>>,
+        #[drive(skip)]
         result: Option<TypeAnnotation>,
     },
     FuncSignature(#[drive(skip)] FuncSignature),

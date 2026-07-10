@@ -175,7 +175,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.wanteds.push(Constraint::HasVariant {
                     enum_ty: next_result_ty.clone(),
                     label: Label::Named("some".into()),
-                    payload: vec![element_ty.clone()],
+                    payload: vec![(Label::Positional(0), element_ty.clone())],
                     ctor: None,
                     origin: CtOrigin::new(pattern.id, CtReason::Pattern),
                 });

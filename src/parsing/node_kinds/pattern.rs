@@ -52,7 +52,11 @@ pub enum PatternKind {
         variant_name: String,
         #[drive(skip)]
         variant_name_span: Span,
-        fields: Vec<Pattern>, // Recursive patterns for fields
+        /// Labels select fixed, positional enum payload slots. They are not
+        /// record fields and are erased after the checker validates them.
+        fields: Vec<Pattern>,
+        #[drive(skip)]
+        field_labels: Vec<Option<Name>>,
     },
 
     Record {

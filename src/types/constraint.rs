@@ -99,14 +99,14 @@ pub enum Constraint {
     /// A leading-dot variant use (`.some(1)`) in inference position: the
     /// enum arrives through unification rather than the checking mode, so
     /// resolution defers until `enum_ty`'s head is known — the same
-    /// discipline as `HasMember`. `payload` carries the written arguments'
-    /// inferred types; `ctor` is the callee node's type variable when the
-    /// dot is a call's callee, unified with the constructor's function type
-    /// on discharge.
+    /// discipline as `HasMember`. `payload` carries each written argument's
+    /// label and inferred type until the enum metadata is available. `ctor`
+    /// is the callee node's type variable when the dot is a call's callee,
+    /// unified with the constructor's function type on discharge.
     HasVariant {
         enum_ty: Ty,
         label: Label,
-        payload: Vec<Ty>,
+        payload: Vec<(Label, Ty)>,
         ctor: Option<Ty>,
         origin: CtOrigin,
     },

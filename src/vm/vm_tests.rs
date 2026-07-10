@@ -488,6 +488,14 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_labeled_enum_payloads() {
+        let (value, _) = run_on_both_engines_io(
+            "enum Foo {\n\tcase bar(fizz: Int, buzz: String)\n\tcase ok(String)\n}\nlet foo = Foo.bar(fizz: 123, buzz: \"sup\")\nmatch foo {\n\t.bar(fizz: _, buzz: value) -> value.byte_count,\n\t.ok(value) -> value.byte_count\n}",
+        );
+        assert_eq!(value, Value::I64(3));
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_nested_variant_patterns() {
         let (value, _) = run_on_both_engines_io(
             "enum Inner {\n\tcase a(Int)\n\tcase b\n}\nenum Outer {\n\tcase wrap(Inner)\n\tcase empty\n}\nlet o = Outer.wrap(Inner.a(7))\nmatch o {\n\t.wrap(.a(x)) -> x,\n\t.wrap(.b) -> 1,\n\t.empty -> 2\n}",

@@ -596,6 +596,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     name,
                     generics: case_generics,
                     payloads: payload_annotations,
+                    payload_labels: declared_payload_labels,
                     result: case_result,
                     ..
                 } => {
@@ -607,6 +608,22 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                         .iter()
                         .map(|a| self.lower_annotation(a))
                         .collect();
+                    let payload_labels: Vec<Option<String>> = declared_payload_labels
+                        .iter()
+                        .map(|label| label.as_ref().map(Name::name_str))
+                        .collect();
+                    let mut seen_labels = FxHashSet::default();
+                    for label in payload_labels.iter().flatten() {
+                        if !seen_labels.insert(label.clone()) {
+                            self.diagnostics.errors.push((
+                                TypeError::DuplicateVariantPayloadLabel {
+                                    variant: name.name_str(),
+                                    label: label.clone(),
+                                },
+                                member.id,
+                            ));
+                        }
+                    }
                     let case_result_ty = case_result
                         .as_ref()
                         .map(|annotation| self.lower_annotation(annotation))
@@ -668,6 +685,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                         name.name_str(),
                         Variant {
                             symbol: variant,
+                            payload_labels,
                             constructor_scheme,
                         },
                     );

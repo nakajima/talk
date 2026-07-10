@@ -45,6 +45,7 @@ pub mod tests {
             name,
             name_span,
             generics: vec![],
+            payload_labels: vec![None; payloads.len()],
             payloads,
             result: None,
         }

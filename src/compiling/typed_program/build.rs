@@ -976,12 +976,14 @@ impl TypedTreeBuilder<'_> {
                 name,
                 generics,
                 payloads,
+                payload_labels,
                 result,
                 ..
             } => typed_ast::DeclKind::EnumVariant {
                 name: name.clone(),
                 generics: generics.clone(),
                 payloads: payloads.clone(),
+                payload_labels: payload_labels.clone(),
                 result: result.clone(),
             },
             decl::DeclKind::FuncSignature(sig) => typed_ast::DeclKind::FuncSignature(sig.clone()),
