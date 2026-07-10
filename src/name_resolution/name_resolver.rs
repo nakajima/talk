@@ -1393,6 +1393,7 @@ impl NameResolver {
                 | InlineIRInstructionKind::Load { ty, .. }
                 | InlineIRInstructionKind::Store { ty, .. }
                 | InlineIRInstructionKind::Copy { ty, .. }
+                | InlineIRInstructionKind::Swap { ty, .. }
                 | InlineIRInstructionKind::Gep { ty, .. } => self.enter_type_annotation(ty),
                 InlineIRInstructionKind::IoWrite { .. }
                 | InlineIRInstructionKind::Trunc { .. }

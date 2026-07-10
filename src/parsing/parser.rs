@@ -1669,6 +1669,18 @@ impl<'a> Parser<'a> {
                         },
                     })
                 }
+                "swap" => {
+                    let ty = self.type_annotation()?;
+                    let a = self.ir_value()?;
+                    let b = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Swap { ty, a, b },
+                    })
+                }
                 _ => {
                     return Err(ParserError::UnexpectedToken {
                         expected: "supported @_ir instr".into(),

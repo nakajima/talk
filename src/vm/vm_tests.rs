@@ -579,6 +579,22 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_array_swap() {
+        let (value, _) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet a = [1, 2, 3]\n\ta.swap(0, 2)\n\ta.get(0) * 10 + a.get(2)\n}\nmain()",
+        );
+        assert_eq!(value, Value::I64(31));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_string_array_swap() {
+        let (value, _) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet a = [\"a\", \"bbb\"]\n\ta.swap(0, 1)\n\ta.get(0).byte_count * 10 + a.get(1).byte_count\n}\nmain()",
+        );
+        assert_eq!(value, Value::I64(31));
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_float_array_round_trip() {
         let (_, out) =
             run_on_both_engines_io("let a = [1.5, 2.5]\nprint(a.get(0))\nprint(a.get(1))");

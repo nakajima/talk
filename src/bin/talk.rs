@@ -399,6 +399,13 @@ async fn main() {
                         std::process::exit(1);
                     }
                 }
+                Err(talk::testing::TestError::CompileDiagnostics(diagnostics)) => {
+                    eprint!(
+                        "{}",
+                        diagnostics.render_text(talk::cli::diagnostics::ColorMode::Auto)
+                    );
+                    std::process::exit(1);
+                }
                 Err(err) => {
                     eprintln!("error: {err}");
                     std::process::exit(1);

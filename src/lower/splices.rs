@@ -136,6 +136,13 @@ impl<'a> Lowering<'a> {
                     operand(self, length)?,
                 ],
             ),
+            K::Swap { ty, a, b } => {
+                let element = self.splice_ty(ty, ctx)?;
+                (
+                    Op::Swap(element),
+                    vec![operand(self, a)?, operand(self, b)?],
+                )
+            }
             K::IoWrite { fd, buf, count, .. } => (
                 Op::IoWrite,
                 vec![
@@ -150,7 +157,7 @@ impl<'a> Lowering<'a> {
             Op::Trunc | Op::BToI => self.p.ty_i64(),
             Op::IToF => self.p.ty_f64(),
             Op::Alloc => self.p.ty_ptr(),
-            Op::Copy | Op::Store | Op::Free => self.p.ty_void(),
+            Op::Copy | Op::Swap(_) | Op::Store | Op::Free => self.p.ty_void(),
             Op::IoWrite => self.p.ty_i64(),
             _ => self.p.expr_ty(operands[0]),
         };

@@ -667,6 +667,19 @@ impl Evaluator {
                 self.mem.copy_within(from..from + len, to);
                 Ok(EvalValue::Void)
             }
+            Op::Swap(element_ty) => {
+                let a = self.eval_sub(p, args[0])?;
+                let b = self.eval_sub(p, args[1])?;
+                let (EvalValue::Ptr(a), EvalValue::Ptr(b)) = (a, b) else {
+                    return Err(EvalError::Unsupported("swap operands".into()));
+                };
+                let Some(size) = p.ty_kind(element_ty).mem_size() else {
+                    return Err(EvalError::Unsupported(
+                        "swap of a type that cannot live in memory".into(),
+                    ));
+                };
+                self.swap_memory(a, b, size as usize)
+            }
             // The io dialect runs against the captured IO (simulated
             // descriptors; sleeping is a no-op — the evaluator exists to
             // be compared against, and tests must stay fast).
@@ -1020,6 +1033,41 @@ impl Evaluator {
             .get_mut(start..start + 8)
             .ok_or_else(|| EvalError::Unsupported("store out of bounds".into()))?;
         slot.copy_from_slice(&word.to_le_bytes());
+        Ok(EvalValue::Void)
+    }
+
+    fn swap_memory(&mut self, a: u32, b: u32, len: usize) -> Result<EvalValue, EvalError> {
+        self.check_access(a, len, "swap")?;
+        self.check_access(b, len, "swap")?;
+        if a == b {
+            return Ok(EvalValue::Void);
+        }
+        if len > 8 {
+            return Err(EvalError::Unsupported("swap width too large".into()));
+        }
+
+        let a = a as usize;
+        let b = b as usize;
+        let mut left = [0u8; 8];
+        let mut right = [0u8; 8];
+        left[..len].copy_from_slice(
+            self.mem
+                .get(a..a + len)
+                .ok_or_else(|| EvalError::Unsupported("swap out of bounds".into()))?,
+        );
+        right[..len].copy_from_slice(
+            self.mem
+                .get(b..b + len)
+                .ok_or_else(|| EvalError::Unsupported("swap out of bounds".into()))?,
+        );
+        self.mem
+            .get_mut(a..a + len)
+            .ok_or_else(|| EvalError::Unsupported("swap out of bounds".into()))?
+            .copy_from_slice(&right[..len]);
+        self.mem
+            .get_mut(b..b + len)
+            .ok_or_else(|| EvalError::Unsupported("swap out of bounds".into()))?
+            .copy_from_slice(&left[..len]);
         Ok(EvalValue::Void)
     }
 

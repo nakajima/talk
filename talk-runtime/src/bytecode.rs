@@ -307,6 +307,12 @@ impl Encoder {
                 self.mem_kind(kind);
             }
             Insn::Copy { from, to, len } => self.reg3(27, from, to, len),
+            Insn::Swap { a, b, kind } => {
+                self.u8(49);
+                self.u16(a);
+                self.u16(b);
+                self.mem_kind(kind);
+            }
             Insn::Io { dest, op, a, b, c } => {
                 self.u8(28);
                 self.u16(dest);
@@ -829,6 +835,11 @@ impl<'a> Decoder<'a> {
                 dest: self.u16()?,
                 src: self.u16()?,
             }),
+            49 => Ok(Insn::Swap {
+                a: self.u16()?,
+                b: self.u16()?,
+                kind: self.mem_kind()?,
+            }),
             _ => Err(DecodeError::InvalidTag("instruction", tag)),
         }
     }
@@ -1145,6 +1156,7 @@ impl Insn {
             Insn::Load { dest, ptr, .. } => Register::new(n_regs).check_many(&[dest, ptr])?,
             Insn::Store { ptr, src, .. } => Register::new(n_regs).check_many(&[ptr, src])?,
             Insn::Copy { from, to, len } => Register::new(n_regs).check_many(&[from, to, len])?,
+            Insn::Swap { a, b, .. } => Register::new(n_regs).check_many(&[a, b])?,
             Insn::Io { dest, a, b, c, .. } => Register::new(n_regs).check_many(&[dest, a, b, c])?,
             Insn::Call {
                 dest,
@@ -1317,6 +1329,35 @@ mod tests {
                 n_regs: 2,
             }],
             consts: vec![Value::Bool(true)],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        let decoded = Module::decode_bytecode(&encoded).unwrap();
+        assert_eq!(decoded.render(), module.render());
+    }
+
+    #[test]
+    fn round_trips_swap_opcode() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Swap {
+                        a: 0,
+                        b: 1,
+                        kind: MemKind::I64,
+                    },
+                    Insn::Ret { src: 0 },
+                ],
+                arity: 0,
+                n_regs: 2,
+            }],
+            consts: vec![],
             arg_pool: vec![],
             switch_pool: vec![],
             traps: vec![],

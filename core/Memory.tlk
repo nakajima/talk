@@ -26,6 +26,10 @@ public func _copy(from: RawPtr, to: RawPtr, length: Int) 'alloc -> Void {
 	@_ir(from, to, length) { copy Byte $0 $1 $2 }
 }
 
+public func _swap<Element>(a: RawPtr, b: RawPtr) 'alloc -> Void {
+	@_ir(a, b) { swap Element $0 $1 }
+}
+
 // Release one reference to a raw allocation (frees at zero). Static data
 // is unmanaged: freeing it is a no-op.
 public func _free(ptr: RawPtr) 'alloc -> Void {

@@ -3321,6 +3321,7 @@ pub mod tests {
            @_ir { %? = load Int %1 }
            @_ir { store Int %1 %2 }
            @_ir { copy Int %1 %2 3 }
+           @_ir { swap Int %1 %2 }
            @_ir { %? = gep Int %1 2 }
            @_ir { %? = io_write %0 %1 %2 }
            @_ir { %? = trunc %0 }

@@ -184,6 +184,11 @@ pub enum Insn {
         to: u16,
         len: u16,
     },
+    Swap {
+        a: u16,
+        b: u16,
+        kind: MemKind,
+    },
     Io {
         dest: u16,
         op: IoOp,
@@ -448,6 +453,9 @@ impl Module {
                 format!("{kind:?}").to_lowercase()
             ),
             Insn::Copy { from, to, len } => format!("copy [r{to}] <- [r{from}], r{len} bytes"),
+            Insn::Swap { a, b, kind } => {
+                format!("swap_{} [r{a}], [r{b}]", format!("{kind:?}").to_lowercase())
+            }
             Insn::Io { dest, op, a, b, c } => format!(
                 "io_{} r{dest} <- r{a}, r{b}, r{c}",
                 format!("{op:?}").to_lowercase()

@@ -939,6 +939,18 @@ impl<'a> ChunkBuilder<'a> {
                 self.code.push(Insn::Const { dest, k });
                 Ok(dest)
             }
+            Op::Swap(element_ty) => {
+                let Some(kind) = mem_kind_of(self.p.ty_kind(element_ty)) else {
+                    return self.eval_trap("vm: swap of a type that cannot live in memory");
+                };
+                let a = self.eval(args[0])?;
+                let b = self.eval(args[1])?;
+                self.code.push(Insn::Swap { a, b, kind });
+                let k = self.const_index(Const::Void, Value::Void);
+                let dest = self.fresh();
+                self.code.push(Insn::Const { dest, k });
+                Ok(dest)
+            }
             // The io dialect: one parametric instruction; operands in
             // IORequest order, unused slots 0.
             Op::IoRead

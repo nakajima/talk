@@ -128,6 +128,7 @@ pub enum Op {
     Load,
     Store,
     Copy,
+    Swap(TyId),
     Move,
     Gep,
     RecordNew(Symbol),

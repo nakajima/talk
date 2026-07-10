@@ -124,6 +124,12 @@ pub enum InlineIRInstructionKind {
         to: Value,
         length: Value,
     },
+    #[doc = "swap $ty $a $b"]
+    Swap {
+        ty: TypeAnnotation,
+        a: Value,
+        b: Value,
+    },
     #[doc = "$dest = gep $ty $addr $offset_index"]
     Gep {
         dest: Register,
@@ -362,6 +368,9 @@ impl Display for InlineIRInstruction {
                 length,
             } => {
                 write!(f, "copy {} {} {} {}", ty.simple_display(), from, to, length)
+            }
+            InlineIRInstructionKind::Swap { ty, a, b } => {
+                write!(f, "swap {} {} {}", ty.simple_display(), a, b)
             }
             InlineIRInstructionKind::Gep {
                 dest,

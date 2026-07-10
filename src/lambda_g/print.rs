@@ -321,6 +321,7 @@ fn op_name(op: &Op) -> String {
         Op::ExistentialPack(_) => "existential_pack".into(),
         Op::ExistentialWitness(_) => "existential_witness".into(),
         Op::ExistentialPayload => "existential_payload".into(),
+        Op::Swap(_) => "swap".into(),
         other => snake(&format!("{other:?}")),
     }
 }

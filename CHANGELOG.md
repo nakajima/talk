@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased (2026-07-09) — Array.swap and typed raw-memory swap
+
+`Array` now has `swap(i, j)`, implemented with copy-on-write uniqueness and a
+new typed raw-memory swap primitive instead of value-level load/store traffic.
+This gives sorting, partitioning, and shuffle-style code a direct in-place swap
+path while preserving Array value semantics.
+
+Inline IR gained `swap T ptrA ptrB`, lowered through lambda-G as `Op::Swap(T)`
+and scheduled to a VM `Swap` bytecode instruction. The evaluator and runtime VM
+swap the typed memory slot directly: byte elements swap one byte, while scalar,
+pointer, and boxed aggregate elements swap their word/handle representation.
+Core exposes this as `_swap<Element>(a, b)` in `Memory.tlk`, which
+`Array.swap` uses after `uniqued_storage()`.
+
 ## Unreleased (2026-07-08) — Protocol-head conformance axioms (ADR 0020)
 
 Protocol-head conformance extensions are now first-class conformance axiom

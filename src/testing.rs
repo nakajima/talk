@@ -4,8 +4,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use indexmap::IndexMap;
+
 use crate::{
+    analysis::{Diagnostic, DocumentId},
+    ast::{AST, NameResolved},
     compiling::driver::{Driver, DriverConfig, Source},
+    diagnostic::AnyDiagnostic,
     vm::interp::Value,
 };
 
@@ -37,10 +42,39 @@ impl Summary {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct CompileDiagnostic {
+    pub document_id: DocumentId,
+    pub text: String,
+    pub diagnostic: Diagnostic,
+}
+
+#[derive(Clone, Debug)]
+pub struct CompileDiagnostics {
+    pub entries: Vec<CompileDiagnostic>,
+}
+
+impl CompileDiagnostics {
+    #[cfg(feature = "cli")]
+    pub fn render_text(&self, color_mode: crate::cli::diagnostics::ColorMode) -> String {
+        let mut output = String::new();
+        for entry in &self.entries {
+            output.push_str(&crate::cli::diagnostics::render_text(
+                &entry.document_id,
+                &entry.text,
+                &entry.diagnostic,
+                color_mode,
+            ));
+        }
+        output
+    }
+}
+
 #[derive(Debug)]
 pub enum TestError {
     Discovery(String),
     Compile(String),
+    CompileDiagnostics(CompileDiagnostics),
     Runtime(String),
     UnexpectedReturn(String),
 }
@@ -52,6 +86,18 @@ impl Display for TestError {
             | Self::Compile(message)
             | Self::Runtime(message)
             | Self::UnexpectedReturn(message) => f.write_str(message),
+            Self::CompileDiagnostics(diagnostics) => {
+                if diagnostics.entries.is_empty() {
+                    return f.write_str("compilation failed");
+                }
+                for (index, entry) in diagnostics.entries.iter().enumerate() {
+                    if index > 0 {
+                        writeln!(f)?;
+                    }
+                    write!(f, "{}: {}", entry.document_id, entry.diagnostic.message)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -141,7 +187,7 @@ impl Runner {
     }
 
     fn suite_sources(&self, test_sources: Vec<Source>) -> Result<Vec<Source>, TestError> {
-        let parsed = Driver::new(test_sources, DriverConfig::new("TalkTests"))
+        let parsed = Driver::new(test_sources, Self::compile_config())
             .parse()
             .map_err(|err| TestError::Compile(format!("{err:?}")))?;
 
@@ -156,29 +202,104 @@ impl Runner {
         &self,
         sources: Vec<Source>,
     ) -> Result<Driver<crate::compiling::driver::Lowered>, TestError> {
-        let driver = Driver::new(sources, DriverConfig::new("TalkTests"));
+        let driver = Driver::new(sources, Self::compile_config());
         let parsed = driver
             .parse()
             .map_err(|err| TestError::Compile(format!("{err:?}")))?;
         let resolved = parsed
             .resolve_names()
             .map_err(|err| TestError::Compile(format!("{err:?}")))?;
+        let asts_by_source = resolved.phase.asts.clone();
         let typed = resolved.type_check();
         if typed.has_errors() {
-            return Err(TestError::Compile(
-                typed
-                    .diagnostics()
-                    .iter()
-                    .map(|diagnostic| format!("{diagnostic:?}"))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ));
+            let diagnostics = Self::compile_diagnostics(&asts_by_source, typed.diagnostics());
+            if diagnostics.entries.is_empty() {
+                return Err(TestError::Compile(
+                    typed
+                        .diagnostics()
+                        .iter()
+                        .map(|diagnostic| format!("{diagnostic:?}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ));
+            }
+            return Err(TestError::CompileDiagnostics(diagnostics));
         }
         let lowered = typed.lower();
         if !lowered.phase.diagnostics.is_empty() {
             return Err(TestError::Compile(lowered.phase.diagnostics.join("\n")));
         }
         Ok(lowered)
+    }
+
+    fn compile_config() -> DriverConfig {
+        DriverConfig::new("TalkTests")
+            .lenient_parsing()
+            .preserve_comments(true)
+    }
+
+    fn compile_diagnostics(
+        asts_by_source: &IndexMap<Source, AST<NameResolved>>,
+        diagnostics: &[AnyDiagnostic],
+    ) -> CompileDiagnostics {
+        let file_count = asts_by_source
+            .values()
+            .map(|ast| ast.file_id.0 as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let mut file_id_to_document = vec![String::new(); file_count];
+        let mut texts = vec![String::new(); file_count];
+        let mut asts = vec![None; file_count];
+
+        for (source, ast) in asts_by_source {
+            let index = ast.file_id.0 as usize;
+            if index >= file_id_to_document.len() {
+                continue;
+            }
+            file_id_to_document[index] = source.path().into_owned();
+            texts[index] = source.read().unwrap_or_default();
+            asts[index] = Some(ast.clone());
+        }
+
+        let mut entries: Vec<_> = diagnostics
+            .iter()
+            .filter_map(|diagnostic| {
+                let file_index = Self::diagnostic_file_index(diagnostic);
+                crate::analysis::workspace::diagnostic_for_any(
+                    &file_id_to_document,
+                    &texts,
+                    &asts,
+                    diagnostic,
+                )
+                .map(|(document_id, diagnostic)| CompileDiagnostic {
+                    document_id,
+                    text: texts.get(file_index).cloned().unwrap_or_default(),
+                    diagnostic,
+                })
+            })
+            .collect();
+        entries.sort_by(|left, right| {
+            left.document_id
+                .cmp(&right.document_id)
+                .then(
+                    left.diagnostic
+                        .range
+                        .start
+                        .cmp(&right.diagnostic.range.start),
+                )
+                .then(left.diagnostic.range.end.cmp(&right.diagnostic.range.end))
+                .then(left.diagnostic.message.cmp(&right.diagnostic.message))
+        });
+        CompileDiagnostics { entries }
+    }
+
+    fn diagnostic_file_index(diagnostic: &AnyDiagnostic) -> usize {
+        match diagnostic {
+            AnyDiagnostic::Parsing(diagnostic) => diagnostic.id.0.0 as usize,
+            AnyDiagnostic::NameResolution(diagnostic) => diagnostic.id.0.0 as usize,
+            AnyDiagnostic::Types(diagnostic) => diagnostic.id.0.0 as usize,
+            AnyDiagnostic::Ownership(diagnostic) => diagnostic.id.0.0 as usize,
+        }
     }
 
     fn is_test_file(path: &Path) -> bool {
@@ -260,6 +381,28 @@ test(\"ok\") {\n\tassert(1 + 1 == 2)\n}\n",
         };
         assert_eq!(summary.failures, 0);
         assert_eq!(summary.output, "\u{1b}[32m.\u{1b}[0m\n1 tests passed.\n");
+    }
+
+    #[test]
+    fn runner_reports_compile_errors_as_source_diagnostics() {
+        let project = temp_project("compile-error-test-runner");
+        let test_path = project.join("bad.test.tlk");
+        std::fs::write(&test_path, "test \"bad\" {\n\tlet x: Int = \"nope\"\n}\n")
+            .expect("test file");
+
+        let err = Runner::new([project]).run().expect_err("compile error");
+        let TestError::CompileDiagnostics(diagnostics) = err else {
+            panic!("expected source diagnostics");
+        };
+        assert_eq!(diagnostics.entries.len(), 1, "{diagnostics:?}");
+        let entry = &diagnostics.entries[0];
+        assert!(
+            entry.document_id.ends_with("bad.test.tlk"),
+            "{}",
+            entry.document_id
+        );
+        assert!(entry.diagnostic.message.contains("Type mismatch"));
+        assert!(entry.text.contains("let x: Int"));
     }
 
     #[test]

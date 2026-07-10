@@ -468,6 +468,33 @@ impl Machine<'_> {
         Ok(())
     }
 
+    fn swap_memory(&mut self, a: u32, b: u32, len: usize) -> Result<(), String> {
+        self.check_access(a, len, "swap")?;
+        self.check_access(b, len, "swap")?;
+        if a == b {
+            return Ok(());
+        }
+        if len > 8 {
+            return Err("vm: swap width too large".into());
+        }
+
+        let a = a as usize;
+        let b = b as usize;
+        let mut left = [0u8; 8];
+        let mut right = [0u8; 8];
+        left[..len].copy_from_slice(self.mem.get(a..a + len).ok_or("vm: swap out of bounds")?);
+        right[..len].copy_from_slice(self.mem.get(b..b + len).ok_or("vm: swap out of bounds")?);
+        self.mem
+            .get_mut(a..a + len)
+            .ok_or("vm: swap out of bounds")?
+            .copy_from_slice(&right[..len]);
+        self.mem
+            .get_mut(b..b + len)
+            .ok_or("vm: swap out of bounds")?
+            .copy_from_slice(&left[..len]);
+        Ok(())
+    }
+
     fn free(&mut self, ptr: u32) -> Result<(), String> {
         self.allocations
             .free(self.static_len, ptr)
@@ -1156,6 +1183,17 @@ fn exec_local(
             machine.check_access(*to, *len as usize, "copy")?;
             let (from, to, len) = (*from as usize, *to as usize, *len as usize);
             machine.mem.copy_within(from..from + len, to);
+        }
+        Insn::Swap { a, b, kind } => {
+            let (Value::Ptr(a), Value::Ptr(b)) = (&frame.regs[a as usize], &frame.regs[b as usize])
+            else {
+                return Err("vm: swap operands".into());
+            };
+            let len = match kind {
+                MemKind::Byte => 1,
+                MemKind::I64 | MemKind::F64 | MemKind::Bool | MemKind::Ptr | MemKind::Boxed => 8,
+            };
+            machine.swap_memory(*a, *b, len)?;
         }
         Insn::Io { dest, op, a, b, c } => {
             let result = run_io(machine, frame, op, a, b, c)?;

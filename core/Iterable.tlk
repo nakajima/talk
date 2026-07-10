@@ -24,6 +24,8 @@ public protocol Iterator {
 		}
 		self
 	}
+
+	mut func swap(i: Int, j: Int) {}
 }
 
 extend Iterator {

@@ -463,7 +463,7 @@ fn parser_error_range(text: &str, err: &ParserError) -> TextRange {
     }
 }
 
-fn diagnostic_for_any(
+pub(crate) fn diagnostic_for_any(
     file_id_to_document: &[DocumentId],
     texts: &[String],
     asts: &[Option<AST<NameResolved>>],

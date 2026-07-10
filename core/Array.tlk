@@ -2,7 +2,7 @@
 // unsafe
 use ./Optional.tlk
 use { Iterable, Iterator, IntoIterator, IndexIterable, IndexIterator, Skip, Map } from ./Iterable.tlk
-use { Storage, _storage, _load, _store, _is_unique } from ./Memory.tlk
+use { Storage, _storage, _load, _store, _swap, _is_unique } from ./Memory.tlk
 use { String } from ./String.tlk
 use { Add, Subtract, Multiply, Comparable, Equatable } from ./Operators.tlk
 use { Showable } from ./Showable.tlk
@@ -52,6 +52,14 @@ public struct Array<Element> {
 	mut func set(index: Int, consume value: Element) -> Void {
 		let storage = self.uniqued_storage()
 		storage.set(index, value)
+	}
+
+	mut func swap(i: Int, j: Int) -> Void {
+		if i == j { return () }
+		let storage = self.uniqued_storage()
+		let a: RawPtr = @_ir(storage.base, i) { %? = gep Element $0 $1 }
+		let b: RawPtr = @_ir(storage.base, j) { %? = gep Element $0 $1 }
+		_swap<Element>(a, b)
 	}
 
 	consuming func map<T>(consume fn: (Element) -> T) -> Map<ArrayIntoIterator<Element>, T> {
