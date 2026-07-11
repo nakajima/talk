@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --verbose --locked
+      - name: Run tests
+        run: cargo test --verbose --locked
+
+  talk-swift:
+    name: TalkSwift
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios,aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build TalkC for the host
+        run: cargo build -p talk-c --locked
+
+      - name: Test TalkSwift with the host library
+        run: swift test -Xlinker -L -Xlinker "$GITHUB_WORKSPACE/target/debug"
+
+      - name: Build TalkC XCFramework
+        run: ./talk-swift/scripts/build-xcframework.sh
+
+      - name: Test TalkSwift with the XCFramework
+        run: |
+          swift package reset
+          swift test
+
+      - name: Build TalkSwift for iOS Simulator
+        run: xcodebuild -scheme TalkSwift -destination "generic/platform=iOS Simulator" build

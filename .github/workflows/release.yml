@@ -1,0 +1,244 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Cargo package version to release; defaults to the current version"
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASOR2000_VERSION: "0.1.8"
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release Talk
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Cargo.toml version change
+        id: version
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          read_package_version() {
+            awk '
+              /^\[package\]/ { in_package = 1; next }
+              /^\[/ { in_package = 0 }
+              in_package && /^[[:space:]]*version[[:space:]]*=/ {
+                sub(/^[^=]*=[[:space:]]*/, "", $0)
+                gsub(/["[:space:]]/, "", $0)
+                print
+                exit
+              }
+            '
+          }
+
+          current_version="$(read_package_version < Cargo.toml)"
+          if [[ -z "$current_version" ]]; then
+            echo "::error::could not read package.version from Cargo.toml"
+            exit 1
+          fi
+
+          requested_version="${VERSION_INPUT:-$current_version}"
+          if [[ "$requested_version" != "$current_version" ]]; then
+            echo "::error::requested version ${requested_version} does not match Cargo.toml version ${current_version}"
+            exit 1
+          fi
+
+          changed=true
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            old_version=""
+            before="${BEFORE_SHA:-}"
+            if [[ -n "$before" && ! "$before" =~ ^0+$ ]] && git cat-file -e "${before}:Cargo.toml" 2>/dev/null; then
+              old_version="$(git show "${before}:Cargo.toml" | read_package_version)"
+            fi
+
+            if [[ "$old_version" == "$current_version" ]]; then
+              echo "Cargo.toml package.version unchanged (${current_version}); skipping release"
+              changed=false
+            elif [[ -z "$old_version" ]]; then
+              echo "No previous Cargo.toml package.version found; releasing ${current_version}"
+            else
+              echo "Cargo.toml package.version changed: ${old_version} -> ${current_version}"
+            fi
+          fi
+
+          echo "version=${current_version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${current_version}" >> "$GITHUB_OUTPUT"
+          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
+
+      - name: Reject an existing release tag
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::tag already exists: ${TAG}"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@nightly
+        if: steps.version.outputs.changed == 'true'
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.version.outputs.changed == 'true'
+
+      - name: Build TalkC for the host
+        if: steps.version.outputs.changed == 'true'
+        run: cargo build -p talk-c --locked
+
+      - name: Test TalkSwift with the host library
+        if: steps.version.outputs.changed == 'true'
+        run: swift test -Xlinker -L -Xlinker "$GITHUB_WORKSPACE/target/debug"
+
+      - name: Build TalkC XCFramework
+        if: steps.version.outputs.changed == 'true'
+        run: ./talk-swift/scripts/build-xcframework.sh
+
+      - name: Test TalkSwift with the XCFramework
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          swift package reset
+          swift test
+          xcodebuild -scheme TalkSwift -destination "generic/platform=iOS Simulator" build
+
+      - name: Package TalkC XCFramework
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p talk-swift/.build/release
+          cd talk-swift/Artifacts
+          ditto -c -k --sequesterRsrc --keepParent TalkC.xcframework ../.build/release/TalkC.xcframework.zip
+
+      - name: Compute SwiftPM checksum
+        if: steps.version.outputs.changed == 'true'
+        id: checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          checksum="$(swift package compute-checksum talk-swift/.build/release/TalkC.xcframework.zip)"
+          echo "checksum=${checksum}" >> "$GITHUB_OUTPUT"
+          echo "TalkC.xcframework.zip checksum: ${checksum}"
+
+      - name: Stamp the release Package.swift
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+          CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          package = Path("Package.swift")
+          text = package.read_text()
+          url = f"https://github.com/{os.environ['REPOSITORY']}/releases/download/{os.environ['TAG']}/TalkC.xcframework.zip"
+
+          text, url_replacements = re.subn(
+              r'let talkCReleaseURL = "[^"]*"',
+              f'let talkCReleaseURL = "{url}"',
+              text,
+          )
+          text, checksum_replacements = re.subn(
+              r'let talkCReleaseChecksum = "[0-9a-fA-F]*"',
+              f'let talkCReleaseChecksum = "{os.environ["CHECKSUM"]}"',
+              text,
+          )
+          if url_replacements != 1 or checksum_replacements != 1:
+              raise SystemExit("expected exactly one release URL and checksum in Package.swift")
+
+          package.write_text(text)
+          PY
+          git diff --check
+          git diff -- Package.swift
+
+      - name: Create the release commit
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Package.swift
+          git commit -m "Release ${TAG}"
+
+      - name: Install Linux cross-build tools
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install zig
+          cargo install cargo-zigbuild --locked
+
+      - name: Install releasor2000
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL \
+            --connect-timeout 20 \
+            --max-time 300 \
+            --retry 5 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            "https://github.com/nakajima/releasor2000/releases/download/v${RELEASOR2000_VERSION}/install.sh" \
+            -o "$RUNNER_TEMP/releasor2000-install.sh"
+          INSTALL_DIR="$HOME/.local/bin" sh "$RUNNER_TEMP/releasor2000-install.sh"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run releasor2000 release
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: releasor2000 release
+
+      - name: Upload TalkC XCFramework to the release
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" talk-swift/.build/release/TalkC.xcframework.zip --clobber; then
+              exit 0
+            fi
+            if [[ "$attempt" == 5 ]]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done

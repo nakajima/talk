@@ -1,31 +1,32 @@
 # TalkSwift
 
-Swift package wrapper around the local `talk-c` C ABI facade.
+Swift package wrapper around the `talk-c` C ABI facade. The repository root `Package.swift` is the canonical package manifest for both local development and remote SwiftPM consumption.
 
-For remote SwiftPM/Xcode consumption, use the repository root package from a version tag produced by the `TalkSwift XCFramework release` workflow. That tag's root `Package.swift` points at the matching GitHub Release `TalkC.xcframework.zip` asset and checksum.
+Version tags produced by the release workflow point the root package at the matching `TalkC.xcframework.zip` asset and checksum on the same GitHub release.
 
-This nested package is mainly for local development. It has two modes:
+The package has three dependency resolution modes:
 
-1. If `Artifacts/TalkC.xcframework` exists, `Package.swift` consumes it as a binary target.
-2. Otherwise it falls back to a `systemLibrary` target that imports `../talk-c/include/talk_c.h` and links `libtalk_c` from the build/linker search path.
+1. If `talk-swift/Artifacts/TalkC.xcframework` exists, it consumes the local binary target.
+2. Otherwise, if a host `talk-c` archive exists under `target/debug` or `target/release`, it imports `talk-c/include/talk_c.h` and links that archive.
+3. Version-tagged packages without local artifacts download the matching XCFramework from the GitHub release.
 
-For local development on the host:
+For local development on the host, run these commands from the repository root:
 
 ```sh
 cargo build -p talk-c
-cd talk-swift
-swift build -Xlinker -L -Xlinker ../target/debug
+swift test -Xlinker -L -Xlinker "$PWD/target/debug"
 ```
 
-For iOS packaging on macOS:
+To build and test the production XCFramework on macOS:
 
 ```sh
-cd talk-swift
-./scripts/build-xcframework.sh
-swift build
+./talk-swift/scripts/build-xcframework.sh
+swift package reset
+swift test
+xcodebuild -scheme TalkSwift -destination "generic/platform=iOS Simulator" build
 ```
 
-The Swift API copies borrowed C strings into Swift values before freeing result handles. Public editor APIs use byte offsets/ranges to match the Rust analysis layer.
+The Swift API copies borrowed C strings into Swift values before freeing result handles. Public editor APIs use byte offsets and ranges to match the Rust analysis layer.
 
 `TalkPackage.create(at:name:version:binaryName:)` creates a package directory with a `main` binary, lockfile, and starter test. `TalkPackage.install(at:provider:offline:update:)` installs dependencies, while `TalkPackage.run(at:binaryName:provider:offline:)` and `TalkPackage.test(at:provider:offline:)` run a package from a file URL.
 
