@@ -1,3 +1,15 @@
 test "generic into iterator" {
 	assert([1, 2, 3].into_iter().to_array() == [1, 2, 3])
 }
+
+test "peekable" {
+	let a = [1, 2, 3].into_iter().peekable()
+	assert(a.peek() == 1)
+	assert(a.peek() == 1)
+	assert(a.peek() == 1)
+
+	a.next()
+
+	assert(a.peek() == 2)
+	assert(a.peek() == 2)
+}

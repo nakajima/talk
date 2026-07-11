@@ -501,6 +501,7 @@ impl<'a> Formatter<'a> {
                 type_args,
                 args,
                 trailing_block,
+                ..
             } => self.format_call(expr, callee, type_args, args, trailing_block.as_ref()),
             ExprKind::Member(receiver, property, ..) => self.format_member(receiver, property),
             ExprKind::Func(func) => self.format_func(func),

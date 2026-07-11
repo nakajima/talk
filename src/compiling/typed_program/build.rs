@@ -247,6 +247,7 @@ impl TypedTreeBuilder<'_> {
                 type_args,
                 args,
                 trailing_block,
+                ..
             } => typed_ast::ExprKind::Call {
                 callee: self.boxed(callee),
                 type_args: type_args.clone(),

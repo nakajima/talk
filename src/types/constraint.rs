@@ -28,6 +28,8 @@ use crate::types::ty::{EffectRow, Perm, Predicate, Ty};
 pub enum CtReason {
     Annotation,
     Apply,
+    /// The conformance selected by a surface `==` or `!=` expression.
+    EqualityComparison,
     /// A constraint originating in an argument, after structural
     /// decomposition has crossed the application boundary. It retains the
     /// argument context for diagnostics without enabling application-only

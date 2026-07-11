@@ -529,6 +529,7 @@ pub mod tests {
                         type_args: vec![],
                         args: vec![],
                         trailing_block: None,
+                        desugared_operator: None,
                     })]),
                     ret: None,
                     attributes: vec![]
@@ -562,6 +563,7 @@ pub mod tests {
                         type_args: vec![],
                         args: vec![],
                         trailing_block: None,
+                        desugared_operator: None,
                     })]),
                     ret: None,
                     attributes: vec![]
@@ -879,6 +881,7 @@ pub mod tests {
                     value: any_expr!(ExprKind::LiteralString("$0 = add int 1 2".into()))
                 })],
                 trailing_block: None,
+                desugared_operator: None,
             })
         );
     }
@@ -1294,6 +1297,7 @@ pub mod tests {
                                 type_args: vec![],
                                 args: vec![],
                                 trailing_block: None,
+                                desugared_operator: None,
                             })]),
                             ret: None,
                             attributes: vec![]
@@ -1336,6 +1340,7 @@ pub mod tests {
                                 type_args: vec![],
                                 args: vec![],
                                 trailing_block: None,
+                                desugared_operator: None,
                             })]),
                             ret: None,
                             attributes: vec![]
@@ -1367,6 +1372,7 @@ pub mod tests {
                 type_args: vec![],
                 args: vec![],
                 trailing_block: None,
+                desugared_operator: None,
             })
         )
     }

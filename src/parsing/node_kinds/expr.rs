@@ -51,6 +51,11 @@ pub enum ExprKind {
         type_args: Vec<TypeAnnotation>,
         args: Vec<CallArg>,
         trailing_block: Option<Block>,
+        /// The surface operator lowered into this call, if any. Keeping this
+        /// provenance lets later phases report operator-specific diagnostics
+        /// without mistaking an explicit protocol-static call for an operator.
+        #[drive(skip)]
+        desugared_operator: Option<TokenKind>,
     },
 
     // A dot thing

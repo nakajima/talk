@@ -347,6 +347,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         symbol: Symbol,
         label: &Label,
         node: NodeID,
+        reason: CtReason,
     ) -> Option<Ty> {
         let label_str = label.to_string();
 
@@ -398,7 +399,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.wanteds.push(
                     predicate
                         .substitute(&tys, &effs, &Default::default())
-                        .into_constraint(CtOrigin::new(node, CtReason::Apply)),
+                        .into_constraint(CtOrigin::new(node, reason)),
                 );
             }
             let signature = scheme.ty.substitute(&tys, &effs, &Default::default());
@@ -406,7 +407,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             self.wanteds.push(Constraint::Conforms {
                 ty: self_var,
                 protocol: owner.clone(),
-                origin: CtOrigin::new(node, CtReason::Apply),
+                origin: CtOrigin::new(node, reason),
             });
             self.artifacts.member_resolutions.insert(
                 node,

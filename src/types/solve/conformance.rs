@@ -345,13 +345,20 @@ impl<'s> Solver<'s> {
         origin: CtOrigin,
     ) -> Option<Constraint> {
         let rendered = self.store.render(ty);
-        self.errors.push((
+        let error = if origin.reason == CtReason::EqualityComparison
+            && let [rhs] = protocol.args.as_slice()
+        {
+            TypeError::EqualityNotSupported {
+                lhs: rendered,
+                rhs: self.store.render(rhs),
+            }
+        } else {
             TypeError::NotConforming {
                 ty: rendered,
                 protocol: protocol.to_string(),
-            },
-            origin.node,
-        ));
+            }
+        };
+        self.errors.push((error, origin.node));
         None
     }
 

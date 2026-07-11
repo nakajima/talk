@@ -484,6 +484,7 @@ impl PackageManifest {
             args,
             type_args,
             trailing_block,
+            ..
         } = &expression.kind
         else {
             return Err(Self::manifest_error(
@@ -512,6 +513,7 @@ impl PackageManifest {
             args,
             type_args,
             trailing_block,
+            ..
         } = &expression.kind
         else {
             return Err(Self::manifest_error(

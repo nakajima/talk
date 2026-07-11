@@ -27,6 +27,11 @@ applications and `'heap` structs are not derived automatically.
   relevant context, such as an annotation, function argument, assignment,
   return value, branch, condition, pattern, or array element, and state why
   the required type differs from the type that was found.
+- **Equality diagnostics now describe the operands.** Failed `==` and `!=`
+  comparisons report that the left and right operand types cannot be compared
+  for equality instead of exposing the underlying `Equatable<RHS>` conformance
+  constraint. Explicit `Equatable.equals` and `Equatable.notEquals` calls keep
+  the general protocol-conformance diagnostic.
 
 ## Unreleased (2026-07-09) — Neotest and machine-readable test output
 

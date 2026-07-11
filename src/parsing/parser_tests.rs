@@ -76,6 +76,7 @@ pub mod tests {
                     type_args: vec![],
                     args: $args,
                     trailing_block: None,
+                    desugared_operator: None,
                 },
             }
         };
@@ -1073,6 +1074,7 @@ pub mod tests {
                 }],
                 args: vec![],
                 trailing_block: None,
+                desugared_operator: None,
             })
         );
     }
@@ -1224,6 +1226,7 @@ pub mod tests {
                 type_args: vec![],
                 args: vec![],
                 trailing_block: None,
+                desugared_operator: None,
             })
         );
     }
@@ -1246,6 +1249,7 @@ pub mod tests {
                     value: any_expr!(ExprKind::LiteralInt("123".into()))
                 }],
                 trailing_block: None,
+                desugared_operator: None,
             })
         );
     }
@@ -1268,6 +1272,7 @@ pub mod tests {
                     value: any_expr!(ExprKind::LiteralString("hello".into()))
                 }],
                 trailing_block: None,
+                desugared_operator: None,
             })
         );
     }
@@ -1292,6 +1297,7 @@ pub mod tests {
                 trailing_block: Some(any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
                     "123".into()
                 ))])),
+                desugared_operator: None,
             })
         );
     }
@@ -1319,6 +1325,7 @@ pub mod tests {
                     }],
                     body: vec![Node::Stmt(any_expr_stmt!(ExprKind::Variable("x".into())))],
                 }),
+                desugared_operator: None,
             })
         );
     }
@@ -1372,6 +1379,7 @@ pub mod tests {
                 trailing_block: Some(any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
                     "456".into()
                 ))])),
+                desugared_operator: None,
             })
         );
     }
@@ -1389,6 +1397,7 @@ pub mod tests {
                 trailing_block: Some(any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
                     "456".into()
                 ))])),
+                desugared_operator: None,
             })
         );
     }
@@ -1417,6 +1426,7 @@ pub mod tests {
                     }],
                     body: vec![Node::Stmt(any_expr_stmt!(ExprKind::Variable("x".into())))],
                 }),
+                desugared_operator: None,
             })
         );
     }
@@ -1435,6 +1445,7 @@ pub mod tests {
                 trailing_block: Some(any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
                     "123".into()
                 ))])),
+                desugared_operator: None,
             })
         );
     }
@@ -1453,6 +1464,7 @@ pub mod tests {
                 trailing_block: Some(any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
                     "123".into()
                 ))])),
+                desugared_operator: None,
             })
         );
     }
@@ -1950,6 +1962,7 @@ pub mod tests {
                     value: any_expr!(ExprKind::LiteralInt("123".into()))
                 }],
                 trailing_block: None,
+                desugared_operator: None,
             })
         );
     }

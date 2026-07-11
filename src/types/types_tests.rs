@@ -4126,6 +4126,39 @@ mod with_core {
     }
 
     #[test]
+    fn equality_operator_reports_operand_types_without_changing_explicit_calls() {
+        let operators = check_with_core(Source::from(
+            "let value: Int? = .some(1)\nlet a = value == 1\nlet b = value != 2",
+        ));
+        let errors = type_errors(&operators);
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| {
+                    error.contains("Cannot compare Optional<Int> with Int for equality")
+                })
+                .count(),
+            2,
+            "{errors:?}"
+        );
+
+        let explicit = check_with_core(Source::from(
+            "let value: Int? = .some(1)\nlet invalid = Equatable.equals(value, 1)",
+        ));
+        let errors = type_errors(&explicit);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Optional<Int> does not conform to Equatable<Int>")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().all(|error| !error.contains("Cannot compare")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
     fn conformance_dispatch_publishes_receiver_theta_on_node() {
         // Swift model: the node carries the complete θ. A ViaConformance
         // callee's instantiation must include the receiver-derived

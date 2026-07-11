@@ -44,6 +44,10 @@ pub enum TypeError {
         ty: String,
         protocol: String,
     },
+    EqualityNotSupported {
+        lhs: String,
+        rhs: String,
+    },
     /// Several protocols the receiver conforms to provide the member;
     /// committing to any would make the program's meaning depend on
     /// conformance-table order (the overlapping-instances coherence
@@ -190,6 +194,10 @@ impl Display for TypeError {
                     f,
                     "Type mismatch in function argument: the parameter requires {expected}, but the argument has type {found}"
                 ),
+                CtReason::EqualityComparison => write!(
+                    f,
+                    "Cannot compare values of type {expected} and {found} for equality"
+                ),
                 CtReason::Branch | CtReason::GadtBranch => write!(
                     f,
                     "Type mismatch between branches: one branch has type {expected}, but another has type {found}; all branches must have the same type"
@@ -262,6 +270,9 @@ impl Display for TypeError {
             }
             TypeError::NotConforming { ty, protocol } => {
                 write!(f, "{ty} does not conform to {protocol}")
+            }
+            TypeError::EqualityNotSupported { lhs, rhs } => {
+                write!(f, "Cannot compare {lhs} with {rhs} for equality")
             }
             TypeError::AmbiguousMember {
                 receiver,

@@ -1,10 +1,20 @@
 use super::*;
+use crate::token_kind::TokenKind;
 
 impl<'s, 'a> BodyChecker<'s, 'a> {
     // ----- Expressions -------------------------------------------------
 
     pub(super) fn infer_expr(&mut self, expr: &Expr, ctx: &Ctx) -> Ty {
-        let ty = self.infer_expr_kind(expr, ctx);
+        self.infer_expr_with_static_member_reason(expr, ctx, CtReason::Apply)
+    }
+
+    fn infer_expr_with_static_member_reason(
+        &mut self,
+        expr: &Expr,
+        ctx: &Ctx,
+        reason: CtReason,
+    ) -> Ty {
+        let ty = self.infer_expr_kind(expr, ctx, reason);
         self.artifacts.node_types.insert(expr.id, ty.clone());
         ty
     }
@@ -537,7 +547,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
     }
 
-    pub(super) fn infer_expr_kind(&mut self, expr: &Expr, ctx: &Ctx) -> Ty {
+    pub(super) fn infer_expr_kind(
+        &mut self,
+        expr: &Expr,
+        ctx: &Ctx,
+        static_member_reason: CtReason,
+    ) -> Ty {
         match &expr.kind {
             ExprKind::LiteralInt(_) => Ty::Nominal(Symbol::Int, vec![]),
             ExprKind::LiteralFloat(_) => Ty::Nominal(Symbol::Float, vec![]),
@@ -598,6 +613,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 type_args,
                 args,
                 trailing_block,
+                desugared_operator,
             } => {
                 if let ExprKind::Constructor(name) = &callee.kind {
                     return self.infer_construction(
@@ -667,7 +683,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     });
                     return result;
                 }
-                let callee_ty = self.infer_expr(callee, ctx);
+                let callee_reason = match desugared_operator {
+                    Some(TokenKind::EqualsEquals | TokenKind::BangEquals) => {
+                        CtReason::EqualityComparison
+                    }
+                    _ => CtReason::Apply,
+                };
+                let callee_ty =
+                    self.infer_expr_with_static_member_reason(callee, ctx, callee_reason);
                 if !type_args.is_empty() {
                     self.apply_type_args(callee.id, type_args);
                 }
@@ -692,7 +715,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     // type for it (it has no value type, like a type name used as a
                     // value, so `Ty::Error`). Keeps `node_types` total over expressions.
                     self.artifacts.node_types.insert(receiver.id, Ty::Error);
-                    return match self.resolve_type_member(symbol, label, expr.id) {
+                    return match self.resolve_type_member(
+                        symbol,
+                        label,
+                        expr.id,
+                        static_member_reason,
+                    ) {
                         Some(ty) => ty,
                         None => {
                             self.diagnostics.errors.push((

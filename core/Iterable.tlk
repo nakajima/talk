@@ -16,6 +16,10 @@ public protocol Iterator {
 		Map(inner: self, fn: fn)
 	}
 
+	consuming func peekable() -> Peek<Self> {
+		Peek(inner: self)
+	}
+
 	consuming func skip(count: Int) -> Self {
 		let i = 0
 		loop i < count {
@@ -140,11 +144,24 @@ extend IndexIterator<T: IndexIterable>: Iterator {
 public struct Peek<T: Iterator> {
 	let inner: T
 	let peeked: T.Element?
+	let has_peeked: Bool
 
 	init(inner: T) {
 		self.inner = inner
 		self.peeked = .none
+		self.has_peeked = false
 	}
 
-	// public func peek() -> T.Element? {}
+	public mut func peek() -> &T.Element? {
+		if has_peeked { return self.peeked }
+
+		self.peeked = self.inner.next()
+		self.has_peeked = true
+
+		return self.peeked
+	}
+}
+
+extend Peek<T: Iterator>: Iterator {
+	mut func next() -> T.Element? { .none }
 }

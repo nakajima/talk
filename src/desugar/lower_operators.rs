@@ -53,6 +53,7 @@ impl LowerOperators {
                     type_args: vec![],
                     args: vec![],
                     trailing_block: None,
+                    desugared_operator: None,
                 }
             }
             ExprKind::Binary(lhs, op, box rhs) => {
@@ -153,6 +154,11 @@ impl LowerOperators {
                             },
                         ],
                         trailing_block: None,
+                        desugared_operator: matches!(
+                            op,
+                            TokenKind::EqualsEquals | TokenKind::BangEquals
+                        )
+                        .then_some(op),
                     }
                 }
             }

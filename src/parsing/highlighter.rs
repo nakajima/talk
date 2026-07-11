@@ -529,6 +529,7 @@ impl<'a> Higlighter<'a> {
                     type_args,
                     args,
                     trailing_block,
+                    ..
                 } => {
                     result.extend(self.tokens_from_expr(callee, ast));
                     result.extend(self.tokens_from_exprs(type_args, ast));

@@ -2461,6 +2461,7 @@ impl<'a> Parser<'a> {
                 type_args: vec![],
                 args: vec![],
                 trailing_block: Some(trailing_block),
+                desugared_operator: None,
             },
             tok,
         )
@@ -2493,6 +2494,7 @@ impl<'a> Parser<'a> {
                 type_args: vec![],
                 args,
                 trailing_block,
+                desugared_operator: None,
             },
             tok,
         )?;
@@ -2544,6 +2546,7 @@ impl<'a> Parser<'a> {
                 type_args,
                 args,
                 trailing_block,
+                desugared_operator: None,
             },
             tok,
         )?;
