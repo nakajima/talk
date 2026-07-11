@@ -17,7 +17,7 @@ use package::Ownership::{ Borrowed }
 use package::Optional::{ Optional }
 use package::Iterable::{ Iterable, Iterator }
 use package::Showable::{ Showable }
-use package::UnicodeData::{ _GC_CONTROL, _GC_CR, _GC_EXTEND, _GC_EXTEND_INCB_EXTEND, _GC_EXTEND_INCB_LINKER, _GC_EXT_PICT, _GC_HANGUL_L, _GC_HANGUL_LV, _GC_HANGUL_LVT, _GC_HANGUL_T, _GC_HANGUL_V, _GC_INCB_CONSONANT, _GC_LF, _GC_OTHER, _GC_PREPEND, _GC_REGIONAL_INDICATOR, _GC_SPACINGMARK, _GC_ZWJ, _gcb_table }
+use package::UnicodeData::{ _CC_ALPHABETIC, _CC_ALPHANUMERIC, _CC_NUMERIC, _CC_OTHER, _CC_WHITESPACE, _GC_CONTROL, _GC_CR, _GC_EXTEND, _GC_EXTEND_INCB_EXTEND, _GC_EXTEND_INCB_LINKER, _GC_EXT_PICT, _GC_HANGUL_L, _GC_HANGUL_LV, _GC_HANGUL_LVT, _GC_HANGUL_T, _GC_HANGUL_V, _GC_INCB_CONSONANT, _GC_LF, _GC_OTHER, _GC_PREPEND, _GC_REGIONAL_INDICATOR, _GC_SPACINGMARK, _GC_ZWJ, _character_class_table, _gcb_table }
 
 // talk has no bitwise operators; UTF-8's masks and shifts are powers of
 // two, so / and * and - do the same work.
@@ -146,6 +146,56 @@ func _packed_scalar(packed: Int) -> Int {
 
 func _packed_size(packed: Int) -> Int {
 	packed - (packed / 8) * 8
+}
+
+// Look up a scalar in the generated character-property partition.
+func _character_class(scalar: Int) -> Int {
+	if scalar < 0 { return _CC_OTHER }
+	if 1114111 < scalar { return _CC_OTHER }
+
+	let table: String = _character_class_table()
+	let entry_count: Int = table.byte_count / 4
+	let lo: Int = 0
+	let hi: Int = entry_count - 1
+	loop lo < hi {
+		let mid: Int = (lo + hi + 1) / 2
+		let mid_start: Int = _entry_value(table.storage, mid) / 32
+		if scalar < mid_start {
+			hi = mid - 1
+		} else {
+			lo = mid
+		}
+	}
+	let v: Int = _entry_value(table.storage, lo)
+	v - (v / 32) * 32
+}
+
+public func scalar_is_whitespace(scalar: Int) -> Bool {
+	_character_class(scalar) == _CC_WHITESPACE
+}
+
+public func scalar_is_alphabetic(scalar: Int) -> Bool {
+	let cat: Int = _character_class(scalar)
+	cat == _CC_ALPHABETIC || cat == _CC_ALPHANUMERIC
+}
+
+public func scalar_is_numeric(scalar: Int) -> Bool {
+	let cat: Int = _character_class(scalar)
+	cat == _CC_NUMERIC || cat == _CC_ALPHANUMERIC
+}
+
+public func scalar_is_alphanumeric(scalar: Int) -> Bool {
+	scalar_is_alphabetic(scalar) || scalar_is_numeric(scalar)
+}
+
+public func scalar_is_ascii_digit(scalar: Int) -> Bool {
+	47 < scalar && scalar < 58
+}
+
+public func scalar_is_ascii_hexdigit(scalar: Int) -> Bool {
+	if scalar_is_ascii_digit(scalar) { return true }
+	if 64 < scalar && scalar < 71 { return true }
+	96 < scalar && scalar < 103
 }
 
 // Whether `cat` extends the current cluster under GB9 (Extend and ZWJ,
@@ -289,6 +339,39 @@ public struct Character {
 	func to_string() -> String {
 		self.as_substring().to_string()
 	}
+
+	// Classification uses the cluster's first Unicode scalar. This keeps
+	// combining marks attached for iteration while classifying `1` plus a
+	// combining mark as numeric.
+	func first_scalar() -> Int {
+		_packed_scalar(
+			_utf8_decode(self.storage, self.start, self.start + self.byte_count)
+		)
+	}
+
+	func is_whitespace() -> Bool {
+		scalar_is_whitespace(self.first_scalar())
+	}
+
+	func is_alphabetic() -> Bool {
+		scalar_is_alphabetic(self.first_scalar())
+	}
+
+	func is_numeric() -> Bool {
+		scalar_is_numeric(self.first_scalar())
+	}
+
+	func is_alphanumeric() -> Bool {
+		scalar_is_alphanumeric(self.first_scalar())
+	}
+
+	func is_ascii_digit() -> Bool {
+		scalar_is_ascii_digit(self.first_scalar())
+	}
+
+	func is_ascii_hexdigit() -> Bool {
+		scalar_is_ascii_hexdigit(self.first_scalar())
+	}
 }
 
 extend Character: Borrowed {}
@@ -343,6 +426,25 @@ extend CharacterIterator: Iterator<Character> {
 	}
 }
 
+// A Unicode-scalar view. Values are scalar code points as Ints; malformed
+// UTF-8 yields U+FFFD while advancing by the decoder's maximal subpart.
+public struct ScalarIterator {
+	let storage: ByteStorage
+	let offset: Int
+	let end: Int
+}
+
+extend ScalarIterator: Borrowed {}
+
+extend ScalarIterator: Iterator<Int> {
+	mut func next() -> Int? {
+		if self.end <= self.offset { return Optional.none }
+		let packed: Int = _utf8_decode(self.storage, self.offset, self.end)
+		self.offset = self.offset + _packed_size(packed)
+		Optional.some(_packed_scalar(packed))
+	}
+}
+
 extend String: Iterable {
 	func iter() -> CharacterIterator {
 		CharacterIterator(storage: self.storage, offset: 0, end: self.byte_count)
@@ -352,6 +454,22 @@ extend String: Iterable {
 extend Substring: Iterable {
 	func iter() -> CharacterIterator {
 		CharacterIterator(
+			storage: self.storage,
+			offset: self.start,
+			end: self.start + self.byte_count
+		)
+	}
+}
+
+extend String {
+	func scalars() -> ScalarIterator {
+		ScalarIterator(storage: self.storage, offset: 0, end: self.byte_count)
+	}
+}
+
+extend Substring {
+	func scalars() -> ScalarIterator {
+		ScalarIterator(
 			storage: self.storage,
 			offset: self.start,
 			end: self.start + self.byte_count

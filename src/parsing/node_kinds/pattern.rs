@@ -32,6 +32,7 @@ pub enum PatternKind {
     LiteralInt(#[drive(skip)] String),
     LiteralFloat(#[drive(skip)] String),
     LiteralCharacter(#[drive(skip)] String),
+    LiteralString(#[drive(skip)] String),
     LiteralTrue,
     LiteralFalse,
 
@@ -92,6 +93,7 @@ impl Pattern {
             PatternKind::LiteralInt(_) => (),
             PatternKind::LiteralFloat(_) => (),
             PatternKind::LiteralCharacter(_) => (),
+            PatternKind::LiteralString(_) => (),
             PatternKind::LiteralTrue => (),
             PatternKind::LiteralFalse => (),
             PatternKind::Or(patterns) => {

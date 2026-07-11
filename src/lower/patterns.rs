@@ -91,6 +91,7 @@ enum PatternLiteral {
     Float(u64),
     Bool(bool),
     Character(Vec<u8>),
+    Str(Vec<u8>),
 }
 
 impl<'p> Pat<'p> {
@@ -278,6 +279,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             PatternKind::LiteralInt(_)
             | PatternKind::LiteralFloat(_)
             | PatternKind::LiteralCharacter(_)
+            | PatternKind::LiteralString(_)
             | PatternKind::LiteralTrue
             | PatternKind::LiteralFalse => self.literal_column(occs, rows, column, head),
             PatternKind::Tuple(_) => self.tuple_column(occs, rows, column),
@@ -642,6 +644,9 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             PatternLiteral::Character(bytes) => {
                 self.character_literal_branch(&occ, &bytes, then_body, else_body)
             }
+            PatternLiteral::Str(bytes) => {
+                self.string_literal_branch(&occ, &bytes, then_body, else_body)
+            }
         }
     }
 
@@ -671,6 +676,15 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                     self.lowering
                         .diagnostics
                         .push("lowering: character literal pattern with invalid escape".into());
+                    None
+                }
+            },
+            PatternKind::LiteralString(text) => match crate::parsing::lexing::unescape(text) {
+                Ok(value) => Some(PatternLiteral::Str(value.into_bytes())),
+                Err(_) => {
+                    self.lowering
+                        .diagnostics
+                        .push("lowering: string literal pattern with invalid escape".into());
                     None
                 }
             },
@@ -756,6 +770,81 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                 let index = self.lowering.p.int(index as i64);
                 self.lowering.p.add(start, index)
             };
+            let ptr = self.lowering.p.add(base, offset);
+            let byte_ty = self.lowering.p.ty(TyKind::Byte);
+            let actual = self.lowering.p.primop(Op::Load, &[ptr], byte_ty);
+            let expected = self.lowering.p.constant(Const::Byte(expected), byte_ty);
+            let cond = self.lowering.p.cmp(CmpOp::Eq, actual, expected);
+            matched = self.lowering.branch_value(cond, matched, else_body);
+        }
+        let expected_length = self.lowering.p.int(bytes.len() as i64);
+        let length_matches = self.lowering.p.cmp(CmpOp::Eq, length, expected_length);
+        self.lowering
+            .branch_value(length_matches, matched, else_body)
+    }
+
+    /// Match a `String` scrutinee against a literal's bytes: a byte_count
+    /// check guarding a byte-equality chain over the string's buffer, the
+    /// same shape as `character_literal_branch`.
+    fn string_literal_branch(
+        &mut self,
+        occ: &Occurrence,
+        bytes: &[u8],
+        then_body: ExprId,
+        else_body: ExprId,
+    ) -> ExprId {
+        let CheckTy::Nominal(string_symbol, _) = &occ.ty else {
+            self.lowering
+                .diagnostics
+                .push("lowering: string pattern on a non-String value".into());
+            return self.trap_jump();
+        };
+        let metadata = self
+            .lowering
+            .units
+            .iter()
+            .find_map(|unit| unit.types.catalog.structs.get(string_symbol))
+            .and_then(|string| {
+                let storage_index = string.fields.get_index_of("storage")? as u32;
+                let length_index = string.fields.get_index_of("byte_count")? as u32;
+                let (_, storage_ty) = string.fields.get("storage")?;
+                let CheckTy::Nominal(storage_symbol, _) = storage_ty else {
+                    return None;
+                };
+                let storage = self
+                    .lowering
+                    .units
+                    .iter()
+                    .find_map(|unit| unit.types.catalog.structs.get(storage_symbol))?;
+                let base_index = storage.fields.get_index_of("base")? as u32;
+                Some((storage_index, length_index, storage_ty.clone(), base_index))
+            });
+        let Some((storage_index, length_index, storage_ty, base_index)) = metadata else {
+            self.lowering
+                .diagnostics
+                .push("lowering: String pattern requires storage and byte_count fields".into());
+            return self.trap_jump();
+        };
+
+        let storage_lam_ty = self.lowering.map_ty(&storage_ty);
+        let storage =
+            self.lowering
+                .p
+                .primop(Op::GetField(storage_index), &[occ.value], storage_lam_ty);
+        let ptr_ty = self.lowering.p.ty_ptr();
+        let base = self
+            .lowering
+            .p
+            .primop(Op::GetField(base_index), &[storage], ptr_ty);
+        let i64_ty = self.lowering.p.ty_i64();
+        let length = self
+            .lowering
+            .p
+            .primop(Op::GetField(length_index), &[occ.value], i64_ty);
+
+        let mut matched = then_body;
+        for (index, expected) in bytes.iter().copied().enumerate().rev() {
+            let offset = self.lowering.p.int(index as i64);
             let ptr = self.lowering.p.add(base, offset);
             let byte_ty = self.lowering.p.ty(TyKind::Byte);
             let actual = self.lowering.p.primop(Op::Load, &[ptr], byte_ty);

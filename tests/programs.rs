@@ -47,6 +47,21 @@ fn string_building() {
 }
 
 #[test]
+fn string_patterns() {
+    run_program("string_patterns");
+}
+
+#[test]
+fn tuple_access() {
+    run_program("tuple_access");
+}
+
+#[test]
+fn clone_method() {
+    run_program("clone_method");
+}
+
+#[test]
 fn conditional_moves() {
     run_program("conditional_moves");
 }
@@ -126,6 +141,9 @@ fn every_corpus_program_is_exercised() {
     let known = [
         "iterate_and_match",
         "string_building",
+        "string_patterns",
+        "tuple_access",
+        "clone_method",
         "conditional_moves",
         "handlers",
         "heap_graph",

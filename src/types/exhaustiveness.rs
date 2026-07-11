@@ -85,6 +85,7 @@ enum Ctor {
     /// under-reports reachability, never coverage.
     Float(String),
     Character(String),
+    Str(String),
     /// One enum case: the enum's symbol and the case's name.
     Variant(Symbol, String),
     Tuple(usize),
@@ -120,6 +121,10 @@ impl Coverage<'_> {
             PatternKind::LiteralFloat(text) => Pat::Ctor(Ctor::Float(text.clone()), vec![]),
             PatternKind::LiteralCharacter(text) => match crate::parsing::lexing::unescape(text) {
                 Ok(value) => Pat::Ctor(Ctor::Character(value), vec![]),
+                Err(_) => Pat::Wild,
+            },
+            PatternKind::LiteralString(text) => match crate::parsing::lexing::unescape(text) {
+                Ok(value) => Pat::Ctor(Ctor::Str(value), vec![]),
                 Err(_) => Pat::Wild,
             },
             PatternKind::Or(items) => Pat::Or(items.iter().map(|p| self.lower(p, ty)).collect()),
@@ -226,6 +231,9 @@ impl Coverage<'_> {
             Ctor::Character(_) => {
                 matches!(ty, Ty::Nominal(symbol, _) if *symbol == Symbol::Character)
             }
+            Ctor::Str(_) => {
+                matches!(ty, Ty::Nominal(symbol, _) if *symbol == Symbol::String)
+            }
             Ctor::Tuple(n) => matches!(ty, Ty::Tuple(items) if items.len() == *n),
             Ctor::Record(labels) => {
                 matches!(ty, Ty::Record(row) if row.fields.len() == labels.len())
@@ -261,7 +269,7 @@ impl Coverage<'_> {
 
     fn arity(&self, ctor: &Ctor) -> usize {
         match ctor {
-            Ctor::Bool(_) | Ctor::Int(_) | Ctor::Float(_) | Ctor::Character(_) => 0,
+            Ctor::Bool(_) | Ctor::Int(_) | Ctor::Float(_) | Ctor::Character(_) | Ctor::Str(_) => 0,
             Ctor::Tuple(n) => *n,
             Ctor::Record(labels) => labels.len(),
             Ctor::Variant(enum_symbol, name) => self
@@ -279,7 +287,9 @@ impl Coverage<'_> {
     fn ctor_field_tys(&self, ctor: &Ctor, ty: &Ty) -> Vec<Ty> {
         let ty = Self::pattern_ty(ty);
         match ctor {
-            Ctor::Bool(_) | Ctor::Int(_) | Ctor::Float(_) | Ctor::Character(_) => vec![],
+            Ctor::Bool(_) | Ctor::Int(_) | Ctor::Float(_) | Ctor::Character(_) | Ctor::Str(_) => {
+                vec![]
+            }
             Ctor::Tuple(n) => {
                 let mut tys = match ty {
                     Ty::Tuple(items) => items.clone(),
@@ -557,6 +567,7 @@ fn render(pat: &Pat) -> String {
             Ctor::Int(value) => value.to_string(),
             Ctor::Float(text) => text.clone(),
             Ctor::Character(text) => format!("'{text}'"),
+            Ctor::Str(text) => format!("{text:?}"),
             Ctor::Variant(_, name) if args.is_empty() => format!(".{name}"),
             Ctor::Variant(_, name) => format!(".{name}({})", list(args)),
             Ctor::Tuple(_) => format!("({})", list(args)),

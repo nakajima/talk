@@ -361,6 +361,15 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 );
                 PatternRefinement::default()
             }
+            PatternKind::LiteralString(_) => {
+                self.emit_eq(
+                    expected.clone(),
+                    Ty::Nominal(Symbol::String, vec![]),
+                    pattern.id,
+                    CtReason::Pattern,
+                );
+                PatternRefinement::default()
+            }
             PatternKind::LiteralTrue | PatternKind::LiteralFalse => {
                 self.emit_eq(
                     expected.clone(),

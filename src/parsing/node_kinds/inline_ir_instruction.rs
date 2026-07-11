@@ -109,6 +109,12 @@ pub enum InlineIRInstructionKind {
         ty: TypeAnnotation,
         addr: Value,
     },
+    #[doc = "$dest = take $ty $value"]
+    Take {
+        dest: Register,
+        ty: TypeAnnotation,
+        value: Value,
+    },
     #[doc = "store $ty $value $addr"]
     Store {
         value: Value,
@@ -354,6 +360,9 @@ impl Display for InlineIRInstruction {
             }
             InlineIRInstructionKind::Load { dest, ty, addr } => {
                 write!(f, "{dest} = load {} {}", ty.simple_display(), addr)
+            }
+            InlineIRInstructionKind::Take { dest, ty, value } => {
+                write!(f, "{dest} = take {} {}", ty.simple_display(), value)
             }
             InlineIRInstructionKind::Store { value, ty, addr } => {
                 write!(f, "store {} {} {}", ty.simple_display(), value, addr)

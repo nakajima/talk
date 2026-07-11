@@ -43,6 +43,7 @@ pub fn typed() -> Arc<LibraryTyped> {
 pub const CORE_SOURCE_NAMES: &[&str] = &[
     "Ownership.tlk",
     "Optional.tlk",
+    "Result.tlk",
     "Operators.tlk",
     "Convert.tlk",
     "String.tlk",
@@ -66,6 +67,7 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
     vec![
         ("Ownership.tlk", include_str!("../../core/Ownership.tlk")),
         ("Optional.tlk", include_str!("../../core/Optional.tlk")),
+        ("Result.tlk", include_str!("../../core/Result.tlk")),
         ("Operators.tlk", include_str!("../../core/Operators.tlk")),
         ("Convert.tlk", include_str!("../../core/Convert.tlk")),
         ("String.tlk", include_str!("../../core/String.tlk")),

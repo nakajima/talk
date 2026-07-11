@@ -299,13 +299,17 @@ fn symbol_from_type_annotation(
             symbol_from_type_annotation(inner, byte_offset)
         }
         TypeAnnotationKind::Nominal {
-            name, name_span, ..
-        } => {
-            if !nominal_name_span_contains(name, *name_span, byte_offset) {
-                return None;
-            }
-            name.symbol().ok()
-        }
+            name,
+            name_span,
+            generics,
+        } => generics
+            .iter()
+            .find_map(|generic| symbol_from_type_annotation(generic, byte_offset))
+            .or_else(|| {
+                nominal_name_span_contains(name, *name_span, byte_offset)
+                    .then(|| name.symbol().ok())
+                    .flatten()
+            }),
         TypeAnnotationKind::SelfType(name) => name.symbol().ok(),
         TypeAnnotationKind::Any {
             protocol,
@@ -327,7 +331,12 @@ fn symbol_from_type_annotation(
             .find_map(|param| symbol_from_type_annotation(param, byte_offset))
             .or_else(|| effect_symbol_at_offset(effects, byte_offset))
             .or_else(|| symbol_from_type_annotation(returns, byte_offset)),
-        _ => None,
+        TypeAnnotationKind::Tuple(items) => items
+            .iter()
+            .find_map(|item| symbol_from_type_annotation(item, byte_offset)),
+        TypeAnnotationKind::Record { fields } => fields
+            .iter()
+            .find_map(|field| symbol_from_type_annotation(&field.value, byte_offset)),
     }
 }
 

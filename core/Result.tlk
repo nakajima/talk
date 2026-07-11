@@ -1,0 +1,20 @@
+// no-core
+
+// A recoverable computation result. Libraries can return this when failure
+// is part of their ordinary API rather than an effect or process failure.
+public enum Result<Success, Failure> {
+	case ok(Success)
+	case error(Failure)
+	func is_ok() -> Bool {
+		match self {
+			.ok(_) -> true,
+			.error(_) -> false
+		}
+	}
+	func is_error() -> Bool {
+		match self {
+			.ok(_) -> false,
+			.error(_) -> true
+		}
+	}
+}

@@ -956,6 +956,7 @@ impl<'a> MoveChecker<'a> {
             ExprKind::Member(Some(receiver), _) | ExprKind::Proj(receiver, ..) => {
                 self.walk_expr(receiver, state)
             }
+            ExprKind::Clone(inner) => self.walk_expr(inner, state),
             ExprKind::Member(None, _) | ExprKind::Variable(_) | ExprKind::Constructor(_) => {}
             ExprKind::Tuple(items)
             | ExprKind::LiteralArray(items)
@@ -977,12 +978,23 @@ impl<'a> MoveChecker<'a> {
                 self.check_closure(func, state, EscapeContext::Bound);
             }
             ExprKind::InlineIR(ir) => {
-                for bind in &ir.binds {
+                use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, Value};
+
+                let taken = match &ir.kind {
+                    InlineIRInstructionKind::Take {
+                        value: Value::Bind(index),
+                        ..
+                    } => Some(*index),
+                    _ => None,
+                };
+                for (index, bind) in ir.binds.iter().enumerate() {
+                    if taken == Some(index) {
+                        self.take_expr(bind, state);
                     // A generic-typed value handed to raw IR transfers
                     // ownership (`_store<Element>`'s value): the
                     // implicit-copy rule inserts the retain. Concrete
                     // binds stay reads.
-                    if matches!(bind.ty, Ty::Param(_) | Ty::Proj(..)) {
+                    } else if matches!(bind.ty, Ty::Param(_) | Ty::Proj(..)) {
                         self.consume_expr(bind, state);
                     } else {
                         self.walk_expr(bind, state);
@@ -1316,6 +1328,49 @@ impl<'a> MoveChecker<'a> {
 
     fn move_place(&mut self, expr: &typed_ast::Expr, place: Place, state: &mut MoveState) {
         self.move_place_with(expr, place, state, false);
+    }
+
+    /// Transfer a place through the unsafe `take` IR instruction. Unlike an
+    /// ordinary read, this may move the current value out through an exclusive
+    /// borrow; flow then requires the place to be restored before another use.
+    fn take_expr(&mut self, expr: &typed_ast::Expr, state: &mut MoveState) {
+        let Some(place) = self.place(expr) else {
+            self.walk_expr(expr, state);
+            return;
+        };
+        let ty = match &expr.ty {
+            Ty::Borrow(_, inner) => inner.as_ref().clone(),
+            other => other.clone(),
+        };
+        if self.grades.is_copy(&ty) {
+            self.walk_expr(expr, state);
+            return;
+        }
+        let root = Place::root(place.root);
+        let borrowed = state.borrowed_roots.get(&place.root).copied();
+        if borrowed.is_some_and(|perm| !perm.is_exclusive()) {
+            let error = OwnershipError::MoveOutOfBorrowedValue {
+                name: self.render(&place),
+                owner: self.render(&root),
+                ty: ty.render_mono(),
+            };
+            self.error(error, expr.id);
+            return;
+        }
+
+        self.check_use(expr.id, &ty, &place, true, state);
+        self.check_move_while_borrowed(expr.id, &place, state);
+        if self.recording {
+            self.consumed.insert(expr.id);
+            self.facts.moves.push(super::FlowMoveFact {
+                node: expr.id,
+                place: render_place(&place, self.types),
+                ty: ty.render_mono(),
+            });
+        }
+        state.invalidate_borrows_of(&place);
+        self.record_runtime_move(&place);
+        state.note_move(place, expr.id, ty);
     }
 
     /// `forced` = a `consume`-marked argument (ADR 0018): no liveness

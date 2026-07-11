@@ -1761,6 +1761,67 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_else_if_stmt() {
+        let parsed = parse("if true { 1 } else if false { 2 } else { 3 }");
+        let Stmt {
+            kind: StmtKind::If(_, _, Some(alt)),
+            ..
+        } = parsed.roots[0].as_stmt()
+        else {
+            panic!("expected if stmt with else");
+        };
+        // The else-if chain is wrapped in a synthesized block holding the
+        // nested if statement.
+        assert_eq!(alt.body.len(), 1);
+        let Stmt {
+            kind: StmtKind::If(_, _, Some(inner_alt)),
+            ..
+        } = alt.body[0].as_stmt()
+        else {
+            panic!("expected nested if stmt in else block");
+        };
+        assert_eq!(inner_alt.body.len(), 1);
+    }
+
+    #[test]
+    fn parses_else_if_without_final_else() {
+        let parsed = parse("if true { 1 } else if false { 2 }");
+        let Stmt {
+            kind: StmtKind::If(_, _, Some(alt)),
+            ..
+        } = parsed.roots[0].as_stmt()
+        else {
+            panic!("expected if stmt with else");
+        };
+        let Stmt {
+            kind: StmtKind::If(_, _, None),
+            ..
+        } = alt.body[0].as_stmt()
+        else {
+            panic!("expected nested if stmt without else");
+        };
+    }
+
+    #[test]
+    fn parses_else_if_expr() {
+        let parsed = parse("let a = if true { 1 } else if false { 2 } else { 3 }");
+        let DeclKind::Let { rhs: Some(rhs), .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected let decl");
+        };
+        let ExprKind::If(_, _, alt) = &rhs.kind else {
+            panic!("expected if expr");
+        };
+        assert_eq!(alt.body.len(), 1);
+        let Node::Expr(Expr {
+            kind: ExprKind::If(_, _, _),
+            ..
+        }) = &alt.body[0]
+        else {
+            panic!("expected nested if expr in else block");
+        };
+    }
+
+    #[test]
     fn parses_if_expr() {
         let parsed = parse("let a = if true { 123 } else { 456 }");
         assert_eq!(
@@ -2550,6 +2611,38 @@ pub mod tests {
         assert_eq!(
             parse_pattern("'\\u{1F60E}'").kind,
             PatternKind::LiteralCharacter("\\u{1F60E}".into())
+        );
+    }
+
+    #[test]
+    fn parses_literal_string_pattern() {
+        assert_eq!(
+            parse_pattern("\"func\"").kind,
+            PatternKind::LiteralString("func".into())
+        );
+        // Escapes stay raw, as in string literal expressions.
+        assert_eq!(
+            parse_pattern("\"a\\nb\"").kind,
+            PatternKind::LiteralString("a\\nb".into())
+        );
+    }
+
+    #[test]
+    fn parses_string_pattern_or_chain() {
+        assert_eq!(
+            parse_pattern("\"if\" | \"else\"").kind,
+            PatternKind::Or(vec![
+                Pattern {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    kind: PatternKind::LiteralString("if".into())
+                },
+                Pattern {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    kind: PatternKind::LiteralString("else".into())
+                },
+            ])
         );
     }
 

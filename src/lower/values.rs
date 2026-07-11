@@ -121,6 +121,14 @@ impl<'a> Lowering<'a> {
         {
             return Some(self.p.extract(receiver_value, index as u32));
         }
+        // Tuple element access (`p.0`): an extract at the position.
+        if let CheckTy::Tuple(items) = &head
+            && let ExprKind::Member(_, label) | ExprKind::Proj(_, label, _) = &expr.kind
+            && let Ok(index) = label.to_string().parse::<usize>()
+            && index < items.len()
+        {
+            return Some(self.p.extract(receiver_value, index as u32));
+        }
         let resolution = expr.member_resolution.clone();
         if let Some(crate::types::output::MemberResolution::Direct(property)) = resolution {
             let index = self.field_index(&head, property)?;

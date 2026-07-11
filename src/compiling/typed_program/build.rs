@@ -151,12 +151,13 @@ impl TypedTreeBuilder<'_> {
     }
 
     fn expr_with_kind(&self, e: &expr::Expr, kind: typed_ast::ExprKind) -> typed_ast::Expr {
+        let explicit_clone = matches!(kind, typed_ast::ExprKind::Clone(_));
         typed_ast::Expr {
             id: e.id,
             kind,
             span: e.span,
             ownership: typed_ast::ExprOwnership {
-                auto_clone: self.types.coerce_clones.contains(&e.id),
+                auto_clone: explicit_clone || self.types.coerce_clones.contains(&e.id),
             },
             // The type checker assigns every expression a type; a hole can
             // only arise downstream of an error diagnostic (which normally
@@ -178,6 +179,13 @@ impl TypedTreeBuilder<'_> {
 
     fn boxed(&self, e: &expr::Expr) -> Box<typed_ast::Expr> {
         Box::new(self.expr(e))
+    }
+
+    fn is_marker_clone_requirement(&self, symbol: Symbol) -> bool {
+        [Symbol::Copy, Symbol::CheapClone]
+            .into_iter()
+            .filter_map(|protocol| self.types.catalog.requirement_in(protocol, "clone"))
+            .any(|(_, requirement)| requirement.symbol == symbol)
     }
 
     /// Build `inner` in place of the erased wrapper `e`, overlaying the
@@ -248,12 +256,28 @@ impl TypedTreeBuilder<'_> {
                 args,
                 trailing_block,
                 ..
-            } => typed_ast::ExprKind::Call {
-                callee: self.boxed(callee),
-                type_args: type_args.clone(),
-                args: args.iter().map(|a| self.call_arg(a)).collect(),
-                trailing_block: trailing_block.as_ref().map(|b| self.block(b)),
-            },
+            } => {
+                let clone_requirement = match self.types.member_resolutions.get(&callee.id) {
+                    Some(crate::types::output::MemberResolution::Direct(symbol)) => {
+                        self.is_marker_clone_requirement(*symbol)
+                    }
+                    _ => false,
+                };
+                if clone_requirement
+                    && args.is_empty()
+                    && trailing_block.is_none()
+                    && let expr::ExprKind::Member(Some(receiver), _, _) = &callee.kind
+                {
+                    typed_ast::ExprKind::Clone(self.boxed(receiver))
+                } else {
+                    typed_ast::ExprKind::Call {
+                        callee: self.boxed(callee),
+                        type_args: type_args.clone(),
+                        args: args.iter().map(|a| self.call_arg(a)).collect(),
+                        trailing_block: trailing_block.as_ref().map(|b| self.block(b)),
+                    }
+                }
+            }
             expr::ExprKind::Member(recv, label, _span) => {
                 // Field read vs method/variant, decided once here: a member
                 // that resolves to a stored field is a projection.
@@ -360,6 +384,9 @@ impl TypedTreeBuilder<'_> {
             }
             pattern::PatternKind::LiteralCharacter(s) => {
                 typed_ast::PatternKind::LiteralCharacter(s.clone())
+            }
+            pattern::PatternKind::LiteralString(s) => {
+                typed_ast::PatternKind::LiteralString(s.clone())
             }
             pattern::PatternKind::LiteralTrue => typed_ast::PatternKind::LiteralTrue,
             pattern::PatternKind::LiteralFalse => typed_ast::PatternKind::LiteralFalse,

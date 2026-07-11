@@ -1100,6 +1100,7 @@ impl<'types> Builder<'types> {
                 self.push_reads(expr, current);
                 current
             }
+            ExprKind::Clone(inner) => self.lower_expr(inner, current, temp_drops),
             ExprKind::LiteralArray(items)
             | ExprKind::Tuple(items)
             | ExprKind::Con { args: items, .. } => self.lower_exprs(items, current, temp_drops),

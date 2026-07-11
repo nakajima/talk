@@ -1,5 +1,85 @@
 # Changelog
 
+## Unreleased (2026-07-11) — Language, core, lexer, and package hardening
+
+This release addresses the compiler and core-library gaps found while porting
+Talk's Rust lexer to Talk itself. It expands pattern matching, tuple access,
+ownership-aware cloning, Unicode APIs, package testing, and LSP navigation,
+while fixing several type-checker and lexer correctness bugs.
+
+### Added
+
+- **`else if` chains.** Conditional statements and expressions now accept
+  `else if`, including chains following `if let`.
+- **String-literal patterns.** Match arms can use string patterns, including
+  escapes, Unicode text, empty strings, and or-patterns. Matching compares the
+  UTF-8 byte content and remains non-exhaustive without a catch-all arm.
+- **Tuple element access.** Tuple values support positional members such as
+  `.0` and `.1`, including chained access such as `nested.0.1` and borrowed
+  tuple receivers. Existing tuple destructuring continues to work.
+- **Ownership-aware `clone()` methods.** `Copy` and `CheapClone` now declare a
+  real `clone() -> Self` protocol method. The compiler supplies the operation
+  for marker conformances: `Copy` values duplicate without runtime work, while
+  `CheapClone` values retain their shared storage. Declared methods still take
+  precedence over the marker implementation.
+- **`Result<Success, Failure>`.** Core now provides `.ok` and `.error` cases
+  with `is_ok()` and `is_error()` helpers.
+- **Byte comparisons.** `Byte` now conforms to `Equatable<Byte>` and
+  `Comparable<Byte>`, enabling normal `==`, `!=`, `<`, `<=`, `>`, and `>=`
+  operations without converting through `_toInt()`.
+- **Unicode character classification.** `Character` now provides
+  `is_whitespace`, `is_alphabetic`, `is_numeric`, `is_alphanumeric`,
+  `is_ascii_digit`, and `is_ascii_hexdigit`. Classification uses the first
+  scalar of an extended grapheme cluster.
+- **Unicode scalar iteration.** `String.scalars()` and `Substring.scalars()`
+  expose a scalar-level iterator yielding Unicode code points as `Int` values.
+  Public scalar classification functions provide the same classification API.
+- **Generated Unicode property data.** The Unicode generator now emits a
+  compact character-class table from Unicode 17.0 `Alphabetic`, `White_Space`,
+  and general-category data in addition to the grapheme-break table.
+
+### Changed
+
+- **Payload-free enums are `Copy`.** Enums whose cases have no payloads are
+  treated as bare runtime tags. Borrowed values of these enums can flow into
+  owned parameters and fields without requiring `consume`.
+- **Match inference considers the whole arm set.** When multiple enums share a
+  case name, the checker intersects all top-level variant names before checking
+  individual arms. A later unique case can therefore disambiguate an earlier
+  shared case such as `.ok`.
+- **Package test discovery includes source tests.** Bare `talk test` discovers
+  both `tests/**/*.test.tlk` and `src/**/*.test.tlk`. Explicit package test
+  paths and directories retain package compilation context.
+- **Package-local imports work in tests.** Test files under either `tests/` or
+  `src/` can resolve `package::module` imports against the package source root,
+  while `self::` and `super::` remain relative to the importing test file.
+- **Cheap cloning arrays does not require cloneable elements.** Array cloning
+  retains the shared buffer and does not visit its elements, allowing aggregate
+  types containing arrays to conform to `CheapClone` when otherwise valid.
+
+### Fixed
+
+- **Static methods can construct their own type.** An in-flight initializer no
+  longer forces its unit-returning body to have the constructed nominal type,
+  so `static func make() -> Box { Box() }` type-checks correctly.
+- **Static character constants are accepted.** A global `Character` initialized
+  from a character literal is recognized as a view into static program data.
+  Other borrowed globals still require valid global-rooted provenance.
+- **LSP goto-definition handles nested optional and generic annotations.** A
+  source nominal inside a synthesized annotation such as `Token?` is resolved
+  before the outer `Optional<Token>`. Unique, tuple, record, and nominal-path
+  annotation traversal is also covered.
+- **String and character newlines are counted once by the Rust lexer.** Line
+  and column updates now live solely in `advance()` rather than being repeated
+  by string and escape scanning.
+- **Unterminated literal diagnostics are reachable.** EOF in a string reports
+  `UnterminatedString`; EOF after definite character-literal content reports
+  `UnterminatedCharacterLiteral` while identifier-shaped effect names and
+  effect-row ticks retain their existing interpretation.
+- **Standalone tick spans include the tick.** A `SingleQuote` token is no
+  longer zero-width. Character literal `'['` remains distinct from an effect
+  row opener such as `'[io]`.
+
 ## Unreleased (2026-07-10) — Derived `Equatable`
 
 Talk now automatically derives same-type `Equatable` conformance for value

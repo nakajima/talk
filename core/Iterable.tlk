@@ -2,6 +2,7 @@
 use package::Convert
 use package::Optional::{ Optional }
 use package::Array::{ Array }
+use package::Memory::{ replace }
 use package::Operators::{ Add, Subtract, Comparable, Equatable }
 use package::Ownership::{ Borrowed }
 
@@ -163,5 +164,12 @@ public struct Peek<T: Iterator> {
 }
 
 extend Peek<T: Iterator>: Iterator {
-	mut func next() -> T.Element? { .none }
+	mut func next() -> T.Element? {
+		if self.has_peeked {
+			let next = self.inner.next()
+			return replace(mut self.peeked, consume next)
+		} else {
+			self.inner.next()
+		}
+	}
 }

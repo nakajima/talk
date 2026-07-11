@@ -111,6 +111,24 @@ public struct Array<Element> {
 
 extend Array<Element> where Element: Comparable<Element> {
 	consuming func sort_by(fn: (Element, Element) -> Bool) -> Self {
+		let i = 0
+
+		loop i < self.count - 1 {
+			let min = i // assume the current position as the minimum
+
+			// Search for the smallest element in the unsorted portion
+			let j = i + 1
+			loop j < self.count - 1 {
+				if fn(self.get(j), self.get(min)) { min = j }
+				j = j + 1
+			}
+
+			// Swap only if a smaller element was found
+			if min != i { self.swap(i, min) }
+
+			i = i + 1
+		}
+
 		self
 	}
 }

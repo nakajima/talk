@@ -118,6 +118,12 @@ extend Bool: Equatable<Bool> {
 	}
 }
 
+extend Byte: Equatable<Byte> {
+	func equals(rhs: Byte) -> Bool {
+		@_ir { %? = cmp Byte %0 == %1 }
+	}
+}
+
 extend Int: Negatable {
 	func negated() -> Int {
 		@_ir { %? = sub Int 0 %0 }
@@ -155,5 +161,11 @@ extend Int: Comparable<Int> {
 extend Float: Comparable<Float> {
 	func gt(rhs: Float) -> Bool {
 		@_ir { %? = cmp Float %0 > %1 }
+	}
+}
+
+extend Byte: Comparable<Byte> {
+	func gt(rhs: Byte) -> Bool {
+		@_ir { %? = cmp Byte %0 > %1 }
 	}
 }

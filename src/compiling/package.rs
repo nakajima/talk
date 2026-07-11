@@ -2107,18 +2107,23 @@ impl PackageProject {
         paths: &[PathBuf],
         filter: Option<String>,
     ) -> Result<Option<crate::testing::Runner>, PackageError> {
-        let tests_root = self.root.join("tests");
+        let tests_root = self.root.join("tests").canonicalize().ok();
+        // `package::` imports in test files anchor at the package source
+        // directory, matching the library compile; `self`/`super` stay
+        // relative to each test file.
+        let src_root = self.root.join("src").canonicalize().ok();
         let (roots, source_root) = if paths.is_empty() {
-            if !tests_root.is_dir() {
+            // Discover package tests both under tests/ and alongside the
+            // sources (src/**/*.test.tlk).
+            let roots: Vec<PathBuf> = [tests_root.clone(), src_root.clone()]
+                .into_iter()
+                .flatten()
+                .collect();
+            if roots.is_empty() {
                 return Ok(None);
             }
-            let tests_root = tests_root
-                .canonicalize()
-                .map_err(|source| PackageError::Io {
-                    context: format!("failed to find package tests under {}", self.root.display()),
-                    source,
-                })?;
-            (vec![tests_root.clone()], Some(tests_root))
+            let source_root = src_root.clone().or_else(|| tests_root.clone());
+            (roots, source_root)
         } else {
             let roots = paths
                 .iter()
@@ -2134,10 +2139,11 @@ impl PackageProject {
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let source_root = tests_root
-                .canonicalize()
-                .ok()
-                .filter(|tests_root| roots.iter().all(|root| root.starts_with(tests_root)));
+            let source_root = src_root.clone().or_else(|| {
+                tests_root
+                    .clone()
+                    .filter(|tests_root| roots.iter().all(|root| root.starts_with(tests_root)))
+            });
             (roots, source_root)
         };
         let graph = self.compile_graph()?;
@@ -2539,6 +2545,58 @@ mod tests {
             panic!("expected selected package test to run");
         };
         assert_eq!(summary.failures, 0);
+        fs::remove_dir_all(temporary).expect("remove package root");
+    }
+
+    #[test]
+    fn bare_test_run_discovers_src_tests_and_resolves_package_imports() {
+        let temporary = std::env::temp_dir().join(format!(
+            "talk-package-discovery-test-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(temporary.join("src")).expect("create source directory");
+        fs::create_dir_all(temporary.join("tests")).expect("create tests directory");
+        fs::write(
+            temporary.join(MANIFEST_FILE),
+            "Package(name: \"sample-package\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        )
+        .expect("write manifest");
+        fs::write(
+            temporary.join("src/lib.tlk"),
+            "public func answer() -> Int { 42 }\n",
+        )
+        .expect("write library");
+        fs::write(
+            temporary.join("src/helper.tlk"),
+            "public func double(n: Int) -> Int { n * 2 }\n",
+        )
+        .expect("write helper module");
+        // A test file living alongside the sources is discovered by a bare
+        // run and can use sibling modules through `package::`.
+        fs::write(
+            temporary.join("src/helper.test.tlk"),
+            "use package::helper::{ double }\n\ntest(\"src test\") {\n    assert(double(n: 21) == 42)\n}\n",
+        )
+        .expect("write src test");
+        // A test under tests/ can import package modules by path too.
+        fs::write(
+            temporary.join("tests/import.test.tlk"),
+            "use package::helper::{ double }\n\ntest(\"tests dir import\") {\n    assert(double(n: 5) == 10)\n}\n",
+        )
+        .expect("write tests-dir test");
+
+        let project = PackageProject::install_at(&temporary, true, false).expect("install package");
+        let outcome = project.run_tests().expect("run package tests");
+        let crate::testing::Outcome::Finished(summary) = outcome else {
+            panic!("expected discovery to find both test files");
+        };
+        assert_eq!(summary.failures, 0);
+        assert!(
+            summary.output.contains("2 tests passed"),
+            "expected both tests to run, got: {}",
+            summary.output
+        );
         fs::remove_dir_all(temporary).expect("remove package root");
     }
 

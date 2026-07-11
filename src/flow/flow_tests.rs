@@ -466,6 +466,27 @@ fn assignment_schedules_replace_drop() {
 }
 
 #[test]
+fn take_then_restore_makes_assignment_an_initialization() {
+    let driver = flow_driver(
+        "// unsafe\nfunc take_owned<T>(consume value: T) -> T { value }\nfunc replace<T>(mut place: T, consume replacement: T) -> T {\n\tlet previous: T = @_ir(place) { %? = take T $0 }\n\tplace = take_owned(consume replacement)\n\tprevious\n}",
+    );
+    assert!(!driver.has_errors(), "{:?}", driver.diagnostics());
+    let body = stored_body(&driver, "replace");
+    let replace: Vec<_> = candidate_drops(&driver, &body)
+        .into_iter()
+        .filter(|(_, reason, _)| *reason == DropReason::AssignmentReplace)
+        .collect();
+    assert_eq!(
+        replace,
+        vec![(
+            String::new(),
+            DropReason::AssignmentReplace,
+            DropElaboration::Dead
+        )]
+    );
+}
+
+#[test]
 fn consumed_places_are_recorded_on_checked_mir() {
     let driver = flow_driver(
         "func take(consume s: String) -> Int {\n\ts.byte_count\n}\nfunc make() -> Int {\n\tlet s = \"hello\" + \" world\"\n\ttake(s)\n}",

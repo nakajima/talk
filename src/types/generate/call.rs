@@ -280,7 +280,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         EffectRow::pure(),
                     ),
                 );
-                let expected = Ty::Func(arg_tys, Box::new(self_ty.clone()), ctx.eff.clone());
+                // The construction's result is `self_ty` regardless of the
+                // init's own return type (init bodies return unit), so
+                // leave the signature's return free instead of pinning it
+                // to `self_ty`; otherwise `Box3()` inside `Box3`'s own
+                // binding group (e.g. a static method) poisons the init's
+                // signature and the body type comes out mismatched.
+                let ret = Ty::Var(self.store.fresh_ty(self.level, expr.id));
+                let expected = Ty::Func(arg_tys, Box::new(ret), ctx.eff.clone());
                 self.emit_eq(signature, expected, expr.id, CtReason::Apply);
                 self_ty
             }

@@ -221,6 +221,7 @@ impl<'s> Solver<'s> {
                 origin,
             });
         }
+
         match member_receiver.clone() {
             Ty::Var(_) => Some(Constraint::HasMember {
                 receiver,
@@ -291,6 +292,26 @@ impl<'s> Solver<'s> {
                     },
                     origin.node,
                 ));
+                None
+            }
+            // Tuple element access: `.0`, `.1`, ... extract by position.
+            Ty::Tuple(items) => {
+                let index = label_str.parse::<usize>().ok();
+                match index.and_then(|index| items.get(index)) {
+                    Some(item) => {
+                        queue.push(Constraint::Eq(member, item.clone(), origin));
+                    }
+                    None => {
+                        let rendered = self.store.render(&diagnostic_receiver);
+                        self.errors.push((
+                            TypeError::UnknownMember {
+                                receiver: rendered,
+                                label: label_str,
+                            },
+                            origin.node,
+                        ));
+                    }
+                }
                 None
             }
             // Structural access via an open-row equality (Leijen 2005):
@@ -493,6 +514,37 @@ impl<'s> Solver<'s> {
                         queue,
                     );
                 }
+                // `clone` is a real marker-protocol requirement, but its
+                // implementation is compiler-provided because retaining an
+                // arbitrary Self is not expressible in user code.
+                let clone_protocol = if self
+                    .catalog
+                    .has_bare_conformance(symbol, Symbol::CheapClone)
+                {
+                    Some(Symbol::CheapClone)
+                } else if self.catalog.grade_of(symbol) == crate::types::catalog::Grade::Copy {
+                    Some(Symbol::Copy)
+                } else {
+                    None
+                };
+                if label_str == "clone"
+                    && let Some(protocol) = clone_protocol
+                    && let Some((_, requirement)) = self.catalog.requirement_in(protocol, "clone")
+                {
+                    let requirement_symbol = requirement.symbol;
+                    queue.push(Constraint::Eq(
+                        member,
+                        Ty::Func(
+                            vec![],
+                            Box::new(member_receiver.clone()),
+                            EffectRow::open(self.store.fresh_eff(self.level, origin.node)),
+                        ),
+                        origin,
+                    ));
+                    self.member_resolutions
+                        .insert(origin.node, MemberResolution::Direct(requirement_symbol));
+                    return None;
+                }
                 // Members provided through conformances (extend witnesses):
                 // type via the protocol requirement, which is always valid if
                 // the conformance is (the witness is checked against the
@@ -619,6 +671,19 @@ impl<'s> Solver<'s> {
                         self.member_resolutions
                             .insert(origin.node, MemberResolution::Direct(inherent.symbol));
                     }
+                    return None;
+                }
+                // Copy/CheapClone both declare `clone`, but neither should
+                // make the method visible on a type that conforms to neither.
+                if label_str == "clone" && clone_protocol.is_none() {
+                    let rendered = self.store.render(&diagnostic_receiver);
+                    self.errors.push((
+                        TypeError::UnknownMember {
+                            receiver: rendered,
+                            label: label_str,
+                        },
+                        origin.node,
+                    ));
                     return None;
                 }
                 let owner_protocols = self.protocol_owner_refs(&label_str, origin.node);

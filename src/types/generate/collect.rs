@@ -400,9 +400,12 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             // A unique value is the sole reference: never Copy/CheapClone.
             Ty::Unique(_) => false,
             Ty::Nominal(symbol, args) => {
-                // Storage is the intrinsic refcounted buffer: cheap to clone
-                // whatever it stores (the bump never touches elements).
-                if marker == Symbol::CheapClone && *symbol == Symbol::Storage {
+                // Storage and Array are refcounted buffers: cloning bumps
+                // the buffer without touching elements, so element grade is
+                // irrelevant.
+                if marker == Symbol::CheapClone
+                    && matches!(*symbol, Symbol::Storage | Symbol::Array)
+                {
                     return true;
                 }
                 let head_ok = match marker {
@@ -1329,7 +1332,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                                 .contains_key(&(head, owner.clone()));
                             let separately_claims_owner = owner != protocol
                                 && self.explicit_conformances.contains(&(head, owner.clone()));
+                            let intrinsic_marker_clone = label == "clone"
+                                && matches!(owner.protocol, Symbol::Copy | Symbol::CheapClone);
                             if !requirement.has_default
+                                && !intrinsic_marker_clone
                                 && !already_conforms_to_owner
                                 && !separately_claims_owner
                                 && missing_requirements.insert(requirement.symbol)

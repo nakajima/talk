@@ -34,13 +34,26 @@ impl LocalModulePaths {
         let mut target = match anchor {
             "package" => self.source_root.clone(),
             "self" | "super" => {
-                let source_relative =
-                    source.strip_prefix(&self.source_root).ok().or_else(|| {
-                        (self.source_root.as_os_str().is_empty()
-                            || self.source_root == Path::new("."))
-                        .then_some(source)
-                    })?;
-                let mut current_module = source_relative.with_extension("");
+                // `self`/`super` are relative to the importing file. When
+                // the file lives under the source root, anchor there (the
+                // usual case); when it lives outside it (a package test
+                // under tests/ while `package::` anchors at src/), anchor
+                // at the file's own directory.
+                let (base, mut current_module) = match source.strip_prefix(&self.source_root) {
+                    Ok(source_relative) => {
+                        (self.source_root.clone(), source_relative.with_extension(""))
+                    }
+                    Err(_)
+                        if self.source_root.as_os_str().is_empty()
+                            || self.source_root == Path::new(".") =>
+                    {
+                        (self.source_root.clone(), source.with_extension(""))
+                    }
+                    Err(_) => (
+                        source.parent()?.to_path_buf(),
+                        PathBuf::from(source.file_stem()?),
+                    ),
+                };
 
                 if anchor == "super" {
                     while tail.first() == Some(&"super") {
@@ -54,7 +67,7 @@ impl LocalModulePaths {
                     }
                 }
 
-                self.source_root.join(current_module)
+                base.join(current_module)
             }
             _ => return None,
         };

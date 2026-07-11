@@ -1056,7 +1056,7 @@ impl<'a> Parser<'a> {
         let cond = self.expr_with_precedence(Precedence::Or)?;
         let body = self.block(BlockContext::If, true)?;
         let alt = if self.did_match(TokenKind::Else)? {
-            self.block(BlockContext::If, true)?
+            self.else_block(true)?
         } else {
             self.record_diagnostic(self.expected_token_error(TokenKind::Else));
             self.empty_recovered_block()
@@ -1112,7 +1112,7 @@ impl<'a> Parser<'a> {
         let body = self.block(BlockContext::If, true)?;
 
         if self.did_match(TokenKind::Else)? {
-            let alt = self.block(BlockContext::If, true)?;
+            let alt = self.else_block(false)?;
             self.save_meta(tok, |id, span| Stmt {
                 id,
                 span,
@@ -1125,6 +1125,29 @@ impl<'a> Parser<'a> {
                 kind: StmtKind::If(cond.as_expr(), body, None),
             })
         }
+    }
+
+    /// Parses the alternative after an already-consumed `else`. Supports
+    /// `else if` chains by parsing the nested `if` and wrapping it in a
+    /// synthesized block; otherwise parses a braced block as before.
+    fn else_block(&mut self, expr_position: bool) -> Result<Block, ParserError> {
+        if !self.peek_is(TokenKind::If) {
+            return self.block(BlockContext::If, true);
+        }
+
+        let node = if expr_position {
+            self.if_expr(false)?
+        } else {
+            let stmt = self.if_stmt()?;
+            stmt.into()
+        };
+
+        Ok(Block {
+            id: self.next_id(),
+            args: vec![],
+            body: vec![node],
+            span: Span::SYNTHESIZED,
+        })
     }
 
     /// Shared helper for `if let` in both expression and statement position.
@@ -1141,9 +1164,9 @@ impl<'a> Parser<'a> {
 
         let alt = if require_else {
             self.consume(TokenKind::Else)?;
-            self.block(BlockContext::If, true)?
+            self.else_block(true)?
         } else if self.did_match(TokenKind::Else)? {
-            self.block(BlockContext::If, true)?
+            self.else_block(false)?
         } else {
             Block {
                 id: self.next_id(),
@@ -1503,6 +1526,17 @@ impl<'a> Parser<'a> {
                         kind: InlineIRInstructionKind::Load { dest, ty, addr },
                     })
                 }
+                "take" => {
+                    let ty = self.type_annotation()?;
+                    let value = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Take { dest, ty, value },
+                    })
+                }
                 "gep" => {
                     let ty = self.type_annotation()?;
                     let addr = self.ir_value()?;
@@ -1810,6 +1844,15 @@ impl<'a> Parser<'a> {
                 self.advance();
                 PatternKind::LiteralCharacter(val)
             }
+            TokenKind::StringLiteral => {
+                // Strip surrounding quotes but keep escape sequences intact,
+                // matching string literal expressions.
+                let lexeme = self.lexeme(&current);
+                let inner = &lexeme[1..lexeme.len() - 1];
+                let val = inner.to_string();
+                self.advance();
+                PatternKind::LiteralString(val)
+            }
             TokenKind::True => {
                 self.advance();
                 PatternKind::LiteralTrue
@@ -2059,6 +2102,9 @@ impl<'a> Parser<'a> {
         let tok = self.push_lhs_location(lhs.id);
         self.consume(TokenKind::Dot)?;
 
+        // `x.0.1` lexes `0.1` as one float token: split it back into two
+        // positional accesses, the second applied after the first below.
+        let mut pending_positional: Option<(Label, Span)> = None;
         let (name, name_span) = match self.current.clone() {
             Some(cur) if cur.kind == TokenKind::Identifier => match self.identifier() {
                 Ok((name, span)) => (Label::Named(name), span),
@@ -2080,6 +2126,31 @@ impl<'a> Parser<'a> {
                         .span(self.file_id),
                 )
             }
+            Some(cur) if cur.kind == TokenKind::Float => {
+                let val = self.lexeme(&cur).to_string();
+                self.advance();
+                let Some((first, second)) = val.split_once('.') else {
+                    return Err(ParserError::BadLabel(val));
+                };
+                let first_label = Label::Positional(
+                    str::parse(first).map_err(|_| ParserError::BadLabel(val.clone()))?,
+                );
+                let second_label = Label::Positional(
+                    str::parse(second).map_err(|_| ParserError::BadLabel(val.clone()))?,
+                );
+                let first_span = Span {
+                    start: cur.start,
+                    end: cur.start + first.len() as u32,
+                    file_id: self.file_id,
+                };
+                let second_span = Span {
+                    start: cur.start + first.len() as u32 + 1,
+                    end: cur.end,
+                    file_id: self.file_id,
+                };
+                pending_positional = Some((second_label, second_span));
+                (first_label, first_span)
+            }
             Some(_) | None => {
                 self.record_diagnostic(ParserError::ExpectedIdentifier(self.current.clone()));
                 let incomplete_member =
@@ -2088,7 +2159,15 @@ impl<'a> Parser<'a> {
             }
         };
 
-        let member = self.add_expr(ExprKind::Member(Some(Box::new(lhs)), name, name_span), tok)?;
+        let mut member =
+            self.add_expr(ExprKind::Member(Some(Box::new(lhs)), name, name_span), tok)?;
+        if let Some((second_label, second_span)) = pending_positional {
+            let loc = self.push_lhs_location(member.id);
+            member = self.add_expr(
+                ExprKind::Member(Some(Box::new(member)), second_label, second_span),
+                loc,
+            )?;
+        }
 
         self.skip_semicolons_and_newlines();
 
@@ -4161,6 +4240,7 @@ fn collect_pattern_binder_names_inner(pattern: &Pattern, names: &mut Vec<Name>) 
         PatternKind::LiteralInt(_)
         | PatternKind::LiteralFloat(_)
         | PatternKind::LiteralCharacter(_)
+        | PatternKind::LiteralString(_)
         | PatternKind::LiteralTrue
         | PatternKind::LiteralFalse
         | PatternKind::Wildcard

@@ -71,6 +71,12 @@ fn rejects_borrowed_global() {
 }
 
 #[test]
+fn allows_character_literal_global() {
+    // Character is a borrowed view, but a literal points into static data.
+    assert_no_errors("let newline = '\\n'\nlet lambda = 'λ'\nprint(newline)\nprint(lambda)");
+}
+
+#[test]
 fn allows_global_iterator_over_global_array() {
     // A borrow-wrapping global is fine when its loans are rooted in other
     // globals: both live for the whole program, and reassignment of the

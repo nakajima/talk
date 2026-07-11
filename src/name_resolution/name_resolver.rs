@@ -1036,7 +1036,8 @@ impl NameResolver {
             | PatternKind::LiteralTrue
             | PatternKind::LiteralInt(..)
             | PatternKind::LiteralFloat(..)
-            | PatternKind::LiteralCharacter(..) => (),
+            | PatternKind::LiteralCharacter(..)
+            | PatternKind::LiteralString(..) => (),
         }
     }
 
@@ -1123,7 +1124,8 @@ impl NameResolver {
             | PatternKind::LiteralTrue
             | PatternKind::LiteralInt(..)
             | PatternKind::LiteralFloat(..)
-            | PatternKind::LiteralCharacter(..) => (),
+            | PatternKind::LiteralCharacter(..)
+            | PatternKind::LiteralString(..) => (),
         }
     }
 
@@ -1211,6 +1213,7 @@ impl NameResolver {
             PatternKind::LiteralInt(..)
             | PatternKind::LiteralFloat(..)
             | PatternKind::LiteralCharacter(..)
+            | PatternKind::LiteralString(..)
             | PatternKind::LiteralTrue
             | PatternKind::LiteralFalse => (),
             PatternKind::Wildcard => (),
@@ -1424,6 +1427,7 @@ impl NameResolver {
                 | InlineIRInstructionKind::Div { ty, .. }
                 | InlineIRInstructionKind::Alloc { ty, .. }
                 | InlineIRInstructionKind::Load { ty, .. }
+                | InlineIRInstructionKind::Take { ty, .. }
                 | InlineIRInstructionKind::Store { ty, .. }
                 | InlineIRInstructionKind::Copy { ty, .. }
                 | InlineIRInstructionKind::Swap { ty, .. }

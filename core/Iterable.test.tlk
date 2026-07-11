@@ -2,6 +2,14 @@ test "generic into iterator" {
 	assert([1, 2, 3].into_iter().to_array() == [1, 2, 3])
 }
 
+test "replace returns the previous owned value" {
+	let current = "old" + " value"
+	let replacement = "new" + " value"
+	let previous = replace(mut current, replacement)
+	assert(previous.byte_count == 9)
+	assert(current.byte_count == 9)
+}
+
 test "peekable" {
 	let a = [1, 2, 3].into_iter().peekable()
 	assert(a.peek() == .some(1))

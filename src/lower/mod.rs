@@ -555,6 +555,7 @@ impl<'a> Lowering<'a> {
                 trailing_block,
                 ..
             } => self.lower_call(expr, callee, args, trailing_block.as_ref(), ctx, k),
+            ExprKind::Clone(inner) => self.lower_expr(inner, ctx, k),
             // Variant construction with impure payloads: chain the
             // arguments, then build the value (no function is called).
             ExprKind::Con {

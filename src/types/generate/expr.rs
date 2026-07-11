@@ -385,6 +385,34 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         result
     }
 
+    fn enum_hint_from_match_arms(&mut self, arms: &[MatchArm], node: NodeID) -> Option<Ty> {
+        let mut names = vec![];
+        for arm in arms {
+            collect_top_level_variant_names(&arm.pattern, &mut names);
+        }
+        if names.is_empty() {
+            return None;
+        }
+        names.sort();
+        names.dedup();
+
+        let mut candidates = self
+            .catalog
+            .enums
+            .iter()
+            .filter(|(_, info)| names.iter().all(|name| info.variants.contains_key(name)));
+        let (symbol, info) = candidates.next()?;
+        if candidates.next().is_some() {
+            return None;
+        }
+        let symbol = *symbol;
+        let param_count = info.params.len();
+        let args = (0..param_count)
+            .map(|_| Ty::Var(self.store.fresh_ty(self.level, node)))
+            .collect();
+        Some(Ty::Nominal(symbol, args))
+    }
+
     pub(super) fn check_match_expr(
         &mut self,
         scrutinee: &Expr,
@@ -413,7 +441,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let pattern_scrutinee_ty = match self.store.shallow(&scrutinee_ty) {
             Ty::Borrow(_, inner) => *inner,
             Ty::Var(id) => {
-                let view = Ty::Var(self.store.fresh_ty(self.level, scrutinee.id));
+                // Several enums may share one case name (`Result.ok` and
+                // `Scan.ok`). Use every top-level variant named by the match
+                // before checking the first arm; their intersection often
+                // identifies the enum even while the scrutinee call is still
+                // an unsolved variable.
+                let view = self
+                    .enum_hint_from_match_arms(arms, scrutinee.id)
+                    .unwrap_or_else(|| Ty::Var(self.store.fresh_ty(self.level, scrutinee.id)));
                 self.wanteds.push(Constraint::PatternView {
                     scrutinee: Ty::Var(id),
                     view: view.clone(),
@@ -867,5 +902,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             }
             ExprKind::Incomplete(_) => Ty::Error,
         }
+    }
+}
+
+fn collect_top_level_variant_names(pattern: &Pattern, names: &mut Vec<String>) {
+    match &pattern.kind {
+        PatternKind::Variant { variant_name, .. } => names.push(variant_name.clone()),
+        PatternKind::Or(alternatives) => {
+            for alternative in alternatives {
+                collect_top_level_variant_names(alternative, names);
+            }
+        }
+        _ => {}
     }
 }

@@ -7,6 +7,7 @@
 //! (`flow::liveness`).
 
 use crate::flow::OwnershipError;
+use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
 use crate::typed_ast::{self, ExprKind};
 use crate::types::ty::{Perm, Ty};
@@ -827,6 +828,11 @@ impl MoveChecker<'_> {
                             self.global_borrows.insert(owner.root, borrower.root);
                         }
                     }
+                    // Character literals are views into static program data
+                    // and therefore outlive every global binding. Keep this
+                    // narrow: other borrowed values still need an owner.
+                    _ if loan.origin == Origin::Static
+                        && matches!(borrower_ty, Ty::Nominal(Symbol::Character, _)) => {}
                     _ => {
                         let error = OwnershipError::BorrowedGlobal {
                             name: self.render(&borrower),

@@ -30,6 +30,16 @@ public func _swap<Element>(a: RawPtr, b: RawPtr) 'alloc -> Void {
 	@_ir(a, b) { swap Element $0 $1 }
 }
 
+func _take_owned<Element>(consume value: Element) -> Element {
+	value
+}
+
+public func replace<Element>(mut place: Element, consume replacement: Element) -> Element {
+	let previous: Element = @_ir(place) { %? = take Element $0 }
+	place = _take_owned(consume replacement)
+	previous
+}
+
 // Release one reference to a raw allocation (frees at zero). Static data
 // is unmanaged: freeing it is a no-op.
 public func _free(ptr: RawPtr) 'alloc -> Void {

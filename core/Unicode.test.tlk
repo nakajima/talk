@@ -1,0 +1,45 @@
+test "character classification covers Unicode" {
+	let kinds = ""
+	for ch in "A λ 中 ١ Ⅷ !" {
+		if ch.is_whitespace() {
+			kinds = kinds + "w"
+		} else {
+			if ch.is_alphabetic() {
+				kinds = kinds + "a"
+			} else {
+				if ch.is_numeric() {
+					kinds = kinds + "n"
+				} else {
+					kinds = kinds + "o"
+				}
+			}
+		}
+	}
+	assert(kinds == "awawawnwawo")
+}
+
+test "character classification uses the first scalar in a cluster" {
+	for ch in "1\u{301}" {
+		assert(ch.is_numeric())
+		assert(ch.is_alphanumeric())
+		assert(ch.is_ascii_digit())
+		assert(ch.is_ascii_hexdigit())
+	}
+}
+
+test "scalar iteration separates grapheme components" {
+	let actual = ""
+	for scalar in "\r\n1\u{301}".scalars() {
+		actual = actual + scalar.show() + ","
+	}
+	assert(actual == "13,10,49,769,")
+}
+
+test "scalar classification functions" {
+	assert(scalar_is_whitespace(10))
+	assert(scalar_is_alphabetic(955))
+	assert(scalar_is_numeric(1633))
+	assert(scalar_is_alphanumeric(8544))
+	assert(scalar_is_ascii_hexdigit(70))
+	assert(!scalar_is_ascii_hexdigit(71))
+}

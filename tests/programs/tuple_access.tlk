@@ -1,0 +1,27 @@
+// Tuple element access and destructuring.
+
+func line_col() -> (Int, Int) { (3, 7) }
+
+let p = line_col()
+print(p.0)
+print(p.1)
+print(p.0 + p.1)
+
+// Chained positional access splits the float-shaped `0.1` token.
+let nested = ((1, 2), 3)
+print(nested.0.1)
+print(nested.1)
+
+let mixed = (true, "hey", 42)
+print(mixed.1)
+print(mixed.2)
+
+// Borrowed receivers extract the same way.
+func first(pair: &(Int, Int)) -> Int {
+	pair.0
+}
+print(first(pair: (9, 10)))
+
+// Destructuring still works alongside positional access.
+let (a, b) = line_col()
+print(a + b)

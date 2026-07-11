@@ -136,6 +136,8 @@ pub enum ExprKind {
         args: Vec<CallArg>,
         trailing_block: Option<Block>,
     },
+    /// Lowered form of the real Copy/CheapClone `clone()` method.
+    Clone(Box<Expr>),
     Member(Option<Box<Expr>>, #[drive(skip)] Label),
     /// An enum-variant construction (`.some(x)`, `Optional.some(x)`,
     /// payload-less `.none`), split from `Call`/`Member` at build time by
@@ -238,6 +240,7 @@ pub enum PatternKind {
     LiteralInt(#[drive(skip)] String),
     LiteralFloat(#[drive(skip)] String),
     LiteralCharacter(#[drive(skip)] String),
+    LiteralString(#[drive(skip)] String),
     LiteralTrue,
     LiteralFalse,
     Bind(#[drive(skip)] Name),
@@ -290,6 +293,7 @@ impl Pattern {
             PatternKind::LiteralInt(_)
             | PatternKind::LiteralFloat(_)
             | PatternKind::LiteralCharacter(_)
+            | PatternKind::LiteralString(_)
             | PatternKind::LiteralTrue
             | PatternKind::LiteralFalse
             | PatternKind::Wildcard => {}

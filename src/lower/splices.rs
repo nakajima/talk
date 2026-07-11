@@ -96,6 +96,9 @@ impl<'a> Lowering<'a> {
                 let ptr = operand(self, addr)?;
                 return Some(self.p.primop(Op::Load, &[ptr], result));
             }
+            // `take T $value` transfers the value without changing its runtime
+            // representation. Flow records the bind as consumed.
+            K::Take { value, .. } => return Some(operand(self, value)?),
             // `store T $value $addr`: one sized write; the width comes
             // from the value's λ_G type at the engines.
             K::Store { value, addr, .. } => {

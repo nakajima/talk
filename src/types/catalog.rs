@@ -365,8 +365,9 @@ impl TypeCatalog {
     }
 
     /// The usage grade of a nominal: `Linear` iff declared `linear`, `Copy`
-    /// for scalars and explicit `Copy` conformances, `Affine` otherwise
-    /// (including unknown heads — affine is the safe default for both).
+    /// for scalars, payload-free enums (bare tags at runtime), and explicit
+    /// `Copy` conformances, `Affine` otherwise (including unknown heads;
+    /// affine is the safe default for both).
     /// Declared `'heap`: values are region-allocated objects with
     /// reference semantics.
     pub fn is_heap(&self, symbol: Symbol) -> bool {
@@ -390,6 +391,16 @@ impl TypeCatalog {
             .unwrap_or(false);
         if linear {
             return Grade::Linear;
+        }
+        // A payload-free enum is a bare tag at runtime: nothing to own,
+        // nothing to drop, so it copies like a scalar.
+        if let Some(info) = self.enums.get(&symbol)
+            && !info.variants.is_empty()
+            && info.variants.values().all(|variant| {
+                matches!(&variant.constructor_scheme.ty, Ty::Func(payloads, ..) if payloads.is_empty())
+            })
+        {
+            return Grade::Copy;
         }
         if self.has_bare_conformance(symbol, Symbol::Copy) {
             return Grade::Copy;

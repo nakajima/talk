@@ -4497,4 +4497,140 @@ mod with_core {
         assert_eq!(catalog.grade_of(Symbol::Int), Grade::Copy);
         assert_eq!(catalog.grade_of(Symbol::String), Grade::Affine);
     }
+
+    #[test]
+    fn match_uses_all_variant_names_to_disambiguate_shared_cases() {
+        let t = check_with_core(Source::from(
+            "enum Scan {\n\tcase ok\n\tcase no\n\tcase failed(String)\n}\nfunc scan() -> Scan { .ok }\nlet value = match scan() {\n\t.ok -> 1,\n\t.no -> 2,\n\t.failed(_) -> 3\n}",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn clone_method_exists_for_copy_and_cheapclone_values() {
+        let t = check_with_core(Source::from(
+            "struct BoxedText {\n\tlet value: String\n}\nextend BoxedText: CheapClone {}\nlet original = BoxedText(value: \"hi\")\nlet duplicate = original.clone()\nlet number = 1\nlet copied = number.clone()\nprint(original.value)\nprint(duplicate.value)\nprint(number + copied)",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn clone_method_is_rejected_for_affine_values() {
+        let t = check_with_core(Source::from(
+            "struct Affine {\n\tlet value: String\n}\nlet value = Affine(value: \"hi\")\nlet duplicate = value.clone()",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Unknown member 'clone'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn payload_free_enum_borrow_coerces_to_owned() {
+        // A plain (non-consume) param arrives as a borrow; a payload-free
+        // enum is a bare tag (Copy grade), so passing it on to an owned
+        // position, even nested inside a construction, must succeed.
+        let t = super::tests::check(
+            "// no-core
+enum Kind {
+	case left
+	case right
+}
+
+struct Token {
+	let kind: Kind
+	init(kind: Kind) { self.kind = kind }
+}
+
+func make_token(kind: Kind) -> Token {
+	Token(kind: kind)
+}",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn enum_with_payload_stays_affine() {
+        use crate::name_resolution::symbol::Symbol;
+        use crate::types::catalog::Grade;
+        let t = super::tests::check(
+            "// no-core
+enum Tag {
+	case a
+	case b
+}
+enum Carrier {
+	case none
+	case value(Int)
+}",
+        );
+        super::tests::assert_clean(&t);
+        let resolved = &t.phase.program.resolved_names();
+        let enum_named = |name: &str| -> Symbol {
+            resolved
+                .symbol_names
+                .iter()
+                .find(|(sym, n)| n.as_str() == name && matches!(sym, Symbol::Enum(_)))
+                .map(|(sym, _)| *sym)
+                .unwrap_or_else(|| panic!("no enum symbol named {name}"))
+        };
+        let catalog = &t.phase.program.types().catalog;
+        assert_eq!(catalog.grade_of(enum_named("Tag")), Grade::Copy);
+        assert_eq!(catalog.grade_of(enum_named("Carrier")), Grade::Affine);
+    }
+
+    #[test]
+    fn static_func_can_construct_its_own_type() {
+        let t = super::tests::check(
+            "// no-core
+struct Box3 {
+	let flag: Bool
+	init() { self.flag = false }
+
+	static func make_it() -> Box3 {
+		Box3()
+	}
+}",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_func_can_construct_its_own_type_with_args() {
+        let t = super::tests::check(
+            "// no-core
+struct Pair {
+	let a: Int
+	let b: Int
+	init(a: Int, b: Int) {
+		self.a = a
+		self.b = b
+	}
+
+	static func zero() -> Pair {
+		Pair(a: 0, b: 0)
+	}
+}",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn instance_method_can_construct_its_own_type() {
+        let t = super::tests::check(
+            "// no-core
+struct Counter {
+	let n: Int
+	init(n: Int) { self.n = n }
+
+	func bump() -> Counter {
+		Counter(n: self.n + 1)
+	}
+}",
+        );
+        super::tests::assert_clean(&t);
+    }
 }

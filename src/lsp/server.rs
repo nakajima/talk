@@ -2489,6 +2489,22 @@ extend Person {
     }
 
     #[test]
+    fn goto_definition_finds_nominal_inside_optional_method_return() {
+        // `Token?` is represented as a synthesized Optional<Token> whose
+        // outer span overlaps Token. The nested source nominal must win.
+        let code = "struct Token {}\nstruct Lexer {\n  func next() -> Token? { .none }\n}\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_optional_nominal.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let token_offset = code.rfind("Token?").expect("return Token") as u32;
+        let target =
+            super::goto_definition(&module, None, &uri, token_offset).expect("Token definition");
+        assert_eq!(target.uri, uri);
+        assert_eq!(target.range.start.line, 0);
+    }
+
+    #[test]
     fn goto_definition_finds_pattern_binding() {
         let code = r#"func main() {
   let (a, b) = (1, 2)

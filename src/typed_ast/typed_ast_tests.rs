@@ -75,7 +75,7 @@ fn collect_expr(e: &typed_ast::Expr, ids: &mut Vec<NodeID>) {
                 collect_expr(r, ids);
             }
         }
-        K::Proj(recv, ..) => collect_expr(recv, ids),
+        K::Proj(recv, ..) | K::Clone(recv) => collect_expr(recv, ids),
         K::Func(f) => collect_block(&f.body, ids),
         K::Match(s, arms) => {
             collect_expr(s, ids);

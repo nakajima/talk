@@ -195,6 +195,10 @@ impl Prepass {
                 self.walk_expr(receiver);
                 self.bump(expr.id);
             }
+            ExprKind::Clone(inner) => {
+                self.walk_expr(inner);
+                self.bump(expr.id);
+            }
             ExprKind::Con { args, .. } => {
                 for arg in args {
                     self.walk_expr(arg);

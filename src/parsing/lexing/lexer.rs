@@ -242,17 +242,19 @@ impl<'a> Lexer<'a> {
     }
 
     fn effect_name(&mut self) -> Result<Token, LexerError> {
-        // Note: ' has already been consumed, self.started points after it
-        // We want the span to start after the ' prefix
-        self.started = self.current;
-
         if !self
             .peek()
             .map(|t| t.is_alphanumeric() || t == '_')
             .unwrap_or(false)
         {
+            // A standalone tick keeps its own span (set in `next()`),
+            // so the token covers the `'` character itself.
             return self.make(TokenKind::SingleQuote);
         }
+
+        // Note: ' has already been consumed; effect name spans exclude
+        // the ' prefix, so start the span after it.
+        self.started = self.current;
 
         while let Some(ch) = self.peek() {
             if ch.is_alphanumeric() || ch == '_' {
@@ -289,6 +291,19 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        // Distinguish an effect row (`'[io]`) from the character literal
+        // `'['`: only a closing bracket before a tick commits to the row.
+        if self.peek() == Some('[') {
+            let mut row_probe = self.clone();
+            while let Some(ch) = row_probe.advance() {
+                match ch {
+                    ']' => return self.effect_name(),
+                    '\'' | '\n' => break,
+                    _ => {}
+                }
+            }
+        }
+
         let mut probe = self.clone();
         match probe.character_literal_candidate() {
             Ok(true) => {
@@ -302,9 +317,16 @@ impl<'a> Lexer<'a> {
 
     fn character_literal_candidate(&mut self) -> Result<bool, LexerError> {
         let mut saw_content = false;
+        let mut definite_character = false;
 
         loop {
             let Some(ch) = self.advance() else {
+                // Identifier-shaped effects and effect-row openers were
+                // handled before this probe. An escape or non-whitespace
+                // character commits to a literal; whitespace alone does not.
+                if definite_character {
+                    return Err(LexerError::UnterminatedCharacterLiteral);
+                }
                 return Ok(false);
             };
 
@@ -317,16 +339,24 @@ impl<'a> Lexer<'a> {
                 }
                 '\\' => {
                     saw_content = true;
+                    definite_character = true;
                     self.scan_literal_escape()?;
                 }
                 '\n' => return Ok(false),
-                _ => saw_content = true,
+                _ => {
+                    saw_content = true;
+                    if !ch.is_whitespace() {
+                        definite_character = true;
+                    }
+                }
             }
         }
     }
 
     fn scan_literal_escape(&mut self) -> Result<(), LexerError> {
-        let esc = self.advance().ok_or(LexerError::UnexpectedEOF)?;
+        let esc = self
+            .advance()
+            .ok_or(LexerError::UnterminatedCharacterLiteral)?;
         match esc {
             'n' | 't' | 'r' | '"' | '\'' | '\\' => Ok(()),
             'u' => {
@@ -343,11 +373,8 @@ impl<'a> Lexer<'a> {
                     Err(LexerError::InvalidUnicodeEscape)
                 }
             }
-            '\n' => {
-                self.line += 1;
-                self.col = 0;
-                Ok(())
-            }
+            // `advance()` already bumped line/col for the newline.
+            '\n' => Ok(()),
             other => Err(LexerError::InvalidEscape(other)),
         }
     }
@@ -359,13 +386,13 @@ impl<'a> Lexer<'a> {
 
         loop {
             // pull the next physical character
-            let ch = self.advance().ok_or(LexerError::UnexpectedEOF)?;
+            let ch = self.advance().ok_or(LexerError::UnterminatedString)?;
 
             match ch {
                 '"' => break,
                 '\\' => {
                     // skip past escape sequence
-                    let esc = self.advance().ok_or(LexerError::UnexpectedEOF)?;
+                    let esc = self.advance().ok_or(LexerError::UnterminatedString)?;
                     match esc {
                         'n' | 't' | 'r' | '"' | '\\' => {}
 
@@ -383,18 +410,14 @@ impl<'a> Lexer<'a> {
                             }
                         }
 
-                        '\n' => {
-                            self.line += 1;
-                            self.col = 0;
-                        }
+                        // `advance()` already bumped line/col.
+                        '\n' => {}
 
                         other => return Err(LexerError::InvalidEscape(other)),
                     }
                 }
-                '\n' => {
-                    self.line += 1;
-                    self.col = 0;
-                }
+                // `advance()` already bumped line/col.
+                '\n' => {}
                 _ => {}
             }
         }
@@ -818,13 +841,24 @@ mod tests {
 
     #[test]
     fn character_literals() {
-        let source = r"'a' '😎' '\n' '\''";
+        let source = r"'a' '😎' '\n' '\'' '['";
         let mut lexer = Lexer::new(source);
         assert_token(source, &lexer.next().unwrap(), CharacterLiteral, "'a'");
         assert_token(source, &lexer.next().unwrap(), CharacterLiteral, "'😎'");
         assert_token(source, &lexer.next().unwrap(), CharacterLiteral, r"'\n'");
         assert_token(source, &lexer.next().unwrap(), CharacterLiteral, r"'\''");
+        assert_token(source, &lexer.next().unwrap(), CharacterLiteral, "'['");
         assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn effect_row_opener_is_not_a_character_literal() {
+        let source = "'[io]";
+        let mut lexer = Lexer::new(source);
+        assert_token(source, &lexer.next().unwrap(), SingleQuote, "'");
+        assert_eq!(lexer.next().unwrap().kind, LeftBracket);
+        assert_token(source, &lexer.next().unwrap(), Identifier, "io");
+        assert_eq!(lexer.next().unwrap().kind, RightBracket);
     }
 
     #[test]
@@ -840,6 +874,62 @@ mod tests {
     fn rejects_empty_character_literal() {
         let mut lexer = Lexer::new("''");
         assert_eq!(lexer.next(), Err(LexerError::EmptyCharacterLiteral));
+    }
+
+    #[test]
+    fn lines_counted_once_inside_strings() {
+        let source = "\"a\nb\nc\" x";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_eq!(tok.kind, StringLiteral);
+        // Two newlines inside the string: the next token sits on line 2.
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "x");
+        assert_eq!(tok.line, 2);
+    }
+
+    #[test]
+    fn lines_counted_once_for_escaped_newline_in_character_literal() {
+        let source = "'\\\n' x";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_eq!(tok.kind, CharacterLiteral);
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "x");
+        assert_eq!(tok.line, 1);
+    }
+
+    #[test]
+    fn unterminated_string_at_eof() {
+        let mut lexer = Lexer::new("\"hello");
+        assert_eq!(lexer.next(), Err(LexerError::UnterminatedString));
+
+        // EOF right after a backslash is also an unterminated string.
+        let mut lexer = Lexer::new("\"hello\\");
+        assert_eq!(lexer.next(), Err(LexerError::UnterminatedString));
+    }
+
+    #[test]
+    fn unterminated_character_literal_at_eof() {
+        // Content that cannot be an identifier-shaped effect name pins this
+        // down as a character literal, so EOF requires a closing tick.
+        let mut lexer = Lexer::new("'\\n");
+        assert_eq!(lexer.next(), Err(LexerError::UnterminatedCharacterLiteral));
+
+        let mut lexer = Lexer::new("'\\");
+        assert_eq!(lexer.next(), Err(LexerError::UnterminatedCharacterLiteral));
+
+        let mut lexer = Lexer::new("'😎");
+        assert_eq!(lexer.next(), Err(LexerError::UnterminatedCharacterLiteral));
+    }
+
+    #[test]
+    fn standalone_single_quote_spans_the_tick() {
+        let source = "' ";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_eq!(tok.kind, SingleQuote);
+        assert_token(source, &tok, SingleQuote, "'");
     }
 
     #[test]

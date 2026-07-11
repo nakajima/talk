@@ -1,0 +1,35 @@
+// String-literal patterns: equality chains over the string's bytes, with
+// or-patterns, escapes, and borrowed scrutinees.
+
+func keyword(word: &String) -> Int {
+	match word {
+		"func" -> 1,
+		"let" -> 2,
+		"if"|"else" -> 3,
+		_ -> 0
+	}
+}
+
+print(keyword(word: "func"))
+print(keyword(word: "let"))
+print(keyword(word: "if"))
+print(keyword(word: "else"))
+print(keyword(word: "fun"))
+print(keyword(word: "funcc"))
+print(keyword(word: ""))
+
+let empty = match "" {
+	"" -> 100,
+	_ -> 200
+}
+print(empty)
+
+match "line1\nline2" {
+	"line1\nline2" -> print("escapes match"),
+	_ -> print("escapes miss")
+}
+
+match "caf\u{E9}" {
+	"café" -> print("unicode matches"),
+	_ -> print("unicode miss")
+}

@@ -1,0 +1,20 @@
+// Explicit cloning is a method on Copy and CheapClone values.
+
+struct BoxedText {
+	let value: String
+}
+extend BoxedText: CheapClone {}
+
+let original = BoxedText(value: "hello")
+let duplicate = original.clone()
+print(original.value)
+print(duplicate.value)
+
+let source = "world"
+let cloned = source.clone()
+print(source)
+print(cloned)
+
+let number = 42
+let copied = number.clone()
+print(number + copied)

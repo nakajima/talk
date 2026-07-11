@@ -1,0 +1,13 @@
+test "result cases and predicates" {
+	let success: Result<Int, String> = .ok(42)
+	let failure: Result<Int, String> = .error("nope")
+
+	assert(success.is_ok())
+	assert(!success.is_error())
+	assert(failure.is_error())
+	assert(!failure.is_ok())
+
+	match success { .ok(value) -> assert(value == 42), .error(_) -> assert(false) }
+
+	match failure { .ok(_) -> assert(false), .error(message) -> assert(message == "nope") }
+}

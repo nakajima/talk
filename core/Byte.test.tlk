@@ -1,0 +1,25 @@
+test "byte equality" {
+	let s = "aba"
+	let first = s.storage.get(0)
+	let second = s.storage.get(1)
+	let third = s.storage.get(2)
+
+	assert(first == third)
+	assert(first != second)
+	assert(!(first == second))
+}
+
+test "byte ordering" {
+	let s = "az"
+	let a = s.storage.get(0)
+	let z = s.storage.get(1)
+
+	assert(a < z)
+	assert(z > a)
+	assert(a <= z)
+	assert(z >= a)
+	assert(a <= a)
+	assert(a >= a)
+	assert(!(a > z))
+	assert(!(z < a))
+}
