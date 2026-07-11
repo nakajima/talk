@@ -6,13 +6,12 @@ public enum Optional<Wrapped> {
 	case none
 }
 
-// extend Optional<Wrapped>: Equatable<Wrapped> where Wrapped:
-// Equatable<Wrapped> {
-// 	func equals(rhs: Wrapped?) -> Bool {
-// 		match (self, rhs) {
-// 			(.some(a),.some(b)) -> a == b,
-// 			(.none,.none) -> true,
-// 			_ -> false
-// 		}
-// 	}
-// }
+extend Optional<Wrapped>: Equatable where Wrapped: Equatable<Wrapped> {
+	func equals(rhs: Wrapped?) -> Bool {
+		match (self, rhs) {
+			(.some(a),.some(b)) -> a == b,
+			(.none,.none) -> true,
+			_ -> false
+		}
+	}
+}

@@ -33,17 +33,36 @@ use crate::{
     token_kind::TokenKind,
 };
 
+/// A document tree that is laid out by [`Formatter::render_doc`].
+///
+/// [`group`] controls whether its line breaks use their flat or broken form:
+///
+/// | Break | Flat group | Broken group or outside a group |
+/// | --- | --- | --- |
+/// | [`line()`] | One space | Newline |
+/// | [`softline()`] | Nothing | Newline |
+/// | [`hardline()`] | Newline | Newline |
 #[derive(Clone, Debug, PartialEq)]
 pub enum Doc {
+    /// Produces no output.
     Empty,
+    /// Produces literal text and contributes its byte length to line fitting.
     Text(String),
+    /// Produces a line comment, reflowing its words when it exceeds the width.
     Comment(String),
+    /// A break that becomes one space when flattened.
     Line,
+    /// A break that disappears when flattened.
     Softline,
+    /// A break that remains a newline when flattened.
     Hardline,
+    /// Increases indentation for lines broken within the nested document.
     Nest(u8, Box<Doc>),
+    /// Places two documents next to each other without an implicit separator.
     Concat(Box<Doc>, Box<Doc>),
+    /// Chooses between the flattened and broken forms of a document.
     Group(Box<Doc>),
+    /// Produces text that does not contribute to line-fitting calculations.
     Annotation(String),
 }
 
@@ -55,10 +74,16 @@ impl Add for Doc {
 }
 
 impl Doc {
+    /// Returns whether this is exactly [`Doc::Empty`].
+    ///
+    /// This does not recursively inspect concatenations or groups.
     pub fn is_empty(&self) -> bool {
         matches!(self, Doc::Empty)
     }
 
+    /// Returns whether this is directly one of the three line-break variants.
+    ///
+    /// This does not recursively inspect nested documents.
     pub fn is_line_break(&self) -> bool {
         matches!(self, Doc::Line | Doc::Softline | Doc::Hardline)
     }
@@ -112,53 +137,79 @@ impl CommentStore {
 
 const SINGLE_LINE_FUNC_MAX_WIDTH: usize = 40;
 
+/// Places `inner` between `before` and `after` with no implicit separators.
 pub fn wrap(before: Doc, inner: Doc, after: Doc) -> Doc {
     concat(before, concat(inner, after))
 }
 
-// Helper functions for building documents
+/// Creates a document that produces no output and occupies no width.
 pub fn empty() -> Doc {
     Doc::Empty
 }
 
+/// Creates literal output text.
+///
+/// Its byte length contributes to the width used when deciding whether a
+/// [`group`] fits on the current line.
 pub fn text(s: impl Into<String>) -> Doc {
     Doc::Text(s.into())
 }
 
+/// Creates output text that occupies no width for line-fitting purposes.
+///
+/// The renderer emits the text verbatim, but [`group`] ignores it when deciding
+/// whether the flattened document fits. Use [`text`] for ordinary source text.
 pub fn annotate(s: impl Into<String>) -> Doc {
     Doc::Annotation(s.into())
 }
 
+/// Creates a break that is a space in a flat [`group`] and a newline otherwise.
 pub fn line() -> Doc {
     Doc::Line
 }
 
+/// Creates a break that disappears in a flat [`group`] and is a newline otherwise.
+///
+/// This is useful just inside delimiters when the flat form should have no
+/// whitespace, such as between `(` and its first item.
 pub fn softline() -> Doc {
     Doc::Softline
 }
 
+/// Creates an unconditional newline, including inside a flat [`group`].
 pub fn hardline() -> Doc {
     Doc::Hardline
 }
 
+/// Increases indentation by `indent` tabs after breaks within `doc`.
+///
+/// Nesting does not indent the first line or force a break by itself.
 pub fn nest(indent: u8, doc: Doc) -> Doc {
     Doc::Nest(indent, Box::new(doc))
 }
 
+/// Places `rhs` immediately after `lhs` with no implicit separator.
 pub fn concat(lhs: Doc, rhs: Doc) -> Doc {
     Doc::Concat(Box::new(lhs), Box::new(rhs))
 }
 
+/// Uses a document's flat form if it fits, and its broken form otherwise.
+///
+/// Flattening turns [`line()`] into a space, removes [`softline()`], and preserves
+/// [`hardline()`]. The fit check starts at the renderer's current column.
 pub fn group(doc: Doc) -> Doc {
     Doc::Group(Box::new(doc))
 }
 
-// Concat with space operator
+/// Places one literal space between `lhs` and `rhs`.
 pub fn concat_space(lhs: Doc, rhs: Doc) -> Doc {
     concat(concat(lhs, text(" ")), rhs)
 }
 
-// Join documents with a separator
+/// Concatenates `docs` with `separator` between adjacent documents.
+///
+/// No separator is added before the first or after the last document. An empty
+/// input produces [`empty`].
 pub fn join(docs: Vec<Doc>, separator: Doc) -> Doc {
     docs.into_iter().fold(empty(), |acc, doc| {
         if acc.is_empty() {
@@ -1232,16 +1283,16 @@ impl<'a> Formatter<'a> {
                 patterns.iter().map(|p| self.format_pattern(p)).collect(),
                 text("|"),
             ),
-            PatternKind::Tuple(items) => concat(
+            PatternKind::Tuple(items) => group(concat(
+                text("("),
                 concat(
-                    text("("),
                     join(
                         items.iter().map(|item| self.format_pattern(item)).collect(),
-                        text(","),
+                        concat(text(","), line()),
                     ),
+                    text(")"),
                 ),
-                text(")"),
-            ),
+            )),
             PatternKind::Variant {
                 enum_name,
                 variant_name,
