@@ -23,6 +23,10 @@ applications and `'heap` structs are not derived automatically.
 - **Nested match ownership is tracked per projection.** Borrowed payload
   binders remain aliases while owned payloads in the same aggregate still
   receive their normal wildcard and scope-exit drops.
+- **Type mismatch diagnostics now explain both sides.** Errors identify the
+  relevant context, such as an annotation, function argument, assignment,
+  return value, branch, condition, pattern, or array element, and state why
+  the required type differs from the type that was found.
 
 ## Unreleased (2026-07-09) — Neotest and machine-readable test output
 
