@@ -4,7 +4,9 @@ use std::{
     rc::Rc,
 };
 
-use crate::analysis::{Diagnostic, DiagnosticSeverity, DocumentId, DocumentInput, TextRange};
+use crate::analysis::{
+    Diagnostic, DiagnosticKind, DiagnosticSeverity, DocumentId, DocumentInput, TextRange,
+};
 use crate::ast::{AST, NameResolved};
 use crate::compiling::driver::{CompilationMode, Driver, DriverConfig, Source};
 use crate::compiling::module::{ModuleEnvironment, ModuleId};
@@ -215,6 +217,8 @@ impl Workspace {
                 .entry(doc_id.clone())
                 .or_default()
                 .push(Diagnostic {
+                    node_id: None,
+                    kind: None,
                     range: TextRange::new(0, 0),
                     severity: DiagnosticSeverity::Error,
                     message: error.to_string(),
@@ -537,6 +541,9 @@ fn parser_error_range(text: &str, err: &ParserError) -> TextRange {
         | ParserError::ConformanceListNotAllowed {
             token: Some(token), ..
         } => TextRange::new(token.start, token.end),
+        ParserError::ExplicitSelfParameterNotAllowed { parameter } => {
+            TextRange::new(parameter.start, parameter.end)
+        }
         ParserError::UnexpectedEndOfInput(..) => TextRange::new(eof, eof),
         _ => TextRange::new(0, 0),
     }
@@ -548,10 +555,11 @@ pub(crate) fn diagnostic_for_any(
     asts: &[Option<AST<NameResolved>>],
     diagnostic: &AnyDiagnostic,
 ) -> Option<(DocumentId, Diagnostic)> {
-    let (id, message, parse_error, prefer_identifier, severity) = match diagnostic {
+    let (id, message, kind, parse_error, prefer_identifier, severity) = match diagnostic {
         AnyDiagnostic::Parsing(diagnostic) => (
             diagnostic.id,
             diagnostic.kind.to_string(),
+            DiagnosticKind::Parsing(diagnostic.kind.clone()),
             Some(&diagnostic.kind),
             false,
             &diagnostic.severity,
@@ -559,6 +567,7 @@ pub(crate) fn diagnostic_for_any(
         AnyDiagnostic::NameResolution(diagnostic) => (
             diagnostic.id,
             diagnostic.kind.to_string(),
+            DiagnosticKind::NameResolution(diagnostic.kind.clone()),
             None,
             true,
             &diagnostic.severity,
@@ -566,6 +575,7 @@ pub(crate) fn diagnostic_for_any(
         AnyDiagnostic::Types(diagnostic) => (
             diagnostic.id,
             diagnostic.kind.to_string(),
+            DiagnosticKind::Types(diagnostic.kind.clone()),
             None,
             false,
             &diagnostic.severity,
@@ -573,6 +583,7 @@ pub(crate) fn diagnostic_for_any(
         AnyDiagnostic::Ownership(diagnostic) => (
             diagnostic.id,
             diagnostic.kind.to_string(),
+            DiagnosticKind::Ownership(diagnostic.kind.clone()),
             None,
             false,
             &diagnostic.severity,
@@ -604,6 +615,8 @@ pub(crate) fn diagnostic_for_any(
     Some((
         doc_id,
         Diagnostic {
+            node_id: Some(id),
+            kind: Some(kind),
             range,
             severity,
             message,

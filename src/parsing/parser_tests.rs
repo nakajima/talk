@@ -2984,7 +2984,7 @@ pub mod tests {
 
         assert!(matches!(
             result,
-            Err(ParserError::ExplicitSelfParameterNotAllowed)
+            Err(ParserError::ExplicitSelfParameterNotAllowed { .. })
         ));
     }
 

@@ -178,6 +178,56 @@ pub enum TypeError {
 
 impl Error for TypeError {}
 
+impl TypeError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Mismatch { .. } => "type.mismatch",
+            Self::ArityMismatch { .. } => "type.arity-mismatch",
+            Self::InfiniteType { .. } => "type.infinite-type",
+            Self::UnknownMember { .. } => "type.unknown-member",
+            Self::UnknownMemberOnInferred { .. } => "type.unknown-member-on-inferred",
+            Self::NotAFunction { .. } => "type.not-a-function",
+            Self::InvalidAssignmentTarget => "type.invalid-assignment-target",
+            Self::AssignThroughSharedBorrow { .. } => "type.assign-through-shared-borrow",
+            Self::NotConforming { .. } => "type.not-conforming",
+            Self::EqualityNotSupported { .. } => "type.equality-not-supported",
+            Self::AmbiguousMember { .. } => "type.ambiguous-member",
+            Self::MissingWitness { .. } => "type.missing-witness",
+            Self::OverlappingConformance { .. } => "type.overlapping-conformance",
+            Self::AmbiguousTypeParameter { .. } => "type.ambiguous-type-parameter",
+            Self::DuplicatePredicate { .. } => "type.duplicate-predicate",
+            Self::InvalidWherePredicate => "type.invalid-where-predicate",
+            Self::EscapingExistential { .. } => "type.escaping-existential",
+            Self::GenericShadowing { .. } => "type.generic-shadowing",
+            Self::InvalidVariantResultType { .. } => "type.invalid-variant-result-type",
+            Self::RedundantVariantResultType { .. } => "type.redundant-variant-result-type",
+            Self::InvalidVariantPayloadLabels { .. } => "type.invalid-variant-payload-labels",
+            Self::DuplicateVariantPayloadLabel { .. } => "type.duplicate-variant-payload-label",
+            Self::IncompatibleOrPatternRefinements => "type.incompatible-or-pattern-refinements",
+            Self::AmbiguousGadtMatchResult => "type.ambiguous-gadt-match-result",
+            Self::InvalidExistentialProtocol { .. } => "type.invalid-existential-protocol",
+            Self::MissingAssociatedTypeBinding { .. } => "type.missing-associated-type-binding",
+            Self::UnknownAssociatedTypeBinding { .. } => "type.unknown-associated-type-binding",
+            Self::DuplicateAssociatedTypeBinding { .. } => "type.duplicate-associated-type-binding",
+            Self::NonObjectSafeExistential { .. } => "type.non-object-safe-existential",
+            Self::UnsupportedExistentialUpcast { .. } => "type.unsupported-existential-upcast",
+            Self::UndeclaredEffect { .. } => "type.undeclared-effect",
+            Self::UnhandledEffect { .. } => "type.unhandled-effect",
+            Self::NonExhaustiveMatch { .. } => "type.non-exhaustive-match",
+            Self::UnreachableMatchArm => "type.unreachable-match-arm",
+            Self::UnreachableCode => "type.unreachable-code",
+            Self::CannotInfer => "type.cannot-infer",
+            Self::NonConformingField { .. } => "type.non-conforming-field",
+            Self::LinearConformance { .. } => "type.linear-conformance",
+            Self::HeapConformance { .. } => "type.heap-conformance",
+            Self::UnresolvedVariant { .. } => "type.unresolved-variant",
+            Self::RecursiveConformance { .. } => "type.recursive-conformance",
+            Self::SolverOverflow { .. } => "type.solver-overflow",
+            Self::Unsupported(_) => "type.unsupported",
+        }
+    }
+}
+
 impl Display for TypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -169,6 +169,8 @@ mod tests {
     fn text_diagnostic_caret_aligns_with_source_column() {
         let text = "func fizz() { buzz() }";
         let diagnostic = Diagnostic {
+            node_id: None,
+            kind: None,
             range: TextRange::new(14, 18),
             severity: DiagnosticSeverity::Error,
             message: "Undefined name: buzz".to_string(),

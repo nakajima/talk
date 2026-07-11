@@ -1,3 +1,5 @@
+#[cfg(feature = "cli")]
+mod code_actions;
 pub mod completion;
 pub mod document;
 pub mod semantic_tokens;

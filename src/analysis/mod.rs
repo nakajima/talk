@@ -5,6 +5,11 @@ pub mod ownership;
 pub mod rename;
 pub mod workspace;
 
+use crate::{
+    flow::OwnershipError, name_resolution::name_resolver::NameResolverError, node_id::NodeID,
+    parser_error::ParserError, types::TypeError,
+};
+
 pub type DocumentId = String;
 
 #[derive(Clone, Debug)]
@@ -35,7 +40,29 @@ pub enum DiagnosticSeverity {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiagnosticKind {
+    Parsing(ParserError),
+    NameResolution(NameResolverError),
+    Types(TypeError),
+    Ownership(OwnershipError),
+}
+
+impl DiagnosticKind {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Parsing(error) => error.code(),
+            Self::NameResolution(NameResolverError::UndefinedName(_)) => "name.undefined",
+            Self::NameResolution(_) => "name.resolution",
+            Self::Types(error) => error.code(),
+            Self::Ownership(_) => "ownership.error",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
+    pub node_id: Option<NodeID>,
+    pub kind: Option<DiagnosticKind>,
     pub range: TextRange,
     pub severity: DiagnosticSeverity,
     pub message: String,

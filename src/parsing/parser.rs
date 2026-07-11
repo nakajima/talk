@@ -561,7 +561,22 @@ impl<'a> Parser<'a> {
         is_static: bool,
     ) -> Result<(), ParserError> {
         if !is_static && first_param_is_self(params) {
-            return Err(ParserError::ExplicitSelfParameterNotAllowed);
+            let parameter = params
+                .first()
+                .map(|parameter| Span {
+                    file_id: parameter.name_span.file_id,
+                    start: parameter
+                        .mode_span
+                        .map(|span| span.start)
+                        .unwrap_or(parameter.name_span.start),
+                    end: parameter
+                        .type_annotation
+                        .as_ref()
+                        .map(|annotation| annotation.span.end)
+                        .unwrap_or(parameter.name_span.end),
+                })
+                .unwrap_or(Span::SYNTHESIZED);
+            return Err(ParserError::ExplicitSelfParameterNotAllowed { parameter });
         }
         Ok(())
     }
@@ -902,7 +917,7 @@ impl<'a> Parser<'a> {
                     is_open = true;
                 } else {
                     return Err(ParserError::UnexpectedToken {
-                        expected: "effect name".to_string(),
+                        expected: "effect name".into(),
                         actual: format!("{:?}", self.current),
                         token: None,
                     });
@@ -1673,7 +1688,7 @@ impl<'a> Parser<'a> {
             TokenKind::Identifier if self.lexeme(&current) == "void" => Value::Void,
             _ => {
                 return Err(ParserError::UnexpectedToken {
-                    expected: "IR".to_string(),
+                    expected: "IR".into(),
                     actual: format!("{current:?}"),
                     token: self.current.clone(),
                 });
@@ -1898,7 +1913,7 @@ impl<'a> Parser<'a> {
                     // "rest" must be the last item
                     if !self.peek_is(TokenKind::RightBrace) {
                         return Err(ParserError::UnexpectedToken {
-                            expected: "}".into(),
+                            expected: TokenKind::RightBrace.into(),
                             actual: format!(
                                 "got {:?}. Rest pattern must be at the end of record pattern",
                                 self.current
@@ -2821,7 +2836,7 @@ impl<'a> Parser<'a> {
             } else {
                 if has_effects || saw_param_mode {
                     return Err(ParserError::UnexpectedToken {
-                        expected: "->".to_string(),
+                        expected: TokenKind::Arrow.into(),
                         actual: format!("{:?}", self.current),
                         token: self.current.clone(),
                     });
@@ -3832,7 +3847,7 @@ impl<'a> Parser<'a> {
 
     fn expected_token_error(&self, expected: TokenKind) -> ParserError {
         ParserError::UnexpectedToken {
-            expected: format!("{expected:?}"),
+            expected: expected.into(),
             actual: format!("{:?}", self.current),
             token: self.current.clone(),
         }
@@ -4032,7 +4047,7 @@ impl<'a> Parser<'a> {
         };
 
         Err(ParserError::UnexpectedToken {
-            expected: format!("{expected:?}"),
+            expected: expected.into(),
             actual: format!("{:?}", self.current),
             token: self.current.clone(),
         })
@@ -4053,7 +4068,7 @@ impl<'a> Parser<'a> {
                     Ok(current)
                 } else {
                     Err(ParserError::UnexpectedToken {
-                        expected: format!("{possible_tokens:?}"),
+                        expected: format!("{possible_tokens:?}").into(),
                         actual: format!("{current:?}"),
                         token: Some(current),
                     })

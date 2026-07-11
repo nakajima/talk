@@ -2,11 +2,10 @@ struct TickEvent;
 
 use async_lsp::LanguageClient;
 use async_lsp::lsp_types::{
-    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionProviderCapability,
-    CodeActionResponse, CompletionOptions, Diagnostic, DiagnosticSeverity, InlayHint,
+    CodeActionProviderCapability, CompletionOptions, Diagnostic, DiagnosticSeverity, InlayHint,
     InlayHintKind, InlayHintLabel, InlayHintOptions, InlayHintServerCapabilities, InlayHintTooltip,
-    MessageType, Position, Range, SemanticTokens, SemanticTokensResult, ShowMessageParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    MessageType, NumberOrString, Position, Range, SemanticTokens, SemanticTokensResult,
+    ShowMessageParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
     TextDocumentSyncSaveOptions, TextEdit,
 };
 use async_lsp::{
@@ -18,15 +17,13 @@ use async_lsp::{
         InitializeParams, InitializeResult, MarkupContent, MarkupKind, OneOf,
         PublishDiagnosticsParams, Range as LspRange, SemanticTokensFullOptions,
         SemanticTokensLegend, SemanticTokensOptions, SemanticTokensServerCapabilities,
-        ServerCapabilities, TextDocumentItem, Url, WorkspaceEdit, WorkspaceFolder, notification,
-        request,
+        ServerCapabilities, TextDocumentItem, Url, WorkspaceFolder, notification, request,
     },
     panic::CatchUnwindLayer,
     router::Router,
     server::LifecycleLayer,
     tracing::TracingLayer,
 };
-use derive_visitor::Drive;
 use ignore::WalkBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::any::Any;
@@ -46,6 +43,9 @@ use crate::analysis::{
     Diagnostic as AnalysisDiagnostic, DiagnosticSeverity as AnalysisSeverity, DocumentId,
     DocumentInput, Workspace as AnalysisWorkspace, completion as analysis_completion,
 };
+use crate::lsp::code_actions::compute_code_actions;
+#[cfg(test)]
+use crate::lsp::code_actions::{code_action_diagnostic, separator_list_item_removal_range};
 use crate::lsp::goto_definition::goto_definition;
 use crate::lsp::rename::rename_at;
 use crate::lsp::semantic_tokens::collect;
@@ -1083,6 +1083,10 @@ fn lsp_diagnostic_for_analysis(text: &str, diagnostic: &AnalysisDiagnostic) -> O
     Some(Diagnostic {
         range,
         severity: Some(severity),
+        code: diagnostic
+            .kind
+            .as_ref()
+            .map(|kind| NumberOrString::String(kind.code().to_string())),
         source: Some("talk".to_string()),
         message: diagnostic.message.clone(),
         ..Diagnostic::default()
@@ -1107,746 +1111,6 @@ fn byte_offset_to_utf16_position(text: &str, byte_offset: u32) -> Option<Positio
     let col_slice = text.get(line_start..byte_offset)?;
     let col = col_slice.encode_utf16().count() as u32;
     Some(Position::new(line, col))
-}
-
-/// Compute code actions for a document, including auto-import suggestions
-fn is_import(node: &crate::node::Node) -> bool {
-    matches!(
-        node,
-        crate::node::Node::Decl(crate::node_kinds::decl::Decl {
-            kind: crate::node_kinds::decl::DeclKind::Import(_),
-            ..
-        })
-    )
-}
-
-fn auto_import_edit(
-    text: &str,
-    roots: &[crate::node::Node],
-    import_statement: &str,
-) -> Option<TextEdit> {
-    let import_count = roots.iter().take_while(|root| is_import(root)).count();
-    let next_root_exists = import_count < roots.len();
-
-    let (insert_offset, mut new_text) = if let Some(last_import) = import_count
-        .checked_sub(1)
-        .and_then(|index| roots.get(index))
-    {
-        let import_end = last_import.span().end as usize;
-        let line_end = text[import_end..]
-            .find('\n')
-            .map(|offset| import_end + offset + 1)
-            .unwrap_or(text.len());
-        let suffix = text.get(line_end..)?;
-        let mut new_text = import_statement.to_string();
-        if next_root_exists {
-            new_text.push('\n');
-            if !suffix.starts_with('\n') {
-                new_text.push('\n');
-            }
-        } else if text.ends_with('\n') {
-            new_text.push('\n');
-        }
-        (line_end, new_text)
-    } else {
-        let no_core_end = text
-            .starts_with("// no-core")
-            .then(|| {
-                text.find('\n')
-                    .map(|offset| offset + 1)
-                    .unwrap_or(text.len())
-            })
-            .unwrap_or(0);
-        let suffix = text.get(no_core_end..)?;
-        let mut new_text = String::new();
-        if no_core_end > 0 && !text[..no_core_end].ends_with('\n') {
-            new_text.push('\n');
-        }
-        new_text.push_str(import_statement);
-        if !suffix.is_empty() {
-            new_text.push('\n');
-            if !suffix.starts_with('\n') {
-                new_text.push('\n');
-            }
-        }
-        (no_core_end, new_text)
-    };
-
-    let range = byte_span_to_range_utf16(text, insert_offset as u32, insert_offset as u32)?;
-    Some(TextEdit::new(range, std::mem::take(&mut new_text)))
-}
-
-fn compute_code_actions(
-    workspace: &AnalysisWorkspace,
-    document_id: &DocumentId,
-    uri: &Url,
-    range: Range,
-) -> CodeActionResponse {
-    let mut actions: Vec<CodeActionOrCommand> = Vec::new();
-
-    // Get diagnostics for this document
-    let Some(diagnostics) = workspace.diagnostics.get(document_id) else {
-        return actions;
-    };
-
-    // Get the file ID for this document
-    let Some(&file_id) = workspace.document_to_file_id.get(document_id) else {
-        return actions;
-    };
-
-    // Get the text for this document
-    let Some(text) = workspace.texts.get(file_id.0 as usize) else {
-        return actions;
-    };
-
-    // Build an index of public symbols from all other files
-    // Map from symbol name -> (source file path, symbol)
-    let mut public_exports: FxHashMap<
-        String,
-        Vec<(String, crate::name_resolution::symbol::Symbol)>,
-    > = FxHashMap::default();
-
-    for (idx, doc_id) in workspace.file_id_to_document.iter().enumerate() {
-        if doc_id == document_id {
-            continue; // Skip current file
-        }
-        let Some(source_path) = workspace
-            .asts
-            .get(idx)
-            .and_then(|ast| ast.as_ref())
-            .map(|ast| ast.path.clone())
-        else {
-            continue;
-        };
-
-        let target_file_id = crate::node_id::FileID(idx as u32);
-        let scope_id = crate::node_id::NodeID(target_file_id, 0);
-
-        if let Some(scope) = workspace.resolved_names.scopes.get(&scope_id) {
-            for (name, &symbol) in &scope.values {
-                if workspace.resolved_names.public_symbols.contains(&symbol) {
-                    public_exports
-                        .entry(name.clone())
-                        .or_default()
-                        .push((source_path.clone(), symbol));
-                }
-            }
-            for (name, &symbol) in &scope.types {
-                if workspace.resolved_names.public_symbols.contains(&symbol) {
-                    public_exports
-                        .entry(name.clone())
-                        .or_default()
-                        .push((source_path.clone(), symbol));
-                }
-            }
-        }
-    }
-
-    // Check each diagnostic for undefined name errors
-    for diagnostic in diagnostics {
-        // Only handle diagnostics that are in the range
-        let diag_range =
-            byte_span_to_range_utf16(text, diagnostic.range.start, diagnostic.range.end);
-        let Some(diag_range) = diag_range else {
-            continue;
-        };
-
-        // Check if this diagnostic intersects with the requested range
-        if diag_range.end.line < range.start.line || diag_range.start.line > range.end.line {
-            continue;
-        }
-
-        if diagnostic.message.starts_with("Missing '") {
-            actions.extend(missing_witness_quick_fixes(
-                workspace,
-                text,
-                uri,
-                file_id,
-                diagnostic.range.start,
-                &diagnostic.message,
-                diag_range,
-            ));
-            continue;
-        }
-
-        if diagnostic
-            .message
-            .starts_with("Match does not cover every case;")
-        {
-            actions.extend(non_exhaustive_match_quick_fixes(
-                workspace,
-                text,
-                uri,
-                file_id,
-                diagnostic.range.start,
-                &diagnostic.message,
-                diag_range,
-            ));
-            continue;
-        }
-
-        // Ambiguous member: one rewrite per candidate protocol,
-        // `x.m(args)` -> `P.m(x, args)` (the explicit protocol-static
-        // form the checker's message suggests).
-        if diagnostic.message.starts_with("Ambiguous member '") {
-            actions.extend(ambiguous_member_quick_fixes(
-                text,
-                uri,
-                diagnostic.range.start as usize,
-                diagnostic.range.end as usize,
-                &diagnostic.message,
-                diag_range,
-            ));
-            continue;
-        }
-
-        // Check if this is an "undefined name" diagnostic
-        if !diagnostic.message.starts_with("Undefined name:") {
-            continue;
-        }
-
-        // Extract the undefined name from the message
-        let Some(name) = diagnostic.message.strip_prefix("Undefined name: ") else {
-            continue;
-        };
-
-        // Look up if this name exists as a public export
-        if let Some(sources) = public_exports.get(name) {
-            for (source_path, _symbol) in sources {
-                let source_path = std::path::Path::new(source_path);
-                let Some(relative_path) = source_path.strip_prefix(&workspace.source_root).ok()
-                else {
-                    continue;
-                };
-                let relative_module = relative_path.with_extension("");
-                let segments: Vec<_> = relative_module
-                    .components()
-                    .filter_map(|component| match component {
-                        std::path::Component::Normal(segment) => segment.to_str(),
-                        _ => None,
-                    })
-                    .collect();
-                if segments.is_empty() {
-                    continue;
-                }
-                let module_path = format!("package::{}", segments.join("::"));
-
-                let Some(roots) = workspace
-                    .asts
-                    .get(file_id.0 as usize)
-                    .and_then(|ast| ast.as_ref())
-                    .map(|ast| ast.roots.as_slice())
-                else {
-                    continue;
-                };
-                let import_stmt = format!("use {module_path}::{{ {name} }}");
-                let Some(edit) = auto_import_edit(text, roots, &import_stmt) else {
-                    continue;
-                };
-
-                let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
-                    std::collections::HashMap::new();
-                changes.insert(uri.clone(), vec![edit]);
-
-                let action = CodeAction {
-                    title: format!("Import '{}' from {}", name, module_path),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: Some(vec![Diagnostic {
-                        range: diag_range,
-                        severity: Some(DiagnosticSeverity::ERROR),
-                        source: Some("talk".to_string()),
-                        message: diagnostic.message.clone(),
-                        ..Default::default()
-                    }]),
-                    edit: Some(WorkspaceEdit {
-                        changes: Some(changes),
-                        document_changes: None,
-                        change_annotations: None,
-                    }),
-                    command: None,
-                    is_preferred: Some(sources.len() == 1),
-                    disabled: None,
-                    data: None,
-                };
-
-                actions.push(CodeActionOrCommand::CodeAction(action));
-            }
-        }
-    }
-
-    actions
-}
-
-/// Build the quick-fixes for one ambiguous-member diagnostic. The message
-/// carries the candidate protocols ("provided by Aa, Bb"); the diagnostic
-/// span covers the member use, whose text ends in `.label` followed by the
-/// argument list. Each fix rewrites the receiver-dot form into the
-/// protocol-static call with the receiver as first argument.
-fn ambiguous_member_quick_fixes(
-    text: &str,
-    uri: &Url,
-    diag_start: usize,
-    diag_end: usize,
-    message: &str,
-    diag_range: Range,
-) -> Vec<CodeActionOrCommand> {
-    let Some(rest) = message.strip_prefix("Ambiguous member '") else {
-        return vec![];
-    };
-    let Some((label, rest)) = rest.split_once('\'') else {
-        return vec![];
-    };
-    let Some((_, rest)) = rest.split_once("provided by ") else {
-        return vec![];
-    };
-    let Some((providers, _)) = rest.split_once(". Name one explicitly") else {
-        return vec![];
-    };
-    let Some(snippet) = text.get(diag_start..diag_end) else {
-        return vec![];
-    };
-    // The span must actually be a `receiver.label(...)` use: a discharge
-    // site for a scheme-carried constraint points at the caller instead,
-    // where no textual rewrite applies (the diagnostic alone serves there).
-    let needle = format!(".{label}");
-    let Some(dot) = snippet.rfind(&needle) else {
-        return vec![];
-    };
-    let receiver = snippet[..dot].trim();
-    if receiver.is_empty() {
-        return vec![];
-    }
-    let receiver_start = diag_start + snippet[..dot].len() - snippet[..dot].trim_start().len();
-    let label_end = diag_start + dot + needle.len();
-    if text.as_bytes().get(label_end) != Some(&b'(') {
-        return vec![];
-    }
-    let after_paren = label_end + 1;
-    let empty_args = text[after_paren..].trim_start().starts_with(')');
-    let insertion = if empty_args {
-        receiver.to_string()
-    } else {
-        format!("{receiver}, ")
-    };
-
-    let mut actions = vec![];
-    for candidate in providers.split(", ") {
-        let Some(callee_range) =
-            byte_span_to_range_utf16(text, receiver_start as u32, label_end as u32)
-        else {
-            continue;
-        };
-        let Some(insert_range) =
-            byte_span_to_range_utf16(text, after_paren as u32, after_paren as u32)
-        else {
-            continue;
-        };
-        let edits = vec![
-            TextEdit::new(callee_range, format!("{candidate}.{label}")),
-            TextEdit::new(insert_range, insertion.clone()),
-        ];
-        let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
-            std::collections::HashMap::new();
-        changes.insert(uri.clone(), edits);
-        actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-            title: format!("Use '{candidate}.{label}({receiver}...)'"),
-            kind: Some(CodeActionKind::QUICKFIX),
-            diagnostics: Some(vec![Diagnostic {
-                range: diag_range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("talk".to_string()),
-                message: message.to_string(),
-                ..Default::default()
-            }]),
-            edit: Some(WorkspaceEdit {
-                changes: Some(changes),
-                document_changes: None,
-                change_annotations: None,
-            }),
-            command: None,
-            is_preferred: None,
-            disabled: None,
-            data: None,
-        }));
-    }
-    actions
-}
-
-fn missing_witness_quick_fixes(
-    workspace: &AnalysisWorkspace,
-    text: &str,
-    uri: &Url,
-    file_id: crate::node_id::FileID,
-    diag_start: u32,
-    message: &str,
-    diag_range: Range,
-) -> Vec<CodeActionOrCommand> {
-    let Some((requirement, protocol)) = parse_missing_witness(message) else {
-        return vec![];
-    };
-    let Some(ast) = workspace
-        .asts
-        .get(file_id.0 as usize)
-        .and_then(|ast| ast.as_ref())
-    else {
-        return vec![];
-    };
-    let Some(extend) = enclosing_extend_at(ast, diag_start) else {
-        return vec![];
-    };
-    let crate::node_kinds::decl::DeclKind::Extend { body, .. } = &extend.kind else {
-        return vec![];
-    };
-    let signature = source_requirement_signature(workspace, requirement, protocol)
-        .or_else(|| catalog_requirement_signature(workspace, requirement, protocol))
-        .unwrap_or_else(|| format!("func {requirement}()"));
-    let stub = method_stub(&signature);
-    let Some((insert_offset, insert_text)) = insertion_before_closing_brace(text, body.span, &stub)
-    else {
-        return vec![];
-    };
-    let Some(range) = byte_span_to_range_utf16(text, insert_offset as u32, insert_offset as u32)
-    else {
-        return vec![];
-    };
-
-    vec![quick_fix_action(
-        uri,
-        format!("Add requirement '{requirement}'"),
-        vec![TextEdit::new(range, insert_text)],
-        message,
-        diag_range,
-        Some(true),
-    )]
-}
-
-fn non_exhaustive_match_quick_fixes(
-    workspace: &AnalysisWorkspace,
-    text: &str,
-    uri: &Url,
-    file_id: crate::node_id::FileID,
-    diag_start: u32,
-    message: &str,
-    diag_range: Range,
-) -> Vec<CodeActionOrCommand> {
-    let Some(ast) = workspace
-        .asts
-        .get(file_id.0 as usize)
-        .and_then(|ast| ast.as_ref())
-    else {
-        return vec![];
-    };
-    let Some(expr) = enclosing_match_at(ast, diag_start) else {
-        return vec![];
-    };
-    let patterns = missing_patterns_for_match(workspace, &expr)
-        .filter(|patterns| !patterns.is_empty())
-        .unwrap_or_else(|| parse_missing_patterns(message));
-    if patterns.is_empty() {
-        return vec![];
-    }
-    let arms = patterns
-        .iter()
-        .map(|pattern| format!("{pattern} -> {{}}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let Some((insert_offset, insert_text)) = insertion_before_closing_brace(text, expr.span, &arms)
-    else {
-        return vec![];
-    };
-    let Some(range) = byte_span_to_range_utf16(text, insert_offset as u32, insert_offset as u32)
-    else {
-        return vec![];
-    };
-    let title = if patterns.len() == 1 {
-        format!("Add missing match arm '{}'", patterns[0])
-    } else {
-        "Add missing match arms".to_string()
-    };
-
-    vec![quick_fix_action(
-        uri,
-        title,
-        vec![TextEdit::new(range, insert_text)],
-        message,
-        diag_range,
-        Some(true),
-    )]
-}
-
-fn quick_fix_action(
-    uri: &Url,
-    title: String,
-    edits: Vec<TextEdit>,
-    message: &str,
-    diag_range: Range,
-    is_preferred: Option<bool>,
-) -> CodeActionOrCommand {
-    let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
-        std::collections::HashMap::new();
-    changes.insert(uri.clone(), edits);
-    CodeActionOrCommand::CodeAction(CodeAction {
-        title,
-        kind: Some(CodeActionKind::QUICKFIX),
-        diagnostics: Some(vec![Diagnostic {
-            range: diag_range,
-            severity: Some(DiagnosticSeverity::ERROR),
-            source: Some("talk".to_string()),
-            message: message.to_string(),
-            ..Default::default()
-        }]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
-        command: None,
-        is_preferred,
-        disabled: None,
-        data: None,
-    })
-}
-
-fn parse_missing_witness(message: &str) -> Option<(&str, &str)> {
-    let rest = message.strip_prefix("Missing '")?;
-    let (requirement, rest) = rest.split_once("' required by ")?;
-    Some((requirement, rest))
-}
-
-fn enclosing_extend_at(
-    ast: &crate::ast::AST<crate::ast::NameResolved>,
-    byte_offset: u32,
-) -> Option<crate::node_kinds::decl::Decl> {
-    crate::analysis::node_ids_at_offset(ast, byte_offset)
-        .into_iter()
-        .filter_map(|node_id| match ast.find(node_id) {
-            Some(crate::node::Node::Decl(
-                decl @ crate::node_kinds::decl::Decl {
-                    kind: crate::node_kinds::decl::DeclKind::Extend { .. },
-                    ..
-                },
-            )) => Some(decl),
-            _ => None,
-        })
-        .find(|decl| decl.span.start <= byte_offset && byte_offset <= decl.span.end)
-}
-
-fn enclosing_match_at(
-    ast: &crate::ast::AST<crate::ast::NameResolved>,
-    byte_offset: u32,
-) -> Option<crate::node_kinds::expr::Expr> {
-    crate::analysis::node_ids_at_offset(ast, byte_offset)
-        .into_iter()
-        .filter_map(|node_id| match ast.find(node_id) {
-            Some(crate::node::Node::Expr(expr)) => Some(expr),
-            _ => None,
-        })
-        .find(|expr| match &expr.kind {
-            crate::node_kinds::expr::ExprKind::Match(scrutinee, _) => {
-                scrutinee.span.start <= byte_offset && byte_offset <= scrutinee.span.end
-            }
-            _ => false,
-        })
-}
-
-fn source_requirement_signature(
-    workspace: &AnalysisWorkspace,
-    requirement: &str,
-    protocol: &str,
-) -> Option<String> {
-    let protocol_name = protocol.split('<').next().unwrap_or(protocol);
-    for ast in workspace.asts.iter().flatten() {
-        let mut result = None;
-        let mut visitor =
-            derive_visitor::visitor_enter_fn(|decl: &crate::node_kinds::decl::Decl| {
-                if result.is_some() {
-                    return;
-                }
-                let crate::node_kinds::decl::DeclKind::Protocol { name, body, .. } = &decl.kind
-                else {
-                    return;
-                };
-                if name.name_str() != protocol_name {
-                    return;
-                }
-                for member in &body.decls {
-                    match &member.kind {
-                        crate::node_kinds::decl::DeclKind::MethodRequirement {
-                            signature, ..
-                        }
-                        | crate::node_kinds::decl::DeclKind::FuncSignature(signature)
-                            if signature.name.name_str() == requirement =>
-                        {
-                            result = Some(crate::parsing::formatter::format_node(
-                                &crate::node::Node::Decl(member.clone()),
-                                &ast.meta,
-                            ));
-                            return;
-                        }
-                        _ => {}
-                    }
-                }
-            });
-        for root in &ast.roots {
-            root.drive(&mut visitor);
-        }
-        drop(visitor);
-        if let Some(result) = result {
-            return Some(strip_implicit_self_param(result.trim()));
-        }
-    }
-    None
-}
-
-fn catalog_requirement_signature(
-    workspace: &AnalysisWorkspace,
-    requirement: &str,
-    protocol: &str,
-) -> Option<String> {
-    let _names =
-        crate::name_resolution::symbol::set_symbol_names(workspace.types.display_names.clone());
-    let mut refs: Vec<crate::types::ty::ProtocolRef> = workspace
-        .types
-        .catalog
-        .protocols
-        .keys()
-        .copied()
-        .map(crate::types::ty::ProtocolRef::bare)
-        .collect();
-    for (_, protocol_ref) in workspace.types.catalog.conformances.keys() {
-        if !refs.contains(protocol_ref) {
-            refs.push(protocol_ref.clone());
-        }
-    }
-
-    for protocol_ref in refs {
-        for (owner, label, req) in workspace
-            .types
-            .catalog
-            .requirements_for_conformance(&protocol_ref)
-        {
-            if label == requirement && owner.to_string() == protocol {
-                return signature_from_requirement_scheme(&workspace.types, &label, req.symbol);
-            }
-        }
-    }
-    None
-}
-
-fn signature_from_requirement_scheme(
-    types: &crate::types::TypeOutput,
-    label: &str,
-    symbol: crate::name_resolution::symbol::Symbol,
-) -> Option<String> {
-    let scheme = types.schemes.get(&symbol)?;
-    let crate::types::ty::Ty::Func(params, ret, _) = &scheme.ty else {
-        return None;
-    };
-    let params = params
-        .iter()
-        .enumerate()
-        .map(|(index, ty)| format!("arg{index}: {}", ty.render_mono()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(strip_implicit_self_param(&format!(
-        "func {label}({params}) -> {}",
-        ret.render_mono()
-    )))
-}
-
-fn strip_implicit_self_param(signature: &str) -> String {
-    let Some(open) = signature.find('(') else {
-        return signature.to_string();
-    };
-    let after_open = &signature[open + 1..];
-    let leading = after_open.len() - after_open.trim_start().len();
-    let params = &after_open[leading..];
-    if !params.starts_with("self:") {
-        return signature.to_string();
-    }
-    if let Some(comma) = params.find(',') {
-        return format!(
-            "{}{}",
-            &signature[..open + 1],
-            params[comma + 1..].trim_start()
-        );
-    }
-    if let Some(close) = params.find(')') {
-        return format!("{}{}", &signature[..open + 1], &params[close..]);
-    }
-    signature.to_string()
-}
-
-fn method_stub(signature: &str) -> String {
-    format!("{} {{\n\t{{}}\n}}", signature.trim())
-}
-
-fn missing_patterns_for_match(
-    workspace: &AnalysisWorkspace,
-    expr: &crate::node_kinds::expr::Expr,
-) -> Option<Vec<String>> {
-    let crate::node_kinds::expr::ExprKind::Match(scrutinee, arms) = &expr.kind else {
-        return None;
-    };
-    let mut ty = workspace.types.node_types.get(&scrutinee.id)?.clone();
-    if let crate::types::ty::Ty::Borrow(_, inner) = ty {
-        ty = *inner;
-    }
-    let arms: Vec<&crate::node_kinds::pattern::Pattern> =
-        arms.iter().map(|arm| &arm.pattern).collect();
-    Some(crate::types::exhaustiveness::check_match(&workspace.types.catalog, &ty, &arms).missing)
-}
-
-fn parse_missing_patterns(message: &str) -> Vec<String> {
-    if message.contains("add a catch-all arm") {
-        return vec!["_".to_string()];
-    }
-    let Some(rest) = message.strip_prefix("Match does not cover every case; unhandled: ") else {
-        return vec![];
-    };
-    rest.split(", ").map(str::to_string).collect()
-}
-
-fn insertion_before_closing_brace(
-    text: &str,
-    span: crate::span::Span,
-    block: &str,
-) -> Option<(usize, String)> {
-    let span_text = text.get(span.start as usize..span.end as usize)?;
-    let close = span.start as usize + span_text.rfind('}')?;
-    let line_start = text[..close].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
-    let before_close_on_line = text.get(line_start..close)?;
-    let base_indent = if before_close_on_line.trim().is_empty() {
-        before_close_on_line
-    } else {
-        text.get(line_start..line_start + leading_whitespace_len(before_close_on_line))?
-    };
-    let child_indent = format!("{base_indent}\t");
-    let indented = indent_block(block, &child_indent);
-
-    if before_close_on_line.trim().is_empty() {
-        Some((line_start, format!("{indented}\n")))
-    } else {
-        Some((close, format!("\n{indented}\n{base_indent}")))
-    }
-}
-
-fn leading_whitespace_len(text: &str) -> usize {
-    text.char_indices()
-        .find_map(|(idx, ch)| (!matches!(ch, ' ' | '\t')).then_some(idx))
-        .unwrap_or(text.len())
-}
-
-fn indent_block(block: &str, indent: &str) -> String {
-    let mut result = String::new();
-    for (index, line) in block.lines().enumerate() {
-        if index > 0 {
-            result.push('\n');
-        }
-        result.push_str(indent);
-        result.push_str(line);
-    }
-    result
 }
 
 #[cfg(test)]
@@ -1908,6 +1172,199 @@ mod tests {
         AnalysisWorkspace::new(inputs).expect("workspace")
     }
 
+    fn parser_workspace(uri: &Url, text: &str) -> AnalysisWorkspace {
+        use crate::analysis::workspace::diagnostic_for_any;
+        use crate::ast::{AST, NameResolved};
+        use crate::compiling::module::ModuleId;
+        use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
+        use crate::lexer::Lexer;
+        use crate::node_id::{FileID, NodeID};
+        use crate::parser::Parser;
+        use rustc_hash::FxHashMap;
+
+        let file_id = FileID(0);
+        let parser = Parser::new(uri.path(), file_id, Lexer::preserving_comments(text));
+        let (ast, diagnostics) = match parser.parse() {
+            Ok((ast, diagnostics)) => (AST::<NameResolved>::from(ast), diagnostics),
+            Err(error) => (
+                AST::<NameResolved> {
+                    path: uri.path().to_string(),
+                    roots: vec![],
+                    meta: Default::default(),
+                    phase: NameResolved,
+                    node_ids: Default::default(),
+                    synthsized_ids: Default::default(),
+                    file_id,
+                    skip_core_prelude: false,
+                },
+                vec![AnyDiagnostic::Parsing(Diagnostic {
+                    id: NodeID(file_id, 0),
+                    severity: Severity::Error,
+                    kind: error,
+                })],
+            ),
+        };
+        let document_id = super::document_id_for_uri(uri);
+        let file_id_to_document = vec![document_id.clone()];
+        let texts = vec![text.to_string()];
+        let asts = vec![Some(ast)];
+        let analysis_diagnostics = diagnostics
+            .iter()
+            .filter_map(|diagnostic| {
+                diagnostic_for_any(&file_id_to_document, &texts, &asts, diagnostic)
+            })
+            .map(|(_, diagnostic)| diagnostic)
+            .collect();
+        let mut diagnostics_by_document = FxHashMap::default();
+        diagnostics_by_document.insert(document_id.clone(), analysis_diagnostics);
+
+        AnalysisWorkspace {
+            local_module_id: ModuleId::Current,
+            source_root: uri
+                .to_file_path()
+                .ok()
+                .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+                .unwrap_or_default(),
+            versions: [(document_id.clone(), 0)].into_iter().collect(),
+            file_id_to_document,
+            document_to_file_id: [(document_id, file_id)].into_iter().collect(),
+            texts,
+            asts,
+            resolved_names: Default::default(),
+            types: Default::default(),
+            flow: Default::default(),
+            diagnostics: diagnostics_by_document,
+            stdlib_module_ids: Default::default(),
+        }
+    }
+
+    fn bare_workspace(uri: &Url, text: &str) -> AnalysisWorkspace {
+        use crate::analysis::workspace::diagnostic_for_any;
+        use crate::compiling::driver::{Driver, DriverConfig, Source};
+        use crate::name_resolution::symbol::set_symbol_names;
+        use rustc_hash::FxHashMap;
+
+        let path = uri.to_file_path().expect("file path");
+        let config = DriverConfig::new("CodeActionTest");
+        let local_module_id = config.module_id;
+        let driver = Driver::new_bare(
+            vec![Source::in_memory(path.clone(), text.to_string())],
+            config,
+        );
+        let parsed = driver.parse().expect("parse");
+        let resolved = parsed.resolve_names().expect("resolve");
+        let asts_by_source = resolved.phase.asts.clone();
+        let typed = resolved.type_check();
+        let Driver { phase, .. } = typed;
+        let (resolved_names, types) = phase.program.into_semantic_parts();
+        let flow = phase.flow;
+        let diagnostics_any = phase.diagnostics;
+        let document_id = super::document_id_for_uri(uri);
+        let file_id_to_document = vec![document_id.clone()];
+        let document_to_file_id = [(document_id.clone(), crate::node_id::FileID(0))]
+            .into_iter()
+            .collect();
+        let texts = vec![text.to_string()];
+        let mut asts = vec![None];
+        for ast in asts_by_source.values() {
+            asts[ast.file_id.0 as usize] = Some(ast.clone());
+        }
+        let _names = set_symbol_names(resolved_names.symbol_names.clone());
+        let mut diagnostics: FxHashMap<String, Vec<crate::analysis::Diagnostic>> =
+            FxHashMap::default();
+        for diagnostic in &diagnostics_any {
+            if let Some((document_id, diagnostic)) =
+                diagnostic_for_any(&file_id_to_document, &texts, &asts, diagnostic)
+            {
+                diagnostics.entry(document_id).or_default().push(diagnostic);
+            }
+        }
+
+        AnalysisWorkspace {
+            local_module_id,
+            source_root: path
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_default(),
+            versions: [(document_id.clone(), 0)].into_iter().collect(),
+            file_id_to_document,
+            document_to_file_id,
+            texts,
+            asts,
+            resolved_names,
+            types,
+            flow,
+            diagnostics,
+            stdlib_module_ids: Default::default(),
+        }
+    }
+
+    fn action_rewrite(
+        code: &str,
+        title: &str,
+        workspace: impl FnOnce(&Url, &str) -> AnalysisWorkspace,
+    ) -> String {
+        let uri =
+            Url::from_file_path(std::env::temp_dir().join("code_action.tlk")).expect("file uri");
+        let workspace = workspace(&uri, code);
+        let document_id = super::document_id_for_uri(&uri);
+        let everywhere = Range::new(
+            async_lsp::lsp_types::Position::new(0, 0),
+            async_lsp::lsp_types::Position::new(999, 0),
+        );
+        let actions = super::compute_code_actions(&workspace, &document_id, &uri, everywhere);
+        let action = actions
+            .iter()
+            .find_map(|action| match action {
+                async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action)
+                    if action.title == title =>
+                {
+                    Some(action)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing action '{title}': {actions:?}; diagnostics: {:?}",
+                    workspace.diagnostics
+                )
+            });
+        apply_edits(code, action.edit.as_ref().expect("edit"), &uri)
+    }
+
+    fn parser_action_rewrite(code: &str, title: &str) -> String {
+        action_rewrite(code, title, parser_workspace)
+    }
+
+    fn type_action_rewrite(code: &str, title: &str) -> String {
+        action_rewrite(code, title, bare_workspace)
+    }
+
+    fn action_titles(
+        code: &str,
+        workspace: impl FnOnce(&Url, &str) -> AnalysisWorkspace,
+    ) -> Vec<String> {
+        let uri = Url::from_file_path(std::env::temp_dir().join("code_action_titles.tlk"))
+            .expect("file uri");
+        let workspace = workspace(&uri, code);
+        let document_id = super::document_id_for_uri(&uri);
+        super::compute_code_actions(
+            &workspace,
+            &document_id,
+            &uri,
+            Range::new(
+                async_lsp::lsp_types::Position::new(0, 0),
+                async_lsp::lsp_types::Position::new(999, 0),
+            ),
+        )
+        .into_iter()
+        .filter_map(|action| match action {
+            async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) => Some(action.title),
+            _ => None,
+        })
+        .collect()
+    }
+
     fn edit_ranges_for_uri(edit: &WorkspaceEdit, uri: &Url) -> Vec<Range> {
         let mut ranges: Vec<Range> = edit
             .changes
@@ -1919,6 +1376,299 @@ mod tests {
             .collect();
         ranges.sort_by_key(|r| (r.start.line, r.start.character, r.end.line, r.end.character));
         ranges
+    }
+
+    #[test]
+    fn parser_code_actions_insert_recovered_delimiters() {
+        assert_eq!(
+            parser_action_rewrite("let xs = [1, 2", "Insert ']'"),
+            "let xs = [1, 2]"
+        );
+        assert_eq!(
+            parser_action_rewrite("let pair = (1, 2", "Insert ')'"),
+            "let pair = (1, 2)"
+        );
+        assert_eq!(
+            parser_action_rewrite("func f() { 1", "Insert '}'"),
+            "func f() { 1}"
+        );
+        assert_eq!(
+            parser_action_rewrite("let xs = [\"😀\"", "Insert ']'"),
+            "let xs = [\"😀\"]"
+        );
+    }
+
+    #[test]
+    fn parser_code_action_adds_required_else_branch() {
+        assert_eq!(
+            parser_action_rewrite("let x = if true { 1 }", "Add required else branch"),
+            "let x = if true { 1 } else {}"
+        );
+    }
+
+    #[test]
+    fn parser_code_action_removes_explicit_self_parameter() {
+        assert_eq!(
+            parser_action_rewrite(
+                "struct Foo { func f(self: Foo, value: Int) { value } }",
+                "Remove explicit self parameter",
+            ),
+            "struct Foo { func f(value: Int) { value } }"
+        );
+    }
+
+    #[test]
+    fn existing_type_code_actions_use_structured_diagnostics() {
+        let ambiguous = "protocol A { func m() -> Int }\nprotocol B { func m() -> Int }\nextend Int: A { func m() -> Int { 1 } }\nextend Int: B { func m() -> Int { 2 } }\nlet n = 1\nlet x = n.m()\n";
+        assert!(type_action_rewrite(ambiguous, "Use 'A.m(n...)'").contains("let x = A.m(n)"),);
+
+        let missing_witness =
+            "protocol P { func required() -> Int }\nstruct S {}\nextend S: P {}\n";
+        assert!(
+            type_action_rewrite(missing_witness, "Add requirement 'required'")
+                .contains("func required() -> Int"),
+        );
+
+        let non_exhaustive = "enum Choice { case yes, no }\nlet choice = Choice.yes\nlet n = match choice { .yes -> 1 }\n";
+        assert!(
+            type_action_rewrite(non_exhaustive, "Add missing match arm '.no'")
+                .contains(".no -> {}"),
+        );
+    }
+
+    #[test]
+    fn arity_code_actions_add_and_remove_value_arguments() {
+        let missing = "func add(a: Int, b: Int) -> Int { a }\nlet n = add(1)\n";
+        assert_eq!(
+            type_action_rewrite(missing, "Add missing argument"),
+            "func add(a: Int, b: Int) -> Int { a }\nlet n = add(1, {})\n"
+        );
+
+        let multiple_missing = "func add(a: Int, b: Int) -> Int { a }\nlet n = add()\n";
+        assert_eq!(
+            type_action_rewrite(multiple_missing, "Add 2 missing arguments"),
+            "func add(a: Int, b: Int) -> Int { a }\nlet n = add({}, {})\n"
+        );
+
+        let effect_call = "effect 'ask(a: Int, b: Int) -> Int\nlet n = 'ask(1)\n";
+        assert_eq!(
+            type_action_rewrite(effect_call, "Add missing argument"),
+            "effect 'ask(a: Int, b: Int) -> Int\nlet n = 'ask(1, {})\n"
+        );
+
+        let too_many = "func add(a: Int, b: Int) -> Int { a }\nlet n = add(1, 2, 3, 4)\n";
+        assert_eq!(
+            type_action_rewrite(too_many, "Remove 2 extra arguments"),
+            "func add(a: Int, b: Int) -> Int { a }\nlet n = add(1, 2)\n"
+        );
+
+        let labeled_constructor = "struct Pair { let x: Int let y: Int }\nlet pair = Pair(x: 1)\n";
+        assert_eq!(
+            type_action_rewrite(labeled_constructor, "Add missing argument"),
+            "struct Pair { let x: Int let y: Int }\nlet pair = Pair(x: 1, y: {})\n"
+        );
+
+        let missing_before_block =
+            "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet n = apply() { 1 }\n";
+        assert_eq!(
+            type_action_rewrite(missing_before_block, "Add missing argument"),
+            "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet n = apply({}) { 1 }\n"
+        );
+
+        let extra_block = "func identity(value: Int) -> Int { value }\nlet n = identity(1) { 2 }\n";
+        assert_eq!(
+            type_action_rewrite(extra_block, "Remove extra argument"),
+            "func identity(value: Int) -> Int { value }\nlet n = identity(1)\n"
+        );
+
+        let omitted_parentheses = "func combine(value: String, n: Int) -> String { value }\nlet missing = combine \"x\"\nfunc no_args() -> Int { 1 }\nlet extra = no_args \"x\"\n";
+        assert_eq!(
+            type_action_rewrite(omitted_parentheses, "Add missing argument"),
+            "func combine(value: String, n: Int) -> String { value }\nlet missing = combine(\"x\", {})\nfunc no_args() -> Int { 1 }\nlet extra = no_args \"x\"\n"
+        );
+        assert_eq!(
+            type_action_rewrite(omitted_parentheses, "Remove extra argument"),
+            "func combine(value: String, n: Int) -> String { value }\nlet missing = combine \"x\"\nfunc no_args() -> Int { 1 }\nlet extra = no_args()\n"
+        );
+
+        let parenthesized_blocks = "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet missing = apply({ 1 })\nfunc identity(value: Int) -> Int { value }\nlet extra = identity(1, { 2 })\n";
+        assert_eq!(
+            type_action_rewrite(parenthesized_blocks, "Add missing argument"),
+            "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet missing = apply({}, { 1 })\nfunc identity(value: Int) -> Int { value }\nlet extra = identity(1, { 2 })\n"
+        );
+        assert_eq!(
+            type_action_rewrite(parenthesized_blocks, "Remove extra argument"),
+            "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet missing = apply({ 1 })\nfunc identity(value: Int) -> Int { value }\nlet extra = identity(1)\n"
+        );
+    }
+
+    #[test]
+    fn type_code_actions_remove_duplicate_and_redundant_syntax() {
+        let duplicate_predicate = "protocol P {}\nfunc f<T>(x: T) -> T where T: P && T: P { x }\n";
+        assert_eq!(
+            type_action_rewrite(duplicate_predicate, "Remove duplicate where predicate"),
+            "protocol P {}\nfunc f<T>(x: T) -> T where T: P { x }\n"
+        );
+
+        let redundant_result = "enum Box<T> {\n\tcase value(T) -> Box<T>\n}\n";
+        assert_eq!(
+            type_action_rewrite(redundant_result, "Remove redundant variant result type",),
+            "enum Box<T> {\n\tcase value(T)\n}\n"
+        );
+
+        let duplicate_binding =
+            "protocol P { associated Item }\nlet x: any P<Item = Int, Item = Int>\n";
+        assert_eq!(
+            type_action_rewrite(
+                duplicate_binding,
+                "Remove duplicate associated type binding",
+            ),
+            "protocol P { associated Item }\nlet x: any P<Item = Int>\n"
+        );
+    }
+
+    #[test]
+    fn type_code_actions_use_catalog_candidates() {
+        let unknown_member =
+            "struct Counter { let count: Int }\nlet counter = Counter(count: 1)\ncounter.cout\n";
+        assert_eq!(
+            type_action_rewrite(unknown_member, "Change member to 'count'"),
+            "struct Counter { let count: Int }\nlet counter = Counter(count: 1)\ncounter.count\n"
+        );
+
+        let unresolved_variant = "enum Choice { case yes }\nlet choice = .yes\n";
+        assert_eq!(
+            type_action_rewrite(unresolved_variant, "Qualify as 'Choice.yes'"),
+            "enum Choice { case yes }\nlet choice = Choice.yes\n"
+        );
+
+        let ambiguous_variant = "enum A { case yes }\nenum B { case yes }\nlet value = .yes\n";
+        let titles = action_titles(ambiguous_variant, bare_workspace);
+        assert!(
+            titles.contains(&"Qualify as 'A.yes'".to_string()),
+            "{titles:?}"
+        );
+        assert!(
+            titles.contains(&"Qualify as 'B.yes'".to_string()),
+            "{titles:?}"
+        );
+
+        let unknown_binding = "protocol P { associated Item }\nlet x: any P<Ietm = Int>\n";
+        assert_eq!(
+            type_action_rewrite(unknown_binding, "Change associated type binding to 'Item'",),
+            "protocol P { associated Item }\nlet x: any P<Item = Int>\n"
+        );
+    }
+
+    #[test]
+    fn type_code_actions_repair_effects_variants_and_generics() {
+        let undeclared_effect =
+            "effect 'io() -> Int\neffect 'net() -> Int\nfunc f() 'net -> Int { 'io() }\n";
+        assert_eq!(
+            type_action_rewrite(undeclared_effect, "Add 'io to effect annotation"),
+            "effect 'io() -> Int\neffect 'net() -> Int\nfunc f() '[net, io] -> Int { 'io() }\n"
+        );
+
+        let invalid_result = "struct Other<T> {}\nenum Box<T> { case value(T) -> Other<T> }\n";
+        assert_eq!(
+            type_action_rewrite(invalid_result, "Change variant result to 'Box'"),
+            "struct Other<T> {}\nenum Box<T> { case value(T) -> Box<T> }\n"
+        );
+
+        let invalid_labels = "enum Box { case value(item: Int) }\nlet box: Box = .value(itme: 1)\n";
+        assert_eq!(
+            type_action_rewrite(invalid_labels, "Use declared variant payload labels"),
+            "enum Box { case value(item: Int) }\nlet box: Box = .value(item: 1)\n"
+        );
+
+        let shadowed_generic = "enum Box<T> { case value<T>(T) -> Box<T> }\n";
+        let rewritten = type_action_rewrite(shadowed_generic, "Rename inner generic to 'T1'");
+        assert!(rewritten.contains("case value<T1>(T1)"), "{rewritten}");
+    }
+
+    #[test]
+    fn type_code_actions_split_patterns_and_remove_unreachable_source() {
+        let incompatible_or = "enum G<T> {\n\tcase int(Int) -> G<Int>\n\tcase bool(Bool) -> G<Bool>\n}\nfunc f<T>(g: G<T>) -> Int {\n\tmatch g {\n\t\t.int(x) | .bool(x) -> 0\n\t}\n}\n";
+        let split =
+            type_action_rewrite(incompatible_or, "Split or-pattern into separate match arms");
+        assert!(
+            split.contains(".int(x) -> 0,\n\t\t.bool(x) -> 0"),
+            "{split}"
+        );
+
+        let unreachable_arm = "enum Choice { case yes, no }\nlet choice = Choice.yes\nlet n = match choice {\n\t_ -> 1,\n\t.yes -> 2\n}\n";
+        let removed = type_action_rewrite(unreachable_arm, "Remove unreachable match arm");
+        assert!(!removed.contains(".yes -> 2"), "{removed}");
+
+        let unreachable_code = "func f() -> Int {\n\tloop {}\n\t2\n\t3\n}\n";
+        assert_eq!(
+            type_action_rewrite(unreachable_code, "Remove unreachable code"),
+            "func f() -> Int {\n\tloop {}\n}\n"
+        );
+    }
+
+    #[test]
+    fn separator_removal_handles_first_middle_and_last_items() {
+        let text = "a && b && c";
+        let remove = |start: usize, end: usize| {
+            let (start, end) = super::separator_list_item_removal_range(text, start, end, "&&")
+                .expect("removal range");
+            format!("{}{}", &text[..start], &text[end..])
+        };
+        assert_eq!(remove(0, 1), "b && c");
+        assert_eq!(remove(5, 6), "a && c");
+        assert_eq!(remove(10, 11), "a && b");
+    }
+
+    #[test]
+    fn code_actions_do_not_guess_for_underdetermined_diagnostics() {
+        assert!(action_titles("let x: Int = true\n", bare_workspace).is_empty());
+        assert!(
+            action_titles("struct Box<T> {}\nlet x: Box<Int, Bool>\n", bare_workspace,).is_empty()
+        );
+        assert!(
+            action_titles(
+                "protocol P { associated Item }\nlet x: any P\n",
+                bare_workspace,
+            )
+            .is_empty()
+        );
+        assert!(action_titles("func f(", parser_workspace).is_empty());
+    }
+
+    #[test]
+    fn code_action_diagnostic_preserves_warning_identity() {
+        let diagnostic = crate::analysis::Diagnostic {
+            node_id: None,
+            kind: Some(crate::analysis::DiagnosticKind::Types(
+                crate::types::TypeError::UnreachableMatchArm,
+            )),
+            range: crate::analysis::TextRange::new(0, 1),
+            severity: crate::analysis::DiagnosticSeverity::Warning,
+            message: "unreachable".to_string(),
+        };
+        let lsp = super::code_action_diagnostic(
+            &diagnostic,
+            Range::new(
+                async_lsp::lsp_types::Position::new(0, 0),
+                async_lsp::lsp_types::Position::new(0, 1),
+            ),
+        );
+        assert_eq!(
+            lsp.severity,
+            Some(async_lsp::lsp_types::DiagnosticSeverity::WARNING)
+        );
+        let expected_code = Some(async_lsp::lsp_types::NumberOrString::String(
+            "type.unreachable-match-arm".to_string(),
+        ));
+        assert_eq!(lsp.code, expected_code);
+        let published =
+            super::lsp_diagnostic_for_analysis("x", &diagnostic).expect("published diagnostic");
+        assert_eq!(published.code, expected_code);
+        assert_eq!(
+            published.severity,
+            Some(async_lsp::lsp_types::DiagnosticSeverity::WARNING)
+        );
     }
 
     #[test]
@@ -2153,8 +1903,7 @@ mod tests {
         );
     }
 
-    /// Apply a WorkspaceEdit's text edits to source (test-only; assumes
-    /// ASCII so UTF-16 columns equal byte columns).
+    /// Apply a WorkspaceEdit's UTF-16 text edits to source.
     fn apply_edits(text: &str, edit: &WorkspaceEdit, uri: &Url) -> String {
         let mut edits: Vec<&async_lsp::lsp_types::TextEdit> = edit
             .changes
@@ -2167,7 +1916,21 @@ mod tests {
             .chain(text.match_indices('\n').map(|(i, _)| i + 1))
             .collect();
         let to_byte = |p: &async_lsp::lsp_types::Position| {
-            line_starts[p.line as usize] + p.character as usize
+            let line_start = line_starts[p.line as usize];
+            let line_end = text[line_start..]
+                .find('\n')
+                .map(|offset| line_start + offset)
+                .unwrap_or(text.len());
+            let line = &text[line_start..line_end];
+            let mut utf16 = 0u32;
+            for (byte, character) in line.char_indices() {
+                if utf16 == p.character {
+                    return line_start + byte;
+                }
+                utf16 += character.len_utf16() as u32;
+            }
+            assert_eq!(utf16, p.character, "position splits a UTF-16 character");
+            line_end
         };
         edits.sort_by_key(|e| std::cmp::Reverse((e.range.start.line, e.range.start.character)));
         let mut out = text.to_string();

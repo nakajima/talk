@@ -37,7 +37,9 @@ text edits.
 
 - **Diagnostics** — parser, name-resolution, type, and flow/ownership
   errors, on open and (debounced) on change. Whatever message the compiler
-  produces is what the editor shows.
+  produces is what the editor shows. Analysis preserves the structured
+  compiler diagnostic and source node, and the LSP publishes a stable
+  diagnostic code; editor behavior never parses message prose.
 - **Hover** — signatures for bindings (for example
   `<T0, T1>(T0) -> T1 where T0.go: () -> T1`), inferred types for
   expressions, and ownership details.
@@ -55,11 +57,16 @@ text edits.
 - **Completions** (`completion.rs`) — translation of analysis completion
   items to LSP completion items; dot completion is triggered by `.`, and
   extension bodies offer missing protocol requirements as snippets.
-- **Code actions** (`compute_code_actions` in `server.rs`) — quick fixes
-  keyed off diagnostics: add a missing path-only `use ...` for an
-  undefined name that is public in another workspace file, rewrite an
-  ambiguous member call `x.m(args)` into `P.m(x, args)`, add missing protocol
-  requirement stubs, and insert missing match arms for non-exhaustive matches.
+- **Code actions** (`code_actions.rs`) — conservative quick fixes keyed by
+  structured diagnostics. They include imports, recovered
+  parser delimiters, required `else` branches, explicit-`self` removal, call
+  arity repairs, member and variant qualification, effect annotations,
+  protocol requirement stubs,
+  match coverage, variant labels and result heads, duplicate/redundant syntax,
+  generic shadowing, or-pattern splitting, and unreachable-source removal.
+  Actions are offered only when compiler structure determines a syntactically
+  valid edit without inventing a value or deleting a potentially evaluated
+  expression. See ADR 0025.
 
 ## Notes
 

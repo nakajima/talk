@@ -1,5 +1,49 @@
-use crate::{lexer::LexerError, parser::BlockContext, token::Token, token_kind::TokenKind};
+use crate::{
+    lexer::LexerError, parser::BlockContext, span::Span, token::Token, token_kind::TokenKind,
+};
 use std::{error::Error, fmt::Display};
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ExpectedSyntax {
+    Token(TokenKind),
+    Description(String),
+}
+
+impl ExpectedSyntax {
+    pub fn token(&self) -> Option<TokenKind> {
+        match self {
+            Self::Token(token) => Some(*token),
+            Self::Description(_) => None,
+        }
+    }
+}
+
+impl From<TokenKind> for ExpectedSyntax {
+    fn from(value: TokenKind) -> Self {
+        Self::Token(value)
+    }
+}
+
+impl From<String> for ExpectedSyntax {
+    fn from(value: String) -> Self {
+        Self::Description(value)
+    }
+}
+
+impl From<&str> for ExpectedSyntax {
+    fn from(value: &str) -> Self {
+        Self::Description(value.to_string())
+    }
+}
+
+impl Display for ExpectedSyntax {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Token(token) => write!(f, "{}", token.as_str()),
+            Self::Description(description) => f.write_str(description),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ParserError {
@@ -9,7 +53,7 @@ pub enum ParserError {
         col: u32,
     },
     UnexpectedToken {
-        expected: String,
+        expected: ExpectedSyntax,
         actual: String,
         token: Option<Token>,
     },
@@ -22,13 +66,37 @@ pub enum ParserError {
     ExpectedDecl(TokenKind),
     LetNotAllowed(BlockContext),
     InitNotAllowed(BlockContext),
-    ExplicitSelfParameterNotAllowed,
+    ExplicitSelfParameterNotAllowed {
+        parameter: Span,
+    },
     ConformanceListNotAllowed {
         context: BlockContext,
         token: Option<Token>,
     },
     IncompleteFuncSignature(String),
     ConversionError(String),
+}
+
+impl ParserError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Lexer { .. } => "parser.lexer",
+            Self::UnexpectedToken { .. } => "parser.unexpected-token",
+            Self::UnexpectedEndOfInput(_) => "parser.unexpected-end-of-input",
+            Self::InfiniteLoop(_) => "parser.infinite-loop",
+            Self::ExpectedIdentifier(_) => "parser.expected-identifier",
+            Self::UnbalancedLocationStack => "parser.unbalanced-location-stack",
+            Self::BadLabel(_) => "parser.bad-label",
+            Self::CannotAssign => "parser.cannot-assign",
+            Self::ExpectedDecl(_) => "parser.expected-declaration",
+            Self::LetNotAllowed(_) => "parser.let-not-allowed",
+            Self::InitNotAllowed(_) => "parser.init-not-allowed",
+            Self::ExplicitSelfParameterNotAllowed { .. } => "parser.explicit-self-parameter",
+            Self::ConformanceListNotAllowed { .. } => "parser.conformance-list-not-allowed",
+            Self::IncompleteFuncSignature(_) => "parser.incomplete-function-signature",
+            Self::ConversionError(_) => "parser.conversion",
+        }
+    }
 }
 
 impl Display for ParserError {
@@ -53,7 +121,7 @@ impl Display for ParserError {
             Self::UnexpectedToken {
                 expected, actual, ..
             } => {
-                write!(f, "Unexpected token. Expected {expected:?}, got {actual:?}")
+                write!(f, "Unexpected token. Expected {expected}, got {actual:?}")
             }
             Self::InfiniteLoop(current) => {
                 write!(
@@ -72,7 +140,7 @@ impl Display for ParserError {
             Self::ExpectedDecl(actual) => write!(f, "Expected declaration, got {actual:?}"),
             Self::LetNotAllowed(context) => write!(f, "Cannot use `let` in {context:?} body"),
             Self::InitNotAllowed(_context) => write!(f, "Cannot use `init` in this context"),
-            Self::ExplicitSelfParameterNotAllowed => {
+            Self::ExplicitSelfParameterNotAllowed { .. } => {
                 write!(
                     f,
                     "Methods do not declare `self`; use `func`, `mut func`, or `consuming func`"
