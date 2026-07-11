@@ -9,6 +9,9 @@ while fixing several type-checker and lexer correctness bugs.
 
 ### Added
 
+- **Talk source tests run with the Rust test suite.** `cargo test` now invokes
+  `talk test` from the repository root so checked-in `.test.tlk` tests cannot
+  be omitted from CI.
 - **`else if` chains.** Conditional statements and expressions now accept
   `else if`, including chains following `if let`.
 - **String-literal patterns.** Match arms can use string patterns, including
