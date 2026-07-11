@@ -1040,6 +1040,7 @@ pub mod tests {
         // workspace — only diagnostics attributed to a file block that file.
         use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
         use crate::node_id::{FileID, NodeID};
+        use crate::types::constraint::CtReason;
         use crate::types::error::TypeError;
 
         let mismatch = |id: NodeID| {
@@ -1049,6 +1050,7 @@ pub mod tests {
                 kind: TypeError::Mismatch {
                     expected: "Int".into(),
                     found: "String".into(),
+                    reason: CtReason::Annotation,
                 },
             })
         };

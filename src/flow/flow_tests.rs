@@ -1426,6 +1426,32 @@ fn match_on_borrowed_enum_neither_leaks_nor_double_frees() {
     );
 }
 
+/// Borrowed enums nested inside an owned tuple remain borrowed at their
+/// individual pattern occurrences. The payload binders alias the arguments,
+/// while both argument owners remain reusable after the match.
+#[test]
+fn tuple_match_on_borrowed_enums_preserves_payload_owners() {
+    let (value, _, live_allocations) = run_heap_eval(
+        "enum MaybeText {\n\tcase some(String)\n\tcase none\n}\nfunc lengths(lhs: MaybeText, rhs: MaybeText) -> Int {\n\tmatch (lhs, rhs) {\n\t\t(MaybeText.some(a), MaybeText.some(b)) -> a.byte_count + b.byte_count,\n\t\t(MaybeText.none, MaybeText.none) -> 0,\n\t\t_ -> 1\n\t}\n}\nfunc check() -> Int {\n\tlet lhs = MaybeText.some(\"ab\" + \"cd\")\n\tlet rhs = MaybeText.some(\"ef\" + \"gh\")\n\tlengths(lhs, rhs) + lengths(lhs, rhs)\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(16));
+    assert_eq!(live_allocations, 0, "tuple projections remain aliases");
+}
+
+/// Ownership is tracked per tuple element: the borrowed argument remains an
+/// alias while the owned rvalue payload is still dropped by its wildcard.
+#[test]
+fn tuple_match_keeps_owned_and_borrowed_payload_drops_separate() {
+    let (value, _, live_allocations) = run_heap_eval(
+        "enum MaybeText {\n\tcase some(String)\n\tcase none\n}\nfunc inspect(lhs: MaybeText) -> Int {\n\tmatch (lhs, MaybeText.some(\"owned\" + \" payload\")) {\n\t\t(MaybeText.some(value), MaybeText.some(_)) -> value.byte_count,\n\t\t_ -> 0\n\t}\n}\nfunc check() -> Int {\n\tlet lhs = MaybeText.some(\"borrowed\" + \" payload\")\n\tinspect(lhs) + inspect(lhs)\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(32));
+    assert_eq!(
+        live_allocations, 0,
+        "owned and borrowed paths drop separately"
+    );
+}
+
 /// Iterating an array of enums and matching each element — the borrowed
 /// element's variant patterns and payload uses, end to end. Runs on the
 /// allocation-tracking evaluator, so a double free of any aliased payload

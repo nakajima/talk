@@ -1934,6 +1934,15 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_tuple_match_with_borrowed_enum_elements() {
+        let (value, out) = run_on_both_engines_io(
+            "enum MaybeText {\n\tcase some(String)\n\tcase none\n}\nfunc lengths(lhs: MaybeText, rhs: MaybeText) -> Int {\n\tmatch (lhs, rhs) {\n\t\t(MaybeText.some(a), MaybeText.some(b)) -> a.byte_count + b.byte_count,\n\t\t(MaybeText.none, MaybeText.none) -> 0,\n\t\t_ -> 1\n\t}\n}\nlet lhs = MaybeText.some(\"ab\" + \"cd\")\nlet rhs = MaybeText.some(\"ef\" + \"gh\")\nprint(lengths(lhs, rhs))\nprint(lengths(lhs, rhs))",
+        );
+        assert_eq!(value, Value::Void);
+        assert_eq!(out, "8\n8\n");
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_match_on_an_unannotated_next() {
         let (_, out) = run_on_both_engines_io(
             "func main() {\n\tlet a = [42]\n\tlet i = a.iter()\n\tlet opt = i.next()\n\tmatch opt {\n\t\t.some(x) -> print(x),\n\t\t.none -> print(0)\n\t}\n}",

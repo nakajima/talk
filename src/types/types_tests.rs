@@ -1217,9 +1217,8 @@ pub mod tests {
         );
         let errors = type_errors(&t);
         assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("expected Bool, found Int")),
+            errors.iter().any(|error| error
+                .contains("the annotation requires Bool, but the expression has type Int")),
             "expected associated type alias to constrain the witness, got {errors:?}"
         );
     }
@@ -1408,10 +1407,9 @@ pub mod tests {
         let t = check("// no-core\nlet a: Int = 1.5");
         let errors = type_errors(&t);
         assert_eq!(errors.len(), 1, "errors: {errors:?}");
-        assert!(errors[0].contains("Int"), "error mentions Int: {errors:?}");
-        assert!(
-            errors[0].contains("Float"),
-            "error mentions Float: {errors:?}"
+        assert_eq!(
+            errors[0],
+            "Type mismatch in annotated expression: the annotation requires Int, but the expression has type Float"
         );
     }
 
@@ -1438,7 +1436,12 @@ pub mod tests {
     #[test]
     fn if_branch_mismatch_errors() {
         let t = check("// no-core\nlet a = if true { 1 } else { 1.5 }");
-        assert_eq!(type_errors(&t).len(), 1);
+        assert_eq!(
+            type_errors(&t),
+            [
+                "Type mismatch between branches: one branch has type Float, but another has type Int; all branches must have the same type"
+            ]
+        );
     }
 
     #[test]
@@ -1518,8 +1521,34 @@ pub mod tests {
     #[test]
     fn assignment_mismatch_errors() {
         let t = check("// no-core\nfunc f() {\n\tlet i = 0\n\ti = 1.5\n}");
-        let errors = type_errors(&t);
-        assert_eq!(errors.len(), 1, "errors: {errors:?}");
+        assert_eq!(
+            type_errors(&t),
+            [
+                "Type mismatch in assignment: the target requires Int, but the assigned value has type Float"
+            ]
+        );
+    }
+
+    #[test]
+    fn argument_mismatch_explains_parameter_and_argument_types() {
+        let t = check("// no-core\nfunc f(value: Int) { value }\nf(true)");
+        assert_eq!(
+            type_errors(&t),
+            [
+                "Type mismatch in function argument: the parameter requires Int, but the argument has type Bool"
+            ]
+        );
+    }
+
+    #[test]
+    fn return_mismatch_explains_declared_and_returned_types() {
+        let t = check("// no-core\nfunc f() -> Int { return true }");
+        assert_eq!(
+            type_errors(&t),
+            [
+                "Type mismatch in return value: the function requires Int, but the returned expression has type Bool"
+            ]
+        );
     }
 
     #[test]
@@ -2839,7 +2868,10 @@ pub mod tests {
         );
         let errors = type_errors(&t);
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].contains("expected Int, found Bool"), "{errors:?}");
+        assert!(
+            errors[0].contains("the parameter requires Int, but the argument has type Bool"),
+            "{errors:?}"
+        );
     }
 
     #[test]
@@ -3261,6 +3293,15 @@ pub mod tests {
     #[test]
     fn tuple_patterns_cover_componentwise() {
         let t = check("// no-core\nmatch (true, 1) {\n\t(true, _) -> 1,\n\t(false, _) -> 2\n}");
+        assert_clean(&t);
+        assert_eq!(type_warnings(&t), Vec::<String>::new());
+    }
+
+    #[test]
+    fn tuple_patterns_view_through_borrowed_elements() {
+        let t = check(
+            "// no-core\nenum Maybe<T> {\n\tcase some(T), none\n}\nfunc pick(lhs: Maybe<Int>, rhs: Maybe<Int>) -> Int {\n\tmatch (lhs, rhs) {\n\t\t(.some(a), .some(_)) -> a,\n\t\t(.none, .none) -> 0,\n\t\t_ -> 1\n\t}\n}",
+        );
         assert_clean(&t);
         assert_eq!(type_warnings(&t), Vec::<String>::new());
     }

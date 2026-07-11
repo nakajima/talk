@@ -144,7 +144,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 unreachable!("if expressions are desugared to match before type checking")
             }
             ExprKind::Match(scrutinee, arms) => {
-                self.check_match_expr(scrutinee, arms, expected, ctx);
+                self.check_match_expr(scrutinee, arms, expected, reason, ctx);
                 self.artifacts.node_types.insert(expr.id, expected.clone());
             }
             ExprKind::Func(func) => {
@@ -371,7 +371,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             return Ty::Nominal(Symbol::Never, vec![]);
         }
         let result = Ty::Var(self.store.fresh_ty(self.level, node));
-        self.check_match_arms_against(scrutinee, arms, &result, true, ctx);
+        self.check_match_arms_against(scrutinee, arms, &result, None, ctx);
         result
     }
 
@@ -380,9 +380,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         scrutinee: &Expr,
         arms: &[MatchArm],
         expected: &Ty,
+        reason: CtReason,
         ctx: &Ctx,
     ) {
-        self.check_match_arms_against(scrutinee, arms, expected, false, ctx);
+        self.check_match_arms_against(scrutinee, arms, expected, Some(reason), ctx);
     }
 
     pub(super) fn check_match_arms_against(
@@ -390,18 +391,15 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         scrutinee: &Expr,
         arms: &[MatchArm],
         expected: &Ty,
-        inferring_result: bool,
+        checking_reason: Option<CtReason>,
         ctx: &Ctx,
     ) {
         // OutsideIn(X) checks each GADT arm under an implication: constructor
         // equalities are givens, arm-local unification variables are
         // touchable, and outer variables stay untouchable.
         let scrutinee_ty = self.infer_expr(scrutinee, ctx);
-        // Patterns match through a borrow. When the scrutinee's type is
-        // still unresolved (an iterator's element type, say), a deferred
-        // PatternView constraint strips it once its head is known — pinning
-        // the patterns to the owned enum here would clash with a borrow
-        // arriving later from a conformance solution.
+        // Every arm shares one view of the root occurrence. Recursive
+        // aggregate projections create their own views in `check_pattern`.
         let pattern_scrutinee_ty = match self.store.shallow(&scrutinee_ty) {
             Ty::Borrow(_, inner) => *inner,
             Ty::Var(id) => {
@@ -420,11 +418,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             let arm_level = self.level.next();
             let start = self.wanteds.len();
             self.level = arm_level;
-            let refinement = self.check_pattern(&arm.pattern, &pattern_scrutinee_ty);
-            let reason = if inferring_result && !refinement.is_empty() {
-                CtReason::GadtBranch
-            } else {
-                CtReason::Body
+            let refinement = self.check_pattern_viewed(&arm.pattern, &pattern_scrutinee_ty);
+            let reason = match (checking_reason, refinement.is_empty()) {
+                (Some(CtReason::Recursion), _) => CtReason::Branch,
+                (Some(reason), _) => reason,
+                (None, false) => CtReason::GadtBranch,
+                (None, true) => CtReason::Branch,
             };
             self.check_block_value_with_reason(&arm.body, expected, reason, ctx);
             self.level = old_level;

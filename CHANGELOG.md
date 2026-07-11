@@ -12,6 +12,18 @@ implementation provides `!=` from the synthesized `equals` witness.
 Explicit conformances continue to take precedence. Cross-type `Equatable`
 applications and `'heap` structs are not derived automatically.
 
+### Fixed
+
+- **Patterns now view through borrows at every aggregate occurrence.** Tuple
+  and record elements containing borrowed enums can use the same variant
+  patterns as owned values; no owned/borrowed pattern syntax is required.
+- **Exhaustiveness agrees with borrow-transparent pattern checking.** Valid
+  nested borrowed variant patterns no longer produce cascading type errors or
+  false unreachable-arm warnings.
+- **Nested match ownership is tracked per projection.** Borrowed payload
+  binders remain aliases while owned payloads in the same aggregate still
+  receive their normal wildcard and scope-exit drops.
+
 ## Unreleased (2026-07-09) — Neotest and machine-readable test output
 
 `talk test` now supports `--json` for machine-readable results. The JSON report

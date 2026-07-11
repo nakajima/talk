@@ -33,7 +33,11 @@ use std::any::Any;
 use std::fs::File;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
-use std::{ops::ControlFlow, path::PathBuf, time::Duration};
+use std::{
+    ops::ControlFlow,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use tokio::spawn;
 use tower::ServiceBuilder;
 use tracing::Level;
@@ -78,8 +82,41 @@ struct ServerState {
     documents: FxHashMap<Url, Document>,
     dirty_documents: FxHashSet<Url>,
     workspaces: FxHashMap<PathBuf, Arc<AnalysisWorkspace>>,
+    workspace_analysis_backoffs: FxHashMap<PathBuf, WorkspaceAnalysisBackoff>,
     core: Option<Arc<AnalysisWorkspace>>,
     workspace_roots: Vec<PathBuf>,
+}
+
+struct WorkspaceAnalysisBackoff {
+    versions: FxHashMap<DocumentId, i32>,
+    consecutive_failures: u32,
+    retry_at: Instant,
+}
+
+impl WorkspaceAnalysisBackoff {
+    const MAX_DELAY_SECS: u64 = 30;
+
+    fn after_failure(
+        versions: FxHashMap<DocumentId, i32>,
+        previous: Option<&Self>,
+        now: Instant,
+    ) -> Self {
+        let consecutive_failures = previous
+            .filter(|failure| failure.versions == versions)
+            .map_or(1, |failure| failure.consecutive_failures.saturating_add(1));
+        let exponent = consecutive_failures.saturating_sub(1).min(5);
+        let delay_secs = (1_u64 << exponent).min(Self::MAX_DELAY_SECS);
+
+        Self {
+            versions,
+            consecutive_failures,
+            retry_at: now + Duration::from_secs(delay_secs),
+        }
+    }
+
+    fn blocks(&self, versions: &FxHashMap<DocumentId, i32>, now: Instant) -> bool {
+        self.versions == *versions && now < self.retry_at
+    }
 }
 
 fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
@@ -134,6 +171,21 @@ fn report_lsp_internal_error(
     });
 }
 
+fn recover_lsp_result<T>(
+    state: &mut ServerState,
+    uri: Option<&Url>,
+    context: &str,
+    f: impl FnOnce() -> T,
+) -> Result<T, ()> {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(value) => Ok(value),
+        Err(payload) => {
+            report_lsp_internal_error(state, uri, context, payload.as_ref());
+            Err(())
+        }
+    }
+}
+
 fn recover_lsp<T>(
     state: &mut ServerState,
     uri: Option<&Url>,
@@ -141,12 +193,9 @@ fn recover_lsp<T>(
     fallback: T,
     f: impl FnOnce() -> T,
 ) -> T {
-    match catch_unwind(AssertUnwindSafe(f)) {
+    match recover_lsp_result(state, uri, context, f) {
         Ok(value) => value,
-        Err(payload) => {
-            report_lsp_internal_error(state, uri, context, payload.as_ref());
-            fallback
-        }
+        Err(()) => fallback,
     }
 }
 
@@ -171,6 +220,7 @@ pub async fn start() {
             documents: Default::default(),
             dirty_documents: Default::default(),
             workspaces: Default::default(),
+            workspace_analysis_backoffs: Default::default(),
             core: None,
             workspace_roots: Default::default(),
         });
@@ -185,6 +235,7 @@ pub async fn start() {
                 }
                 st.workspace_roots = roots;
                 st.workspaces.clear();
+                st.workspace_analysis_backoffs.clear();
 
                 async move {
                     Ok(InitializeResult {
@@ -827,6 +878,13 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
     {
         return Some(existing.clone());
     }
+    if state
+        .workspace_analysis_backoffs
+        .get(&root)
+        .is_some_and(|backoff| backoff.blocks(&versions, Instant::now()))
+    {
+        return None;
+    }
 
     let mut uris: Vec<Url> = docs_by_uri.keys().cloned().collect();
     uris.sort_by(|a, b| a.as_str().cmp(b.as_str()));
@@ -864,10 +922,23 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
         return None;
     }
 
-    let analysis = recover_lsp(state, Some(focus_uri), "analyzing workspace", None, || {
+    let analysis = match recover_lsp_result(state, Some(focus_uri), "analyzing workspace", || {
         AnalysisWorkspace::new(docs)
-    })?;
+    }) {
+        Ok(Some(analysis)) => analysis,
+        Ok(None) => return None,
+        Err(()) => {
+            let backoff = WorkspaceAnalysisBackoff::after_failure(
+                versions,
+                state.workspace_analysis_backoffs.get(&root),
+                Instant::now(),
+            );
+            state.workspace_analysis_backoffs.insert(root, backoff);
+            return None;
+        }
+    };
     let analysis = Arc::new(analysis);
+    state.workspace_analysis_backoffs.remove(&root);
     state.workspaces.insert(root, analysis.clone());
     Some(analysis)
 }
@@ -1780,7 +1851,7 @@ fn indent_block(block: &str, indent: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AnalysisWorkspace, DocumentInput};
+    use super::{AnalysisWorkspace, DocumentInput, WorkspaceAnalysisBackoff};
     use crate::lsp::document::Document;
     use async_lsp::ClientSocket;
     use async_lsp::lsp_types::HoverContents;
@@ -1789,6 +1860,40 @@ mod tests {
     use async_lsp::lsp_types::Url;
     use async_lsp::lsp_types::WorkspaceEdit;
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn workspace_analysis_failures_back_off_until_the_input_changes() {
+        let now = Instant::now();
+        let versions = [("main.tlk".to_string(), 1)].into_iter().collect();
+        let first = WorkspaceAnalysisBackoff::after_failure(versions, None, now);
+        assert!(first.blocks(&first.versions, now + Duration::from_millis(999)));
+        assert!(!first.blocks(&first.versions, now + Duration::from_secs(1)));
+
+        let versions = first.versions.clone();
+        let second = WorkspaceAnalysisBackoff::after_failure(versions, Some(&first), now);
+        assert_eq!(second.retry_at, now + Duration::from_secs(2));
+
+        let changed_versions = [("main.tlk".to_string(), 2)].into_iter().collect();
+        assert!(!second.blocks(&changed_versions, now));
+        let changed = WorkspaceAnalysisBackoff::after_failure(changed_versions, Some(&second), now);
+        assert_eq!(changed.retry_at, now + Duration::from_secs(1));
+    }
+
+    #[test]
+    fn workspace_analysis_backoff_is_capped() {
+        let now = Instant::now();
+        let versions = [("main.tlk".to_string(), 1)].into_iter().collect();
+        let mut backoff = WorkspaceAnalysisBackoff::after_failure(versions, None, now);
+        for _ in 0..10 {
+            backoff = WorkspaceAnalysisBackoff::after_failure(
+                backoff.versions.clone(),
+                Some(&backoff),
+                now,
+            );
+        }
+        assert_eq!(backoff.retry_at, now + Duration::from_secs(30));
+    }
 
     fn workspace_for_docs(docs: Vec<(Url, &str)>) -> AnalysisWorkspace {
         let inputs = docs
@@ -2456,6 +2561,7 @@ mod tests {
             documents: Default::default(),
             dirty_documents: Default::default(),
             workspaces: Default::default(),
+            workspace_analysis_backoffs: Default::default(),
             core: None,
             workspace_roots: vec![root],
         };

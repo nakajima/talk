@@ -24,10 +24,15 @@ use crate::types::Level;
 use crate::types::ty::{EffectRow, Perm, Predicate, Ty};
 
 /// Why a constraint exists — the blame half of GHC's CtOrigin.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CtReason {
     Annotation,
     Apply,
+    /// A constraint originating in an argument, after structural
+    /// decomposition has crossed the application boundary. It retains the
+    /// argument context for diagnostics without enabling application-only
+    /// coercions in the solver.
+    NestedApply,
     Branch,
     GadtBranch,
     Assignment,
@@ -49,7 +54,7 @@ impl CtReason {
     /// unification. Other reasons are already non-coercing and pass through.
     pub fn nested(self) -> CtReason {
         match self {
-            CtReason::Apply => CtReason::Body,
+            CtReason::Apply => CtReason::NestedApply,
             other => other,
         }
     }
@@ -131,11 +136,10 @@ pub enum Constraint {
         found: Ty,
         origin: CtOrigin,
     },
-    /// The type a match's patterns check against: `scrutinee` with a
-    /// top-level borrow stripped — patterns match through borrows
-    /// (the runtime erases them; binders alias the borrowed payloads).
-    /// Defers until the scrutinee's head resolves (e.g. an iterator
-    /// element type solved by a conformance).
+    /// The type one pattern occurrence checks against, with a borrow at that
+    /// occurrence stripped. Aggregate children create their own views, so a
+    /// tuple can contain borrowed enum occurrences without changing the
+    /// tuple's type. Defers until the occurrence head resolves.
     PatternView {
         scrutinee: Ty,
         view: Ty,

@@ -7,11 +7,14 @@
 use std::error::Error;
 use std::fmt::Display;
 
+use super::constraint::CtReason;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TypeError {
     Mismatch {
         expected: String,
         found: String,
+        reason: CtReason,
     },
     ArityMismatch {
         expected: usize,
@@ -174,9 +177,56 @@ impl Error for TypeError {}
 impl Display for TypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TypeError::Mismatch { expected, found } => {
-                write!(f, "Type mismatch: expected {expected}, found {found}")
-            }
+            TypeError::Mismatch {
+                expected,
+                found,
+                reason,
+            } => match reason {
+                CtReason::Annotation => write!(
+                    f,
+                    "Type mismatch in annotated expression: the annotation requires {expected}, but the expression has type {found}"
+                ),
+                CtReason::Apply | CtReason::NestedApply => write!(
+                    f,
+                    "Type mismatch in function argument: the parameter requires {expected}, but the argument has type {found}"
+                ),
+                CtReason::Branch | CtReason::GadtBranch => write!(
+                    f,
+                    "Type mismatch between branches: one branch has type {expected}, but another has type {found}; all branches must have the same type"
+                ),
+                CtReason::Assignment => write!(
+                    f,
+                    "Type mismatch in assignment: the target requires {expected}, but the assigned value has type {found}"
+                ),
+                CtReason::Return => write!(
+                    f,
+                    "Type mismatch in return value: the function requires {expected}, but the returned expression has type {found}"
+                ),
+                CtReason::Recursion => write!(
+                    f,
+                    "Type mismatch in recursive definition: earlier uses require {expected}, but the definition has type {found}"
+                ),
+                CtReason::ArrayElement => write!(
+                    f,
+                    "Type mismatch in array element: the array requires elements of type {expected}, but this element has type {found}"
+                ),
+                CtReason::Condition => write!(
+                    f,
+                    "Type mismatch in condition: a condition must have type {expected}, but this expression has type {found}"
+                ),
+                CtReason::Pattern => write!(
+                    f,
+                    "Type mismatch in pattern: the matched value has type {expected}, but this pattern requires {found}"
+                ),
+                CtReason::Effect => write!(
+                    f,
+                    "Type mismatch in effects: the surrounding context allows {expected}, but this expression has {found}"
+                ),
+                CtReason::Body => write!(
+                    f,
+                    "Type mismatch in expression: the surrounding context requires {expected}, but this expression has type {found}"
+                ),
+            },
             TypeError::ArityMismatch { expected, found } => {
                 write!(
                     f,

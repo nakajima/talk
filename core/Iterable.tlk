@@ -146,5 +146,5 @@ public struct Peek<T: Iterator> {
 		self.peeked = .none
 	}
 
-	public func peek() -> T.Element? {}
+	// public func peek() -> T.Element? {}
 }

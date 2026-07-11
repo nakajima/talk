@@ -162,8 +162,14 @@ impl<'s> Solver<'s> {
                 if z1 != z2 {
                     let expected = self.store.render(&a);
                     let found = self.store.render(&b);
-                    self.errors
-                        .push((TypeError::Mismatch { expected, found }, origin.node));
+                    self.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
                 }
             }
 
@@ -404,8 +410,14 @@ impl<'s> Solver<'s> {
         }
         let expected = self.store.render(expected_ty);
         let found = self.store.render(found_ty);
-        self.errors
-            .push((TypeError::Mismatch { expected, found }, origin.node));
+        self.errors.push((
+            TypeError::Mismatch {
+                expected,
+                found,
+                reason: origin.reason,
+            },
+            origin.node,
+        ));
     }
 
     pub(super) fn gadt_branch_mismatch_is_ambiguous(
@@ -792,9 +804,14 @@ impl<'s> Solver<'s> {
                 if unhandled.is_empty() {
                     let expected = solver.store.render_eff(a);
                     let found = solver.store.render_eff(b);
-                    solver
-                        .errors
-                        .push((TypeError::Mismatch { expected, found }, origin.node));
+                    solver.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
                 }
                 for effect in unhandled {
                     solver.errors.push((
@@ -857,9 +874,14 @@ impl<'s> Solver<'s> {
             |solver| {
                 let expected = solver.store.render(&Ty::Record(a.clone()));
                 let found = solver.store.render(&Ty::Record(b.clone()));
-                solver
-                    .errors
-                    .push((TypeError::Mismatch { expected, found }, origin.node));
+                solver.errors.push((
+                    TypeError::Mismatch {
+                        expected,
+                        found,
+                        reason: origin.reason,
+                    },
+                    origin.node,
+                ));
             },
         )
     }

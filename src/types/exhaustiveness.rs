@@ -96,10 +96,18 @@ struct Coverage<'a> {
 }
 
 impl Coverage<'_> {
+    fn pattern_ty(ty: &Ty) -> &Ty {
+        match ty {
+            Ty::Borrow(_, inner) => Self::pattern_ty(inner),
+            other => other,
+        }
+    }
+
     /// Reduce an AST pattern at the given column type. Anything this
     /// analysis doesn't understand becomes a catch-all — over-approximating
     /// what a pattern matches can only silence reports, never invent them.
     fn lower(&self, pattern: &Pattern, ty: &Ty) -> Pat {
+        let ty = Self::pattern_ty(ty);
         match &pattern.kind {
             PatternKind::Wildcard | PatternKind::Bind(_) => Pat::Wild,
             PatternKind::LiteralTrue => Pat::Ctor(Ctor::Bool(true), vec![]),
@@ -206,6 +214,7 @@ impl Coverage<'_> {
     }
 
     fn ctor_possible(&self, ctor: &Ctor, ty: &Ty) -> bool {
+        let ty = Self::pattern_ty(ty);
         match ctor {
             Ctor::Bool(_) => matches!(ty, Ty::Nominal(symbol, _) if *symbol == Symbol::Bool),
             Ctor::Int(_) | Ctor::Float(_) => true,
@@ -225,6 +234,7 @@ impl Coverage<'_> {
         name: &str,
         ty: &Ty,
     ) -> Option<crate::types::variant::VariantInstantiation> {
+        let ty = Self::pattern_ty(ty);
         let Ty::Nominal(symbol, args) = ty else {
             return None;
         };
@@ -259,6 +269,7 @@ impl Coverage<'_> {
     /// The column types a constructor's sub-patterns match at, given the
     /// constructor's own column type.
     fn ctor_field_tys(&self, ctor: &Ctor, ty: &Ty) -> Vec<Ty> {
+        let ty = Self::pattern_ty(ty);
         match ctor {
             Ctor::Bool(_) | Ctor::Int(_) | Ctor::Float(_) => vec![],
             Ctor::Tuple(n) => {
@@ -291,6 +302,7 @@ impl Coverage<'_> {
     /// types. `None` for everything else (Int, String, type variables, …)
     /// — those are only ever covered by a catch-all.
     fn universe(&self, ty: &Ty) -> Option<Vec<Ctor>> {
+        let ty = Self::pattern_ty(ty);
         match ty {
             Ty::Nominal(symbol, _) if *symbol == Symbol::Bool => {
                 Some(vec![Ctor::Bool(false), Ctor::Bool(true)])

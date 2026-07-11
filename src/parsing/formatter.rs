@@ -2757,6 +2757,7 @@ mod formatter_tests {
         assert_eq!(format_code("(1)", 80), "(1)");
         assert_eq!(format_code("(1, 2)", 80), "(1, 2)");
         assert_eq!(format_code("(1, 2, 3)", 80), "(1, 2, 3)");
+        assert_eq!(format_code("(.none,.none,)", 80), "(.none, .none)");
     }
 
     #[test]

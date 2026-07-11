@@ -275,6 +275,42 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     // ----- Patterns -----------------------------------------------------
 
     pub(super) fn check_pattern(&mut self, pattern: &Pattern, expected: &Ty) -> PatternRefinement {
+        // Borrowing is not part of pattern syntax. View through a borrow at
+        // every pattern occurrence, not only at the match root: aggregate
+        // projections can themselves be borrowed values. A variable-headed
+        // occurrence defers the same decision until solving reveals its head.
+        let expected = if matches!(pattern.kind, PatternKind::Bind(_) | PatternKind::Wildcard) {
+            // Irrefutable patterns do not inspect value shape. Keep an
+            // explicit borrow in a binder's type (for example the payload
+            // of `Optional<&T>`); only constructor/literal patterns need a
+            // borrow-erased view.
+            expected.clone()
+        } else {
+            match self.store.shallow(expected) {
+                Ty::Borrow(_, inner) => *inner,
+                Ty::Var(id) => {
+                    let view = Ty::Var(self.store.fresh_ty(self.level, pattern.id));
+                    self.wanteds.push(Constraint::PatternView {
+                        scrutinee: Ty::Var(id),
+                        view: view.clone(),
+                        origin: CtOrigin::new(pattern.id, CtReason::Pattern),
+                    });
+                    view
+                }
+                other => other,
+            }
+        };
+        self.check_pattern_viewed(pattern, &expected)
+    }
+
+    /// Check a pattern against an occurrence type whose outer borrow has
+    /// already been viewed by the enclosing match. Recursive projections go
+    /// back through `check_pattern` so their own borrows are viewed there.
+    pub(super) fn check_pattern_viewed(
+        &mut self,
+        pattern: &Pattern,
+        expected: &Ty,
+    ) -> PatternRefinement {
         match &pattern.kind {
             PatternKind::Wildcard => PatternRefinement::default(),
             PatternKind::Bind(name) => {

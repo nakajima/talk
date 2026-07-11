@@ -22,9 +22,10 @@ use rustc_hash::FxHashMap;
 
 use crate::compiling::driver::Source;
 use crate::lower::mir;
+use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
 use crate::typed_ast::{self, TypedFile};
-use crate::types::ty::Ty;
+use crate::types::ty::{Perm, Ty};
 
 use super::drops::{DropElaboration, DropReason};
 use super::liveness::Liveness;
@@ -661,12 +662,139 @@ fn successor_states(
     }
 }
 
-/// Mirror `walk_match`'s per-arm seeding: borrow-typed binders re-borrow
-/// the scrutinee's owners; every binder starts initialized. A BORROWED
-/// scrutinee additionally marks every payload binder as a borrowed root
-/// with the scrutinee's provenance — the owner keeps the payloads, so
-/// extracting one routes through the tier-2 clone / move-out-of-borrow
-/// machinery instead of moving.
+impl MoveChecker<'_> {
+    /// Borrow permission of each binder's projection. Pattern syntax views
+    /// through borrows, so this walk preserves the ownership fact that the
+    /// binder's surface type intentionally omits.
+    fn pattern_binder_borrows(
+        &self,
+        pattern: &typed_ast::Pattern,
+        ty: &Ty,
+    ) -> FxHashMap<Symbol, Perm> {
+        let mut result = FxHashMap::default();
+        self.collect_pattern_binder_borrows(pattern, ty, None, &mut result);
+        result
+    }
+
+    fn collect_pattern_binder_borrows(
+        &self,
+        pattern: &typed_ast::Pattern,
+        ty: &Ty,
+        mut inherited: Option<Perm>,
+        result: &mut FxHashMap<Symbol, Perm>,
+    ) {
+        let mut viewed = ty;
+        loop {
+            match viewed {
+                Ty::Borrow(perm, inner) => {
+                    inherited = Some(match inherited {
+                        Some(outer) if !outer.is_exclusive() || !perm.is_exclusive() => {
+                            Perm::Shared
+                        }
+                        Some(_) => Perm::Exclusive,
+                        None => *perm,
+                    });
+                    viewed = inner;
+                }
+                Ty::Unique(inner) => viewed = inner,
+                _ => break,
+            }
+        }
+
+        match &pattern.kind {
+            typed_ast::PatternKind::Bind(name) => {
+                if let Some(perm) = inherited
+                    && let Ok(symbol) = name.symbol()
+                {
+                    result.insert(symbol, perm);
+                }
+            }
+            typed_ast::PatternKind::Tuple(patterns) => {
+                if let Ty::Tuple(items) = viewed {
+                    for (pattern, item) in patterns.iter().zip(items) {
+                        self.collect_pattern_binder_borrows(pattern, item, inherited, result);
+                    }
+                }
+            }
+            typed_ast::PatternKind::Or(patterns) => {
+                for pattern in patterns {
+                    self.collect_pattern_binder_borrows(pattern, viewed, inherited, result);
+                }
+            }
+            typed_ast::PatternKind::Variant {
+                variant_name,
+                fields,
+                ..
+            } => {
+                let Ty::Nominal(symbol, args) = viewed else {
+                    return;
+                };
+                let Some(info) = self.types.catalog.enums.get(symbol) else {
+                    return;
+                };
+                let Some(variant) = info.variants.get(variant_name) else {
+                    return;
+                };
+                let substitution: FxHashMap<Symbol, Ty> = info
+                    .params
+                    .iter()
+                    .copied()
+                    .zip(args.iter().cloned())
+                    .collect();
+                let Some(instantiation) = variant
+                    .instantiate(&substitution, &Default::default(), &Default::default())
+                    .refined_by_result(viewed)
+                else {
+                    return;
+                };
+                for (pattern, payload) in fields.iter().zip(&instantiation.argument_types) {
+                    self.collect_pattern_binder_borrows(pattern, payload, inherited, result);
+                }
+            }
+            typed_ast::PatternKind::Record { fields } => {
+                let Ty::Record(row) = viewed else {
+                    return;
+                };
+                for field in fields {
+                    let (name, subpattern) = match &field.kind {
+                        typed_ast::RecordFieldPatternKind::Bind(name) => (name, None),
+                        typed_ast::RecordFieldPatternKind::Equals { name, value } => {
+                            (name, Some(value))
+                        }
+                        typed_ast::RecordFieldPatternKind::Rest => continue,
+                    };
+                    let label = name.name_str();
+                    let Some((_, field_ty)) = row
+                        .fields
+                        .iter()
+                        .find(|(field_label, _)| field_label.to_string() == label)
+                    else {
+                        continue;
+                    };
+                    if let Some(perm) = inherited
+                        && let Ok(symbol) = name.symbol()
+                    {
+                        result.insert(symbol, perm);
+                    }
+                    if let Some(subpattern) = subpattern {
+                        self.collect_pattern_binder_borrows(
+                            subpattern, field_ty, inherited, result,
+                        );
+                    }
+                }
+            }
+            typed_ast::PatternKind::LiteralInt(_)
+            | typed_ast::PatternKind::LiteralFloat(_)
+            | typed_ast::PatternKind::LiteralTrue
+            | typed_ast::PatternKind::LiteralFalse
+            | typed_ast::PatternKind::Wildcard
+            | typed_ast::PatternKind::Struct { .. } => {}
+        }
+    }
+}
+
+/// Mirror `walk_match`'s per-arm seeding: borrowed projections re-borrow
+/// the scrutinee's owners; every binder starts initialized.
 fn seed_arm_binders(
     checker: &mut MoveChecker,
     scrutinee: &typed_ast::Expr,
@@ -674,19 +802,16 @@ fn seed_arm_binders(
     scrutinee_provenance: Option<&super::loans::Provenance>,
     state: &mut MoveState,
 ) {
-    let borrowed_scrutinee_perm = match &scrutinee.ty {
-        Ty::Borrow(perm, _) => Some(*perm),
-        _ => None,
-    };
+    let binder_borrows = checker.pattern_binder_borrows(&arm.pattern, &scrutinee.ty);
     if let Some(provenance) = scrutinee_provenance {
         for (binder_id, binder) in arm.pattern.collect_binders() {
             // Binder types live in `local_tys` (keyed by symbol — typing's
-            // `mono` map), not `node_types`: an owned scrutinee that
-            // CONTAINS borrows (`Optional<&T>` from an iterator) must still
-            // register its borrow-typed binders, or extracting a field out
-            // of one silently moves instead of tier-2 cloning.
+            // `mono` map), not `node_types`. Pattern viewing can also erase
+            // a borrow from the binder's surface type, so projection
+            // ownership is consulted independently.
             let binder_ty = local_ty(checker, binder_id, binder);
-            if checker.grades.contains_borrowed(&binder_ty) || borrowed_scrutinee_perm.is_some() {
+            if checker.grades.contains_borrowed(&binder_ty) || binder_borrows.contains_key(&binder)
+            {
                 checker.install_provenance(
                     binder_id,
                     Place::root(binder),
@@ -699,7 +824,7 @@ fn seed_arm_binders(
     }
     for (_, binder) in arm.pattern.collect_binders() {
         state.restore(&Place::root(binder));
-        if let Some(perm) = borrowed_scrutinee_perm {
+        if let Some(&perm) = binder_borrows.get(&binder) {
             state.borrowed_roots.insert(binder, perm);
             if !perm.is_exclusive() {
                 state.shared_borrow_roots.insert(binder);

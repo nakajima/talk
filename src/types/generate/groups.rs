@@ -262,16 +262,26 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     // A projection equality that never reduced: unprovable.
                     let expected = self.store.render(&a);
                     let found = self.store.render(&b);
-                    self.diagnostics
-                        .errors
-                        .push((TypeError::Mismatch { expected, found }, origin.node));
+                    self.diagnostics.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
                 }
                 Constraint::EffEq(a, b, origin) => {
                     let expected = self.store.render_eff(&a);
                     let found = self.store.render_eff(&b);
-                    self.diagnostics
-                        .errors
-                        .push((TypeError::Mismatch { expected, found }, origin.node));
+                    self.diagnostics.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
                 }
                 Constraint::ApplyBorrow {
                     expected_perm,
@@ -283,9 +293,14 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         .store
                         .render(&Ty::Borrow(expected_perm, Box::new(expected_inner)));
                     let found = self.store.render(&found);
-                    self.diagnostics
-                        .errors
-                        .push((TypeError::Mismatch { expected, found }, origin.node));
+                    self.diagnostics.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
                 }
                 _ => {}
             }
@@ -368,12 +383,13 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             {
                 if let Some(rhs) = rhs {
                     let expected = self.mono[binder].clone();
-                    self.body().check_expr(
-                        rhs,
-                        &expected,
-                        CtReason::Recursion,
-                        &group_ctx.with_binder(*binder),
-                    );
+                    let reason = if annotation.is_some() {
+                        CtReason::Annotation
+                    } else {
+                        CtReason::Recursion
+                    };
+                    self.body()
+                        .check_expr(rhs, &expected, reason, &group_ctx.with_binder(*binder));
                 }
                 // Value restriction (Wright 1995): only syntactic values of
                 // unmutated binders generalize.

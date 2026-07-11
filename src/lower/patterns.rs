@@ -38,7 +38,34 @@ use super::{Binding, Ctx, EvidenceBinding, Lowering, ScaffoldArms};
 #[derive(Clone)]
 struct Occurrence {
     value: ExprId,
+    /// The type visible to pattern shape checking. A borrow at this
+    /// occurrence is erased, but borrows nested below aggregates remain
+    /// until those child occurrences are projected.
     ty: CheckTy,
+    /// Whether reaching this occurrence crossed a borrow. Borrowed
+    /// occurrences are aliases: neither wildcards nor binders own a drop.
+    borrowed: bool,
+}
+
+impl Occurrence {
+    fn new(value: ExprId, mut ty: CheckTy, mut borrowed: bool) -> Self {
+        loop {
+            match ty {
+                CheckTy::Borrow(_, inner) => {
+                    borrowed = true;
+                    ty = *inner;
+                }
+                CheckTy::Unique(inner) => ty = *inner,
+                _ => {
+                    return Occurrence {
+                        value,
+                        ty,
+                        borrowed,
+                    };
+                }
+            }
+        }
+    }
 }
 
 /// What ownership action a synthetic wildcard cell represents at a leaf.
@@ -82,8 +109,9 @@ impl<'p> Pat<'p> {
 #[derive(Clone)]
 struct Row<'p> {
     pats: Vec<Pat<'p>>,
-    /// Binders whose columns have been consumed: symbol → bound value.
-    binds: Vec<(Symbol, ExprId)>,
+    /// Binders whose columns have been consumed: symbol, value, and whether
+    /// the projection aliases borrowed storage.
+    binds: Vec<(Symbol, ExprId, bool)>,
     /// Runtime dictionaries brought into scope by consumed GADT constructors.
     evidence: Vec<((Symbol, Symbol), EvidenceBinding)>,
     /// Index of the source arm this row came from.
@@ -99,7 +127,7 @@ impl<'p> Row<'p> {
             && let PatternKind::Bind(name) = &p.kind
             && let Ok(symbol) = name.symbol()
         {
-            row.binds.push((symbol, occ.value));
+            row.binds.push((symbol, occ.value, occ.borrowed));
         }
         row
     }
@@ -133,6 +161,7 @@ impl<'p> Row<'p> {
 /// shared by every later one.
 struct ArmTarget {
     binders: Vec<Symbol>,
+    binder_borrows: Vec<bool>,
     evidence: Vec<(Symbol, Symbol)>,
     label: Option<Label>,
 }
@@ -147,7 +176,6 @@ pub(super) fn compile_match(
     scrutinee_ty: CheckTy,
     arms: &[MatchArm],
     scaffold_arms: Option<ScaffoldArms>,
-    scrutinee_borrowed: bool,
     ctx: &Ctx,
     k: ExprId,
 ) -> ExprId {
@@ -164,6 +192,7 @@ pub(super) fn compile_match(
             }
             ArmTarget {
                 binders,
+                binder_borrows: vec![],
                 evidence: vec![],
                 label: None,
             }
@@ -179,17 +208,13 @@ pub(super) fn compile_match(
             arm,
         })
         .collect();
-    let occs = vec![Occurrence {
-        value,
-        ty: scrutinee_ty,
-    }];
+    let occs = vec![Occurrence::new(value, scrutinee_ty, false)];
     MatchCompiler {
         lowering,
         ctx,
         k,
         arms,
         scaffold_arms,
-        scrutinee_borrowed,
         targets,
         trap: None,
     }
@@ -206,9 +231,6 @@ struct MatchCompiler<'l, 'a, 'p> {
     /// is embedded there: arm bodies lower from these instead of standalone
     /// bodies.
     scaffold_arms: Option<ScaffoldArms>,
-    /// A borrowed scrutinee keeps ownership of its payloads: arm binders
-    /// are pure aliases and never drop.
-    scrutinee_borrowed: bool,
     targets: Vec<ArmTarget>,
     /// The shared no-row-matched target (bodyless, so both engines trap) —
     /// reachable only if a non-exhaustive match slips past the checker.
@@ -265,26 +287,35 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
     /// The first row matches: gather its binds and jump to its arm's join
     /// point with the bound values.
     fn leaf(&mut self, occs: &[Occurrence], row: Row<'p>) -> ExprId {
-        let mut binds: FxHashMap<Symbol, ExprId> = row.binds.iter().copied().collect();
+        let mut binds: FxHashMap<Symbol, (ExprId, bool)> = row
+            .binds
+            .iter()
+            .map(|(symbol, value, borrowed)| (*symbol, (*value, *borrowed)))
+            .collect();
         for (pat, occ) in row.pats.iter().zip(occs) {
             if let Pat::Source(p) = pat
                 && let PatternKind::Bind(name) = &p.kind
                 && let Ok(symbol) = name.symbol()
             {
-                binds.insert(symbol, occ.value);
+                binds.insert(symbol, (occ.value, occ.borrowed));
             }
         }
         let binders = self.targets[row.arm].binders.clone();
         let mut values = Vec::with_capacity(binders.len());
+        let mut binder_borrows = Vec::with_capacity(binders.len());
         for symbol in &binders {
             match binds.get(symbol) {
-                Some(&value) => values.push(value),
+                Some(&(value, borrowed)) => {
+                    values.push(value);
+                    binder_borrows.push(borrowed);
+                }
                 None => {
                     self.lowering.diagnostics.push(format!(
                         "lowering: pattern alternative does not bind {symbol} \
                          (alternatives must bind the same names)"
                     ));
                     values.push(self.lowering.p.void());
+                    binder_borrows.push(false);
                 }
             }
         }
@@ -293,6 +324,11 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
         let mut evidence_values = vec![];
         let label = match self.targets[row.arm].label {
             Some(label) => {
+                if self.targets[row.arm].binder_borrows != binder_borrows {
+                    self.lowering
+                        .diagnostics
+                        .push("lowering: pattern alternatives disagree on binder ownership".into());
+                }
                 for key in &self.targets[row.arm].evidence {
                     match evidence_by_key.get(key) {
                         Some(binding) => evidence_values.push(binding.table),
@@ -307,25 +343,24 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             }
             None => {
                 evidence_values.extend(row.evidence.iter().map(|(_, binding)| binding.table));
-                self.make_arm(row.arm, &binders, &values, &row.evidence)
+                self.make_arm(row.arm, &binders, &values, &binder_borrows, &row.evidence)
             }
         };
         values.extend(evidence_values);
         let arg = self.lowering.p.tuple(&values);
         let func = self.lowering.p.func_ref(label);
         let mut body = self.lowering.p.app(func, arg);
-        if !self.scrutinee_borrowed {
-            for (pat, occ) in row.pats.iter().zip(occs).rev() {
-                let should_drop = match pat {
+        for (pat, occ) in row.pats.iter().zip(occs).rev() {
+            let should_drop = !occ.borrowed
+                && match pat {
                     Pat::Wild(WildcardCell::Drop) => true,
                     Pat::Wild(WildcardCell::Ignore) => false,
                     Pat::Source(pattern) => matches!(pattern.kind, PatternKind::Wildcard),
                 };
-                if should_drop {
-                    body = self
-                        .lowering
-                        .lower_drop_value_then(self.ctx, occ.value, &occ.ty, body);
-                }
+            if should_drop {
+                body = self
+                    .lowering
+                    .lower_drop_value_then(self.ctx, occ.value, &occ.ty, body);
             }
         }
         body
@@ -337,6 +372,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
         arm: usize,
         binders: &[Symbol],
         values: &[ExprId],
+        binder_borrows: &[bool],
         evidence: &[((Symbol, Symbol), EvidenceBinding)],
     ) -> Label {
         let mut tys: Vec<_> = values.iter().map(|v| self.lowering.p.expr_ty(*v)).collect();
@@ -349,6 +385,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
         let bot = self.lowering.p.ty_bot();
         let label = self.lowering.p.func("arm", dom, bot);
         self.targets[arm].label = Some(label);
+        self.targets[arm].binder_borrows = binder_borrows.to_vec();
         self.targets[arm].evidence = evidence.iter().map(|(key, _)| *key).collect();
 
         let var = self.lowering.p.var(label);
@@ -375,22 +412,26 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             );
         }
         let body_block = &self.arms[arm].body;
-        // Arm payload binders that take ownership (owned scrutinee) drop at
-        // arm-scope exit; seed the drop stack so the arm blocks' candidates
-        // resolve. A borrowed scrutinee keeps its payloads: binders alias.
-        if !self.scrutinee_borrowed {
-            let pattern_types = self.lowering.units[self.ctx.unit].types;
-            for (_, symbol, ty) in
-                crate::lower::mir::arm_release_binders(pattern_types, &self.arms[arm].pattern)
-            {
-                if binders.contains(&symbol) {
-                    inner.drop_stack.push(crate::lower::DropBinding {
-                        symbol,
-                        key_path: crate::lower::Place::root(symbol),
-                        ty,
-                        dynamic_flags: vec![],
-                    });
-                }
+        // Only binders projected entirely through owned occurrences take an
+        // arm-scope drop. Borrowed projections remain aliases even when the
+        // outer scrutinee itself is an owned aggregate.
+        let pattern_types = self.lowering.units[self.ctx.unit].types;
+        for (_, symbol, ty) in
+            crate::lower::mir::arm_release_binders(pattern_types, &self.arms[arm].pattern)
+        {
+            let borrowed = binders
+                .iter()
+                .position(|binder| *binder == symbol)
+                .and_then(|index| binder_borrows.get(index))
+                .copied()
+                .unwrap_or(false);
+            if binders.contains(&symbol) && !borrowed {
+                inner.drop_stack.push(crate::lower::DropBinding {
+                    symbol,
+                    key_path: crate::lower::Place::root(symbol),
+                    ty,
+                    dynamic_flags: vec![],
+                });
             }
         }
         let k = self.k;
@@ -473,10 +514,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                         self.lowering
                             .p
                             .primop(Op::GetPayload(i as u32), &[occ.value], lam_ty);
-                    Occurrence {
-                        value,
-                        ty: payload_ty.clone(),
-                    }
+                    Occurrence::new(value, payload_ty.clone(), occ.borrowed)
                 })
                 .collect();
             let gadt_evidence = self.lowering.variant_pattern_evidence(
@@ -620,9 +658,12 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
         let sub_occs: Vec<Occurrence> = items
             .iter()
             .enumerate()
-            .map(|(i, ty)| Occurrence {
-                value: self.lowering.p.extract(occ.value, i as u32),
-                ty: ty.clone(),
+            .map(|(i, ty)| {
+                Occurrence::new(
+                    self.lowering.p.extract(occ.value, i as u32),
+                    ty.clone(),
+                    occ.borrowed,
+                )
             })
             .collect();
 
@@ -677,9 +718,12 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
         let sub_occs: Vec<Occurrence> = field_tys
             .iter()
             .enumerate()
-            .map(|(i, ty)| Occurrence {
-                value: self.lowering.p.extract(occ.value, i as u32),
-                ty: ty.clone(),
+            .map(|(i, ty)| {
+                Occurrence::new(
+                    self.lowering.p.extract(occ.value, i as u32),
+                    ty.clone(),
+                    occ.borrowed,
+                )
             })
             .collect();
 
@@ -705,7 +749,9 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                 let cell = fields.iter().find_map(|field| match &field.kind {
                     RecordFieldPatternKind::Bind(name) if name.name_str() == *label => {
                         if let Ok(symbol) = name.symbol() {
-                            new_row.binds.push((symbol, sub_occs[i].value));
+                            new_row
+                                .binds
+                                .push((symbol, sub_occs[i].value, sub_occs[i].borrowed));
                         }
                         Some(Pat::Wild(WildcardCell::Ignore))
                     }
@@ -715,7 +761,9 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                         if name.name_str() == *label =>
                     {
                         if let Ok(symbol) = name.symbol() {
-                            new_row.binds.push((symbol, sub_occs[i].value));
+                            new_row
+                                .binds
+                                .push((symbol, sub_occs[i].value, sub_occs[i].borrowed));
                         }
                         Some(Pat::Source(value))
                     }

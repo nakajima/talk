@@ -14,8 +14,6 @@ impl<'a> Lowering<'a> {
         k: ExprId,
     ) -> ExprId {
         let scrutinee_check_ty = self.checker_ty(scrutinee, ctx);
-        let scrutinee_borrowed = matches!(scrutinee_check_ty, CheckTy::Borrow(..));
-        let pattern_scrutinee_ty = Self::borrow_erased_ty(scrutinee_check_ty.clone());
         // Ledger rule D analog: an rvalue scrutinee's carried +1 dies with
         // the match — release once the match delivers. (A call-result temp
         // is pure to read but still an rvalue.)
@@ -46,10 +44,9 @@ impl<'a> Lowering<'a> {
                 patterns::compile_match(
                     self,
                     value,
-                    pattern_scrutinee_ty,
+                    scrutinee_check_ty.clone(),
                     arms,
                     scaffold_arms,
-                    scrutinee_borrowed,
                     ctx,
                     k,
                 )
@@ -65,10 +62,9 @@ impl<'a> Lowering<'a> {
                 let body = patterns::compile_match(
                     self,
                     value,
-                    pattern_scrutinee_ty,
+                    scrutinee_check_ty,
                     arms,
                     scaffold_arms,
-                    scrutinee_borrowed,
                     ctx,
                     k,
                 );
