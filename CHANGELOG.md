@@ -20,6 +20,7 @@ applications and `'heap` structs are not derived automatically.
 
 ### Fixed
 
+- **Equality now provides same-type context to leading-dot enum cases.** Expressions such as `optional == .some(value)` prefer the default `Equatable<Self>` application while concrete cross-type `Equatable<RHS>` comparisons remain supported.
 - **Patterns now view through borrows at every aggregate occurrence.** Tuple
   and record elements containing borrowed enums can use the same variant
   patterns as owned values; no owned/borrowed pattern syntax is required.

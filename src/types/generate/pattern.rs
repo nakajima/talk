@@ -54,6 +54,11 @@ impl PatternRefinement {
                 origin,
             ),
             Constraint::EffEq(a, b, origin) => Constraint::EffEq(a, b, origin),
+            Constraint::PreferEq(a, b, origin) => Constraint::PreferEq(
+                a.substitute(&tys, &effs, &rows),
+                b.substitute(&tys, &effs, &rows),
+                origin,
+            ),
             handle @ Constraint::HandleEffect { .. } => handle,
             Constraint::Conforms {
                 ty,

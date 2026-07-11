@@ -97,6 +97,13 @@ pub enum Constraint {
         protocol: crate::types::ty::ProtocolRef,
         origin: CtOrigin,
     },
+    /// A ranked same-type preference for an otherwise heterogeneous
+    /// operation. Hard constraints solve first; at quiescence, if either side
+    /// is still an unbound variable, the solver equates them and retries. If
+    /// both sides independently resolved, the preference is discarded. This
+    /// models the preferred same-type equality overload without preventing an
+    /// `Equatable<RHS>` conformance from supporting a concrete cross-type use.
+    PreferEq(Ty, Ty, CtOrigin),
     HasMember {
         receiver: Ty,
         label: Label,

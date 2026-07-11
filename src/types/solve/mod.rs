@@ -109,6 +109,7 @@ impl<'s> Solver<'s> {
     pub fn solve(&mut self, wanteds: Vec<Constraint>) -> Vec<Constraint> {
         let mut queue = wanteds;
         let mut stuck: Vec<Constraint> = vec![];
+        let mut preferred_equalities: Vec<(Ty, Ty, CtOrigin)> = vec![];
         // Handler-extent boundaries wait until everything else quiesces:
         // only then has the extent's row content surfaced (LIFO, so an
         // inner handler filters before the outer one it feeds).
@@ -133,6 +134,9 @@ impl<'s> Solver<'s> {
                 }
                 match constraint {
                     Constraint::HandleEffect { .. } => handler_boundaries.push(constraint),
+                    Constraint::PreferEq(a, b, origin) => {
+                        preferred_equalities.push((a, b, origin));
+                    }
                     Constraint::Eq(a, b, origin) => {
                         let original_a = normalize_ty(self.store, self.catalog, &a);
                         let original_b = normalize_ty(self.store, self.catalog, &b);
@@ -237,11 +241,14 @@ impl<'s> Solver<'s> {
                 }
             }
             if stuck.is_empty() {
-                if handler_boundaries.is_empty() {
-                    return vec![];
+                if !handler_boundaries.is_empty() {
+                    self.process_handler_boundaries(&mut handler_boundaries, &mut stuck);
+                    continue;
                 }
-                self.process_handler_boundaries(&mut handler_boundaries, &mut stuck);
-                continue;
+                if self.apply_preferred_equalities(&mut preferred_equalities, &mut queue) {
+                    continue;
+                }
+                return vec![];
             }
             if self.store.generation() != generation {
                 queue = std::mem::take(&mut stuck);
@@ -257,6 +264,10 @@ impl<'s> Solver<'s> {
                 continue;
             }
             if self.default_apply_borrows(&mut stuck, &mut queue) {
+                continue;
+            }
+            if self.apply_preferred_equalities(&mut preferred_equalities, &mut queue) {
+                queue.extend(std::mem::take(&mut stuck));
                 continue;
             }
             break;
@@ -369,6 +380,23 @@ impl<'s> Solver<'s> {
             }
         }
         residual
+    }
+
+    fn apply_preferred_equalities(
+        &mut self,
+        preferences: &mut Vec<(Ty, Ty, CtOrigin)>,
+        queue: &mut Vec<Constraint>,
+    ) -> bool {
+        let mut applied = false;
+        for (left, right, origin) in std::mem::take(preferences) {
+            let left = self.store.shallow(&left);
+            let right = self.store.shallow(&right);
+            if matches!(left, Ty::Var(_)) || matches!(right, Ty::Var(_)) {
+                queue.push(Constraint::Eq(left, right, origin));
+                applied = true;
+            }
+        }
+        applied
     }
 
     fn solve_apply_borrow(
@@ -584,6 +612,11 @@ impl<'s> Solver<'s> {
                 let a = self.store.render_eff(a);
                 let b = self.store.render_eff(b);
                 format!("effects {a} == {b}")
+            }
+            Constraint::PreferEq(a, b, _) => {
+                let a = self.store.render(a);
+                let b = self.store.render(b);
+                format!("prefer {a} == {b}")
             }
             Constraint::Conforms { ty, protocol, .. } => {
                 let ty = self.store.render(ty);

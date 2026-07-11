@@ -4113,6 +4113,24 @@ mod with_core {
     }
 
     #[test]
+    fn equality_prefers_same_type_context_for_leading_dot_variants() {
+        let typed = check_with_core(Source::from(
+            "let iterator = [1, 2, 3].into_iter().peekable()\nlet matches = iterator.peek() == .some(1)\nlet differs = iterator.peek() != .none",
+        ));
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn equality_keeps_concrete_cross_type_conformance_as_fallback() {
+        let typed = check_with_core(Source::from(
+            "struct A {}\nstruct B {}\nextend A: Equatable<B> {\n\tfunc equals(rhs: B) -> Bool { true }\n}\nlet matches = A() == B()",
+        ));
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
     fn derived_equatable_does_not_supply_cross_type_or_heap_conformance() {
         let cross_type = check_with_core(Source::from(
             "struct Point {\n\tlet x: Int\n}\nlet invalid = Point(x: 1) == 1",

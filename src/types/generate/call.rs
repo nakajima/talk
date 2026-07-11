@@ -405,10 +405,19 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             let signature = scheme.ty.substitute(&tys, &effs, &Default::default());
 
             self.wanteds.push(Constraint::Conforms {
-                ty: self_var,
+                ty: self_var.clone(),
                 protocol: owner.clone(),
                 origin: CtOrigin::new(node, reason),
             });
+            if reason == CtReason::EqualityComparison
+                && let [rhs] = owner.args.as_slice()
+            {
+                self.wanteds.push(Constraint::PreferEq(
+                    self_var,
+                    rhs.clone(),
+                    CtOrigin::new(node, reason),
+                ));
+            }
             self.artifacts.member_resolutions.insert(
                 node,
                 MemberResolution::ViaConformance {
