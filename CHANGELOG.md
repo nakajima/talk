@@ -12,6 +12,12 @@ implementation provides `!=` from the synthesized `equals` witness.
 Explicit conformances continue to take precedence. Cross-type `Equatable`
 applications and `'heap` structs are not derived automatically.
 
+### Added
+
+- **Character literals can now be used as patterns.** Match arms accept forms
+  such as `'a'`, `'😎'`, and `'\u{1F60E}'`. Matching compares the character's
+  UTF-8 bytes, including borrowed character views into strings.
+
 ### Fixed
 
 - **Patterns now view through borrows at every aggregate occurrence.** Tuple

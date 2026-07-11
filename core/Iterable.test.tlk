@@ -4,12 +4,12 @@ test "generic into iterator" {
 
 test "peekable" {
 	let a = [1, 2, 3].into_iter().peekable()
-	assert(a.peek() == 1)
-	assert(a.peek() == 1)
-	assert(a.peek() == 1)
+	assert(a.peek() == .some(1))
+	assert(a.peek() == .some(1))
+	assert(a.peek() == .some(1))
 
 	a.next()
 
-	assert(a.peek() == 2)
-	assert(a.peek() == 2)
+	assert(a.peek() == .some(2))
+	assert(a.peek() == .some(2))
 }

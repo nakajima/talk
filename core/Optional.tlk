@@ -5,13 +5,3 @@ public enum Optional<Wrapped> {
 	case some(Wrapped)
 	case none
 }
-
-extend Optional<Wrapped>: Equatable where Wrapped: Equatable<Wrapped> {
-	func equals(rhs: Wrapped?) -> Bool {
-		match (self, rhs) {
-			(.some(a), .some(b)) -> a == b,
-			(.none, .none) -> true,
-			_ -> false
-		}
-	}
-}

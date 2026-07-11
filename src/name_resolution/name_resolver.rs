@@ -1035,7 +1035,8 @@ impl NameResolver {
             PatternKind::LiteralFalse
             | PatternKind::LiteralTrue
             | PatternKind::LiteralInt(..)
-            | PatternKind::LiteralFloat(..) => (),
+            | PatternKind::LiteralFloat(..)
+            | PatternKind::LiteralCharacter(..) => (),
         }
     }
 
@@ -1121,7 +1122,8 @@ impl NameResolver {
             | PatternKind::LiteralFalse
             | PatternKind::LiteralTrue
             | PatternKind::LiteralInt(..)
-            | PatternKind::LiteralFloat(..) => (),
+            | PatternKind::LiteralFloat(..)
+            | PatternKind::LiteralCharacter(..) => (),
         }
     }
 
@@ -1208,6 +1210,7 @@ impl NameResolver {
             }
             PatternKind::LiteralInt(..)
             | PatternKind::LiteralFloat(..)
+            | PatternKind::LiteralCharacter(..)
             | PatternKind::LiteralTrue
             | PatternKind::LiteralFalse => (),
             PatternKind::Wildcard => (),

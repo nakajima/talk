@@ -785,6 +785,7 @@ impl MoveChecker<'_> {
             }
             typed_ast::PatternKind::LiteralInt(_)
             | typed_ast::PatternKind::LiteralFloat(_)
+            | typed_ast::PatternKind::LiteralCharacter(_)
             | typed_ast::PatternKind::LiteralTrue
             | typed_ast::PatternKind::LiteralFalse
             | typed_ast::PatternKind::Wildcard

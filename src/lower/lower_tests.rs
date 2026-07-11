@@ -62,6 +62,24 @@ pub mod tests {
     }
 
     #[test]
+    fn character_literals_match_by_utf8_bytes() {
+        assert_eq!(
+            run("match '😎' { '😁' -> 1, '\\u{1F60E}' -> 2, _ -> 3 }"),
+            EvalValue::I64(2)
+        );
+        assert_eq!(
+            run("match 'a' { 'ab' -> 1, 'a' -> 2, _ -> 3 }"),
+            EvalValue::I64(2)
+        );
+        assert_eq!(
+            run(
+                "func test() -> Int {\n\tlet chars = \"x😎\".iter()\n\tchars.next()\n\tmatch chars.next() { .some('😎') -> 4, .some(_) -> 5, .none -> 6 }\n}\ntest()"
+            ),
+            EvalValue::I64(4)
+        );
+    }
+
+    #[test]
     fn imported_stdlib_memberwise_init_has_a_body() {
         let ir = lowered_ir("fs::Directory(path: Path([]))");
         assert!(ir.contains("func init("), "{ir}");

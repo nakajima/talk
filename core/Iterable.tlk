@@ -153,7 +153,7 @@ public struct Peek<T: Iterator> {
 	}
 
 	public mut func peek() -> &T.Element? {
-		if has_peeked { return self.peeked }
+		if self.has_peeked { return self.peeked }
 
 		self.peeked = self.inner.next()
 		self.has_peeked = true

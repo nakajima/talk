@@ -36,6 +36,17 @@ function expandHome(path: string): string {
   return path;
 }
 
+function configuredBinaryPath(): string {
+  const binaryPath = workspace
+    .getConfiguration("talktalk")
+    .get<string>("binaryPath")
+    ?.trim();
+
+  return binaryPath
+    ? expandHome(binaryPath)
+    : homedir() + "/apps/talk/target/debug/talk";
+}
+
 function configuredCorePath(): string | undefined {
   const corePath = workspace
     .getConfiguration("talktalk")
@@ -83,7 +94,7 @@ function serverOptions(): ServerOptions {
   };
 
   return {
-    command: homedir() + "/apps/talk/target/debug/talk",
+    command: configuredBinaryPath(),
     transport: TransportKind.stdio,
     args: ["lsp"],
     options: { env },

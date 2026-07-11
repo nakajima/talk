@@ -46,6 +46,11 @@
     "configuration": {
       "title": "TalkTalk",
       "properties": {
+        "talktalk.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the talk binary used to start the language server. Supports a leading ~/. If empty, the extension uses ~/apps/talk/target/debug/talk. Restart the language server after changing this setting."
+        },
         "talktalk.corePath": {
           "type": "string",
           "default": "",

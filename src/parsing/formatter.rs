@@ -1276,6 +1276,7 @@ impl<'a> Formatter<'a> {
         match &pattern.kind {
             PatternKind::LiteralInt(val) => text(val),
             PatternKind::LiteralFloat(val) => text(val),
+            PatternKind::LiteralCharacter(val) => self.format_character_literal(val),
             PatternKind::LiteralTrue => text("true"),
             PatternKind::LiteralFalse => text("false"),
             PatternKind::Bind(name) => self.format_name(name),

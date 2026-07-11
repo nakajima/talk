@@ -358,6 +358,9 @@ impl TypedTreeBuilder<'_> {
             pattern::PatternKind::LiteralFloat(s) => {
                 typed_ast::PatternKind::LiteralFloat(s.clone())
             }
+            pattern::PatternKind::LiteralCharacter(s) => {
+                typed_ast::PatternKind::LiteralCharacter(s.clone())
+            }
             pattern::PatternKind::LiteralTrue => typed_ast::PatternKind::LiteralTrue,
             pattern::PatternKind::LiteralFalse => typed_ast::PatternKind::LiteralFalse,
             pattern::PatternKind::Bind(name) => typed_ast::PatternKind::Bind(name.clone()),

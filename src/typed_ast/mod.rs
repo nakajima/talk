@@ -237,6 +237,7 @@ pub struct Pattern {
 pub enum PatternKind {
     LiteralInt(#[drive(skip)] String),
     LiteralFloat(#[drive(skip)] String),
+    LiteralCharacter(#[drive(skip)] String),
     LiteralTrue,
     LiteralFalse,
     Bind(#[drive(skip)] Name),
@@ -288,6 +289,7 @@ impl Pattern {
         match &self.kind {
             PatternKind::LiteralInt(_)
             | PatternKind::LiteralFloat(_)
+            | PatternKind::LiteralCharacter(_)
             | PatternKind::LiteralTrue
             | PatternKind::LiteralFalse
             | PatternKind::Wildcard => {}

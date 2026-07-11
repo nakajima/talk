@@ -1788,6 +1788,13 @@ impl<'a> Parser<'a> {
                 self.advance();
                 PatternKind::LiteralFloat(val)
             }
+            TokenKind::CharacterLiteral => {
+                let lexeme = self.lexeme(&current);
+                let inner = &lexeme[1..lexeme.len() - 1];
+                let val = inner.to_string();
+                self.advance();
+                PatternKind::LiteralCharacter(val)
+            }
             TokenKind::True => {
                 self.advance();
                 PatternKind::LiteralTrue
@@ -4138,6 +4145,7 @@ fn collect_pattern_binder_names_inner(pattern: &Pattern, names: &mut Vec<Name>) 
         }
         PatternKind::LiteralInt(_)
         | PatternKind::LiteralFloat(_)
+        | PatternKind::LiteralCharacter(_)
         | PatternKind::LiteralTrue
         | PatternKind::LiteralFalse
         | PatternKind::Wildcard

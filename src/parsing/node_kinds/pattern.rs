@@ -31,6 +31,7 @@ pub enum PatternKind {
     // Literals that must match exactly
     LiteralInt(#[drive(skip)] String),
     LiteralFloat(#[drive(skip)] String),
+    LiteralCharacter(#[drive(skip)] String),
     LiteralTrue,
     LiteralFalse,
 
@@ -90,6 +91,7 @@ impl Pattern {
         match &self.kind {
             PatternKind::LiteralInt(_) => (),
             PatternKind::LiteralFloat(_) => (),
+            PatternKind::LiteralCharacter(_) => (),
             PatternKind::LiteralTrue => (),
             PatternKind::LiteralFalse => (),
             PatternKind::Or(patterns) => {

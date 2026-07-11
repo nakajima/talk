@@ -2546,6 +2546,14 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_literal_character_pattern() {
+        assert_eq!(
+            parse_pattern("'\\u{1F60E}'").kind,
+            PatternKind::LiteralCharacter("\\u{1F60E}".into())
+        );
+    }
+
+    #[test]
     fn parses_variant_pattern() {
         assert_eq!(
             parse_pattern("Fizz.buzz").kind,

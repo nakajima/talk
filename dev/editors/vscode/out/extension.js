@@ -21,6 +21,15 @@ function expandHome(path) {
     }
     return path;
 }
+function configuredBinaryPath() {
+    const binaryPath = vscode_1.workspace
+        .getConfiguration("talktalk")
+        .get("binaryPath")
+        ?.trim();
+    return binaryPath
+        ? expandHome(binaryPath)
+        : (0, os_1.homedir)() + "/apps/talk/target/debug/talk";
+}
 function configuredCorePath() {
     const corePath = vscode_1.workspace
         .getConfiguration("talktalk")
@@ -59,7 +68,7 @@ function serverOptions() {
         ...(stdlibPath ? { TALK_STDLIB_PATH: stdlibPath } : {}),
     };
     return {
-        command: (0, os_1.homedir)() + "/apps/talk/target/debug/talk",
+        command: configuredBinaryPath(),
         transport: node_1.TransportKind.stdio,
         args: ["lsp"],
         options: { env },

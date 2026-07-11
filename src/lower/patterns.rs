@@ -26,7 +26,7 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::lambda_g::expr::{CmpOp, ExprId, Op};
+use crate::lambda_g::expr::{CmpOp, Const, ExprId, Op, TyKind};
 use crate::lambda_g::program::Label;
 use crate::name_resolution::symbol::Symbol;
 use crate::typed_ast::{MatchArm, Pattern, PatternKind, RecordFieldPatternKind};
@@ -83,6 +83,14 @@ enum WildcardCell {
 enum Pat<'p> {
     Wild(WildcardCell),
     Source(&'p Pattern),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum PatternLiteral {
+    Int(i64),
+    Float(u64),
+    Bool(bool),
+    Character(Vec<u8>),
 }
 
 impl<'p> Pat<'p> {
@@ -269,6 +277,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             PatternKind::Variant { .. } => self.variant_column(occs, rows, column),
             PatternKind::LiteralInt(_)
             | PatternKind::LiteralFloat(_)
+            | PatternKind::LiteralCharacter(_)
             | PatternKind::LiteralTrue
             | PatternKind::LiteralFalse => self.literal_column(occs, rows, column, head),
             PatternKind::Tuple(_) => self.tuple_column(occs, rows, column),
@@ -583,7 +592,7 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
         head: &'p Pattern,
     ) -> ExprId {
         let occ = occs[column].clone();
-        let Some(constant) = self.literal_const(head) else {
+        let Some(literal) = self.pattern_literal(head) else {
             return self.trap_jump();
         };
 
@@ -601,8 +610,10 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             let Pat::Source(p) = row.pats[column] else {
                 continue;
             };
-            match self.literal_const(p) {
-                Some(c) if c == constant => then_rows.push(row.without_column(column, &occ)),
+            match self.pattern_literal(p) {
+                Some(candidate) if candidate == literal => {
+                    then_rows.push(row.without_column(column, &occ));
+                }
                 Some(_) => else_rows.push(row.clone()),
                 None => {}
             }
@@ -612,16 +623,32 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
         then_occs.remove(column);
         let then_body = self.compile(then_occs, then_rows);
         let else_body = self.compile(occs, else_rows);
-        let cond = self.lowering.p.cmp(CmpOp::Eq, occ.value, constant);
-        self.lowering.branch_value(cond, then_body, else_body)
+        match literal {
+            PatternLiteral::Int(value) => {
+                let constant = self.lowering.p.int(value);
+                let cond = self.lowering.p.cmp(CmpOp::Eq, occ.value, constant);
+                self.lowering.branch_value(cond, then_body, else_body)
+            }
+            PatternLiteral::Float(bits) => {
+                let constant = self.lowering.p.float(f64::from_bits(bits));
+                let cond = self.lowering.p.cmp(CmpOp::Eq, occ.value, constant);
+                self.lowering.branch_value(cond, then_body, else_body)
+            }
+            PatternLiteral::Bool(value) => {
+                let constant = self.lowering.p.bool(value);
+                let cond = self.lowering.p.cmp(CmpOp::Eq, occ.value, constant);
+                self.lowering.branch_value(cond, then_body, else_body)
+            }
+            PatternLiteral::Character(bytes) => {
+                self.character_literal_branch(&occ, &bytes, then_body, else_body)
+            }
+        }
     }
 
-    /// The λ_G constant a literal pattern tests against. Hash-consing makes
-    /// ExprId equality literal equality (`1` and `01` intern to one node).
-    fn literal_const(&mut self, pattern: &Pattern) -> Option<ExprId> {
+    fn pattern_literal(&mut self, pattern: &Pattern) -> Option<PatternLiteral> {
         match &pattern.kind {
             PatternKind::LiteralInt(text) => match text.parse() {
-                Ok(v) => Some(self.lowering.p.int(v)),
+                Ok(value) => Some(PatternLiteral::Int(value)),
                 Err(_) => {
                     self.lowering
                         .diagnostics
@@ -629,8 +656,8 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                     None
                 }
             },
-            PatternKind::LiteralFloat(text) => match text.parse() {
-                Ok(v) => Some(self.lowering.p.float(v)),
+            PatternKind::LiteralFloat(text) => match text.parse::<f64>() {
+                Ok(value) => Some(PatternLiteral::Float(value.to_bits())),
                 Err(_) => {
                     self.lowering
                         .diagnostics
@@ -638,10 +665,108 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                     None
                 }
             },
-            PatternKind::LiteralTrue => Some(self.lowering.p.bool(true)),
-            PatternKind::LiteralFalse => Some(self.lowering.p.bool(false)),
+            PatternKind::LiteralCharacter(text) => match crate::parsing::lexing::unescape(text) {
+                Ok(value) => Some(PatternLiteral::Character(value.into_bytes())),
+                Err(_) => {
+                    self.lowering
+                        .diagnostics
+                        .push("lowering: character literal pattern with invalid escape".into());
+                    None
+                }
+            },
+            PatternKind::LiteralTrue => Some(PatternLiteral::Bool(true)),
+            PatternKind::LiteralFalse => Some(PatternLiteral::Bool(false)),
             _ => None,
         }
+    }
+
+    fn character_literal_branch(
+        &mut self,
+        occ: &Occurrence,
+        bytes: &[u8],
+        then_body: ExprId,
+        else_body: ExprId,
+    ) -> ExprId {
+        let CheckTy::Nominal(character_symbol, _) = &occ.ty else {
+            self.lowering
+                .diagnostics
+                .push("lowering: character pattern on a non-Character value".into());
+            return self.trap_jump();
+        };
+        let metadata = self
+            .lowering
+            .units
+            .iter()
+            .find_map(|unit| unit.types.catalog.structs.get(character_symbol))
+            .and_then(|character| {
+                let storage_index = character.fields.get_index_of("storage")? as u32;
+                let start_index = character.fields.get_index_of("start")? as u32;
+                let length_index = character.fields.get_index_of("byte_count")? as u32;
+                let (_, storage_ty) = character.fields.get("storage")?;
+                let CheckTy::Nominal(storage_symbol, _) = storage_ty else {
+                    return None;
+                };
+                let storage = self
+                    .lowering
+                    .units
+                    .iter()
+                    .find_map(|unit| unit.types.catalog.structs.get(storage_symbol))?;
+                let base_index = storage.fields.get_index_of("base")? as u32;
+                Some((
+                    storage_index,
+                    start_index,
+                    length_index,
+                    storage_ty.clone(),
+                    base_index,
+                ))
+            });
+        let Some((storage_index, start_index, length_index, storage_ty, base_index)) = metadata
+        else {
+            self.lowering.diagnostics.push(
+                "lowering: Character pattern requires storage, start, and byte_count fields".into(),
+            );
+            return self.trap_jump();
+        };
+
+        let storage_lam_ty = self.lowering.map_ty(&storage_ty);
+        let storage =
+            self.lowering
+                .p
+                .primop(Op::GetField(storage_index), &[occ.value], storage_lam_ty);
+        let ptr_ty = self.lowering.p.ty_ptr();
+        let base = self
+            .lowering
+            .p
+            .primop(Op::GetField(base_index), &[storage], ptr_ty);
+        let i64_ty = self.lowering.p.ty_i64();
+        let start = self
+            .lowering
+            .p
+            .primop(Op::GetField(start_index), &[occ.value], i64_ty);
+        let length = self
+            .lowering
+            .p
+            .primop(Op::GetField(length_index), &[occ.value], i64_ty);
+
+        let mut matched = then_body;
+        for (index, expected) in bytes.iter().copied().enumerate().rev() {
+            let offset = if index == 0 {
+                start
+            } else {
+                let index = self.lowering.p.int(index as i64);
+                self.lowering.p.add(start, index)
+            };
+            let ptr = self.lowering.p.add(base, offset);
+            let byte_ty = self.lowering.p.ty(TyKind::Byte);
+            let actual = self.lowering.p.primop(Op::Load, &[ptr], byte_ty);
+            let expected = self.lowering.p.constant(Const::Byte(expected), byte_ty);
+            let cond = self.lowering.p.cmp(CmpOp::Eq, actual, expected);
+            matched = self.lowering.branch_value(cond, matched, else_body);
+        }
+        let expected_length = self.lowering.p.int(bytes.len() as i64);
+        let length_matches = self.lowering.p.cmp(CmpOp::Eq, length, expected_length);
+        self.lowering
+            .branch_value(length_matches, matched, else_body)
     }
 
     // ----- Irrefutable aggregate columns (expand in place, no branching) ------
