@@ -1045,7 +1045,6 @@ impl<'types> Builder<'types> {
                 current,
                 !consume_expr_value,
                 tail_exits,
-                temp_drops,
             ),
             StmtKind::Loop(condition, body) => {
                 self.lower_loop(condition.as_ref(), body, current, temp_drops)
@@ -1336,7 +1335,6 @@ impl<'types> Builder<'types> {
         current: BlockId,
         mark_tail_exprs: bool,
         tail_exits: bool,
-        _temp_drops: &mut Vec<Expr>,
     ) -> BlockId {
         let mut condition_temp_drops = vec![];
         let current = self.lower_expr(condition, current, &mut condition_temp_drops);

@@ -332,10 +332,9 @@ pub mod tests {
     fn rejects_linear_prefix_keyword() {
         let lexer = Lexer::new("linear struct Token {}");
         let parser = Parser::new("-", FileID(0), lexer);
-        let result = parser.parse();
-        let err = result
-            .err()
-            .expect("the prefix form should no longer parse");
+        let err = parser
+            .parse()
+            .expect_err("the prefix form should no longer parse");
         assert!(
             err.to_string().contains("'linear"),
             "the error should point at the new attribute form: {err}"

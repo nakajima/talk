@@ -125,6 +125,10 @@ impl PatternRefinement {
                 view: view.substitute(&tys, &effs, &rows),
                 origin,
             },
+            Constraint::StringPattern { ty, origin } => Constraint::StringPattern {
+                ty: ty.substitute(&tys, &effs, &rows),
+                origin,
+            },
             Constraint::Implic(implication) => Constraint::Implic(implication),
         }
     }
@@ -362,12 +366,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 PatternRefinement::default()
             }
             PatternKind::LiteralString(_) => {
-                self.emit_eq(
-                    expected.clone(),
-                    Ty::Nominal(Symbol::String, vec![]),
-                    pattern.id,
-                    CtReason::Pattern,
-                );
+                // String literals match both owned String values and borrowed
+                // Substring views by UTF-8 content.
+                self.wanteds.push(Constraint::StringPattern {
+                    ty: expected.clone(),
+                    origin: CtOrigin::new(pattern.id, CtReason::Pattern),
+                });
                 PatternRefinement::default()
             }
             PatternKind::LiteralTrue | PatternKind::LiteralFalse => {

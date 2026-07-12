@@ -503,8 +503,7 @@ impl<'e> Elaborator<'e> {
                 .collect();
             for (label, sig, predicates) in requirements {
                 self.validate_object_safe_requirement(
-                    protocol.protocol,
-                    current.protocol,
+                    (protocol.protocol, current.protocol),
                     &assoc_symbols,
                     &label,
                     &sig,
@@ -518,14 +517,14 @@ impl<'e> Elaborator<'e> {
 
     fn validate_object_safe_requirement(
         &mut self,
-        existential_protocol: Symbol,
-        requirement_protocol: Symbol,
+        protocols: (Symbol, Symbol),
         assoc_symbols: &FxHashSet<Symbol>,
         label: &str,
         sig: &Ty,
         predicates: &[Predicate],
         node: NodeID,
     ) {
+        let (existential_protocol, requirement_protocol) = protocols;
         let Ty::Func(params, ret, _) = sig else {
             self.object_safety_error(
                 existential_protocol,

@@ -154,6 +154,12 @@ pub enum Constraint {
         view: Ty,
         origin: CtOrigin,
     },
+    /// A string literal pattern accepts exactly String and Substring. This
+    /// defers while a call result's nominal head is unresolved.
+    StringPattern {
+        ty: Ty,
+        origin: CtOrigin,
+    },
     /// A handler extent's row boundary (label-scoped elimination —
     /// docs/generic-effects-plan.md): every occurrence of `effects`'
     /// labels in `inner` is discharged by the covering `@handle`s; the

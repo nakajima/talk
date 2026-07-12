@@ -1206,6 +1206,12 @@ impl<'a> Formatter<'a> {
             return group(concat(result, concat(text(" "), block_doc)));
         }
 
+        // Empty call parentheses are indivisible. In a long member chain,
+        // inheriting the general argument-list softlines would split `()`.
+        if args.is_empty() {
+            return concat(result, text("()"));
+        }
+
         let call_doc = group(concat(
             result,
             concat(
@@ -3253,6 +3259,19 @@ mod formatter_tests {
         let input = "func foo() {\n// note\n}";
         let expected = "func foo() {\n\t// note\n}";
         assert_eq!(format_string(input), expected);
+    }
+
+    #[test]
+    fn test_keeps_nested_comments_attached_after_labeled_arguments() {
+        let input = "struct A {\n\t// first\n\tfunc foo() {}\n\n\t// second\n\tfunc bar() {\n\t\tThing(a: 1, b: 2, c: 3, d: 4, e: 5)\n\t}\n}";
+        let expected = "struct A {\n\t// first\n\tfunc foo() {}\n\n\t// second\n\tfunc bar() {\n\t\tThing(a: 1, b: 2, c: 3, d: 4, e: 5)\n\t}\n}";
+        assert_eq!(format_string(input), expected);
+    }
+
+    #[test]
+    fn test_keeps_empty_chained_calls_on_one_line() {
+        let input = "very_long_receiver_name().next().finish()";
+        assert_eq!(format_string_with_width(input, 12), input);
     }
 
     #[test]

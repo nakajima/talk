@@ -103,7 +103,15 @@ impl<'a> Lowering<'a> {
         // The checked MIR body (the same one `lower_block` reuses below): a
         // parameter moved on only some paths has Conditional drops recorded
         // here, which need flag cells like a let-bind's.
-        let mir_body = self.checked_body(source_body, &ctx);
+        let Some(mir_body) = self.checked_body(source_body, &ctx) else {
+            self.diagnostics.push(format!(
+                "lowering: missing checked MIR body for block {:?}",
+                source_body.id
+            ));
+            let body = self.dead_end("missing_checked_mir_function_body");
+            self.p.set_body(label, body);
+            return;
+        };
         // Owned by-value parameters: consumed arguments' drops ride the
         // callee, so the flow checker schedules them at body exit — seed
         // the drop stack so those candidates resolve (`'heap`-carrying

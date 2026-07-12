@@ -841,10 +841,11 @@ impl<'a> Lowering<'a> {
         // The combined main body spans every file's runnable top-level nodes:
         // `mir::build_checked` built and checked it from the same node filter
         // (`mir::main_body_nodes`).
-        let body = self.units[ctx.unit]
-            .bodies
-            .top_level()
-            .unwrap_or_else(|| panic!("missing checked MIR top-level body"));
+        let Some(body) = self.units[ctx.unit].bodies.top_level() else {
+            self.diagnostics
+                .push("lowering: missing checked MIR top-level body".into());
+            return self.dead_end("missing_checked_mir_top_level_body");
+        };
         self.lower_mir_body(&body, ctx, k)
     }
 

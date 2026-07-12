@@ -1,3 +1,5 @@
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 use std::any::Any;
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -654,7 +656,7 @@ impl WorkspacePtr {
         Self(ptr)
     }
 
-    fn get_mut(&self) -> ApiResult<&mut TalkWorkspace> {
+    fn get_mut(&mut self) -> ApiResult<&mut TalkWorkspace> {
         if self.0.is_null() {
             return Err(ApiError::invalid_input("workspace pointer is null"));
         }
@@ -690,7 +692,7 @@ impl ReplPtr {
         Self(ptr)
     }
 
-    fn get_mut(&self) -> ApiResult<&mut TalkReplSession> {
+    fn get_mut(&mut self) -> ApiResult<&mut TalkReplSession> {
         if self.0.is_null() {
             return Err(ApiError::invalid_input("repl pointer is null"));
         }
@@ -1557,6 +1559,7 @@ pub extern "C" fn talk_run_program_utf8(
 }
 
 #[unsafe(no_mangle)]
+#[allow(clippy::arc_with_non_send_sync)]
 pub extern "C" fn talk_package_provider_new(
     capabilities: i32,
     fetch_tar: Option<PackageFetchTarCallback>,
@@ -1875,7 +1878,7 @@ pub extern "C" fn talk_workspace_remove_document_utf8(
 pub extern "C" fn talk_workspace_analyze(workspace: *mut TalkWorkspace) -> *mut TalkDiagnostics {
     Boundary::handle(
         || {
-            let handle = WorkspacePtr::new(workspace);
+            let mut handle = WorkspacePtr::new(workspace);
             let workspace = handle.get_mut()?.analyze()?;
             Ok(diagnostic_records_from_workspace(workspace, None))
         },
@@ -1890,7 +1893,7 @@ pub extern "C" fn talk_workspace_diagnostics(
 ) -> *mut TalkDiagnostics {
     Boundary::handle(
         || {
-            let handle = WorkspacePtr::new(workspace);
+            let mut handle = WorkspacePtr::new(workspace);
             let workspace = handle.get_mut()?.ensure_analysis()?;
             Ok(diagnostic_records_from_workspace(workspace, None))
         },
@@ -1908,7 +1911,7 @@ pub extern "C" fn talk_workspace_document_diagnostics_utf8(
     Boundary::handle(
         || {
             let id = RawBytes::new(id_ptr, id_len, "id").string()?;
-            let handle = WorkspacePtr::new(workspace);
+            let mut handle = WorkspacePtr::new(workspace);
             let workspace = handle.get_mut()?.ensure_analysis()?;
             Ok(diagnostic_records_from_workspace(workspace, Some(&id)))
         },
@@ -1927,7 +1930,7 @@ pub extern "C" fn talk_workspace_hover_utf8(
     Boundary::handle(
         || {
             let id = RawBytes::new(id_ptr, id_len, "id").string()?;
-            let handle = WorkspacePtr::new(workspace);
+            let mut handle = WorkspacePtr::new(workspace);
             let workspace = handle.get_mut()?.ensure_analysis()?;
             Ok(talk::analysis::hover_at(workspace, &id, byte_offset).map(hover_record))
         },
@@ -1946,7 +1949,7 @@ pub extern "C" fn talk_workspace_completions_utf8(
     Boundary::handle(
         || {
             let id = RawBytes::new(id_ptr, id_len, "id").string()?;
-            let handle = WorkspacePtr::new(workspace);
+            let mut handle = WorkspacePtr::new(workspace);
             let workspace = handle.get_mut()?.ensure_analysis()?;
             let items =
                 talk::analysis::completion::complete_in_workspace(workspace, &id, byte_offset);
@@ -1968,7 +1971,7 @@ pub extern "C" fn talk_workspace_inlay_hints_utf8(
     Boundary::handle(
         || {
             let id = RawBytes::new(id_ptr, id_len, "id").string()?;
-            let handle = WorkspacePtr::new(workspace);
+            let mut handle = WorkspacePtr::new(workspace);
             let workspace = handle.get_mut()?.ensure_analysis()?;
             let items =
                 talk::analysis::ownership_inlay_hints(workspace, &id, TextRange::new(start, end));
@@ -1989,7 +1992,7 @@ pub extern "C" fn talk_workspace_goto_definition_utf8(
     Boundary::handle(
         || {
             let id = RawBytes::new(id_ptr, id_len, "id").string()?;
-            let handle = WorkspacePtr::new(workspace);
+            let mut handle = WorkspacePtr::new(workspace);
             let workspace = handle.get_mut()?;
             let analysis = workspace.ensure_analysis()?.clone();
             let core = workspace.ensure_core();
@@ -2016,7 +2019,7 @@ pub extern "C" fn talk_workspace_rename_utf8(
         || {
             let id = RawBytes::new(id_ptr, id_len, "id").string()?;
             let new_name = RawBytes::new(new_name_ptr, new_name_len, "new_name").string()?;
-            let handle = WorkspacePtr::new(workspace);
+            let mut handle = WorkspacePtr::new(workspace);
             let workspace = handle.get_mut()?.ensure_analysis()?;
             let edit = talk::analysis::rename_at(workspace, &id, byte_offset, &new_name);
             Ok(workspace_edit_records(edit))

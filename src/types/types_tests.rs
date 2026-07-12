@@ -4499,6 +4499,25 @@ mod with_core {
     }
 
     #[test]
+    fn result_equatable_is_conditional_on_both_arguments() {
+        let clean = check_with_core(Source::from(
+            "let left: Result<Int, String> = .ok(1)\nlet right: Result<Int, String> = .ok(1)\nprint(left == right)",
+        ));
+        assert_no_errors(&clean);
+
+        let rejected = check_with_core(Source::from(
+            "struct NotEquatable {\n\tlet callback: () -> Int\n}\nlet left: Result<NotEquatable, String> = .ok(NotEquatable(callback: func() { 1 }))\nlet right: Result<NotEquatable, String> = .ok(NotEquatable(callback: func() { 1 }))\nprint(left == right)",
+        ));
+        let errors = type_errors(&rejected);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("does not conform") && error.contains("Equatable")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
     fn match_uses_all_variant_names_to_disambiguate_shared_cases() {
         let t = check_with_core(Source::from(
             "enum Scan {\n\tcase ok\n\tcase no\n\tcase failed(String)\n}\nfunc scan() -> Scan { .ok }\nlet value = match scan() {\n\t.ok -> 1,\n\t.no -> 2,\n\t.failed(_) -> 3\n}",

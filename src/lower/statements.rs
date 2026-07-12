@@ -23,26 +23,31 @@ impl<'a> Lowering<'a> {
     /// expression). A block's value is its final expression; divergent
     /// statements (return) ignore `k`.
     pub(super) fn lower_block(&mut self, block: &Block, ctx: &Ctx, k: ExprId) -> ExprId {
-        let body = self.checked_body(block, ctx);
+        let Some(body) = self.checked_body(block, ctx) else {
+            self.diagnostics.push(format!(
+                "lowering: missing checked MIR body for block {:?}",
+                block.id
+            ));
+            return self.dead_end("missing_checked_mir_body");
+        };
         self.lower_mir_body(&body, ctx, k)
     }
 
     /// One checked MIR body per typed block — every θ-specialization re-lowers
-    /// the shared body instead of rebuilding it. Missing bodies are compiler
-    /// errors: lowering has no typed-tree fallback path.
-    pub(super) fn checked_body(&mut self, block: &Block, ctx: &Ctx) -> std::sync::Arc<mir::Body> {
+    /// the shared body instead of rebuilding it.
+    pub(super) fn checked_body(
+        &mut self,
+        block: &Block,
+        ctx: &Ctx,
+    ) -> Option<std::sync::Arc<mir::Body>> {
         let key = (ctx.unit, block.id);
         if let Some(body) = self.checked_bodies.get(&key) {
-            return std::sync::Arc::clone(body);
+            return Some(std::sync::Arc::clone(body));
         }
-        let unit = &self.units[ctx.unit];
-        let body = unit
-            .bodies
-            .get(block.id)
-            .unwrap_or_else(|| panic!("missing checked MIR body for block {:?}", block.id));
+        let body = self.units[ctx.unit].bodies.get(block.id)?;
         self.checked_bodies
             .insert(key, std::sync::Arc::clone(&body));
-        body
+        Some(body)
     }
 
     /// Resolve an assignment lhs to its root cell and the field path down

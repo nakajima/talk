@@ -6,6 +6,15 @@ test "result cases and predicates" {
 	assert(!success.is_error())
 	assert(failure.is_error())
 	assert(!failure.is_ok())
+	let same_success: Result<Int, String> = .ok(42)
+	let other_success: Result<Int, String> = .ok(41)
+	let same_failure: Result<Int, String> = .error("nope")
+	let other_failure: Result<Int, String> = .error("other")
+	assert(success == same_success)
+	assert(success != other_success)
+	assert(failure == same_failure)
+	assert(failure != other_failure)
+	assert(success != failure)
 
 	match success { .ok(value) -> assert(value == 42), .error(_) -> assert(false) }
 

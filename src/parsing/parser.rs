@@ -2735,7 +2735,6 @@ impl<'a> Parser<'a> {
             let Some((label, label_span)) = self.identifier().ok() else {
                 return Err(ParserError::ExpectedIdentifier(self.current.clone()));
             };
-            let tok = self.push_source_location();
             self.consume(TokenKind::Colon)?;
             let mode = self.arg_mode();
             let value = self.expr_with_precedence(Precedence::Assignment)?;

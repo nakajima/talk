@@ -1352,7 +1352,7 @@ impl<'a> Lowering<'a> {
         k: ExprId,
         cache: &mut MirBlockCache,
     ) -> ExprId {
-        let body = self.lower_mir_terminator_inner(cursor.clone(), ctx, k, cache);
+        let body = self.lower_mir_terminator_inner(cursor, ctx, k, cache);
         let moves = cursor.body.blocks[cursor.block.0]
             .terminator_ownership
             .moves

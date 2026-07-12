@@ -234,6 +234,19 @@ impl<'s> Solver<'s> {
                         }
                         other => queue.push(Constraint::Eq(other, view, origin)),
                     },
+                    Constraint::StringPattern { ty, origin } => match self.store.shallow(&ty) {
+                        Ty::Var(_) => stuck.push(Constraint::StringPattern { ty, origin }),
+                        Ty::Borrow(_, inner) => {
+                            queue.push(Constraint::StringPattern { ty: *inner, origin });
+                        }
+                        Ty::Nominal(symbol, _)
+                            if symbol == Symbol::String || symbol == Symbol::Substring => {}
+                        other => self.report_mismatch(
+                            &other,
+                            &Ty::Nominal(Symbol::String, vec![]),
+                            origin,
+                        ),
+                    },
                     Constraint::Implic(implication) => {
                         let residual = self.solve_implication(*implication);
                         queue.extend(residual);
@@ -354,6 +367,9 @@ impl<'s> Solver<'s> {
                         view,
                         origin,
                     });
+                }
+                string_pattern @ Constraint::StringPattern { .. } => {
+                    residual.push(string_pattern);
                 }
                 variant @ Constraint::HasVariant { .. } => {
                     // Float like HasMember: a later group may resolve the
@@ -677,6 +693,9 @@ impl<'s> Solver<'s> {
                 let scrutinee = self.store.render(scrutinee);
                 let view = self.store.render(view);
                 format!("pattern view of {scrutinee} as {view}")
+            }
+            Constraint::StringPattern { ty, .. } => {
+                format!("string pattern over {}", self.store.render(ty))
             }
             Constraint::HandleEffect {
                 inner,

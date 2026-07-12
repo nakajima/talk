@@ -783,9 +783,8 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             .branch_value(length_matches, matched, else_body)
     }
 
-    /// Match a `String` scrutinee against a literal's bytes: a byte_count
-    /// check guarding a byte-equality chain over the string's buffer, the
-    /// same shape as `character_literal_branch`.
+    /// Match a String or Substring scrutinee against a literal's bytes: a
+    /// byte_count check guarding a byte-equality chain over the view.
     fn string_literal_branch(
         &mut self,
         occ: &Occurrence,
@@ -807,6 +806,10 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             .and_then(|string| {
                 let storage_index = string.fields.get_index_of("storage")? as u32;
                 let length_index = string.fields.get_index_of("byte_count")? as u32;
+                let start_index = string
+                    .fields
+                    .get_index_of("start")
+                    .map(|index| index as u32);
                 let (_, storage_ty) = string.fields.get("storage")?;
                 let CheckTy::Nominal(storage_symbol, _) = storage_ty else {
                     return None;
@@ -817,12 +820,19 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                     .iter()
                     .find_map(|unit| unit.types.catalog.structs.get(storage_symbol))?;
                 let base_index = storage.fields.get_index_of("base")? as u32;
-                Some((storage_index, length_index, storage_ty.clone(), base_index))
+                Some((
+                    storage_index,
+                    length_index,
+                    start_index,
+                    storage_ty.clone(),
+                    base_index,
+                ))
             });
-        let Some((storage_index, length_index, storage_ty, base_index)) = metadata else {
+        let Some((storage_index, length_index, start_index, storage_ty, base_index)) = metadata
+        else {
             self.lowering
                 .diagnostics
-                .push("lowering: String pattern requires storage and byte_count fields".into());
+                .push("lowering: string pattern requires storage and byte_count fields".into());
             return self.trap_jump();
         };
 
@@ -841,10 +851,22 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             .lowering
             .p
             .primop(Op::GetField(length_index), &[occ.value], i64_ty);
+        let start = match start_index {
+            Some(index) => self
+                .lowering
+                .p
+                .primop(Op::GetField(index), &[occ.value], i64_ty),
+            None => self.lowering.p.int(0),
+        };
 
         let mut matched = then_body;
         for (index, expected) in bytes.iter().copied().enumerate().rev() {
-            let offset = self.lowering.p.int(index as i64);
+            let offset = if index == 0 {
+                start
+            } else {
+                let index = self.lowering.p.int(index as i64);
+                self.lowering.p.add(start, index)
+            };
             let ptr = self.lowering.p.add(base, offset);
             let byte_ty = self.lowering.p.ty(TyKind::Byte);
             let actual = self.lowering.p.primop(Op::Load, &[ptr], byte_ty);

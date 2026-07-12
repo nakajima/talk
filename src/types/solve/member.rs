@@ -612,9 +612,7 @@ impl<'s> Solver<'s> {
                     && let Some(inherent) = members.get(&label_str)
                 {
                     let inherent = inherent.clone();
-                    let Some(scheme) = self.schemes.get(&inherent.symbol).cloned() else {
-                        return None;
-                    };
+                    let scheme = self.schemes.get(&inherent.symbol).cloned()?;
                     let mut substitution: FxHashMap<Symbol, Ty> = FxHashMap::default();
                     for (pattern, actual) in inherent.self_args.iter().zip(&args) {
                         bind_param_pattern(pattern, actual, &mut substitution);
@@ -875,11 +873,10 @@ impl<'s> Solver<'s> {
                 // an owned/unsolved slot defers (ADR 0021): eager equality
                 // would bind the slot to the borrow — or the argument var
                 // owned — before the coercion can be judged.
-                let defer = match (self.store.shallow(expected), self.store.shallow(found)) {
-                    (_, Ty::Borrow(..)) => true,
-                    (Ty::Param(_), Ty::Var(_)) => true,
-                    _ => false,
-                };
+                let defer = matches!(
+                    (self.store.shallow(expected), self.store.shallow(found)),
+                    (_, Ty::Borrow(..)) | (Ty::Param(_), Ty::Var(_))
+                );
                 if defer {
                     queue.push(Constraint::CoerceOwned {
                         expected: expected.clone(),

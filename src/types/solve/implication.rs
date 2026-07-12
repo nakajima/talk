@@ -78,6 +78,7 @@ impl<'s> Solver<'s> {
             | Constraint::ApplyBorrow { origin, .. }
             | Constraint::CoerceOwned { origin, .. }
             | Constraint::PatternView { origin, .. }
+            | Constraint::StringPattern { origin, .. }
             | Constraint::HandleEffect { origin, .. } => Some(*origin),
             Constraint::Implic(_) => None,
         }
@@ -163,6 +164,7 @@ impl<'s> Solver<'s> {
             } => self
                 .ty_mentions_params(scrutinee, params)
                 .or_else(|| self.ty_mentions_params(view, params)),
+            Constraint::StringPattern { ty, .. } => self.ty_mentions_params(ty, params),
             Constraint::Implic(implication) => implication
                 .givens
                 .iter()

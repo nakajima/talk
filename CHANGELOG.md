@@ -14,9 +14,10 @@ while fixing several type-checker and lexer correctness bugs.
   be omitted from CI.
 - **`else if` chains.** Conditional statements and expressions now accept
   `else if`, including chains following `if let`.
-- **String-literal patterns.** Match arms can use string patterns, including
-  escapes, Unicode text, empty strings, and or-patterns. Matching compares the
-  UTF-8 byte content and remains non-exhaustive without a catch-all arm.
+- **String-literal patterns.** Match arms can use string patterns against both
+  `String` and `Substring` values, including escapes, Unicode text, empty
+  strings, and or-patterns. Matching compares the UTF-8 byte content and
+  remains non-exhaustive without a catch-all arm.
 - **Tuple element access.** Tuple values support positional members such as
   `.0` and `.1`, including chained access such as `nested.0.1` and borrowed
   tuple receivers. Existing tuple destructuring continues to work.
@@ -26,7 +27,8 @@ while fixing several type-checker and lexer correctness bugs.
   `CheapClone` values retain their shared storage. Declared methods still take
   precedence over the marker implementation.
 - **`Result<Success, Failure>`.** Core now provides `.ok` and `.error` cases
-  with `is_ok()` and `is_error()` helpers.
+  with `is_ok()` and `is_error()` helpers. Results conditionally conform to
+  `Equatable` when both type arguments conform.
 - **Byte comparisons.** `Byte` now conforms to `Equatable<Byte>` and
   `Comparable<Byte>`, enabling normal `==`, `!=`, `<`, `<=`, `>`, and `>=`
   operations without converting through `_toInt()`.
@@ -82,6 +84,11 @@ while fixing several type-checker and lexer correctness bugs.
 - **Standalone tick spans include the tick.** A `SingleQuote` token is no
   longer zero-width. Character literal `'['` remains distinct from an effect
   row opener such as `'[io]`.
+- **Formatter comments remain attached to their declarations.** Labeled call
+  arguments no longer leak parser location frames that caused nested comments
+  to move ahead of their enclosing type.
+- **Empty chained calls keep `()` intact.** Formatting a long member chain no
+  longer splits empty call parentheses across lines.
 
 ## Unreleased (2026-07-10) — Derived `Equatable`
 

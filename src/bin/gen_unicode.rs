@@ -500,9 +500,7 @@ mod tests {
     #[test]
     fn boundary_list_compresses_runs() {
         let mut cats = vec![OTHER; 16];
-        for cp in 4..8 {
-            cats[cp] = EXTEND;
-        }
+        cats[4..8].fill(EXTEND);
         assert_eq!(boundaries(&cats), vec![(0, OTHER), (4, EXTEND), (8, OTHER)]);
     }
 

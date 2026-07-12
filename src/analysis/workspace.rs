@@ -66,14 +66,14 @@ impl Workspace {
                     id: prelude_path.clone(),
                     path: prelude_path,
                     version: 0,
-                    text: prelude.read().expect("test harness prelude is in memory"),
+                    text: prelude.read().ok()?,
                 },
             );
             docs.push(DocumentInput {
                 id: postlude_path.clone(),
                 path: postlude_path,
                 version: 0,
-                text: postlude.read().expect("test harness postlude is in memory"),
+                text: postlude.read().ok()?,
             });
         }
 

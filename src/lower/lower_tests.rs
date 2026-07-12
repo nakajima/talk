@@ -449,32 +449,29 @@ pub mod tests {
         // function's post-loop code into the closure. (The handler-body
         // analogue is unreachable today: @handle inside a loop is fenced
         // as a nested block.)
-        for code in [
-            "func twice(fn: () -> ()) {\n\tfn()\n\tfn()\n}\nfunc f() {\n\tloop true {\n\t\ttwice {\n\t\t\tbreak\n\t\t}\n\t}\n}\nf()",
-        ] {
-            let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("LowerTest"));
-            let typed = driver
-                .parse()
-                .expect("parse")
-                .resolve_names()
-                .expect("resolve")
-                .type_check();
-            assert!(
-                !typed.has_errors(),
-                "type errors: {:?}",
-                typed.diagnostics()
-            );
-            let lowered = typed.lower();
-            assert!(
-                lowered
-                    .phase
-                    .diagnostics
-                    .iter()
-                    .any(|d| d.contains("break outside loop")),
-                "expected a break-outside-loop diagnostic, got {:?}",
-                lowered.phase.diagnostics
-            );
-        }
+        let code = "func twice(fn: () -> ()) {\n\tfn()\n\tfn()\n}\nfunc f() {\n\tloop true {\n\t\ttwice {\n\t\t\tbreak\n\t\t}\n\t}\n}\nf()";
+        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("LowerTest"));
+        let typed = driver
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
+        let lowered = typed.lower();
+        assert!(
+            lowered
+                .phase
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("break outside loop")),
+            "expected a break-outside-loop diagnostic, got {:?}",
+            lowered.phase.diagnostics
+        );
     }
 
     #[test]

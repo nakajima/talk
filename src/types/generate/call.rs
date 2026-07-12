@@ -93,12 +93,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         &mut self,
         expr: &Expr,
         callee: &Expr,
-        receiver: &Expr,
-        label: &Label,
         args: &[CallArg],
         trailing_block: &Option<Block>,
         ctx: &Ctx,
     ) -> Ty {
+        let ExprKind::Member(Some(receiver), label, _) = &callee.kind else {
+            return Ty::Error;
+        };
         let receiver_ty = self.infer_expr(receiver, ctx);
         let member = Ty::Var(self.store.fresh_ty(self.level, callee.id));
         self.artifacts.node_types.insert(callee.id, member.clone());
@@ -125,12 +126,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         &mut self,
         expr: &Expr,
         callee: &Expr,
-        name: &Name,
         type_args: &[TypeAnnotation],
         args: &[CallArg],
         trailing_block: &Option<Block>,
         ctx: &Ctx,
     ) -> Ty {
+        let ExprKind::Constructor(name) = &callee.kind else {
+            return Ty::Error;
+        };
         let Ok(symbol) = name.symbol() else {
             return Ty::Error;
         };

@@ -236,31 +236,13 @@ fn add_nominal_member_items(
             );
         }
         for (label, method) in &info.methods {
-            add_symbol_member_item(
-                types,
-                label,
-                *method,
-                &info.params,
-                args,
-                CompletionItemKind::Method,
-                true,
-                items,
-            );
+            add_symbol_member_item(types, label, *method, &info.params, args, true, items);
         }
     }
 
     if let Some(info) = types.catalog.enums.get(&symbol) {
         for (label, method) in &info.methods {
-            add_symbol_member_item(
-                types,
-                label,
-                *method,
-                &info.params,
-                args,
-                CompletionItemKind::Method,
-                true,
-                items,
-            );
+            add_symbol_member_item(types, label, *method, &info.params, args, true, items);
         }
     }
 
@@ -326,16 +308,7 @@ fn add_type_member_items(
 
     if let Some(info) = types.catalog.structs.get(&symbol) {
         for (label, method) in &info.statics {
-            add_symbol_member_item(
-                types,
-                label,
-                *method,
-                &info.params,
-                &[],
-                CompletionItemKind::Method,
-                false,
-                items,
-            );
+            add_symbol_member_item(types, label, *method, &info.params, &[], false, items);
         }
     }
 
@@ -363,7 +336,6 @@ fn add_symbol_member_item(
     symbol: Symbol,
     owner_params: &[Symbol],
     owner_args: &[Ty],
-    kind: CompletionItemKind,
     drop_self: bool,
     items: &mut FxHashMap<String, CompletionItem>,
 ) {
@@ -376,7 +348,7 @@ fn add_symbol_member_item(
             ty.render_mono()
         }
     });
-    add_member_item(items, label.to_string(), kind, detail);
+    add_member_item(items, label.to_string(), CompletionItemKind::Method, detail);
 }
 
 fn add_protocol_requirement_items(
@@ -603,7 +575,7 @@ fn conformance_protocol_refs(types: &TypeOutput, extend: &Decl) -> Vec<ProtocolR
             continue;
         };
         let mut matched = false;
-        for ((candidate_head, candidate_protocol), _) in &types.catalog.conformances {
+        for (candidate_head, candidate_protocol) in types.catalog.conformances.keys() {
             if *candidate_head == head && candidate_protocol.protocol == protocol {
                 if !refs.contains(candidate_protocol) {
                     refs.push(candidate_protocol.clone());

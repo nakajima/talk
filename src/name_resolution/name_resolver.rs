@@ -706,9 +706,7 @@ impl NameResolver {
                     .map(|(name, &symbol)| (name.clone(), symbol, true))
                     .collect_vec()
             } else {
-                let Some(target_scope) = self.scopes.get(&target_scope_id) else {
-                    return None;
-                };
+                let target_scope = self.scopes.get(&target_scope_id)?;
                 let mut symbols = Vec::new();
                 for (name, &symbol) in &target_scope.values {
                     symbols.push((
@@ -1624,11 +1622,10 @@ impl NameResolver {
             // use already resolved (sequential shadowing).
             if !self.at_module_scope()
                 && let Some(staged) = self.pending_locals.pop()
+                && let Some(scope) = self.current_scope_mut()
             {
-                if let Some(scope) = self.current_scope_mut() {
-                    for (name, symbol) in staged {
-                        scope.types.insert(name, symbol);
-                    }
+                for (name, symbol) in staged {
+                    scope.types.insert(name, symbol);
                 }
             }
         })
@@ -1641,10 +1638,10 @@ fn module_path_keys(path: &str) -> Vec<String> {
     if let Ok(canonical) = path_buf.canonicalize() {
         keys.push(canonical.to_string_lossy().to_string());
     }
-    if path_buf.extension().and_then(|ext| ext.to_str()) == Some("tlk") {
-        if let Some(stemless) = path.strip_suffix(".tlk") {
-            keys.push(stemless.to_string());
-        }
+    if path_buf.extension().and_then(|ext| ext.to_str()) == Some("tlk")
+        && let Some(stemless) = path.strip_suffix(".tlk")
+    {
+        keys.push(stemless.to_string());
     }
     keys.sort();
     keys.dedup();

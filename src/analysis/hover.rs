@@ -82,17 +82,16 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
             // shows its checked type.
             if let ExprKind::Variable(name) | ExprKind::Constructor(name) = &expr.kind
                 && let Ok(symbol) = name.symbol()
-            {
-                if let Some(hover) = hover_for_symbol(
+                && let Some(hover) = hover_for_symbol(
                     workspace,
                     expr.id,
                     symbol,
                     &name.name_str(),
                     TextRange::new(expr.span.start, expr.span.end),
                     workspace.types.node_types.get(&expr.id),
-                ) {
-                    return Some(hover);
-                }
+                )
+            {
+                return Some(hover);
             }
             let ty = workspace.types.node_types.get(&expr.id)?;
             Some(Hover {

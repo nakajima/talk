@@ -18,8 +18,9 @@ static STDLIB: OnceLock<Vec<Arc<Module>>> = OnceLock::new();
 /// for these on every compile (each REPL line, each test), so the full
 /// pipeline must run once per module, not once per call. The id is
 /// part of the key because the environment assigns it.
-static STDLIB_TYPED: OnceLock<Mutex<FxHashMap<(&'static str, ModuleId), Arc<LibraryTyped>>>> =
-    OnceLock::new();
+type TypedModuleCache = FxHashMap<(&'static str, ModuleId), Arc<LibraryTyped>>;
+
+static STDLIB_TYPED: OnceLock<Mutex<TypedModuleCache>> = OnceLock::new();
 
 pub fn path_override() -> Option<PathBuf> {
     std::env::var_os(TALK_STDLIB_PATH_ENV)
@@ -129,30 +130,6 @@ fn compile_typed_module(name: &'static str, source: Source, module_id: ModuleId)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn typed_modules_are_cached() {
-        // Driver::lower() calls typed_modules() on every compile (each
-        // REPL line, each test): the full parse/resolve/check pipeline
-        // must run once per module, not once per call.
-        let mut env = ModuleEnvironment::default();
-        env.import_core(crate::compiling::core::compile());
-        for module in modules() {
-            env.import((*module).clone());
-        }
-        let first = typed_modules(&env);
-        let second = typed_modules(&env);
-        assert!(!first.is_empty(), "stdlib has modules");
-        assert!(
-            first.iter().zip(&second).all(|(a, b)| Arc::ptr_eq(a, b)),
-            "repeated calls must return the cached artifacts"
-        );
-    }
-}
-
 fn active_stdlib_dir() -> PathBuf {
     path_override().unwrap_or_else(bundled_compilation_dir)
 }
@@ -243,4 +220,28 @@ fn compile_driver(name: &'static str, source: Source, module_id: ModuleId) -> Dr
     );
 
     typed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_modules_are_cached() {
+        // Driver::lower() calls typed_modules() on every compile (each
+        // REPL line, each test): the full parse/resolve/check pipeline
+        // must run once per module, not once per call.
+        let mut env = ModuleEnvironment::default();
+        env.import_core(crate::compiling::core::compile());
+        for module in modules() {
+            env.import((*module).clone());
+        }
+        let first = typed_modules(&env);
+        let second = typed_modules(&env);
+        assert!(!first.is_empty(), "stdlib has modules");
+        assert!(
+            first.iter().zip(&second).all(|(a, b)| Arc::ptr_eq(a, b)),
+            "repeated calls must return the cached artifacts"
+        );
+    }
 }

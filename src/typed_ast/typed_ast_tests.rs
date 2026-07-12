@@ -129,19 +129,14 @@ fn collect_block(b: &typed_ast::Block, ids: &mut Vec<NodeID>) {
 fn collect_decl(d: &typed_ast::Decl, ids: &mut Vec<NodeID>) {
     use typed_ast::DeclKind as K;
     match &d.kind {
-        K::Let { rhs, .. } => {
-            if let Some(rhs) = rhs {
-                collect_expr(rhs, ids);
-            }
-        }
+        K::Let { rhs: Some(rhs), .. } => collect_expr(rhs, ids),
         K::Init { body, .. } => collect_block(body, ids),
         K::Method { func, .. } => collect_block(&func.body, ids),
         K::Func(f) => collect_block(&f.body, ids),
-        K::Property { default_value, .. } => {
-            if let Some(v) = default_value {
-                collect_expr(v, ids);
-            }
-        }
+        K::Property {
+            default_value: Some(value),
+            ..
+        } => collect_expr(value, ids),
         K::Struct { body, .. }
         | K::Protocol { body, .. }
         | K::Extend { body, .. }

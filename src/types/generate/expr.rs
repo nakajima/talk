@@ -285,11 +285,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // never drives the var's inference, so the deferral loses nothing
         // (ADR 0021's per-instantiation clone coercion).
         let defer_coercion = reason == CtReason::Apply
-            && match (self.store.shallow(expected), self.store.shallow(&found)) {
-                (Ty::Param(_), Ty::Var(_) | Ty::Borrow(..)) => true,
-                (Ty::Var(_), Ty::Borrow(..)) => true,
-                _ => false,
-            };
+            && matches!(
+                (self.store.shallow(expected), self.store.shallow(&found)),
+                (Ty::Param(_), Ty::Var(_) | Ty::Borrow(..)) | (Ty::Var(_), Ty::Borrow(..))
+            );
         if defer_coercion {
             self.wanteds.push(Constraint::CoerceOwned {
                 expected: expected.clone(),
@@ -650,11 +649,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 trailing_block,
                 desugared_operator,
             } => {
-                if let ExprKind::Constructor(name) = &callee.kind {
+                if let ExprKind::Constructor(_) = &callee.kind {
                     return self.infer_construction(
                         expr,
                         callee,
-                        name,
                         type_args,
                         args,
                         trailing_block,
@@ -678,21 +676,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         expr.id,
                     );
                 }
-                if let ExprKind::Member(Some(receiver), label, _) = &callee.kind
+                if let ExprKind::Member(Some(receiver), _, _) = &callee.kind
                     && !matches!(receiver.kind, ExprKind::Constructor(_))
                 {
                     if !type_args.is_empty() {
                         self.unsupported(expr.id, "type arguments on method calls");
                     }
-                    return self.infer_member_call(
-                        expr,
-                        callee,
-                        receiver,
-                        label,
-                        args,
-                        trailing_block,
-                        ctx,
-                    );
+                    return self.infer_member_call(expr, callee, args, trailing_block, ctx);
                 }
                 // A leading-dot construction whose enum is not yet known:
                 // infer the payload, hand the resolution to the solver. The

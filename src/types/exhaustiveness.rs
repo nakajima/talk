@@ -231,9 +231,11 @@ impl Coverage<'_> {
             Ctor::Character(_) => {
                 matches!(ty, Ty::Nominal(symbol, _) if *symbol == Symbol::Character)
             }
-            Ctor::Str(_) => {
-                matches!(ty, Ty::Nominal(symbol, _) if *symbol == Symbol::String)
-            }
+            Ctor::Str(_) => matches!(
+                ty,
+                Ty::Nominal(symbol, _)
+                    if *symbol == Symbol::String || *symbol == Symbol::Substring
+            ),
             Ctor::Tuple(n) => matches!(ty, Ty::Tuple(items) if items.len() == *n),
             Ctor::Record(labels) => {
                 matches!(ty, Ty::Record(row) if row.fields.len() == labels.len())

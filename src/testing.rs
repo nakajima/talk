@@ -381,7 +381,7 @@ impl JsonEventParser {
 
     fn decode_hex(value: &str) -> Result<String, TestError> {
         let bytes = value.as_bytes();
-        if bytes.len() % 2 != 0 {
+        if !bytes.len().is_multiple_of(2) {
             return Err(TestError::UnexpectedReturn(
                 "test event had odd-length hex data".into(),
             ));
