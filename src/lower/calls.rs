@@ -480,16 +480,32 @@ impl<'a> Lowering<'a> {
                         witness,
                     }) => {
                         let head_ty = head_ty?;
-                        // The node carries the solver's published θ;
-                        // resolve_witness reads it (committed) or selects
-                        // at this specialization (deferred).
+                        // Keep the solver's protocol application for explicit-row
+                        // selection: a generic argument is intentionally a wildcard
+                        // there. Auto-derived conformances have no row, so also carry
+                        // the fully specialized application for that fallback.
                         let theta = self.instantiation_at(callee.instantiation.as_ref(), ctx);
+                        let derived_protocol = protocol
+                            .clone()
+                            .substitute(&theta, &Default::default(), &Default::default())
+                            .substitute(&ctx.theta, &Default::default(), &Default::default());
+                        let derived_protocol = ProtocolRef {
+                            protocol: derived_protocol.protocol,
+                            args: derived_protocol
+                                .args
+                                .into_iter()
+                                .map(|arg| self.normalize_check_ty(arg, ctx.unit))
+                                .collect(),
+                        };
+                        // resolve_witness reads the published theta (committed)
+                        // or selects at this specialization (deferred).
                         let (target, target_symbol, witness_theta) = self.resolve_witness(
                             protocol,
                             witness,
                             label.to_string(),
                             &head_ty,
                             &theta,
+                            Some(derived_protocol),
                         )?;
                         Some((target, target_symbol, prefix, witness_theta))
                     }
@@ -579,6 +595,7 @@ impl<'a> Lowering<'a> {
                                         label_str.clone(),
                                         &head,
                                         &Theta::default(),
+                                        None,
                                     )
                                 {
                                     return Some((target, target_symbol, prefix, witness_theta));
@@ -782,6 +799,7 @@ impl<'a> Lowering<'a> {
         label: String,
         head: &CheckTy,
         node_theta: &Theta,
+        derived_protocol: Option<ProtocolRef>,
     ) -> Option<(Label, Symbol, Theta)> {
         let head_for_witness = match head {
             CheckTy::Nominal(..) => head,
@@ -885,9 +903,15 @@ impl<'a> Lowering<'a> {
             let target = self.demand(requirement_or_witness, theta.clone())?;
             return Some((target, requirement_or_witness, theta));
         }
-        // No explicit row: an auto-derived protocol synthesizes its required
-        // witness in lambda-G, or uses a declared protocol default. The
-        // checker already discharged the same conformance structurally.
+        // No explicit row: an auto-derived protocol needs the concrete
+        // application from the enclosing specialization. Explicit rows above
+        // intentionally matched against the solver's generic application.
+        let protocol = derived_protocol
+            .map(|protocol| catalog.canonical_protocol_ref(protocol))
+            .unwrap_or(protocol);
+        // The synthesized witness lives in lambda-G, or a declared protocol
+        // default supplies it. The checker already discharged the same
+        // conformance structurally.
         let protocol_symbol = protocol.protocol;
         let derived_protocol = self
             .units

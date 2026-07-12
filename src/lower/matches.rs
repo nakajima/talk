@@ -703,6 +703,7 @@ impl<'a> Lowering<'a> {
             label.to_string(),
             payload_ty,
             &Theta::default(),
+            None,
         ) else {
             self.diagnostics.push(format!(
                 "lowering: cannot build existential witness for {label} at {:?}",

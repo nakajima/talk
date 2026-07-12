@@ -194,6 +194,16 @@ pub mod tests {
     }
 
     #[test]
+    fn conditional_equatable_witness_specializes_derived_payload_conformances() {
+        assert_eq!(
+            run(
+                "struct Token {\n\tlet kind: Int\n}\nstruct LexError {\n\tlet code: Int\n}\nlet left: Result<Token, LexError> = .ok(Token(kind: 1))\nlet right: Result<Token, LexError> = .ok(Token(kind: 1))\nleft == right"
+            ),
+            EvalValue::Bool(true)
+        );
+    }
+
+    #[test]
     fn if_expressions_branch() {
         assert_eq!(run("if true { 1 } else { 2 }"), EvalValue::I64(1));
         assert_eq!(run("if 2 > 3 { 1 } else { 2 }"), EvalValue::I64(2));

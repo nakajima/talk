@@ -321,6 +321,7 @@ impl<'a> Lowering<'a> {
             "equals".into(),
             ty,
             &Theta::default(),
+            None,
         )?;
 
         let void_ty = self.p.ty_void();
@@ -409,6 +410,7 @@ impl<'a> Lowering<'a> {
                     "show".into(),
                     ty,
                     &Theta::default(),
+                    None,
                 )?;
                 let add = self.string_add()?;
                 let shown = self.p.func("shown", string_ty, bot);

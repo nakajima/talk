@@ -64,6 +64,11 @@ while fixing several type-checker and lexer correctness bugs.
 
 ### Fixed
 
+- **Conditional equality lowers derived payload witnesses.** Specializing a
+  generic conformance such as `Result<Success, Failure>: Equatable` now carries
+  the concrete protocol application into auto-derived witness selection, so
+  values such as `Result<Token, LexError>` lower when both payload types derive
+  `Equatable`.
 - **Static methods can construct their own type.** An in-flight initializer no
   longer forces its unit-returning body to have the constructed nominal type,
   so `static func make() -> Box { Box() }` type-checks correctly.
