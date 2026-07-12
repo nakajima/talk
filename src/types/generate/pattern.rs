@@ -54,6 +54,15 @@ impl PatternRefinement {
                 origin,
             ),
             Constraint::EffEq(a, b, origin) => Constraint::EffEq(a, b, origin),
+            Constraint::EffectSubset {
+                inferred,
+                allowed,
+                origin,
+            } => Constraint::EffectSubset {
+                inferred,
+                allowed,
+                origin,
+            },
             Constraint::PreferEq(a, b, origin) => Constraint::PreferEq(
                 a.substitute(&tys, &effs, &rows),
                 b.substitute(&tys, &effs, &rows),

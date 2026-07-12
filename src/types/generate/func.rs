@@ -19,7 +19,30 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     pub(super) fn infer_func(&mut self, func: &Func, ctx: &Ctx) -> Ty {
         self.register_func_bounds(func);
         self.with_declared_givens(&func.generics, func.where_clause.as_ref(), |this| {
-            this.infer_callable(&func.params, func.ret.as_ref(), &func.body, func.id, ctx)
+            let inferred =
+                this.infer_callable(&func.params, func.ret.as_ref(), &func.body, func.id, ctx);
+            if func.effects.is_open {
+                return inferred;
+            }
+
+            let Ty::Func(params, ret, inferred_effects) = inferred else {
+                return inferred;
+            };
+            let allowed = EffectRow::new(
+                func.effects
+                    .names
+                    .iter()
+                    .filter_map(|name| name.symbol().ok())
+                    .map(EffectEntry::label)
+                    .collect(),
+                None,
+            );
+            this.wanteds.push(Constraint::EffectSubset {
+                inferred: inferred_effects,
+                allowed: allowed.clone(),
+                origin: CtOrigin::new(func.id, CtReason::Effect),
+            });
+            Ty::Func(params, ret, allowed)
         })
     }
 

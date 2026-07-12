@@ -88,6 +88,15 @@ impl CtOrigin {
 pub enum Constraint {
     Eq(Ty, Ty, CtOrigin),
     EffEq(EffectRow, EffectRow, CtOrigin),
+    /// One effect row must flow into another. Calls use this as the
+    /// application subeffecting rule; explicit function annotations use it
+    /// to publish the declared row while retaining a structured diagnostic
+    /// for each inferred label outside that bound.
+    EffectSubset {
+        inferred: EffectRow,
+        allowed: EffectRow,
+        origin: CtOrigin,
+    },
     /// `ty` conforms to `protocol`, with this use's expected associated-type
     /// bindings (fresh holes at a use site; concrete expectations when
     /// re-emitted from a scheme's bounds). Discharge equates each binding

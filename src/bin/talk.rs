@@ -687,7 +687,7 @@ async fn main() {
 
             init();
             let source = input_text(filename.as_deref());
-            println!(
+            print!(
                 "{}",
                 formatter::format_string_with_width(&source, width.unwrap_or(80))
             );

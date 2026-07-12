@@ -1,5 +1,5 @@
 // no-core
-use package::Memory::{ _alloc, _copy, _free }
+use package::Memory::{ alloc, _alloc, _copy, _free }
 use package::Operators::{ Add, Comparable, Equatable }
 use package::String::{ String }
 use package::Showable::{ Showable }
@@ -89,7 +89,7 @@ public func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {
 // High-level open for Talk strings: copy the path into fresh memory with
 // a NUL terminator (allocations are zero-filled, so the terminator comes
 // free) and open through the C-string path.
-public func open_path(path: String, flags: Int, mode: Int) 'io -> Int {
+public func open_path(path: String, flags: Int, mode: Int) '[io, alloc] -> Int {
 	let buf = _alloc<Byte>(path.byte_count + 1)
 	_copy(path.storage.base, buf, path.byte_count)
 	let fd = _io_open(buf, flags, mode)

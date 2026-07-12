@@ -173,6 +173,27 @@ fn lowers_a_construct_diverse_program_without_panicking() {
 }
 
 #[test]
+fn functions_carry_their_finalized_effect_scheme() {
+    use derive_visitor::Drive;
+
+    let source = "// no-core\neffect 'a() -> ()\nfunc f() 'a -> () { () }";
+    let mut effect_counts = vec![];
+    for (_, hir_nodes) in lower(source) {
+        let mut collect = derive_visitor::visitor_enter_fn(|func: &typed_ast::Func| {
+            if func.name.name_str() == "f"
+                && let crate::types::ty::Ty::Func(_, _, effects) = &func.scheme.ty
+            {
+                effect_counts.push(effects.effects.len());
+            }
+        });
+        for node in &hir_nodes {
+            node.drive(&mut collect);
+        }
+    }
+    assert_eq!(effect_counts, vec![1]);
+}
+
+#[test]
 fn preserves_node_ids_one_to_one() {
     let source = "func f(x: Int) -> Int {\n\tlet y = x\n\ty\n}\nf(x: 2)";
     for (ast_roots, hir_nodes) in lower(source) {

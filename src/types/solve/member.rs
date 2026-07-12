@@ -1013,6 +1013,54 @@ impl<'s> Solver<'s> {
         }
         let signature = scheme.ty.substitute(&tys, &effs, &Default::default());
 
+        // The requirement supplies the abstract shape, but a concrete call
+        // also knows its selected witness. Equating their outer effect rows
+        // carries the witness's inferred effects into the member expression
+        // that will be baked into the typed AST.
+        let witness_substitution = if witness != requirement.symbol {
+            match &receiver_head {
+                Ty::Nominal(head, head_args) => self
+                    .catalog
+                    .matching_conformances(*head, head_args, &protocol)
+                    .into_iter()
+                    .next()
+                    .map(|matched| matched.substitution),
+                other => self
+                    .catalog
+                    .matching_protocol_head_conformances(other, &protocol)
+                    .into_iter()
+                    .next()
+                    .map(|matched| matched.substitution),
+            }
+        } else {
+            None
+        };
+        let witness_signature = witness_substitution.as_ref().and_then(|substitution| {
+            let scheme = self.schemes.get(&witness)?.clone();
+            let mut specialized = scheme.clone();
+            specialized.ty =
+                specialized
+                    .ty
+                    .substitute(substitution, &Default::default(), &Default::default());
+            specialized.predicates = specialized
+                .predicates
+                .iter()
+                .map(|predicate| {
+                    predicate.substitute(substitution, &Default::default(), &Default::default())
+                })
+                .collect();
+            Some(self.instantiate_scheme(&specialized, origin.node, queue))
+        });
+        if let Some(Ty::Func(_, _, witness_effects)) = witness_signature
+            && let Ty::Func(_, _, requirement_effects) = &signature
+        {
+            queue.push(Constraint::EffEq(
+                requirement_effects.clone(),
+                witness_effects,
+                origin,
+            ));
+        }
+
         let mut local_wanteds = vec![];
         if let Ty::Func(params, ret, eff) = signature
             && !params.is_empty()
@@ -1057,25 +1105,8 @@ impl<'s> Solver<'s> {
         // conformance row's rigid params bound against the receiver head;
         // a default body needs Self and the assoc bindings. Entries may
         // hold vars/projections — finalize zonks and normalizes them.
-        let head_for_witness = match &receiver_head {
-            Ty::Borrow(_, inner) => inner.as_ref().clone(),
-            other => other.clone(),
-        };
         if witness != requirement.symbol {
-            let matched = match &head_for_witness {
-                Ty::Nominal(head, head_args) => self
-                    .catalog
-                    .matching_conformances(*head, head_args, &protocol)
-                    .into_iter()
-                    .next(),
-                other => self
-                    .catalog
-                    .matching_protocol_head_conformances(other, &protocol)
-                    .into_iter()
-                    .next(),
-            };
-            if let Some(matched) = matched {
-                let bound = matched.substitution;
+            if let Some(bound) = witness_substitution {
                 self.instantiations
                     .entry(origin.node)
                     .or_default()

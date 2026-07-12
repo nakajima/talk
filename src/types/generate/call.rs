@@ -59,7 +59,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         CtReason::Apply,
                     );
                 }
-                self.emit_eff_eq(eff, ctx.eff.clone(), node);
+                self.wanteds.push(Constraint::EffectSubset {
+                    inferred: eff,
+                    allowed: ctx.eff.clone(),
+                    origin: CtOrigin::new(node, CtReason::Apply),
+                });
                 *ret
             }
             Ty::Var(_) => {
@@ -71,8 +75,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     arg_tys.push(self.infer_closure_block(block, ctx));
                 }
                 let ret = Ty::Var(self.store.fresh_ty(self.level, result_origin));
-                let expected = Ty::Func(arg_tys, Box::new(ret.clone()), ctx.eff.clone());
+                let callee_effects = EffectRow::open(self.store.fresh_eff(self.level, node));
+                let expected = Ty::Func(arg_tys, Box::new(ret.clone()), callee_effects.clone());
                 self.emit_eq(callee_ty, expected, node, CtReason::Apply);
+                self.wanteds.push(Constraint::EffectSubset {
+                    inferred: callee_effects,
+                    allowed: ctx.eff.clone(),
+                    origin: CtOrigin::new(node, CtReason::Apply),
+                });
                 ret
             }
             Ty::Error => Ty::Error,

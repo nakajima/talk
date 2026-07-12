@@ -19,7 +19,10 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             .catalog
             .effects
             .keys()
-            .filter(|symbol| symbol.external_module_id() == Some(ModuleId::Core))
+            .filter(|symbol| {
+                symbol.external_module_id() == Some(ModuleId::Core)
+                    || (self.module_id == ModuleId::Core && symbol.external_module_id().is_none())
+            })
             .copied()
             .collect();
         self.handler_positions = stmts
@@ -283,6 +286,22 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         origin.node,
                     ));
                 }
+                Constraint::EffectSubset {
+                    inferred,
+                    allowed,
+                    origin,
+                } => {
+                    let expected = self.store.render_eff(&allowed);
+                    let found = self.store.render_eff(&inferred);
+                    self.diagnostics.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
+                }
                 Constraint::ApplyBorrow {
                     expected_perm,
                     expected_inner,
@@ -322,9 +341,6 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
 
         // (symbol, type, passes value restriction, was annotated, declared generics/predicates)
         let mut outputs: Vec<(Symbol, Ty, bool, bool, DeclaredSchemeContext)> = vec![];
-        // Binders with a closed effect annotation (`func f() 'a -> ()`),
-        // checked as an exact upper bound after the solve.
-        let mut closed_annotations: Vec<(Symbol, &'a Func)> = vec![];
         // Nominal member bodies queued behind skeleton creation so members
         // can reference each other (and Lets in the same group) freely.
         let mut member_queue: Vec<(Ty, Vec<(Symbol, MemberWork<'a>)>)> = vec![];
@@ -402,14 +418,6 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     }) => self.declared_scheme_context(&func.generics, func.where_clause.as_ref()),
                     _ => DeclaredSchemeContext::default(),
                 };
-                if let Some(Expr {
-                    kind: ExprKind::Func(func),
-                    ..
-                }) = rhs
-                    && !func.effects.is_open
-                {
-                    closed_annotations.push((*binder, func));
-                }
                 outputs.push((
                     *binder,
                     self.mono[binder].clone(),
@@ -470,31 +478,6 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
 
         let wanteds = std::mem::take(self.wanteds);
         let residuals = self.run_solver(wanteds);
-
-        // Closed effect annotations are exact upper bounds on the inferred
-        // row, checked at the declaration site so arrow rows stay open
-        // (a deliberate deviation from Koka's row-typed effect system).
-        for (binder, func) in closed_annotations {
-            let declared: Vec<Symbol> = func
-                .effects
-                .names
-                .iter()
-                .filter_map(|n| n.symbol().ok())
-                .collect();
-            let ty = self.mono[&binder].clone();
-            if let Ty::Func(_, _, eff) = self.store.zonk_ty(&ty) {
-                for entry in &eff.effects {
-                    if !declared.contains(&entry.effect) {
-                        self.diagnostics.errors.push((
-                            TypeError::UndeclaredEffect {
-                                effect: entry.effect.to_string(),
-                            },
-                            func.id,
-                        ));
-                    }
-                }
-            }
-        }
 
         // THIH's restricted-group rule: one restricted binder makes the
         // whole group monomorphic.
@@ -574,8 +557,11 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         self.deferred.push(residual)
                     }
                 }
-                Constraint::ApplyBorrow { .. } => self.deferred.push(residual),
-                Constraint::CoerceOwned { .. } => self.deferred.push(residual),
+                Constraint::EffEq(..)
+                | Constraint::EffectSubset { .. }
+                | Constraint::HandleEffect { .. }
+                | Constraint::ApplyBorrow { .. }
+                | Constraint::CoerceOwned { .. } => self.deferred.push(residual),
                 // A leading-dot use whose enum this group never determined:
                 // a later group (or the final solve's error) owns it. It
                 // never qualifies a scheme — lowering needs one concrete

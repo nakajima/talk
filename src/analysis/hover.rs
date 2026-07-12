@@ -306,6 +306,30 @@ mod tests {
     }
 
     #[test]
+    fn hover_on_string_add_shows_the_concrete_alloc_effect() {
+        let source = "let value = \"a\".add(\"b\")\nvalue";
+        let hover = hover(source, "add").expect("hover");
+        assert!(hover.contents.contains("'alloc"), "{}", hover.contents);
+    }
+
+    #[test]
+    fn string_add_cannot_flow_into_a_pure_function() {
+        let source = "func concatenate() '[] -> String {\n\t\"a\".add(\"b\")\n}";
+        let workspace = workspace(source);
+        let diagnostics = workspace
+            .diagnostics
+            .get("<test>")
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("'alloc")),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
     fn hover_on_a_let_binding_target_shows_its_type() {
         let source = "let foo = 123\nfoo";
         let hover = hover(source, "foo").expect("hover");

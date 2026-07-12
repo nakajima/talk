@@ -419,6 +419,11 @@ pub struct Func {
     pub name: Name,
     #[drive(skip)]
     pub effects: EffectSet,
+    /// The function's finalized callable contract. Explicit effect
+    /// annotations appear here as conservative bounds; inferred functions
+    /// carry their solved latent row.
+    #[drive(skip)]
+    pub scheme: crate::types::ty::Scheme,
     pub generics: Vec<GenericDecl>,
     #[drive(skip)]
     pub captures: Vec<CaptureSpec>,

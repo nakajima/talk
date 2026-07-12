@@ -897,11 +897,25 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 Ty::Error
             }
         };
-        // The effect tail is a parameter keyed by the requirement symbol so
-        // every use substitutes a fresh one (no accidental row sharing).
-        let eff = EffectRow {
-            effects: Default::default(),
-            tail: Some(EffTail::Param(symbol)),
+        // An omitted annotation is effect-polymorphic and gets a fresh tail
+        // at every use. An explicit annotation is the requirement's closed
+        // effect contract and must survive into witness dispatch.
+        let eff = if signature.effects.is_open {
+            EffectRow {
+                effects: Default::default(),
+                tail: Some(EffTail::Param(symbol)),
+            }
+        } else {
+            EffectRow::new(
+                signature
+                    .effects
+                    .names
+                    .iter()
+                    .filter_map(|name| name.symbol().ok())
+                    .map(EffectEntry::label)
+                    .collect(),
+                None,
+            )
         };
         self.insert_requirement_scheme(
             symbol,
@@ -926,8 +940,15 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         generics: Vec<Symbol>,
         predicates: Vec<Predicate>,
     ) {
+        let has_open_outer = matches!(
+            &sig,
+            Ty::Func(_, _, EffectRow {
+                tail: Some(EffTail::Param(param)),
+                ..
+            }) if *param == symbol
+        );
         let (sig, inner_eff_params) = self.quantify_signature_eff_vars(sig);
-        let mut eff_params = vec![symbol];
+        let mut eff_params = if has_open_outer { vec![symbol] } else { vec![] };
         eff_params.extend(inner_eff_params);
         self.schemes.insert(
             symbol,
@@ -964,9 +985,21 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             Some(annotation) => self.lower_annotation(annotation),
             None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, func.id)),
         };
-        let eff = EffectRow {
-            effects: Default::default(),
-            tail: Some(EffTail::Param(symbol)),
+        let eff = if func.effects.is_open {
+            EffectRow {
+                effects: Default::default(),
+                tail: Some(EffTail::Param(symbol)),
+            }
+        } else {
+            EffectRow::new(
+                func.effects
+                    .names
+                    .iter()
+                    .filter_map(|name| name.symbol().ok())
+                    .map(EffectEntry::label)
+                    .collect(),
+                None,
+            )
         };
         self.insert_requirement_scheme(
             symbol,

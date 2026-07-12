@@ -71,6 +71,7 @@ impl<'s> Solver<'s> {
         match constraint {
             Constraint::Eq(_, _, origin)
             | Constraint::EffEq(_, _, origin)
+            | Constraint::EffectSubset { origin, .. }
             | Constraint::PreferEq(_, _, origin)
             | Constraint::Conforms { origin, .. }
             | Constraint::HasMember { origin, .. }
@@ -119,6 +120,11 @@ impl<'s> Solver<'s> {
             Constraint::EffEq(a, b, _) => self
                 .eff_mentions_params(a, params)
                 .or_else(|| self.eff_mentions_params(b, params)),
+            Constraint::EffectSubset {
+                inferred, allowed, ..
+            } => self
+                .eff_mentions_params(inferred, params)
+                .or_else(|| self.eff_mentions_params(allowed, params)),
             Constraint::PreferEq(a, b, _) => self
                 .ty_mentions_params(a, params)
                 .or_else(|| self.ty_mentions_params(b, params)),

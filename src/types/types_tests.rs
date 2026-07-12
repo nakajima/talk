@@ -2761,6 +2761,13 @@ pub mod tests {
     }
 
     #[test]
+    fn explicit_effect_annotation_is_the_published_contract() {
+        let t = check("// no-core\neffect 'a() -> ()\nfunc f() 'a -> () {\n\t()\n}");
+        assert_clean(&t);
+        assert!(ty_of(&t, "f").contains("'a"), "{}", ty_of(&t, "f"));
+    }
+
+    #[test]
     fn effectful_function_type_annotation_accepts_declared_effects() {
         let t = check("// no-core\neffect 'a() -> ()\nlet f: () 'a -> () = func() {\n\t'a()\n}");
         assert_clean(&t);

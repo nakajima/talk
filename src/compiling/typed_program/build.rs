@@ -857,10 +857,25 @@ impl TypedTreeBuilder<'_> {
     }
 
     fn func(&self, f: &crate::node_kinds::func::Func) -> typed_ast::Func {
+        let scheme = f
+            .name
+            .symbol()
+            .ok()
+            .and_then(|symbol| self.types.schemes.get(&symbol))
+            .cloned()
+            .or_else(|| {
+                self.types
+                    .node_types
+                    .get(&f.id)
+                    .cloned()
+                    .map(crate::types::ty::Scheme::mono)
+            })
+            .unwrap_or_else(|| crate::types::ty::Scheme::mono(crate::types::ty::Ty::Error));
         typed_ast::Func {
             id: f.id,
             name: f.name.clone(),
             effects: f.effects.clone(),
+            scheme,
             generics: f.generics.clone(),
             captures: f.captures.clone(),
             where_clause: f.where_clause.clone(),

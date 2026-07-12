@@ -114,6 +114,10 @@ impl<'s> Solver<'s> {
         // only then has the extent's row content surfaced (LIFO, so an
         // inner handler filters before the outer one it feeds).
         let mut handler_boundaries: Vec<Constraint> = vec![];
+        // Effect flow from calls runs before handler elimination; explicit
+        // function bounds run afterward against the handled body row.
+        let mut effect_flows: Vec<Constraint> = vec![];
+        let mut effect_bounds: Vec<Constraint> = vec![];
         let mut steps = 0usize;
         loop {
             let generation = self.store.generation();
@@ -134,6 +138,12 @@ impl<'s> Solver<'s> {
                 }
                 match constraint {
                     Constraint::HandleEffect { .. } => handler_boundaries.push(constraint),
+                    Constraint::EffectSubset { origin, .. }
+                        if origin.reason == CtReason::Effect =>
+                    {
+                        effect_bounds.push(constraint)
+                    }
+                    Constraint::EffectSubset { .. } => effect_flows.push(constraint),
                     Constraint::PreferEq(a, b, origin) => {
                         preferred_equalities.push((a, b, origin));
                     }
@@ -254,8 +264,16 @@ impl<'s> Solver<'s> {
                 }
             }
             if stuck.is_empty() {
+                if !effect_flows.is_empty() {
+                    self.process_effect_subsets(&mut effect_flows, &mut stuck);
+                    continue;
+                }
                 if !handler_boundaries.is_empty() {
                     self.process_handler_boundaries(&mut handler_boundaries, &mut stuck);
+                    continue;
+                }
+                if !effect_bounds.is_empty() {
+                    self.process_effect_subsets(&mut effect_bounds, &mut stuck);
                     continue;
                 }
                 if self.apply_preferred_equalities(&mut preferred_equalities, &mut queue) {
@@ -271,8 +289,18 @@ impl<'s> Solver<'s> {
                 queue.extend(std::mem::take(&mut stuck));
                 continue;
             }
+            if !effect_flows.is_empty() {
+                self.process_effect_subsets(&mut effect_flows, &mut stuck);
+                queue.extend(std::mem::take(&mut stuck));
+                continue;
+            }
             if !handler_boundaries.is_empty() {
                 self.process_handler_boundaries(&mut handler_boundaries, &mut stuck);
+                queue.extend(std::mem::take(&mut stuck));
+                continue;
+            }
+            if !effect_bounds.is_empty() {
+                self.process_effect_subsets(&mut effect_bounds, &mut stuck);
                 queue.extend(std::mem::take(&mut stuck));
                 continue;
             }
@@ -329,6 +357,9 @@ impl<'s> Solver<'s> {
                     // tail is touchable, or final solving can report the
                     // effect mismatch.
                     residual.push(Constraint::EffEq(a, b, origin));
+                }
+                bound @ Constraint::EffectSubset { .. } => {
+                    residual.push(bound);
                 }
                 boundary @ Constraint::HandleEffect { .. } => {
                     // A handler boundary whose tails were untouchable here:
@@ -629,6 +660,13 @@ impl<'s> Solver<'s> {
                 let b = self.store.render_eff(b);
                 format!("effects {a} == {b}")
             }
+            Constraint::EffectSubset {
+                inferred, allowed, ..
+            } => {
+                let inferred = self.store.render_eff(inferred);
+                let allowed = self.store.render_eff(allowed);
+                format!("effects {inferred} within {allowed}")
+            }
             Constraint::PreferEq(a, b, _) => {
                 let a = self.store.render(a);
                 let b = self.store.render(b);
@@ -754,6 +792,93 @@ impl<'s> Solver<'s> {
         match self.store.flatten_eff(row).1 {
             FlatTail::Var(v) => Some(v),
             _ => None,
+        }
+    }
+
+    /// Solve effect inclusion after rows reach quiescence. Calls flow their
+    /// concrete labels into an open ambient row. Explicit annotations close
+    /// the body row against allowed labels and report anything outside the
+    /// bound.
+    fn process_effect_subsets(
+        &mut self,
+        bounds: &mut Vec<Constraint>,
+        stuck: &mut Vec<Constraint>,
+    ) {
+        while let Some(bound) = bounds.pop() {
+            let Constraint::EffectSubset {
+                inferred,
+                allowed,
+                origin,
+            } = bound
+            else {
+                unreachable!("effect subset queues hold only EffectSubset");
+            };
+            let (inferred_entries, _) = self.store.flatten_eff(&inferred);
+            let (allowed_entries, allowed_tail) = self.store.flatten_eff(&allowed);
+
+            // Calls flow their concrete labels into an open ambient row while
+            // leaving room for effects from sibling expressions.
+            if origin.reason != CtReason::Effect {
+                let required = EffectRow::open(self.store.fresh_eff(self.level, origin.node));
+                let required = EffectRow::new(inferred_entries, required.tail);
+                if !self.unify_eff(&required, &allowed, origin) {
+                    stuck.push(Constraint::EffectSubset {
+                        inferred,
+                        allowed,
+                        origin,
+                    });
+                }
+                continue;
+            }
+
+            // A declared function bound is closed. If it is temporarily
+            // untouchable inside an implication, float it instead of
+            // diagnosing against an incomplete row.
+            if !matches!(allowed_tail, FlatTail::None) {
+                stuck.push(Constraint::EffectSubset {
+                    inferred,
+                    allowed,
+                    origin,
+                });
+                continue;
+            }
+
+            let allowed_labels: FxHashSet<Symbol> =
+                allowed_entries.iter().map(|entry| entry.effect).collect();
+            let mut target_entries = inferred_entries.clone();
+            for entry in &allowed_entries {
+                if !target_entries
+                    .iter()
+                    .any(|inferred| inferred.effect == entry.effect)
+                {
+                    target_entries.push(entry.clone());
+                }
+            }
+            let target = EffectRow::new(target_entries, None);
+            if !self.unify_eff(&inferred, &target, origin) {
+                stuck.push(Constraint::EffectSubset {
+                    inferred,
+                    allowed,
+                    origin,
+                });
+                continue;
+            }
+
+            let mut undeclared: Vec<Symbol> = inferred_entries
+                .iter()
+                .map(|entry| entry.effect)
+                .filter(|effect| !allowed_labels.contains(effect))
+                .collect();
+            undeclared.sort();
+            undeclared.dedup();
+            for effect in undeclared {
+                self.errors.push((
+                    TypeError::UndeclaredEffect {
+                        effect: effect.to_string(),
+                    },
+                    origin.node,
+                ));
+            }
         }
     }
 
