@@ -58,8 +58,14 @@ libc = "0.2"
 name = "vm_e2e"
 harness = false
 
+[[test]]
+name = "fuzz"
+path = "tests/fuzz.rs"
+required-features = ["fuzz-tests"]
+
 [features]
 default = ["cli"]
+fuzz-tests = []
 cli = [
   "dep:clap",
   "dep:clap_complete",

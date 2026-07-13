@@ -24,6 +24,8 @@ jobs:
         run: cargo build --verbose --locked
       - name: Run tests
         run: cargo test --verbose --locked
+      - name: Run fuzz tests
+        run: cargo test --test fuzz --features fuzz-tests --verbose --locked
 
   talk-swift:
     name: TalkSwift

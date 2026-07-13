@@ -41,9 +41,6 @@ pub mod cli;
 pub mod lsp;
 
 #[cfg(test)]
-pub mod fuzz_tests;
-
-#[cfg(test)]
 pub mod test_utils;
 
 #[cfg(test)]

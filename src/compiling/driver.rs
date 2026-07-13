@@ -705,11 +705,11 @@ impl Driver<Typed> {
             },
         };
         // Free-balance verifier (ADR 0017 stage 2, plan 6.1): ON by
-        // default for every lowered body in the test harness paths;
-        // TALK_SKIP_VERIFY_BALANCE=1 opts out. Production builds are
-        // untouched. Only well-lowered programs are verified — a program
-        // with type or lowering diagnostics is allowed to be partial.
-        #[cfg(test)]
+        // default for every lowered body in unit tests and the dedicated
+        // fuzz target; TALK_SKIP_VERIFY_BALANCE=1 opts out. Production
+        // builds are untouched. Only well-lowered programs are verified -
+        // a program with type or lowering diagnostics may be partial.
+        #[cfg(any(test, feature = "fuzz-tests"))]
         if driver.phase.diagnostics.is_empty()
             && !has_error_diagnostics(&driver.phase.prior_diagnostics)
             && let Some(outcome) = crate::lambda_g::balance::verify_balance_unless_skipped(
@@ -805,7 +805,8 @@ impl Driver<Lowered> {
     /// success, asserts the leak invariant: everything live at exit is the
     /// result value's own footprint — every other allocation and `'heap`
     /// object torn down. Leak detection is suite policy (CPython's refleak
-    /// buildbots), not per-test opt-in.
+    /// buildbots), not per-test opt-in. It is active in unit tests and the
+    /// dedicated fuzz target.
     pub fn eval_with_output(
         &mut self,
     ) -> Result<(crate::lambda_g::eval::EvalValue, String), crate::lambda_g::eval::EvalError> {
@@ -847,7 +848,7 @@ impl Driver<Lowered> {
     /// equality would fire spuriously; only the negative-balance
     /// direction (`live >= result`) is still sound to assert.
     fn assert_balance(&self, balance: &crate::vm::interp::RunBalance, engine: &str) {
-        if !cfg!(test) {
+        if !cfg!(any(test, feature = "fuzz-tests")) {
             return;
         }
         if !balance.result_exact {
@@ -901,9 +902,10 @@ impl Driver<Lowered> {
     }
 
     /// Every VM run computes the allocation balance at exit (one walk of
-    /// the result footprint — cheap enough for production runs); in test
-    /// builds [`Driver::assert_balance`] asserts it — the VM half of the
-    /// leak fence, symmetrical with [`Driver::eval_with_output`].
+    /// the result footprint — cheap enough for production runs); in unit
+    /// tests and the fuzz target [`Driver::assert_balance`] asserts it - the
+    /// VM half of the leak fence, symmetrical with
+    /// [`Driver::eval_with_output`].
     fn run_vm_fenced(
         &self,
         module: &crate::vm::Module,

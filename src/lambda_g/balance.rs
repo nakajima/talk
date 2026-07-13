@@ -74,7 +74,8 @@
 //! reach (it happens through untracked places, never misreported).
 //!
 //! ON by default in test builds (plan 6.1): `Driver::lower` runs it over
-//! every lowered body under `cfg(test)` and asserts zero reports; set
+//! every lowered body in unit tests and the dedicated fuzz target and
+//! asserts zero reports; set
 //! `TALK_SKIP_VERIFY_BALANCE=1` to opt out. Production builds never run
 //! it. Its acceptance tests (including the known-bug shapes it was built
 //! red against) live in `balance_tests.rs`.
@@ -205,9 +206,10 @@ pub fn verify_balance(p: &Program, main: Label, entry_funcs: &FxHashSet<Label>) 
     outcome
 }
 
-/// Entry point for the test harnesses: ON by default (plan 6.1 —
-/// `Driver::lower` runs it over every lowered body under `cfg(test)`);
-/// `TALK_SKIP_VERIFY_BALANCE=1` opts out, returning `None`.
+/// Entry point for the test harnesses: ON by default (plan 6.1 -
+/// `Driver::lower` runs it over every lowered body in unit tests and the
+/// dedicated fuzz target); `TALK_SKIP_VERIFY_BALANCE=1` opts out, returning
+/// `None`.
 pub fn verify_balance_unless_skipped(
     p: &Program,
     main: Label,

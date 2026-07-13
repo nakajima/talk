@@ -29,7 +29,7 @@
 //! Exploratory runs override via env:
 //!
 //! ```text
-//! TALK_FUZZ_SEED=42 TALK_FUZZ_COUNT=5000 cargo test fuzz_ownership -- --nocapture
+//! TALK_FUZZ_SEED=42 TALK_FUZZ_COUNT=5000 cargo test --test fuzz --features fuzz-tests -- --nocapture
 //! ```
 //!
 //! On a failure the harness greedily shrinks (statement removal + scope
@@ -42,9 +42,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    use crate::compiling::driver::{Driver, DriverConfig, Source};
-    use crate::lambda_g::eval::EvalValue;
-    use crate::vm::interp::Value;
+    use talk::compiling::driver::{Driver, DriverConfig, Source};
+    use talk::lambda_g::eval::EvalValue;
+    use talk::vm::interp::Value;
 
     /// Fixed CI base seed. Chosen once, arbitrarily; changing it is a
     /// deliberate act (it changes which programs CI explores).

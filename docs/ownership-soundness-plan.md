@@ -81,7 +81,7 @@ probes while fixing B2; not yet assigned to a track — triage into wave 2):
 | B10 | A body whose tail is a branch join reaches `Terminator::Return` with ScopeExit DropCandidates unclaimed (no ReturnValue statement to run `wrap_cont_with_following_drops`) — owned **parameters** on that shape silently leak (locals survive via StorageDead pairing). The drain fix is written but backed out: it unmasks S7 (double-frees `Dict.insert`'s consume params). Sequencing: land S7's rule-B buffer retain FIRST, then the drain. Documented at `src/lower/mir_lowering.rs:1434-1452` | `src/lower/mir_lowering.rs:1434-1452` |
 
 Discovered by the 8.4 fuzzer (wave 4, 2026-07-12; pre-existing, unassigned
-triage — minimal repros in `src/fuzz_tests.rs`'s `DEFAULT_SKIPS` comment,
+triage — minimal repros in `tests/fuzz.rs`'s `DEFAULT_SKIPS` comment,
 shrunk generator repros in `target/fuzz/`):
 
 | ID | Finding | Locus |
@@ -706,15 +706,17 @@ borrowed receiver × method × loop, handler × consume) that every recent
 ownership bug lived in and hand-written tests keep sampling one point of.
 Seeded, deterministic in CI; failures shrink to corpus entries in
 `tests/programs/`.
-**LANDED 2026-07-12** (`src/fuzz_tests.rs`, a cfg(test) lib module so the
-cfg(test) balance verifier and VM fence are in the oracle): typed grammar
+**LANDED 2026-07-12** (`tests/fuzz.rs`, a dedicated Cargo test target gated
+by the `fuzz-tests` feature, which also enables the balance verifier and VM
+fence in the oracle): typed grammar
 with a scope stack (owned/borrowed/consumed tracking; loop, for, and
 closure bodies are consume barriers; ~10% "spice" deliberately violates
 the tracking to keep the reject path populated), hand-rolled xorshift64*
 + splitmix64 per-program seeds, greedy tree shrinking
 (remove/unwrap/zero ops re-running the oracle), failures written to
 `target/fuzz/`. CI runs 60 programs at a fixed base seed in ~7s at an
-88% compile rate (floor asserted at 60%); `TALK_FUZZ_SEED` /
+88% compile rate (floor asserted at 60%). Run it with
+`cargo test --test fuzz --features fuzz-tests`; `TALK_FUZZ_SEED` /
 `TALK_FUZZ_COUNT` / `TALK_FUZZ_SHRINK_BUDGET` drive exploratory runs,
 `TALK_FUZZ_PROBE` runs one file through the exact oracle with per-engine
 leak attribution. First session (5,000+ generated programs) found

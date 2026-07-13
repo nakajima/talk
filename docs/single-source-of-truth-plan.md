@@ -143,7 +143,7 @@ exhaustiveness test so a new op can't be forgotten by one of the four.
 
 ### O8. Fuzzer DEFAULT_SKIPS as shadow bug tracker (MEDIUM)
 
-`fuzz_tests.rs::DEFAULT_SKIPS` duplicates the plan doc's F-findings
+`tests/fuzz.rs::DEFAULT_SKIPS` duplicates the plan doc's F-findings
 (prose + index lists in two places). Shape: each skipped index becomes
 a named expected-fail test that flips red when fixed; the skip array
 derives from those names.
