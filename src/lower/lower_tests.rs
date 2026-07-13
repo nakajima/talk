@@ -62,6 +62,54 @@ pub mod tests {
     }
 
     #[test]
+    fn all_return_match_with_live_local_lowers() {
+        // A needs-release local live at a match whose arms ALL return: the
+        // candidates at the (dataflow-unreachable) join must classify Dead,
+        // not reach lowering unelaborated.
+        run("func f() {\n\tlet s = \"e\"\n\tmatch 0 {\n\t\t_ -> return\n\t}\n}\nf()");
+    }
+
+    #[test]
+    fn all_return_inner_match_with_live_binder_lowers() {
+        // Same shape through a match-pattern binder instead of a declared
+        // local (the PatternBindLocal flavor).
+        run(
+            "func f() {\n\tmatch Optional.some(\"e\") {\n\t\t.some(s) -> {\n\t\t\tmatch 0 {\n\t\t\t\t_ -> return\n\t\t\t}\n\t\t},\n\t\t.none -> ()\n\t}\n}\nf()",
+        );
+    }
+
+    #[test]
+    fn unwind_entries_ride_capability_passing_applications() {
+        // ADR 0027: a perform with an owned local live across it carries
+        // an unwind entry (rendered as a trailing `unwind …` annotation)
+        // whose body frees the local and terminates in `unwind_done`.
+        let ir = lowered_ir(
+            "effect 'oops(error) -> Never\n@handle 'oops { err in print(err) }\nfunc boom() 'oops -> () {\n\tlet owned = [1, 2]\n\t'oops(\"bang\")\n}\nboom()",
+        );
+        assert!(
+            ir.contains("unwind unwind_entry"),
+            "expected an unwind operand on the perform application:\n{ir}"
+        );
+        assert!(
+            ir.contains("unwind_done"),
+            "expected the entry to terminate in unwind_done:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn suspension_sites_with_nothing_live_carry_no_unwind_entry() {
+        // The zero-cost half: when no owned local is live across the
+        // suspension, no entry is minted (code size only where needed).
+        let ir = lowered_ir(
+            "effect 'oops(error) -> Never\n@handle 'oops { err in print(err) }\nfunc boom() 'oops -> () {\n\t'oops(\"bang\")\n}\nboom()",
+        );
+        assert!(
+            !ir.contains("unwind_entry"),
+            "expected no unwind entries when nothing owned is live:\n{ir}"
+        );
+    }
+
+    #[test]
     fn character_literals_match_by_utf8_bytes() {
         assert_eq!(
             run("match '😎' { '😁' -> 1, '\\u{1F60E}' -> 2, _ -> 3 }"),
@@ -406,6 +454,84 @@ pub mod tests {
     }
 
     #[test]
+    fn mixed_rawptr_struct_drop_frees_sibling_droppable_fields() {
+        // R5/6.3(c): teardown of a struct with a RawPtr field PLUS another
+        // droppable field must free BOTH — the walk used to stop at the
+        // first RawPtr field and silently leak the siblings. The eval leak
+        // fence (scalar result) asserts the balance.
+        assert_eq!(
+            run(
+                "// unsafe\nstruct Mixed {\n\tlet buf: RawPtr\n\tlet name: String\n}\nfunc check() -> Int {\n\tlet m = Mixed(buf: _alloc<Byte>(4), name: \"a\" + \"b\")\n\t0\n}\ncheck()"
+            ),
+            EvalValue::I64(0)
+        );
+    }
+
+    #[test]
+    fn mixed_rawptr_struct_retain_covers_sibling_droppable_fields() {
+        // The retain twin: a tier-2 clone of the mixed struct must bump
+        // BOTH buffers (raw field + String), so the clone and the region's
+        // original each free exactly once per buffer.
+        assert_eq!(
+            run(
+                "// unsafe\nstruct Mixed {\n\tlet buf: RawPtr\n\tlet name: String\n}\nextend Mixed: CheapClone {}\nstruct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value: CheapClone>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: Mixed(buf: _alloc<Byte>(4), name: \"a\" + \"b\"))\n\tlet m = extract(h)\n\tm.name.byte_count\n}\ncheck()"
+            ),
+            EvalValue::I64(2)
+        );
+    }
+
+    #[test]
+    fn mixed_rawptr_struct_retain_walk_matches_drop_walk() {
+        // The two walks visit the same field set: Mixed's retain must
+        // touch the raw buffer AND the String's storage base (2 retains),
+        // exactly the pointers its teardown frees.
+        let ir = lowered_ir(
+            "// unsafe\nstruct Mixed {\n\tlet buf: RawPtr\n\tlet name: String\n}\nextend Mixed: CheapClone {}\nstruct Holder<Value> 'heap {\n\tlet value: Value\n}\nfunc extract<Value: CheapClone>(h: Holder<Value>) -> Value {\n\th.value\n}\nfunc check() -> Int {\n\tlet h = Holder(value: Mixed(buf: _alloc<Byte>(4), name: \"a\" + \"b\"))\n\tlet m = extract(h)\n\tm.name.byte_count\n}\ncheck()",
+        );
+        // Op-level retains on the walked fields render as
+        // `retain(get_field(…))` — the `retain` continuation's declaration
+        // and application don't match the pattern.
+        let retain_count = ir.matches("retain(get_field").count();
+        assert_eq!(
+            retain_count, 2,
+            "the retain walk must visit both droppable fields (raw buf + name's storage), got {retain_count}:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn retain_walk_acquires_regions_of_object_carrying_values() {
+        // 6.3(a): the retain walk's RegionAcquire counterpart to the drop
+        // walk's RegionRelease. `_retain<M>` over an object-carrying M
+        // (unreachable through tier-2 today — typing forbids CheapClone
+        // object fields and raw storage rejects objects — but reachable
+        // through the splice, and the safety net for widening auto-clone
+        // later) must acquire M's regions exactly where M's drop releases
+        // them, alongside the sibling buffer retain.
+        let ir = lowered_ir(
+            "// unsafe\nstruct Obj 'heap {\n\tlet n: Int\n}\nstruct M {\n\tlet o: Obj\n\tlet name: String\n}\nfunc bump(m: &M) -> Int {\n\t_retain<M>(m)\n\t0\n}\nfunc run() -> Int {\n\tlet m = M(o: Obj(n: 1), name: \"a\" + \"b\")\n\tbump(m)\n}\nrun()",
+        );
+        // Scope the assertions to the `_retain<M>` specialization's body —
+        // rule-B acquires elsewhere (M's init) must not satisfy them.
+        let start = ir
+            .find("func _retain<")
+            .expect("the _retain specialization is in the program");
+        let body_indent = &ir[start..];
+        let end = body_indent[5..]
+            .find("\nfunc ")
+            .map(|i| i + 5)
+            .unwrap_or(body_indent.len());
+        let walk = &body_indent[..end];
+        assert!(
+            walk.contains("region_acquire("),
+            "the retain walk must acquire the value's regions:\n{walk}"
+        );
+        assert!(
+            walk.contains("retain(get_field"),
+            "the retain walk must still bump the sibling String buffer:\n{walk}"
+        );
+    }
+
+    #[test]
     fn borrowed_derived_show_lowers() {
         let ir = lowered_ir(
             "struct Box {\n\tlet value: Int\n}\nfunc main() {\n\tfor item in [Box(value: 1)] {\n\t\tprint(item)\n\t}\n}",
@@ -414,11 +540,64 @@ pub mod tests {
     }
 
     #[test]
-    fn stdlib_fs_directory_runner_lowers() {
-        let ir = lowered_ir(
-            "func main() {\n\tlet directory = fs::Directory(path: Path([\".\"]))\n\tprint(directory)\n\tfor entry in directory.entries() {\n\t\tprint(entry)\n\t}\n}",
+    fn stdlib_fs_direct_iteration_runs_balanced_on_both_engines() {
+        // The old string-presence test's exact program, executed: direct
+        // `for` iteration over a borrowed-receiver method source.
+        let code = "func main() {\n\tlet directory = fs::Directory(path: Path([\".\"]))\n\tprint(directory)\n\tfor entry in directory.entries() {\n\t\tprint(entry)\n\t}\n}";
+        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("LowerTest"));
+        let typed = driver
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
         );
+        let mut lowered = typed.lower();
+        assert!(
+            lowered.phase.diagnostics.is_empty(),
+            "lowering: {:?}",
+            lowered.phase.diagnostics
+        );
+        let (_, vm_out) = lowered.run_vm_with_output().expect("vm");
+        let (_, eval_out) = lowered.eval_with_output().expect("evaluator");
+        assert_eq!(eval_out, vm_out);
+    }
+
+    #[test]
+    fn stdlib_fs_directory_runner_runs_balanced_on_both_engines() {
+        // ADR 0017's fs-walk shape: a method on a BORROWED receiver as the
+        // for-source, with the binder fed to a `(&DirectoryEntry) -> ()`
+        // consumer. Executed, not just lowered: the evaluator run asserts
+        // the free balance, and both engines must agree on stdout.
+        let code = "func walk(directory: &fs::Directory, fn: (&fs::DirectoryEntry) -> ()) {\n\tfor entry in directory.entries() {\n\t\tfn(entry)\n\t}\n}\nfunc main() {\n\tlet directory = fs::Directory(path: Path([\".\"]))\n\tprint(directory)\n\twalk(directory) { entry in\n\t\tprint(entry)\n\t}\n}";
+        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("LowerTest"));
+        let typed = driver
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
+        let mut lowered = typed.lower();
+        assert!(
+            lowered.phase.diagnostics.is_empty(),
+            "lowering diagnostics: {:?}",
+            lowered.phase.diagnostics
+        );
+        let ir = lowered.phase.program.render();
         assert!(ir.contains("show_DirectoryEntry"), "{ir}");
+        let (_, vm_out) = lowered.run_vm_with_output().expect("vm");
+        let (_, eval_out) = lowered.eval_with_output().expect("evaluator");
+        assert_eq!(eval_out, vm_out, "stdout diverged");
+        assert!(!vm_out.is_empty(), "the walk printed nothing");
     }
 
     #[test]
@@ -496,5 +675,260 @@ pub mod tests {
             ),
             EvalValue::I64(55)
         );
+    }
+
+    /// Full pipeline, executed on BOTH engines with stdout compared. The
+    /// evaluator's leak fence and the VM's live-count assertion (always on
+    /// under cfg(test)) make every call a free-balance check.
+    fn run_balanced_on_both_engines(code: &'static str) -> String {
+        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("LowerTest"));
+        let typed = driver
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(
+            !typed.has_errors(),
+            "type errors: {:?}",
+            typed.diagnostics()
+        );
+        let mut lowered = typed.lower();
+        assert!(
+            lowered.phase.diagnostics.is_empty(),
+            "lowering diagnostics: {:?}",
+            lowered.phase.diagnostics
+        );
+        let (_, vm_out) = lowered.run_vm_with_output().expect("vm");
+        let (_, eval_out) = lowered.eval_with_output().expect("evaluator");
+        assert_eq!(eval_out, vm_out, "stdout diverged between engines");
+        vm_out
+    }
+
+    // ----- Early-exit drop characterization (track 7.1 / M2) --------------
+    //
+    // These pin the shapes `lower_early_exit_then` must cover from flow's
+    // `EarlyExit` candidates alone (ADR 0010 stage 3: the candidates are the
+    // single drop authority; lowering keeps no shadow drop stack). Each
+    // shape puts droppable owned locals at several scope depths between the
+    // exit and its target and asserts balance on both engines.
+
+    #[test]
+    fn break_at_depth_drops_loop_locals_and_keeps_enclosing() {
+        // `break` from a nested block: the loop-iteration local and the
+        // if-block local drop on the exit edge; the enclosing function's
+        // local survives the loop and is used after it.
+        let out = run_balanced_on_both_engines(
+            "func f() -> Int {\n\tlet outer = \"aa\" + \"bb\"\n\tlet i = 0\n\tloop i < 5 {\n\t\ti = i + 1\n\t\tlet ring = \"cc\" + \"dd\"\n\t\tif i == 2 {\n\t\t\tlet deep = \"ee\" + \"ff\"\n\t\t\tbreak\n\t\t}\n\t}\n\touter.byte_count + i\n}\nprint(f())",
+        );
+        assert_eq!(out, "6\n");
+    }
+
+    #[test]
+    fn continue_drops_per_iteration_locals_each_iteration() {
+        // `continue` re-enters the loop head: the iteration's local must
+        // drop on every continue edge (a per-iteration leak amplifies).
+        let out = run_balanced_on_both_engines(
+            "func f() -> Int {\n\tlet outer = \"aa\" + \"bb\"\n\tlet i = 0\n\tlet total = 0\n\tloop i < 4 {\n\t\ti = i + 1\n\t\tlet ring = \"cc\" + \"dd\"\n\t\tif i == 2 {\n\t\t\tcontinue\n\t\t}\n\t\ttotal = total + ring.byte_count\n\t}\n\ttotal + outer.byte_count\n}\nprint(f())",
+        );
+        assert_eq!(out, "16\n");
+    }
+
+    #[test]
+    fn return_from_nested_loop_scopes_drops_all_depths() {
+        // `return` from inside if-in-loop: locals at every depth (the
+        // if-block's, the iteration's, the function's) drop on the return
+        // edge after the returned value is computed from all three.
+        let out = run_balanced_on_both_engines(
+            "func f() -> Int {\n\tlet outer = \"aa\" + \"bb\"\n\tlet i = 0\n\tloop i < 5 {\n\t\ti = i + 1\n\t\tlet ring = \"cc\" + \"dd\"\n\t\tif i == 3 {\n\t\t\tlet deep = \"ee\" + \"ff\"\n\t\t\treturn deep.byte_count + ring.byte_count + outer.byte_count\n\t\t}\n\t}\n\t0\n}\nprint(f())",
+        );
+        assert_eq!(out, "12\n");
+    }
+
+    #[test]
+    fn break_from_inner_of_nested_loops_drops_inner_scope_only() {
+        // Nested loops: the inner `break` drops only the inner iteration's
+        // local; the outer iteration's local and the function's local stay
+        // live (their own scope exits drop them).
+        let out = run_balanced_on_both_engines(
+            "func f() -> Int {\n\tlet outer = \"aa\" + \"bb\"\n\tlet i = 0\n\tloop i < 3 {\n\t\ti = i + 1\n\t\tlet mid = \"cc\" + \"dd\"\n\t\tlet j = 0\n\t\tloop j < 3 {\n\t\t\tj = j + 1\n\t\t\tlet inner = \"ee\" + \"ff\"\n\t\t\tif j == 2 {\n\t\t\t\tbreak\n\t\t\t}\n\t\t}\n\t}\n\touter.byte_count\n}\nprint(f())",
+        );
+        assert_eq!(out, "4\n");
+    }
+
+    #[test]
+    fn break_inside_match_arm_drops_loop_locals() {
+        // The arm body is a separate lowered body (the pattern compiler's
+        // `make_arm`): a `break` inside it exits the enclosing loop and
+        // must still drop the iteration's droppable local.
+        let out = run_balanced_on_both_engines(
+            "func f() -> Int {\n\tlet outer = \"aa\" + \"bb\"\n\tlet i = 0\n\tloop i < 5 {\n\t\ti = i + 1\n\t\tlet ring = \"cc\" + \"dd\"\n\t\tmatch i {\n\t\t\t2 -> break,\n\t\t\t_ -> 0,\n\t\t}\n\t}\n\touter.byte_count + i\n}\nprint(f())",
+        );
+        assert_eq!(out, "6\n");
+    }
+
+    #[test]
+    fn return_inside_match_arm_at_depth_runs_balanced() {
+        // `return` from a match arm inside a loop: the arm-scope local, the
+        // iteration's local, and the function's local all drop on the
+        // return edge.
+        let out = run_balanced_on_both_engines(
+            "func f() -> Int {\n\tlet outer = \"aa\" + \"bb\"\n\tlet i = 0\n\tloop i < 5 {\n\t\ti = i + 1\n\t\tlet ring = \"cc\" + \"dd\"\n\t\tmatch i {\n\t\t\t3 -> {\n\t\t\t\tlet deep = \"gg\" + \"hh\"\n\t\t\t\treturn deep.byte_count + outer.byte_count\n\t\t\t},\n\t\t\t_ -> 0,\n\t\t}\n\t}\n\t0\n}\nprint(f())",
+        );
+        assert_eq!(out, "8\n");
+    }
+
+    #[test]
+    fn temporary_end_disposition_flags_non_static_elaborations() {
+        // R6: flow classifies temps `Static` (drop), `Dead` (consumed), or
+        // `Open` with a moved path (a consuming projection took one field
+        // path; the rest drops) — consumption is static per temp, so temps
+        // never carry drop flags. `Conditional` (or a pathless `Open`)
+        // therefore means a stage upstream broke that contract: lowering
+        // must flag them (debug assert + lowering diagnostic), never skip
+        // them silently — a silent skip is a silent leak. Flow cannot
+        // produce the Invalid inputs today, so the dispatch is pinned
+        // directly.
+        use crate::lower::Lowering;
+        use crate::lower::mir::{DropElaboration, DropElaborationResult};
+        use crate::lower::mir_lowering::TempDropDisposition;
+
+        let result = |kind, moved_path| DropElaborationResult {
+            key_path: None,
+            kind,
+            moved_path,
+        };
+        assert_eq!(
+            Lowering::temp_drop_disposition(Some(&result(DropElaboration::Static, vec![]))),
+            TempDropDisposition::Drop
+        );
+        assert_eq!(
+            Lowering::temp_drop_disposition(Some(&result(DropElaboration::Dead, vec![]))),
+            TempDropDisposition::Skip
+        );
+        assert_eq!(
+            Lowering::temp_drop_disposition(None),
+            TempDropDisposition::Skip
+        );
+        let field = crate::name_resolution::symbol::Symbol::DeclaredLocal(
+            crate::name_resolution::symbol::DeclaredLocalId(1),
+        );
+        assert_eq!(
+            Lowering::temp_drop_disposition(Some(&result(DropElaboration::Open, vec![field]))),
+            TempDropDisposition::DropExcept(vec![field])
+        );
+        assert_eq!(
+            Lowering::temp_drop_disposition(Some(&result(DropElaboration::Conditional, vec![]))),
+            TempDropDisposition::Invalid(DropElaboration::Conditional)
+        );
+        assert_eq!(
+            Lowering::temp_drop_disposition(Some(&result(DropElaboration::Open, vec![]))),
+            TempDropDisposition::Invalid(DropElaboration::Open)
+        );
+    }
+
+    #[test]
+    fn symbol_drop_facts_collects_moves_flags_and_live_unwind_in_one_pass() {
+        // `SymbolDropFacts::collect` replaced three per-binding full-body
+        // scans (move facts, drop-flag keys, live-at-Unwind facts) with one
+        // walk; this pins the per-symbol answers those scans produced.
+        use crate::flow::Place;
+        use crate::lower::SymbolDropFacts;
+        use crate::lower::mir::{
+            BasicBlock, BlockId, Body, DropElaboration, DropElaborationResult, DropReason,
+            DropTarget, LocatedStatement, ScopeId, Statement, StatementOwnership,
+            TerminatorOwnership,
+        };
+        use crate::name_resolution::symbol::{DeclaredLocalId, Symbol};
+        use crate::parsing::node_id::NodeID;
+
+        let local = |id| Symbol::DeclaredLocal(DeclaredLocalId(id));
+        let (moved, flagged, suspended, dead, untouched) =
+            (local(1), local(2), local(3), local(4), local(5));
+        let field = local(6);
+        let statement = |kind, ownership| LocatedStatement { kind, ownership };
+        let unwind_candidate = |symbol, elaboration| {
+            statement(
+                Statement::DropCandidate {
+                    target: DropTarget::Symbol {
+                        id: NodeID::ANY,
+                        symbol,
+                    },
+                    key_path: Some(Place::root(symbol)),
+                    reason: DropReason::Unwind,
+                    source: NodeID::ANY,
+                },
+                StatementOwnership {
+                    drop: Some(DropElaborationResult {
+                        key_path: Some(Place::root(symbol)),
+                        kind: elaboration,
+                        moved_path: vec![],
+                    }),
+                    moves: vec![],
+                },
+            )
+        };
+        let field_place = Place {
+            root: flagged,
+            fields: vec![field],
+        };
+        let body = Body {
+            entry: BlockId(0),
+            blocks: vec![
+                BasicBlock {
+                    statements: vec![
+                        // A whole-value move: a move fact, root flag only.
+                        statement(
+                            Statement::ScopeEnter { scope: ScopeId(0) },
+                            StatementOwnership {
+                                drop: None,
+                                moves: vec![Place::root(moved)],
+                            },
+                        ),
+                        // A Conditional field drop + a partial move of the
+                        // same field: root flag first, the field key once.
+                        statement(
+                            Statement::ScopeExit { scope: ScopeId(0) },
+                            StatementOwnership {
+                                drop: Some(DropElaborationResult {
+                                    key_path: Some(field_place.clone()),
+                                    kind: DropElaboration::Conditional,
+                                    moved_path: vec![],
+                                }),
+                                moves: vec![field_place.clone()],
+                            },
+                        ),
+                        // Live at a suspension site vs. Dead there.
+                        unwind_candidate(suspended, DropElaboration::Static),
+                        unwind_candidate(dead, DropElaboration::Dead),
+                    ],
+                    ..Default::default()
+                },
+                // Terminator moves count as move facts too.
+                BasicBlock {
+                    terminator_ownership: TerminatorOwnership {
+                        moves: vec![Place::root(suspended)],
+                    },
+                    ..Default::default()
+                },
+            ],
+            scaffolds: Default::default(),
+        };
+
+        let facts = SymbolDropFacts::collect(&body);
+        assert!(facts.has_move(moved));
+        assert!(facts.has_move(suspended));
+        // The field move roots at `flagged`.
+        assert!(facts.has_move(flagged));
+        assert!(!facts.has_move(untouched));
+        assert!(facts.has_live_unwind(suspended));
+        assert!(!facts.has_live_unwind(dead));
+        assert!(!facts.has_live_unwind(moved));
+        assert_eq!(facts.drop_flag_keys(moved), vec![Place::root(moved)]);
+        assert_eq!(
+            facts.drop_flag_keys(flagged),
+            vec![Place::root(flagged), field_place]
+        );
+        assert_eq!(facts.drop_flag_keys(untouched), Vec::<Place>::new());
     }
 }

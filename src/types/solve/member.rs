@@ -517,10 +517,7 @@ impl<'s> Solver<'s> {
                 // `clone` is a real marker-protocol requirement, but its
                 // implementation is compiler-provided because retaining an
                 // arbitrary Self is not expressible in user code.
-                let clone_protocol = if self
-                    .catalog
-                    .has_bare_conformance(symbol, Symbol::CheapClone)
-                {
+                let clone_protocol = if self.catalog.cheap_clone_rows(symbol, &args) {
                     Some(Symbol::CheapClone)
                 } else if self.catalog.grade_of(symbol) == crate::types::catalog::Grade::Copy {
                     Some(Symbol::Copy)
@@ -1226,10 +1223,13 @@ impl<'s> Solver<'s> {
         for param in &scheme.perm_params {
             perms.insert(*param, Perm::Var(self.store.fresh_perm(self.level, node)));
         }
+        // Perms substitute into predicates too (see `instantiate` in
+        // generate/instantiate.rs — same rule, same reason).
         for predicate in &scheme.predicates {
             queue.push(
                 predicate
                     .substitute(&tys, &effs, &rows)
+                    .substitute_perms(&perms)
                     .into_constraint(CtOrigin::new(node, CtReason::Apply)),
             );
         }

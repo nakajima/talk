@@ -214,12 +214,16 @@ mod tests {
             bodies[0]
         );
         // check: the concat temp is consumed by the binding (Dead), the
+        // `take(s)` call site gets an Unwind candidate for `s` (ADR 0027)
+        // classified Dead — the call itself consumed it, so an abort
+        // unwinding through this frame must not double-free it — the
         // Int-typed take(s) temp stays unelaborated (nothing to drop),
         // and `s` moved into take(s) at the tail → Dead.
         assert_eq!(
             candidate_kinds(&bodies[1]),
             vec![
                 (DropReason::TemporaryEnd, Some(DropElaboration::Dead)),
+                (DropReason::Unwind, Some(DropElaboration::Dead)),
                 (DropReason::TemporaryEnd, None),
                 (DropReason::ScopeExit, Some(DropElaboration::Dead)),
             ],

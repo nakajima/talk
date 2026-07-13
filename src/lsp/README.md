@@ -66,7 +66,7 @@ text edits.
   generic shadowing, or-pattern splitting, and unreachable-source removal.
   Actions are offered only when compiler structure determines a syntactically
   valid edit without inventing a value or deleting a potentially evaluated
-  expression. See ADR 0025.
+  expression. See ADR 0028.
 
 ## Notes
 

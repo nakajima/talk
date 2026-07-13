@@ -40,15 +40,12 @@ pub(crate) fn check_bodies(
     files: &IndexMap<Source, TypedFile>,
     bodies: &mut crate::lower::mir::ModuleBodies,
 ) {
-    let saved = (checker.report_errors, checker.recording);
-    checker.recording = false;
-
     for file in files.values() {
         // The file's top level checks as its own body (fresh state, the
         // full roots — declaration members included), errors only: the
         // COMBINED main body below carries the recording.
         let mut top = mir::build_nodes(checker.types, &file.roots);
-        let liveness = Liveness::analyze(&file.roots);
+        let liveness = Liveness::analyze(&file.roots, &[]);
         check_body(
             checker,
             &mut top,
@@ -73,7 +70,7 @@ pub(crate) fn check_bodies(
     // per-file walks' (already reported), so this pass only records.
     let main_nodes = crate::lower::mir::main_body_nodes(files.values());
     let mut main_body = mir::build_nodes(checker.types, &main_nodes);
-    let liveness = Liveness::analyze(&main_nodes);
+    let liveness = Liveness::analyze(&main_nodes, &[]);
     check_body(
         checker,
         &mut main_body,
@@ -84,7 +81,31 @@ pub(crate) fn check_bodies(
     );
     bodies.set_top_level(main_body);
 
-    (checker.report_errors, checker.recording) = saved;
+    // Engine done: back to the checker's resting mode (`Report`) for
+    // `check_flow`'s error-only cross-procedural post-pass.
+    checker.pass = Pass::Report;
+}
+
+/// Which of the engine's three passes is running — threaded through the
+/// transfer functions, so every mode-gated side effect names the pass it
+/// fires in. `check_body` runs the passes in order; `BodyRole` selects
+/// which ones a body gets (stored bodies: all three; per-file top levels:
+/// no `Record`; the combined main: no `Report` — so the top-level nodes,
+/// checked twice, report once and record once). Outside the engine the
+/// checker rests at `Report`: `check_flow`'s whole-module pre- and
+/// post-passes are error-only walks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Pass {
+    /// Silent worklist run until block-entry states converge: no errors,
+    /// no persistent side effects.
+    Fixpoint,
+    /// One transfer at the converged states writing the persistent facts:
+    /// editor facts, consume/auto-clone flags, runtime move sets, global
+    /// borrows, and per-point candidate drop elaborations.
+    Record,
+    /// One transfer at the same states reporting the errors, with the
+    /// checked facts already in place.
+    Report,
 }
 
 /// What a body's check produces: stored bodies do everything; the per-file
@@ -135,12 +156,12 @@ impl BodyWalk<'_, '_> {
                     .map(|scheme| scheme.ty.clone());
                 self.check_func_body(func, func_ty);
             }
-            typed_ast::DeclKind::Init { body, .. } => {
+            typed_ast::DeclKind::Init { params, body, .. } => {
                 let Some(stored) = self.bodies.get_mut(body.id) else {
                     return;
                 };
                 // An init seeds nothing: self is constructed, not owned.
-                let liveness = Liveness::analyze(&body.body);
+                let liveness = Liveness::analyze(&body.body, params);
                 check_body(self.checker, stored, liveness, &[], None, BodyRole::Stored);
             }
             _ => {}
@@ -152,7 +173,7 @@ impl BodyWalk<'_, '_> {
             return;
         };
         // Bodies swap in fresh liveness like `check_func`.
-        let liveness = Liveness::analyze(&func.body.body);
+        let liveness = Liveness::analyze(&func.body.body, &func.params);
         check_body(
             self.checker,
             stored,
@@ -184,19 +205,21 @@ fn check_body(
     );
     let mut entry_state = MoveState::default();
     if !params.is_empty() {
-        checker.seed_params(params, func_ty.as_ref(), &mut entry_state);
+        checker.seed_params(params, &mut entry_state);
     }
     checker.push_body_frame();
+    let handler_reentry = handler_reentry_edges(body);
 
     // ----- Fixpoint: silent transfer until block-entry states converge.
-    checker.report_errors = false;
     let mut entries: FxHashMap<usize, MoveState> = FxHashMap::default();
     entries.insert(body.entry.0, entry_state);
     let mut work: VecDeque<usize> = VecDeque::from([body.entry.0]);
     while let Some(index) = work.pop_front() {
         let mut state = entries[&index].clone();
-        transfer_block(checker, body, index, &mut state, false);
-        for (successor, edge_state) in successor_states(checker, body, index, &state) {
+        transfer_block(checker, body, index, &mut state, Pass::Fixpoint);
+        for (successor, edge_state) in
+            successor_states(checker, body, index, &state, &handler_reentry)
+        {
             match entries.get_mut(&successor) {
                 Some(existing) => {
                     if existing.join_from(&edge_state) && !work.contains(&successor) {
@@ -214,21 +237,49 @@ fn check_body(
     if role != BodyRole::TopLevelErrors {
         // ----- Recording pass at the converged states: facts, runtime moves,
         // auto-clone flags, globals, and per-point candidate elaborations.
-        checker.recording = true;
         for index in 0..body.blocks.len() {
             let Some(entry) = entries.get(&index) else {
                 continue;
             };
             let mut state = entry.clone();
-            transfer_block(checker, body, index, &mut state, true);
+            transfer_block(checker, body, index, &mut state, Pass::Record);
             // Terminator edge effects (scrutinee consumption, arm-binder
             // seeding) record their facts here too; the edge states are
             // already converged and are discarded.
             checker.begin_runtime_moves();
-            successor_states(checker, body, index, &state);
+            successor_states(checker, body, index, &state, &handler_reentry);
             body.blocks[index].terminator_ownership.moves = checker.take_runtime_moves();
         }
-        checker.recording = false;
+
+        // A block the fixpoint never reached (e.g. the join after a match
+        // whose arms all exit) still lowers structurally: classify its
+        // candidates Dead so the "flow classifies every needs-release
+        // candidate" contract holds on unreachable points too — nothing
+        // executes there, so emitting nothing is the only sound drop.
+        for index in 0..body.blocks.len() {
+            if entries.contains_key(&index) {
+                continue;
+            }
+            for statement in &mut body.blocks[index].statements {
+                let mir::Statement::DropCandidate { target, .. } = &statement.kind else {
+                    continue;
+                };
+                if statement.ownership.drop.is_some() {
+                    continue;
+                }
+                // Symbol-rooted elaborations key on the candidate's own
+                // place; lowering matches key paths when it resolves one.
+                let key_path = match target {
+                    mir::DropTarget::Symbol { symbol, .. } => Some(Place::root(*symbol)),
+                    mir::DropTarget::Expr(_) => None,
+                };
+                statement.ownership.drop = Some(mir::DropElaborationResult {
+                    key_path,
+                    kind: mir::DropElaboration::Dead,
+                    moved_path: vec![],
+                });
+            }
+        }
 
         // ----- Bake recorded expression flags onto embedded nodes. Runtime
         // move sets and drop elaborations were written directly at their MIR
@@ -243,62 +294,65 @@ fn check_body(
     if role != BodyRole::MainRecording {
         // ----- Error pass at the same converged states, with checked facts in
         // place (the Read-statement use-check consults them).
-        checker.report_errors = true;
         for index in 0..body.blocks.len() {
             let Some(entry) = entries.get(&index) else {
                 continue;
             };
             let mut state = entry.clone();
-            transfer_block(checker, body, index, &mut state, false);
+            transfer_block(checker, body, index, &mut state, Pass::Report);
             // Terminator edge effects report their errors here (each block
             // is visited once, so nothing double-reports).
-            successor_states(checker, body, index, &state);
+            successor_states(checker, body, index, &state, &handler_reentry);
         }
-        checker.report_errors = false;
     }
 
     checker.pop_body_frame();
     checker.exit_body(outer, is_function);
 }
 
-/// Run one block's statements through the transfer functions, mutating
-/// `state` in place; when `annotate`, also write candidate elaborations.
+/// Run one block's statements through the transfer functions under `pass`,
+/// mutating `state` in place; the `Record` pass also writes runtime move
+/// sets and candidate elaborations onto the statements.
 fn transfer_block(
     checker: &mut MoveChecker,
     body: &mut mir::Body,
     block: usize,
     state: &mut MoveState,
-    annotate: bool,
+    pass: Pass,
 ) {
+    // The deep transfer walks (moves.rs, loans.rs) gate their side effects
+    // on the checker's pass; the terminator edge effects the caller runs
+    // next (`successor_states`) inherit it too.
+    checker.pass = pass;
     for index in 0..body.blocks[block].statements.len() {
-        if annotate {
+        if pass == Pass::Record {
             checker.begin_runtime_moves();
         }
         let elaboration = {
             let statement = &body.blocks[block].statements[index];
-            transfer_statement(checker, &statement.kind, state, annotate)
+            transfer_statement(checker, &statement.kind, state, pass)
         };
-        if annotate {
+        if pass == Pass::Record {
             body.blocks[block].statements[index].ownership.moves = checker.take_runtime_moves();
-        }
-        if annotate && let Some(elaboration) = elaboration {
-            body.blocks[block].statements[index].ownership.drop = elaboration;
+            if let Some(elaboration) = elaboration {
+                body.blocks[block].statements[index].ownership.drop = elaboration;
+            }
         }
     }
 }
 
 /// Transfer one statement; returns `Some(new elaboration)` for a candidate
-/// the reporting pass should overwrite.
+/// the recording pass writes onto the statement.
 fn transfer_statement(
     checker: &mut MoveChecker,
     statement: &mir::Statement,
     state: &mut MoveState,
-    annotate: bool,
+    pass: Pass,
 ) -> Option<Option<mir::DropElaborationResult>> {
     match statement {
         mir::Statement::ScopeEnter { .. } | mir::Statement::ScopeExit { .. } => {}
-        mir::Statement::StorageLive { id, symbol } => {
-            let ty = local_ty(checker, *id, *symbol);
+        mir::Statement::StorageLive { symbol, .. } => {
+            let ty = local_ty(checker, *symbol);
             checker.register_scope_local(*symbol, ty);
         }
         mir::Statement::StorageDead { symbol, .. } => {
@@ -428,9 +482,7 @@ fn transfer_statement(
             transfer_decl_body(checker, body, state);
         }
         mir::Statement::DropCandidate { target, reason, .. } => {
-            return Some(classify_candidate(
-                checker, target, *reason, state, annotate,
-            ));
+            return Some(classify_candidate(checker, target, *reason, state, pass));
         }
     }
     None
@@ -468,7 +520,7 @@ fn classify_candidate(
     target: &mir::DropTarget,
     reason: DropReason,
     state: &MoveState,
-    annotate: bool,
+    pass: Pass,
 ) -> Option<mir::DropElaborationResult> {
     use crate::name_resolution::symbol::Symbol;
 
@@ -478,7 +530,7 @@ fn classify_candidate(
         // value. Consumed temps handed their value on (`Dead`); anything
         // droppable (or generic — each specialization elides per θ) that
         // was merely read drops here. Consumption is static per temp, so
-        // the checker-level set (complete before the annotate pass)
+        // the checker-level set (complete before the recording pass)
         // classifies without per-path state.
         mir::DropTarget::Expr(expr) if matches!(expr.kind, typed_ast::ExprKind::Temp(_)) => {
             let typed_ast::ExprKind::Temp(temp) = expr.kind else {
@@ -491,14 +543,20 @@ fn classify_candidate(
             {
                 return None;
             }
-            let kind = if checker.consumed_temps.contains(&temp) {
-                mir::DropElaboration::Dead
+            // A consuming projection took ONE field path out of the temp
+            // (B9's non-retainable arm): `Open` — lowering drops every
+            // field off the moved path, so siblings still tear down.
+            let (kind, moved_path) = if let Some(path) = checker.temp_extractions.get(&temp) {
+                (mir::DropElaboration::Open, path.clone())
+            } else if checker.consumed_temps.contains(&temp) {
+                (mir::DropElaboration::Dead, vec![])
             } else {
-                mir::DropElaboration::Static
+                (mir::DropElaboration::Static, vec![])
             };
-            return annotate.then_some(mir::DropElaborationResult {
+            return (pass == Pass::Record).then_some(mir::DropElaborationResult {
                 key_path: None,
                 kind,
+                moved_path,
             });
         }
         mir::DropTarget::Expr(expr) => {
@@ -516,14 +574,15 @@ fn classify_candidate(
             } else {
                 classify(&place, state)
             };
-            return annotate.then_some(mir::DropElaborationResult {
+            return (pass == Pass::Record).then_some(mir::DropElaborationResult {
                 key_path: Some(place),
                 kind,
+                moved_path: vec![],
             });
         }
     };
     let symbol_value = symbol?;
-    let ty = local_ty(checker, id, symbol_value);
+    let ty = local_ty(checker, symbol_value);
     // "Needs release": owned values drop; `'heap`-handle carriers release
     // their regions. GENERIC (Param/Proj) types classify too — the flow
     // runs once over the generic body, and each specialization elides
@@ -547,7 +606,7 @@ fn classify_candidate(
     if !is_param
         && kind != DropElaboration::Dead
         && matches!(reason, DropReason::ScopeExit | DropReason::EarlyExit)
-        && checker.ty_is_linear(&ty)
+        && checker.grades.is_linear(&ty)
     {
         let error = super::errors::OwnershipError::LinearNotConsumed {
             name: super::moves::render_place(&place, checker.types),
@@ -555,7 +614,10 @@ fn classify_candidate(
         };
         checker.error(error, id);
     }
-    if checker.recording {
+    // Unwind candidates (ADR 0027) are abort-path metadata at every
+    // suspension site — recording them as editor drop facts would flood
+    // the normal-path story.
+    if pass == Pass::Record && !matches!(reason, DropReason::Unwind) {
         checker.facts.drops.push(super::FlowDropFact {
             node: id,
             place: super::moves::render_place(&place, checker.types),
@@ -564,22 +626,88 @@ fn classify_candidate(
             reason,
         });
     }
-    annotate.then_some(mir::DropElaborationResult {
+    (pass == Pass::Record).then_some(mir::DropElaborationResult {
         key_path: Some(place),
         kind,
+        moved_path: vec![],
     })
 }
 
-fn local_ty(
-    checker: &MoveChecker,
-    id: NodeID,
-    symbol: crate::name_resolution::symbol::Symbol,
-) -> Ty {
+/// The type of a local binder: the checker's registered scope state first
+/// (its entries can be flow-refined), then typing's binder table
+/// (`local_tys`, keyed by symbol) for binders not yet registered — e.g.
+/// match-arm binders at seeding time. Never a per-node table: binder
+/// nodes have no `node_types` entry, and reaching for one was the
+/// `seed_arm_binders` double free.
+fn local_ty(checker: &MoveChecker, symbol: crate::name_resolution::symbol::Symbol) -> Ty {
     checker
         .symbol_local_ty(symbol)
-        .or_else(|| checker.types.local_tys.get(&symbol).cloned())
-        .or_else(|| checker.types.node_types.get(&id).cloned())
+        .or_else(|| checker.types.binder_ty(symbol).cloned())
         .unwrap_or(Ty::Error)
+}
+
+/// A handler or trailing-closure body's entry, with the binder parameters
+/// (`msg in`, `$0`) the callee re-binds fresh on every entry.
+struct HandlerBody {
+    entry: usize,
+    binders: Vec<Symbol>,
+}
+
+/// Handler and trailing-closure bodies run once per perform / once per
+/// callee invocation: every jump to a `Handler` terminator's join is a
+/// body exit, and its state must also feed back into the body's own entry
+/// (a re-entry self-edge) so a move inside the body is may-moved at the
+/// body's entry — exactly the loop-header treatment of loop-carried moves.
+/// Keyed join block → body entry.
+fn handler_reentry_edges(body: &mir::Body) -> FxHashMap<usize, HandlerBody> {
+    let mut edges = FxHashMap::default();
+    for block in &body.blocks {
+        let mir::Terminator::Handler { body_block, join } = block.terminator else {
+            continue;
+        };
+        // The handling/trailing-call statement terminates its block, so it
+        // is the last such statement here; its block carries the binders.
+        let binders = block
+            .statements
+            .iter()
+            .rev()
+            .find_map(|statement| match &statement.kind {
+                mir::Statement::Handling { body, .. } => Some(block_binders(body)),
+                mir::Statement::Call {
+                    trailing_block: Some(trailing),
+                    ..
+                } => Some(block_binders(trailing)),
+                _ => None,
+            })
+            .unwrap_or_default();
+        edges.insert(
+            join.0,
+            HandlerBody {
+                entry: body_block.0,
+                binders,
+            },
+        );
+    }
+    edges
+}
+
+fn block_binders(block: &typed_ast::Block) -> Vec<Symbol> {
+    block
+        .args
+        .iter()
+        .filter_map(|param| param.name.symbol().ok())
+        .collect()
+}
+
+/// Every entry re-binds the body's binder parameters fresh: forget any
+/// state a previous entry left rooted at them (their moves, their loans).
+/// Applied on the initial body edge too — a nested handler's header state
+/// can carry its own binders' previous-iteration facts once an ENCLOSING
+/// body's re-entry edge cycles them around.
+fn rebind_body_binders(handler_body: &HandlerBody, state: &mut MoveState) {
+    for binder in &handler_body.binders {
+        state.finish_local(&Place::root(*binder));
+    }
 }
 
 /// The successor blocks of `block`'s terminator, each with the state that
@@ -589,6 +717,7 @@ fn successor_states(
     body: &mir::Body,
     block: usize,
     exit_state: &MoveState,
+    handler_reentry: &FxHashMap<usize, HandlerBody>,
 ) -> Vec<(usize, MoveState)> {
     match &body.blocks[block].terminator {
         mir::Terminator::Unset
@@ -596,7 +725,18 @@ fn successor_states(
         | mir::Terminator::ReturnVoid
         | mir::Terminator::Break
         | mir::Terminator::Continue => vec![],
-        mir::Terminator::Jump(target) => vec![(target.0, exit_state.clone())],
+        mir::Terminator::Jump(target) => {
+            let mut successors = vec![(target.0, exit_state.clone())];
+            // A jump to a handler's join exits its body; the body may
+            // re-enter (next perform / next invocation), so the exit state
+            // also flows back to the body's entry, binders re-bound fresh.
+            if let Some(handler_body) = handler_reentry.get(&target.0) {
+                let mut reentry_state = exit_state.clone();
+                rebind_body_binders(handler_body, &mut reentry_state);
+                successors.push((handler_body.entry, reentry_state));
+            }
+            successors
+        }
         mir::Terminator::Branch {
             then_block,
             else_block,
@@ -613,12 +753,16 @@ fn successor_states(
             (body_block.0, exit_state.clone()),
             (exit_block.0, exit_state.clone()),
         ],
-        // A handler body runs zero or more times; the two edges are the
-        // tree walk's clone+merge (zero-or-one approximation, matching it).
-        mir::Terminator::Handler { body_block, join } => vec![
-            (body_block.0, exit_state.clone()),
-            (join.0, exit_state.clone()),
-        ],
+        // A handler body runs zero or more times: entry + join edges here,
+        // plus the re-entry self-edge added at every body-exit jump (see
+        // `handler_reentry_edges`) — the loop treatment of re-entry.
+        mir::Terminator::Handler { body_block, join } => {
+            let mut body_state = exit_state.clone();
+            if let Some(handler_body) = handler_reentry.get(&join.0) {
+                rebind_body_binders(handler_body, &mut body_state);
+            }
+            vec![(body_block.0, body_state), (join.0, exit_state.clone())]
+        }
         mir::Terminator::Switch {
             scrutinee,
             match_arms,
@@ -807,11 +951,9 @@ fn seed_arm_binders(
     let binder_borrows = checker.pattern_binder_borrows(&arm.pattern, &scrutinee.ty);
     if let Some(provenance) = scrutinee_provenance {
         for (binder_id, binder) in arm.pattern.collect_binders() {
-            // Binder types live in `local_tys` (keyed by symbol — typing's
-            // `mono` map), not `node_types`. Pattern viewing can also erase
-            // a borrow from the binder's surface type, so projection
-            // ownership is consulted independently.
-            let binder_ty = local_ty(checker, binder_id, binder);
+            // Pattern viewing can erase a borrow from the binder's surface
+            // type, so projection ownership is consulted independently.
+            let binder_ty = local_ty(checker, binder);
             if checker.grades.contains_borrowed(&binder_ty) || binder_borrows.contains_key(&binder)
             {
                 checker.install_provenance(

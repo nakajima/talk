@@ -24,6 +24,27 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// equality oriented expected-then-found for blame.
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Ty, reason: CtReason, ctx: &Ctx) {
         if let Ty::Borrow(expected_kind, inner) = self.store.shallow(expected) {
+            // The auto-borrow peel is position-dependent. It stays for:
+            //   - `Apply`: the argument is borrowed for the call's extent;
+            //   - `Return`/`Body`: return-position borrows, where flow's
+            //     `check_return_provenance` validates the source (tier 1);
+            //   - `Assignment`: writing an owned value through a `&mut`
+            //     slot is ADR 0018's inout write-back, not aliasing;
+            //   - place expressions under any reason: a borrow introduction
+            //     (`let x: &T = local`; flow installs the loan).
+            // Everything else — an annotation, branch, pattern, or element
+            // slot fed a non-place rvalue — demands a genuine borrow:
+            // peeling would alias an owned temp that dies at statement end
+            // (temp drop + alias-owner drop; ownership-soundness plan S4).
+            let peels = matches!(
+                reason,
+                CtReason::Apply | CtReason::Return | CtReason::Body | CtReason::Assignment
+            ) || Self::is_borrowable_place(expr);
+            if !peels {
+                let found = self.infer_expr(expr, ctx);
+                self.check_inferred_against_expected(expr.id, expected, found, reason);
+                return;
+            }
             match &expr.kind {
                 ExprKind::Member(None, ..) => {
                     self.check_expr(expr, &inner, reason, ctx);
@@ -172,6 +193,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let ty = self.infer_expr(expr, ctx);
                 self.check_inferred_against_expected(expr.id, expected, ty, reason);
             }
+        }
+    }
+
+    /// A place expression names borrowable storage: a variable, or a field
+    /// path rooted at one. Everything else evaluates to an owned rvalue
+    /// temp, which a borrow-typed slot outside an application must reject.
+    fn is_borrowable_place(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Variable(_) => true,
+            ExprKind::Member(Some(receiver), ..) => Self::is_borrowable_place(receiver),
+            _ => false,
         }
     }
 

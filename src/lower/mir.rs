@@ -85,6 +85,11 @@ pub(crate) struct DropElaborationResult {
     /// `Temp` expression is the value).
     pub(crate) key_path: Option<Place>,
     pub(crate) kind: DropElaboration,
+    /// For an `Open` TEMP candidate: the field path a consuming projection
+    /// moved out of the temporary (base field first). Lowering drops every
+    /// field OFF this path; symbol-rooted candidates keep it empty (their
+    /// partial drops ride runtime drop flags instead).
+    pub(crate) moved_path: Vec<crate::name_resolution::symbol::Symbol>,
 }
 
 #[allow(dead_code)]
@@ -158,6 +163,11 @@ pub(crate) enum Statement {
     Call {
         /// The whole call expression: lowering evaluates it HERE, binding
         /// the result to `temp` for the consuming statement's `Temp` read.
+        /// NOTE: the argument nodes are embedded TWICE — inside `expr` and
+        /// in `args` — and lowering evaluates from `args`. Any pass that
+        /// writes per-node facts (ownership marks) must drive both copies,
+        /// as `mir_annotate` does; writing one copy silently drops facts
+        /// on the other (the ADR 0029 trial tripped on exactly this).
         expr: Expr,
         callee: Expr,
         args: Vec<CallArg>,
@@ -288,6 +298,9 @@ struct HandlerTargets {
     /// `scope_stack.len()` at handler entry, for the resume path's
     /// target-relative early-exit drops.
     scope_depth: usize,
+    /// `enclosing_temps.len()` at handler entry: the resume path drains
+    /// only the pending-temp frames of constructs inside the body.
+    temp_depth: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -298,6 +311,10 @@ struct LoopTargets {
     /// the scopes at or above this depth, so its early-exit drops are
     /// target-relative instead of covering every enclosing scope.
     scope_depth: usize,
+    /// `enclosing_temps.len()` at loop entry: a `break`/`continue` bypasses
+    /// only the joins of constructs inside the loop body, so it drains only
+    /// the pending-temp frames above this depth.
+    temp_depth: usize,
 }
 
 #[derive(derive_visitor::VisitorMut)]
@@ -310,6 +327,12 @@ impl TempSubstituter<'_> {
     fn enter_expr(&mut self, expr: &mut Expr) {
         if let Some(&temp) = self.subs.get(&expr.id) {
             expr.kind = ExprKind::Temp(temp);
+            // The temp read is an operand reference, not a re-evaluation —
+            // "an atom: no transfer effects" per `ExprKind::Temp`'s
+            // contract. Ownership marks (tier-2 retains) fired when the
+            // temp was materialized; carrying them onto the reference
+            // would retain the same value twice.
+            expr.ownership = Default::default();
         }
     }
 }
@@ -320,12 +343,32 @@ struct Builder<'types> {
     blocks: Vec<BasicBlock>,
     scopes: Vec<Scope>,
     scope_stack: Vec<ScopeFrame>,
-    loop_stack: Vec<LoopTargets>,
-    handler_stack: Vec<HandlerTargets>,
     /// Temporaries minted for flattened constructs, and the source nodes
     /// they replace in later statement/terminator embeddings.
     next_temp: u32,
     temp_subs: FxHashMap<NodeID, u32>,
+    /// The statement-scoped state — swapped wholesale at embedded-body
+    /// boundaries by `lower_embedded_body` (ADR 0017 stage 4).
+    stmt_scope: StatementScope,
+    scaffolds: FxHashMap<NodeID, BlockId>,
+}
+
+/// Builder state scoped to the statement (and value construct) currently
+/// being lowered. An embedded body — a handler body or trailing block —
+/// is a closure lowered inline, mid-statement: it must never observe the
+/// enclosing statement's value of ANY of these, so `lower_embedded_body`
+/// swaps the whole bundle wholesale (ADR 0017 stage 4). A new
+/// statement-scoped field belongs here, never loose on `Builder`, where
+/// the swap isolates it automatically.
+#[derive(Default)]
+struct StatementScope {
+    /// `break`/`continue` jump targets, innermost last. Empty inside an
+    /// embedded body: enclosing loops are not jump targets from inside a
+    /// closure.
+    loop_stack: Vec<LoopTargets>,
+    /// `continue v` resume targets, innermost last. Empty inside a
+    /// trailing block: a resume never crosses a closure boundary.
+    handler_stack: Vec<HandlerTargets>,
     /// The join temps of the value-producing constructs currently being
     /// lowered, innermost last: an arm tail's `Continuation` delivery
     /// names the enclosing construct's temp.
@@ -338,11 +381,22 @@ struct Builder<'types> {
     /// Result temps for value-producing block expressions currently being
     /// flattened into the surrounding MIR body.
     block_value_temps: Vec<u32>,
+    /// Snapshots of the enclosing statements' pending temps, one frame per
+    /// value-producing construct currently lowering its arms (innermost
+    /// last). The join block drains this data on fallthrough paths; an
+    /// early exit that bypasses a join drains it on the exit edge instead
+    /// (`emit_exit_drop_candidates`). Embedded bodies mask the stack
+    /// wholesale: their exits must never drain the enclosing statement's
+    /// temps into a body that runs per invocation (ADR 0017 bug A).
+    enclosing_temps: Vec<Vec<Expr>>,
     /// Whether this body's root-scope tail is the function's return value
-    /// (true for function/top-level bodies; false for standalone match-arm
-    /// bodies, whose tail delivers to the match join).
+    /// (true for function/top-level bodies; false for init bodies and
+    /// embedded bodies, whose tails deliver to their own consumers).
     root_tail_is_return: bool,
-    scaffolds: FxHashMap<NodeID, BlockId>,
+    /// `scope_stack.len()` at embedded-body entry (0 for a real body):
+    /// early exits inside the body never mint drop candidates below this
+    /// floor — the enclosing function's locals outlive the closure.
+    scope_floor: usize,
 }
 
 #[derive(Debug)]
@@ -358,15 +412,10 @@ struct ScopeFrame {
     param_likes: Vec<(NodeID, Symbol)>,
 }
 
-pub(crate) fn build_function(
-    types: &TypeOutput,
-    owner: Option<Symbol>,
-    params: &[Parameter],
-    block: &Block,
-) -> Body {
+pub(crate) fn build_function(types: &TypeOutput, params: &[Parameter], block: &Block) -> Body {
     let mut builder = Builder::new(types);
     let entry = builder.new_block();
-    let param_likes = builder.owned_param_locals(owner, params);
+    let param_likes = builder.owned_param_locals(params);
     let exit = builder.lower_body_scope(entry, block.id, param_likes, |builder, entry| {
         builder.lower_nodes(&block.body, entry, true, true)
     });
@@ -379,7 +428,7 @@ pub(crate) fn build_function(
 /// the caller receives self, so no return-provenance applies to it.
 pub(crate) fn build_init_body(types: &TypeOutput, block: &Block) -> Body {
     let mut builder = Builder::new(types);
-    builder.root_tail_is_return = false;
+    builder.stmt_scope.root_tail_is_return = false;
     let entry = builder.new_block();
     let exit = builder.lower_body_scope(entry, block.id, vec![], |builder, entry| {
         builder.lower_nodes(&block.body, entry, true, false)
@@ -400,10 +449,7 @@ pub(crate) fn arm_release_binders(
         .collect_binders()
         .into_iter()
         .filter_map(|(id, symbol)| {
-            let ty = types
-                .local_tys
-                .get(&symbol)
-                .or_else(|| types.node_types.get(&id))?;
+            let ty = types.binder_ty(symbol)?;
             grades.needs_drop(ty).then(|| (id, symbol, ty.clone()))
         })
         .collect()
@@ -543,8 +589,7 @@ fn build_module_bodies<'a>(
                 return;
             }
             if let Some(func) = item.downcast_ref::<crate::typed_ast::Func>() {
-                let owner = func.name.symbol().ok();
-                let body = build_function(self.types, owner, &func.params, &func.body);
+                let body = build_function(self.types, &func.params, &func.body);
                 self.bodies
                     .map
                     .insert(func.body.id, std::sync::Arc::new(body));
@@ -578,14 +623,12 @@ impl<'types> Builder<'types> {
             blocks: vec![],
             scopes: vec![],
             scope_stack: vec![],
-            loop_stack: vec![],
-            handler_stack: vec![],
             next_temp: 0,
             temp_subs: FxHashMap::default(),
-            continuation_temps: vec![],
-            join_depth: 0,
-            block_value_temps: vec![],
-            root_tail_is_return: true,
+            stmt_scope: StatementScope {
+                root_tail_is_return: true,
+                ..Default::default()
+            },
             scaffolds: FxHashMap::default(),
         }
     }
@@ -595,29 +638,16 @@ impl<'types> Builder<'types> {
     /// The same filter the flow checker's `seed_params` applies: borrows
     /// aren't locals, and `'heap`-carrying parameters are exempt (params
     /// neither acquire nor release the region ledger).
-    fn owned_param_locals(
-        &mut self,
-        owner: Option<Symbol>,
-        params: &[Parameter],
-    ) -> Vec<(NodeID, Symbol)> {
-        let scheme_params = owner
-            .and_then(|owner| self.types.schemes.get(&owner))
-            .and_then(|scheme| match &scheme.ty {
-                Ty::Func(params, ..) => Some(params.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
+    fn owned_param_locals(&mut self, params: &[Parameter]) -> Vec<(NodeID, Symbol)> {
         let mut locals = vec![];
-        for (index, param) in params.iter().enumerate() {
+        for param in params {
             let Ok(symbol) = param.name.symbol() else {
                 continue;
             };
-            let Some(ty) = param
-                .ty
-                .clone()
-                .or_else(|| self.types.node_types.get(&param.id).cloned())
-                .or_else(|| scheme_params.get(index).cloned())
-            else {
+            // The tree is the authority: `param.ty` is baked from typing's
+            // per-node table at build (`None` only for unchecked trees,
+            // e.g. the MIR-builder tests' placeholder types).
+            let Some(ty) = param.ty.clone() else {
                 continue;
             };
             if self.grades.contains_borrowed(&ty) {
@@ -666,12 +696,21 @@ impl<'types> Builder<'types> {
     /// operands still classify `Dead`. `'heap`-carrying values are exempt:
     /// the region ledger owns their lifetime.
     fn temp_rvalue_aggregate(&mut self, expr: &Expr, current: BlockId, temp_drops: &mut Vec<Expr>) {
+        // Already materialized (a clone reached both the operand walk and
+        // its own lowering arm): one temp, one candidate.
+        if self.temp_subs.contains_key(&expr.id) {
+            return;
+        }
         if !matches!(
             expr.kind,
             ExprKind::LiteralArray(_)
                 | ExprKind::Tuple(_)
                 | ExprKind::Con { .. }
                 | ExprKind::RecordLiteral { .. }
+                // A `clone()` result is an owned rvalue like any other
+                // construction: without its own temp, its retain has no
+                // releaser in borrow position (fuzzer finding F-A).
+                | ExprKind::Clone(_)
         ) {
             return;
         }
@@ -753,11 +792,13 @@ impl<'types> Builder<'types> {
             if let Some(expr) = tail_expr {
                 // Only the root scope's tail is the function's return value;
                 // nested tails (branch arms, value blocks) deliver within it.
-                let destination = if let Some(temp) = self.continuation_temps.last().copied() {
+                let destination = if let Some(temp) =
+                    self.stmt_scope.continuation_temps.last().copied()
+                {
                     ValueDestination::Continuation(temp)
-                } else if let Some(temp) = self.block_value_temps.last().copied() {
+                } else if let Some(temp) = self.stmt_scope.block_value_temps.last().copied() {
                     ValueDestination::TempThenContinue(temp)
-                } else if self.root_tail_is_return && self.join_depth == 0 {
+                } else if self.stmt_scope.root_tail_is_return && self.stmt_scope.join_depth == 0 {
                     ValueDestination::TailReturn
                 } else {
                     ValueDestination::Fallthrough
@@ -957,6 +998,7 @@ impl<'types> Builder<'types> {
             StmtKind::Return(Some(expr)) => {
                 let current = self.lower_expr(expr, current, temp_drops);
                 self.emit_temp_drops(current, temp_drops);
+                self.emit_bypassed_join_temp_drops(current, 0);
                 self.push_statement(
                     current,
                     Statement::ReturnValue {
@@ -964,12 +1006,13 @@ impl<'types> Builder<'types> {
                         destination: ValueDestination::Return,
                     },
                 );
-                self.emit_early_exit_drops(current, stmt.id, 0);
+                self.emit_exit_drop_candidates(current, stmt.id, 0, DropReason::EarlyExit);
                 self.terminate_if_open(current, Terminator::Return);
                 current
             }
             StmtKind::Return(None) => {
-                self.emit_early_exit_drops(current, stmt.id, 0);
+                self.emit_bypassed_join_temp_drops(current, 0);
+                self.emit_exit_drop_candidates(current, stmt.id, 0, DropReason::EarlyExit);
                 self.terminate_if_open(current, Terminator::ReturnVoid);
                 current
             }
@@ -978,14 +1021,32 @@ impl<'types> Builder<'types> {
                 // the handling construct's join, never at a loop header.
                 let current = self.lower_expr(expr, current, temp_drops);
                 self.emit_temp_drops(current, temp_drops);
+                let temp_depth = self
+                    .stmt_scope
+                    .handler_stack
+                    .last()
+                    .map(|handler| handler.temp_depth)
+                    .unwrap_or_else(|| self.loop_temp_depth());
+                self.emit_bypassed_join_temp_drops(current, temp_depth);
                 self.push_statement(current, Statement::ContinueValue { expr: expr.clone() });
-                if let Some(handler) = self.handler_stack.last().copied() {
-                    self.emit_early_exit_drops(current, stmt.id, handler.scope_depth);
+                if let Some(handler) = self.stmt_scope.handler_stack.last().copied() {
+                    self.emit_exit_drop_candidates(
+                        current,
+                        stmt.id,
+                        handler.scope_depth,
+                        DropReason::EarlyExit,
+                    );
                     self.terminate_if_open(current, Terminator::Jump(handler.join));
                     return current;
                 }
-                self.emit_early_exit_drops(current, stmt.id, self.loop_scope_depth());
+                self.emit_exit_drop_candidates(
+                    current,
+                    stmt.id,
+                    self.loop_scope_depth(),
+                    DropReason::EarlyExit,
+                );
                 let terminator = self
+                    .stmt_scope
                     .loop_stack
                     .last()
                     .map(|targets| Terminator::Jump(targets.continue_target))
@@ -994,8 +1055,15 @@ impl<'types> Builder<'types> {
                 current
             }
             StmtKind::Continue(None) => {
-                self.emit_early_exit_drops(current, stmt.id, self.loop_scope_depth());
+                self.emit_bypassed_join_temp_drops(current, self.loop_temp_depth());
+                self.emit_exit_drop_candidates(
+                    current,
+                    stmt.id,
+                    self.loop_scope_depth(),
+                    DropReason::EarlyExit,
+                );
                 let terminator = self
+                    .stmt_scope
                     .loop_stack
                     .last()
                     .map(|targets| Terminator::Jump(targets.continue_target))
@@ -1004,8 +1072,15 @@ impl<'types> Builder<'types> {
                 current
             }
             StmtKind::Break => {
-                self.emit_early_exit_drops(current, stmt.id, self.loop_scope_depth());
+                self.emit_bypassed_join_temp_drops(current, self.loop_temp_depth());
+                self.emit_exit_drop_candidates(
+                    current,
+                    stmt.id,
+                    self.loop_scope_depth(),
+                    DropReason::EarlyExit,
+                );
                 let terminator = self
+                    .stmt_scope
                     .loop_stack
                     .last()
                     .map(|targets| Terminator::Jump(targets.break_target))
@@ -1073,20 +1148,7 @@ impl<'types> Builder<'types> {
                         join: join_id,
                     },
                 );
-                self.handler_stack.push(HandlerTargets {
-                    join: join_id,
-                    scope_depth: self.scope_stack.len(),
-                });
-                // The handler body becomes a closure: enclosing loops are
-                // not jump targets from inside it — a break/continue here
-                // must surface as Terminator::Break/Continue (which
-                // lowering diagnoses), not a jump into the enclosing CFG.
-                let enclosing_loops = std::mem::take(&mut self.loop_stack);
-                let body_exit = self.lower_scope(body_id, body.id, |builder, body_id| {
-                    builder.lower_nodes(&body.body, body_id, true, false)
-                });
-                self.loop_stack = enclosing_loops;
-                self.handler_stack.pop();
+                let body_exit = self.lower_embedded_body(body_id, body, Some(join_id));
                 self.terminate_if_open(body_exit, Terminator::Jump(join_id));
                 join_id
             }
@@ -1099,7 +1161,14 @@ impl<'types> Builder<'types> {
                 self.push_reads(expr, current);
                 current
             }
-            ExprKind::Clone(inner) => self.lower_expr(inner, current, temp_drops),
+            ExprKind::Clone(inner) => {
+                let current = self.lower_expr(inner, current, temp_drops);
+                // The clone rvalue under a projection or receiver chain
+                // (F-A's `s.clone().byte_count` twin) needs the same temp
+                // the operand walk gives it in argument position.
+                self.temp_rvalue_aggregate(expr, current, temp_drops);
+                current
+            }
             ExprKind::LiteralArray(items)
             | ExprKind::Tuple(items)
             | ExprKind::Con { args: items, .. } => self.lower_exprs(items, current, temp_drops),
@@ -1110,16 +1179,22 @@ impl<'types> Builder<'types> {
                     .existential_pack
                     .as_ref()
                     .map(|pack| pack.payload.clone())
-                    .or_else(|| self.types.node_types.get(&expr.id).cloned())
-                    .unwrap_or(Ty::Error);
+                    .unwrap_or_else(|| expr.ty.clone());
+                // The statement's temps pending at block entry (and not
+                // the block's own result temp, which nothing has written
+                // yet): an early exit inside the block bypasses the
+                // statement's join, so it drains these on the exit edge —
+                // exactly `lower_match`'s arm treatment.
+                self.stmt_scope.enclosing_temps.push(temp_drops.clone());
                 temp_drops.push(self.temp_expr(expr.id, expr.span, temp, result_ty.clone()));
                 self.temp_subs.insert(expr.id, temp);
                 let delivers_value = block.body.last().is_some_and(node_delivers_tail_value);
-                self.block_value_temps.push(temp);
+                self.stmt_scope.block_value_temps.push(temp);
                 let exit = self.lower_scope(current, block.id, |builder, current| {
                     builder.lower_nodes(&block.body, current, true, false)
                 });
-                self.block_value_temps.pop();
+                self.stmt_scope.block_value_temps.pop();
+                self.stmt_scope.enclosing_temps.pop();
                 if !delivers_value && !self.is_terminated(exit) {
                     self.push_statement(
                         exit,
@@ -1165,9 +1240,9 @@ impl<'types> Builder<'types> {
                     .existential_pack
                     .as_ref()
                     .map(|pack| pack.payload.clone())
-                    .or_else(|| self.types.node_types.get(&expr.id).cloned())
-                    .unwrap_or(Ty::Error);
+                    .unwrap_or_else(|| expr.ty.clone());
                 temp_drops.push(self.temp_expr(expr.id, expr.span, temp, result_ty.clone()));
+                let may_suspend = call_may_suspend(&callee.ty);
                 self.push_statement(
                     current,
                     Statement::Call {
@@ -1179,6 +1254,9 @@ impl<'types> Builder<'types> {
                         result_ty,
                     },
                 );
+                if may_suspend {
+                    self.emit_exit_drop_candidates(current, expr.id, 0, DropReason::Unwind);
+                }
                 // Later embeddings of this call read its temp.
                 self.temp_subs.insert(expr.id, temp);
                 // A trailing block runs inside the callee, zero or more
@@ -1195,13 +1273,7 @@ impl<'types> Builder<'types> {
                             join: join_id,
                         },
                     );
-                    // Like a handler body: the trailing block is a closure,
-                    // so enclosing loops are not jump targets from inside.
-                    let enclosing_loops = std::mem::take(&mut self.loop_stack);
-                    let body_exit = self.lower_scope(body_id, block.id, |builder, body_id| {
-                        builder.lower_nodes(&block.body, body_id, true, false)
-                    });
-                    self.loop_stack = enclosing_loops;
+                    let body_exit = self.lower_embedded_body(body_id, block, None);
                     self.terminate_if_open(body_exit, Terminator::Jump(join_id));
                     return join_id;
                 }
@@ -1218,9 +1290,9 @@ impl<'types> Builder<'types> {
                     .existential_pack
                     .as_ref()
                     .map(|pack| pack.payload.clone())
-                    .or_else(|| self.types.node_types.get(&expr.id).cloned())
-                    .unwrap_or(Ty::Error);
+                    .unwrap_or_else(|| expr.ty.clone());
                 temp_drops.push(self.temp_expr(expr.id, expr.span, temp, result_ty.clone()));
+                let may_suspend = perform_may_suspend(expr);
                 self.push_statement(
                     current,
                     Statement::Perform {
@@ -1229,10 +1301,23 @@ impl<'types> Builder<'types> {
                         result_ty,
                     },
                 );
+                if may_suspend {
+                    self.emit_exit_drop_candidates(current, expr.id, 0, DropReason::Unwind);
+                }
                 self.temp_subs.insert(expr.id, temp);
                 current
             }
             ExprKind::Proj(..) => {
+                // A non-place chain bottoms out at an opaque base whose
+                // interior must ride its own statements (B9): an rvalue
+                // call under a projection (`g().byte_count`) lowers here
+                // to a Call statement with a `TemporaryEnd` temp, exactly
+                // like any other embedded call. Place-shaped chains have
+                // no embedded evaluation — the boundary reads suffice.
+                let current = match opaque_chain_base(expr) {
+                    Some(base) => self.lower_expr(base, current, temp_drops),
+                    None => current,
+                };
                 self.push_reads(expr, current);
                 current
             }
@@ -1353,7 +1438,7 @@ impl<'types> Builder<'types> {
             },
         );
 
-        self.join_depth += 1;
+        self.stmt_scope.join_depth += 1;
         let then_exit = self.lower_scope(then_id, then_block.id, |builder, then_id| {
             builder.lower_nodes(&then_block.body, then_id, mark_tail_exprs, tail_exits)
         });
@@ -1367,7 +1452,7 @@ impl<'types> Builder<'types> {
             else_id
         };
         self.terminate_if_open(else_exit, Terminator::Jump(join_id));
-        self.join_depth -= 1;
+        self.stmt_scope.join_depth -= 1;
 
         join_id
     }
@@ -1411,15 +1496,16 @@ impl<'types> Builder<'types> {
             );
         }
 
-        self.loop_stack.push(LoopTargets {
+        self.stmt_scope.loop_stack.push(LoopTargets {
             continue_target: header_id,
             break_target: exit_id,
             scope_depth: self.scope_stack.len(),
+            temp_depth: self.stmt_scope.enclosing_temps.len(),
         });
         let body_exit = self.lower_scope(body_id, body.id, |builder, body_id| {
             builder.lower_nodes(&body.body, body_id, false, false)
         });
-        self.loop_stack.pop();
+        self.stmt_scope.loop_stack.pop();
         self.terminate_if_open(body_exit, Terminator::Jump(header_id));
 
         exit_id
@@ -1443,7 +1529,6 @@ impl<'types> Builder<'types> {
         let temp = self.next_temp;
         self.next_temp += 1;
         self.temp_subs.insert(expr_id, temp);
-        temp_drops.push(self.temp_expr(expr_id, scrutinee.span, temp, result_ty.clone()));
         let mut scrutinee_sub = scrutinee.clone();
         self.substitute_temps_expr(&mut scrutinee_sub);
         self.terminate_if_open(
@@ -1454,12 +1539,18 @@ impl<'types> Builder<'types> {
                 arms: arm_blocks.clone(),
                 default: None,
                 join: join_id,
-                result: Some((temp, result_ty)),
+                result: Some((temp, result_ty.clone())),
             },
         );
 
-        self.continuation_temps.push(temp);
-        self.join_depth += 1;
+        self.stmt_scope.continuation_temps.push(temp);
+        self.stmt_scope.join_depth += 1;
+        // The statement's temps pending at arm entry (the scrutinee's call
+        // temps and any earlier operands — everything materialized before
+        // the switch, and nothing after: this match's own result temp joins
+        // `temp_drops` only after the arms, so an exit edge never drops a
+        // temp the bypassed join would have been the first to write).
+        self.stmt_scope.enclosing_temps.push(temp_drops.clone());
         for (arm, arm_id) in arms.iter().zip(arm_blocks) {
             let arm_exit = self.lower_scope(arm_id, arm.body.id, |builder, arm_id| {
                 builder.lower_pattern_binders(&arm.pattern, arm_id);
@@ -1467,8 +1558,10 @@ impl<'types> Builder<'types> {
             });
             self.terminate_if_open(arm_exit, Terminator::Jump(join_id));
         }
-        self.join_depth -= 1;
-        self.continuation_temps.pop();
+        self.stmt_scope.enclosing_temps.pop();
+        self.stmt_scope.join_depth -= 1;
+        self.stmt_scope.continuation_temps.pop();
+        temp_drops.push(self.temp_expr(expr_id, scrutinee.span, temp, result_ty));
 
         join_id
     }
@@ -1573,13 +1666,62 @@ impl<'types> Builder<'types> {
     }
 
     /// The scope depth a `break`/`continue` unwinds to: the innermost
-    /// loop's entry depth (0 outside any loop, where the jump is an error
-    /// anyway).
+    /// loop's entry depth (the body's own floor outside any loop, where
+    /// the jump is an error anyway).
     fn loop_scope_depth(&self) -> usize {
-        self.loop_stack
+        self.stmt_scope
+            .loop_stack
             .last()
             .map(|targets| targets.scope_depth)
-            .unwrap_or(0)
+            .unwrap_or(self.stmt_scope.scope_floor)
+    }
+
+    /// The pending-temp depth a `break`/`continue` unwinds to: the
+    /// innermost loop's entry depth (outside any loop — an error anyway —
+    /// the current depth, so nothing drains).
+    fn loop_temp_depth(&self) -> usize {
+        self.stmt_scope
+            .loop_stack
+            .last()
+            .map(|targets| targets.temp_depth)
+            .unwrap_or(self.stmt_scope.enclosing_temps.len())
+    }
+
+    /// The one way into an embedded body (ADR 0017 stage 4). A handler
+    /// body or trailing block is a closure lowered inline, mid-statement:
+    /// the whole statement-scoped bundle swaps out for the body and back
+    /// after, so no construct has per-field isolation to forget. A
+    /// break/continue with no target inside the body surfaces as
+    /// `Terminator::Break`/`Continue` (which lowering diagnoses), never a
+    /// jump into the enclosing CFG; exits drain only the body's own
+    /// pending temps and locals (ADR 0017 bug A; `scope_floor`).
+    /// `resume_join` is the handling construct's join block: with it,
+    /// `continue v` inside the body resumes there.
+    fn lower_embedded_body(
+        &mut self,
+        body_id: BlockId,
+        block: &Block,
+        resume_join: Option<BlockId>,
+    ) -> BlockId {
+        let enclosing = std::mem::replace(
+            &mut self.stmt_scope,
+            StatementScope {
+                scope_floor: self.scope_stack.len(),
+                ..Default::default()
+            },
+        );
+        if let Some(join) = resume_join {
+            self.stmt_scope.handler_stack.push(HandlerTargets {
+                join,
+                scope_depth: self.scope_stack.len(),
+                temp_depth: 0,
+            });
+        }
+        let exit = self.lower_scope(body_id, block.id, |builder, body_id| {
+            builder.lower_nodes(&block.body, body_id, true, false)
+        });
+        self.stmt_scope = enclosing;
+        exit
     }
 
     /// Push a scope frame (parent = the enclosing frame, if any), lower
@@ -1688,12 +1830,66 @@ impl<'types> Builder<'types> {
         current
     }
 
-    /// Early-exit drop candidates for a `return`/`break`/`continue`: the
-    /// locals (and param-like locals) of exactly the scopes between the
-    /// jump and its target
-    /// (`from_depth` — 0 for `return`, the loop's entry depth for
-    /// `break`/`continue`), innermost scope first.
-    fn emit_early_exit_drops(&mut self, current: BlockId, source: NodeID, from_depth: usize) {
+    /// `TemporaryEnd` drop candidates for the pending temps of every
+    /// value-construct join an early exit bypasses (`temp_depth` — 0 for
+    /// `return`, the loop's/handler's entry depth for `break`/`continue`),
+    /// innermost frame first, reverse creation order within a frame. The
+    /// candidates carry the same data the bypassed join blocks would have
+    /// drained (`emit_temp_drops`), emitted on the exit edge instead: the
+    /// join runs only on non-exit paths, so per path each temp drops
+    /// exactly once. Emitted BEFORE the exit's value/exit statements, like
+    /// the exit's own-statement temp drops — the exit machinery reads its
+    /// trailing `EarlyExit` symbol candidates adjacently, and statements
+    /// after a `ReturnValue`/`ContinueValue` delivery never lower.
+    fn emit_bypassed_join_temp_drops(&mut self, current: BlockId, temp_depth: usize) {
+        let temps: Vec<Expr> = self
+            .stmt_scope
+            .enclosing_temps
+            .get(temp_depth..)
+            .unwrap_or_default()
+            .iter()
+            .rev()
+            .flat_map(|frame| frame.iter().rev().cloned())
+            .collect();
+        for temp_expr in temps {
+            let source = temp_expr.id;
+            self.push_statement(
+                current,
+                Statement::DropCandidate {
+                    target: DropTarget::Expr(temp_expr),
+                    key_path: None,
+                    reason: DropReason::TemporaryEnd,
+                    source,
+                },
+            );
+        }
+    }
+
+    /// Exit drop candidates: the locals (and param-like locals) of every
+    /// scope between `from_depth` and the current innermost one, innermost
+    /// scope first, reverse declaration order within a scope. Serves both
+    /// exit flavors:
+    /// - `EarlyExit`, a `return`/`break`/`continue` (`from_depth` — 0 for
+    ///   `return`, the loop's entry depth for `break`/`continue`);
+    /// - `Unwind`, a suspension site (ADR 0027; `from_depth` 0): the order
+    ///   the drops would have run had each scope exited normally. The flow
+    ///   checker classifies each from the state just after the call's
+    ///   argument consumption; lowering builds the site's unwind entry
+    ///   from the non-`Dead` ones and never lowers them on the normal
+    ///   path. Candidates only what could owe a drop (the classify
+    ///   filter, applied early so suspension-heavy bodies don't balloon).
+    /// The `scope_floor` clamps the walk inside an embedded body: a
+    /// `return` or suspension in a handler/trailing body exits or unwinds
+    /// the closure, so the enclosing function's locals are structurally
+    /// out of reach — its own suspension site carries them.
+    fn emit_exit_drop_candidates(
+        &mut self,
+        current: BlockId,
+        source: NodeID,
+        from_depth: usize,
+        reason: DropReason,
+    ) {
+        let from_depth = from_depth.max(self.stmt_scope.scope_floor);
         let locals: Vec<(NodeID, Symbol)> = self
             .scope_stack
             .iter()
@@ -1709,17 +1905,32 @@ impl<'types> Builder<'types> {
             })
             .collect();
         for (id, symbol) in locals {
+            if reason == DropReason::Unwind && !self.may_owe_unwind_drop(symbol) {
+                continue;
+            }
             let key_path = Some(Place::root(symbol));
             self.push_statement(
                 current,
                 Statement::DropCandidate {
                     target: DropTarget::Symbol { id, symbol },
                     key_path,
-                    reason: DropReason::EarlyExit,
+                    reason,
                     source,
                 },
             );
         }
+    }
+
+    /// Whether a local could owe a drop at a suspension site: droppable,
+    /// `'heap`-carrying, or generic — borrows own nothing. Unknown types
+    /// stay conservative.
+    fn may_owe_unwind_drop(&self, symbol: Symbol) -> bool {
+        let Some(ty) = self.types.binder_ty(symbol) else {
+            return true;
+        };
+        let generic = matches!(ty, Ty::Param(_) | Ty::Proj(..));
+        !self.grades.contains_borrowed(ty)
+            && (generic || self.grades.needs_drop(ty) || self.grades.contains_object(ty))
     }
 
     fn terminate_if_open(&mut self, block: BlockId, terminator: Terminator) {
@@ -1730,6 +1941,57 @@ impl<'types> Builder<'types> {
 
     fn is_terminated(&self, block: BlockId) -> bool {
         self.blocks[block.0].terminator != Terminator::Unset
+    }
+}
+
+/// The opaque base of a projection/member chain that is NOT place-shaped:
+/// the expression whose interior must ride its own statements (the shape
+/// `push_reads` walks down to). `None` when the chain reaches a place-shaped
+/// suffix — a place has no embedded evaluation.
+/// Whether a call could suspend on a user-effect perform below it
+/// (ADR 0027): its row carries a non-core effect, or is open/unknown
+/// (an effect-polymorphic callee may instantiate to user effects — a
+/// conservative superset; lowering gates the actual unwind entry on the
+/// capabilities it threads). Core effects ('io & co) route to primops
+/// and never suspend.
+fn call_may_suspend(callee_ty: &Ty) -> bool {
+    match callee_ty {
+        Ty::Func(_, _, eff) => {
+            eff.tail.is_some()
+                || eff.effects.iter().any(|entry| {
+                    entry.effect.external_module_id()
+                        != Some(crate::compiling::module::ModuleId::Core)
+                })
+        }
+        Ty::Borrow(_, inner) | Ty::Unique(inner) => call_may_suspend(inner),
+        // Unknown callee shape: conservative.
+        _ => true,
+    }
+}
+
+/// Whether a perform is of a user effect (a capability call — a
+/// suspension site). Core performs are primops.
+fn perform_may_suspend(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::CallEffect { effect_name, .. } => {
+            effect_name.symbol().ok().is_none_or(|symbol| {
+                symbol.external_module_id() != Some(crate::compiling::module::ModuleId::Core)
+            })
+        }
+        _ => true,
+    }
+}
+
+fn opaque_chain_base(expr: &Expr) -> Option<&Expr> {
+    let mut e = expr;
+    loop {
+        if crate::flow::place_for_expr(e).is_some() {
+            return None;
+        }
+        match &e.kind {
+            ExprKind::Proj(receiver, ..) | ExprKind::Member(Some(receiver), ..) => e = receiver,
+            _ => return Some(e),
+        }
     }
 }
 
@@ -1887,6 +2149,20 @@ mod tests {
     };
 
     fn with_first_func_mir<R>(source: &str, f: impl FnOnce(&Body) -> R) -> R {
+        with_matching_func_mir(source, None, f)
+    }
+
+    fn with_func_mir<R>(source: &str, name: &str, f: impl FnOnce(&Body) -> R) -> R {
+        with_matching_func_mir(source, Some(name), f)
+    }
+
+    /// Build MIR for the function (declared or `let`-bound) named `name` —
+    /// or the first one, when `None` — and hand its body to `f`.
+    fn with_matching_func_mir<R>(
+        source: &str,
+        name: Option<&str>,
+        f: impl FnOnce(&Body) -> R,
+    ) -> R {
         let source = format!("// no-core\n{source}");
         let resolved = Driver::new_bare(
             vec![Source::from(source.as_str())],
@@ -1908,22 +2184,29 @@ mod tests {
             let typed_file = crate::compiling::typed_program::build::build_file(ast, &types);
             for node in &typed_file.roots {
                 let Node::Decl(decl) = node else { continue };
-                let DeclKind::Func(func) = &decl.kind else {
-                    if let DeclKind::Let {
+                let func = match &decl.kind {
+                    DeclKind::Func(func) => func,
+                    DeclKind::Let {
                         rhs: Some(expr), ..
-                    } = &decl.kind
-                        && let ExprKind::Func(func) = &expr.kind
-                    {
-                        let body = build_function(&types, None, &func.params, &func.body);
-                        return f(&body);
+                    } => {
+                        let ExprKind::Func(func) = &expr.kind else {
+                            continue;
+                        };
+                        func
                     }
-                    continue;
+                    _ => continue,
                 };
-                let body = build_function(&types, None, &func.params, &func.body);
+                if name.is_some_and(|name| func.name.name_str() != name) {
+                    continue;
+                }
+                let body = build_function(&types, &func.params, &func.body);
                 return f(&body);
             }
         }
-        panic!("expected a function declaration");
+        match name {
+            Some(name) => panic!("expected a function named {name}"),
+            None => panic!("expected a function declaration"),
+        }
     }
 
     /// A `TypeOutput` giving every AST expression a placeholder type — enough for
@@ -2092,6 +2375,155 @@ mod tests {
                 !return_path.is_empty(),
                 "return drops every enclosing scope's locals: {per_block:?}\n{body:#?}"
             );
+        });
+    }
+
+    #[test]
+    fn call_statements_carry_unwind_drop_candidates_for_live_locals() {
+        // ADR 0027: a (possibly effectful — placeholder types are
+        // conservative) call statement is followed by `Unwind` drop
+        // candidates for every in-scope local, in reverse declaration
+        // order — the order the site's unwind entry drops them.
+        let source = "
+            func g(x) { x }
+
+            func f() {
+                let a = 1
+                let b = 2
+                g(a)
+            }
+        ";
+        let names = resolved_names(source);
+        let a = symbol_named(&names, "a");
+        let b = symbol_named(&names, "b");
+        // with_first_func_mir returns the first declared func (g); scan
+        // for f's shape instead: the body whose Call is followed by the
+        // candidates.
+        with_func_mir(source, "f", |body| {
+            let mut found = false;
+            for block in &body.blocks {
+                for (index, statement) in block.statements.iter().enumerate() {
+                    if !matches!(statement.kind, Statement::Call { .. }) {
+                        continue;
+                    }
+                    let unwinds: Vec<Symbol> = block.statements[index + 1..]
+                        .iter()
+                        .map_while(|following| match &following.kind {
+                            Statement::DropCandidate {
+                                reason: DropReason::Unwind,
+                                target: DropTarget::Symbol { symbol, .. },
+                                ..
+                            } => Some(*symbol),
+                            _ => None,
+                        })
+                        .collect();
+                    if !unwinds.is_empty() {
+                        assert_eq!(unwinds, vec![b, a], "reverse declaration order: {body:#?}");
+                        found = true;
+                    }
+                }
+            }
+            assert!(
+                found,
+                "expected Unwind candidates after the call: {body:#?}"
+            );
+        });
+    }
+
+    #[test]
+    fn return_inside_trailing_block_mints_no_early_exit_for_enclosing_locals() {
+        // ADR 0017 stage 4: `lower_embedded_body` floors the scope walk,
+        // so a `return` inside a trailing block exits the closure
+        // structurally — the enclosing function's locals are out of
+        // reach, not classification-neutralized.
+        let source = "
+            func run(fn) { fn() }
+
+            func f() {
+                let outer = 1
+                run {
+                    let held = 2
+                    return
+                }
+                outer
+            }
+        ";
+        let names = resolved_names(source);
+        let outer = symbol_named(&names, "outer");
+        let held = symbol_named(&names, "held");
+        with_func_mir(source, "f", |body| {
+            let early_exits: Vec<Symbol> = body
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .filter_map(|statement| match &statement.kind {
+                    Statement::DropCandidate {
+                        reason: DropReason::EarlyExit,
+                        target: DropTarget::Symbol { symbol, .. },
+                        ..
+                    } => Some(*symbol),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                early_exits.contains(&held),
+                "the closure's own local drops on its return edge: {body:#?}"
+            );
+            assert!(
+                !early_exits.contains(&outer),
+                "the enclosing function's local must be structurally out of reach: {body:#?}"
+            );
+        });
+    }
+
+    #[test]
+    fn suspension_inside_trailing_block_mints_no_unwind_for_enclosing_locals() {
+        // The unwind walk floors at the embedded body's scope floor, like
+        // the early-exit walk: the enclosing function's locals unwind from
+        // the enclosing call's own suspension entry, never the closure's —
+        // listing them at both sites drops them twice on an effect abort.
+        let source = "
+            func run(fn) { fn() }
+
+            func g(x) { x }
+
+            func f() {
+                let outer = 1
+                run {
+                    let held = 2
+                    g(held)
+                }
+            }
+        ";
+        let names = resolved_names(source);
+        let outer = symbol_named(&names, "outer");
+        let held = symbol_named(&names, "held");
+        with_func_mir(source, "f", |body| {
+            for block in &body.blocks {
+                for (index, statement) in block.statements.iter().enumerate() {
+                    if !matches!(statement.kind, Statement::Call { .. }) {
+                        continue;
+                    }
+                    let unwinds: Vec<Symbol> = block.statements[index + 1..]
+                        .iter()
+                        .map_while(|following| match &following.kind {
+                            Statement::DropCandidate {
+                                reason: DropReason::Unwind,
+                                target: DropTarget::Symbol { symbol, .. },
+                                ..
+                            } => Some(*symbol),
+                            _ => None,
+                        })
+                        .collect();
+                    if unwinds.contains(&held) {
+                        assert!(
+                            !unwinds.contains(&outer),
+                            "the closure's suspension site must not list the \
+                             enclosing function's locals: {body:#?}"
+                        );
+                    }
+                }
+            }
         });
     }
 

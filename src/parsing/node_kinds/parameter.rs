@@ -20,6 +20,18 @@ pub enum ParamMode {
     ConsumeMut,
 }
 
+impl ParamMode {
+    /// The mode's source spelling, for diagnostics.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Self::Borrow => "borrow",
+            Self::Mut => "mut",
+            Self::Consume => "consume",
+            Self::ConsumeMut => "consume mut",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct Parameter {
     #[drive(skip)]

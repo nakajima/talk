@@ -507,9 +507,11 @@ mod tests {
             value_of(session.eval("dictionary.insert \"fizz\", \"buzz\"")),
             "()"
         );
-        assert!(session
-            .persistent_source()
-            .contains("dictionary.insert \"fizz\", \"buzz\""));
+        assert!(
+            session
+                .persistent_source()
+                .contains("dictionary.insert \"fizz\", \"buzz\"")
+        );
         assert_eq!(
             value_of(session.eval("dictionary.get \"fizz\"")),
             "Optional.some(\"buzz\")"
@@ -576,7 +578,7 @@ mod tests {
             ReplEvalResult::Output {
                 stdout: String::new(),
                 stderr: String::new(),
-                value: Some("<T0>(T0) -> T0".to_string()),
+                value: Some("<T0>(&T0) -> &T0".to_string()),
             }
         );
     }

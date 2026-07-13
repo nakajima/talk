@@ -79,10 +79,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // The scheme's qualified context becomes fresh wanteds under the
         // instantiation substitution (Jones's qualified-type instantiation).
         // This subsumes inline bounds and scheme-carried HasMember facts.
+        // Perms substitute here too: a predicate mentioning a quantified
+        // `Perm::Param` must see the same fresh var the scheme type gets.
         for predicate in &scheme.predicates {
             self.wanteds.push(
                 predicate
                     .substitute(&tys, &effs, &rows)
+                    .substitute_perms(&perms)
                     .into_constraint(CtOrigin::new(node, CtReason::Apply)),
             );
         }

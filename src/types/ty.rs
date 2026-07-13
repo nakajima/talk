@@ -763,9 +763,25 @@ impl TyFold for ExportSanitizer {
 
     // A leftover perm var degrades to the safe default rather than poisoning
     // the whole type: `&T` is always a sound reading of an undecided borrow.
+    //
+    // CONTRACT: this fold is store-free, so it must only see post-`final_ty`
+    // input. `final_ty` runs `default_unsolved_perms` (binding every
+    // unsolved perm var to `Shared` in the store), so a finalized type
+    // contains no `Perm::Var` at all and this arm is belt-and-suspenders.
+    // On a PRE-finalize type the rewrite would be unsound: a var the store
+    // solved to `Exclusive` would launder to a shared borrow here, exactly
+    // the mismatch the store-aware defaulting exists to prevent. The
+    // assertion keeps the arm loud if a caller ever feeds unfinalized types.
     fn fold_perm(&mut self, perm: Perm) -> Perm {
         match perm {
-            Perm::Var(_) => Perm::Shared,
+            Perm::Var(_) => {
+                debug_assert!(
+                    false,
+                    "ExportSanitizer saw a Perm::Var: input was not finalized \
+                     (final_ty defaults unsolved perm vars in the store)"
+                );
+                Perm::Shared
+            }
             other => other,
         }
     }
@@ -881,31 +897,11 @@ impl Predicate {
     /// Export form of a predicate: leftover variables degrade exactly as
     /// they do in types (vars → Error, tails → owner-keyed params).
     pub fn sanitize_for_export(&self, owner: Symbol) -> Predicate {
-        let mut folder = ExportSanitizer {
+        self.fold_with(&mut ExportSanitizer {
             owner,
             minted_eff: false,
             minted_row: false,
-        };
-        match self {
-            Predicate::TypeEq(a, b) => Predicate::TypeEq(folder.fold_ty(a), folder.fold_ty(b)),
-            Predicate::EffectEq(a, b) => {
-                Predicate::EffectEq(folder.fold_eff(a), folder.fold_eff(b))
-            }
-            Predicate::RowEq(a, b) => Predicate::RowEq(folder.fold_row(a), folder.fold_row(b)),
-            Predicate::Conforms { ty, protocol } => Predicate::Conforms {
-                ty: folder.fold_ty(ty),
-                protocol: folder.fold_protocol_ref(protocol),
-            },
-            Predicate::HasMember {
-                receiver,
-                label,
-                member,
-            } => Predicate::HasMember {
-                receiver: folder.fold_ty(receiver),
-                label: label.clone(),
-                member: folder.fold_ty(member),
-            },
-        }
+        })
     }
 }
 
@@ -914,13 +910,10 @@ impl Predicate {
         render_predicate(self, &FxHashMap::default())
     }
 
-    pub fn substitute(
-        &self,
-        tys: &FxHashMap<Symbol, Ty>,
-        effs: &FxHashMap<Symbol, EffTail>,
-        rows: &FxHashMap<Symbol, RowTail>,
-    ) -> Predicate {
-        let mut folder = Substituter { tys, effs, rows };
+    /// Apply a [`TyFold`] across every type, effect row, record row, and
+    /// protocol reference this predicate contains — the one owner of the
+    /// per-variant recursion, shared by every predicate rebuild.
+    pub(crate) fn fold_with(&self, folder: &mut impl TyFold) -> Predicate {
         match self {
             Predicate::TypeEq(a, b) => Predicate::TypeEq(folder.fold_ty(a), folder.fold_ty(b)),
             Predicate::EffectEq(a, b) => {
@@ -941,6 +934,24 @@ impl Predicate {
                 member: folder.fold_ty(member),
             },
         }
+    }
+
+    pub fn substitute(
+        &self,
+        tys: &FxHashMap<Symbol, Ty>,
+        effs: &FxHashMap<Symbol, EffTail>,
+        rows: &FxHashMap<Symbol, RowTail>,
+    ) -> Predicate {
+        self.fold_with(&mut Substituter { tys, effs, rows })
+    }
+
+    /// Instantiation's permission-param leg for predicates: the exact
+    /// mirror of [`Ty::substitute_perms`], so a predicate mentioning a
+    /// quantified `Perm::Param` gets the same fresh variable the scheme
+    /// type received (a rigid param left behind would never unify with
+    /// the call site's perms).
+    pub fn substitute_perms(&self, perms: &FxHashMap<Symbol, Perm>) -> Predicate {
+        self.fold_with(&mut PermSubstituter { perms })
     }
 }
 
@@ -977,30 +988,7 @@ impl Row {
 
 impl Predicate {
     pub fn import_symbols(&self, target: crate::compiling::module::ModuleId) -> Predicate {
-        match self {
-            Predicate::TypeEq(a, b) => {
-                Predicate::TypeEq(a.import_symbols(target), b.import_symbols(target))
-            }
-            Predicate::EffectEq(a, b) => {
-                Predicate::EffectEq(a.import_symbols(target), b.import_symbols(target))
-            }
-            Predicate::RowEq(a, b) => {
-                Predicate::RowEq(a.import_symbols(target), b.import_symbols(target))
-            }
-            Predicate::Conforms { ty, protocol } => Predicate::Conforms {
-                ty: ty.import_symbols(target),
-                protocol: protocol.import_symbols(target),
-            },
-            Predicate::HasMember {
-                receiver,
-                label,
-                member,
-            } => Predicate::HasMember {
-                receiver: receiver.import_symbols(target),
-                label: label.clone(),
-                member: member.import_symbols(target),
-            },
-        }
+        self.fold_with(&mut SymbolImporter { target })
     }
 }
 

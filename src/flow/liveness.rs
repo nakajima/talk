@@ -24,13 +24,21 @@ pub(crate) struct Liveness {
 }
 
 impl Liveness {
-    pub(crate) fn analyze(nodes: &[typed_ast::Node]) -> Liveness {
+    pub(crate) fn analyze(nodes: &[typed_ast::Node], params: &[typed_ast::Parameter]) -> Liveness {
         let mut pass = Prepass {
             liveness: Liveness::default(),
             declared: FxHashMap::default(),
             loop_stack: vec![],
             next: 0,
         };
+        // Parameters are declared before every body position: seed them at
+        // position 0 so uses inside loops loop-carry exactly like pre-loop
+        // `let` binders (positions start at 1, so 0 predates them all).
+        for param in params {
+            if let Ok(symbol) = param.name.symbol() {
+                pass.declared.insert(symbol, 0);
+            }
+        }
         pass.walk_nodes(nodes);
         pass.liveness
     }
@@ -74,11 +82,15 @@ impl Prepass {
     fn record_use(&mut self, symbol: Symbol, position: usize) {
         // A use inside a loop of a symbol declared before the loop recurs
         // every iteration; the loop frame extends it to the loop end.
+        // `<=` because a symbol declared AT the frame's start position
+        // (a parameter seeded at 0 when the loop is the body's first node,
+        // or a match binder bumped immediately before the loop) predates
+        // the loop: any in-loop declaration bumps past `start`.
         for frame in self.loop_stack.iter_mut().rev() {
             if self
                 .declared
                 .get(&symbol)
-                .is_some_and(|declared| *declared < frame.start)
+                .is_some_and(|declared| *declared <= frame.start)
             {
                 frame.carried.insert(symbol);
             }
@@ -171,8 +183,24 @@ impl Prepass {
                 }
             }
             typed_ast::StmtKind::Handling { body, .. } => {
+                // A handler body runs once per perform: uses inside it of
+                // symbols declared before it recur per entry, so they extend
+                // to the handling construct's end — the loop-carry treatment.
+                // A consume inside the body is therefore never the last use
+                // (generic consumes tier-2 auto-clone per entry); the CFG's
+                // body re-entry self-edge rejects the genuine moves.
+                self.loop_stack.push(LoopFrame {
+                    carried: FxHashSet::default(),
+                    start: self.next,
+                });
                 self.walk_nodes(&body.body);
-                self.bump(stmt.id);
+                let end = self.bump(stmt.id);
+                let Some(frame) = self.loop_stack.pop() else {
+                    unreachable!("handler frame pushed above")
+                };
+                for symbol in frame.carried {
+                    self.record_use(symbol, end);
+                }
             }
         }
     }
@@ -215,10 +243,24 @@ impl Prepass {
                 for arg in args {
                     self.walk_expr(&arg.value);
                 }
-                if let Some(block) = trailing_block {
+                // A trailing block runs once per callee invocation: the
+                // loop-carry treatment, exactly like handler bodies (see
+                // `StmtKind::Handling`); carried uses extend to the call.
+                let carried = trailing_block.as_ref().map(|block| {
+                    self.loop_stack.push(LoopFrame {
+                        carried: FxHashSet::default(),
+                        start: self.next,
+                    });
                     self.walk_nodes(&block.body);
+                    let Some(frame) = self.loop_stack.pop() else {
+                        unreachable!("trailing-block frame pushed above")
+                    };
+                    frame.carried
+                });
+                let end = self.bump(expr.id);
+                for symbol in carried.into_iter().flatten() {
+                    self.record_use(symbol, end);
                 }
-                self.bump(expr.id);
             }
             ExprKind::CallEffect { args, .. } => {
                 for arg in args {

@@ -4,12 +4,51 @@
 //! semantics, but reads everything from the type catalog. The `Owner` /
 //! `Borrowed` marker protocols are still honored while the core library
 //! carries them; they retire with the legacy checker.
+//!
+//! ## Deliberate dual: declared Copy (typing) vs structural copy (here)
+//!
+//! Typing's Copy judgment (`catalog.grade_of(head) == Grade::Copy`,
+//! `copies_out_of_borrow`) is DECLARED — scalars, payload-free enums, and
+//! explicit `Copy` conformances — and gates coercion legality: may a
+//! borrowed value satisfy an owned slot, is `&Int` erased to `Int`
+//! (ADR 0014). [`GradeView::is_copy`] is STRUCTURAL — a field walk — and
+//! answers move-on-use for the flow lattice: does using the value move
+//! it, does its storage need a drop. Example: `struct Point { let x: Int,
+//! let y: Int }` with no `Copy` conformance is structurally copy (using a
+//! `Point` never moves it; nothing to drop) but not declared Copy
+//! (`&Point` does not coerce to owned `Point` — the declaration is the
+//! API contract, so adding a `String` field later cannot silently
+//! legalize existing call sites). Do not "unify" the two: making typing
+//! structural widens coercions behind the author's back, and making flow
+//! declared-only would schedule moves and drops for values that have
+//! nothing to drop.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::name_resolution::symbol::Symbol;
 use crate::types::TypeOutput;
-use crate::types::ty::{ProtocolRef, Ty};
+use crate::types::ty::Ty;
+
+/// The tier-2 ownership action for a value leaving storage its consumer
+/// does not own (a borrowed/temp extraction, a `copy` argument, a region
+/// constructor's place read): what must happen for the extracted value to
+/// get an independent lifetime. One judgment behind every site that used
+/// to spell the `Copy` / `CheapClone`-or-generic / owned-droppable split
+/// by hand; the ACTION each site takes per variant stays local to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tier2Action {
+    /// No owned parts: nothing to emit.
+    Copy,
+    /// `CheapClone`: an O(1) buffer retain — the clone and the original
+    /// release independently.
+    Retain,
+    /// Generic (`Param`/`Proj`): mark a retain and let the θ-resolved
+    /// instantiation decide at lowering (Copy: nothing, CheapClone:
+    /// retain, owned non-CheapClone: a loud lowering error).
+    Generic,
+    /// Owned droppable, not retainable: ownership must transfer.
+    Move,
+}
 
 pub(crate) struct GradeView<'a> {
     types: &'a TypeOutput,
@@ -37,9 +76,15 @@ impl<'a> GradeView<'a> {
     /// alias-on-use, never moved, released at region granularity.
     pub(crate) fn is_object(&self, ty: &Ty) -> bool {
         match ty {
-            Ty::Nominal(symbol, _) => self.types.catalog.is_heap(*symbol),
+            Ty::Nominal(symbol, _) => self.symbol_is_object(*symbol),
             _ => false,
         }
+    }
+
+    /// Declared `'heap` on a declaration head — the symbol-level twin of
+    /// [`GradeView::is_object`] for callers holding a destructured head.
+    pub(crate) fn symbol_is_object(&self, symbol: Symbol) -> bool {
+        self.types.catalog.is_heap(symbol)
     }
 
     /// Whether the VALUE of this type carries an object handle anywhere —
@@ -84,27 +129,41 @@ impl<'a> GradeView<'a> {
         }
     }
 
+    /// See [`Tier2Action`]. Built on this view's structural predicates —
+    /// deliberately NOT typing's declared `CoerceKind` (see the module
+    /// doc's declared/structural dual).
+    pub(crate) fn tier2_action(&self, ty: &Ty) -> Tier2Action {
+        if matches!(ty, Ty::Param(_) | Ty::Proj(..)) {
+            return Tier2Action::Generic;
+        }
+        if self.is_cheap_clone(ty) {
+            return Tier2Action::Retain;
+        }
+        if self.needs_drop(ty) {
+            return Tier2Action::Move;
+        }
+        Tier2Action::Copy
+    }
+
     /// Cloning this type is an O(1) buffer retain (the `CheapClone`
     /// marker): extracting it from a borrow clones silently instead of
     /// moving out.
     pub(crate) fn is_cheap_clone(&self, ty: &Ty) -> bool {
         match ty {
-            Ty::Nominal(symbol, _) => self.has_marker(*symbol, Symbol::CheapClone),
+            // The declared rows (with their where-clause contexts) decide,
+            // through the same catalog judgment the marker field check and
+            // clone-witness selection use.
+            Ty::Nominal(symbol, args) => self.types.catalog.cheap_clone_rows(*symbol, args),
             _ => false,
         }
     }
 
     pub(crate) fn param_copies_out_of_borrow(&self, symbol: Symbol) -> bool {
-        let Some(bounds) = self.types.catalog.param_bounds.get(&symbol) else {
-            return false;
-        };
         self.types
             .catalog
-            .bounds_satisfy(bounds, &ProtocolRef::bare(Symbol::Copy))
-            || self
-                .types
-                .catalog
-                .bounds_satisfy(bounds, &ProtocolRef::bare(Symbol::CheapClone))
+            .param_bounds
+            .get(&symbol)
+            .is_some_and(|bounds| self.types.catalog.bounds_coerce_kind(bounds).is_some())
     }
 
     /// A borrowed *value* type: `Substring` and friends (the `Borrowed`
@@ -112,9 +171,26 @@ impl<'a> GradeView<'a> {
     pub(crate) fn is_borrowed_value(&self, ty: &Ty) -> bool {
         match ty {
             Ty::Borrow(..) => true,
-            Ty::Nominal(symbol, _) => self.has_marker(*symbol, Symbol::Borrowed),
+            Ty::Nominal(symbol, _) => self.symbol_is_borrowed_value(*symbol),
             _ => false,
         }
+    }
+
+    /// The `Borrowed` marker on a declaration head — the symbol-level twin
+    /// of [`GradeView::is_borrowed_value`] for callers holding a
+    /// destructured nominal head.
+    pub(crate) fn symbol_is_borrowed_value(&self, symbol: Symbol) -> bool {
+        self.has_marker(symbol, Symbol::Borrowed)
+    }
+
+    /// Declared `'linear`: values must move (never copy) and must reach a
+    /// consume site, even when every field is structurally copyable.
+    pub(crate) fn is_linear(&self, ty: &Ty) -> bool {
+        matches!(ty, Ty::Nominal(symbol, _) if self.symbol_is_linear(*symbol))
+    }
+
+    fn symbol_is_linear(&self, symbol: Symbol) -> bool {
+        self.types.catalog.grade_of(symbol) == crate::types::catalog::Grade::Linear
     }
 
     /// Whether the VALUE of this type contains a borrow: a `&T`, or a
@@ -229,10 +305,8 @@ impl<'a> GradeView<'a> {
                 {
                     return true;
                 }
-                // A linear declaration is owned by fiat: its values must
-                // move (never copy) and must reach a consume site, even when
-                // every field is structurally copyable.
-                if self.types.catalog.grade_of(*symbol) == crate::types::catalog::Grade::Linear {
+                // A linear declaration is owned by fiat (see is_linear).
+                if self.symbol_is_linear(*symbol) {
                     return true;
                 }
                 if !seen.insert(*symbol) {
@@ -293,6 +367,31 @@ impl<'a> GradeView<'a> {
 
     fn has_marker(&self, symbol: Symbol, marker: Symbol) -> bool {
         self.types.catalog.has_bare_conformance(symbol, marker)
+    }
+}
+
+/// A syntactic `&T` in stored position (not under a function type: a
+/// function value whose signature mentions borrows is fine to store).
+/// Deliberately NOT [`GradeView::contains_borrowed`]: this is the
+/// declaration-position question for `check_borrow_storage`, so nominal
+/// heads are transparent — a `Borrowed`-marker type (`Substring`) is a
+/// storable value whose loans provenance tracks, and a concrete nominal's
+/// own fields were checked at its own declaration. Only the syntactic
+/// borrow (including via generic arguments) is rejected.
+pub(crate) fn stores_borrow(ty: &Ty) -> bool {
+    match ty {
+        Ty::Borrow(..) => true,
+        Ty::Unique(inner) => stores_borrow(inner),
+        Ty::Nominal(_, args) => args.iter().any(stores_borrow),
+        Ty::Tuple(items) => items.iter().any(stores_borrow),
+        Ty::Record(row) => row.fields.iter().any(|(_, field)| stores_borrow(field)),
+        Ty::Func(..)
+        | Ty::Any { .. }
+        | Ty::Proj(..)
+        | Ty::Var(_)
+        | Ty::Param(_)
+        | Ty::Eff(_)
+        | Ty::Error => false,
     }
 }
 

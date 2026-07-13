@@ -74,7 +74,7 @@ impl Program {
         let expr = self.expr(e).clone();
         match &expr.kind {
             ExprKind::Const(_) | ExprKind::Var(_) | ExprKind::Func(_) => {}
-            ExprKind::App(f, a) => {
+            ExprKind::App(f, a, unwind) => {
                 self.verify_expr(*f, errors);
                 self.verify_expr(*a, errors);
                 let f_ty = self.expr_ty(*f);
@@ -88,6 +88,19 @@ impl Program {
                         }
                     }
                     _ => errors.push(VerifyError("T-App: callee not a function".to_string())),
+                }
+                // The unwind entry (ADR 0027) is a Fn(Void, ⊥) continuation.
+                if let Some(u) = unwind {
+                    self.verify_expr(*u, errors);
+                    let u_ty = self.expr_ty(*u);
+                    let void = self.ty(TyKind::Void);
+                    let bot = self.ty(TyKind::Bot);
+                    let expected = self.ty(TyKind::Fn(void, bot));
+                    if u_ty != expected {
+                        errors.push(VerifyError(
+                            "T-App: unwind entry is not Fn(Void, ⊥)".to_string(),
+                        ));
+                    }
                 }
             }
             ExprKind::Tuple(items) => {

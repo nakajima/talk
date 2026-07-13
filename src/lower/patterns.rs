@@ -183,6 +183,7 @@ pub(super) fn compile_match(
     lowering: &mut Lowering<'_>,
     value: ExprId,
     scrutinee_ty: CheckTy,
+    scrutinee_is_deinit_self: bool,
     arms: &[MatchArm],
     scaffold_arms: Option<ScaffoldArms>,
     ctx: &Ctx,
@@ -226,6 +227,7 @@ pub(super) fn compile_match(
         scaffold_arms,
         targets,
         trap: None,
+        scrutinee_is_deinit_self,
     }
     .compile(occs, rows)
 }
@@ -244,6 +246,9 @@ struct MatchCompiler<'l, 'a, 'p> {
     /// The shared no-row-matched target (bodyless, so both engines trap) —
     /// reachable only if a non-exhaustive match slips past the checker.
     trap: Option<Label>,
+    /// The scrutinee moves the enclosing deinit body's own `self`: an arm
+    /// binder taking the whole scrutinee inherits its drop suppression.
+    scrutinee_is_deinit_self: bool,
 }
 
 impl<'p> MatchCompiler<'_, '_, 'p> {
@@ -437,11 +442,18 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
                 .copied()
                 .unwrap_or(false);
             if binders.contains(&symbol) && !borrowed {
+                // A root `Bind` pattern takes the whole scrutinee: when
+                // that scrutinee is the deinit body's own `self`, the
+                // binder IS the instance under teardown.
+                let is_deinit_self = self.scrutinee_is_deinit_self
+                    && matches!(&self.arms[arm].pattern.kind, PatternKind::Bind(name)
+                        if name.symbol().is_ok_and(|bound| bound == symbol));
                 inner.drop_stack.push(crate::lower::DropBinding {
                     symbol,
                     key_path: crate::lower::Place::root(symbol),
                     ty,
                     dynamic_flags: vec![],
+                    is_deinit_self,
                 });
             }
         }
@@ -598,14 +610,19 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             return self.trap_jump();
         };
 
-        // S(c, P): rows matching this constant lose the column; the rest —
-        // other constants impossible here, wildcards still possible — form
-        // the chain's else side, D-style (Fig. 5, case 2 over constants).
+        // S(c, P): rows matching this constant stop testing the column; the
+        // rest — other constants impossible here, wildcards still possible —
+        // form the chain's else side, D-style (Fig. 5, case 2 over
+        // constants). The occurrence STAYS in the matrix as an irrefutable
+        // wildcard cell: a matched literal's owned occurrence is a source
+        // discard, freed at the leaf exactly like a source wildcard (B8 —
+        // removing the column here dropped it from ownership accounting).
         let mut then_rows: Vec<Row<'p>> = vec![];
         let mut else_rows: Vec<Row<'p>> = vec![];
         for row in &rows {
             if row.pats[column].is_irrefutable() {
-                then_rows.push(row.without_column(column, &occ));
+                let cell = row.pats[column].expanded_wildcard();
+                then_rows.push(row.with_column_expanded(column, &occ, vec![cell]));
                 else_rows.push(row.clone());
                 continue;
             }
@@ -614,16 +631,18 @@ impl<'p> MatchCompiler<'_, '_, 'p> {
             };
             match self.pattern_literal(p) {
                 Some(candidate) if candidate == literal => {
-                    then_rows.push(row.without_column(column, &occ));
+                    then_rows.push(row.with_column_expanded(
+                        column,
+                        &occ,
+                        vec![Pat::Wild(WildcardCell::Drop)],
+                    ));
                 }
                 Some(_) => else_rows.push(row.clone()),
                 None => {}
             }
         }
 
-        let mut then_occs = occs.clone();
-        then_occs.remove(column);
-        let then_body = self.compile(then_occs, then_rows);
+        let then_body = self.compile(occs.clone(), then_rows);
         let else_body = self.compile(occs, else_rows);
         match literal {
             PatternLiteral::Int(value) => {

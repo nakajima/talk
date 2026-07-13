@@ -1,9 +1,10 @@
 //! Move checking: the state lattice (`MoveState`), the drop classification
 //! rule, and the expression-level transfer functions the CFG engine
-//! (`flow::cfg`) runs over each body's MIR blocks. Statement-embedded
-//! blocks with no MIR blocks of their own (handler bodies, trailing
-//! blocks) still walk tree-style through `walk_block`: branches check
-//! against clones of the incoming state and merge at the join.
+//! (`flow::cfg`) runs over each body's MIR blocks. Handler bodies and
+//! trailing-closure blocks are no exception: the MIR builder gives them
+//! scaffold CFG blocks under `Terminator::Handler`, whose body/join
+//! edges are the may-execute approximation the engine joins like any
+//! other branch — no tree-mode walking remains.
 //!
 //! What consumes a value is the legacy rule set verbatim: binding rhs,
 //! assignment rhs, by-value call argument, by-value/`consuming` receiver,
@@ -22,8 +23,9 @@ use crate::typed_ast::{self, ExprKind};
 use crate::types::TypeOutput;
 use crate::types::ty::{Perm, Ty};
 
+use super::cfg::Pass;
 use super::drops::DropElaboration;
-use super::grades::GradeView;
+use super::grades::{GradeView, Tier2Action};
 use super::liveness::Liveness;
 use super::loans::{ActiveLoan, Origin, Provenance};
 use super::place::Place;
@@ -47,7 +49,11 @@ pub(crate) struct MoveState {
     /// Borrowers whose owner moved or was reassigned while they were live.
     pub(crate) invalid_borrows: FxHashMap<Place, Place>,
     /// Roots that ARE borrowed values (borrow-typed bindings and params),
-    /// with their permission.
+    /// with their permission. Read through
+    /// [`MoveState::borrowed_root_perm`] — both move-out-of-borrow
+    /// spellings (`take_expr` here and loans.rs's
+    /// `check_move_out_of_borrowed_with`) must decide from the same
+    /// consultation.
     pub(crate) borrowed_roots: FxHashMap<crate::name_resolution::symbol::Symbol, Perm>,
     /// Shared-borrow roots: assignment through them is rejected.
     pub(crate) shared_borrow_roots: FxHashSet<crate::name_resolution::symbol::Symbol>,
@@ -61,6 +67,16 @@ pub(crate) struct MoveState {
 }
 
 impl MoveState {
+    /// The one consultation for whether a ROOT names borrowed storage (an
+    /// ADR 0025 pattern binder or a borrow-typed binding/param), with its
+    /// permission.
+    pub(crate) fn borrowed_root_perm(
+        &self,
+        root: crate::name_resolution::symbol::Symbol,
+    ) -> Option<Perm> {
+        self.borrowed_roots.get(&root).copied()
+    }
+
     /// CFG-join: may-sets union, must-sets intersect (the legacy
     /// `MoveState`/`DropState` merge semantics in one place), reporting
     /// whether anything changed — the worklist's fixpoint test.
@@ -85,19 +101,23 @@ impl MoveState {
             .extend(other.initialized_any.iter().cloned());
         changed |= self.initialized_any.len() != before;
         for loan in &other.loans {
-            if !self
-                .loans
-                .iter()
-                .any(|mine| mine.borrower == loan.borrower && mine.owner == loan.owner)
-            {
+            if !self.loans.iter().any(|mine| {
+                mine.borrower == loan.borrower && mine.owner == loan.owner && mine.kind == loan.kind
+            }) {
                 self.loans.push(loan.clone());
                 changed = true;
             }
         }
         for (place, provenance) in &other.provenances {
-            if !self.provenances.contains_key(place) {
-                self.provenances.insert(place.clone(), provenance.clone());
-                changed = true;
+            match self.provenances.get_mut(place) {
+                // A borrower's reach at a join is the union over incoming
+                // paths — reassigning its owner on either path must still
+                // invalidate it.
+                Some(existing) => changed |= existing.union_with(provenance),
+                None => {
+                    self.provenances.insert(place.clone(), provenance.clone());
+                    changed = true;
+                }
             }
         }
         for (borrower, owner) in &other.invalid_borrows {
@@ -107,9 +127,19 @@ impl MoveState {
             }
         }
         for (root, kind) in &other.borrowed_roots {
-            if !self.borrowed_roots.contains_key(root) {
-                self.borrowed_roots.insert(*root, *kind);
-                changed = true;
+            match self.borrowed_roots.get_mut(root) {
+                // Both paths see the root as borrowed: the weakest
+                // permission (shared) wins when they disagree.
+                Some(existing) => {
+                    if *existing != *kind && *existing != Perm::Shared {
+                        *existing = Perm::Shared;
+                        changed = true;
+                    }
+                }
+                None => {
+                    self.borrowed_roots.insert(*root, *kind);
+                    changed = true;
+                }
             }
         }
         let before = self.shared_borrow_roots.len();
@@ -221,6 +251,7 @@ pub(crate) struct BodyContext {
     param_tys: FxHashMap<crate::name_resolution::symbol::Symbol, Ty>,
     /// Temp numbering restarts per body; the consumed set must too.
     consumed_temps: rustc_hash::FxHashSet<u32>,
+    temp_extractions: FxHashMap<u32, Vec<crate::name_resolution::symbol::Symbol>>,
     ret_is_borrow: bool,
 }
 
@@ -249,6 +280,11 @@ pub(crate) struct MoveChecker<'a> {
     /// moves or borrows), so a plain set suffices; filled across the
     /// fixpoint/record passes, complete before checked facts are projected.
     pub(crate) consumed_temps: rustc_hash::FxHashSet<u32>,
+    /// Temps a consuming projection moved ONE field path out of (B9's
+    /// non-retainable arm): temp → extracted path, base field first.
+    /// Their `TemporaryEnd` candidates classify `Open` so lowering drops
+    /// the remaining fields. Static per temp, like `consumed_temps`.
+    pub(crate) temp_extractions: FxHashMap<u32, Vec<crate::name_resolution::symbol::Symbol>>,
     /// Borrower liveness for the body being walked (per body; swapped on
     /// nested-body entry like the scope stack).
     liveness: Liveness,
@@ -283,13 +319,12 @@ pub(crate) struct MoveChecker<'a> {
     pub(crate) global_writes: Vec<(NodeID, crate::name_resolution::symbol::Symbol)>,
     /// Nesting depth of function bodies below the file's top level.
     pub(crate) fn_depth: usize,
-    /// Whether `error` reports (the CFG engine reports only on its final,
-    /// converged pass; the tree walk's errors are superseded by it).
-    pub(crate) report_errors: bool,
-    /// Whether the walk records persistent side effects (facts, consume /
-    /// auto-clone flags, drop schedules): true for the tree walk, false for
-    /// every CFG-engine walk, whose repeated visits would duplicate them.
-    pub(crate) recording: bool,
+    /// Which engine pass is running (set by the CFG engine as it threads
+    /// the pass through its transfer functions): errors report only in
+    /// `Report`; persistent side effects — facts, consume/auto-clone flags,
+    /// runtime move sets, global writes/borrows — write only in `Record`,
+    /// so the engine's repeated visits never duplicate them.
+    pub(crate) pass: Pass,
     /// Runtime ownership transfers produced by the statement/terminator
     /// currently being recorded. Logical consumes that do not transfer
     /// runtime ownership (notably effect performs) suppress this collection.
@@ -308,6 +343,7 @@ impl<'a> MoveChecker<'a> {
             scopes: vec![],
             liveness: Liveness::default(),
             consumed_temps: rustc_hash::FxHashSet::default(),
+            temp_extractions: FxHashMap::default(),
             borrowed_params: FxHashSet::default(),
             ret_is_borrow: false,
             param_tys: FxHashMap::default(),
@@ -319,8 +355,9 @@ impl<'a> MoveChecker<'a> {
             global_borrows: FxHashMap::default(),
             global_writes: vec![],
             fn_depth: 0,
-            report_errors: true,
-            recording: true,
+            // The checker's resting mode outside the engine: the
+            // whole-module pre- and post-passes are error-only walks.
+            pass: Pass::Report,
             runtime_moves: None,
             runtime_moves_enabled: true,
         }
@@ -343,7 +380,7 @@ impl<'a> MoveChecker<'a> {
     }
 
     pub(crate) fn record_runtime_move(&mut self, place: &Place) {
-        if self.recording
+        if self.pass == Pass::Record
             && self.runtime_moves_enabled
             && let Some(moves) = &mut self.runtime_moves
             && !moves.iter().any(|seen| seen == place)
@@ -353,8 +390,12 @@ impl<'a> MoveChecker<'a> {
     }
 
     pub(crate) fn error(&mut self, error: OwnershipError, node: NodeID) {
-        if !self.report_errors {
-            return;
+        match self.pass {
+            Pass::Report => {}
+            // Fixpoint states haven't converged; the recording pass
+            // re-walks blocks the report pass visits — either would
+            // misreport.
+            Pass::Fixpoint | Pass::Record => return,
         }
         if self.reported.insert((node, error.to_string())) {
             self.errors.push((error, node));
@@ -366,23 +407,14 @@ impl<'a> MoveChecker<'a> {
     /// Seed each parameter: a borrow-containing parameter starts with
     /// caller-owned (`BorrowedParam`) provenance, so returning it is legal
     /// and moving out of it is not.
-    pub(crate) fn seed_params(
-        &mut self,
-        params: &[typed_ast::Parameter],
-        func_ty: Option<&Ty>,
-        state: &mut MoveState,
-    ) {
-        let ty_params = func_ty.and_then(func_params).unwrap_or_default();
-        for (index, param) in params.iter().enumerate() {
+    pub(crate) fn seed_params(&mut self, params: &[typed_ast::Parameter], state: &mut MoveState) {
+        for param in params {
             let Ok(symbol) = param.name.symbol() else {
                 continue;
             };
-            let Some(ty) = param
-                .ty
-                .clone()
-                .or_else(|| self.types.node_types.get(&param.id).cloned())
-                .or_else(|| ty_params.get(index).cloned())
-            else {
+            // The tree is the authority: `param.ty` is baked from typing's
+            // per-node table at build, and flow only runs on checked trees.
+            let Some(ty) = param.ty.clone() else {
                 continue;
             };
             self.param_tys.insert(symbol, ty.clone());
@@ -456,8 +488,10 @@ impl<'a> MoveChecker<'a> {
         state: &mut MoveState,
     ) {
         // A single-binder let's type comes from its `&`/`&mut` annotation
-        // (the legacy `binding_expected_ty`), else its rhs; destructuring
-        // binders carry their own node types.
+        // (the legacy `binding_expected_ty`), else its rhs — the typed
+        // tree. Destructuring binders have no whole-binding type here and
+        // classify conservatively (their per-component types live in
+        // `local_tys`; this walk has never consulted them).
         use crate::node_kinds::type_annotation::TypeAnnotationKind;
         let annotation_borrow = match annotation.map(|annotation| &annotation.kind) {
             Some(TypeAnnotationKind::Borrow { mutable: true, .. }) => Some(Perm::Exclusive),
@@ -479,16 +513,7 @@ impl<'a> MoveChecker<'a> {
             && single_binder
             && let Some((binder_id, binder)) = lhs.collect_binders().first().copied()
         {
-            let binder_ty = match annotation_borrow {
-                Some(_) => whole_binding_ty.clone().unwrap_or(Ty::Error),
-                None => self
-                    .types
-                    .node_types
-                    .get(&binder_id)
-                    .cloned()
-                    .or_else(|| whole_binding_ty.clone())
-                    .unwrap_or(Ty::Error),
-            };
+            let binder_ty = whole_binding_ty.clone().unwrap_or(Ty::Error);
             if self.grades.contains_borrowed(&binder_ty) && !self.grades.contains_object(&binder_ty)
             {
                 let mut provenance = self.expr_provenance(rhs, state);
@@ -524,13 +549,7 @@ impl<'a> MoveChecker<'a> {
         }
 
         for (id, binder) in lhs.collect_binders() {
-            let ty = self
-                .types
-                .node_types
-                .get(&id)
-                .cloned()
-                .or_else(|| whole_binding_ty.clone())
-                .unwrap_or(Ty::Error);
+            let ty = whole_binding_ty.clone().unwrap_or(Ty::Error);
             if let Some(frame) = self.scopes.last_mut() {
                 frame.locals.push(ScopeLocal {
                     symbol: binder,
@@ -546,14 +565,6 @@ impl<'a> MoveChecker<'a> {
                 state.note_move(place, id, ty);
             }
         }
-    }
-
-    // ----- Drop scheduling ----------------------------------------------------
-
-    pub(crate) fn ty_is_linear(&self, ty: &Ty) -> bool {
-        use crate::types::catalog::Grade;
-        matches!(ty, Ty::Nominal(symbol, _)
-            if self.types.catalog.grade_of(*symbol) == Grade::Linear)
     }
 
     // ----- Statement/node walk ----------------------------------------------
@@ -577,6 +588,7 @@ impl<'a> MoveChecker<'a> {
             borrowed_params: std::mem::take(&mut self.borrowed_params),
             param_tys: std::mem::take(&mut self.param_tys),
             consumed_temps: std::mem::take(&mut self.consumed_temps),
+            temp_extractions: std::mem::take(&mut self.temp_extractions),
             ret_is_borrow: std::mem::take(&mut self.ret_is_borrow),
         };
         if is_function {
@@ -594,6 +606,7 @@ impl<'a> MoveChecker<'a> {
         self.borrowed_params = outer.borrowed_params;
         self.param_tys = outer.param_tys;
         self.consumed_temps = outer.consumed_temps;
+        self.temp_extractions = outer.temp_extractions;
         self.ret_is_borrow = outer.ret_is_borrow;
     }
 
@@ -649,7 +662,7 @@ impl<'a> MoveChecker<'a> {
             // A write to a global from inside a function body: the
             // per-body NLL walk cannot see whether a global borrows it, so
             // record it for `check_flow`'s cross-procedural post-pass.
-            if self.recording
+            if self.pass == Pass::Record
                 && self.fn_depth > 0
                 && matches!(
                     place.root,
@@ -790,6 +803,44 @@ impl<'a> MoveChecker<'a> {
             ExprKind::Temp(temp) => {
                 self.consumed_temps.insert(*temp);
             }
+            // A consuming projection out of a temp (`let s = mk().inner`,
+            // B9): the temp's `TemporaryEnd` teardown owns the whole value,
+            // so a droppable extraction retains its buffers at the read
+            // (tier 2 — generics resolve per instantiation at lowering).
+            // A non-retainable extraction takes its field path instead:
+            // the candidate classifies `Open` with the path, and lowering
+            // drops the temp's REMAINING fields there (the extracted
+            // value's consumer owns only the path it took — classifying
+            // the whole temp `Dead` leaked the sibling fields).
+            ExprKind::Proj(..) => {
+                // The needs-drop gate keeps a droppable-free extraction
+                // unmarked (nothing to retain, no clone fact): under it,
+                // `Copy` is unreachable.
+                if let Some(temp) = temp_at_chain_base(expr)
+                    && (matches!(expr.ty, Ty::Param(_) | Ty::Proj(..))
+                        || self.grades.needs_drop(&expr.ty))
+                {
+                    match self.grades.tier2_action(&expr.ty) {
+                        Tier2Action::Retain | Tier2Action::Generic => {
+                            if self.pass == Pass::Record {
+                                self.auto_clones.insert(expr.id);
+                            }
+                        }
+                        Tier2Action::Move => {
+                            let mut path = vec![];
+                            let mut e = expr;
+                            while let ExprKind::Proj(receiver, _, field) = &e.kind {
+                                path.push(*field);
+                                e = receiver;
+                            }
+                            path.reverse();
+                            self.temp_extractions.insert(temp, path);
+                        }
+                        Tier2Action::Copy => {}
+                    }
+                }
+                self.walk_expr(expr, state);
+            }
             _ => self.walk_expr(expr, state),
         }
     }
@@ -856,12 +907,22 @@ impl<'a> MoveChecker<'a> {
                     return false;
                 }
                 let ty = value.ty.clone();
+                // Declared/structural dual: the STRUCTURAL is_copy gate is
+                // this site's own (a `copy` mark on a field-wise-copyable
+                // value is legal without a declared Copy row); the tier-2
+                // judgment then decides retain vs reject. `Copy` from the
+                // judgment (a non-copyable, non-droppable type: an
+                // unresolved Var at worst) stays an error here — `copy` of
+                // it has nothing to copy.
                 if self.grades.is_copy(&ty) {
                     self.walk_expr(value, state);
                     return true;
                 }
-                if self.grades.is_cheap_clone(&ty) || matches!(ty, Ty::Param(_) | Ty::Proj(..)) {
-                    if self.recording {
+                if matches!(
+                    self.grades.tier2_action(&ty),
+                    Tier2Action::Retain | Tier2Action::Generic
+                ) {
+                    if self.pass == Pass::Record {
                         self.auto_clones.insert(value.id);
                     }
                     self.walk_expr(value, state);
@@ -1045,17 +1106,18 @@ impl<'a> MoveChecker<'a> {
                         if perm.is_exclusive() {
                             self.check_exclusive_root(receiver.id, &receiver_place);
                         }
-                        let owner = state.loan_owner_for(&receiver_place);
                         let perm = state.rebased_perm(&receiver_place, perm);
-                        self.check_borrow_conflicts(
-                            receiver.id,
-                            &owner,
-                            perm,
-                            Some(&receiver_place),
-                            state,
-                        );
-                        if perm.is_exclusive() {
-                            state.invalidate_borrows_of_except(&owner, Some(&receiver_place));
+                        for owner in state.loan_owners_for(&receiver_place).iter() {
+                            self.check_borrow_conflicts(
+                                receiver.id,
+                                owner,
+                                perm,
+                                Some(&receiver_place),
+                                state,
+                            );
+                            if perm.is_exclusive() {
+                                state.invalidate_borrows_of_except(owner, Some(&receiver_place));
+                            }
                         }
                     }
                 }
@@ -1073,6 +1135,11 @@ impl<'a> MoveChecker<'a> {
         // handle-carrying payloads through the ledger too.
         let borrowed_constructor = matches!(callee.kind, ExprKind::Constructor(_))
             && self.grades.is_copy(&result_ty(callee));
+        // S7's tier-2 retain is REGION-scoped: only a `'heap` result has a
+        // finalizer to provide the matching free. A result that is copy
+        // because it carries the `Borrowed` marker (Substring and friends)
+        // is a VIEW — construction reads the storage without retaining.
+        let region_constructor = borrowed_constructor && self.grades.is_object(&result_ty(callee));
 
         for (index, arg) in args.iter().enumerate() {
             let param = params.get(index);
@@ -1090,17 +1157,18 @@ impl<'a> MoveChecker<'a> {
                         if perm.is_exclusive() {
                             self.check_exclusive_root(arg.value.id, &arg_place);
                         }
-                        let owner = state.loan_owner_for(&arg_place);
                         let perm = state.rebased_perm(&arg_place, perm);
-                        self.check_borrow_conflicts(
-                            arg.value.id,
-                            &owner,
-                            perm,
-                            Some(&arg_place),
-                            state,
-                        );
-                        if perm.is_exclusive() {
-                            state.invalidate_borrows_of_except(&owner, Some(&arg_place));
+                        for owner in state.loan_owners_for(&arg_place).iter() {
+                            self.check_borrow_conflicts(
+                                arg.value.id,
+                                owner,
+                                perm,
+                                Some(&arg_place),
+                                state,
+                            );
+                            if perm.is_exclusive() {
+                                state.invalidate_borrows_of_except(owner, Some(&arg_place));
+                            }
                         }
                     } else if !is_object && perm.is_exclusive() && self.place(&arg.value).is_none()
                     {
@@ -1121,6 +1189,33 @@ impl<'a> MoveChecker<'a> {
                     // consumed by the region and must not release at its
                     // full expression's end.
                     self.mark_rvalue_temps_consumed(&arg.value);
+                    // The retain is a tier-2 clone (S7): a place read whose
+                    // value owns buffers marks auto-clone so lowering
+                    // retains them at the call — the owner's scope-exit
+                    // drop and the region's finalizer then free exactly
+                    // once each. Generic payloads resolve per instantiation
+                    // at lowering (Copy: nothing, CheapClone: retain).
+                    // Owned-but-not-retainable values MOVE in instead,
+                    // exactly like a value-struct constructor argument.
+                    // `Borrowed`-marker results skip all of this: a view's
+                    // construction is a read (no retain, no consume).
+                    if region_constructor
+                        && self.place(&arg.value).is_some()
+                        && !self.grades.is_copy(&arg.value.ty)
+                    {
+                        match self.grades.tier2_action(&arg.value.ty) {
+                            Tier2Action::Retain | Tier2Action::Generic => {
+                                if self.pass == Pass::Record {
+                                    self.auto_clones.insert(arg.value.id);
+                                }
+                            }
+                            Tier2Action::Move => {
+                                self.consume_expr(&arg.value, state);
+                                continue;
+                            }
+                            Tier2Action::Copy => {}
+                        }
+                    }
                     self.walk_expr(&arg.value, state)
                 }
                 _ => self.consume_expr(&arg.value, state),
@@ -1321,8 +1416,9 @@ impl<'a> MoveChecker<'a> {
         // A read of a mutably-borrowed owner conflicts (NLL: while the loan
         // is live). The borrower reading through itself is fine.
         if !use_is_owned {
-            let owner = state.loan_owner_for(place);
-            self.check_borrow_conflicts(node, &owner, Perm::Shared, Some(place), state);
+            for owner in state.loan_owners_for(place).iter() {
+                self.check_borrow_conflicts(node, owner, Perm::Shared, Some(place), state);
+            }
         }
     }
 
@@ -1347,7 +1443,7 @@ impl<'a> MoveChecker<'a> {
             return;
         }
         let root = Place::root(place.root);
-        let borrowed = state.borrowed_roots.get(&place.root).copied();
+        let borrowed = state.borrowed_root_perm(place.root);
         if borrowed.is_some_and(|perm| !perm.is_exclusive()) {
             let error = OwnershipError::MoveOutOfBorrowedValue {
                 name: self.render(&place),
@@ -1360,7 +1456,7 @@ impl<'a> MoveChecker<'a> {
 
         self.check_use(expr.id, &ty, &place, true, state);
         self.check_move_while_borrowed(expr.id, &place, state);
-        if self.recording {
+        if self.pass == Pass::Record {
             self.consumed.insert(expr.id);
             self.facts.moves.push(super::FlowMoveFact {
                 node: expr.id,
@@ -1405,16 +1501,18 @@ impl<'a> MoveChecker<'a> {
         // end), so over-approximation only adds a balanced retain+release
         // pair, never a move before a live use. A moved-then-used generic
         // can therefore never arise — moving early and reusing would read
-        // memory the consumer may already have freed.
-        if matches!(expr.ty, Ty::Param(_) | Ty::Proj(..)) && tracked_root(place.root) {
+        // memory the consumer may already have freed. Deliberately Generic
+        // ONLY: a concrete Retain type here (a CheapClone local) really
+        // moves — the local is the consumer's to take.
+        if self.grades.tier2_action(&expr.ty) == Tier2Action::Generic && tracked_root(place.root) {
             if !forced && !self.liveness.dead_after(expr.id, place.root) {
-                if self.recording {
+                if self.pass == Pass::Record {
                     self.auto_clones.insert(expr.id);
                 }
                 return;
             }
             self.check_move_while_borrowed(expr.id, &place, state);
-            if self.recording {
+            if self.pass == Pass::Record {
                 self.consumed.insert(expr.id);
                 self.facts.moves.push(super::FlowMoveFact {
                     node: expr.id,
@@ -1429,7 +1527,7 @@ impl<'a> MoveChecker<'a> {
         }
         if (owned || noncopy_closure) && tracked_root(place.root) {
             self.check_move_while_borrowed(expr.id, &place, state);
-            if self.recording {
+            if self.pass == Pass::Record {
                 self.consumed.insert(expr.id);
                 self.facts.moves.push(super::FlowMoveFact {
                     node: expr.id,
@@ -1453,6 +1551,20 @@ pub(crate) enum EscapeContext {
     Escaping,
 }
 
+/// The temp at the base of a projection chain (`mk().inner.x` reads
+/// `Temp(n).inner.x` after substitution), if any: the storage a consuming
+/// extraction must not double-free with the temp's own teardown.
+fn temp_at_chain_base(expr: &typed_ast::Expr) -> Option<u32> {
+    let mut e = expr;
+    loop {
+        match &e.kind {
+            ExprKind::Proj(receiver, ..) => e = receiver,
+            ExprKind::Temp(temp) => return Some(*temp),
+            _ => return None,
+        }
+    }
+}
+
 fn tracked_root(root: crate::name_resolution::symbol::Symbol) -> bool {
     use crate::name_resolution::symbol::Symbol;
     matches!(
@@ -1472,6 +1584,11 @@ fn callee_params(callee: &typed_ast::Expr) -> Vec<Ty> {
 pub(crate) fn func_params(ty: &Ty) -> Option<Vec<Ty>> {
     match ty {
         Ty::Func(params, ..) => Some(params.clone()),
+        // A borrow-by-default function-typed parameter (`fn: (&T) -> ()`
+        // arrives as `&((&T) -> ())`): calling through the borrow uses the
+        // function's own parameter list — without the peel every argument
+        // would fall into the unknown-params consume default.
+        Ty::Borrow(_, inner) => func_params(inner),
         _ => None,
     }
 }
@@ -1502,4 +1619,155 @@ pub(crate) fn render_symbol(
         .get(&symbol)
         .map(|name| name.to_string())
         .unwrap_or_else(|| format!("{symbol}"))
+}
+
+#[cfg(test)]
+mod join_tests {
+    //! `MoveState::join_from` is a lattice join: the merged state must not
+    //! depend on which predecessor the worklist processed first. These
+    //! tests pin that order-independence with hand-built states.
+
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::name_resolution::symbol::{DeclaredLocalId, Symbol};
+
+    fn local(id: u32) -> Symbol {
+        Symbol::DeclaredLocal(DeclaredLocalId(id))
+    }
+
+    fn place(id: u32) -> Place {
+        Place::root(local(id))
+    }
+
+    fn prov(owner: u32, kind: Perm) -> Provenance {
+        Provenance::direct(Origin::Local, Some(place(owner)), kind)
+    }
+
+    fn set_of<T: std::fmt::Debug>(items: impl IntoIterator<Item = T>) -> BTreeSet<String> {
+        items.into_iter().map(|item| format!("{item:?}")).collect()
+    }
+
+    /// Order-insensitive digest of every field `join_from` merges. `moved`
+    /// and `invalid_borrows` digest by key: their values are diagnostic
+    /// witnesses (which move/owner the error names), and either path's
+    /// witness is valid at a join.
+    fn digest(state: &MoveState) -> [BTreeSet<String>; 11] {
+        [
+            set_of(state.moved.keys()),
+            set_of(&state.moved_all),
+            set_of(&state.initialized_all),
+            set_of(&state.initialized_any),
+            set_of(&state.loans),
+            set_of(
+                state
+                    .provenances
+                    .iter()
+                    .map(|(borrower, provenance)| (borrower, set_of(&provenance.loans))),
+            ),
+            set_of(state.invalid_borrows.keys()),
+            set_of(
+                state
+                    .borrowed_roots
+                    .iter()
+                    .map(|(root, kind)| (root, *kind)),
+            ),
+            set_of(&state.shared_borrow_roots),
+            set_of(state.closure_captures.keys()),
+            set_of(
+                state
+                    .temp_provenances
+                    .iter()
+                    .map(|(temp, provenance)| (temp, set_of(&provenance.loans))),
+            ),
+        ]
+    }
+
+    /// Join both orders, assert the results agree, and assert the joined
+    /// state is a fixpoint (re-joining either input reports no change —
+    /// the worklist's termination condition). Returns the joined state.
+    fn assert_join_commutes(a: &MoveState, b: &MoveState) -> MoveState {
+        let mut ab = a.clone();
+        ab.join_from(b);
+        let mut ba = b.clone();
+        ba.join_from(a);
+        assert_eq!(digest(&ab), digest(&ba), "join must be order-independent");
+        assert!(!ab.clone().join_from(a), "joined state must absorb `a`");
+        assert!(!ab.clone().join_from(b), "joined state must absorb `b`");
+        ab
+    }
+
+    #[test]
+    fn join_unions_provenances_across_paths() {
+        let sub = place(1);
+        let mut a = MoveState::default();
+        a.provenances.insert(sub.clone(), prov(2, Perm::Shared));
+        let mut b = MoveState::default();
+        b.provenances.insert(sub.clone(), prov(3, Perm::Shared));
+        let joined = assert_join_commutes(&a, &b);
+        let owners = set_of(
+            joined.provenances[&sub]
+                .loans
+                .iter()
+                .filter_map(|loan| loan.owner.as_ref()),
+        );
+        assert_eq!(owners, set_of([&place(2), &place(3)]));
+    }
+
+    #[test]
+    fn join_keeps_loans_that_differ_only_in_kind() {
+        let mut a = MoveState::default();
+        a.add_loan(place(1), place(2), Perm::Shared);
+        let mut b = MoveState::default();
+        b.add_loan(place(1), place(2), Perm::Exclusive);
+        let joined = assert_join_commutes(&a, &b);
+        assert_eq!(joined.loans.len(), 2, "one kind swallowed the other");
+        assert!(joined.loans.iter().any(|loan| loan.kind.is_exclusive()));
+        assert!(joined.loans.iter().any(|loan| !loan.kind.is_exclusive()));
+    }
+
+    #[test]
+    fn join_borrowed_roots_weakest_perm_wins() {
+        let root = local(1);
+        let mut a = MoveState::default();
+        a.borrowed_roots.insert(root, Perm::Exclusive);
+        let mut b = MoveState::default();
+        b.borrowed_roots.insert(root, Perm::Shared);
+        let joined = assert_join_commutes(&a, &b);
+        assert_eq!(joined.borrowed_roots[&root], Perm::Shared);
+    }
+
+    #[test]
+    fn join_borrowed_roots_one_sided_entry_keeps_its_perm() {
+        let root = local(1);
+        let mut a = MoveState::default();
+        a.borrowed_roots.insert(root, Perm::Exclusive);
+        let joined = assert_join_commutes(&a, &MoveState::default());
+        assert_eq!(joined.borrowed_roots[&root], Perm::Exclusive);
+    }
+
+    #[test]
+    fn join_is_order_independent_on_mixed_state() {
+        // Overlapping and disjoint facts across every join-merged field.
+        let mut a = MoveState::default();
+        a.note_move(place(1), NodeID::ANY, Ty::unit());
+        a.restore(&place(2));
+        a.add_loan(place(3), place(4), Perm::Shared);
+        a.provenances.insert(place(3), prov(4, Perm::Shared));
+        a.invalid_borrows.insert(place(5), place(4));
+        a.borrowed_roots.insert(local(3), Perm::Shared);
+        a.shared_borrow_roots.insert(local(3));
+        a.temp_provenances.insert(7, prov(4, Perm::Shared));
+
+        let mut b = MoveState::default();
+        b.note_move(place(2), NodeID::ANY, Ty::unit());
+        b.restore(&place(1));
+        b.add_loan(place(3), place(6), Perm::Exclusive);
+        b.provenances.insert(place(3), prov(6, Perm::Exclusive));
+        b.invalid_borrows.insert(place(5), place(6));
+        b.borrowed_roots.insert(local(3), Perm::Exclusive);
+        b.temp_provenances.insert(7, prov(6, Perm::Exclusive));
+
+        assert_join_commutes(&a, &b);
+    }
 }

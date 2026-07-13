@@ -307,7 +307,7 @@ impl Program {
         }
         let lv = self.merge_lv(&[f, a]);
         let lf = self.merge_lf(&[f, a]);
-        Ok(self.intern_expr(ExprKind::App(f, a), cod, lv, lf))
+        Ok(self.intern_expr(ExprKind::App(f, a, None), cod, lv, lf))
     }
 
     pub fn app(&mut self, f: ExprId, a: ExprId) -> ExprId {
@@ -318,6 +318,34 @@ impl Program {
             // well-typed (preservation through lowering).
             Err(e) => unreachable!("λ_G construction: {}", e.0),
         }
+    }
+
+    /// T-App with an unwind entry (ADR 0027): `unwind : Fn(Void, ⊥)` rides
+    /// the application terminal as its third operand.
+    pub fn app_unwind(&mut self, f: ExprId, a: ExprId, unwind: Option<ExprId>) -> ExprId {
+        let Some(u) = unwind else {
+            return self.app(f, a);
+        };
+        let f_ty = self.expr_ty(f);
+        let TyKind::Fn(dom, cod) = *self.ty_kind(f_ty) else {
+            unreachable!("λ_G construction: T-App callee is not a function");
+        };
+        if self.expr_ty(a) != dom {
+            unreachable!("λ_G construction: T-App argument/domain mismatch (unwind form)");
+        }
+        let u_ty = self.expr_ty(u);
+        let void = self.ty_void();
+        let bot = self.ty_bot();
+        let expected = self.ty_fn(void, bot);
+        if u_ty != expected {
+            unreachable!(
+                "λ_G construction: unwind entry must have type Fn(Void, ⊥), got {}",
+                self.render_ty(u_ty)
+            );
+        }
+        let lv = self.merge_lv(&[f, a, u]);
+        let lf = self.merge_lf(&[f, a, u]);
+        self.intern_expr(ExprKind::App(f, a, Some(u)), cod, lv, lf)
     }
 
     pub fn tuple(&mut self, items: &[ExprId]) -> ExprId {

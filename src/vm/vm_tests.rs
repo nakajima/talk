@@ -36,7 +36,9 @@ pub mod tests {
             lowered.phase.diagnostics
         );
         // Post-lowering verifier: T-Prog + WF over the whole program
-        // (LLVM-verifier spirit — Lattner & Adve, CGO 2004).
+        // (LLVM-verifier spirit — Lattner & Adve, CGO 2004). The
+        // free-balance verifier (ADR 0017 stage 2) already ran inside
+        // `Driver::lower` — on by default in test builds.
         let verified = lowered.phase.program.verify();
         assert!(verified.is_ok(), "verifier: {:?}", verified.err());
 
@@ -216,6 +218,20 @@ pub mod tests {
         assert_eq!(out, "4\n");
     }
 
+    /// B4 (ownership-soundness plan 3.2): an implicit pack from a borrowed
+    /// CheapClone payload compiles by retaining — the packed `any` and the
+    /// caller's original release independently, so the program balances
+    /// (the eval harness's leak fence asserts it) instead of double-freeing.
+    #[test]
+    fn vm_balances_borrowed_cheap_clone_existential_pack() {
+        assert_eq!(
+            run_on_both_engines(
+                "protocol Sized {\n\tfunc size() -> Int\n}\nextend String: Sized {\n\tfunc size() -> Int { self.byte_count }\n}\nfunc pack(s: String) -> any Sized {\n\ts\n}\nfunc use_it() -> Int {\n\tlet s = \"hello\" + \" heap string\"\n\tlet a = pack(s)\n\ta.size() + s.byte_count\n}\nuse_it()"
+            ),
+            Value::I64(34)
+        );
+    }
+
     #[test]
     fn vm_runs_gadt_hidden_payload_packed_as_existential() {
         assert_eq!(
@@ -276,6 +292,56 @@ pub mod tests {
         );
     }
 
+    #[test]
+    fn vm_matches_evaluator_on_generic_consume_param_in_loop() {
+        // A generic `consume` param eaten inside a loop auto-clones per
+        // iteration (liveness loop-carries parameters like pre-loop lets);
+        // the String instantiation exercises the retain/release balance on
+        // both engines.
+        assert_eq!(
+            run_on_both_engines(
+                "func eat<T>(consume x: T) -> Int {\n\t0\n}\nfunc f<T>(consume x: T) -> Int {\n\tlet i = 0\n\tloop i < 2 {\n\t\ti = i + 1\n\t\tlet n = eat(x)\n\t}\n\ti\n}\nf(\"a\" + \"b\")"
+            ),
+            Value::I64(2)
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_inferred_borrow_param() {
+        // Plan 3.3(b): `func peek(x)` borrows by default — a droppable
+        // String flows through the inferred param, stays caller-owned, and
+        // both engines balance (no leak, no double free).
+        assert_eq!(
+            run_on_both_engines(
+                "func peek(x) -> Int {\n\tx.byte_count\n}\nlet s = \"a\" + \"b\"\nlet n = peek(s)\nlet m = s.byte_count\nn + m"
+            ),
+            Value::I64(4)
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_inferred_param_arithmetic() {
+        // Copy erasure on inferred borrow params: `&?a` meets Int and
+        // erases, so the body compiles to scalar arithmetic.
+        assert_eq!(
+            run_on_both_engines("func add(a, b) {\n\ta + b\n}\nadd(1, 2)"),
+            Value::I64(3)
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_inferred_identity_borrow() {
+        // `func id(x) { x }` returns a borrow of its argument (the
+        // annotated-generic twin's semantics); the caller reads through
+        // both the borrow and the original owner.
+        assert_eq!(
+            run_on_both_engines(
+                "func id(x) {\n\tx\n}\nlet s = \"a\" + \"b\"\nlet t = id(s)\nt.byte_count + s.byte_count"
+            ),
+            Value::I64(4)
+        );
+    }
+
     /// Both engines, including captured stdout (the M3 surface: records,
     /// strings, io_write).
     fn run_on_both_engines_io(code: &'static str) -> (Value, String) {
@@ -312,9 +378,66 @@ pub mod tests {
             "lowering: {:?}",
             lowered.phase.diagnostics
         );
+        // T-Prog + WF; the free-balance verifier already ran inside
+        // `Driver::lower` (on by default in test builds).
         let verified = lowered.phase.program.verify();
         assert!(verified.is_ok(), "verifier: {:?}", verified.err());
         lowered
+    }
+
+    // ------------------------------------------------------------------
+    // Leak fences (ownership-soundness plan 6.2): every run asserts the
+    // allocation balance at exit, with the result value's own footprint
+    // accounted so container/String-valued programs are fenced too.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn vm_matches_evaluator_on_discarded_droppable_call_result() {
+        // A statement-position call whose droppable result is discarded:
+        // flow CONSUMES the value (mir ConsumeValue), so the discard owns
+        // the drop (`lower_mir_discard`). Found by the 6.2 accounting
+        // sweep — the discard delivered the value into a `drop`
+        // continuation that dropped nothing.
+        assert_eq!(
+            run_on_both_engines(
+                "func mk() -> String {\n\t\"x\" + \"y\"\n}\nfunc check() -> Int {\n\tmk()\n\t0\n}\ncheck()"
+            ),
+            Value::I64(0)
+        );
+    }
+
+    /// A leak the free-balance verifier cannot see (the pointer escapes
+    /// into an array buffer, so the verifier widens instead of reporting)
+    /// behind a non-scalar result: only the runtime fence catches it.
+    const LEAK_BEHIND_STRING_RESULT: &str = "let xs = [_alloc<Byte>(8)]\n\"a\" + \"b\"";
+
+    #[test]
+    #[should_panic(expected = "allocations leaked")]
+    fn eval_fence_catches_leak_behind_string_result() {
+        let mut lowered = lower_for_both_engines(LEAK_BEHIND_STRING_RESULT);
+        let _ = lowered.eval_with_output().expect("evaluator");
+    }
+
+    #[test]
+    #[should_panic(expected = "allocations leaked")]
+    fn vm_fence_catches_leak_behind_string_result() {
+        let mut lowered = lower_for_both_engines(LEAK_BEHIND_STRING_RESULT);
+        let _ = lowered.run_vm_with_output().expect("vm");
+    }
+
+    #[test]
+    fn fences_account_result_footprint_for_container_results() {
+        // Heap-backed results are the value's own footprint, not a leak: a
+        // heap String, an array, and a struct holding a heap String.
+        for code in [
+            "\"a\" + \"b\"",
+            "[1, 2, 3]",
+            "struct Holder {\n\tlet name: String\n}\nHolder(name: \"a\" + \"b\")",
+        ] {
+            let mut lowered = lower_for_both_engines(code);
+            let _ = lowered.run_vm_with_output().expect("vm");
+            let _ = lowered.eval_with_output().expect("evaluator");
+        }
     }
 
     fn assert_engine_values_match(evaluator_value: &EvalValue, vm_value: &Value) {
@@ -444,12 +567,193 @@ pub mod tests {
     }
 
     #[test]
+    fn clone_temp_passed_to_borrow_param_does_not_leak() {
+        // Fuzzer finding F-A: a `.clone()` result temp in borrow position
+        // leaked its refcount bump — the builder never minted a temp (and
+        // so no `TemporaryEnd` candidate) for `ExprKind::Clone` rvalues.
+        // The eval/VM leak fences assert the balance.
+        assert_eq!(
+            run_on_both_engines(
+                "func blen(s: &String) -> Int {\n\ts.byte_count\n}\nfunc f() -> Int {\n\tlet s = \"a\" + \"b\"\n\tblen(s.clone())\n}\nf()"
+            ),
+            Value::I64(2)
+        );
+    }
+
+    #[test]
+    fn clone_receiver_under_projection_does_not_leak() {
+        // F-A's receiver twin: the clone rvalue under a projection rides
+        // the opaque-chain path (B9) and needs the same temp.
+        assert_eq!(
+            run_on_both_engines(
+                "func f() -> Int {\n\tlet s = \"a\" + \"b\"\n\ts.clone().byte_count\n}\nf()"
+            ),
+            Value::I64(2)
+        );
+    }
+
+    #[test]
+    fn clone_into_consume_param_still_balances() {
+        // F-A's control: consume-position clones balanced before the fix
+        // and must keep balancing (the temp classifies Dead — consumed).
+        assert_eq!(
+            run_on_both_engines(
+                "func eat(consume s: String) -> Int {\n\ts.byte_count\n}\nfunc f() -> Int {\n\tlet s = \"a\" + \"b\"\n\teat(s.clone()) + s.byte_count\n}\nf()"
+            ),
+            Value::I64(4)
+        );
+    }
+
+    #[test]
+    fn let_bound_clone_still_balances() {
+        assert_eq!(
+            run_on_both_engines(
+                "func f() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet t = s.clone()\n\ts.byte_count + t.byte_count\n}\nf()"
+            ),
+            Value::I64(4)
+        );
+    }
+
+    #[test]
+    fn borrowed_scrutinee_payload_binder_consume_retains_and_balances() {
+        // Plan S3 repro (ADR 0025): `steal` consumes the payload binder of
+        // a borrowed scrutinee. The tier-2 clone must retain — without it
+        // the caller's enum frees the same payload again.
+        assert_eq!(
+            run_on_both_engines(
+                "enum E {\n\tcase a(String)\n}\nfunc steal(e: E) -> String {\n\tmatch e {\n\t\t.a(s) -> s\n\t}\n}\nfunc go() -> Int {\n\tlet e = E.a(\"heap\" + \" string payload\")\n\tlet s = steal(e: e)\n\tlet n = s.byte_count\n\tlet m = match e {\n\t\t.a(t) -> t.byte_count\n\t}\n\tn + m\n}\ngo()"
+            ),
+            Value::I64(38)
+        );
+    }
+
+    #[test]
+    fn borrowed_scrutinee_payload_binder_into_owned_field_balances() {
+        // S3 shape 2: the binder flows into an owned aggregate; the clone's
+        // buffer is freed by the aggregate's drop, the original by the enum.
+        assert_eq!(
+            run_on_both_engines(
+                "struct Holder {\n\tlet s: String\n}\nenum E {\n\tcase a(String)\n}\nfunc hold(e: E) -> Holder {\n\tmatch e {\n\t\t.a(s) -> Holder(s: s)\n\t}\n}\nfunc go() -> Int {\n\tlet e = E.a(\"xy\" + \"z\")\n\tlet h = hold(e: e)\n\tlet n = h.s.byte_count\n\tlet m = match e {\n\t\t.a(t) -> t.byte_count\n\t}\n\tn + m\n}\ngo()"
+            ),
+            Value::I64(6)
+        );
+    }
+
+    #[test]
+    fn tuple_nested_borrowed_payload_binder_consume_balances() {
+        // S3 shape 3 (ADR 0025's nested case): the binder's projection
+        // crosses a borrow below a tuple; consuming it must still retain.
+        assert_eq!(
+            run_on_both_engines(
+                "enum E {\n\tcase a(String)\n}\nfunc first(x: E, y: E) -> String {\n\tmatch (x, y) {\n\t\t(.a(s), _) -> s\n\t}\n}\nfunc go() -> Int {\n\tlet x = E.a(\"ab\" + \"c\")\n\tlet y = E.a(\"de\" + \"f\")\n\tlet s = first(x, y)\n\tlet n = s.byte_count\n\tlet m = match x {\n\t\t.a(t) -> t.byte_count\n\t}\n\tn + m\n}\ngo()"
+            ),
+            Value::I64(6)
+        );
+    }
+
+    #[test]
+    fn generic_payload_binder_from_borrowed_self_retains_per_instantiation() {
+        // The generic body carries the tier-2 mark; the String instantiation
+        // resolves it to a retain. Without the mark the arm's `t` would move
+        // out of the borrowed receiver and `f`'s drop would free it again.
+        assert_eq!(
+            run_on_both_engines(
+                "enum Fizz<T> {\n\tcase foo(T)\n\n\tfunc unwrap() -> T {\n\t\tmatch self {\n\t\t\t.foo(t) -> t\n\t\t}\n\t}\n}\nfunc go() -> Int {\n\tlet f = Fizz.foo(\"gen\" + \"eric\")\n\tlet s = f.unwrap()\n\tlet n = s.byte_count\n\tlet m = match f {\n\t\t.foo(t) -> t.byte_count\n\t}\n\tn + m\n}\ngo()"
+            ),
+            Value::I64(14)
+        );
+    }
+
+    #[test]
     fn default_bind_arm_owns_enum_without_dropping_payload_twice() {
         assert_eq!(
             run_on_both_engines(
                 "enum Wrapped { case tagged(String) case empty }\nfunc f() -> Int {\n\tlet w = Wrapped.tagged(\"a\" + \"b\")\n\tmatch w { .empty -> 0, x -> 1 }\n}\nf()"
             ),
             Value::I64(1)
+        );
+    }
+
+    // ----- Deinit with droppable fields (ownership-soundness S1/R1) -------
+
+    /// A user `Deinit` on a struct with a droppable field: the hook runs
+    /// once and the GLUE tears the field down once — the deinit body's own
+    /// `self` scope exit must not free the fields a second time.
+    #[test]
+    fn user_deinit_with_droppable_field_frees_fields_once() {
+        let (_, out) = run_on_both_engines_io(
+            "struct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tprint(\"bye\")\n\t\t()\n\t}\n}\nfunc f() {\n\tlet x = Loud(s: \"a\" + \"b\")\n}\nf()",
+        );
+        assert_eq!(out, "bye\n");
+    }
+
+    /// The generic twin: the same balance holds when the droppable field's
+    /// type arrives through an instantiation.
+    #[test]
+    fn generic_deinit_with_droppable_field_frees_fields_once() {
+        let (_, out) = run_on_both_engines_io(
+            "struct Loud<T> {\n\tlet s: T\n}\nextend Loud<T>: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tprint(\"bye\")\n\t\t()\n\t}\n}\nfunc f() {\n\tlet x = Loud(s: \"a\" + \"b\")\n}\nf()",
+        );
+        assert_eq!(out, "bye\n");
+    }
+
+    /// A deinit body that reads a field still leaves teardown to the glue.
+    #[test]
+    fn deinit_body_reading_a_field_frees_fields_once() {
+        let (_, out) = run_on_both_engines_io(
+            "struct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tprint(self.s)\n\t\t()\n\t}\n}\nfunc f() {\n\tlet x = Loud(s: \"a\" + \"b\")\n}\nf()",
+        );
+        assert_eq!(out, "ab\n");
+    }
+
+    /// R1: the suppression keys on the VALUE (the body's own `self`), not
+    /// the type — a fresh sibling instance created inside its own type's
+    /// deinit still runs its hook when it drops.
+    #[test]
+    fn deinit_constructing_a_sibling_runs_both_hooks() {
+        let (_, out) = run_on_both_engines_io(
+            "struct Loud {\n\tlet s: String\n\tlet n: Int\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tprint(\"bye\")\n\t\tif self.n > 0 {\n\t\t\tlet sibling = Loud(s: \"x\" + \"y\", n: self.n - 1)\n\t\t\tprint(\"sibling made\")\n\t\t}\n\t}\n}\nfunc f() {\n\tlet x = Loud(s: \"a\" + \"b\", n: 1)\n}\nf()",
+        );
+        assert_eq!(out, "bye\nsibling made\nbye\n");
+    }
+
+    /// An owned local in a branch-tailed body drops at scope exit exactly
+    /// once (StorageDead-paired candidates survive the branch join).
+    /// Owned PARAMETERS on this same shape still leak — the diagnosed
+    /// `Return`-tail candidate loss in `lower_mir_terminator_inner`, left
+    /// in place until the rule-B buffer retain lands (see the comment
+    /// there).
+    #[test]
+    fn owned_local_dropped_when_body_tail_is_a_branch() {
+        let (_, out) = run_on_both_engines_io(
+            "func f() {\n\tlet s = \"a\" + \"b\"\n\tif 1 < 2 {\n\t\tprint(s)\n\t}\n}\nf()",
+        );
+        assert_eq!(out, "ab\n");
+    }
+
+    #[test]
+    fn owned_param_dropped_when_body_tail_is_a_branch() {
+        // The parameter twin of the local case above (B10): a body whose
+        // tail is a branch join reaches `Terminator::Return` with its
+        // ScopeExit candidates unclaimed — owned parameters must drain
+        // there (locals are covered by StorageDead pairing). The eval
+        // leak fence asserts the balance.
+        let (_, out) = run_on_both_engines_io(
+            "func f(consume s: String) {\n\tif 1 < 2 {\n\t\tprint(s)\n\t}\n}\nf(\"a\" + \"b\")",
+        );
+        assert_eq!(out, "ab\n");
+    }
+
+    #[test]
+    fn heap_constructor_place_read_args_balance_on_both_engines() {
+        // S7: consume params (place reads) stored into a `'heap`
+        // constructor retain their buffers — the params' scope-exit drops
+        // and the region finalizer each free exactly once.
+        assert_eq!(
+            run_on_both_engines(
+                "struct Node 'heap {\n\tlet key: String\n\tlet value: String\n}\nfunc stash(consume key: String, consume value: String) -> Void {\n\tlet n = Node(key: key, value: value)\n\t()\n}\nstash(\"a\" + \"b\", \"c\" + \"d\")"
+            ),
+            Value::Void
         );
     }
 
@@ -727,6 +1031,28 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_for_loop_over_borrowed_receiver_method_source_feeds_borrow_callback() {
+        // ADR 0017 bug B: a same-module method on a BORROWED receiver as
+        // the for-source. The binder must type `&Array<String>` exactly as
+        // it does with a free-function source, and the loop must run
+        // balanced (no per-iteration drop of the source's elements).
+        let (_, out) = run_on_both_engines_io(
+            "struct D {\n\tlet name: String\n\tfunc make() -> Array<Array<String>> {\n\t\t[[\"x\" + \"y\"]]\n\t}\n}\nfunc walk(d: &D, fn: (&Array<String>) -> ()) {\n\tfor item in d.make() {\n\t\tfn(item)\n\t}\n}\nfunc main() -> Int {\n\tlet d = D(name: \"d\" + \"!\")\n\twalk(d) { row in\n\t\tprint(row.count)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "1\n");
+    }
+
+    #[test]
+    fn vm_for_loop_over_free_function_source_feeds_borrow_callback() {
+        // Free-function twin of the borrowed-receiver-method shape above:
+        // the control that pins ADR 0017 bug B to the method path.
+        let (_, out) = run_on_both_engines_io(
+            "func make() -> Array<Array<String>> {\n\t[[\"x\" + \"y\"]]\n}\nfunc walk(fn: (&Array<String>) -> ()) {\n\tfor item in make() {\n\t\tfn(item)\n\t}\n}\nfunc main() -> Int {\n\twalk() { row in\n\t\tprint(row.count)\n\t}\n\t0\n}",
+        );
+        assert_eq!(out, "1\n");
+    }
+
+    #[test]
     fn vm_for_loop_element_feeds_borrow_callback() {
         let (_, out) = run_on_both_engines_io(
             "func each(entries: Array<String>, fn: (&String) -> ()) {\n\tfor e in entries {\n\t\tfn(e)\n\t}\n}\nfunc main() -> Int {\n\tlet xs = [\"a\" + \"b\", \"c\" + \"d\"]\n\teach(xs) { e in\n\t\tprint(e)\n\t}\n\t0\n}",
@@ -926,6 +1252,128 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_taken_literal_match_arm_frees_scrutinee() {
+        // B8: the pattern compiler freed owned occurrences only for
+        // WILDCARD cells, so the taken "ab" arm leaked the RVALUE scrutinee
+        // (a place scrutinee matches through a borrow and is unaffected)
+        // while the `_` arm balanced. Both arms exercised; the evaluator
+        // leak fence (scalar results) asserts the balance.
+        let (_, out) = run_on_both_engines_io(
+            "func g(z: Bool) -> String {\n\tif z {\n\t\t\"a\" + \"b\"\n\t} else {\n\t\t\"z\" + \"zz\"\n\t}\n}\nfunc m(z: Bool) -> Int {\n\tmatch g(z) {\n\t\t\"ab\" -> 1,\n\t\t_ -> 2,\n\t}\n}\nprint(m(true))\nprint(m(false))",
+        );
+        assert_eq!(out, "1\n2\n");
+    }
+
+    #[test]
+    fn vm_literal_arm_nested_in_enum_pattern_frees_payload() {
+        // B8, nested shape: the String literal cell is a variant PAYLOAD
+        // occurrence; matching it must free the payload exactly as the
+        // `.some(_)` wildcard cell does.
+        let (_, out) = run_on_both_engines_io(
+            "func mk(flag: Bool) -> Optional<String> {\n\tif flag {\n\t\tOptional.some(\"a\" + \"b\")\n\t} else {\n\t\tOptional.some(\"z\" + \"zz\")\n\t}\n}\nfunc m(flag: Bool) -> Int {\n\tmatch mk(flag) {\n\t\t.some(\"ab\") -> 1,\n\t\t.some(_) -> 2,\n\t\t.none -> 3,\n\t}\n}\nprint(m(true))\nprint(m(false))",
+        );
+        assert_eq!(out, "1\n2\n");
+    }
+
+    #[test]
+    fn vm_or_pattern_literal_arm_frees_scrutinee_once() {
+        // B8, or-pattern shape (Talk has no match guards): each alternative
+        // expands to its own row, and whichever alternative matches must
+        // free the rvalue scrutinee exactly once.
+        let (_, out) = run_on_both_engines_io(
+            "func mk(i: Int) -> String {\n\tif i == 0 {\n\t\t\"a\" + \"b\"\n\t} else {\n\t\tif i == 1 {\n\t\t\t\"x\" + \"y\"\n\t\t} else {\n\t\t\t\"q\" + \"q\"\n\t\t}\n\t}\n}\nfunc m(i: Int) -> Int {\n\tmatch mk(i) {\n\t\t\"xy\" | \"ab\" -> 1,\n\t\t_ -> 2,\n\t}\n}\nprint(m(0))\nprint(m(1))\nprint(m(2))",
+        );
+        assert_eq!(out, "1\n1\n2\n");
+    }
+
+    #[test]
+    fn vm_literal_match_binder_arm_does_not_double_free() {
+        // B8 fence: the binder arm takes ownership of the scrutinee — the
+        // matched-literal free must not also fire for binder rows.
+        let (_, out) = run_on_both_engines_io(
+            "func mk(z: Bool) -> String {\n\tif z {\n\t\t\"a\" + \"b\"\n\t} else {\n\t\t\"c\" + \"de\"\n\t}\n}\nfunc m(z: Bool) -> Int {\n\tmatch mk(z) {\n\t\t\"ab\" -> 1,\n\t\tx -> x.byte_count,\n\t}\n}\nprint(m(true))\nprint(m(false))",
+        );
+        assert_eq!(out, "1\n3\n");
+    }
+
+    #[test]
+    fn vm_borrowed_scrutinee_literal_match_stays_balanced() {
+        // B8 fence: a literal match through a borrow is an alias — the
+        // taken arm must NOT free what the owner still holds.
+        let (_, out) = run_on_both_engines_io(
+            "func pick(s: &String) -> Int {\n\tmatch s {\n\t\t\"ab\" -> 1,\n\t\t_ -> 2,\n\t}\n}\nfunc main() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet a = pick(s)\n\ta + s.byte_count\n}\nprint(main())",
+        );
+        assert_eq!(out, "3\n");
+    }
+
+    #[test]
+    fn vm_projection_of_call_result_frees_the_temp() {
+        // B9: `g().byte_count` — the rvalue call under a projection must
+        // evaluate at its own Call statement with a TemporaryEnd temp;
+        // boundary Reads alone leaked the result. The evaluator leak
+        // fence (scalar result) asserts the balance.
+        let (_, out) = run_on_both_engines_io(
+            "func g() -> String {\n\t\"a\" + \"b\"\n}\nfunc f() -> Int {\n\tg().byte_count\n}\nprint(f())",
+        );
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
+    fn vm_chained_projection_of_call_result_frees_the_temp() {
+        // B9, chained shape: the projection chain rides the SAME temp —
+        // `mk().inner.byte_count` reads through the temp's field (borrow
+        // provenance into the temp), and the temp's teardown frees the
+        // struct exactly once.
+        let (_, out) = run_on_both_engines_io(
+            "struct Wrap {\n\tlet inner: String\n}\nfunc mk() -> Wrap {\n\tWrap(inner: \"a\" + \"b\")\n}\nfunc f() -> Int {\n\tmk().inner.byte_count\n}\nprint(f())",
+        );
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
+    fn vm_projection_of_call_in_loop_frees_per_iteration() {
+        // B9, loop shape: one temp per iteration, each freed on its own
+        // iteration — three iterations leak exactly zero.
+        let (_, out) = run_on_both_engines_io(
+            "func g() -> String {\n\t\"a\" + \"b\"\n}\nfunc f() -> Int {\n\tlet i = 0\n\tlet total = 0\n\tloop i < 3 {\n\t\ti = i + 1\n\t\ttotal = total + g().byte_count\n\t}\n\ttotal\n}\nprint(f())",
+        );
+        assert_eq!(out, "6\n");
+    }
+
+    #[test]
+    fn vm_consuming_field_projection_of_call_retains_not_double_frees() {
+        // B9 consume shape: `let s = mk().inner` binds a CheapClone field
+        // out of the call temp. The extraction retains (tier 2), so the
+        // temp's teardown and `s`'s scope exit each free exactly once.
+        let (_, out) = run_on_both_engines_io(
+            "struct Wrap {\n\tlet inner: String\n}\nfunc mk() -> Wrap {\n\tWrap(inner: \"a\" + \"b\")\n}\nfunc f() -> Int {\n\tlet s = mk().inner\n\ts.byte_count\n}\nprint(f())",
+        );
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
+    fn vm_consuming_noncheap_projection_of_call_takes_the_temp() {
+        // B9 consume shape, non-retainable field: the extraction takes the
+        // whole temp (its candidate classifies Dead), and the extracted
+        // value's own teardown frees the buffers once — the pre-B9 shape,
+        // with no double free.
+        let (_, out) = run_on_both_engines_io(
+            "struct Inner {\n\tlet s: String\n}\nstruct Outer {\n\tlet i: Inner\n}\nfunc mk() -> Outer {\n\tOuter(i: Inner(s: \"a\" + \"b\"))\n}\nfunc f() -> Int {\n\tlet x = mk().i\n\tx.s.byte_count\n}\nprint(f())",
+        );
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
+    fn vm_projection_of_call_as_match_scrutinee_frees_the_temp() {
+        // B9, scrutinee position: the projection's temp drains at the
+        // match's own statement boundary on both arm paths.
+        let (_, out) = run_on_both_engines_io(
+            "func g(z: Bool) -> String {\n\tif z {\n\t\t\"a\" + \"b\"\n\t} else {\n\t\t\"z\" + \"zz\"\n\t}\n}\nfunc f(z: Bool) -> Int {\n\tmatch g(z).byte_count {\n\t\t2 -> 1,\n\t\t_ -> 2,\n\t}\n}\nprint(f(true))\nprint(f(false))",
+        );
+        assert_eq!(out, "1\n2\n");
+    }
+
+    #[test]
     fn vm_statements_after_match_with_diverging_arm_run() {
         // A match with one diverging arm still delivers value-arm results
         // to the join: the binding and everything after the match run.
@@ -971,6 +1419,85 @@ pub mod tests {
         assert_eq!(out, "3\n");
     }
 
+    #[test]
+    fn vm_return_from_match_arm_drains_pending_statement_temp() {
+        // g()'s call temp (borrowed by len, so unconsumed) normally drains
+        // at the match join; a `return` arm bypasses the join, so the exit
+        // edge must drain it.
+        let (_, out) = run_on_both_engines_io(
+            "func len(s: String) -> Int {\n\ts.byte_count\n}\nfunc g() -> String {\n\t\"a\" + \"b\"\n}\nfunc f() -> Int {\n\tlet a = match len(g()) {\n\t\t2 -> return 1,\n\t\t_ -> 2,\n\t}\n\ta\n}\nprint(f())",
+        );
+        assert_eq!(out, "1\n");
+    }
+
+    #[test]
+    fn vm_return_from_match_arm_untaken_path_still_balanced() {
+        // Taken exit drains on the exit edge, untaken drains at the join —
+        // per-path exact: the same temp must not free twice on either run.
+        let (_, out) = run_on_both_engines_io(
+            "func len(s: String) -> Int {\n\ts.byte_count\n}\nfunc mk(s: String) -> String {\n\ts + \"!\"\n}\nfunc f(s: String) -> Int {\n\tlet a = match len(mk(s)) {\n\t\t3 -> return 1,\n\t\t_ -> 2,\n\t}\n\ta\n}\nprint(f(\"ab\"))\nprint(f(\"zzzz\"))",
+        );
+        assert_eq!(out, "1\n2\n");
+    }
+
+    #[test]
+    fn vm_break_from_match_arm_drains_pending_statement_temp() {
+        let (_, out) = run_on_both_engines_io(
+            "func len(s: String) -> Int {\n\ts.byte_count\n}\nfunc g() -> String {\n\t\"a\" + \"b\"\n}\nfunc f() -> Int {\n\tlet total = 0\n\tloop {\n\t\tlet a = match len(g()) {\n\t\t\t2 -> break,\n\t\t\t_ -> 1,\n\t\t}\n\t\ttotal = total + a\n\t}\n\ttotal\n}\nprint(f())",
+        );
+        assert_eq!(out, "0\n");
+    }
+
+    #[test]
+    fn vm_break_from_match_arm_after_untaken_iterations_balanced() {
+        // Two join-drained iterations, then a break-drained one: no leak
+        // and no double free across the mix.
+        let (_, out) = run_on_both_engines_io(
+            "func pick(s: String, i: Int) -> Int {\n\ts.byte_count + i\n}\nfunc g() -> String {\n\t\"a\" + \"b\"\n}\nfunc f() -> Int {\n\tlet i = 0\n\tlet total = 0\n\tloop {\n\t\ti = i + 1\n\t\tlet a = match pick(g(), i) {\n\t\t\t5 -> break,\n\t\t\t_ -> 1,\n\t\t}\n\t\ttotal = total + a\n\t}\n\ttotal\n}\nprint(f())",
+        );
+        assert_eq!(out, "2\n");
+    }
+
+    #[test]
+    fn vm_continue_from_match_arm_drains_temp_every_iteration() {
+        // `continue` bypasses the join once per iteration: three taken
+        // continues must leak exactly zero temps, not three.
+        let (_, out) = run_on_both_engines_io(
+            "func len(s: String) -> Int {\n\ts.byte_count\n}\nfunc g() -> String {\n\t\"a\" + \"b\"\n}\nfunc f() -> Int {\n\tlet i = 0\n\tlet total = 0\n\tloop i < 3 {\n\t\ti = i + 1\n\t\tlet a = match len(g()) {\n\t\t\t2 -> {\n\t\t\t\tcontinue\n\t\t\t},\n\t\t\t_ -> 2,\n\t\t}\n\t\ttotal = total + a\n\t}\n\ttotal\n}\nprint(f())",
+        );
+        assert_eq!(out, "0\n");
+    }
+
+    #[test]
+    fn vm_return_from_expression_if_drains_condition_temp() {
+        // Expression-position `if` desugars to a match on its condition;
+        // the condition's call temp rides the enclosing statement.
+        let (_, out) = run_on_both_engines_io(
+            "func len(s: String) -> Int {\n\ts.byte_count\n}\nfunc g() -> String {\n\t\"a\" + \"b\"\n}\nfunc f(n: Int) -> Int {\n\tlet a = if (len(g()) == n) {\n\t\treturn 1\n\t} else {\n\t\t2\n\t}\n\ta\n}\nprint(f(2))\nprint(f(9))",
+        );
+        assert_eq!(out, "1\n2\n");
+    }
+
+    #[test]
+    fn vm_return_through_short_circuit_drains_left_temp() {
+        // `&&` desugars to a nested match; the droppable temp on its left
+        // is pending across both joins when the return arm is taken.
+        let (_, out) = run_on_both_engines_io(
+            "func len(s: String) -> Int {\n\ts.byte_count\n}\nfunc g() -> String {\n\t\"a\" + \"b\"\n}\nfunc f(n: Int) -> Int {\n\tlet a = if (len(g()) == 2 && n > 0) {\n\t\treturn 1\n\t} else {\n\t\t2\n\t}\n\ta\n}\nprint(f(1))\nprint(f(0))",
+        );
+        assert_eq!(out, "1\n2\n");
+    }
+
+    #[test]
+    fn vm_return_from_nested_match_arm_drains_both_levels() {
+        // A return from the inner match's arm bypasses both joins: temps
+        // at both nesting levels drain on the one exit edge.
+        let (_, out) = run_on_both_engines_io(
+            "func len(s: String) -> Int {\n\ts.byte_count\n}\nfunc g() -> String {\n\t\"a\" + \"b\"\n}\nfunc h() -> String {\n\t\"c\" + \"de\"\n}\nfunc f() -> Int {\n\tlet a = match len(g()) {\n\t\t2 -> match len(h()) {\n\t\t\t3 -> return 1,\n\t\t\t_ -> 2,\n\t\t},\n\t\t_ -> 3,\n\t}\n\ta\n}\nprint(f())",
+        );
+        assert_eq!(out, "1\n");
+    }
+
     // ----- M6: closures, indirect calls, trailing blocks ---------------------
 
     #[test]
@@ -1014,6 +1541,59 @@ pub mod tests {
             "func twice(path: &Path, fn: () -> ()) {\n\tfn()\n\tfn()\n}\ntwice(Path([\".\"])) { print(\"tick\") }",
         );
         assert_eq!(out, "tick\ntick\n");
+    }
+
+    #[test]
+    fn trailing_block_isolates_the_whole_statement_scope_bundle() {
+        // ADR 0017 stage 4 characterization: a trailing block containing a
+        // loop with break/continue, a droppable local, and an early return
+        // — inside a call with its own pending arg temp (`Path`), itself
+        // inside an enclosing loop. Every statement-scoped builder field
+        // (loop targets, pending-temp frames, early-exit scopes) must stay
+        // isolated from the enclosing statement's values.
+        let (_, out) = run_on_both_engines_io(
+            "func run(path: &Path, fn: () -> ()) {\n\tfn()\n\tfn()\n}\nfunc main() -> Int {\n\tlet outer = 0\n\tloop outer < 2 {\n\t\touter = outer + 1\n\t\trun(Path([\".\"])) {\n\t\t\tlet held = \"a\" + \"b\"\n\t\t\tlet j = 0\n\t\t\tloop j < 3 {\n\t\t\t\tj = j + 1\n\t\t\t\tif j == 1 {\n\t\t\t\t\tcontinue\n\t\t\t\t}\n\t\t\t\tbreak\n\t\t\t}\n\t\t\tif j == 2 {\n\t\t\t\tprint(held)\n\t\t\t\treturn\n\t\t\t}\n\t\t\tprint(\"unreachable\")\n\t\t}\n\t}\n\tprint(outer)\n\t0\n}",
+        );
+        assert_eq!(out, "ab\nab\nab\nab\n2\n");
+    }
+
+    #[test]
+    fn trailing_block_tail_inside_value_block_returns_to_its_own_caller() {
+        // Found landing ADR 0017 stage 4: `block_value_temps` leaked into
+        // embedded bodies, so a trailing block's tail delivered to the
+        // ENCLOSING block expression's temp instead of the closure's own
+        // return — λ_G construction panicked (T-App: argument () does not
+        // match domain int). The wholesale statement-scope swap isolates
+        // it by construction.
+        let (_, out) = run_on_both_engines_io(
+            "func call(fn: () -> Int) -> Int {\n\tfn()\n}\nfunc main() -> Int {\n\tlet x = {\n\t\tlet y = call {\n\t\t\t5\n\t\t}\n\t\ty + 1\n\t}\n\tprint(x)\n\t0\n}",
+        );
+        assert_eq!(out, "6\n");
+    }
+
+    #[test]
+    fn early_return_from_value_block_arg_drops_pending_call_temps() {
+        // A value-position block is a value construct like a match: a
+        // `return` inside it bypasses the statement's join, so the temps
+        // already materialized for the statement (g()'s result) must
+        // drain on the exit edge (`enclosing_temps`), exactly as they
+        // would from a match arm. The run fences catch the leak.
+        let (_, out) = run_on_both_engines_io(
+            "func g() -> String {\n\t\"a\" + \"b\"\n}\nfunc h(a: String, b: Int, c: Int) -> Int {\n\ta.byte_count * 100 + b * 10 + c\n}\nfunc f(flag: Bool) -> Int {\n\th(g(), {\n\t\tif flag {\n\t\t\treturn 5\n\t\t}\n\t\t2\n\t}, 1)\n}\nprint(f(true))\nprint(f(false))",
+        );
+        assert_eq!(out, "5\n221\n");
+    }
+
+    #[test]
+    fn trailing_block_tail_inside_match_arm_returns_to_its_own_caller() {
+        // The `continuation_temps` twin of the shape above: a trailing
+        // block's value tail inside an expression-position match arm is
+        // the closure's return, never a continuation into the enclosing
+        // match's join.
+        let (_, out) = run_on_both_engines_io(
+            "func call(fn: () -> Int) -> Int {\n\tfn()\n}\nfunc main() -> Int {\n\tlet v = match 1 {\n\t\t1 -> call {\n\t\t\t5\n\t\t},\n\t\t_ -> 0,\n\t}\n\tprint(v)\n\t0\n}",
+        );
+        assert_eq!(out, "5\n");
     }
 
     #[test]
@@ -1090,6 +1670,137 @@ pub mod tests {
             "effect 'oops(error) -> Never\nlet tag = \"caught: \"\n@handle 'oops { err in\n\tprint(tag)\n\tprint(err)\n}\nfunc boom() 'oops -> () {\n\t'oops(\"bang\")\n}\nboom()",
         );
         assert_eq!(out, "caught: \nbang\n");
+    }
+
+    // ----- ADR 0027: aborts unwind through lowerer-emitted cleanup --------
+    // The nine acceptance tests: aborting handlers run the suspended
+    // frames' drops instead of discarding them. The run helpers' leak
+    // fences (evaluator balance + VM run_counted) assert the balance.
+
+    #[test]
+    fn abort_unwind_frees_performer_frame_locals() {
+        // ADR 0027 test 1 (shape 1): the performing frame's owned local
+        // drops during the unwind; balance asserted by the run fences.
+        let (_, out) = run_on_both_engines_io(
+            "effect 'oops(error) -> Never\n@handle 'oops { err in print(err) }\nfunc boom() 'oops -> () {\n\tlet owned = [1, 2, 3]\n\t'oops(\"bang\")\n}\nboom()",
+        );
+        assert_eq!(out, "bang\n");
+    }
+
+    #[test]
+    fn abort_unwind_frees_intervening_frame_locals() {
+        // ADR 0027 test 2 (shape 2): a frame between performer and
+        // installer is suspended at an ordinary effectful call; its owned
+        // local drops on the unwind.
+        let (_, out) = run_on_both_engines_io(
+            "effect 'oops(error) -> Never\n@handle 'oops { err in print(err) }\nfunc boom() 'oops -> () {\n\t'oops(\"deep\")\n}\nfunc middle() 'oops -> () {\n\tlet held = [4, 5]\n\tboom()\n\tprint(held.count)\n}\nmiddle()",
+        );
+        assert_eq!(out, "deep\n");
+    }
+
+    #[test]
+    fn abort_unwind_frees_installing_frame_pre_handle_locals() {
+        // ADR 0027 test 3 (shape 3): the installing frame's own locals,
+        // declared BEFORE the @handle, drop when an abort exits through
+        // the delimiter (raw_ret_k sits below the drop wrappers).
+        let (value, out) = run_on_both_engines_io(
+            "effect 'oops(error) -> Never\nfunc boom() 'oops -> () {\n\t'oops(\"bang\")\n}\nfunc run() -> Int {\n\tlet before = [7, 8]\n\t@handle 'oops { err in\n\t\tprint(err)\n\t\t0\n\t}\n\tboom()\n\tbefore.count\n}\nprint(run())",
+        );
+        assert_eq!(out, "bang\n0\n");
+        assert_eq!(value, Value::Void);
+    }
+
+    #[test]
+    fn abort_unwind_releases_heap_region_across_abort() {
+        // ADR 0027 test 4: a `'heap` object live across the perform; the
+        // abort releases its region (ledger rule F on the Unwind
+        // candidates) and its teardown runs; the fences assert
+        // live_objects == 0.
+        let (_, out) = run_on_both_engines_io(
+            "struct Box 'heap {\n\tlet label: Int\n}\neffect 'oops(error) -> Never\n@handle 'oops { err in print(err) }\nfunc boom() 'oops -> () {\n\tlet b = Box(label: 9)\n\t'oops(\"bang\")\n}\nboom()",
+        );
+        assert_eq!(out, "bang\n");
+    }
+
+    #[test]
+    fn abort_unwind_runs_deinit_hooks_innermost_frame_first_reverse_decl() {
+        // ADR 0027 drop order: innermost frame first (performer →
+        // installer), reverse declaration order within a frame — the
+        // order the drops would have run had each function returned
+        // normally. The handler body runs BEFORE the unwind (its tail is
+        // the abort).
+        let (_, out) = run_on_both_engines_io(
+            "struct Loud {\n\tlet tag: Int\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tprint(self.tag)\n\t}\n}\neffect 'oops(e) -> Never\n@handle 'oops { e in print(e) }\nfunc boom() 'oops -> () {\n\tlet a = Loud(tag: 1)\n\tlet b = Loud(tag: 2)\n\t'oops(\"bang\")\n}\nfunc middle() 'oops -> () {\n\tlet c = Loud(tag: 3)\n\tboom()\n}\nmiddle()",
+        );
+        assert_eq!(out, "bang\n2\n1\n3\n");
+    }
+
+    #[test]
+    fn abort_unwind_during_finalizer_completes_teardown() {
+        // ADR 0027 test 5: a finalizer body performs and its handler
+        // aborts. Under the Deinit-row check (open question 2) the only
+        // legal shape is a handler installed INSIDE the deinit body — so
+        // the abort's delimiter is the deinit witness's frame, the frames
+        // above it (the performer, holding an owned array) unwind through
+        // their entries while the finalizer-frame counter holds the
+        // teardown pump, and the thunk's remaining field frees run when
+        // the witness returns; teardown completes; balanced.
+        let (_, out) = run_on_both_engines_io(
+            "effect 'mid(m) -> Never\nfunc helper() -> Int {\n\tlet held = [1, 2]\n\t'mid(\"boom\")\n\theld.count\n}\nstruct Res 'heap {\n\tlet name: String\n}\nextend Res: Deinit {\n\tconsuming func deinit() -> Void {\n\t\t@handle 'mid { m in print(m) }\n\t\tlet n = helper()\n\t\tprint(n)\n\t}\n}\nfunc spawn() {\n\tlet r = Res(name: \"a\" + \"b\")\n}\nspawn()\nprint(\"done\")",
+        );
+        assert_eq!(out, "boom\ndone\n");
+    }
+
+    #[test]
+    fn abort_unwind_resumed_then_aborted_drops_current_live_set() {
+        // ADR 0027 test 8: the handler resumes once, the extent performs
+        // again, the handler aborts; the live set at the SECOND suspension
+        // (owned array allocated after the first resume) is what drops.
+        let (value, out) = run_on_both_engines_io(
+            "effect 'check(n) -> Int\n@handle 'check { n in\n\tif n > 0 {\n\t\tcontinue n\n\t}\n\tprint(\"abort\")\n\t0 - 1\n}\nfunc go() 'check -> Int {\n\tlet first = 'check(5)\n\tlet owned = [first, 2]\n\tlet second = 'check(0 - first)\n\towned.count + second\n}\ngo()",
+        );
+        assert_eq!(out, "abort\n");
+        assert_eq!(value, Value::I64(-1));
+    }
+
+    #[test]
+    fn abort_unwind_nested_handler_depths_drop_inner_extent_once() {
+        // ADR 0027 test 7: inner and outer handlers over the same extent,
+        // each aborted in turn; the inner extent's locals drop exactly
+        // once per abort (fences catch both a leak and a double free).
+        // The outer abort unwinds THROUGH the inner installing frame as
+        // an ordinary intervening frame.
+        let (_, out) = run_on_both_engines_io(
+            "effect 'outer_stop(m) -> Never\neffect 'inner_stop(m) -> Never\nfunc work(which: Int) -> Int {\n\tlet inner_owned = [1, 2, 3]\n\tif which > 0 {\n\t\t'inner_stop(\"inner\")\n\t}\n\t'outer_stop(\"outer\")\n\tinner_owned.count\n}\nfunc scope(which: Int) -> Int {\n\t@handle 'inner_stop { m in\n\t\tprint(m)\n\t\t1\n\t}\n\twork(which)\n}\n@handle 'outer_stop { m in print(m) }\nprint(scope(1))\nprint(scope(0))",
+        );
+        assert_eq!(out, "inner\n1\nouter\n");
+    }
+
+    #[test]
+    fn abort_unwind_out_of_recursive_performer() {
+        // ADR 0027 test 9: an abort out of a recursive performer — each
+        // activation holds its own owned array; every suspended
+        // activation's local drops exactly once. Pins the evaluator's
+        // label-identity/LIFO extent-stack discipline.
+        let (value, out) = run_on_both_engines_io(
+            "effect 'oops(error) -> Never\n@handle 'oops { err in\n\tprint(err)\n\t0 - 1\n}\nfunc descend(n: Int) 'oops -> Int {\n\tlet held = [n, n]\n\tif n == 0 {\n\t\t'oops(\"bottom\")\n\t}\n\tdescend(n - 1) + held.count\n}\ndescend(3)",
+        );
+        assert_eq!(out, "bottom\n");
+        assert_eq!(value, Value::I64(-1));
+    }
+
+    #[test]
+    fn abort_unwind_through_handler_body_drops_installing_locals_once() {
+        // A may-suspend call INSIDE a handler body is the CAPABILITY's
+        // suspension site: its unwind entry covers the body's own scopes
+        // only (`scope_floor`). The installing frame's local unwinds from
+        // its own suspension site (the perform that entered the handler) —
+        // listing it at both sites drops it twice when the abort unwinds
+        // through both frames (the run fences catch the double free).
+        let (_, out) = run_on_both_engines_io(
+            "effect 'stop(m) -> Never\neffect 'ask(q) -> Int\n@handle 'stop { m in\n\tprint(m)\n\t0\n}\nfunc boom() 'stop -> Int {\n\t'stop(\"bang\")\n}\nfunc scope() 'stop -> Int {\n\tlet held = [4, 5]\n\t@handle 'ask { q in\n\t\tcontinue boom()\n\t}\n\t'ask(\"q\") + held.count\n}\nscope()",
+        );
+        assert_eq!(out, "bang\n");
     }
 
     // ----- Pattern-binding statements: if-let and let-else ----------------
@@ -1187,6 +1898,21 @@ pub mod tests {
             "effect 'ask(prompt) -> Int\n@handle 'ask { p in\n\tcontinue 10\n}\nfunc inner() 'ask -> Int {\n\tlet v = 'ask(\"x\")\n\tv + 1\n}\nfunc outer() 'ask -> Int {\n\tlet w = inner()\n\tw + 100\n}\nlet o = outer()\nprint(o + 1000)",
         );
         assert_eq!(out, "1111\n");
+    }
+
+    #[test]
+    fn handler_body_isolates_the_whole_statement_scope_bundle() {
+        // ADR 0017 stage 4 characterization, the handler-body twin: a
+        // handler body containing a loop with break/continue, a droppable
+        // local, and an early exit (the `continue v` resume). (`@handle`
+        // only lowers at a function body's root today, so no enclosing
+        // loop/pending-temp statement can surround this site.) The body's
+        // loop targets, pending-temp frames, and early-exit scopes must
+        // stay isolated from the enclosing function's values.
+        let (_, out) = run_on_both_engines_io(
+            "effect 'check(n) -> Int\nfunc go() 'check -> Int {\n\tlet first = 'check(1)\n\tlet second = 'check(2)\n\tfirst + second\n}\nfunc main() -> Int {\n\t@handle 'check { n in\n\t\tlet held = \"h\" + \"!\"\n\t\tlet j = 0\n\t\tloop j < 3 {\n\t\t\tj = j + 1\n\t\t\tif j == 1 {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tbreak\n\t\t}\n\t\tprint(held)\n\t\tcontinue n + j\n\t}\n\tprint(go())\n\t0\n}",
+        );
+        assert_eq!(out, "h!\nh!\n7\n");
     }
 
     #[test]
@@ -1593,6 +2319,96 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_cloned_array_push_retains_shared_elements() {
+        // CoW: push after clone() copies the shared buffer. The copy must
+        // retain each element — otherwise two "unique" buffers hold the
+        // same element pointers and both deep-drop them (double free).
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [\"a\" + \"b\"]\n\tlet snap = xs.clone()\n\txs.push(\"c\" + \"d\")\n\tprint(snap.get(0))\n\tprint(xs.get(0))\n\tprint(xs.get(1))\n\t0\n}",
+        );
+        assert_eq!(out, "ab\nab\ncd\n");
+    }
+
+    #[test]
+    fn vm_cloned_array_set_retains_shared_elements() {
+        // Same CoW copy, reached through set's uniqued_storage: the sharer
+        // keeps its element, the writer drops its (retained) copy.
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [\"a\" + \"b\"]\n\tlet snap = xs.clone()\n\txs.set(0, \"z\" + \"w\")\n\tprint(snap.get(0))\n\tprint(xs.get(0))\n\t0\n}",
+        );
+        assert_eq!(out, "ab\nzw\n");
+    }
+
+    #[test]
+    fn vm_array_grow_moves_droppable_elements() {
+        // Growing past capacity from a unique buffer is a MOVE: elements
+        // are donated to the fresh buffer (no retains) and the old shell
+        // is freed without deep-dropping them — no leak, no double free.
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [\"a\" + \"b\"]\n\txs.push(\"c\" + \"d\")\n\txs.push(\"e\" + \"f\")\n\txs.push(\"g\" + \"h\")\n\tprint(xs.get(0))\n\tprint(xs.get(3))\n\tprint(xs.count)\n\t0\n}",
+        );
+        assert_eq!(out, "ab\ngh\n4\n");
+    }
+
+    #[test]
+    fn vm_cloned_nested_array_push_retains_shared_elements() {
+        // Nested containers: retaining an Array element is an rc bump on
+        // its buffer; the deinit uniqueness gate then tears elements down
+        // exactly once across the sharers.
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [[\"a\" + \"b\"]]\n\tlet snap = xs.clone()\n\txs.push([\"c\" + \"d\"])\n\tprint(snap.get(0).get(0))\n\tprint(xs.get(1).get(0))\n\tprint(xs.count)\n\t0\n}",
+        );
+        assert_eq!(out, "ab\ncd\n2\n");
+    }
+
+    #[test]
+    fn vm_cloned_array_push_retains_enum_elements() {
+        // Enum elements retain under tag dispatch — the branching walk
+        // that makes the retain splice continuation-shaped.
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [Optional.some(\"a\" + \"b\")]\n\tlet snap = xs.clone()\n\txs.push(Optional.some(\"c\" + \"d\"))\n\tmatch snap.get(0) {\n\t\t.some(s) -> print(s),\n\t\t.none -> print(\"none\")\n\t}\n\tprint(xs.count)\n\t0\n}",
+        );
+        assert_eq!(out, "ab\n2\n");
+    }
+
+    #[test]
+    fn vm_cloned_nested_array_set_retains_shared_elements() {
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [[\"a\" + \"b\"]]\n\tlet snap = xs.clone()\n\txs.set(0, [\"z\" + \"w\"])\n\tprint(snap.get(0).get(0))\n\tprint(xs.get(0).get(0))\n\t0\n}",
+        );
+        assert_eq!(out, "ab\nzw\n");
+    }
+
+    #[test]
+    fn vm_array_set_drops_overwritten_element() {
+        // set on an owned array must drop the element it overwrites (the
+        // scalar-result leak fence asserts exact balance).
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [\"a\" + \"b\"]\n\txs.set(0, \"z\" + \"w\")\n\tprint(xs.get(0))\n\t0\n}",
+        );
+        assert_eq!(out, "zw\n");
+    }
+
+    #[test]
+    fn vm_array_set_drops_overwritten_nested_element() {
+        // The overwritten element's drop is a full deep drop: a nested
+        // array element tears down its own strings.
+        let (_, out) = run_on_both_engines_io(
+            "func main() -> Int {\n\tlet xs = [[\"a\" + \"b\"]]\n\txs.set(0, [\"z\" + \"w\"])\n\tprint(xs.get(0).get(0))\n\t0\n}",
+        );
+        assert_eq!(out, "zw\n");
+    }
+
+    #[test]
+    fn vm_sort_by_compares_the_last_element() {
+        // Selection sort's inner scan must include the final index: with
+        // [1, 3, 2] descending, the last element (2) has to move.
+        let value =
+            run_on_both_engines("let sorted = [1, 3, 2].sort_by { $0 > $1 }\nsorted == [3, 2, 1]");
+        assert_eq!(value, Value::Bool(true));
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_mut_inherent_extend_member() {
         // The inout convention is DERIVED from the member's scheme (first
         // param an exclusive borrow), not registered per declaration kind
@@ -1962,6 +2778,22 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_generic_consume_inside_trailing_block() {
+        // A generic (Param-typed) consume inside a trailing block tier-2
+        // auto-clones per callee invocation (the loop treatment: the
+        // body's re-entry self-edge makes a genuine move a checker error,
+        // so the consume must clone instead) — both engines run it and
+        // agree; concrete-typed consumes in the same position are rejected
+        // by the flow checker (see flow_tests re-entry tests).
+        assert_eq!(
+            run_on_both_engines(
+                "func eat<T>(consume x: T) -> Int {\n\t1\n}\nfunc run_twice(f: () -> Int) -> Int {\n\tf() + f()\n}\nfunc check<T>(consume v: T) -> Int {\n\tlet w = v\n\trun_twice {\n\t\teat(w)\n\t}\n}\ncheck(\"hello\" + \" world\")"
+            ),
+            Value::I64(2)
+        );
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_match_on_a_rebound_enum_param() {
         let (_, out) = run_on_both_engines_io(
             "enum Maybe<T> {\n\tcase some(T)\n\tcase none\n}\nfunc f(value: Maybe<Int>) -> Int {\n\tlet y = value\n\tmatch y {\n\t\t.some(x) -> x,\n\t\t.none -> 0\n\t}\n}\nprint(f(Maybe.some(42)))",
@@ -2253,6 +3085,7 @@ pub mod tests {
                 code,
                 arity: 0,
                 n_regs: 6,
+                unwind: vec![],
             }],
             consts,
             arg_pool: vec![],
@@ -2294,6 +3127,9 @@ pub mod tests {
         )
         .expect_err("double-free should fail");
         assert!(error.contains("double free"), "{error}");
+        // Balance-at-trap (plan 6.2c): the trap report carries the
+        // allocation-balance state for diagnosis.
+        assert!(error.contains("balance at trap"), "{error}");
     }
 
     #[test]
@@ -2390,6 +3226,7 @@ pub mod tests {
                 ],
                 arity: 0,
                 n_regs: 6,
+                unwind: vec![],
             }],
             consts: vec![Value::I64(4)],
             arg_pool: vec![1, 2, 2],
@@ -2427,6 +3264,7 @@ pub mod tests {
                 ],
                 arity: 0,
                 n_regs: 4,
+                unwind: vec![],
             }],
             consts: vec![Value::I64(1), Value::I64(-1)],
             arg_pool: vec![1, 2, 2],
@@ -2494,12 +3332,14 @@ pub mod tests {
                     ],
                     arity: 0,
                     n_regs: 2,
+                    unwind: vec![],
                 },
                 Chunk {
                     name: "is_even".into(),
                     code: vec![Insn::Ret { src: 0 }],
                     arity: 1,
                     n_regs: 1,
+                    unwind: vec![],
                 },
             ],
             consts: vec![Value::I64(42)],
@@ -2532,6 +3372,7 @@ chunk 1: is_even (arity 1, regs 1)
                 code: vec![Insn::Ret { src: 0 }],
                 arity: 0,
                 n_regs: 1,
+                unwind: vec![],
             }],
             consts: vec![],
             arg_pool: vec![],

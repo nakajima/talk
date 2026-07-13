@@ -7,6 +7,27 @@ struct PendingDrop {
     ty: CheckTy,
     has_dynamic_flags: bool,
     elaboration: Option<mir::DropElaboration>,
+    /// Carried from the matched `DropBinding`: the deinit body's own
+    /// `self`, whose drop is a no-op (the caller's glue owns teardown).
+    is_deinit_self: bool,
+}
+
+/// What a `TemporaryEnd` candidate's elaboration means to lowering.
+#[derive(Debug, PartialEq)]
+pub(super) enum TempDropDisposition {
+    /// `Static`: an unconsumed owned temp — release it here.
+    Drop,
+    /// `Dead` (consumed) or unelaborated (nothing droppable) — emit nothing.
+    Skip,
+    /// `Open` with a moved path: a consuming projection took one field
+    /// path out of the temp — drop every field OFF that path here.
+    DropExcept(Vec<crate::name_resolution::symbol::Symbol>),
+    /// `Conditional` (or `Open` without a moved path): not a
+    /// classification flow can produce for a temp (consumption is static
+    /// per temp, so temps never need drop flags). An internal error — R6:
+    /// silence here would be a silent leak the day flow's temp contract
+    /// changes.
+    Invalid(mir::DropElaboration),
 }
 
 #[derive(derive_visitor::Visitor)]
@@ -327,9 +348,39 @@ impl<'a> Lowering<'a> {
             }
             None => ctx,
         };
-        let Some(statement) = cursor.statements().get(cursor.index) else {
-            return self.lower_mir_terminator(cursor, ctx, k, cache);
-        };
+        // Skip contiguous runs of non-lowering statements ITERATIVELY:
+        // flow-only bookkeeping (reads, scope markers) and symbol drop
+        // candidates (read by their neighboring statements via cursor
+        // lookaround, never lowered by the walk itself) would otherwise
+        // each cost a recursion frame — with ADR 0027's per-suspension
+        // `Unwind` candidates that depth overflowed the test stack.
+        let mut cursor = cursor;
+        loop {
+            let Some(statement) = cursor.statements().get(cursor.index) else {
+                return self.lower_mir_terminator(cursor, ctx, k, cache);
+            };
+            let skippable = match &statement.kind {
+                mir::Statement::ScopeEnter { .. }
+                | mir::Statement::ScopeExit { .. }
+                | mir::Statement::StorageLive { .. }
+                | mir::Statement::Read { .. }
+                | mir::Statement::AssignmentRootUse { .. }
+                | mir::Statement::DeclBody { .. } => true,
+                // Only an Expr-targeted TemporaryEnd candidate lowers at
+                // its own statement; every symbol-targeted candidate is
+                // consumed by its neighbors' lookaround.
+                mir::Statement::DropCandidate { reason, target, .. } => {
+                    !(matches!(reason, mir::DropReason::TemporaryEnd)
+                        && matches!(target, mir::DropTarget::Expr(_)))
+                }
+                _ => false,
+            };
+            if !skippable {
+                break;
+            }
+            cursor = cursor.advance();
+        }
+        let statement = cursor.statement();
         let mut rest = |this: &mut Self, ctx: &Ctx, k: ExprId| {
             this.lower_mir_statements(cursor.advance(), ctx, k, cache)
         };
@@ -349,17 +400,48 @@ impl<'a> Lowering<'a> {
                 ..
             } => {
                 let rest_body = rest(self, ctx, k);
-                let Some(mir::DropElaboration::Static) = self.drop_elaboration_at(statement, None)
-                else {
-                    return rest_body;
-                };
+                let moved_path =
+                    match Self::temp_drop_disposition(statement.ownership.drop.as_ref()) {
+                        TempDropDisposition::Skip => return rest_body,
+                        TempDropDisposition::Invalid(kind) => {
+                            // Flow classifies temps `Static`, `Dead`, or `Open`
+                            // with a moved path (consumption is static per temp
+                            // — no drop flags). Anything else means a stage
+                            // upstream changed the contract; skipping it
+                            // silently would be a silent leak, so it surfaces
+                            // loudly instead.
+                            debug_assert!(
+                                false,
+                                "TemporaryEnd candidate elaborated {kind:?}: flow \
+                             classifies temps Static, Dead, or pathed Open only"
+                            );
+                            self.diagnostics.push(format!(
+                                "lowering: temporary drop candidate elaborated {kind:?} \
+                             (internal error: temps classify Static, Dead, or \
+                             pathed Open only)"
+                            ));
+                            return rest_body;
+                        }
+                        TempDropDisposition::Drop => vec![],
+                        TempDropDisposition::DropExcept(path) => path,
+                    };
                 let typed_ast::ExprKind::Temp(temp) = temp_expr.kind else {
                     return rest_body;
                 };
                 let Some(value) = ctx.temps.get(&temp).copied() else {
                     return rest_body;
                 };
-                self.lower_drop_value_then(ctx, value, &temp_expr.ty, rest_body)
+                if moved_path.is_empty() {
+                    self.lower_drop_value_then(ctx, value, &temp_expr.ty, rest_body)
+                } else {
+                    self.lower_drop_value_except_then(
+                        ctx,
+                        value,
+                        &temp_expr.ty,
+                        &moved_path,
+                        rest_body,
+                    )
+                }
             }
             mir::Statement::DropCandidate { .. } => rest(self, ctx, k),
             mir::Statement::StorageDead { symbol, .. } => {
@@ -384,7 +466,9 @@ impl<'a> Lowering<'a> {
                 );
                 let result_ty = self.normalize_check_ty(result_ty, ctx.unit);
                 if result_ty.is_never() {
-                    return self.lower_expr_unpacked(expr, ctx, k);
+                    return self.with_unwind_entry(ctx, cursor, cache, |this| {
+                        this.lower_expr_unpacked(expr, ctx, k)
+                    });
                 }
                 let value_ty = self.map_ty(&result_ty);
                 let bot = self.p.ty_bot();
@@ -395,7 +479,9 @@ impl<'a> Lowering<'a> {
                 let rest_body = self.lower_mir_statements(cursor.advance(), &tctx, k, cache);
                 self.p.set_body(kf, rest_body);
                 let kref = self.p.func_ref(kf);
-                self.lower_expr_unpacked(expr, ctx, kref)
+                self.with_unwind_entry(ctx, cursor, cache, |this| {
+                    this.lower_expr_unpacked(expr, ctx, kref)
+                })
             }
             mir::Statement::Call {
                 expr,
@@ -425,7 +511,9 @@ impl<'a> Lowering<'a> {
                 // Raw evaluation: the pack / auto-clone the checker put on
                 // this node applies where its Temp is read (the consuming
                 // statement), exactly as for match temps — not twice.
-                self.lower_expr_unpacked(expr, ctx, kref)
+                self.with_unwind_entry(ctx, cursor, cache, |this| {
+                    this.lower_expr_unpacked(expr, ctx, kref)
+                })
             }
             mir::Statement::Handling {
                 stmt,
@@ -607,7 +695,9 @@ impl<'a> Lowering<'a> {
                         let void_ty = self.p.ty_void();
                         acquires.push(self.p.primop(Op::RegionAcquire, &[value], void_ty));
                     }
-                    if let Some(drop) = self.drop_binding_for_mir_symbol(cursor.body, symbol, ty) {
+                    if let Some(drop) =
+                        self.drop_binding_for_mir_symbol(cursor.body, cache, symbol, ty)
+                    {
                         drop_bindings.push(drop);
                     }
                 }
@@ -667,8 +757,15 @@ impl<'a> Lowering<'a> {
         let binding_ty = self
             .symbol_check_ty(symbol, &ctx.theta)
             .unwrap_or_else(|| self.checker_ty(rhs, ctx));
-        let drop_binding =
-            self.drop_binding_for_mir_symbol(cursor.body, symbol, binding_ty.clone());
+        let drop_binding = self
+            .drop_binding_for_mir_symbol(cursor.body, cache, symbol, binding_ty.clone())
+            .map(|mut drop| {
+                // `let s = self` inside a deinit body: the rebind inherits
+                // the self param's drop suppression (transitively — the
+                // stack entry it reads may itself be an inherited rebind).
+                drop.is_deinit_self = Self::moves_deinit_self(ctx, rhs);
+                drop
+            });
         let mut inner = ctx.clone();
         // Ledger: a binding initialized from a place read takes references
         // into the value's regions (rvalues already carry their +1).
@@ -707,14 +804,20 @@ impl<'a> Lowering<'a> {
     fn drop_binding_for_mir_symbol(
         &self,
         body: &mir::Body,
+        cache: &mut MirBlockCache,
         symbol: Symbol,
         ty: CheckTy,
     ) -> Option<DropBinding> {
         if !self.needs_release_type(&ty) {
             return None;
         }
-        let dynamic_flags = self.drop_flag_keys_for_symbol(body, symbol);
-        if dynamic_flags.is_empty() && self.symbol_has_move_fact(body, symbol) {
+        let facts = cache.symbol_facts(body);
+        let dynamic_flags = facts.drop_flag_keys(symbol);
+        // A statically-moved local usually needs no binding — but a local
+        // that is LIVE at some suspension site before its move must stay
+        // resolvable for that site's unwind entry (ADR 0027): flow's
+        // per-point elaborations keep every normal-path drop `Dead`.
+        if dynamic_flags.is_empty() && facts.has_move(symbol) && !facts.has_live_unwind(symbol) {
             return None;
         }
         Some(DropBinding {
@@ -722,54 +825,8 @@ impl<'a> Lowering<'a> {
             key_path: Place::root(symbol),
             ty,
             dynamic_flags,
+            is_deinit_self: false,
         })
-    }
-
-    pub(super) fn drop_flag_keys_for_symbol(&self, body: &mir::Body, symbol: Symbol) -> Vec<Place> {
-        let mut keys = Vec::new();
-        let root = Place::root(symbol);
-        let mut needs_root_flag = false;
-
-        for block in &body.blocks {
-            for statement in &block.statements {
-                if let Some(drop) = &statement.ownership.drop
-                    && let Some(drop_key_path) = &drop.key_path
-                    && drop_key_path.root == symbol
-                    && matches!(
-                        drop.kind,
-                        mir::DropElaboration::Conditional | mir::DropElaboration::Open
-                    )
-                {
-                    needs_root_flag = true;
-                    if !drop_key_path.fields.is_empty() {
-                        Self::push_unique_drop_flag_key(&mut keys, drop_key_path.clone());
-                    }
-                }
-                for source in &statement.ownership.moves {
-                    if source.root != symbol {
-                        continue;
-                    }
-                    needs_root_flag = true;
-                    if !source.fields.is_empty() {
-                        Self::push_unique_drop_flag_key(&mut keys, source.clone());
-                    }
-                }
-            }
-            for source in &block.terminator_ownership.moves {
-                if source.root != symbol {
-                    continue;
-                }
-                needs_root_flag = true;
-                if !source.fields.is_empty() {
-                    Self::push_unique_drop_flag_key(&mut keys, source.clone());
-                }
-            }
-        }
-
-        if needs_root_flag {
-            keys.insert(0, root);
-        }
-        keys
     }
 
     fn lower_mir_temp_delivery(
@@ -840,43 +897,225 @@ impl<'a> Lowering<'a> {
         self.p.func_ref(wrapper)
     }
 
+    /// The `Unwind` candidates flow published immediately after this
+    /// Call/Perform statement (ADR 0027), resolved against the live drop
+    /// stack. Emission order (innermost scope first, reverse declaration
+    /// order) is the order the entry's drops run.
+    fn unwind_drop_candidates(&self, ctx: &Ctx, cursor: MirCursor) -> Vec<PendingDrop> {
+        self.drop_candidates_following(
+            ctx,
+            cursor,
+            |reason| matches!(reason, mir::DropReason::Unwind),
+            false,
+        )
+    }
+
+    /// Build this suspension site's unwind entry (ADR 0027): a
+    /// `λ((), ⊥)` whose body is the site's scope-exit drops (the same
+    /// `lower_candidate_drop_then` machinery normal drops use — deinit
+    /// hooks, structural teardown, `RegionRelease`, drop-flag guards),
+    /// terminated by `Op::UnwindDone`. `None` when nothing owned is live
+    /// across the site (hash-consing makes "the body is just UnwindDone"
+    /// an exact test).
+    fn unwind_entry_for(
+        &mut self,
+        ctx: &Ctx,
+        cursor: MirCursor,
+        cache: &mut MirBlockCache,
+    ) -> Option<ExprId> {
+        let drops = self.unwind_drop_candidates(ctx, cursor);
+        if drops.is_empty() {
+            return None;
+        }
+        let bot = self.p.ty_bot();
+        let done = self.p.primop(Op::UnwindDone, &[], bot);
+        let mut body = done;
+        for drop in drops.iter().rev() {
+            body = self.lower_candidate_drop_then(ctx, drop, body);
+        }
+        if body == done {
+            return None;
+        }
+        // Suspension sites with the same live drop set lower to the same
+        // (hash-consed) chain: share one entry per body walk instead of
+        // minting a fresh identical λ per site.
+        if let Some(&entry) = cache.unwind_entries.get(&body) {
+            return Some(entry);
+        }
+        let void_ty = self.p.ty_void();
+        let entry = self.p.func("unwind_entry", void_ty, bot);
+        self.p.set_body(entry, body);
+        let entry_ref = self.p.func_ref(entry);
+        cache.unwind_entries.insert(body, entry_ref);
+        Some(entry_ref)
+    }
+
+    /// Install this suspension site's unwind entry (ADR 0027) around one
+    /// expression lowering, restoring the enclosing statement's entry
+    /// afterwards (so nested bodies cannot steal it).
+    fn with_unwind_entry(
+        &mut self,
+        ctx: &Ctx,
+        cursor: MirCursor,
+        cache: &mut MirBlockCache,
+        lower: impl FnOnce(&mut Self) -> ExprId,
+    ) -> ExprId {
+        let saved_unwind = self.pending_unwind.take();
+        self.pending_unwind = self.unwind_entry_for(ctx, cursor, cache);
+        let done = lower(self);
+        self.pending_unwind = saved_unwind;
+        done
+    }
+
     fn following_drop_candidates(&self, ctx: &Ctx, cursor: MirCursor) -> Vec<PendingDrop> {
+        self.drop_candidates_following(
+            ctx,
+            cursor,
+            |reason| {
+                matches!(
+                    reason,
+                    mir::DropReason::ScopeExit | mir::DropReason::EarlyExit
+                )
+            },
+            true,
+        )
+    }
+
+    /// The run of matching `DropCandidate` statements immediately after the
+    /// cursor, resolved against the live drop stack. `skip_bookkeeping`
+    /// lets the run continue across `StorageDead`/`ScopeExit` statements;
+    /// any other statement ends it. Candidates whose reason does not match
+    /// end the run too — they belong to a different consumer.
+    fn drop_candidates_following(
+        &self,
+        ctx: &Ctx,
+        cursor: MirCursor,
+        reason_matches: impl Fn(&mir::DropReason) -> bool,
+        skip_bookkeeping: bool,
+    ) -> Vec<PendingDrop> {
         let mut drops = Vec::new();
         for statement in cursor.statements().iter().skip(cursor.index + 1) {
             match &statement.kind {
                 mir::Statement::DropCandidate {
-                    reason: mir::DropReason::ScopeExit | mir::DropReason::EarlyExit,
+                    reason,
                     target:
                         mir::DropTarget::Symbol {
                             symbol: target_symbol,
                             ..
                         },
-                    key_path,
                     ..
-                } => {
-                    let Some(drop) = ctx
-                        .drop_stack
-                        .iter()
-                        .rev()
-                        .find(|drop| drop.symbol == *target_symbol)
-                    else {
-                        continue;
-                    };
-                    let key_path = key_path.clone().unwrap_or_else(|| drop.key_path.clone());
-                    let elaboration = self.drop_elaboration_at(statement, Some(&key_path));
-                    drops.push(PendingDrop {
-                        symbol: drop.symbol,
-                        key_path,
-                        ty: drop.ty.clone(),
-                        has_dynamic_flags: !drop.dynamic_flags.is_empty(),
-                        elaboration,
-                    });
+                } if reason_matches(reason) => {
+                    if let Some(drop) = self.pending_drop_at(ctx, statement, *target_symbol) {
+                        drops.push(drop);
+                    }
                 }
-                mir::Statement::StorageDead { .. } | mir::Statement::ScopeExit { .. } => {}
+                mir::Statement::StorageDead { .. } | mir::Statement::ScopeExit { .. }
+                    if skip_bookkeeping => {}
                 _ => break,
             }
         }
         drops
+    }
+
+    /// Resolve one ScopeExit/EarlyExit `DropCandidate` statement against the
+    /// live drop stack, reading the flow-annotated elaboration off it.
+    fn pending_drop_at(
+        &self,
+        ctx: &Ctx,
+        statement: &mir::LocatedStatement,
+        target_symbol: Symbol,
+    ) -> Option<PendingDrop> {
+        let mir::Statement::DropCandidate { key_path, .. } = &statement.kind else {
+            return None;
+        };
+        let drop = ctx
+            .drop_stack
+            .iter()
+            .rev()
+            .find(|drop| drop.symbol == target_symbol)?;
+        let key_path = key_path.clone().unwrap_or_else(|| drop.key_path.clone());
+        let elaboration = self.drop_elaboration_at(statement, Some(&key_path));
+        Some(PendingDrop {
+            symbol: drop.symbol,
+            key_path,
+            ty: drop.ty.clone(),
+            has_dynamic_flags: !drop.dynamic_flags.is_empty(),
+            elaboration,
+            is_deinit_self: drop.is_deinit_self,
+        })
+    }
+
+    /// The trailing ScopeExit candidates a `Terminator::Return` block leaves
+    /// unclaimed: a Void-ish tail (a body ending in a branch join) has no
+    /// `ReturnValue` statement to run `wrap_cont_with_following_drops`, so
+    /// owned PARAMETERS would silently leak (locals pair with a following
+    /// `StorageDead`, which claims their candidate — those are skipped).
+    fn unclaimed_scope_exit_drops(&self, ctx: &Ctx, cursor: MirCursor) -> Vec<PendingDrop> {
+        let statements = cursor.statements();
+        // The trailing run of scope-exit bookkeeping before the terminator.
+        let mut start = statements.len();
+        while start > 0 {
+            match &statements[start - 1].kind {
+                mir::Statement::DropCandidate {
+                    reason: mir::DropReason::ScopeExit | mir::DropReason::EarlyExit,
+                    target: mir::DropTarget::Symbol { .. },
+                    ..
+                }
+                | mir::Statement::StorageDead { .. }
+                | mir::Statement::ScopeExit { .. } => start -= 1,
+                _ => break,
+            }
+        }
+        let mut drops = Vec::new();
+        for (index, statement) in statements.iter().enumerate().skip(start) {
+            let mir::Statement::DropCandidate {
+                reason: mir::DropReason::ScopeExit | mir::DropReason::EarlyExit,
+                target:
+                    mir::DropTarget::Symbol {
+                        symbol: target_symbol,
+                        ..
+                    },
+                ..
+            } = &statement.kind
+            else {
+                continue;
+            };
+            // Claimed: an immediately-following StorageDead for the same
+            // symbol drops it at its own statement (`lower_mir_storage_dead`
+            // looks back exactly one statement).
+            if let Some(mir::Statement::StorageDead { symbol, .. }) =
+                statements.get(index + 1).map(|next| &next.kind)
+                && symbol == target_symbol
+            {
+                continue;
+            }
+            let Some(drop) = self.pending_drop_at(ctx, statement, *target_symbol) else {
+                continue;
+            };
+            drops.push(drop);
+        }
+        drops
+    }
+
+    /// Classify a `TemporaryEnd` candidate's annotated elaboration
+    /// (`lower_mir_statements` acts on the result; unit-tested directly —
+    /// no flow state can produce the `Invalid` inputs today).
+    pub(super) fn temp_drop_disposition(
+        elaboration: Option<&mir::DropElaborationResult>,
+    ) -> TempDropDisposition {
+        let Some(drop) = elaboration else {
+            return TempDropDisposition::Skip;
+        };
+        match drop.kind {
+            mir::DropElaboration::Static => TempDropDisposition::Drop,
+            mir::DropElaboration::Dead => TempDropDisposition::Skip,
+            mir::DropElaboration::Open if !drop.moved_path.is_empty() => {
+                TempDropDisposition::DropExcept(drop.moved_path.clone())
+            }
+            kind @ (mir::DropElaboration::Conditional | mir::DropElaboration::Open) => {
+                TempDropDisposition::Invalid(kind)
+            }
+        }
     }
 
     /// The drop elaboration the ownership pass annotated onto this `DropCandidate`
@@ -895,6 +1134,12 @@ impl<'a> Lowering<'a> {
     }
 
     fn lower_candidate_drop_then(&mut self, ctx: &Ctx, drop: &PendingDrop, next: ExprId) -> ExprId {
+        // The deinit body's own `self` elaborates to a NO-OP: the caller's
+        // glue dispatches the hook and tears the fields down — the body
+        // owns no teardown (Swift's deinitialization model).
+        if drop.is_deinit_self {
+            return next;
+        }
         let Some(value) = self.binding_value(ctx, drop.symbol) else {
             return next;
         };
@@ -903,11 +1148,32 @@ impl<'a> Lowering<'a> {
             Some(mir::DropElaboration::Conditional | mir::DropElaboration::Open) => {
                 self.lower_dynamic_assignment_drop_then(ctx, &drop.key_path, value, &drop.ty, next)
             }
-            Some(mir::DropElaboration::Static) | None if drop.has_dynamic_flags => {
+            Some(mir::DropElaboration::Static) if drop.has_dynamic_flags => {
                 self.lower_dynamic_assignment_drop_then(ctx, &drop.key_path, value, &drop.ty, next)
             }
-            Some(mir::DropElaboration::Static) | None => {
+            Some(mir::DropElaboration::Static) => {
                 self.lower_drop_value_then(ctx, value, &drop.ty, next)
+            }
+            // Every candidate that reaches here passed lowering's
+            // needs-release gate on the concrete type, and flow classifies
+            // every such candidate — including generic ones (each
+            // specialization elides per θ). A missing elaboration is a
+            // missing annotation, not a license to guess: guessing "drop"
+            // here is how a flow gap becomes a double free. Surface it
+            // loudly and emit nothing (leak-safe), matching the
+            // `TemporaryEnd` disposition's treatment of contract breaks.
+            None => {
+                debug_assert!(
+                    false,
+                    "drop candidate for {:?} reached lowering unelaborated",
+                    drop.symbol
+                );
+                self.diagnostics.push(format!(
+                    "lowering: drop candidate for {:?} has no flow elaboration \
+                     (internal error: flow classifies every needs-release candidate)",
+                    drop.symbol
+                ));
+                next
             }
         }
     }
@@ -959,6 +1225,9 @@ impl<'a> Lowering<'a> {
         else {
             return rest_body;
         };
+        if drop.is_deinit_self {
+            return rest_body;
+        }
         let Some(value) = self.binding_value(ctx, symbol) else {
             return rest_body;
         };
@@ -973,8 +1242,26 @@ impl<'a> Lowering<'a> {
                     &drop.ty,
                     rest_body,
                 ),
-            Some(mir::DropElaboration::Static) | None => {
+            Some(mir::DropElaboration::Static) => {
                 self.lower_drop_value_then(ctx, value, &drop.ty, rest_body)
+            }
+            // The builder pairs every needs-release local's `StorageDead`
+            // with an immediately-preceding `DropCandidate`, and flow
+            // classifies every such candidate. Reaching here means the
+            // pairing broke or the annotation is missing — dropping on a
+            // guess is the double-free direction, so surface it and emit
+            // nothing (leak-safe).
+            None => {
+                debug_assert!(
+                    false,
+                    "StorageDead for {symbol:?} has no elaborated drop candidate"
+                );
+                self.diagnostics.push(format!(
+                    "lowering: StorageDead for {symbol:?} has no elaborated drop \
+                     candidate (internal error: scope exits pair candidates with \
+                     storage teardown)"
+                ));
+                rest_body
             }
         }
     }
@@ -1278,7 +1565,14 @@ impl<'a> Lowering<'a> {
         let drop_k = self.p.func("drop", value_ty, bot);
         let rest_body = self.lower_mir_statements(cursor.advance(), ctx, k, cache);
         let rest_body = self.clear_moved_drop_flags_then(ctx, cursor.statement(), rest_body);
-        self.p.set_body(drop_k, rest_body);
+        // Flow CONSUMED the discarded value (mir ConsumeValue): the
+        // discard owns its teardown. Type-directed and no-op for
+        // Copy/borrowed values; discarded `'heap` rvalues release their
+        // region here (the constructor's +1 belonged to the binding that
+        // never came).
+        let delivered = self.p.var(drop_k);
+        let drop_body = self.lower_drop_value_then(ctx, delivered, &expr.ty, rest_body);
+        self.p.set_body(drop_k, drop_body);
         let drop_ref = self.p.func_ref(drop_k);
         match pure_value {
             Some(value) => self.p.app(drop_ref, value),
@@ -1342,7 +1636,13 @@ impl<'a> Lowering<'a> {
         });
         let mut scope_ctx = ctx.clone();
         scope_ctx.cap_templates.insert(effect, index);
-        self.lower_mir_statements(cursor.advance(), &scope_ctx, k, cache)
+        let rest = self.lower_mir_statements(cursor.advance(), &scope_ctx, k, cache);
+        // ADR 0027: mark the install for the evaluator's extent stack (a
+        // delimiter marker, popped when the delimiter is applied). The VM
+        // scheduler compiles this to nothing.
+        let void_ty = self.p.ty_void();
+        let install = self.p.primop(Op::HandleInstall, &[ctx.raw_ret_k], void_ty);
+        self.sequence_void_effect(install, rest)
     }
 
     fn lower_mir_terminator(
@@ -1372,14 +1672,32 @@ impl<'a> Lowering<'a> {
         cache: &mut MirBlockCache,
     ) -> ExprId {
         match &cursor.body.blocks[cursor.block.0].terminator {
-            mir::Terminator::Unset | mir::Terminator::Return => {
+            mir::Terminator::Unset => {
                 let void = self.p.void();
                 self.p.app(k, void)
+            }
+            // A Void-ish tail (a body ending in a branch join) reaches
+            // `Return` with its ScopeExit candidates unclaimed — there is
+            // no `ReturnValue` statement to run
+            // `wrap_cont_with_following_drops` — so the unclaimed trailing
+            // candidates (owned PARAMETERS; locals pair with StorageDead)
+            // drain here. Requires the rule-B buffer retain on place-read
+            // `'heap`-constructor arguments: without it this drain
+            // double-freed core `Dict.insert`'s consume params. The deinit
+            // body's own `self` stays a no-op via
+            // `DropBinding::is_deinit_self`.
+            mir::Terminator::Return => {
+                let void = self.p.void();
+                let mut body = self.p.app(k, void);
+                for drop in self.unclaimed_scope_exit_drops(ctx, cursor).iter().rev() {
+                    body = self.lower_candidate_drop_then(ctx, drop, body);
+                }
+                body
             }
             mir::Terminator::ReturnVoid => {
                 let void = self.p.void();
                 let body = self.p.app(ctx.ret_k, void);
-                self.lower_early_exit_then(ctx, cursor, 0, body)
+                self.lower_early_exit_then(ctx, cursor, body)
             }
             mir::Terminator::Break => self.lower_mir_break(cursor, ctx, k),
             mir::Terminator::Continue => self.lower_mir_continue(cursor, ctx, k),
@@ -1404,16 +1722,9 @@ impl<'a> Lowering<'a> {
                     } else {
                         loop_.exit
                     };
-                    let stack_from = ctx
-                        .loops
-                        .iter()
-                        .rev()
-                        .find(|binding| binding.header == loop_.header)
-                        .map(|binding| binding.drop_depth)
-                        .unwrap_or(ctx.drop_stack.len());
                     let void = self.p.void();
                     let jump = self.p.app(jump_to, void);
-                    return self.lower_early_exit_then(ctx, cursor, stack_from, jump);
+                    return self.lower_early_exit_then(ctx, cursor, jump);
                 }
                 self.lower_mir_block(cursor.at_block(*target), ctx, k, cache)
             }
@@ -1512,7 +1823,6 @@ impl<'a> Lowering<'a> {
                 loop_ctx.loops.push(LoopBinding {
                     header: header_ref,
                     exit: exit_ref,
-                    drop_depth: ctx.drop_stack.len(),
                 });
                 // Mirror the loops-in-scope for expression lowering's
                 // scaffold paths (breaks inside expression-position arms
@@ -1611,7 +1921,7 @@ impl<'a> Lowering<'a> {
             Some(loop_binding) => {
                 let void = self.p.void();
                 let body = self.p.app(loop_binding.exit, void);
-                self.lower_early_exit_then(ctx, cursor, loop_binding.drop_depth, body)
+                self.lower_early_exit_then(ctx, cursor, body)
             }
             None => {
                 self.diagnostics.push("lowering: break outside loop".into());
@@ -1641,55 +1951,24 @@ impl<'a> Lowering<'a> {
             .filter_map(|statement| {
                 let mir::Statement::DropCandidate {
                     target: mir::DropTarget::Symbol { symbol, .. },
-                    key_path,
                     ..
                 } = &statement.kind
                 else {
                     return None;
                 };
-                let drop = ctx
-                    .drop_stack
-                    .iter()
-                    .rev()
-                    .find(|drop| drop.symbol == *symbol)?;
-                let key_path = key_path.clone().unwrap_or_else(|| drop.key_path.clone());
-                let elaboration = self.drop_elaboration_at(statement, Some(&key_path));
-                Some(PendingDrop {
-                    symbol: drop.symbol,
-                    key_path,
-                    ty: drop.ty.clone(),
-                    has_dynamic_flags: !drop.dynamic_flags.is_empty(),
-                    elaboration,
-                })
+                self.pending_drop_at(ctx, statement, *symbol)
             })
             .collect()
     }
 
-    /// Early-exit drops before `body` runs: the block's trailing candidates
-    /// are the authority (per-point elaborations from the flow checker);
-    /// drop-stack entries from `stack_from` they don't cover — bindings of
-    /// an enclosing body, reachable only through the standalone-body
-    /// fallback — drop flag-guarded as before. The remainder dies with the
-    /// fallback path.
-    fn lower_early_exit_then(
-        &mut self,
-        ctx: &Ctx,
-        cursor: MirCursor,
-        stack_from: usize,
-        body: ExprId,
-    ) -> ExprId {
-        let candidates = self.trailing_early_exit_drops(ctx, cursor);
-        let remainder: Vec<DropBinding> = ctx.drop_stack[stack_from..]
-            .iter()
-            .filter(|drop| {
-                !candidates
-                    .iter()
-                    .any(|candidate| candidate.symbol == drop.symbol)
-            })
-            .cloned()
-            .collect();
-        let mut body = self.lower_drop_bindings_then(ctx, &remainder, body);
-        for drop in candidates.iter().rev() {
+    /// Early-exit drops before `body` runs: the block's trailing `EarlyExit`
+    /// candidates are the single drop authority (ADR 0010 stage 3) — flow
+    /// classified each at its program point, and the drop stack only
+    /// resolves a candidate's value-level metadata (type, drop flags,
+    /// deinit-self). Lowering compensates for nothing here.
+    fn lower_early_exit_then(&mut self, ctx: &Ctx, cursor: MirCursor, body: ExprId) -> ExprId {
+        let mut body = body;
+        for drop in self.trailing_early_exit_drops(ctx, cursor).iter().rev() {
             body = self.lower_candidate_drop_then(ctx, drop, body);
         }
         body
@@ -1700,7 +1979,7 @@ impl<'a> Lowering<'a> {
             Some(loop_binding) => {
                 let void = self.p.void();
                 let body = self.p.app(loop_binding.header, void);
-                self.lower_early_exit_then(ctx, cursor, loop_binding.drop_depth, body)
+                self.lower_early_exit_then(ctx, cursor, body)
             }
             None => {
                 self.diagnostics

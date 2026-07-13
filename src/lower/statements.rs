@@ -276,48 +276,12 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    pub(super) fn symbol_has_move_fact(&self, body: &mir::Body, symbol: Symbol) -> bool {
-        body.blocks.iter().any(|block| {
-            block.statements.iter().any(|statement| {
-                statement
-                    .ownership
-                    .moves
-                    .iter()
-                    .any(|source| source.root == symbol)
-            }) || block
-                .terminator_ownership
-                .moves
-                .iter()
-                .any(|source| source.root == symbol)
-        })
-    }
-
     pub(super) fn symbol_check_ty(&self, symbol: Symbol, theta: &Theta) -> Option<CheckTy> {
         self.units.iter().enumerate().find_map(|(unit, unit_data)| {
             let raw = unit_data.types.schemes.get(&symbol)?.ty.clone();
             let substituted = raw.substitute(theta, &Default::default(), &Default::default());
             Some(self.normalize_check_ty(substituted, unit))
         })
-    }
-
-    pub(super) fn lower_drop_bindings_then(
-        &mut self,
-        ctx: &Ctx,
-        drops: &[DropBinding],
-        next: ExprId,
-    ) -> ExprId {
-        let mut body = next;
-        for drop in drops.iter().rev() {
-            let Some(value) = self.binding_value(ctx, drop.symbol) else {
-                continue;
-            };
-            body = if drop.dynamic_flags.is_empty() {
-                self.lower_drop_value_then(ctx, value, &drop.ty, body)
-            } else {
-                self.lower_dynamic_drop_binding_then(ctx, drop, value, body)
-            };
-        }
-        body
     }
 
     pub(super) fn binding_value(&mut self, ctx: &Ctx, symbol: Symbol) -> Option<ExprId> {
@@ -387,15 +351,16 @@ impl<'a> Lowering<'a> {
                 // A `Deinit` conformance is the user's destructor hook
                 // (Rust's Drop::drop model): the body runs first, then the
                 // GLUE tears the fields down structurally — the body never
-                // owns field teardown. The self-recursion guard is θ-aware:
-                // inside `deinit<Array<String>>`, dropping an ELEMENT that
-                // is itself an array (a different instantiation) must
-                // still dispatch — only the body's own value skips. The
-                // witness ranges over the CONFORMANCE row's rigid params,
-                // so θ binds the row's self_args against this application.
+                // owns field teardown. Every value dispatches its hook;
+                // the one exception is the deinit body's own `self`, whose
+                // drop is suppressed at its binding (`is_deinit_self`), so
+                // no (witness, θ) recursion guard is needed here — a fresh
+                // sibling instance inside its own type's deinit still runs
+                // its hook. The witness ranges over the CONFORMANCE row's
+                // rigid params, so θ binds the row's self_args against
+                // this application.
                 let value_theta = self.deinit_theta(symbol, &args);
                 if let Some(witness) = self.deinit_witness(symbol)
-                    && (ctx.owner != Some(witness) || value_theta != ctx.theta)
                     && let Some(label) = self.demand(witness, value_theta)
                 {
                     let fn_ref = self.p.func_ref(label);
@@ -433,17 +398,14 @@ impl<'a> Lowering<'a> {
                 }
                 body
             }
-            CheckTy::Any { protocol, .. } => {
-                // Every existential carries a drop witness in its last
+            CheckTy::Any { .. } => {
+                // Every existential carries a drop witness at a FIXED
                 // table slot: `λ(payload, k)` (deinit dispatch included).
-                // The slot index comes from the ENTRY unit's merged
-                // catalog — the drop may lower inside core (Array's
-                // deinit) for a protocol core has never heard of.
-                let index = self.units[self.entry]
-                    .types
-                    .catalog
-                    .requirements_for_conformance(&protocol)
-                    .len() as u32;
+                // Fixed, not requirement-count-derived — counts diverge
+                // across units (`extend P {}` grows only the extending
+                // unit's catalog), and the drop may lower inside core
+                // (Array's deinit) for a protocol core has never heard of.
+                let index = super::matches::EXISTENTIAL_DROP_SLOT;
                 let void_ty = self.p.ty_void();
                 let bot = self.p.ty_bot();
                 let erased = self.p.ty(TyKind::Erased);
@@ -476,6 +438,21 @@ impl<'a> Lowering<'a> {
         ty: &CheckTy,
         next: ExprId,
     ) -> ExprId {
+        // Ledger mirror of the drop path: values carrying `'heap` handles
+        // acquire their regions exactly where a drop would release them
+        // (one runtime scan covers any shape); owned buffers still retain
+        // structurally below, with object interiors left to the region.
+        let mut next = next;
+        if self.contains_object_type(ty) {
+            let void_ty = self.p.ty_void();
+            let acquire = self.p.primop(Op::RegionAcquire, &[value], void_ty);
+            next = self.sequence_void_effect(acquire, next);
+            if matches!(Self::borrow_erased_ty(ty.clone()), CheckTy::Nominal(symbol, _)
+                if self.symbol_is_heap(symbol))
+            {
+                return next;
+            }
+        }
         if !self.needs_drop_type(ty) {
             return next;
         }
@@ -497,16 +474,16 @@ impl<'a> Lowering<'a> {
                         PayloadAction::Retain,
                     );
                 }
-                if let Some(index) = self.rawptr_field_index(symbol) {
-                    let ptr_ty = self.p.ty_ptr();
-                    let ptr = self.p.primop(Op::GetField(index), &[value], ptr_ty);
-                    let void_ty = self.p.ty_void();
-                    let retain = self.p.primop(Op::Retain, &[ptr], void_ty);
-                    return self.sequence_void_effect(retain, next);
-                }
                 let fields = self.field_types_for(symbol, &args);
                 let mut body = next;
                 for (index, (_, field_ty)) in fields.into_iter().enumerate().rev() {
+                    // A raw-pointer field IS a refcounted buffer: rc-bump
+                    // it exactly where the teardown walk frees it, and keep
+                    // walking — a RawPtr field never swallows its siblings.
+                    if Self::field_is_rawptr(&field_ty) {
+                        body = self.rawptr_field_op_then(value, index as u32, Op::Retain, body);
+                        continue;
+                    }
                     if !self.needs_drop_type(&field_ty) {
                         continue;
                     }
@@ -540,8 +517,48 @@ impl<'a> Lowering<'a> {
                 }
                 body
             }
+            CheckTy::Any { .. } => {
+                // Dispatch the existential's RETAIN witness — packed at
+                // the fixed slot after the drop witness — so the hidden
+                // payload's buffers rc-bump exactly where the drop
+                // witness would free them.
+                let index = super::matches::EXISTENTIAL_RETAIN_SLOT;
+                let void_ty = self.p.ty_void();
+                let bot = self.p.ty_bot();
+                let erased = self.p.ty(TyKind::Erased);
+                let k_ty = self.p.ty_fn(void_ty, bot);
+                let dom = self.p.ty_tuple(&[erased, k_ty]);
+                let witness_ty = self.p.ty_fn(dom, bot);
+                let witness = self
+                    .p
+                    .primop(Op::ExistentialWitness(index), &[value], witness_ty);
+                let payload = self.p.primop(Op::ExistentialPayload, &[value], erased);
+                let cont = self.p.func("after_existential_retain", void_ty, bot);
+                self.p.set_body(cont, next);
+                let cont_ref = self.p.func_ref(cont);
+                let args_tuple = self.p.tuple(&[payload, cont_ref]);
+                self.p.app(witness, args_tuple)
+            }
             _ => next,
         }
+    }
+
+    /// Whether a stored field is a bare `RawPtr` — a refcounted buffer the
+    /// containing struct owns. The retain/teardown walks act on it in
+    /// place: a bare pointer value cannot free itself, and `needs_drop`
+    /// deliberately excludes it (RawPtr locals are unmanaged).
+    fn field_is_rawptr(ty: &CheckTy) -> bool {
+        matches!(ty, CheckTy::Nominal(head, _) if *head == Symbol::RawPtr)
+    }
+
+    /// Apply `op` (`Op::Free` on teardown, `Op::Retain` on clone) to the
+    /// raw-pointer field at `index` of `value`, then continue.
+    fn rawptr_field_op_then(&mut self, value: ExprId, index: u32, op: Op, next: ExprId) -> ExprId {
+        let ptr_ty = self.p.ty_ptr();
+        let ptr = self.p.primop(Op::GetField(index), &[value], ptr_ty);
+        let void_ty = self.p.ty_void();
+        let action = self.p.primop(op, &[ptr], void_ty);
+        self.sequence_void_effect(action, next)
     }
 
     /// Walk an enum value's owned payloads: `GetTag` + `Switch`, one arm
@@ -647,16 +664,65 @@ impl<'a> Lowering<'a> {
         args: &[CheckTy],
         next: ExprId,
     ) -> ExprId {
-        if let Some(index) = self.rawptr_field_index(symbol) {
-            let ptr_ty = self.p.ty_ptr();
-            let ptr = self.p.primop(Op::GetField(index), &[value], ptr_ty);
-            let void_ty = self.p.ty_void();
-            let free = self.p.primop(Op::Free, &[ptr], void_ty);
-            return self.sequence_void_effect(free, next);
-        }
         let fields = self.field_types_for(symbol, args);
         let mut body = next;
         for (index, (_, field_ty)) in fields.into_iter().enumerate().rev() {
+            // A raw-pointer field IS a refcounted buffer: free it here (a
+            // bare pointer value cannot free itself) and keep walking — a
+            // RawPtr field never swallows its droppable siblings.
+            if Self::field_is_rawptr(&field_ty) {
+                body = self.rawptr_field_op_then(value, index as u32, Op::Free, body);
+                continue;
+            }
+            if !self.needs_drop_type(&field_ty) {
+                continue;
+            }
+            let field_lambda_ty = self.map_ty(&field_ty);
+            let field_value = self
+                .p
+                .primop(Op::GetField(index as u32), &[value], field_lambda_ty);
+            body = self.lower_drop_value_then(ctx, field_value, &field_ty, body);
+        }
+        body
+    }
+
+    /// Partial teardown of a temporary a consuming projection moved
+    /// `moved_path` (base field first) out of: every field OFF the path
+    /// drops, the path itself descends and its leaf is skipped — the
+    /// extracted value's consumer owns it. No `Deinit` hook dispatches:
+    /// the value is already gutted.
+    pub(super) fn lower_drop_value_except_then(
+        &mut self,
+        ctx: &Ctx,
+        value: ExprId,
+        ty: &CheckTy,
+        moved_path: &[Symbol],
+        next: ExprId,
+    ) -> ExprId {
+        let Some((taken, rest)) = moved_path.split_first() else {
+            return self.lower_drop_value_then(ctx, value, ty, next);
+        };
+        let CheckTy::Nominal(symbol, args) = Self::borrow_erased_ty(ty.clone()) else {
+            return next;
+        };
+        let fields = self.field_types_for(symbol, &args);
+        let mut body = next;
+        for (index, (field_symbol, field_ty)) in fields.into_iter().enumerate().rev() {
+            if field_symbol == *taken {
+                if !rest.is_empty() {
+                    let field_lambda_ty = self.map_ty(&field_ty);
+                    let field_value =
+                        self.p
+                            .primop(Op::GetField(index as u32), &[value], field_lambda_ty);
+                    body =
+                        self.lower_drop_value_except_then(ctx, field_value, &field_ty, rest, body);
+                }
+                continue;
+            }
+            if Self::field_is_rawptr(&field_ty) {
+                body = self.rawptr_field_op_then(value, index as u32, Op::Free, body);
+                continue;
+            }
             if !self.needs_drop_type(&field_ty) {
                 continue;
             }
@@ -806,16 +872,6 @@ impl<'a> Lowering<'a> {
         self.lower_drop_key_path_if_live_then(ctx, key_path, value, ty, next)
     }
 
-    fn lower_dynamic_drop_binding_then(
-        &mut self,
-        ctx: &Ctx,
-        drop: &DropBinding,
-        value: ExprId,
-        next: ExprId,
-    ) -> ExprId {
-        self.lower_drop_key_path_if_live_then(ctx, &drop.key_path, value, &drop.ty, next)
-    }
-
     fn lower_drop_key_path_if_live_then(
         &mut self,
         ctx: &Ctx,
@@ -870,10 +926,11 @@ impl<'a> Lowering<'a> {
                 // params — a nominal θ leaves the witness body's own
                 // generics unbound, so its element loads run erased), and
                 // the destructor body never owns field teardown — the
-                // structural glue follows it.
+                // structural glue follows it. No recursion guard: the
+                // deinit body's own `self` is suppressed at its binding
+                // (`is_deinit_self`), never here.
                 let value_theta = self.deinit_theta(symbol, &args);
                 if let Some(witness) = self.deinit_witness(symbol)
-                    && (ctx.owner != Some(witness) || value_theta != ctx.theta)
                     && let Some(label) = self.demand(witness, value_theta)
                 {
                     let fn_ref = self.p.func_ref(label);
@@ -887,16 +944,16 @@ impl<'a> Lowering<'a> {
                     let args_tuple = self.p.tuple(&[value, cont_ref]);
                     return self.p.app(fn_ref, args_tuple);
                 }
-                if let Some(index) = self.rawptr_field_index(symbol) {
-                    let ptr_ty = self.p.ty_ptr();
-                    let ptr = self.p.primop(Op::GetField(index), &[value], ptr_ty);
-                    let void_ty = self.p.ty_void();
-                    let free = self.p.primop(Op::Free, &[ptr], void_ty);
-                    return self.sequence_void_effect(free, next);
-                }
                 let fields = self.field_types_for(symbol, &args);
                 let mut body = next;
                 for (index, (field_symbol, field_ty)) in fields.into_iter().enumerate().rev() {
+                    // A raw-pointer field IS a refcounted buffer: free it
+                    // here (flow schedules no per-field flags for it) and
+                    // keep walking the droppable siblings.
+                    if Self::field_is_rawptr(&field_ty) {
+                        body = self.rawptr_field_op_then(value, index as u32, Op::Free, body);
+                        continue;
+                    }
                     if !self.needs_drop_type(&field_ty) {
                         continue;
                     }
@@ -958,7 +1015,7 @@ impl<'a> Lowering<'a> {
     /// checker's `GradeView` is the single definition of owned / object /
     /// borrowed — lowering must agree with it for scheduled drops to
     /// match emitted ones.
-    fn grade_views(&self) -> impl Iterator<Item = crate::flow::grades::GradeView<'_>> {
+    pub(super) fn grade_views(&self) -> impl Iterator<Item = crate::flow::grades::GradeView<'_>> {
         self.units
             .iter()
             .map(|unit| crate::flow::grades::GradeView::new(unit.types))
@@ -977,6 +1034,31 @@ impl<'a> Lowering<'a> {
     /// Whether a value of this type may carry a `'heap` handle anywhere.
     pub(super) fn contains_object_type(&self, ty: &CheckTy) -> bool {
         self.grade_views().any(|grades| grades.contains_object(ty))
+    }
+
+    /// Cloning this type is an O(1) buffer retain (the `CheapClone`
+    /// marker), answered by the flow checker's `GradeView`.
+    pub(super) fn is_cheap_clone_type(&self, ty: &CheckTy) -> bool {
+        self.grade_views().any(|grades| grades.is_cheap_clone(ty))
+    }
+
+    /// Whether `expr` reads the enclosing deinit body's own `self` binding
+    /// (directly, or through an earlier rebind that inherited the mark). A
+    /// binding initialized by moving it IS the instance under teardown, so
+    /// its drop must stay the caller glue's no-op — re-dispatching the
+    /// deinit hook on the same value would recurse.
+    pub(super) fn moves_deinit_self(ctx: &Ctx, expr: &Expr) -> bool {
+        let ExprKind::Variable(name) = &expr.kind else {
+            return false;
+        };
+        let Ok(symbol) = name.symbol() else {
+            return false;
+        };
+        ctx.drop_stack
+            .iter()
+            .rev()
+            .find(|drop| drop.symbol == symbol)
+            .is_some_and(|drop| drop.is_deinit_self)
     }
 
     /// A pure place read (variable or stored-field chain): carries no
@@ -1023,29 +1105,11 @@ impl<'a> Lowering<'a> {
             .collect()
     }
 
-    pub(super) fn rawptr_field_index(&self, symbol: Symbol) -> Option<u32> {
-        self.units
-            .iter()
-            .find_map(|unit| unit.types.catalog.structs.get(&symbol))
-            .and_then(|info| {
-                info.fields
-                    .values()
-                    .position(|(_, ty)| {
-                        matches!(ty, CheckTy::Nominal(head, _) if *head == Symbol::RawPtr)
-                    })
-                    .map(|index| index as u32)
-            })
-    }
-
+    /// The `Borrowed` marker on a declaration head, answered by the flow
+    /// checker's `GradeView` (contract 2: one borrowed authority).
     pub(super) fn symbol_is_borrowed(&self, symbol: Symbol) -> bool {
-        // The `Borrowed` marker conformance, read structurally from the
-        // catalog (the legacy fact set is empty under the flow checker).
-        self.units.iter().any(|unit| {
-            unit.types
-                .catalog
-                .conformances
-                .contains_key(&(symbol, ProtocolRef::bare(Symbol::Borrowed)))
-        })
+        self.grade_views()
+            .any(|grades| grades.symbol_is_borrowed_value(symbol))
     }
 
     /// A continuation that discards its value and jumps to `target` with ().

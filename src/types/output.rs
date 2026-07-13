@@ -54,19 +54,19 @@ pub enum MemberResolution {
 }
 
 pub(crate) fn stored_field_symbol(
-    types: &TypeOutput,
+    catalog: &crate::types::catalog::TypeCatalog,
+    schemes: &FxHashMap<Symbol, Scheme>,
     resolution: Option<&MemberResolution>,
 ) -> Option<Symbol> {
     let MemberResolution::Direct(property) = resolution? else {
         return None;
     };
-    let in_catalog = types.catalog.structs.values().any(|info| {
+    let in_catalog = catalog.structs.values().any(|info| {
         info.fields
             .values()
             .any(|(field_symbol, _)| field_symbol == property)
     });
-    let has_field_scheme = types
-        .schemes
+    let has_field_scheme = schemes
         .get(property)
         .is_some_and(|scheme| !matches!(scheme.ty, Ty::Func(..)));
     (in_catalog || has_field_scheme).then_some(*property)
@@ -76,7 +76,14 @@ pub(crate) fn stored_field_symbol(
 pub struct TypeOutput {
     /// This module's slice of the type catalog (exported with the module).
     pub catalog: crate::types::catalog::TypeCatalog,
-    /// Zonked type of every expression node — LSP hover and the lowerer.
+    /// Zonked type of every expression and parameter node. Two consumers
+    /// only: the typed-program build (which bakes it onto the tree as
+    /// `expr.ty`/`param.ty`, erasing typing-internal effect args) and IDE
+    /// surfaces working over the surface AST. Downstream of the build,
+    /// the TREE is the authority for expression types and [`Self::binder_ty`]
+    /// for binder types — flow and lowering must never read this map
+    /// (binder nodes have no entry here; falling back to it was the
+    /// `seed_arm_binders` double free).
     pub node_types: FxHashMap<NodeID, Ty>,
     /// Finished scheme for every top-level binder (monomorphic binders get
     /// empty-parameter schemes).
@@ -97,7 +104,8 @@ pub struct TypeOutput {
     /// parameter by cloning (an O(1) buffer retain, emitted by lowering).
     pub coerce_clones: rustc_hash::FxHashSet<NodeID>,
     /// Finalized types of monomorphic local binders (pattern binds
-    /// included) — the flow checker's source for binder grades.
+    /// included) — the flow checker's source for binder grades. Read it
+    /// through [`Self::binder_ty`].
     pub local_tys: FxHashMap<Symbol, Ty>,
     /// Expression nodes implicitly packed into an existential expected type.
     /// Lowering turns these into payload-plus-witness-table packages.
@@ -106,4 +114,13 @@ pub struct TypeOutput {
     /// Imported + local symbol names, merged — what diagnostics rendered
     /// with during checking, so hover and the REPL show the same names.
     pub display_names: FxHashMap<Symbol, String>,
+}
+
+impl TypeOutput {
+    /// The one authority for a local binder's type (parameters and
+    /// pattern binds included), keyed by symbol. Binder NODES carry no
+    /// `node_types` entry, so there is nothing to fall back to.
+    pub fn binder_ty(&self, symbol: Symbol) -> Option<&Ty> {
+        self.local_tys.get(&symbol)
+    }
 }

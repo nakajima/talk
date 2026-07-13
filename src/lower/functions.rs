@@ -116,24 +116,15 @@ impl<'a> Lowering<'a> {
         // callee, so the flow checker schedules them at body exit — seed
         // the drop stack so those candidates resolve (`'heap`-carrying
         // params are exempt: the ledger never counts parameters).
-        let signature_params = self
-            .symbol_check_ty(symbol, &ctx.theta)
-            .and_then(|sig| match sig {
-                CheckTy::Func(params, ..) => Some(params),
-                _ => None,
-            })
-            .unwrap_or_default();
         let mut param_drops: Vec<DropBinding> = vec![];
+        let symbol_facts = SymbolDropFacts::collect(&mir_body);
         for (index, param) in source_params.iter().enumerate() {
             let Ok(param_symbol) = param.name.symbol() else {
                 continue;
             };
-            let Some(raw) = param
-                .ty
-                .clone()
-                .or_else(|| self.units[unit].types.node_types.get(&param.id).cloned())
-                .or_else(|| signature_params.get(index).cloned())
-            else {
+            // The tree is the authority: `param.ty` is baked from typing's
+            // per-node table at build.
+            let Some(raw) = param.ty.clone() else {
                 continue;
             };
             let substituted = raw.substitute(&ctx.theta, &Default::default(), &Default::default());
@@ -144,11 +135,18 @@ impl<'a> Lowering<'a> {
             {
                 continue;
             }
+            // The deinit witness's own `self`: its scope-exit drop is a
+            // no-op — the caller-side glue runs the hook and then tears the
+            // fields down structurally, so the body owns no teardown.
+            let is_deinit_self = index == 0
+                && matches!(&param_ty, CheckTy::Nominal(head, _)
+                    if self.deinit_witness(*head) == Some(symbol));
             param_drops.push(DropBinding {
                 symbol: param_symbol,
                 key_path: Place::root(param_symbol),
                 ty: param_ty,
-                dynamic_flags: self.drop_flag_keys_for_symbol(&mir_body, param_symbol),
+                dynamic_flags: symbol_facts.drop_flag_keys(param_symbol),
+                is_deinit_self,
             });
         }
         ctx.drop_stack.extend(param_drops.clone());

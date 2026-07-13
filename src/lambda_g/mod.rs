@@ -7,6 +7,7 @@
 //! loop peeling are all β-reduction (Table 2). Lineage: Thorin (CGO 2015),
 //! MimIR (POPL 2025).
 
+pub mod balance;
 pub mod check;
 pub mod eval;
 pub mod expr;
@@ -17,6 +18,8 @@ pub mod program;
 pub mod sets;
 pub mod subst;
 
+#[cfg(test)]
+pub mod balance_tests;
 #[cfg(test)]
 pub mod lambda_g_tests;
 

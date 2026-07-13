@@ -201,10 +201,26 @@ impl<'a> Lowering<'a> {
 
         let cap_var = self.p.var(cap);
         // The delimiter: the handled scope's own return continuation,
-        // captured by the capability closure. An abort applies it
-        // directly; the frames between a perform and this scope simply
-        // never resume.
-        let mut inner = self.rebase_into_closure(&install_ctx, install_ctx.raw_ret_k);
+        // captured by the capability closure. The handler body's normal
+        // completion is an ABORT (ADR 0027): it finishes into an explicit
+        // `Op::Abort(delimiter, value)` — the VM unwinds the suspended
+        // frames through their unwind entries before delivering; the
+        // evaluator runs its extent stack.
+        let delimiter = install_ctx.raw_ret_k;
+        let TyKind::Fn(delimiter_dom, _) = *self.p.ty_kind(self.p.expr_ty(delimiter)) else {
+            self.diagnostics
+                .push("lowering: handler delimiter is not a continuation".into());
+            return None;
+        };
+        let abort = self.p.func("abort", delimiter_dom, bot);
+        let aborted = self.p.var(abort);
+        let abort_body = self.p.primop(Op::Abort, &[delimiter, aborted], bot);
+        self.p.set_body(abort, abort_body);
+        let abort_ref = self.p.func_ref(abort);
+        let mut inner = self.rebase_into_closure(&install_ctx, abort_ref);
+        // A nested `@handle` inside the handler body still delimits at the
+        // raw machine return, and mints its own explicit abort around it.
+        inner.raw_ret_k = delimiter;
         inner.owner = None;
         let generics = self
             .units
@@ -363,10 +379,13 @@ impl<'a> Lowering<'a> {
             k
         };
         let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
+        // ADR 0027: the perform is a suspension site — the statement's
+        // unwind entry rides the capability application.
+        let unwind = self.pending_unwind.take();
         self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
             values.push(resume_k);
             let tuple = this.p.tuple(&values);
-            this.p.app(cap, tuple)
+            this.p.app_unwind(cap, tuple, unwind)
         })
     }
 }

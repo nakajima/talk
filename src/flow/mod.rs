@@ -125,7 +125,9 @@ pub(crate) fn check_flow(
 
     // Silent-clone facts, from both tier-2 sources: the flow checker's
     // borrowed-field extractions and the type checker's borrowed-argument
-    // coercions. Rendered as the owned type the clone produces.
+    // coercions. Rendered as the owned type the clone produces. Display
+    // only, with bare expression-node ids in hand (no tree access here),
+    // so this is the one flow-side `node_types` read.
     for node in checker.auto_clones.iter().chain(&types.coerce_clones) {
         let Some(ty) = types.node_types.get(node) else {
             continue;

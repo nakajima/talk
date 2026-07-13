@@ -40,7 +40,7 @@ impl<'a> Lowering<'a> {
                     continue;
                 }
                 let heap_self = matches!(&**inner, CheckTy::Nominal(head, _)
-                    if self.units.iter().any(|u| u.types.catalog.is_heap(*head)));
+                    if self.symbol_is_heap(*head));
                 if !heap_self {
                     mutating.insert(*symbol);
                 }

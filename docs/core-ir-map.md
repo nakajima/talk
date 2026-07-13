@@ -13,9 +13,18 @@ Status: in progress (2026-07-03)
 > resumption — valid in any expression position. Handler bodies still
 > lower from scaffold blocks exactly as described below.
 
+> **Naming note (2026-07-11):** the tree this map calls "HIR" is today's
+> typed tree — `src/typed_ast` (`typed_ast::ExprKind` and friends) — and
+> its builder (`hir/build.rs` in older entries) is
+> `src/compiling/typed_program/build.rs`. There is no `src/hir` module.
+> The tree walk (`walk_block`/`walk_stmt`/`cfg_exprs`) named in the C4
+> sections was deleted when C4c landed; mentions below describe the
+> deleted machinery, not live code.
+
 Strategy: **HIR becomes Core in place.** There is no parallel tree and no
 big-bang `build_core` — each step removes or splits one HIR form via
-type-directed elaboration in `hir/build.rs`, then deletes the dead arms in
+type-directed elaboration in `src/compiling/typed_program/build.rs`, then
+deletes the dead arms in
 flow (`moves`/`liveness`/`loans`/`cfg`), the MIR builder, and lowering.
 Every step lands green (eval≡VM suite + `run_heap_eval` balance tests) —
 the strangler pattern C1/C2 already used. This aligns with the
@@ -52,7 +61,8 @@ carry Core operands).
 
 - C3a literals → `Lit` — DONE (2026-07-03)
 - C3b `As` erasure — DONE; `as` expressions now actually run (previously
-  hit lowering's unsupported catch-all); `graft` in `hir/build.rs` is the
+  hit lowering's unsupported catch-all); `graft` in
+  `src/compiling/typed_program/build.rs` is the
   reusable erase-a-wrapper helper (id/span/ty/pack/auto-clone overlay)
 - C3c `RowVariable` — DONE; had NO construction site anywhere — deleted
   from surface AND HIR (parser never emitted it)
@@ -103,7 +113,7 @@ swap (mass signature churn), Perform args, aggregates-as-Rvalues,
 Tuple/Record→Con (C5c), and the C6 pass decomposition.
 
 **The match flattening landed: matches lower with value-carrying joins.**
-`hir::ExprKind::Temp(u32)` is the operand bridge; the builder mints a
+`typed_ast::ExprKind::Temp(u32)` is the operand bridge; the builder mints a
 temp per match, stores `(temp, result_ty)` on `Terminator::Switch`, and
 substitutes `Temp` for the match node in every later statement AND
 terminator embedding (`TempSubstituter` in `push_statement` /
@@ -153,7 +163,7 @@ exist; ADR 0010 built them. C4's remaining content is therefore NOT a new
 representation — it is **retiring the last tree-walked statement surface**,
 after which "statement control flow" is CFG-only end to end:
 
-- C4a. `Statement::Handling` carries a whole `hir::Block` that flow
+- C4a. `Statement::Handling` carries a whole `typed_ast::Block` that flow
   tree-walks (`walk_block`, the `cfg_exprs` save/restore) and lowering
   lowers standalone. Scouted 2026-07-03 — NOT a stored body (a handler
   body checks against the state AT the Handling statement, and its
@@ -182,7 +192,7 @@ after which "statement control flow" is CFG-only end to end:
   bodies, engine-checked; the Call statement references the body.
 - C4c. With a and b done, delete `walk_block`/`walk_block_nodes`/
   `cfg_exprs` and the `Block.drops`/`Stmt.drops` carrier fields — flow
-  becomes a pure CFG dataflow with no tree mode. The `hir::StmtKind::If`
+  becomes a pure CFG dataflow with no tree mode. The `typed_ast::StmtKind::If`
   divergence rules stay in the CHECKER (surface), which never collapses.
 
 **C5 (the simplified MIR Pat asked for): flatten evaluation-carrying
@@ -217,7 +227,7 @@ statements to operands, kind by kind.** Ordered by embedded-expr role:
 
   **Opening surgery, spec'd 2026-07-03 (do this first, fresh window):
   Switch lowering with value-carrying joins.** The bridge is
-  `hir::ExprKind::Temp(TempId)` — an atom the builder substitutes into a
+  `typed_ast::ExprKind::Temp(u32)` — an atom the builder substitutes into a
   consuming statement's embedded expr where a flattened construct stood.
   For a match consumed by statement S: the builder terminates into the
   Switch (real arms, not scaffolding), arm tails stay
@@ -235,7 +245,7 @@ statements to operands, kind by kind.** Ordered by embedded-expr role:
   matches ride the same path (their S is `ConsumeValue{Temp}` — a
   discard). Then Calls → temps (retires opaque-embedded-call double
   bookkeeping), then aggregates, then the Operand enum replaces the
-  Temp-in-hir bridge mechanically.
+  Temp-in-typed-tree bridge mechanically.
 - C5c. `Tuple`+`RecordLiteral`→`Con` finishes here (deferred C3d): as
   Rvalues, field reordering is a temp permutation, so record-field
   evaluation order is preserved by construction.

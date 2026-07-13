@@ -29,4 +29,9 @@ pub enum DropReason {
     /// unconsumed owned temporary (e.g. a call result that was only
     /// borrowed) releases here.
     TemporaryEnd,
+    /// ADR 0027: the local's storage is live across an effectful
+    /// call/perform statement — a suspension site. If an effect abort
+    /// unwinds through the frame suspended there, the site's unwind entry
+    /// drops it. Never lowered on the normal path.
+    Unwind,
 }

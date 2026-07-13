@@ -1,14 +1,35 @@
 use super::*;
 
 /// Apply a parameter's ownership mode to its lowered annotation type
-/// (ADR 0018). Explicit `borrow`/`mut` wrap the type in a borrow unless
-/// the annotation already spelled one; `consume` (and unadorned, until
-/// the borrow-by-default flip) lowers as written. Shared borrows of
-/// Copy-grade heads erase (`&Int` never surfaces — ADR 0014): a scalar
-/// borrow IS a value copy, and keeping it bare keeps schemes, flow
-/// provenance, and renderings scalar-shaped.
-pub(super) fn apply_param_mode(catalog: &TypeCatalog, mode: Option<ParamMode>, ty: Ty) -> Ty {
-    let perm = match mode {
+/// (ADR 0018). Explicit `borrow`/`mut` wrap the type in a borrow;
+/// `consume` (and unadorned, until the borrow-by-default flip) lowers as
+/// written. A user-written `mut`/`consume` on an annotation that already
+/// spells a borrow is a declaration-site conflict — the mode and the `&`
+/// are rival spellings of the same decision (a desugar-stamped default on
+/// a legacy `&T` annotation is not: `init(c: &T)` still means borrow).
+/// Shared borrows of Copy-grade heads erase (`&Int` never surfaces —
+/// ADR 0014): a scalar borrow IS a value copy, and keeping it bare keeps
+/// schemes, flow provenance, and renderings scalar-shaped.
+pub(super) fn apply_param_mode(
+    catalog: &TypeCatalog,
+    param: &Parameter,
+    ty: Ty,
+    diagnostics: &mut DiagnosticSink,
+) -> Ty {
+    if let Some(mode @ (ParamMode::Mut | ParamMode::Consume | ParamMode::ConsumeMut)) = param.mode
+        && param.mode_span.is_some()
+        && matches!(ty, Ty::Borrow(..))
+    {
+        diagnostics.errors.push((
+            TypeError::ParamModeBorrowConflict {
+                mode: mode.keyword().to_string(),
+                annotation: ty.render_mono(),
+            },
+            param.id,
+        ));
+        return ty;
+    }
+    let perm = match param.mode {
         None | Some(ParamMode::Consume | ParamMode::ConsumeMut) => return ty,
         Some(ParamMode::Borrow) => Perm::Shared,
         Some(ParamMode::Mut) => Perm::Exclusive,

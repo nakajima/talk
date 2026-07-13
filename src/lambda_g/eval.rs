@@ -47,6 +47,19 @@ enum Step {
     Continue(ExprId),
 }
 
+/// One entry of the evaluator's dynamic extent stack (ADR 0027): the
+/// evaluator has no frames to steer, so it interprets the lowered unwind
+/// annotations dynamically. A `Suspension` records an in-flight
+/// capability-passing call — its continuation label and its unwind
+/// entry; a `Marker` records an installed `@handle`'s delimiter. LIFO:
+/// in one-shot CPS the innermost suspended call's continuation is always
+/// the next of the recorded ones to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExtentEntry {
+    Suspension { k: Label, unwind: Label },
+    Marker(Label),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalError {
     UnboundVariable(String),
@@ -89,6 +102,13 @@ pub struct Evaluator {
     /// The teardown pump's continuation: finalizer thunks are CPS
     /// `λ(self, k)`; applying this k ends the thunk's nested evaluation.
     finalizer_done: Option<Label>,
+    /// The extent stack (ADR 0027): suspension entries pushed at
+    /// applications carrying unwind operands, delimiter markers pushed at
+    /// `@handle` installs, both popped when their label is applied.
+    extent: Vec<ExtentEntry>,
+    /// An abort's unwind entries are running: a second abort here traps
+    /// ("abort during abort unwinding"), matching the VM's v1 rule.
+    unwinding: bool,
 }
 
 impl Default for Evaluator {
@@ -113,6 +133,44 @@ impl Evaluator {
             boxed: vec![],
             halt: None,
             finalizer_done: None,
+            extent: vec![],
+            unwinding: false,
+        }
+    }
+
+    /// A label is being applied: pop every consecutive matching top entry
+    /// of the extent stack. A while-loop, not a single pop — a tail-call
+    /// chain records several suspensions sharing one continuation, and
+    /// applying it completes all of them at once.
+    fn note_application(&mut self, label: Label) {
+        while let Some(top) = self.extent.last() {
+            let completed = match top {
+                ExtentEntry::Suspension { k, .. } => *k == label,
+                ExtentEntry::Marker(delimiter) => *delimiter == label,
+            };
+            if !completed {
+                break;
+            }
+            self.extent.pop();
+        }
+    }
+
+    /// An application carrying an unwind entry is a suspension site:
+    /// record (k, unwind) — the call's continuation is the argument
+    /// tuple's last item.
+    fn note_suspension(&mut self, arg: &EvalValue, unwind: &EvalValue) {
+        let EvalValue::Func(unwind) = unwind else {
+            return;
+        };
+        let k = match arg {
+            EvalValue::Tuple(items) => items.last(),
+            other => Some(other),
+        };
+        if let Some(EvalValue::Func(k)) = k {
+            self.extent.push(ExtentEntry::Suspension {
+                k: *k,
+                unwind: *unwind,
+            });
         }
     }
 
@@ -126,6 +184,73 @@ impl Evaluator {
     /// [`Evaluator::live_allocations`].
     pub fn live_objects(&self) -> usize {
         self.objects.live_objects()
+    }
+
+    /// Allocation balance at exit, with the result value's own footprint
+    /// accounted — the evaluator half of the suite's leak fence (the VM
+    /// half is `talk_runtime::interp::run_counted`). Interior pointers
+    /// resolve to their owning records; a held object handle keeps its
+    /// whole region live. Raw buffer CONTENTS are opaque to the walk —
+    /// the bytes carry no type information, so reaching a buffer big
+    /// enough to hold a word flips `result_exact` off and the footprint
+    /// counts become a lower bound (see `RunBalance::result_exact`).
+    pub fn balance(&self, result: &EvalValue) -> talk_runtime::interp::RunBalance {
+        use std::collections::BTreeSet;
+        let mut bases: BTreeSet<u32> = BTreeSet::new();
+        let mut objects: BTreeSet<u32> = BTreeSet::new();
+        let mut cells: BTreeSet<usize> = BTreeSet::new();
+        let mut exact = true;
+        let mut stack: Vec<EvalValue> = vec![result.clone()];
+        while let Some(value) = stack.pop() {
+            match value {
+                EvalValue::Ptr(addr) => {
+                    if let Some(record) = self.allocations.live_record(self.static_len, addr) {
+                        bases.insert(record.start);
+                        // Pointers and boxed handles are 8-byte words: a
+                        // shorter buffer's contents can't own anything.
+                        exact &= record.len < 8;
+                    }
+                }
+                EvalValue::Tuple(items)
+                | EvalValue::Record(_, items)
+                | EvalValue::Variant(_, _, items) => stack.extend(items),
+                EvalValue::Existential(_, payload, witnesses) => {
+                    stack.push(*payload);
+                    stack.extend(witnesses);
+                }
+                EvalValue::Cell(index) => {
+                    if cells.insert(index)
+                        && let Some(slot) = self.slots.get(index)
+                    {
+                        stack.push(slot.clone());
+                    }
+                }
+                EvalValue::Object(handle) => {
+                    for member in self.objects.region_live_members(handle) {
+                        if objects.insert(member) {
+                            let record = &self.objects.records[member as usize];
+                            stack.extend(record.fields.iter().cloned());
+                            if let Some(finalizer) = &record.finalizer {
+                                stack.push(finalizer.clone());
+                            }
+                        }
+                    }
+                }
+                EvalValue::I64(_)
+                | EvalValue::F64(_)
+                | EvalValue::Bool(_)
+                | EvalValue::Byte(_)
+                | EvalValue::Void
+                | EvalValue::Func(_) => {}
+            }
+        }
+        talk_runtime::interp::RunBalance {
+            live_allocations: self.live_allocations(),
+            live_objects: self.live_objects(),
+            result_allocations: bases.len(),
+            result_objects: objects.len(),
+            result_exact: exact,
+        }
     }
 
     /// Invoke one finalizer thunk `λ(self, k)` with the teardown-pump
@@ -186,9 +311,13 @@ impl Evaluator {
                 return Err(EvalError::StepLimit);
             }
             match p.expr(current).kind.clone() {
-                ExprKind::App(f, a) => {
+                ExprKind::App(f, a, unwind) => {
                     let vf = self.eval_sub(p, f)?;
                     let va = self.eval_sub(p, a)?;
+                    if let Some(u) = unwind {
+                        let vu = self.eval_sub(p, u)?;
+                        self.note_suspension(&va, &vu);
+                    }
                     match self.step(p, vf, va)? {
                         Step::Done(value) => return Ok(value),
                         Step::Continue(next) => current = next,
@@ -235,6 +364,7 @@ impl Evaluator {
         let EvalValue::Func(label) = f else {
             return Err(EvalError::NotAFunction);
         };
+        self.note_application(label);
         if self.halt == Some(label) || self.finalizer_done == Some(label) {
             return Ok(Step::Done(a));
         }
@@ -270,9 +400,13 @@ impl Evaluator {
             ExprKind::Var(l) => Err(EvalError::UnboundVariable(p.name(l))),
             // E-App1 / E-App2 / E-β (non-tail position: recurse, but the
             // applied body re-enters the trampoline).
-            ExprKind::App(f, a) => {
+            ExprKind::App(f, a, unwind) => {
                 let vf = self.eval_sub(p, f)?;
                 let va = self.eval_sub(p, a)?;
+                if let Some(u) = unwind {
+                    let vu = self.eval_sub(p, u)?;
+                    self.note_suspension(&va, &vu);
+                }
                 self.apply(p, vf, va)
             }
             ExprKind::Tuple(items) => {
@@ -299,6 +433,7 @@ impl Evaluator {
         let EvalValue::Func(label) = f else {
             return Err(EvalError::NotAFunction);
         };
+        self.note_application(label);
         if self.halt == Some(label) || self.finalizer_done == Some(label) {
             // The top-level (or finalizer-walk) continuation: this
             // evaluation is complete.
@@ -399,6 +534,53 @@ impl Evaluator {
                 let thunk = self.eval_sub(p, chosen)?;
                 let unit = self.unit_for(p, chosen);
                 self.apply(p, thunk, unit)
+            }
+            // ADR 0027: an effect abort. Pop the extent stack top-down,
+            // running each suspension's unwind entry (a nested evaluation
+            // that completes at its Op::UnwindDone), until this
+            // delimiter's marker; then deliver the value through the
+            // delimiter.
+            Op::Abort => {
+                let delimiter = self.eval_sub(p, args[0])?;
+                let value = self.eval_sub(p, args[1])?;
+                let EvalValue::Func(delimiter_label) = delimiter else {
+                    return Err(EvalError::Unsupported(
+                        "abort delimiter is not a continuation".into(),
+                    ));
+                };
+                if self.unwinding {
+                    return Err(EvalError::Unsupported(
+                        "abort during abort unwinding".into(),
+                    ));
+                }
+                loop {
+                    match self.extent.pop() {
+                        Some(ExtentEntry::Suspension { unwind, .. }) => {
+                            self.unwinding = true;
+                            let ran = self.apply(p, EvalValue::Func(unwind), EvalValue::Void);
+                            self.unwinding = false;
+                            ran?;
+                        }
+                        Some(ExtentEntry::Marker(marker)) if marker == delimiter_label => break,
+                        // An inner handler's delimiter died with the
+                        // extent the abort is discarding.
+                        Some(ExtentEntry::Marker(_)) => {}
+                        None => break,
+                    }
+                }
+                self.apply(p, EvalValue::Func(delimiter_label), value)
+            }
+            // Terminates an unwind entry's nested evaluation (the entry's
+            // body is drops chained down to this).
+            Op::UnwindDone => Ok(EvalValue::Void),
+            // A `@handle` install: push the delimiter marker. (The VM
+            // needs no marker — the Cont's frame index is the marker.)
+            Op::HandleInstall => {
+                let delimiter = self.eval_sub(p, args[0])?;
+                if let EvalValue::Func(label) = delimiter {
+                    self.extent.push(ExtentEntry::Marker(label));
+                }
+                Ok(EvalValue::Void)
             }
             Op::Add | Op::Sub | Op::Mul | Op::Div => {
                 let a = self.eval_sub(p, args[0])?;

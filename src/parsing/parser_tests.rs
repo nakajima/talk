@@ -1553,6 +1553,69 @@ pub mod tests {
     }
 
     #[test]
+    fn if_expr_condition_no_trailing_block() {
+        // Expression-position if disables trailing blocks in its condition
+        // exactly like statement-position if.
+        let parsed = parse("let x = if flag { 1 } else { 2 }");
+        let DeclKind::Let { rhs: Some(rhs), .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected let decl");
+        };
+        let ExprKind::If(cond, _, _) = &rhs.kind else {
+            panic!("expected if expr");
+        };
+        assert!(
+            matches!(cond.kind, ExprKind::Variable(_)),
+            "condition should be the bare variable, got {:?}",
+            cond.kind
+        );
+    }
+
+    #[test]
+    fn parses_or_in_if_condition() {
+        let parsed = parse("if a || b { 1 }");
+        let StmtKind::If(cond, _, _) = &parsed.roots[0].as_stmt().kind else {
+            panic!("expected if statement");
+        };
+        assert!(matches!(
+            cond.kind,
+            ExprKind::Binary(_, TokenKind::PipePipe, _)
+        ));
+    }
+
+    #[test]
+    fn parses_or_in_loop_condition() {
+        let parsed = parse("loop a || b { 1 }");
+        let StmtKind::Loop(Some(cond), _) = &parsed.roots[0].as_stmt().kind else {
+            panic!("expected loop statement with condition");
+        };
+        assert!(matches!(
+            cond.kind,
+            ExprKind::Binary(_, TokenKind::PipePipe, _)
+        ));
+    }
+
+    #[test]
+    fn parses_or_in_if_expr_condition() {
+        let parsed = parse("let x = if a || b { 1 } else { 2 }");
+        let DeclKind::Let { rhs: Some(rhs), .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected let decl");
+        };
+        assert!(matches!(
+            &rhs.kind,
+            ExprKind::If(cond, _, _)
+                if matches!(cond.kind, ExprKind::Binary(_, TokenKind::PipePipe, _))
+        ));
+    }
+
+    #[test]
+    fn continue_before_closing_brace() {
+        // `continue` reads end-of-statement exactly like `return`: a `}`
+        // on the same line means no value.
+        let parsed = parse("loop {\n\tif more { continue }\n}");
+        assert!(matches!(parsed.roots[0].as_stmt().kind, StmtKind::Loop(..)));
+    }
+
+    #[test]
     fn parses_let() {
         let parsed = parse("let fizz");
         assert_eq!(
@@ -3522,6 +3585,7 @@ pub mod tests {
            @_ir { %? = io_write %0 %1 %2 }
            @_ir { %? = trunc %0 }
            @_ir { %? = itof %0 }
+           @_ir { retain Int %0 }
             ",
         );
         assert_eq!(
@@ -3548,6 +3612,17 @@ pub mod tests {
                     ty: nominal_annotation!("Int"),
                     a: Value::Int(123),
                     b: Value::Reg(1)
+                }
+            })))
+        );
+        assert_eq!(
+            *parsed.roots[14].as_stmt(),
+            any_expr_stmt!(ExprKind::InlineIR(any!(InlineIRInstruction, {
+                instr_name_span: Span::ANY,
+                binds: vec![],
+                kind: InlineIRInstructionKind::Retain {
+                    ty: nominal_annotation!("Int"),
+                    value: Value::Reg(0)
                 }
             })))
         );
@@ -4876,6 +4951,40 @@ pub mod tests {
         assert_eq!(block.args.len(), 1);
         assert_eq!(block.args[0].name.name_str(), "x");
         assert_eq!(block.args[0].mode, Some(ParamMode::Consume));
+    }
+
+    #[test]
+    fn rejects_mode_on_borrow_annotation_in_function_type() {
+        // `(mut &T) -> T` used to silently drop the `mut`; the mode and
+        // the `&` are rival spellings of the same decision.
+        let lexer = Lexer::new("func f(fn: (mut &Foo) -> Foo) {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        let err = parser
+            .parse()
+            .expect_err("a mode on a borrow annotation should be rejected");
+        assert!(
+            err.to_string().contains("mut") && err.to_string().contains("already a borrow"),
+            "expected a mode/borrow conflict error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_consume_mode_on_borrow_annotation_in_function_type() {
+        let lexer = Lexer::new("func f(fn: (consume &Foo) -> Foo) {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        let err = parser
+            .parse()
+            .expect_err("a mode on a borrow annotation should be rejected");
+        assert!(
+            err.to_string().contains("consume") && err.to_string().contains("already a borrow"),
+            "expected a mode/borrow conflict error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn modeless_borrow_annotation_in_function_type_stays_legal() {
+        let parsed = parse("func f(fn: (&Foo) -> Foo) {}");
+        assert!(matches!(parsed.roots[0], Node::Decl(_)));
     }
 
     #[test]

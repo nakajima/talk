@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::catalog::Grade;
+use crate::types::catalog::{CoerceKind, Grade};
 use crate::types::ty::Perm;
 
 /// Where a leftover row/effect-row binds its tail when it flows into a
@@ -94,7 +94,7 @@ impl<'s> Solver<'s> {
                 if origin.reason == CtReason::Apply
                     && self.catalog.copies_out_of_borrow(*symbol) =>
             {
-                if self.catalog.grade_of(*symbol) != Grade::Copy {
+                if self.catalog.coerce_kind(*symbol) == Some(CoerceKind::CheapClone) {
                     self.coerce_clones.insert(origin.node);
                 }
                 worklist.push(Constraint::Eq(
@@ -117,6 +117,36 @@ impl<'s> Solver<'s> {
                 ) =>
             {
                 worklist.push(Constraint::Eq((**inner).clone(), other.clone(), origin));
+            }
+
+            // The deferred half of the same erasure: the borrow's payload is
+            // still a variable (an inferred borrow-default parameter — plan
+            // 3.3(b)) against a concrete nominal. When the nominal is
+            // Copy-grade, erasing (payload := nominal) is the only possible
+            // solution — the annotated twin's wrap never existed (`&Int`
+            // never surfaces). Otherwise no payload can ever satisfy the
+            // equation; bind it anyway so the mismatch reports the annotated
+            // twin's rendering (`&String` vs `String`, not `&?3`) and the
+            // body recovers with the same types.
+            (Ty::Borrow(_, inner), other) | (other, Ty::Borrow(_, inner))
+                if matches!(self.store.shallow(inner), Ty::Var(_))
+                    && matches!(other, Ty::Nominal(..)) =>
+            {
+                let copy = matches!(other, Ty::Nominal(symbol, _)
+                    if self.catalog.grade_of(*symbol) == Grade::Copy);
+                if copy {
+                    worklist.push(Constraint::Eq((**inner).clone(), other.clone(), origin));
+                } else {
+                    if let Ty::Var(v) = self.store.shallow(inner) {
+                        let root = self.store.find(v.0);
+                        let level = self.store.level(root);
+                        if self.is_touchable(root) && !self.occurs_and_adjust_ty(root, level, other)
+                        {
+                            self.store.bind(root, VarValue::Ty(other.clone()));
+                        }
+                    }
+                    self.report_mismatch(&a, &b, origin);
+                }
             }
 
             (Ty::Var(x), Ty::Var(y)) if self.store.find(x.0) == self.store.find(y.0) => {}

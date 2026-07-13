@@ -1410,7 +1410,6 @@ impl NameResolver {
         self.exit_scope(arm.id);
     }
 
-    #[instrument(skip(self, expr))]
     fn enter_expr(&mut self, expr: &mut Expr) {
         on!(&mut expr.kind, ExprKind::InlineIR(instr), {
             for bind in &mut instr.binds {
@@ -1429,6 +1428,7 @@ impl NameResolver {
                 | InlineIRInstructionKind::Store { ty, .. }
                 | InlineIRInstructionKind::Copy { ty, .. }
                 | InlineIRInstructionKind::Swap { ty, .. }
+                | InlineIRInstructionKind::Retain { ty, .. }
                 | InlineIRInstructionKind::Gep { ty, .. } => self.enter_type_annotation(ty),
                 InlineIRInstructionKind::IoWrite { .. }
                 | InlineIRInstructionKind::Trunc { .. }

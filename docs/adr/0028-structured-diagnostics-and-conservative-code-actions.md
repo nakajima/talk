@@ -1,6 +1,9 @@
-# 0025 - Structured diagnostics and conservative code actions
+# 0028 - Structured diagnostics and conservative code actions
 
-Status: implemented (2026-07-10)
+Status: implemented (2026-07-10; renumbered from 0025 on 2026-07-11 —
+the number was accidentally shared with
+`0025-borrow-transparent-pattern-occurrences.md` — and again to 0028,
+0026 having been taken by `0026-macros.md` in the meantime)
 
 ## Context
 

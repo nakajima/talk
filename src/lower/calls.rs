@@ -102,6 +102,13 @@ impl<'a> Lowering<'a> {
         // nor release).
         let done_len = done.len();
         let func_ref = self.p.func_ref(label);
+        // ADR 0027: a capability-passing call is a suspension site — the
+        // statement's unwind entry rides its application terminal.
+        let unwind = if cap_entries.is_empty() {
+            None
+        } else {
+            self.pending_unwind.take()
+        };
         self.lower_args(&arg_exprs, ctx, done, &mut |this, values| {
             let k = this.release_temps_then(&arg_exprs, done_len, &values, ctx, k);
             let mut tuple_items = values;
@@ -111,7 +118,7 @@ impl<'a> Lowering<'a> {
             tuple_items.extend(cap_values.iter().copied());
             tuple_items.push(k);
             let arg_tuple = this.p.tuple(&tuple_items);
-            this.p.app(func_ref, arg_tuple)
+            this.p.app_unwind(func_ref, arg_tuple, unwind)
         })
     }
 
@@ -777,8 +784,10 @@ impl<'a> Lowering<'a> {
     }
 
     /// Declared `'heap` in any unit's catalog: values are object handles.
+    /// Answered by the flow checker's `GradeView` (one object authority).
     pub(super) fn symbol_is_heap(&self, symbol: Symbol) -> bool {
-        self.units.iter().any(|u| u.types.catalog.is_heap(symbol))
+        self.grade_views()
+            .any(|grades| grades.symbol_is_object(symbol))
     }
 
     /// Witness selection. Two regimes, one line between them:

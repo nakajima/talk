@@ -108,6 +108,14 @@ struct ChunkBuilder<'a> {
     /// evaluator, which re-evaluates each shared occurrence).
     memo: FxHashMap<ExprId, u16>,
     code: Vec<Insn>,
+    /// The emission index of the block currently being emitted (0 = the
+    /// function body, then `block_order` order) — unwind-table entries
+    /// record positions relative to it and patch in `build`.
+    current_emit_block: u32,
+    /// Pending unwind-table entries (ADR 0027): (emit block, insn index
+    /// just after the call insn — what a suspended frame's pc holds —,
+    /// the unwind entry's label). Patched to absolute pcs in `build`.
+    pending_unwind: Vec<(u32, u32, Label)>,
 }
 
 impl<'a> ChunkBuilder<'a> {
@@ -141,6 +149,8 @@ impl<'a> ChunkBuilder<'a> {
             block_order: vec![],
             memo: FxHashMap::default(),
             code: vec![],
+            current_emit_block: 0,
+            pending_unwind: vec![],
         }
     }
 
@@ -152,8 +162,10 @@ impl<'a> ChunkBuilder<'a> {
         let entry_body = self.p.body(self.func);
         let blocks = self.block_order.clone();
         let mut chunks_of_insns: Vec<Vec<Insn>> = Vec::with_capacity(blocks.len() + 1);
+        self.current_emit_block = 0;
         chunks_of_insns.push(self.emit_block(entry_body)?);
-        for label in blocks {
+        for (index, label) in blocks.into_iter().enumerate() {
+            self.current_emit_block = index as u32 + 1;
             let body = self.p.body(label);
             chunks_of_insns.push(self.emit_block(body)?);
         }
@@ -203,11 +215,30 @@ impl<'a> ChunkBuilder<'a> {
                 self.next_reg
             ));
         }
+        // Resolve the unwind table (ADR 0027): suspension pc = the insn
+        // after the call (what a suspended frame's pc holds), entry pc =
+        // the unwind-entry block's first insn.
+        let mut unwind = Vec::with_capacity(self.pending_unwind.len());
+        for &(emit_block, index, entry) in &self.pending_unwind {
+            let Some(&entry_block) = self.block_of.get(&entry) else {
+                return Err(format!(
+                    "scheduling {}: unwind entry {} is not a block of this chunk",
+                    self.p.name(self.func),
+                    self.p.name(entry)
+                ));
+            };
+            unwind.push((
+                offsets[emit_block as usize] + index,
+                offsets[entry_block as usize],
+            ));
+        }
+        unwind.sort_unstable();
         Ok(Chunk {
             name: self.p.name(self.func),
             code,
             arity: self.arity,
             n_regs: self.next_reg as u16,
+            unwind,
         })
     }
 
@@ -289,8 +320,8 @@ impl<'a> ChunkBuilder<'a> {
     /// continuation), or a branch primop. Thorin CGO 2015's reconstruction.
     fn emit_terminal(&mut self, e: ExprId) -> Result<(), String> {
         match &self.p.expr(e).kind {
-            ExprKind::App(f, a) => {
-                let (f, a) = (*f, *a);
+            ExprKind::App(f, a, unwind) => {
+                let (f, a, unwind) = (*f, *a, *unwind);
                 match &self.p.expr(f).kind {
                     ExprKind::Func(label) if self.chunk_of.contains_key(label) => {
                         let label = *label;
@@ -298,13 +329,19 @@ impl<'a> ChunkBuilder<'a> {
                         // closure so its environment rides along.
                         if self.env_of.get(&label).is_some_and(|env| !env.is_empty()) {
                             let callee = self.make_closure(label, f)?;
-                            self.emit_call_like(CallTarget::Closure(callee), a)
+                            self.emit_call_like(CallTarget::Closure(callee), a, unwind)
                         } else {
-                            self.emit_call_like(CallTarget::Chunk(self.chunk_of[&label]), a)
+                            self.emit_call_like(CallTarget::Chunk(self.chunk_of[&label]), a, unwind)
                         }
                     }
                     ExprKind::Func(label) if self.block_of.contains_key(label) => {
                         let label = *label;
+                        if unwind.is_some() {
+                            let trap =
+                                self.trap("vm: unwind entry on a block jump (lowerer bug)".into());
+                            self.code.push(trap);
+                            return Ok(());
+                        }
                         let src = self.eval(a)?;
                         let dest = self.param_reg[&label];
                         if dest != src {
@@ -316,26 +353,38 @@ impl<'a> ChunkBuilder<'a> {
                         Ok(())
                     }
                     _ if self.is_ret_k(f) => {
+                        if unwind.is_some() {
+                            let trap =
+                                self.trap("vm: unwind entry on a return (lowerer bug)".into());
+                            self.code.push(trap);
+                            return Ok(());
+                        }
                         let src = self.eval(a)?;
                         self.code.push(Insn::Ret { src });
                         Ok(())
                     }
-                    // A computed callee applied to a bare (non-tuple)
-                    // value: a continuation value — an effect handler's
-                    // captured delimiter. Unwind to its frame and deliver.
-                    _ if !matches!(self.p.expr(a).kind, ExprKind::Tuple(_)) => {
-                        let callee = self.eval(f)?;
-                        let src = self.eval(a)?;
-                        self.code.push(Insn::CallCont { callee, src });
-                        Ok(())
-                    }
                     // A computed callee: a closure value in a register
-                    // (CallIndirect — retires the M2 trap).
+                    // (CallIndirect — retires the M2 trap). Delimiter
+                    // delivery is no longer shape-sniffed here: aborts
+                    // compile from the explicit Op::Abort (ADR 0027).
                     _ => {
                         let callee = self.eval(f)?;
-                        self.emit_call_like(CallTarget::Closure(callee), a)
+                        self.emit_call_like(CallTarget::Closure(callee), a, unwind)
                     }
                 }
+            }
+            // ADR 0027: an effect abort — deliver through the one-shot
+            // delimiter; the interpreter's CallCont runs the unwind.
+            ExprKind::PrimOp(Op::Abort, args, _) => {
+                let callee = self.eval(args[0])?;
+                let src = self.eval(args[1])?;
+                self.code.push(Insn::CallCont { callee, src });
+                Ok(())
+            }
+            // ADR 0027: an unwind entry's terminator.
+            ExprKind::PrimOp(Op::UnwindDone, _, _) => {
+                self.code.push(Insn::UnwindRet);
+                Ok(())
             }
             ExprKind::PrimOp(Op::Switch, args, _) => {
                 // switch(tag, k_0, …, k_n, default): a jump table over the
@@ -409,8 +458,14 @@ impl<'a> ChunkBuilder<'a> {
     /// call into its parameter register and fall through to its block;
     /// k = ret continuation → call then `Ret` (a tail call; genuine TCO is
     /// a later optimization, flagged). The callee is a known chunk or a
-    /// closure value in a register (CallIndirect).
-    fn emit_call_like(&mut self, target: CallTarget, arg: ExprId) -> Result<(), String> {
+    /// closure value in a register (CallIndirect). An unwind entry
+    /// (ADR 0027) records a (suspension pc → entry pc) pair on the chunk.
+    fn emit_call_like(
+        &mut self,
+        target: CallTarget,
+        arg: ExprId,
+        unwind: Option<ExprId>,
+    ) -> Result<(), String> {
         let items: Vec<ExprId> = match &self.p.expr(arg).kind {
             ExprKind::Tuple(items) => items.to_vec(),
             _ => {
@@ -452,6 +507,7 @@ impl<'a> ChunkBuilder<'a> {
             ExprKind::Func(label) if self.block_of.contains_key(label) => {
                 let label = *label;
                 self.code.push(call_insn(self.param_reg[&label]));
+                self.record_unwind(unwind)?;
                 self.code.push(Insn::Jump {
                     target: self.block_of[&label],
                 });
@@ -460,6 +516,7 @@ impl<'a> ChunkBuilder<'a> {
             _ if self.is_ret_k(k) => {
                 let dest = self.fresh();
                 self.code.push(call_insn(dest));
+                self.record_unwind(unwind)?;
                 self.code.push(Insn::Ret { src: dest });
                 Ok(())
             }
@@ -469,6 +526,25 @@ impl<'a> ChunkBuilder<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// Record a pending unwind-table entry for the call insn just pushed:
+    /// the suspension pc is `code.len()` (the insn AFTER the call — the pc
+    /// a suspended frame holds, since the interpreter advances pc before
+    /// executing).
+    fn record_unwind(&mut self, unwind: Option<ExprId>) -> Result<(), String> {
+        let Some(u) = unwind else {
+            return Ok(());
+        };
+        let ExprKind::Func(entry) = &self.p.expr(u).kind else {
+            return Err(format!(
+                "scheduling {}: unwind operand is not a direct function reference",
+                self.p.name(self.func)
+            ));
+        };
+        self.pending_unwind
+            .push((self.current_emit_block, self.code.len() as u32, *entry));
+        Ok(())
     }
 
     /// The environment index of a captured label in the CURRENT chunk.
@@ -1015,6 +1091,17 @@ impl<'a> ChunkBuilder<'a> {
                     b: operands[1],
                     c: operands[2],
                 });
+                Ok(dest)
+            }
+            // A `@handle` install marker (ADR 0027): the evaluator's
+            // extent stack needs it; the VM does not — the `Cont`'s frame
+            // index is the marker. Compiles to nothing (the delimiter
+            // operand is NOT evaluated: reifying the return continuation
+            // as a value is exactly what this op avoids).
+            Op::HandleInstall => {
+                let k = self.const_index(Const::Void, Value::Void);
+                let dest = self.fresh();
+                self.code.push(Insn::Const { dest, k });
                 Ok(dest)
             }
             // Cell operations are effects too (the lowerer guarantees

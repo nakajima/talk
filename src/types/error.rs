@@ -95,6 +95,13 @@ pub enum TypeError {
     },
     IncompatibleOrPatternRefinements,
     AmbiguousGadtMatchResult,
+    /// A user-written `mut`/`consume` parameter mode on an annotation that
+    /// already spells a borrow (ADR 0018): the mode and the `&` are rival
+    /// spellings of the same decision, so dropping either is a fix.
+    ParamModeBorrowConflict {
+        mode: String,
+        annotation: String,
+    },
     InvalidExistentialProtocol {
         ty: String,
     },
@@ -148,6 +155,12 @@ pub enum TypeError {
         field: String,
         ty: String,
     },
+    /// A method used as a value (`x.method` with no call): no lowering
+    /// exists for bound-method values yet, so typing owns the rejection —
+    /// this must never surface as a lowerer error.
+    MethodReference {
+        label: String,
+    },
     /// A `linear` declaration claiming a conformance that would defeat
     /// linearity (`Copy` duplicates it, `Deinit` silently discards it).
     LinearConformance {
@@ -157,6 +170,13 @@ pub enum TypeError {
     HeapConformance {
         ty: String,
         protocol: String,
+    },
+    /// A `Deinit` hook whose row carries a user effect: drop glue calls
+    /// deinit through a fixed signature with no capability parameters, so
+    /// the handler could never reach the body (ADR 0027).
+    DeinitEffectRow {
+        ty: String,
+        effect: String,
     },
     /// A leading-dot variant use whose enum was never determined by
     /// context — nothing to resolve `.label` against.
@@ -205,6 +225,7 @@ impl TypeError {
             Self::DuplicateVariantPayloadLabel { .. } => "type.duplicate-variant-payload-label",
             Self::IncompatibleOrPatternRefinements => "type.incompatible-or-pattern-refinements",
             Self::AmbiguousGadtMatchResult => "type.ambiguous-gadt-match-result",
+            Self::ParamModeBorrowConflict { .. } => "type.param-mode-borrow-conflict",
             Self::InvalidExistentialProtocol { .. } => "type.invalid-existential-protocol",
             Self::MissingAssociatedTypeBinding { .. } => "type.missing-associated-type-binding",
             Self::UnknownAssociatedTypeBinding { .. } => "type.unknown-associated-type-binding",
@@ -218,8 +239,10 @@ impl TypeError {
             Self::UnreachableCode => "type.unreachable-code",
             Self::CannotInfer => "type.cannot-infer",
             Self::NonConformingField { .. } => "type.non-conforming-field",
+            Self::MethodReference { .. } => "type.method-reference",
             Self::LinearConformance { .. } => "type.linear-conformance",
             Self::HeapConformance { .. } => "type.heap-conformance",
+            Self::DeinitEffectRow { .. } => "type.deinit-effect-row",
             Self::UnresolvedVariant { .. } => "type.unresolved-variant",
             Self::RecursiveConformance { .. } => "type.recursive-conformance",
             Self::SolverOverflow { .. } => "type.solver-overflow",
@@ -416,6 +439,12 @@ impl Display for TypeError {
                     "Cannot infer this GADT match result; add a return or let annotation so constructor refinements have a rigid expected type"
                 )
             }
+            TypeError::ParamModeBorrowConflict { mode, annotation } => {
+                write!(
+                    f,
+                    "Parameter mode `{mode}` conflicts with its type: {annotation} is already a borrow. The mode decides borrowing — drop the `&` from the annotation, or drop the mode"
+                )
+            }
             TypeError::InvalidExistentialProtocol { ty } => {
                 write!(f, "'any' expects a protocol, found {ty}")
             }
@@ -494,6 +523,12 @@ impl Display for TypeError {
                     "Cannot conform to {protocol}: field `{field}` has type {ty}, which is not {protocol}"
                 )
             }
+            TypeError::MethodReference { label } => {
+                write!(
+                    f,
+                    "Cannot use method '{label}' as a value yet: call it, or wrap it in a closure"
+                )
+            }
             TypeError::LinearConformance { ty, protocol } => {
                 write!(
                     f,
@@ -504,6 +539,12 @@ impl Display for TypeError {
                 write!(
                     f,
                     "`{ty}` is 'heap and cannot conform to {protocol}: heap values are shared by reference"
+                )
+            }
+            TypeError::DeinitEffectRow { ty, effect } => {
+                write!(
+                    f,
+                    "`{ty}`'s Deinit hook performs '{effect}: deinit runs from drop glue, which passes no effect capabilities — handle the effect inside the body"
                 )
             }
             TypeError::UnresolvedVariant { label } => {

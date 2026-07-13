@@ -142,6 +142,11 @@ different here):
 - `func_type_annotation_on_let_is_honored` — annotations no longer
   auto-quantify free type names (`let id: (T) -> T = …` needs declared
   generics).
+- `types_nested_func` — inferred params are borrows (ADR 0018 +
+  ownership-soundness plan 3.3(b), 2026-07): `func fizz(x)` types `x`
+  as `&T0`, and an implicit closure capture of a borrowed param is
+  rejected until a capture mode is explicit — the same rejection the
+  annotated twin `func fizz<T>(x: T)` has had since ADR 0018 landed.
 
 **Nominal member constraints generalize** (qualified types — Jones
 1994): `types_struct_method_on_arg` now passes as

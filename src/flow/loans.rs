@@ -12,6 +12,8 @@ use crate::node_id::NodeID;
 use crate::typed_ast::{self, ExprKind};
 use crate::types::ty::{Perm, Ty};
 
+use super::cfg::Pass;
+use super::grades::{Tier2Action, stores_borrow};
 use super::moves::{MoveChecker, MoveState};
 use super::place::Place;
 
@@ -103,6 +105,24 @@ impl Provenance {
     }
 }
 
+/// [`MoveState::loan_owners_for`]'s result: the input place itself (no
+/// owning loan — no allocation) or the rebased owners. Borrows the PLACE
+/// only, never the state, so callers may mutate state while iterating.
+#[derive(Debug)]
+pub(crate) enum LoanOwners<'p> {
+    One(&'p Place),
+    Many(Vec<Place>),
+}
+
+impl LoanOwners<'_> {
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, Place> {
+        match self {
+            LoanOwners::One(place) => std::slice::from_ref(*place).iter(),
+            LoanOwners::Many(places) => places.iter(),
+        }
+    }
+}
+
 /// An active NLL loan: `borrower` holds access to `owner` at `kind`.
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveLoan {
@@ -120,26 +140,39 @@ impl MoveState {
         });
     }
 
-    /// The owner a use of `place` actually touches: a borrowed root's path
-    /// rebases onto its real owner (`borrow.byte_count` conflicts on `s`).
-    pub(crate) fn loan_owner_for(&self, place: &Place) -> Place {
+    /// The owners a use of `place` actually touches: a borrowed root's path
+    /// rebases onto EVERY owning loan of its provenance (`borrow.byte_count`
+    /// conflicts on `s`; a two-owner provenance conflicts if either owner
+    /// does). A place with no owning loan touches itself — the common case,
+    /// returned without cloning or allocating (this runs per place use per
+    /// fixpoint iteration).
+    pub(crate) fn loan_owners_for<'p>(&self, place: &'p Place) -> LoanOwners<'p> {
         if let Some(provenance) = self
             .provenances
             .get(&Place::root(place.root))
             .or_else(|| self.provenances.get(place))
-            && let Some(owner) = provenance.loans.iter().find_map(|loan| loan.owner.clone())
         {
-            let mut rebased = owner;
-            rebased.fields.extend(place.fields.iter().copied());
-            return rebased;
+            let mut owners: Vec<Place> = vec![];
+            for loan in &provenance.loans {
+                let Some(owner) = &loan.owner else { continue };
+                let mut rebased = owner.clone();
+                rebased.fields.extend(place.fields.iter().copied());
+                if !owners.contains(&rebased) {
+                    owners.push(rebased);
+                }
+            }
+            if !owners.is_empty() {
+                return LoanOwners::Many(owners);
+            }
         }
-        place.clone()
+        LoanOwners::One(place)
     }
 
     /// The permission a use of `place` can actually exert on its rebased
-    /// owner: rebasing through a shared loan caps an exclusive touch of
+    /// owners: rebasing through a shared loan caps an exclusive touch of
     /// the borrower to a shared touch of the owner (mutating an iterator's
-    /// cursor is not a write through its array borrow).
+    /// cursor is not a write through its array borrow). The cap is the
+    /// weakest permission across ALL owning loans.
     pub(crate) fn rebased_perm(&self, place: &Place, requested: Perm) -> Perm {
         if !requested.is_exclusive() {
             return requested;
@@ -148,9 +181,19 @@ impl MoveState {
             .provenances
             .get(&Place::root(place.root))
             .or_else(|| self.provenances.get(place))
-            && let Some(loan) = provenance.loans.iter().find(|loan| loan.owner.is_some())
         {
-            return loan.kind;
+            let mut owning = provenance
+                .loans
+                .iter()
+                .filter(|loan| loan.owner.is_some())
+                .peekable();
+            if owning.peek().is_some() {
+                return if owning.all(|loan| loan.kind.is_exclusive()) {
+                    Perm::Exclusive
+                } else {
+                    Perm::Shared
+                };
+            }
         }
         requested
     }
@@ -276,7 +319,21 @@ impl MoveChecker<'_> {
         state: &MoveState,
         forced: bool,
     ) -> bool {
-        if place.fields.is_empty() {
+        // A ROOT place is borrowed storage only when it is registered as a
+        // borrowed root — an ADR 0025 pattern binder whose borrow-erased
+        // surface type hides that it aliases the scrutinee's payload, or a
+        // borrow-containing parameter. Anything else a root names is the
+        // function's own storage (the `take` path at moves.rs makes the
+        // same consultation).
+        if place.fields.is_empty()
+            && (state.borrowed_root_perm(place.root).is_none()
+                // An implicit existential pack of the binder is the
+                // ownership judgment of the pack itself (plan item B4 /
+                // ADR 0018's documented gap, owned by the typing gate):
+                // flow cannot see the payload type inside `any`, so it
+                // neither clones nor rejects here.
+                || expr.existential_pack.is_some())
+        {
             return false;
         }
         let root = Place::root(place.root);
@@ -286,35 +343,57 @@ impl MoveChecker<'_> {
             Ty::Borrow(_, inner) => self.grades.is_object(inner),
             other => self.grades.is_object(other),
         });
-        let root_is_borrowed = state.borrowed_roots.contains_key(&place.root)
+        let root_is_borrowed = state.borrowed_root_perm(place.root).is_some()
             || state.provenances.contains_key(&root)
             || self
                 .symbol_ty(place.root)
                 .is_some_and(|ty| self.grades.is_borrowed_value(&ty));
         if root_is_borrowed || root_is_object {
-            if !forced && self.grades.is_cheap_clone(&expr.ty) {
-                if self.recording {
-                    self.auto_clones.insert(expr.id);
-                }
-                return true;
-            }
-            // A type-parameter extraction from a heap object is legal only
-            // when the generic declaration proves every instantiation can
-            // copy out of the object's storage.
-            if !forced && root_is_object {
-                let param = match &expr.ty {
-                    Ty::Param(symbol) => Some(*symbol),
-                    Ty::Proj(_, _, symbol) => Some(*symbol),
-                    _ => None,
-                };
-                if let Some(param) = param
-                    && self.grades.param_copies_out_of_borrow(param)
-                {
-                    if self.recording {
+            match (forced, self.grades.tier2_action(&expr.ty)) {
+                (false, Tier2Action::Retain) => {
+                    if self.pass == Pass::Record {
                         self.auto_clones.insert(expr.id);
                     }
                     return true;
                 }
+                (false, Tier2Action::Generic) => {
+                    // A generic-typed ROOT binder registered as borrowed
+                    // (an ADR 0025 payload binder in a generic body,
+                    // `Fizz<T>.unwrap`) clones unconditionally: the
+                    // θ-resolved instantiation decides at lowering (Copy
+                    // needs nothing, CheapClone retains, an owned
+                    // non-CheapClone instantiation is a loud lowering
+                    // error). It must never fall through to the liveness
+                    // branch, whose last-consume MOVES out of the caller's
+                    // storage.
+                    if place.fields.is_empty() && state.borrowed_root_perm(place.root).is_some() {
+                        if self.pass == Pass::Record {
+                            self.auto_clones.insert(expr.id);
+                        }
+                        return true;
+                    }
+                    // A type-parameter extraction from a heap object is
+                    // legal only when the generic declaration proves every
+                    // instantiation can copy out of the object's storage.
+                    if root_is_object {
+                        let param = match &expr.ty {
+                            Ty::Param(symbol) => Some(*symbol),
+                            Ty::Proj(_, _, symbol) => Some(*symbol),
+                            _ => None,
+                        };
+                        if let Some(param) = param
+                            && self.grades.param_copies_out_of_borrow(param)
+                        {
+                            if self.pass == Pass::Record {
+                                self.auto_clones.insert(expr.id);
+                            }
+                            return true;
+                        }
+                    }
+                }
+                // `Copy` and `Move` (and any `forced` consume-marked
+                // argument) fall through to the move-out-of-borrow error.
+                _ => {}
             }
             let error = OwnershipError::MoveOutOfBorrowedValue {
                 name: self.render(place),
@@ -450,10 +529,7 @@ impl MoveChecker<'_> {
             match &decl.kind {
                 typed_ast::DeclKind::Struct { name, .. } => {
                     let Ok(symbol) = name.symbol() else { continue };
-                    if self.types.catalog.has_bare_conformance(
-                        symbol,
-                        crate::name_resolution::symbol::Symbol::Borrowed,
-                    ) {
+                    if self.grades.symbol_is_borrowed_value(symbol) {
                         continue;
                     }
                     let Some(info) = self.types.catalog.structs.get(&symbol) else {
@@ -472,10 +548,7 @@ impl MoveChecker<'_> {
                 }
                 typed_ast::DeclKind::Enum { name, .. } => {
                     let Ok(symbol) = name.symbol() else { continue };
-                    if self.types.catalog.has_bare_conformance(
-                        symbol,
-                        crate::name_resolution::symbol::Symbol::Borrowed,
-                    ) {
+                    if self.grades.symbol_is_borrowed_value(symbol) {
                         continue;
                     }
                     let Some(info) = self.types.catalog.enums.get(&symbol) else {
@@ -516,12 +589,14 @@ impl MoveChecker<'_> {
                 continue;
             };
             for (binder_id, binder) in lhs.collect_binders() {
-                let Some(ty) = self.types.node_types.get(&binder_id).cloned().or_else(|| {
-                    self.types
-                        .schemes
-                        .get(&binder)
-                        .map(|scheme| scheme.ty.clone())
-                }) else {
+                // Top-level binders' types live in `schemes` (monomorphic
+                // ones get empty-parameter schemes).
+                let Some(ty) = self
+                    .types
+                    .schemes
+                    .get(&binder)
+                    .map(|scheme| scheme.ty.clone())
+                else {
                     continue;
                 };
                 if matches!(ty, Ty::Func(..)) {
@@ -584,19 +659,14 @@ impl MoveChecker<'_> {
             }
         }
         for (symbol, func) in funcs {
-            let func_ty = self
-                .types
-                .schemes
-                .get(&symbol)
-                .map(|scheme| scheme.ty.clone());
-            let reach = self.return_reach_of(func, func_ty.as_ref());
+            let reach = self.return_reach_of(func);
             if !reach.is_empty() {
                 self.return_reach.insert(symbol, reach);
             }
         }
     }
 
-    fn return_reach_of(&mut self, func: &typed_ast::Func, func_ty: Option<&Ty>) -> Vec<usize> {
+    fn return_reach_of(&mut self, func: &typed_ast::Func) -> Vec<usize> {
         let Some(tail) = block_tail_expr(&func.body) else {
             return vec![];
         };
@@ -606,7 +676,7 @@ impl MoveChecker<'_> {
         let saved_borrowed = std::mem::take(&mut self.borrowed_params);
         let saved_param_tys = std::mem::take(&mut self.param_tys);
         let mut state = MoveState::default();
-        self.seed_params(&func.params, func_ty, &mut state);
+        self.seed_params(&func.params, &mut state);
         // For reach purposes each borrowed parameter's provenance must name
         // itself as the owner (the body seed deliberately leaves owners
         // empty so self-mutation doesn't invalidate the seed).
@@ -670,6 +740,21 @@ impl MoveChecker<'_> {
         // Method call: a borrowed self parameter means the result borrows
         // from the receiver.
         if let ExprKind::Member(Some(receiver), _) = &callee.kind {
+            // Protocol-static form (`Add.add(lhs, rhs)`, the operator
+            // desugar): the "receiver" is the protocol NAME, not a value —
+            // self travels as the first argument, so the callable's full
+            // param list lines up with the args positionally.
+            let protocol_static = matches!(
+                &receiver.kind,
+                ExprKind::Constructor(name)
+                    if matches!(name.symbol(), Ok(crate::name_resolution::symbol::Symbol::Protocol(_)))
+            );
+            if protocol_static {
+                return match self.member_callable_params(callee) {
+                    Some(params) => self.per_param_provenance(args, &params, None, state),
+                    None => Provenance::unknown(Perm::Shared),
+                };
+            }
             let self_borrow_perm = self
                 .member_callable_params(callee)
                 .as_ref()
@@ -824,7 +909,7 @@ impl MoveChecker<'_> {
                             crate::name_resolution::symbol::Symbol::Global(_)
                         ) =>
                     {
-                        if self.recording {
+                        if self.pass == Pass::Record {
                             self.global_borrows.insert(owner.root, borrower.root);
                         }
                     }
@@ -846,7 +931,7 @@ impl MoveChecker<'_> {
         for loan in &provenance.loans {
             if let Some(owner) = &loan.owner {
                 self.check_borrow_conflicts(node, owner, loan.kind, Some(&borrower), state);
-                if self.recording {
+                if self.pass == Pass::Record {
                     self.facts.borrows.push(super::FlowBorrowFact {
                         node,
                         borrower: self.render(&borrower),
@@ -937,25 +1022,6 @@ impl MoveChecker<'_> {
                     _ => ControlFlow::Continue(()),
                 })
                 .is_break()
-    }
-}
-
-/// A syntactic `&T` in stored position (not under a function type: a
-/// function value whose signature mentions borrows is fine to store).
-fn stores_borrow(ty: &Ty) -> bool {
-    match ty {
-        Ty::Borrow(..) => true,
-        Ty::Unique(inner) => stores_borrow(inner),
-        Ty::Nominal(_, args) => args.iter().any(stores_borrow),
-        Ty::Tuple(items) => items.iter().any(stores_borrow),
-        Ty::Record(row) => row.fields.iter().any(|(_, field)| stores_borrow(field)),
-        Ty::Func(..)
-        | Ty::Any { .. }
-        | Ty::Proj(..)
-        | Ty::Var(_)
-        | Ty::Param(_)
-        | Ty::Eff(_)
-        | Ty::Error => false,
     }
 }
 

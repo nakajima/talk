@@ -69,6 +69,13 @@ pub enum ParserError {
     ExplicitSelfParameterNotAllowed {
         parameter: Span,
     },
+    /// A `mut`/`consume` mode on a function-type parameter whose
+    /// annotation already spells a borrow (ADR 0018): the mode and the
+    /// `&` are rival spellings of the same decision.
+    ParamModeBorrowConflict {
+        mode: &'static str,
+        annotation: Span,
+    },
     ConformanceListNotAllowed {
         context: BlockContext,
         token: Option<Token>,
@@ -92,6 +99,7 @@ impl ParserError {
             Self::LetNotAllowed(_) => "parser.let-not-allowed",
             Self::InitNotAllowed(_) => "parser.init-not-allowed",
             Self::ExplicitSelfParameterNotAllowed { .. } => "parser.explicit-self-parameter",
+            Self::ParamModeBorrowConflict { .. } => "parser.param-mode-borrow-conflict",
             Self::ConformanceListNotAllowed { .. } => "parser.conformance-list-not-allowed",
             Self::IncompleteFuncSignature(_) => "parser.incomplete-function-signature",
             Self::ConversionError(_) => "parser.conversion",
@@ -144,6 +152,12 @@ impl Display for ParserError {
                 write!(
                     f,
                     "Methods do not declare `self`; use `func`, `mut func`, or `consuming func`"
+                )
+            }
+            Self::ParamModeBorrowConflict { mode, .. } => {
+                write!(
+                    f,
+                    "Parameter mode `{mode}` conflicts with its type: the annotation is already a borrow. The mode decides borrowing — drop the `&` from the annotation, or drop the mode"
                 )
             }
             Self::ConformanceListNotAllowed { context, .. } => write!(

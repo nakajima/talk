@@ -50,6 +50,20 @@ fn rejects_use_after_simple_owned_move() {
 }
 
 #[test]
+fn reports_top_level_flow_error_exactly_once() {
+    // Top-level statements are checked twice — once per file (the
+    // error-reporting role) and once in the combined main body (the
+    // recording role). The roles split reporting from recording, so the
+    // diagnostic surfaces exactly once.
+    let errors = flow_errors("let s = \"hello\" + \" world\"\nlet t = s\ns.byte_count");
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected exactly one flow error, got {errors:?}"
+    );
+}
+
+#[test]
 fn allows_copy_value_reuse_after_assignment() {
     assert_no_errors("let x = 1\nlet y = x\nx + y");
 }
@@ -557,6 +571,25 @@ fn vm_and_evaluator_agree_under_flow_checker() {
     }
 }
 
+/// A leak-free program whose result is a container of buffer-owning
+/// elements (an array of runtime-built strings) runs clean on both
+/// engines: raw-buffer contents are opaque to the result-footprint walk,
+/// so the leak fence must not report the elements' allocations as leaks.
+#[test]
+fn array_of_runtime_strings_result_passes_leak_fence() {
+    let source = "[\"a\" + \"b\"]";
+    let typed = flow_driver(source);
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let mut lowered = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    lowered.run_vm().expect("vm");
+    lowered.eval_for_tests().expect("evaluator");
+}
+
 // ----- Deinit ------------------------------------------------------------------
 
 /// A `Deinit` conformance runs at scope exit: the destructor increments a
@@ -583,6 +616,56 @@ fn deinit_runs_at_scope_exit() {
         crate::vm::interp::Value::I64(n) => assert_eq!(n, 2, "deinit should run once per scope"),
         other => panic!("unexpected result: {other:?}"),
     }
+}
+
+/// Rebinding `self` inside its own deinit body (`let s = self`, including a
+/// further `let t = s`) must not re-dispatch the hook when the rebound alias
+/// drops: the binding IS the instance already being torn down, so its drop
+/// stays the caller glue's no-op — otherwise the destructor recurses on the
+/// same value.
+#[test]
+fn deinit_rebound_self_drops_without_redispatch() {
+    let source = "let counter = 0\nstruct Guard {\n\tlet id: Int\n}\nextend Guard: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tlet s = self\n\t\tlet t = s\n\t\tcounter = counter + 1\n\t\t()\n\t}\n}\nfunc scope() -> Int {\n\tlet g = Guard(id: 1)\n\t0\n}\nlet n = scope()\ncounter";
+    let vm_value = run_heap_vm(source);
+    assert_eq!(
+        vm_value,
+        crate::vm::interp::Value::I64(1),
+        "the hook runs exactly once for the rebound self"
+    );
+    let (value, _, _) = run_heap_eval(source);
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(1));
+}
+
+/// A consuming `match self { s -> ... }` inside a deinit body rebinds self
+/// through a match binder: the binder's arm-exit drop must not re-dispatch
+/// the hook on the same instance.
+#[test]
+fn deinit_consuming_match_on_self_drops_without_redispatch() {
+    let source = "let counter = 0\nstruct Guard {\n\tlet id: Int\n}\nextend Guard: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tmatch self {\n\t\t\ts -> {\n\t\t\t\tcounter = counter + 1\n\t\t\t}\n\t\t}\n\t\t()\n\t}\n}\nfunc scope() -> Int {\n\tlet g = Guard(id: 1)\n\t0\n}\nlet n = scope()\ncounter";
+    let vm_value = run_heap_vm(source);
+    assert_eq!(
+        vm_value,
+        crate::vm::interp::Value::I64(1),
+        "the hook runs exactly once for the matched self"
+    );
+    let (value, _, _) = run_heap_eval(source);
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(1));
+}
+
+/// The deinit-self suppression is keyed on the VALUE, not the type: a fresh
+/// sibling instance of a droppable type created inside a deinit body still
+/// dispatches its own hook when it drops.
+#[test]
+fn deinit_created_instance_still_dispatches_hook() {
+    let source = "let counter = 0\nstruct Inner {\n\tlet id: Int\n}\nextend Inner: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tcounter = counter + 1\n\t\t()\n\t}\n}\nstruct Outer {\n\tlet id: Int\n}\nextend Outer: Deinit {\n\tconsuming func deinit() -> Void {\n\t\tlet extra = Inner(id: 9)\n\t\tcounter = counter + 100\n\t\t()\n\t}\n}\nfunc scope() -> Int {\n\tlet o = Outer(id: 1)\n\t0\n}\nlet n = scope()\ncounter";
+    let vm_value = run_heap_vm(source);
+    assert_eq!(
+        vm_value,
+        crate::vm::interp::Value::I64(101),
+        "the created Inner's hook runs alongside Outer's"
+    );
+    let (value, _, _) = run_heap_eval(source);
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(101));
 }
 
 // ----- Heap classification ------------------------------------------------------
@@ -1029,6 +1112,82 @@ fn generic_heap_extraction_rejects_non_cheap_owned_instantiation() {
     );
 }
 
+// ----- 'heap constructor buffer retains (S7) + retain/drop symmetry (R5/6.3) ------
+
+#[test]
+fn heap_constructor_place_read_consume_params_balance() {
+    // S7: a place-read argument stored into a `'heap` constructor is a
+    // RETAIN into the region (rule B) — the owner's scope-exit drop still
+    // runs, and the finalizer frees the region's copy. Without the retain
+    // the same buffer freed twice (straight-line double free).
+    let (value, live_objects, live_allocations) = run_heap_eval(
+        "struct Node 'heap {\n\tlet key: String\n\tlet value: String\n}\nfunc stash(consume key: String, consume value: String) -> Int {\n\tlet n = Node(key: key, value: value)\n\t0\n}\nfunc check() -> Int {\n\tstash(\"a\" + \"b\", \"c\" + \"d\")\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(0));
+    assert_eq!(live_objects, 0);
+    assert_eq!(live_allocations, 0);
+}
+
+#[test]
+fn heap_constructor_place_read_consume_params_run_on_vm() {
+    let value = run_heap_vm(
+        "struct Node 'heap {\n\tlet key: String\n\tlet value: String\n}\nfunc stash(consume key: String, consume value: String) -> Int {\n\tlet n = Node(key: key, value: value)\n\t0\n}\nfunc check() -> Int {\n\tstash(\"a\" + \"b\", \"c\" + \"d\")\n}\ncheck()",
+    );
+    assert_eq!(value, crate::vm::interp::Value::I64(0), "no double free");
+}
+
+#[test]
+fn heap_constructor_place_read_arg_keeps_caller_value_usable() {
+    // Rule B is a retain, not a move: the caller keeps using the value
+    // after the store, and its scope-exit drop still runs.
+    let (value, live_objects, live_allocations) = run_heap_eval(
+        "struct Node 'heap {\n\tlet key: String\n}\nfunc check() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet n = Node(key: s)\n\ts.byte_count\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
+    assert_eq!(live_objects, 0);
+    assert_eq!(live_allocations, 0);
+}
+
+#[test]
+fn borrowed_marker_view_construction_neither_retains_nor_leaks() {
+    // S7's tier-2 retain is REGION-scoped: it applies only when the
+    // constructed value is `'heap` (the region finalizer provides the
+    // matching free). A result that is copy because it carries the
+    // `Borrowed` marker (Substring and friends) is a VIEW — construction
+    // reads the storage without retaining, and the storage's owner frees
+    // exactly once. Found by the 6.2 accounting sweep: every
+    // `String.find`/`as_substring` call on an owned local leaked one
+    // retain (the HTTP router tests' leak).
+    let (value, live_objects, live_allocations) = run_heap_eval(
+        "func check() -> Int {\n\tlet wire = \"x\" + \"404\"\n\tmatch wire.find(\"404\") {\n\t\t.some(i) -> i,\n\t\t.none -> 0 - 1\n\t}\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(1));
+    assert_eq!(live_objects, 0);
+    assert_eq!(live_allocations, 0, "view construction must not retain");
+}
+
+#[test]
+fn array_of_existentials_clone_retains_payloads() {
+    // 6.3(b): the CoW element retain (`_retain<Element>`, the retain walk)
+    // must dispatch the existential's RETAIN witness exactly where the
+    // drop walk dispatches the drop witness. Without it a cloned
+    // `Array<any P>`'s two buffers both deep-drop the hidden payload.
+    let (value, live_objects, live_allocations) = run_heap_eval(
+        "protocol Ident {\n\tfunc ident() -> Int\n}\nstruct Impl {\n\tlet name: String\n}\nextend Impl: Ident {\n\tfunc ident() -> Int {\n\t\tself.name.byte_count\n\t}\n}\nfunc check() -> Int {\n\tlet first: any Ident = Impl(name: \"a\" + \"b\")\n\tlet a = [first]\n\tlet b = a.clone()\n\tlet second: any Ident = Impl(name: \"c\" + \"d\")\n\tb.push(second)\n\tb.get(1).ident()\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
+    assert_eq!(live_objects, 0);
+    assert_eq!(live_allocations, 0);
+}
+
+#[test]
+fn array_of_existentials_clone_runs_on_vm() {
+    let value = run_heap_vm(
+        "protocol Ident {\n\tfunc ident() -> Int\n}\nstruct Impl {\n\tlet name: String\n}\nextend Impl: Ident {\n\tfunc ident() -> Int {\n\t\tself.name.byte_count\n\t}\n}\nfunc check() -> Int {\n\tlet first: any Ident = Impl(name: \"a\" + \"b\")\n\tlet a = [first]\n\tlet b = a.clone()\n\tlet second: any Ident = Impl(name: \"c\" + \"d\")\n\tb.push(second)\n\tb.get(1).ident()\n}\ncheck()",
+    );
+    assert_eq!(value, crate::vm::interp::Value::I64(2), "no double free");
+}
+
 // ----- Enum payload drops (pre-merge hardening) -----------------------------------
 
 #[test]
@@ -1087,6 +1246,89 @@ fn generic_positions_are_leak_free() {
     assert_eq!(out, "ab\n");
 }
 
+// ----- Generic consume params in loops (liveness seeds parameters) ----------
+
+#[test]
+fn generic_consume_param_in_loop_auto_clones() {
+    // A generic `consume` parameter eaten inside a loop is loop-carried:
+    // liveness extends its use to the loop end, so every iteration's consume
+    // auto-clones (tier 2) instead of moving. Parameters seed the liveness
+    // prepass's declaration table like pre-loop `let` binders — before that,
+    // the textually-last use inside the loop counted as dead-after, the
+    // consume became a real move, and the back-edge join reported a
+    // spurious use-of-moved.
+    assert_no_errors(
+        "func eat<T>(consume x: T) -> Int {\n\t0\n}\nfunc f<T>(consume x: T) -> Int {\n\tlet i = 0\n\tloop i < 2 {\n\t\ti = i + 1\n\t\tlet n = eat(x)\n\t}\n\t0\n}",
+    );
+}
+
+#[test]
+fn generic_consume_local_in_loop_auto_clones() {
+    // The local twin of the parameter case above: routing the same value
+    // through a `let` before the loop already passed. Pins the param/local
+    // symmetry.
+    assert_no_errors(
+        "func eat<T>(consume x: T) -> Int {\n\t0\n}\nfunc f<T>(consume x: T) -> Int {\n\tlet y = x\n\tlet i = 0\n\tloop i < 2 {\n\t\ti = i + 1\n\t\tlet n = eat(y)\n\t}\n\t0\n}",
+    );
+}
+
+#[test]
+fn generic_consume_param_in_immediate_loop_auto_clones() {
+    // The loop as the body's first statement: the loop frame opens at
+    // position 0, exactly where parameters are declared — declared-at-start
+    // must still count as declared before the loop.
+    assert_no_errors(
+        "func eat<T>(consume x: T) -> Int {\n\t0\n}\nfunc f<T>(consume x: T) -> Int {\n\tloop {\n\t\tlet n = eat(x)\n\t\tif n == 0 {\n\t\t\tbreak\n\t\t}\n\t}\n\t0\n}",
+    );
+}
+
+#[test]
+fn generic_consume_param_after_loop_still_moves() {
+    // The flipside: a genuinely-last consume of a parameter AFTER a loop is
+    // a real move (the callee frees it), not an auto-clone.
+    let typed = flow_driver(
+        "func eat<T>(consume x: T) -> Int {\n\t0\n}\nfunc f<T>(consume x: T) -> Int {\n\tlet i = 0\n\tloop i < 2 {\n\t\ti = i + 1\n\t}\n\teat(x)\n}",
+    );
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let facts = &typed.phase.flow;
+    assert!(
+        facts.moves.iter().any(|fact| fact.place == "x"),
+        "the post-loop consume must record a move, got {:?}",
+        facts.moves
+    );
+    assert!(
+        facts.clones.is_empty(),
+        "nothing auto-clones here, got {:?}",
+        facts.clones
+    );
+}
+
+#[test]
+fn generic_consume_param_in_loop_balances_allocations() {
+    // Runtime shape of the loop-carried case, instantiated at String: each
+    // iteration's consume auto-clones (buffer retain), the callee releases,
+    // and the still-owned param drops at scope exit — exact balance.
+    let (value, _, live_allocations) = run_heap_eval(
+        "func eat<T>(consume x: T) -> Int {\n\t0\n}\nfunc f<T>(consume x: T) -> Int {\n\tlet i = 0\n\tloop i < 2 {\n\t\ti = i + 1\n\t\tlet n = eat(x)\n\t}\n\ti\n}\nf(\"a\" + \"b\")",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
+    assert_eq!(
+        live_allocations, 0,
+        "per-iteration auto-clones balance exactly"
+    );
+}
+
+#[test]
+fn generic_consume_param_after_loop_balances_allocations() {
+    // Runtime shape of the flipside: the post-loop consume moves into the
+    // callee, which frees it — no double drop at the caller's scope exit.
+    let (value, _, live_allocations) = run_heap_eval(
+        "func eat<T>(consume x: T) -> Int {\n\t0\n}\nfunc f<T>(consume x: T) -> Int {\n\tlet i = 0\n\tloop i < 2 {\n\t\ti = i + 1\n\t}\n\teat(x)\n}\nf(\"a\" + \"b\")",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(0));
+    assert_eq!(live_allocations, 0, "the moved param frees exactly once");
+}
+
 #[test]
 fn move_inside_handler_body_is_may_moved_after() {
     // Handler bodies are CFG blocks with may-execute edges: a value moved
@@ -1136,6 +1378,77 @@ fn trailing_block_locals_balance_allocations() {
 }
 
 #[test]
+fn move_inside_handler_body_is_rejected_on_reentry() {
+    // A handler body runs once per perform: the body's exit state feeds
+    // back into its own entry (the loop treatment), so a value consumed
+    // inside the body — even with NO use after the handling construct —
+    // is may-moved at the body's entry. `f` performs twice; accepting
+    // this double-frees at runtime.
+    assert_error_contains(
+        "func take(consume s: String) -> Int {\n\ts.byte_count\n}\neffect 'log(msg) -> Int\nfunc f() 'log -> Int {\n\t'log(\"a\") + 'log(\"b\")\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\t@handle 'log { msg in\n\t\tcontinue take(s)\n\t}\n\tf()\n}",
+        "Use of moved value",
+    );
+}
+
+#[test]
+fn move_inside_trailing_block_is_rejected_on_reentry() {
+    // A trailing block runs once per callee invocation: same re-entry
+    // self-edge as handler bodies. `run_twice` invokes it twice;
+    // accepting this double-frees at runtime.
+    assert_error_contains(
+        "func take(consume s: String) -> Int {\n\ts.byte_count\n}\nfunc run_twice(f: () -> Int) -> Int {\n\tf() + f()\n}\nfunc check() -> Int {\n\tlet s = \"hello\" + \" world\"\n\trun_twice {\n\t\ttake(s)\n\t}\n}",
+        "Use of moved value",
+    );
+}
+
+#[test]
+fn generic_consume_inside_handler_body_auto_clones_per_entry() {
+    // Generic (Param-typed) consumes inside a handler body auto-clone per
+    // entry (tier 2: CheapClone retains, decided per instantiation),
+    // exactly like consumes inside loop bodies: liveness extends
+    // body-carried uses to the handling construct's end, so the consume is
+    // never the last use. Each perform retains; balance holds.
+    let (value, _, live_allocations) = run_heap_eval(
+        "func eat<T>(consume x: T) -> Int {\n\t1\n}\neffect 'log(msg) -> Int\nfunc f() 'log -> Int {\n\t'log(\"a\") + 'log(\"b\")\n}\nfunc check<T>(consume v: T) -> Int {\n\tlet w = v\n\t@handle 'log { msg in\n\t\tcontinue eat(w)\n\t}\n\tf()\n}\ncheck(\"hello\" + \" world\")",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
+    assert_eq!(
+        live_allocations, 0,
+        "per-entry auto-clone retains balance exactly"
+    );
+}
+
+#[test]
+fn generic_consume_inside_trailing_block_auto_clones_per_entry() {
+    // The trailing-block twin: each callee invocation consumes a fresh
+    // tier-2 clone; the owner drops once at scope exit.
+    let (value, _, live_allocations) = run_heap_eval(
+        "func eat<T>(consume x: T) -> Int {\n\t1\n}\nfunc run_twice(f: () -> Int) -> Int {\n\tf() + f()\n}\nfunc check<T>(consume v: T) -> Int {\n\tlet w = v\n\trun_twice {\n\t\teat(w)\n\t}\n}\ncheck(\"hello\" + \" world\")",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(2));
+    assert_eq!(
+        live_allocations, 0,
+        "per-invocation auto-clone retains balance exactly"
+    );
+}
+
+#[test]
+fn handler_body_binder_consumes_fresh_per_entry() {
+    // The handler-body BINDER is re-bound fresh on every perform, so
+    // consuming it inside the body is fine — the re-entry self-edge must
+    // not carry the previous entry's move into the next entry (the
+    // testing prelude's `registerTest` handler is exactly this shape).
+    let (value, _, live_allocations) = run_heap_eval(
+        "func take(consume s: String) -> Int {\n\ts.byte_count\n}\neffect 'give(s) -> Int\nfunc f() 'give -> Int {\n\t'give(\"ab\" + \"cd\") + 'give(\"ef\" + \"gh\")\n}\nfunc check() -> Int {\n\t@handle 'give { s in\n\t\tcontinue take(s)\n\t}\n\tf()\n}\ncheck()",
+    );
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(8));
+    assert_eq!(
+        live_allocations, 0,
+        "each entry's binder frees exactly once"
+    );
+}
+
+#[test]
 fn variant_construction_shapes_balance_allocations() {
     // The three `Con` classification shapes — leading-dot call, enum-named
     // call, payload-less leading dot — construct, match, and free cleanly.
@@ -1158,6 +1471,21 @@ fn stored_field_projection_chain_balances_allocations() {
     );
     assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(12));
     assert_eq!(live_allocations, 0, "projection reads leak nothing");
+}
+
+#[test]
+fn temp_projection_of_owned_field_frees_sibling_fields() {
+    // B9's non-retainable arm: `mk().a` where `a`'s type is droppable but
+    // NOT CheapClone consumes the extraction — the temp's OTHER droppable
+    // fields (`b`) must still tear down at the temporary's end (they used
+    // to leak when the whole temp classified `Dead`).
+    let source = "struct Inner {\n\tlet text: String\n}\nstruct Pair {\n\tlet a: Inner\n\tlet b: String\n}\nfunc mk() -> Pair {\n\tPair(a: Inner(text: \"ada\" + \" lovelace\"), b: \"grace\" + \" hopper\")\n}\nfunc check() -> Int {\n\tlet x = mk().a\n\tx.text.byte_count\n}\ncheck()";
+    let (value, _, live_allocations) = run_heap_eval(source);
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(12));
+    assert_eq!(live_allocations, 0, "the temp's sibling fields free");
+    // Both engines: the VM run's balance fence asserts the same.
+    let vm_value = run_heap_vm(source);
+    assert_eq!(vm_value, crate::vm::interp::Value::I64(12));
 }
 
 #[test]
@@ -1288,6 +1616,90 @@ fn existential_payload_deinit_runs() {
         value,
         crate::vm::interp::Value::I64(1),
         "the packed Guard's deinit runs when the existential drops"
+    );
+}
+
+/// The existential witness table's drop/retain slots must not depend on the
+/// protocol's requirement count: `extend P {}` grows P's requirements only
+/// in the extending unit's catalog, so an `any P` packed inside a library
+/// and dropped by an entry unit that extends P would otherwise dispatch
+/// past the drop thunk (a retain instead of a drop — a silent leak, or a
+/// free where a retain was meant).
+#[test]
+fn existential_drop_survives_cross_unit_protocol_extension() {
+    use crate::compiling::core::LibraryTyped;
+    use crate::compiling::driver::CompilationMode;
+    use crate::compiling::module::ModuleEnvironment;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    let base_env = || {
+        let mut environment = ModuleEnvironment::default();
+        environment.import_core(crate::compiling::core::compile());
+        for module in crate::compiling::stdlib::modules() {
+            environment.import((*module).clone());
+        }
+        environment
+    };
+
+    // Library unit: defines the protocol and packs the existential.
+    let lib_env = base_env();
+    let module_id = lib_env.next_module_id();
+    let mut lib_config = DriverConfig::new("tasklib");
+    lib_config.module_id = module_id;
+    lib_config.mode = CompilationMode::Library;
+    lib_config.modules = Rc::new(lib_env);
+    let lib_source = "public protocol Task {\n\tfunc run() -> Int\n}\nstruct Job {\n\tlet name: String\n}\nextend Job: Task {\n\tfunc run() -> Int {\n\t\tself.name.byte_count\n\t}\n}\npublic func pack(name: String) -> any Task {\n\tJob(name: name)\n}";
+    let lib_typed = Driver::new_bare(vec![Source::from(lib_source)], lib_config)
+        .parse()
+        .expect("parse lib")
+        .resolve_names()
+        .expect("resolve lib")
+        .type_check();
+    assert!(!lib_typed.has_errors(), "{:?}", lib_typed.diagnostics());
+    let library = Arc::new(LibraryTyped {
+        program: lib_typed.phase.program.clone(),
+        checked_mir: lib_typed.phase.checked_mir.clone(),
+    });
+    let module = lib_typed.module("tasklib");
+
+    // Entry unit: extends the imported protocol (growing its requirement
+    // list in THIS catalog only), then drops a library-packed existential.
+    let mut env = base_env();
+    env.import_compiled(module, module_id)
+        .expect("import tasklib");
+    let mut config = DriverConfig::new("CrossUnitAny");
+    config.modules = Rc::new(env);
+    config.libraries = vec![library];
+    let source = "use tasklib::{ Task, pack }\nextend Task {\n\tfunc twice() -> Int {\n\t\tself.run() + self.run()\n\t}\n}\nfunc scope() -> Int {\n\tlet t = pack(name: \"hello\" + \" world\")\n\tt.run()\n}\nlet n = scope()\nn";
+    let typed = Driver::new_bare(vec![Source::from(source)], config)
+        .parse()
+        .expect("parse")
+        .resolve_names()
+        .expect("resolve")
+        .type_check();
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let mut lowered = typed.lower();
+    assert!(
+        lowered.phase.diagnostics.is_empty(),
+        "lowering: {:?}",
+        lowered.phase.diagnostics
+    );
+    let vm_value = lowered.run_vm().expect("vm");
+    assert_eq!(vm_value, crate::vm::interp::Value::I64(11));
+    let mut evaluator = crate::lambda_g::eval::Evaluator::new();
+    let value = evaluator
+        .run_main(
+            &mut lowered.phase.program,
+            lowered.phase.main,
+            lowered.phase.result_ty,
+        )
+        .expect("eval");
+    assert_eq!(value, crate::lambda_g::eval::EvalValue::I64(11));
+    assert_eq!(
+        evaluator.live_allocations(),
+        0,
+        "the packed Job's buffer frees exactly once"
     );
 }
 

@@ -1,5 +1,16 @@
 use super::*;
 
+/// Fixed witness-table layout for `any P` values: the drop thunk and the
+/// retain thunk occupy slots 0 and 1, requirement witnesses follow in the
+/// catalog's requirement order. The drop/retain slots must not depend on
+/// the requirement count — `extend P {}` grows the count only in the
+/// extending unit's catalog, so a count-derived slot diverges between the
+/// unit that packs and the unit that drops (and the drop/retain thunks
+/// share the `λ(payload, k)` shape, so a mismatch misfires silently).
+pub(super) const EXISTENTIAL_DROP_SLOT: u32 = 0;
+pub(super) const EXISTENTIAL_RETAIN_SLOT: u32 = 1;
+pub(super) const EXISTENTIAL_REQUIREMENT_SLOTS: u32 = 2;
+
 impl<'a> Lowering<'a> {
     // ----- Match -------------------------------------------------------------
 
@@ -36,6 +47,9 @@ impl<'a> Lowering<'a> {
             this.p.set_body(relk, body);
             Some(this.p.func_ref(relk))
         };
+        // A consuming `match self` inside a deinit body: a binder taking the
+        // whole scrutinee inherits the self param's drop suppression.
+        let scrutinee_is_deinit_self = Self::moves_deinit_self(ctx, scrutinee);
         match self.try_pure(scrutinee, ctx) {
             Some(value) => {
                 let Some(k) = release_wrapped(self, value, k) else {
@@ -45,6 +59,7 @@ impl<'a> Lowering<'a> {
                     self,
                     value,
                     scrutinee_check_ty.clone(),
+                    scrutinee_is_deinit_self,
                     arms,
                     scaffold_arms,
                     ctx,
@@ -63,6 +78,7 @@ impl<'a> Lowering<'a> {
                     self,
                     value,
                     scrutinee_check_ty,
+                    scrutinee_is_deinit_self,
                     arms,
                     scaffold_arms,
                     ctx,
@@ -381,7 +397,8 @@ impl<'a> Lowering<'a> {
 
     /// The drop witness packed into every existential: `λ(payload, k)`
     /// dropping the payload's owned parts (deinit dispatch included). A
-    /// uniform last slot in the witness table, so layout stays index-stable.
+    /// uniform slot after the requirement witnesses, so layout stays
+    /// index-stable.
     pub(super) fn existential_drop_thunk(&mut self, ctx: &Ctx, payload_ty: &CheckTy) -> Label {
         let payload_lambda_ty = self.map_ty(payload_ty);
         let void_ty = self.p.ty_void();
@@ -401,6 +418,34 @@ impl<'a> Lowering<'a> {
             // repack); the thunk is a no-op — deferred, see plan notes.
             CheckTy::Param(_) => finish,
             _ => self.lower_drop_value_then(ctx, payload, payload_ty, finish),
+        };
+        self.p.set_body(thunk, body);
+        thunk
+    }
+
+    /// The RETAIN witness packed beside the drop witness (one slot after
+    /// it): `λ(payload, k)` rc-bumping every buffer the payload owns —
+    /// the retain walk's dispatch for `any P` values, symmetric with the
+    /// drop walk's drop-witness dispatch.
+    pub(super) fn existential_retain_thunk(&mut self, ctx: &Ctx, payload_ty: &CheckTy) -> Label {
+        let payload_lambda_ty = self.map_ty(payload_ty);
+        let void_ty = self.p.ty_void();
+        let bot = self.p.ty_bot();
+        let k_ty = self.p.ty_fn(void_ty, bot);
+        let dom = self.p.ty_tuple(&[payload_lambda_ty, k_ty]);
+        let thunk = self.p.func("retain_payload", dom, bot);
+        // The thunk escapes into the witness table: it must become a chunk.
+        self.escaping.insert(thunk);
+        let vthunk = self.p.var(thunk);
+        let payload = self.p.extract(vthunk, 0);
+        let k = self.p.extract(vthunk, 1);
+        let unit_value = self.p.void();
+        let finish = self.p.app(k, unit_value);
+        let body = match payload_ty {
+            // Mirrors the drop thunk's deferral: a type-parameter payload's
+            // walk is unknowable here (generic repack) — no-op.
+            CheckTy::Param(_) => finish,
+            _ => self.lower_retain_value_then(ctx, payload, payload_ty, finish),
         };
         self.p.set_body(thunk, body);
         thunk
@@ -445,8 +490,14 @@ impl<'a> Lowering<'a> {
             .types
             .catalog
             .requirements_for_conformance(protocol);
-        let mut values = Vec::with_capacity(requirements.len() + 1);
+        let mut values = Vec::with_capacity(requirements.len() + 3);
         values.push(payload);
+        // Fixed slots first (see EXISTENTIAL_DROP_SLOT): drop, retain,
+        // then the requirement witnesses.
+        let drop_thunk = self.existential_drop_thunk(ctx, &pack.payload);
+        values.push(self.p.func_ref(drop_thunk));
+        let retain_thunk = self.existential_retain_thunk(ctx, &pack.payload);
+        values.push(self.p.func_ref(retain_thunk));
         for (owner, label, requirement) in requirements {
             let witness = self.existential_witness_wrapper(
                 protocol.protocol,
@@ -460,8 +511,6 @@ impl<'a> Lowering<'a> {
             )?;
             values.push(witness);
         }
-        let drop_thunk = self.existential_drop_thunk(ctx, &pack.payload);
-        values.push(self.p.func_ref(drop_thunk));
         let ty = self.p.ty(TyKind::Existential(protocol.protocol));
         Some(
             self.p
@@ -486,8 +535,15 @@ impl<'a> Lowering<'a> {
             .types
             .catalog
             .requirements_for_conformance(&ProtocolRef::bare(evidence.protocol));
-        let mut values = Vec::with_capacity(target_requirements.len() + 1);
+        let mut values = Vec::with_capacity(target_requirements.len() + 3);
         values.push(payload);
+        // Fixed slots first (see EXISTENTIAL_DROP_SLOT): drop, retain,
+        // then the requirement witnesses.
+        let payload_ty = CheckTy::Param(param);
+        let drop_thunk = self.existential_drop_thunk(ctx, &payload_ty);
+        values.push(self.p.func_ref(drop_thunk));
+        let retain_thunk = self.existential_retain_thunk(ctx, &payload_ty);
+        values.push(self.p.func_ref(retain_thunk));
         for (owner, label, requirement) in target_requirements {
             let source_index = source_requirements
                 .iter()
@@ -502,9 +558,6 @@ impl<'a> Lowering<'a> {
             values.push(self.p.extract(evidence.table, source_index as u32));
             let _ = label;
         }
-        let payload_ty = CheckTy::Param(param);
-        let drop_thunk = self.existential_drop_thunk(ctx, &payload_ty);
-        values.push(self.p.func_ref(drop_thunk));
         let ty = self.p.ty(TyKind::Existential(protocol));
         Some(self.p.primop(Op::ExistentialPack(protocol), &values, ty))
     }
@@ -745,6 +798,9 @@ impl<'a> Lowering<'a> {
         Some(self.normalize_check_ty(signature, unit))
     }
 
+    /// The witness-table slot dispatching a requirement on an `any P`
+    /// value: its position in the catalog's requirement order, after the
+    /// fixed drop/retain slots.
     pub(super) fn existential_requirement_index(
         &self,
         protocol: Symbol,
@@ -760,6 +816,7 @@ impl<'a> Lowering<'a> {
             .position(|(_, candidate_label, requirement)| {
                 candidate_label == label && requirement.symbol == requirement_symbol
             })
+            .map(|position| position + EXISTENTIAL_REQUIREMENT_SLOTS as usize)
     }
 
     /// Branch on a condition expression: br(cond, then_thunk, else_thunk)

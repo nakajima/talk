@@ -158,6 +158,18 @@ pub enum Op {
     /// Ledger: a binding's references went out of scope; a region at zero
     /// tears down (finalizers in reverse allocation order, then bulk free).
     RegionRelease,
+    /// Effect abort (ADR 0027): args [delimiter, value], ⊥-typed. Unwinds
+    /// the suspended frames through their unwind entries, then delivers
+    /// the value through the one-shot delimiter (the VM's `CallCont`).
+    Abort,
+    /// Terminates an unwind entry (⊥-typed, no args): the VM pops the
+    /// unwound frame and continues the unwind; the evaluator's nested
+    /// entry run completes.
+    UnwindDone,
+    /// Marks a `@handle` install for the evaluator's extent stack: args
+    /// [delimiter]. The VM scheduler compiles it to nothing (the `Cont`'s
+    /// frame index is the VM's marker).
+    HandleInstall,
     /// args: [cond, then_thunk, else_thunk]; thunks have type [] → R.
     Br,
     /// args: [tag, k_0, …, k_n, default]; continuations [] → R.
@@ -198,7 +210,12 @@ pub enum ExprKind {
     Func(Label),
     /// var ℓ — the function's variable (its argument).
     Var(Label),
-    App(ExprId, ExprId),
+    /// Application. The third operand is the optional **unwind entry**
+    /// (ADR 0027): a `Fn(Void, ⊥)` continuation holding this suspension
+    /// site's scope-exit drops, entered once if an effect abort unwinds
+    /// through the frame suspended at this call. Structural (not a side
+    /// map) so fv/subst/check/print/schedule all see it.
+    App(ExprId, ExprId, Option<ExprId>),
     Tuple(Box<[ExprId]>),
     Extract(ExprId, u32),
     PrimOp(Op, Box<[ExprId]>, TyId),

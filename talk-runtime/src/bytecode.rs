@@ -4,7 +4,7 @@ use crate::symbol::{LocalSymbolId, ModuleId, ModuleSymbolId, Symbol};
 use crate::{Chunk, Insn, IoOp, MemKind, Module};
 
 const MAGIC: &[u8; 7] = b"TALKBC\0";
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EncodeError {
@@ -107,6 +107,12 @@ impl Encoder {
             self.len("code", chunk.code.len())?;
             for insn in &chunk.code {
                 self.insn(*insn);
+            }
+            // The unwind table (ADR 0027): (suspension pc, entry pc).
+            self.len("unwind", chunk.unwind.len())?;
+            for &(suspension, entry) in &chunk.unwind {
+                self.u32(suspension);
+                self.u32(entry);
             }
         }
         Ok(())
@@ -294,6 +300,7 @@ impl Encoder {
                 self.u16(dest);
             }
             Insn::CallCont { callee, src } => self.reg2(47, callee, src),
+            Insn::UnwindRet => self.u8(50),
             Insn::Load { dest, ptr, kind } => {
                 self.u8(25);
                 self.u16(dest);
@@ -599,11 +606,19 @@ impl<'a> Decoder<'a> {
             for _ in 0..code_len {
                 code.push(self.insn()?);
             }
+            let unwind_len = self.len()?;
+            let mut unwind = Vec::with_capacity(unwind_len);
+            for _ in 0..unwind_len {
+                let suspension = self.u32()?;
+                let entry = self.u32()?;
+                unwind.push((suspension, entry));
+            }
             chunks.push(Chunk {
                 name,
                 code,
                 arity,
                 n_regs,
+                unwind,
             });
         }
         Ok(chunks)
@@ -840,6 +855,7 @@ impl<'a> Decoder<'a> {
                 b: self.u16()?,
                 kind: self.mem_kind()?,
             }),
+            50 => Ok(Insn::UnwindRet),
             _ => Err(DecodeError::InvalidTag("instruction", tag)),
         }
     }
@@ -1093,6 +1109,9 @@ impl Insn {
                 Register::new(n_regs).check_many(&[dest, src])?
             }
             Insn::MakeCont { dest } => Register::new(n_regs).check(dest)?,
+            // UnwindRet touches no registers; its legality is dynamic
+            // (only during an abort unwind).
+            Insn::UnwindRet => {}
             Insn::Add { dest, a, b }
             | Insn::Sub { dest, a, b }
             | Insn::Mul { dest, a, b }
@@ -1301,6 +1320,7 @@ mod tests {
                 code: vec![Insn::Const { dest: 0, k: 0 }, Insn::Ret { src: 0 }],
                 arity: 0,
                 n_regs: 1,
+                unwind: vec![],
             }],
             consts: vec![Value::I64(42)],
             arg_pool: vec![],
@@ -1316,6 +1336,37 @@ mod tests {
     }
 
     #[test]
+    fn round_trips_unwind_table_and_unwind_ret() {
+        // ADR 0027: the chunk's unwind table and the UnwindRet insn
+        // survive the encode/decode round trip.
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::Ret { src: 0 },
+                    Insn::UnwindRet,
+                ],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![(1, 2)],
+            }],
+            consts: vec![Value::I64(42)],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        let decoded = Module::decode_bytecode(&encoded).unwrap();
+        assert_eq!(decoded.render(), module.render());
+        assert_eq!(decoded.chunks[0].unwind, vec![(1, 2)]);
+        assert_eq!(decoded.chunks[0].code[2], Insn::UnwindRet);
+    }
+
+    #[test]
     fn round_trips_bool_to_int_opcode() {
         let module = Module {
             chunks: vec![Chunk {
@@ -1327,6 +1378,7 @@ mod tests {
                 ],
                 arity: 0,
                 n_regs: 2,
+                unwind: vec![],
             }],
             consts: vec![Value::Bool(true)],
             arg_pool: vec![],
@@ -1356,6 +1408,7 @@ mod tests {
                 ],
                 arity: 0,
                 n_regs: 2,
+                unwind: vec![],
             }],
             consts: vec![],
             arg_pool: vec![],
@@ -1399,6 +1452,7 @@ mod tests {
                 ],
                 arity: 0,
                 n_regs: 3,
+                unwind: vec![],
             }],
             consts: vec![Value::I64(7)],
             arg_pool: vec![0],
@@ -1484,12 +1538,14 @@ mod tests {
                     ],
                     arity: 0,
                     n_regs: 11,
+                    unwind: vec![],
                 },
                 Chunk {
                     name: "callee".into(),
                     code: vec![Insn::EnvGet { dest: 1, index: 0 }, Insn::Ret { src: 0 }],
                     arity: 1,
                     n_regs: 2,
+                    unwind: vec![],
                 },
             ],
             consts: vec![
@@ -1526,6 +1582,7 @@ mod tests {
                 code: vec![Insn::Const { dest: 0, k: 99 }],
                 arity: 0,
                 n_regs: 1,
+                unwind: vec![],
             }],
             consts: vec![],
             arg_pool: vec![],
@@ -1555,6 +1612,7 @@ mod tests {
                 ],
                 arity: 0,
                 n_regs: 1,
+                unwind: vec![],
             }],
             consts: vec![],
             arg_pool: vec![1],
@@ -1586,12 +1644,14 @@ mod tests {
                     ],
                     arity: 0,
                     n_regs: 1,
+                    unwind: vec![],
                 },
                 Chunk {
                     name: "callee".into(),
                     code: vec![Insn::Ret { src: 0 }],
                     arity: 1,
                     n_regs: 1,
+                    unwind: vec![],
                 },
             ],
             consts: vec![],
@@ -1615,6 +1675,7 @@ mod tests {
                 code: vec![],
                 arity: 1,
                 n_regs: 0,
+                unwind: vec![],
             }],
             consts: vec![],
             arg_pool: vec![],
@@ -1653,12 +1714,14 @@ mod tests {
                     ],
                     arity: 0,
                     n_regs: 3,
+                    unwind: vec![],
                 },
                 Chunk {
                     name: "callee".into(),
                     code: vec![Insn::Ret { src: 0 }],
                     arity: 1,
                     n_regs: 1,
+                    unwind: vec![],
                 },
             ],
             consts: vec![Value::I64(7)],

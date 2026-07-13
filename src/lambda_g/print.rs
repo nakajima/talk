@@ -210,16 +210,21 @@ impl Program {
             }
             ExprKind::Func(l) => format!("{}{}{}", s.func, self.name(*l), s.reset),
             ExprKind::Var(l) => format!("var {}", self.name(*l)),
-            // A call: tuple arguments print as the argument list.
-            ExprKind::App(f, a) => {
+            // A call: tuple arguments print as the argument list; an
+            // unwind entry (ADR 0027) prints as a trailing annotation.
+            ExprKind::App(f, a, unwind) => {
                 let callee = self.expr_text(*f, s);
-                match &self.expr(*a).kind {
+                let call = match &self.expr(*a).kind {
                     ExprKind::Tuple(items) => {
                         let inner: Vec<String> =
                             items.iter().map(|i| self.expr_text(*i, s)).collect();
                         format!("{callee}({})", inner.join(", "))
                     }
                     _ => format!("{callee}({})", self.expr_text(*a, s)),
+                };
+                match unwind {
+                    Some(u) => format!("{call} unwind {}", self.expr_text(*u, s)),
+                    None => call,
                 }
             }
             ExprKind::Tuple(items) => {

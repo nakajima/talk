@@ -97,10 +97,11 @@ splitter (`try_mir_effect_split`, `rest_mir_closure`), `HandlerCap` /
   capture the delimiter continuation instead, sound because λ_G
   continuations are heap closures on the evaluator and reified one-shot
   `Cont`s on the VM.
-- Aborts still skip frame cleanups (drops, region write-backs) between
-  the perform and the delimiter — unchanged from the slot design;
-  abort-heavy corpus programs sit in the container-leak fence until
-  Track B lands.
+- ~~Aborts still skip frame cleanups (drops, region write-backs) between
+  the perform and the delimiter~~ — DISCHARGED by ADR 0027 (2026-07-12):
+  aborts are now discontinue-style unwinds through lowerer-emitted
+  per-suspension-site unwind entries; the suspended frames' drops and
+  region releases run before the delimiter delivers.
 - Top-level ambient rows are position-aware: a computation (statement or
   `let` rhs, by its group's earliest binder) sees only the `@handle`s
   installed before it in source order — use-before-install is

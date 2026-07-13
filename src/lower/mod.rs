@@ -138,6 +138,14 @@ pub struct Lowering<'a> {
     /// per demanded instantiation, memoized in `materialized_caps`.
     handler_templates: Vec<HandlerTemplate>,
     materialized_caps: FxHashMap<(usize, Vec<CheckTy>), ExprId>,
+    /// The current statement's unwind entry (ADR 0027), built from the
+    /// flow-published `Unwind` candidates at a Call/Perform statement and
+    /// consumed by the one capability-passing application that statement
+    /// lowers (`lower_call` / `lower_capped_perform`). Save/restored
+    /// around every statement's expression lowering so nested bodies
+    /// (handler bodies, trailing closures, function literals) cannot
+    /// steal an enclosing statement's entry.
+    pending_unwind: Option<ExprId>,
     pub diagnostics: Vec<String>,
 }
 
@@ -181,13 +189,18 @@ struct DropBinding {
     key_path: Place,
     ty: CheckTy,
     dynamic_flags: Vec<Place>,
+    /// The enclosing deinit body's own `self` parameter: its scope-exit
+    /// drop is a NO-OP — the caller-side glue owns both the hook dispatch
+    /// and the structural field teardown (Swift's deinitialization model).
+    /// Keyed on the VALUE, not the type: a fresh sibling instance created
+    /// inside its own type's deinit still runs its hook.
+    is_deinit_self: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct LoopBinding {
     header: ExprId,
     exit: ExprId,
-    drop_depth: usize,
 }
 
 /// A variant constructor's call site, carried from `variant_target` into
@@ -253,9 +266,12 @@ struct Ctx {
     params: Vec<ExprId>,
     /// Enclosing loops with the drop-stack depth active at loop entry.
     loops: Vec<LoopBinding>,
-    /// Owned locals currently in scope. Normal scope exits drop only the
-    /// locals introduced by that scope; early exits wrap their continuation
-    /// with the active suffix recorded here.
+    /// Value-level drop metadata for the owned locals currently in scope,
+    /// keyed by symbol (last push wins). This is NOT a drop authority —
+    /// flow's per-point `DropCandidate` elaborations decide every drop
+    /// (ADR 0010 stage 3); candidate resolution (`pending_drop_at`,
+    /// `trailing_early_exit_drops`, `lower_mir_storage_dead`) reads a
+    /// candidate's concrete type, drop-flag keys, and deinit-self bit here.
     drop_stack: Vec<DropBinding>,
     /// Runtime initializedness flags for owned locals whose drop obligation
     /// is path-sensitive (`Conditional`/`Open` in the MIR drop plan).
@@ -312,6 +328,99 @@ struct MirBlockKey {
 #[derive(Default)]
 struct MirBlockCache {
     blocks: FxHashMap<MirBlockKey, ExprId>,
+    /// Per-symbol ownership facts for the body this cache serves, built on
+    /// first query (`drop_binding_for_mir_symbol` asks once per lowered
+    /// binding — scanning the whole body per query was
+    /// O(bindings × statements)).
+    symbol_facts: Option<SymbolDropFacts>,
+    /// Unwind entries (ADR 0027) already minted in this body walk, keyed by
+    /// their hash-consed drop-chain body: suspension sites with the same
+    /// live drop set share one λ instead of minting identical copies.
+    unwind_entries: FxHashMap<ExprId, ExprId>,
+}
+
+impl MirBlockCache {
+    fn symbol_facts(&mut self, body: &mir::Body) -> &SymbolDropFacts {
+        self.symbol_facts
+            .get_or_insert_with(|| SymbolDropFacts::collect(body))
+    }
+}
+
+/// Per-symbol drop/move facts, collected in ONE pass over a body's flow
+/// annotations (statement + terminator ownership).
+#[derive(Default)]
+struct SymbolDropFacts {
+    /// Symbols with a move fact rooted at them.
+    moved: FxHashSet<Symbol>,
+    /// Symbols flow classified live (non-`Dead`) at some `Unwind`
+    /// candidate (ADR 0027).
+    live_unwind: FxHashSet<Symbol>,
+    /// Drop-flag key paths per symbol: the root place first, then each
+    /// moved/conditionally-dropped field path in body walk order.
+    drop_flags: FxHashMap<Symbol, Vec<Place>>,
+}
+
+impl SymbolDropFacts {
+    fn collect(body: &mir::Body) -> Self {
+        let mut facts = Self::default();
+        for block in &body.blocks {
+            for statement in &block.statements {
+                if let mir::Statement::DropCandidate {
+                    reason: mir::DropReason::Unwind,
+                    target: mir::DropTarget::Symbol { symbol, .. },
+                    ..
+                } = &statement.kind
+                    && statement
+                        .ownership
+                        .drop
+                        .as_ref()
+                        .is_some_and(|drop| !matches!(drop.kind, mir::DropElaboration::Dead))
+                {
+                    facts.live_unwind.insert(*symbol);
+                }
+                if let Some(drop) = &statement.ownership.drop
+                    && let Some(key_path) = &drop.key_path
+                    && matches!(
+                        drop.kind,
+                        mir::DropElaboration::Conditional | mir::DropElaboration::Open
+                    )
+                {
+                    facts.record_drop_flag_key(key_path);
+                }
+                for source in &statement.ownership.moves {
+                    facts.moved.insert(source.root);
+                    facts.record_drop_flag_key(source);
+                }
+            }
+            for source in &block.terminator_ownership.moves {
+                facts.moved.insert(source.root);
+                facts.record_drop_flag_key(source);
+            }
+        }
+        facts
+    }
+
+    fn record_drop_flag_key(&mut self, key_path: &Place) {
+        let keys = self
+            .drop_flags
+            .entry(key_path.root)
+            .or_insert_with(|| vec![Place::root(key_path.root)]);
+        if !key_path.fields.is_empty() && !keys.contains(key_path) {
+            keys.push(key_path.clone());
+        }
+    }
+
+    fn drop_flag_keys(&self, symbol: Symbol) -> Vec<Place> {
+        self.drop_flags.get(&symbol).cloned().unwrap_or_default()
+    }
+
+    fn has_move(&self, symbol: Symbol) -> bool {
+        self.moved.contains(&symbol)
+    }
+
+    fn has_live_unwind(&self, symbol: Symbol) -> bool {
+        self.live_unwind.contains(&symbol)
+    }
 }
 
 /// The MIR body whose statements are currently being lowered, plus the
@@ -421,6 +530,7 @@ pub(crate) fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> Lowe
         scaffold_ctx: vec![],
         handler_templates: vec![],
         materialized_caps: FxHashMap::default(),
+        pending_unwind: None,
         diagnostics: vec![],
     };
     for unit in &lowering.units {
@@ -453,6 +563,48 @@ impl<'a> Lowering<'a> {
 
     /// Lower `expr`, delivering its value to continuation `k : Fn(T, ⊥)`.
     fn lower_expr(&mut self, expr: &Expr, ctx: &Ctx, k: ExprId) -> ExprId {
+        if let Some(pack) = self.existential_pack_at(expr.existential_pack.as_ref(), ctx) {
+            let identity = matches!(&pack.payload, CheckTy::Any { protocol, .. }
+                if protocol.protocol
+                    == self
+                        .any_protocol(&pack.existential)
+                        .unwrap_or(protocol.protocol));
+            if !identity {
+                // On a packing node, the tier-2 mark belongs to the PAYLOAD:
+                // the pack owns it, so a borrowed source's buffers retain
+                // before packing and the caller's original releases
+                // independently (typing's borrowed-pack judgment records
+                // the mark). The packed existential itself has no retain
+                // walk, so wrapping `k` would silently drop the retain.
+                let retain_ty = expr
+                    .ownership
+                    .auto_clone
+                    .then(|| Self::borrow_erased_ty(pack.payload.clone()));
+                if let Some(payload) = self.try_pure_unpacked(expr, ctx) {
+                    return match self.existential_pack_value(expr.id, payload, &pack, ctx) {
+                        Some(value) => {
+                            let next = self.p.app(k, value);
+                            self.retain_payload_then(ctx, payload, retain_ty.as_ref(), next)
+                        }
+                        None => self.dead_end("existential_pack"),
+                    };
+                }
+                let payload_ty = self.map_ty(&pack.payload);
+                let bot = self.p.ty_bot();
+                let pack_k = self.p.func("pack_existential", payload_ty, bot);
+                let payload = self.p.var(pack_k);
+                let body = match self.existential_pack_value(expr.id, payload, &pack, ctx) {
+                    Some(value) => {
+                        let next = self.p.app(k, value);
+                        self.retain_payload_then(ctx, payload, retain_ty.as_ref(), next)
+                    }
+                    None => self.dead_end("existential_pack"),
+                };
+                self.p.set_body(pack_k, body);
+                let pack_ref = self.p.func_ref(pack_k);
+                return self.lower_expr_unpacked(expr, ctx, pack_ref);
+            }
+        }
         // Tier-2 auto-clone: retain the value's buffers before handing it to
         // the consumer, so the clone and the original release independently.
         // The mark may sit on a generic body; the θ-resolved type decides
@@ -472,57 +624,48 @@ impl<'a> Lowering<'a> {
         } else {
             k
         };
-        if let Some(pack) = self.existential_pack_at(expr.existential_pack.as_ref(), ctx) {
-            if let CheckTy::Any { protocol, .. } = &pack.payload
-                && protocol.protocol
-                    == self
-                        .any_protocol(&pack.existential)
-                        .unwrap_or(protocol.protocol)
-            {
-                return self.lower_expr_unpacked(expr, ctx, k);
-            }
-            if let Some(payload) = self.try_pure_unpacked(expr, ctx) {
-                return match self.existential_pack_value(expr.id, payload, &pack, ctx) {
-                    Some(value) => self.p.app(k, value),
-                    None => self.dead_end("existential_pack"),
-                };
-            }
-            let payload_ty = self.map_ty(&pack.payload);
-            let bot = self.p.ty_bot();
-            let pack_k = self.p.func("pack_existential", payload_ty, bot);
-            let payload = self.p.var(pack_k);
-            let body = match self.existential_pack_value(expr.id, payload, &pack, ctx) {
-                Some(value) => self.p.app(k, value),
-                None => self.dead_end("existential_pack"),
-            };
-            self.p.set_body(pack_k, body);
-            let pack_ref = self.p.func_ref(pack_k);
-            return self.lower_expr_unpacked(expr, ctx, pack_ref);
-        }
         self.lower_expr_unpacked(expr, ctx, k)
     }
 
     /// What a tier-2 mark means at this instantiation.
     fn auto_clone_action(&mut self, expr: &Expr, ctx: &Ctx) -> AutoClone {
         let ty = Self::borrow_erased_ty(self.checker_ty(expr, ctx));
+        self.auto_clone_action_for_ty(ty)
+    }
+
+    fn auto_clone_action_for_ty(&mut self, ty: CheckTy) -> AutoClone {
         if !self.needs_drop_type(&ty) {
             return AutoClone::Nothing;
         }
-        if let CheckTy::Nominal(symbol, _) = &ty
-            && self.symbol_has_conformance(*symbol, Symbol::CheapClone)
-        {
+        if self.is_cheap_clone_type(&ty) {
             return AutoClone::Retain;
         }
         AutoClone::Unsupported(ty)
     }
 
-    fn symbol_has_conformance(&self, symbol: Symbol, protocol: Symbol) -> bool {
-        self.units.iter().any(|unit| {
-            unit.types
-                .catalog
-                .conformances
-                .contains_key(&(symbol, ProtocolRef::bare(protocol)))
-        })
+    /// The receiving end of a packing node's tier-2 mark: retain the
+    /// payload's buffers (per its θ-resolved type), then continue to
+    /// `next` — the pack-and-deliver continuation.
+    fn retain_payload_then(
+        &mut self,
+        ctx: &Ctx,
+        payload: ExprId,
+        retain_ty: Option<&CheckTy>,
+        next: ExprId,
+    ) -> ExprId {
+        let Some(ty) = retain_ty else {
+            return next;
+        };
+        match self.auto_clone_action_for_ty(ty.clone()) {
+            AutoClone::Retain => self.lower_retain_value_then(ctx, payload, ty, next),
+            AutoClone::Nothing => next,
+            AutoClone::Unsupported(ty) => {
+                self.diagnostics.push(format!(
+                    "lowering: packing an owned value of type {ty:?} from a borrowed source requires a CheapClone (or copy) instantiation"
+                ));
+                next
+            }
+        }
     }
 
     /// A continuation that retains `expr`'s refcounted buffers, then applies
@@ -728,11 +871,14 @@ impl<'a> Lowering<'a> {
             // per-bind retains, then splice over the values.
             ExprKind::InlineIR(instruction) => {
                 let bind_refs: Vec<&Expr> = instruction.binds.iter().collect();
-                self.lower_args(&bind_refs, ctx, vec![], &mut |this, values| match this
-                    .splice_with_values(instruction, ctx, &values)
-                {
-                    Some(result) => this.p.app(k, result),
-                    None => this.dead_end("unsupported_ir"),
+                self.lower_args(&bind_refs, ctx, vec![], &mut |this, values| {
+                    if let InlineIRInstructionKind::Retain { ty, value } = &instruction.kind {
+                        return this.splice_retain(ty, value, ctx, &values, k);
+                    }
+                    match this.splice_with_values(instruction, ctx, &values) {
+                        Some(result) => this.p.app(k, result),
+                        None => this.dead_end("unsupported_ir"),
+                    }
                 })
             }
             other => {

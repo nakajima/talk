@@ -105,6 +105,30 @@ impl Allocations {
         self.records.iter().filter(|record| record.live).count()
     }
 
+    /// Base address of the live allocation containing `addr` (`None` for
+    /// statics and dead/unmanaged addresses). The test-suite leak fences
+    /// resolve a result value's interior pointers to their owning records
+    /// with this, so a result's own buffers aren't reported as leaks.
+    pub fn live_base(&self, static_len: u32, addr: u32) -> Option<u32> {
+        Some(self.live_record(static_len, addr)?.start)
+    }
+
+    /// The live allocation record containing `addr` — [`Self::live_base`]
+    /// plus the record's length, which the leak fences use to tell
+    /// buffers too short to hold a word (whose contents can't own
+    /// anything) from buffers whose contents are opaque to the
+    /// result-footprint walk.
+    pub fn live_record(&self, static_len: u32, addr: u32) -> Option<&AllocationRecord> {
+        if addr < static_len {
+            return None;
+        }
+        let record = self.record_containing(addr)?;
+        let start = record.start as usize;
+        // Zero-length allocations still reserve one byte (`allocate`).
+        let end = start + record.len.max(1);
+        (record.live && (addr as usize) >= start && (addr as usize) < end).then_some(record)
+    }
+
     pub fn check_access(
         &self,
         mem_len: usize,
@@ -195,6 +219,20 @@ mod tests {
         assert_eq!(allocations.live_count(), 0);
         assert_eq!(allocations.free(8, ptr), Err(MemoryError::DoubleFree));
         assert_eq!(allocations.retain(8, ptr), Err(MemoryError::DoubleFree));
+    }
+
+    #[test]
+    fn live_base_resolves_interior_pointers_of_live_records_only() {
+        let mut mem = vec![0u8; 8];
+        let mut allocations = Allocations::default();
+        let ptr = allocations.allocate(&mut mem, 4).expect("alloc");
+        assert_eq!(allocations.live_base(8, ptr), Some(ptr));
+        assert_eq!(allocations.live_base(8, ptr + 3), Some(ptr), "interior");
+        assert_eq!(allocations.live_base(8, ptr + 4), None, "one past the end");
+        assert_eq!(allocations.live_base(8, 4), None, "statics are unmanaged");
+
+        allocations.free(8, ptr).expect("release");
+        assert_eq!(allocations.live_base(8, ptr), None, "dead record");
     }
 
     #[test]

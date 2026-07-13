@@ -253,6 +253,37 @@ fn ordinary_borrowed_return_can_escape_borrowed_parameter() {
     );
 }
 
+// ----- Inferred params are borrows (ownership plan 3.3(b)) -------------------
+
+#[test]
+fn inferred_param_caller_reuses_argument_after_call() {
+    // `func peek(x)` is `func peek(x: String)`'s twin: the call borrows,
+    // so the caller can keep using `s` afterward.
+    assert_no_errors(
+        "func peek(x) -> Int {\n\tx.byte_count\n}\nlet s = \"a\" + \"b\"\nlet n = peek(s)\nlet m = s.byte_count\nprint(n + m)",
+    );
+}
+
+#[test]
+fn inferred_consume_param_still_consumes() {
+    // The stamped mode is the authority: `consume x` without an annotation
+    // keeps owned-parameter semantics, so the caller's later use errors.
+    assert_error_contains(
+        "func eat(consume x) -> Int {\n\t0\n}\nlet s = \"a\" + \"b\"\nlet n = eat(s)\nlet m = s.byte_count\nprint(n + m)",
+        "Use of moved value 's'",
+    );
+}
+
+#[test]
+fn consume_marker_against_inferred_borrow_param_is_rejected() {
+    // Call-site `consume` against a borrow-mode parameter is a contract
+    // conflict for annotated params; the inferred twin must agree.
+    assert_error_contains(
+        "func peek(x) -> Int {\n\tx.byte_count\n}\nlet s = \"a\" + \"b\"\nlet n = peek(consume s)\nprint(n)",
+        "the parameter borrows",
+    );
+}
+
 #[test]
 fn borrowed_return_among_several_arguments_is_precisely_provenanced() {
     assert_no_errors(
@@ -436,6 +467,86 @@ fn rejects_borrowed_non_cheap_clone_argument_to_owned_parameter() {
     assert!(typed.has_errors(), "expected a type error");
 }
 
+// ----- ADR 0025 / plan S3: payload binders under borrowed scrutinees ---------
+//
+// A variant payload binder under a borrowed scrutinee carries the
+// borrow-erased surface type; ownership lives in `borrowed_roots` instead.
+// The move-out-of-borrow judgment must consult that registration for ROOT
+// places too — otherwise consuming the binder records a genuine move and the
+// caller's enum frees the same payload again.
+
+#[test]
+fn rejects_returning_non_cheap_clone_payload_binder_from_borrowed_scrutinee() {
+    assert_error_contains(
+        "struct Name {\n\tlet value: String\n}\nenum E {\n\tcase a(Name)\n}\nfunc steal(e: E) -> Name {\n\tmatch e {\n\t\t.a(n) -> n\n\t}\n}",
+        "out of borrowed value",
+    );
+}
+
+#[test]
+fn rejects_storing_non_cheap_clone_payload_binder_into_owned_struct() {
+    assert_error_contains(
+        "struct Name {\n\tlet value: String\n}\nstruct Holder {\n\tlet name: Name\n}\nenum E {\n\tcase a(Name)\n}\nfunc hold(e: E) -> Int {\n\tlet h = match e {\n\t\t.a(n) -> Holder(name: n)\n\t}\n\th.name.value.byte_count\n}",
+        "out of borrowed value",
+    );
+}
+
+#[test]
+fn rejects_tuple_nested_payload_binder_consume_from_borrowed_scrutinee() {
+    assert_error_contains(
+        "struct Name {\n\tlet value: String\n}\nenum E {\n\tcase a(Name)\n}\nfunc first(x: E, y: E) -> Name {\n\tmatch (x, y) {\n\t\t(.a(n), _) -> n\n\t}\n}",
+        "out of borrowed value",
+    );
+}
+
+#[test]
+fn rejects_consume_argument_of_payload_binder_from_borrowed_scrutinee() {
+    assert_error_contains(
+        "struct Name {\n\tlet value: String\n}\nenum E {\n\tcase a(Name)\n}\nfunc eat(consume name: Name) -> Int {\n\t0\n}\nfunc go(e: E) -> Int {\n\tmatch e {\n\t\t.a(n) -> eat(consume n)\n\t}\n}",
+        "out of borrowed value",
+    );
+}
+
+#[test]
+fn rejects_consume_argument_of_cheap_clone_payload_binder_from_borrowed_scrutinee() {
+    // `consume` disables the tier-2 clone (ADR 0018): a forced move out of
+    // borrowed storage errors even for a CheapClone payload.
+    assert_error_contains(
+        "enum E {\n\tcase a(String)\n}\nfunc eat(consume s: String) -> Int {\n\ts.byte_count\n}\nfunc go(e: E) -> Int {\n\tmatch e {\n\t\t.a(s) -> eat(consume s)\n\t}\n}",
+        "out of borrowed value",
+    );
+}
+
+#[test]
+fn clones_cheap_clone_payload_binder_returned_from_borrowed_scrutinee() {
+    // Tier 2: a String payload consumed through the binder retains instead
+    // of moving out of the caller's enum.
+    assert_no_errors(
+        "enum E {\n\tcase a(String)\n}\nfunc steal(e: E) -> String {\n\tmatch e {\n\t\t.a(s) -> s\n\t}\n}",
+    );
+}
+
+#[test]
+fn generic_payload_binder_from_borrowed_self_rejects_non_cheap_instantiation() {
+    // The generic body checks clean (the tier-2 mark defers to θ); an
+    // owned non-CheapClone instantiation must be a loud lowering error,
+    // never a silent move out of the borrowed receiver.
+    let typed = flow_driver(
+        "struct Name {\n\tlet value: String\n}\nenum Fizz<T> {\n\tcase foo(T)\n\n\tfunc unwrap() -> T {\n\t\tmatch self {\n\t\t\t.foo(t) -> t\n\t\t}\n\t}\n}\nfunc go() -> Int {\n\tlet f = Fizz.foo(Name(value: \"x\" + \"y\"))\n\tlet n = f.unwrap()\n\tn.value.byte_count\n}\ngo()",
+    );
+    assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+    let lowered = typed.lower();
+    assert!(
+        lowered
+            .phase
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("CheapClone")),
+        "expected a lowering rejection for the non-CheapClone instantiation, got {:?}",
+        lowered.phase.diagnostics
+    );
+}
+
 // ----- Borrow conflicts / invalidation ------------------------------------------
 
 #[test]
@@ -450,6 +561,22 @@ fn rejects_borrow_use_after_owner_move() {
 fn rejects_borrow_use_after_owner_reassignment() {
     assert_error_contains(
         "func bad() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.utf8().slice(0, 1)\n\ts = \"new\" + \" value\"\n\tsub.byte_count\n}",
+        "Use of borrowed value 'sub'",
+    );
+}
+
+#[test]
+fn rejects_borrow_use_after_owner_reassignment_across_join() {
+    assert_error_contains(
+        "func bad(flag: Bool) -> Int {\n\tlet a = \"hello\" + \" world\"\n\tlet b = \"bye\" + \" now\"\n\tlet sub = a.utf8().slice(0, 1)\n\tif flag { sub = b.utf8().slice(0, 1) }\n\ta = \"new\" + \" value\"\n\tsub.byte_count\n}",
+        "Use of borrowed value 'sub'",
+    );
+}
+
+#[test]
+fn rejects_borrow_use_after_owner_reassignment_across_join_mirror() {
+    assert_error_contains(
+        "func bad(flag: Bool) -> Int {\n\tlet a = \"hello\" + \" world\"\n\tlet b = \"bye\" + \" now\"\n\tlet sub = a.utf8().slice(0, 1)\n\tif flag { sub = b.utf8().slice(0, 1) }\n\tb = \"new\" + \" value\"\n\tsub.byte_count\n}",
         "Use of borrowed value 'sub'",
     );
 }
@@ -967,5 +1094,93 @@ fn mut_for_rejects_early_exit_until_commit_is_on_exit() {
     assert_rejected(
         "func f() -> Int {\n\tlet xs = [1, 2]\n\tfor x in mut xs {\n\t\tbreak\n\t}\n\t0\n}",
         "`break`, `continue`, and `return` inside `mut` iteration",
+    );
+}
+
+// ----- Plan R3: multi-owner provenance folds over all owning loans -----------
+
+#[test]
+fn loan_owners_fold_over_every_owning_loan() {
+    use crate::flow::loans::{Origin, ProvLoan, Provenance};
+    use crate::flow::moves::MoveState;
+    use crate::flow::place::Place;
+    use crate::name_resolution::symbol::{DeclaredLocalId, Symbol};
+    use crate::types::ty::Perm;
+
+    let borrower = Symbol::DeclaredLocal(DeclaredLocalId(1));
+    let first = Symbol::DeclaredLocal(DeclaredLocalId(2));
+    let second = Symbol::DeclaredLocal(DeclaredLocalId(3));
+    let mut state = MoveState::default();
+    state.provenances.insert(
+        Place::root(borrower),
+        Provenance {
+            loans: vec![
+                ProvLoan {
+                    origin: Origin::Local,
+                    owner: Some(Place::root(first)),
+                    kind: Perm::Exclusive,
+                },
+                ProvLoan {
+                    origin: Origin::Local,
+                    owner: Some(Place::root(second)),
+                    kind: Perm::Shared,
+                },
+            ],
+        },
+    );
+    let borrower_place = Place::root(borrower);
+    let owners = state.loan_owners_for(&borrower_place);
+    assert!(
+        owners.iter().any(|owner| *owner == Place::root(first)),
+        "first owner missing: {owners:?}"
+    );
+    assert!(
+        owners.iter().any(|owner| *owner == Place::root(second)),
+        "a conflict on the second owner would go unseen: {owners:?}"
+    );
+    // Weakest across owners: one shared owning loan caps an exclusive
+    // touch of the borrower to shared.
+    assert_eq!(
+        state.rebased_perm(&Place::root(borrower), Perm::Exclusive),
+        Perm::Shared
+    );
+}
+
+#[test]
+fn rebased_perm_stays_exclusive_when_every_owner_is_exclusive() {
+    use crate::flow::loans::{Origin, ProvLoan, Provenance};
+    use crate::flow::moves::MoveState;
+    use crate::flow::place::Place;
+    use crate::name_resolution::symbol::{DeclaredLocalId, Symbol};
+    use crate::types::ty::Perm;
+
+    let borrower = Symbol::DeclaredLocal(DeclaredLocalId(1));
+    let first = Symbol::DeclaredLocal(DeclaredLocalId(2));
+    let second = Symbol::DeclaredLocal(DeclaredLocalId(3));
+    let mut state = MoveState::default();
+    state.provenances.insert(
+        Place::root(borrower),
+        Provenance {
+            loans: vec![
+                ProvLoan {
+                    origin: Origin::Local,
+                    owner: Some(Place::root(first)),
+                    kind: Perm::Exclusive,
+                },
+                ProvLoan {
+                    origin: Origin::Local,
+                    owner: Some(Place::root(second)),
+                    kind: Perm::Exclusive,
+                },
+            ],
+        },
+    );
+    assert_eq!(
+        state.rebased_perm(&Place::root(borrower), Perm::Exclusive),
+        Perm::Exclusive
+    );
+    assert_eq!(
+        state.rebased_perm(&Place::root(borrower), Perm::Shared),
+        Perm::Shared
     );
 }

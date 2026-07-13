@@ -46,6 +46,14 @@ public func _free(ptr: RawPtr) 'alloc -> Void {
 	@_ir(ptr) { free $0 }
 }
 
+// Add one reference to every refcounted buffer `value` owns — the
+// element half of a copy-on-write buffer copy. Dispatches structurally
+// per specialization (scalars are a no-op; static data is unmanaged),
+// mirroring how a drop of the same value would release.
+public func _retain<Element>(value: &Element) 'alloc -> Void {
+	@_ir(value) { retain Element $0 }
+}
+
 public func _ptr_add(ptr: RawPtr, offset: Int) 'alloc -> RawPtr {
 	@_ir(ptr, offset) { %? = add RawPtr $0 $1 }
 }

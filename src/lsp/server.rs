@@ -2034,7 +2034,7 @@ mod tests {
                 panic!("unexpected hover: {hover:?}");
             };
             // The scheme, not a use site's instantiation.
-            assert!(markup.value.contains("id: <T0>(T0) -> T0"), "{markup:?}");
+            assert!(markup.value.contains("id: <T0>(&T0) -> &T0"), "{markup:?}");
             assert!(!markup.value.contains("Int"), "{markup:?}");
             assert!(!markup.value.contains("Float"), "{markup:?}");
         }

@@ -268,14 +268,19 @@ pub enum Insn {
         dest: u16,
     },
     /// Invoke a reified continuation with a value: unwind every frame
-    /// above the continuation's frame, then return from that frame with
-    /// the value. Traps if the frame is gone — continuations are
-    /// one-shot, and a handler that escapes its scope finds a dead
-    /// delimiter.
+    /// above the continuation's frame — entering each one a final time at
+    /// its unwind entry when its chunk's unwind table has one for the
+    /// suspension pc (ADR 0027) — then return from that frame with the
+    /// value. Traps if the frame is gone — continuations are one-shot,
+    /// and a handler that escapes its scope finds a dead delimiter.
     CallCont {
         callee: u16,
         src: u16,
     },
+    /// Terminates an unwind entry (ADR 0027): pop the frame that just ran
+    /// its cleanup and continue the unwind toward the delimiter. Only
+    /// legal while a `CallCont` unwind is in progress.
+    UnwindRet,
     Trap {
         message: u32,
     },
@@ -315,6 +320,12 @@ pub struct Chunk {
     pub code: Vec<Insn>,
     pub arity: u16,
     pub n_regs: u16,
+    /// The unwind table (ADR 0027): (suspension pc, entry pc) pairs,
+    /// sorted by suspension pc. A frame of this chunk suspended at a
+    /// capability-passing call holds the suspension pc; an effect abort
+    /// unwinding through it enters the frame once at the entry pc (the
+    /// site's scope-exit drops, ending in `UnwindRet`) before popping it.
+    pub unwind: Vec<(u32, u32)>,
 }
 
 #[derive(Debug, Default)]
@@ -526,6 +537,7 @@ impl Module {
             Insn::RegionRelease { dest, src } => format!("region_release r{dest} <- r{src}"),
             Insn::MakeCont { dest } => format!("make_cont r{dest}"),
             Insn::CallCont { callee, src } => format!("call_cont r{callee} <- r{src}"),
+            Insn::UnwindRet => "unwind_ret".to_string(),
         }
     }
 }

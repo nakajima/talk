@@ -283,7 +283,8 @@ impl TypedTreeBuilder<'_> {
                 // that resolves to a stored field is a projection.
                 if let Some(receiver) = recv
                     && let Some(field) = crate::types::output::stored_field_symbol(
-                        self.types,
+                        &self.types.catalog,
+                        &self.types.schemes,
                         self.types.member_resolutions.get(&e.id),
                     )
                 {

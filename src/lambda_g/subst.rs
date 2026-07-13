@@ -72,10 +72,11 @@ impl Program {
                 self.func_ref(l2)
             }
 
-            ExprKind::App(a, b) => {
+            ExprKind::App(a, b, unwind) => {
                 let a2 = self.substitute(subst, a);
                 let b2 = self.substitute(subst, b);
-                self.app(a2, b2)
+                let u2 = unwind.map(|u| self.substitute(subst, u));
+                self.app_unwind(a2, b2, u2)
             }
             ExprKind::Tuple(items) => {
                 let rebuilt: Vec<ExprId> =

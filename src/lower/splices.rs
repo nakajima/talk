@@ -11,6 +11,12 @@ impl<'a> Lowering<'a> {
         instruction: &InlineIRInstruction,
         ctx: &Ctx,
     ) -> Option<ExprId> {
+        // `retain` lowers continuation-style (the walk may branch over
+        // enum tags), so it can't be a single spliced expression; the
+        // continuation path handles it via `splice_retain`.
+        if matches!(instruction.kind, InlineIRInstructionKind::Retain { .. }) {
+            return None;
+        }
         let mut binds = Vec::with_capacity(instruction.binds.len());
         for bind in &instruction.binds {
             // Impure binds (auto-cloned generic values needing retains)
@@ -129,6 +135,8 @@ impl<'a> Lowering<'a> {
                 return Some(self.p.add(addr, offset));
             }
             K::Free { ptr } => (Op::Free, vec![operand(self, ptr)?]),
+            // Handled by `splice_retain` on the continuation path.
+            K::Retain { .. } => return None,
             K::Copy {
                 from, to, length, ..
             } => (
@@ -165,6 +173,48 @@ impl<'a> Lowering<'a> {
             _ => self.p.expr_ty(operands[0]),
         };
         Some(self.p.primop(op, &operands, result_ty))
+    }
+
+    /// `retain T $value`: rc-bump every refcounted buffer the value owns —
+    /// the runtime twin of the drop walk (`lower_retain_value_then`),
+    /// θ-resolved per specialization. Continuation-shaped because the walk
+    /// may branch (enum payloads switch on the tag), so it takes `k`
+    /// directly instead of flowing through `splice_with_values`.
+    pub(super) fn splice_retain(
+        &mut self,
+        annotation: &TypeAnnotation,
+        value: &IrValue,
+        ctx: &Ctx,
+        binds: &[ExprId],
+        k: ExprId,
+    ) -> ExprId {
+        let value = match value {
+            IrValue::Bind(i) => binds.get(*i).copied(),
+            IrValue::Reg(n) => ctx.params.get(*n as usize).copied(),
+            _ => None,
+        };
+        let (Some(value), Some(ty)) = (value, self.splice_check_ty(annotation, ctx)) else {
+            self.diagnostics
+                .push("lowering: unsupported @_ir retain operand".into());
+            return self.dead_end("unsupported_ir");
+        };
+        let void = self.p.void();
+        let next = self.p.app(k, void);
+        self.lower_retain_value_then(ctx, value, &Self::borrow_erased_ty(ty), next)
+    }
+
+    /// The checker type named by a splice's type argument, θ-resolved —
+    /// the CheckTy sibling of [`Self::splice_ty`] for walks that dispatch
+    /// on type structure rather than λ_G layout.
+    fn splice_check_ty(&self, annotation: &TypeAnnotation, ctx: &Ctx) -> Option<CheckTy> {
+        let TypeAnnotationKind::Nominal { name, .. } = &annotation.kind else {
+            return None;
+        };
+        let symbol = name.symbol().ok()?;
+        if let Some(bound) = ctx.theta.get(&symbol) {
+            return Some(bound.clone());
+        }
+        Some(CheckTy::Nominal(symbol, vec![]))
     }
 
     /// The λ_G type named by a splice's type argument, θ-resolved (`load

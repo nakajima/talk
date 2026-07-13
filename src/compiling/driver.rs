@@ -692,7 +692,7 @@ impl Driver<Typed> {
         let entry = units.len() - 1;
         let lowered = lower_program(units, entry);
 
-        Driver {
+        let driver = Driver {
             files: self.files,
             config: self.config,
             phase: Lowered {
@@ -703,7 +703,28 @@ impl Driver<Typed> {
                 diagnostics: lowered.diagnostics,
                 prior_diagnostics: diagnostics,
             },
+        };
+        // Free-balance verifier (ADR 0017 stage 2, plan 6.1): ON by
+        // default for every lowered body in the test harness paths;
+        // TALK_SKIP_VERIFY_BALANCE=1 opts out. Production builds are
+        // untouched. Only well-lowered programs are verified — a program
+        // with type or lowering diagnostics is allowed to be partial.
+        #[cfg(test)]
+        if driver.phase.diagnostics.is_empty()
+            && !has_error_diagnostics(&driver.phase.prior_diagnostics)
+            && let Some(outcome) = crate::lambda_g::balance::verify_balance_unless_skipped(
+                &driver.phase.program,
+                driver.phase.main,
+                &driver.phase.entry_funcs,
+            )
+        {
+            assert!(
+                outcome.reports.is_empty(),
+                "free-balance verifier:\n{}",
+                outcome.render()
+            );
         }
+        driver
     }
 
     pub fn has_errors(&self) -> bool {
@@ -781,31 +802,26 @@ impl Driver<Lowered> {
     }
 
     /// Reference-evaluator run returning (value, captured stdout). On
-    /// success, asserts the leak invariant: every allocation and `'heap`
-    /// object torn down by exit. Leak detection is suite policy (CPython's
-    /// refleak buildbots), not per-test opt-in.
+    /// success, asserts the leak invariant: everything live at exit is the
+    /// result value's own footprint — every other allocation and `'heap`
+    /// object torn down. Leak detection is suite policy (CPython's refleak
+    /// buildbots), not per-test opt-in.
     pub fn eval_with_output(
         &mut self,
     ) -> Result<(crate::lambda_g::eval::EvalValue, String), crate::lambda_g::eval::EvalError> {
-        use crate::lambda_g::eval::EvalValue;
-        let (value, out, live_objects, live_allocations) = self.eval_counted()?;
-        // A program whose VALUE carries buffers legitimately holds them at
-        // exit; exact balance is asserted for scalar-valued programs (the
-        // vast majority — and where a leak can hide nowhere else).
-        if matches!(
-            value,
-            EvalValue::I64(_) | EvalValue::F64(_) | EvalValue::Bool(_) | EvalValue::Void
-        ) {
-            assert_eq!(live_objects, 0, "{live_objects} 'heap objects leaked");
-            assert_eq!(live_allocations, 0, "{live_allocations} allocations leaked");
-        }
+        let (value, out, balance) = self.eval_counted()?;
+        self.assert_balance(&balance, "evaluator");
         Ok((value, out))
     }
 
     fn eval_counted(
         &mut self,
     ) -> Result<
-        (crate::lambda_g::eval::EvalValue, String, usize, usize),
+        (
+            crate::lambda_g::eval::EvalValue,
+            String,
+            crate::vm::interp::RunBalance,
+        ),
         crate::lambda_g::eval::EvalError,
     > {
         let mut evaluator = crate::lambda_g::eval::Evaluator::new();
@@ -814,12 +830,57 @@ impl Driver<Lowered> {
             self.phase.main,
             self.phase.result_ty,
         )?;
+        let balance = evaluator.balance(&value);
         Ok((
             value,
             String::from_utf8_lossy(&evaluator.io.out).into_owned(),
-            evaluator.live_objects(),
-            evaluator.live_allocations(),
+            balance,
         ))
+    }
+
+    /// The leak fence: everything still live at exit must be owned by the
+    /// result value itself. Test-build policy only — production runs
+    /// return early. When the result footprint is inexact
+    /// (`RunBalance::result_exact` false: the result holds a raw buffer
+    /// whose contents the walk can't see through, e.g. an
+    /// array-of-Strings), the counts are a lower bound, so the leak
+    /// equality would fire spuriously; only the negative-balance
+    /// direction (`live >= result`) is still sound to assert.
+    fn assert_balance(&self, balance: &crate::vm::interp::RunBalance, engine: &str) {
+        if !cfg!(test) {
+            return;
+        }
+        if !balance.result_exact {
+            assert!(
+                balance.live_objects >= balance.result_objects,
+                "{engine}: result footprint exceeds live 'heap objects (live {}, result footprint {})",
+                balance.live_objects,
+                balance.result_objects,
+            );
+            assert!(
+                balance.live_allocations >= balance.result_allocations,
+                "{engine}: result footprint exceeds live allocations (live {}, result footprint {})",
+                balance.live_allocations,
+                balance.result_allocations,
+            );
+            return;
+        }
+        assert_eq!(
+            balance.live_objects,
+            balance.result_objects,
+            "{engine}: {} 'heap objects leaked (live {}, result footprint {})",
+            balance.live_objects - balance.result_objects,
+            balance.live_objects,
+            balance.result_objects,
+        );
+        assert_eq!(
+            balance.live_allocations,
+            balance.result_allocations,
+            "{engine}: {} allocations leaked (live {}, result footprint {})",
+            balance.live_allocations - balance.result_allocations,
+            balance.live_allocations,
+            balance.result_allocations,
+        );
     }
 
     /// Schedule to bytecode and execute on the VM against host stdio.
@@ -828,26 +889,43 @@ impl Driver<Lowered> {
     pub fn run_vm(&mut self) -> Result<crate::vm::interp::Value, String> {
         let module = self.schedule()?;
         let mut io = crate::vm::io::StdioIO;
-        crate::vm::interp::run(&module, &mut io)
+        self.run_vm_fenced(&module, &mut io)
     }
 
     /// VM run returning (value, captured stdout) — tests and the REPL.
     pub fn run_vm_with_output(&mut self) -> Result<(crate::vm::interp::Value, String), String> {
         let module = self.schedule()?;
         let mut io = crate::vm::io::CaptureIO::default();
-        let value = crate::vm::interp::run(&module, &mut io)?;
+        let value = self.run_vm_fenced(&module, &mut io)?;
         Ok((value, String::from_utf8_lossy(&io.out).into_owned()))
+    }
+
+    /// Every VM run computes the allocation balance at exit (one walk of
+    /// the result footprint — cheap enough for production runs); in test
+    /// builds [`Driver::assert_balance`] asserts it — the VM half of the
+    /// leak fence, symmetrical with [`Driver::eval_with_output`].
+    fn run_vm_fenced(
+        &self,
+        module: &crate::vm::Module,
+        io: &mut dyn crate::vm::io::IO,
+    ) -> Result<crate::vm::interp::Value, String> {
+        let (value, balance) = crate::vm::interp::run_counted(module, io)?;
+        self.assert_balance(&balance, "vm");
+        Ok(value)
     }
 
     /// VM run returning (value, captured stdout, Talk-style rendering of
     /// the value) — the REPL and the playground display the rendering.
+    /// Fenced like [`Driver::run_vm_with_output`] in test builds.
     pub fn run_vm_displayed(
         &mut self,
         names: &crate::vm::interp::ValueNames,
     ) -> Result<(crate::vm::interp::Value, String, String), String> {
         let module = self.schedule()?;
         let mut io = crate::vm::io::CaptureIO::default();
-        let (value, display) = crate::vm::interp::run_displayed(&module, &mut io, names)?;
+        let (value, display, balance) =
+            crate::vm::interp::run_displayed_counted(&module, &mut io, names)?;
+        self.assert_balance(&balance, "vm");
         Ok((
             value,
             String::from_utf8_lossy(&io.out).into_owned(),
