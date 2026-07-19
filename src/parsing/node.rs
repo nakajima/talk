@@ -97,22 +97,24 @@ impl Node {
         }
     }
 
+    pub(crate) fn into_expr(self) -> Result<Expr, crate::parser_error::ParserError> {
+        match self {
+            Node::Expr(expr) => Ok(expr),
+            Node::InlineIRInstruction(instr) => Ok(Expr {
+                id: instr.id,
+                span: instr.span,
+                kind: ExprKind::InlineIR(instr),
+            }),
+            _ => Err(crate::parser_error::ParserError::CannotAssign),
+        }
+    }
+
     #[allow(clippy::panic)]
     pub fn as_expr(self) -> Expr {
-        if let Node::InlineIRInstruction(ref instr) = self {
-            // This feels janky
-            return Expr {
-                id: self.node_id(),
-                span: self.span(),
-                kind: ExprKind::InlineIR(instr.to_owned()),
-            };
+        match self.into_expr() {
+            Ok(expr) => expr,
+            Err(error) => panic!("Node.as_expr() failed: {error}"),
         }
-
-        let Node::Expr(expr) = self else {
-            panic!("Node.as_expr() failed for {self:?}")
-        };
-
-        expr
     }
 
     #[allow(clippy::panic)]

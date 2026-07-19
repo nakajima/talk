@@ -244,7 +244,7 @@ impl<'a> Parser<'a> {
         self.skip_semicolons_and_newlines();
 
         let Some(current) = self.current.clone() else {
-            unreachable!()
+            return Err(ParserError::UnexpectedEndOfInput(None));
         };
 
         // Make sure to update next_root if adding a case here.
@@ -592,7 +592,7 @@ impl<'a> Parser<'a> {
             None
         };
         let default_value = if self.did_match(TokenKind::Equals)? {
-            Some(self.expr()?.as_expr())
+            Some(self.expr()?.into_expr()?)
         } else {
             None
         };
@@ -777,7 +777,7 @@ impl<'a> Parser<'a> {
             None
         };
         let rhs = if self.did_match(TokenKind::Equals)? {
-            Some(self.expr()?.as_expr())
+            Some(self.expr()?.into_expr()?)
         } else {
             None
         };
@@ -1003,7 +1003,7 @@ impl<'a> Parser<'a> {
                 let expr = if self.at_implicit_statement_end() {
                     None
                 } else {
-                    Some(self.expr()?.as_expr())
+                    Some(self.expr()?.into_expr()?)
                 };
                 self.save_meta(tok, |id, span| Stmt {
                     id,
@@ -1075,7 +1075,7 @@ impl<'a> Parser<'a> {
             return self.if_let_match(tok, true);
         }
 
-        let cond = self.condition(ParseContext::If)?;
+        let cond = self.condition(ParseContext::If)?.into_expr()?;
         let body = self.block(BlockContext::If, true)?;
         let alt = if self.did_match(TokenKind::Else)? {
             self.else_block(true)?
@@ -1088,7 +1088,7 @@ impl<'a> Parser<'a> {
             Expr {
                 id,
                 span,
-                kind: ExprKind::If(Box::new(cond.as_expr()), body, alt),
+                kind: ExprKind::If(Box::new(cond), body, alt),
             }
             .into()
         })
@@ -1120,7 +1120,7 @@ impl<'a> Parser<'a> {
 
         if self.peek_is(TokenKind::Let) {
             let match_node = self.if_let_match(tok, false)?;
-            let expr = match_node.as_expr();
+            let expr = match_node.into_expr()?;
             return Ok(Stmt {
                 id: expr.id,
                 span: expr.span,
@@ -1128,7 +1128,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        let cond = self.condition(ParseContext::If)?;
+        let cond = self.condition(ParseContext::If)?.into_expr()?;
         let body = self.block(BlockContext::If, true)?;
 
         if self.did_match(TokenKind::Else)? {
@@ -1136,13 +1136,13 @@ impl<'a> Parser<'a> {
             self.save_meta(tok, |id, span| Stmt {
                 id,
                 span,
-                kind: StmtKind::If(cond.as_expr(), body, Some(alt)),
+                kind: StmtKind::If(cond, body, Some(alt)),
             })
         } else {
             self.save_meta(tok, |id, span| Stmt {
                 id,
                 span,
-                kind: StmtKind::If(cond.as_expr(), body, None),
+                kind: StmtKind::If(cond, body, None),
             })
         }
     }
@@ -1178,7 +1178,7 @@ impl<'a> Parser<'a> {
         let pattern = self.parse_pattern()?;
         self.consume(TokenKind::Equals)?;
         self.push_context(ParseContext::If);
-        let scrutinee = self.expr()?;
+        let scrutinee = self.expr()?.into_expr()?;
         self.pop_context();
         let body = self.block(BlockContext::If, true)?;
 
@@ -1218,10 +1218,7 @@ impl<'a> Parser<'a> {
             Expr {
                 id,
                 span,
-                kind: ExprKind::Match(
-                    Box::new(scrutinee.as_expr()),
-                    vec![pattern_arm, wildcard_arm],
-                ),
+                kind: ExprKind::Match(Box::new(scrutinee), vec![pattern_arm, wildcard_arm]),
             }
             .into()
         })
@@ -1369,7 +1366,7 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Loop)?;
 
         let cond = if !self.peek_is(TokenKind::LeftBrace) {
-            Some(self.condition(ParseContext::Loop)?)
+            Some(self.condition(ParseContext::Loop)?.into_expr()?)
         } else {
             None
         };
@@ -1378,7 +1375,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Stmt {
             id,
             span,
-            kind: StmtKind::Loop(cond.map(|c| c.as_expr()), body),
+            kind: StmtKind::Loop(cond, body),
         })
     }
 
@@ -1390,7 +1387,7 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::In)?;
         self.push_context(ParseContext::For);
         let source_mode = self.arg_mode();
-        let iterable = self.expr()?.as_expr();
+        let iterable = self.expr()?.into_expr()?;
         self.pop_context();
         let mut body = self.block(BlockContext::Loop, true)?;
         if let Some(arg) = body.args.first() {
@@ -1429,11 +1426,11 @@ impl<'a> Parser<'a> {
             });
         }
 
-        let rhs = Box::new(self.expr_with_precedence(Precedence::None)?);
+        let rhs = self.expr_with_precedence(Precedence::None)?.into_expr()?;
         self.save_meta(tok, |id, span| Stmt {
             id,
             span,
-            kind: StmtKind::Return(Some(rhs.as_expr())),
+            kind: StmtKind::Return(Some(rhs)),
         })
     }
 
@@ -1457,7 +1454,7 @@ impl<'a> Parser<'a> {
 
         if self.did_match(TokenKind::LeftParen)? {
             while !(self.did_match(TokenKind::RightParen)? || self.did_match(TokenKind::EOF)?) {
-                binds.push(self.expr()?.as_expr());
+                binds.push(self.expr()?.into_expr()?);
                 self.consume(TokenKind::Comma).ok();
             }
         }
@@ -1786,7 +1783,7 @@ impl<'a> Parser<'a> {
                 self.record_diagnostic(self.expected_token_error(TokenKind::RightBracket));
                 break;
             }
-            items.push(self.expr()?.as_expr());
+            items.push(self.expr()?.into_expr()?);
             self.consume(TokenKind::Comma).ok();
         }
         self.save_meta(tok, |id, span| {
@@ -1804,7 +1801,7 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Match)?;
         self.push_context(ParseContext::Match);
-        let scrutinee = self.expr()?;
+        let scrutinee = self.expr()?.into_expr()?;
         self.pop_context();
 
         if let Err(err) = self.consume(TokenKind::LeftBrace) {
@@ -1813,7 +1810,7 @@ impl<'a> Parser<'a> {
                 Node::Expr(Expr {
                     id,
                     span,
-                    kind: ExprKind::Match(Box::new(scrutinee.as_expr()), vec![]),
+                    kind: ExprKind::Match(Box::new(scrutinee), vec![]),
                 })
             });
         }
@@ -1848,7 +1845,7 @@ impl<'a> Parser<'a> {
             Node::Expr(Expr {
                 id,
                 span,
-                kind: ExprKind::Match(Box::new(scrutinee.as_expr()), arms),
+                kind: ExprKind::Match(Box::new(scrutinee), arms),
             })
         })
     }
@@ -2112,12 +2109,14 @@ impl<'a> Parser<'a> {
         if self.did_match(TokenKind::Equals)? {
             if can_assign {
                 let loc = self.push_source_location();
-                let rhs = self.expr_with_precedence(Precedence::Assignment)?;
+                let rhs = self
+                    .expr_with_precedence(Precedence::Assignment)?
+                    .into_expr()?;
                 return self.save_meta(loc, |id, span| {
                     Stmt {
                         id,
                         span,
-                        kind: StmtKind::Assignment(expr.into(), rhs.as_expr().into()),
+                        kind: StmtKind::Assignment(expr.into(), rhs.into()),
                     }
                     .into()
                 });
@@ -2216,12 +2215,14 @@ impl<'a> Parser<'a> {
         if self.did_match(TokenKind::Equals)? {
             if can_assign {
                 let loc = self.push_source_location();
-                let rhs = self.expr_with_precedence(Precedence::Assignment)?;
+                let rhs = self
+                    .expr_with_precedence(Precedence::Assignment)?
+                    .into_expr()?;
                 return self.save_meta(loc, |id, span| {
                     Node::Stmt(Stmt {
                         id,
                         span,
-                        kind: StmtKind::Assignment(expr.into(), rhs.as_expr().into()),
+                        kind: StmtKind::Assignment(expr.into(), rhs.into()),
                     })
                 });
             } else {
@@ -2237,10 +2238,10 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
         let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
-        let rhs = Box::new(self.expr_with_precedence(current_precedence)?);
+        let rhs = self.expr_with_precedence(current_precedence)?.into_expr()?;
 
         Ok(self
-            .add_expr(ExprKind::Unary(op.kind, Box::new(rhs.as_expr())), tok)?
+            .add_expr(ExprKind::Unary(op.kind, Box::new(rhs)), tok)?
             .into())
     }
 
@@ -2266,13 +2267,10 @@ impl<'a> Parser<'a> {
         ])?;
 
         let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
-        let rhs = Box::new(self.expr_with_precedence(current_precedence)?);
+        let rhs = self.expr_with_precedence(current_precedence)?.into_expr()?;
 
         Ok(self
-            .add_expr(
-                ExprKind::Binary(Box::new(lhs), op.kind, Box::new(rhs.as_expr())),
-                tok,
-            )?
+            .add_expr(ExprKind::Binary(Box::new(lhs), op.kind, Box::new(rhs)), tok)?
             .into())
     }
 
@@ -2333,12 +2331,12 @@ impl<'a> Parser<'a> {
             Ok(call_expr.into())
         } else if can_assign && self.did_match(TokenKind::Equals)? {
             let tok = self.push_lhs_location(variable.id);
-            let rhs = self.expr()?;
+            let rhs = self.expr()?.into_expr()?;
             self.save_meta(tok, |id, span| {
                 Stmt {
                     id,
                     span,
-                    kind: StmtKind::Assignment(variable.into(), rhs.as_expr().into()),
+                    kind: StmtKind::Assignment(variable.into(), rhs.into()),
                 }
                 .into()
             })
@@ -2367,7 +2365,9 @@ impl<'a> Parser<'a> {
             return Ok(self.add_expr(ExprKind::Tuple(vec![]), tok)?.into());
         }
 
-        let child = self.expr_with_precedence(Precedence::Assignment)?.as_expr();
+        let child = self
+            .expr_with_precedence(Precedence::Assignment)?
+            .into_expr()?;
 
         if self.did_match(TokenKind::RightParen)? {
             return Ok(self.add_expr(ExprKind::Tuple(vec![child]), tok)?.into());
@@ -2392,7 +2392,10 @@ impl<'a> Parser<'a> {
                 recovered_closer = true;
                 break;
             }
-            items.push(self.expr_with_precedence(Precedence::Assignment)?.as_expr());
+            items.push(
+                self.expr_with_precedence(Precedence::Assignment)?
+                    .into_expr()?,
+            );
             if !self.did_match(TokenKind::Comma)? {
                 break;
             }
@@ -2441,7 +2444,7 @@ impl<'a> Parser<'a> {
                     lhs = Some(infix(
                         self,
                         precedence.can_assign(),
-                        previous_lhs.as_expr(),
+                        previous_lhs.into_expr()?,
                     )?);
                 }
             } else {
@@ -2474,12 +2477,13 @@ impl<'a> Parser<'a> {
     fn check_as(&mut self, lhs: Node) -> Result<Node, ParserError> {
         if self.did_match(TokenKind::As)? {
             let tok = self.push_lhs_location(lhs.node_id());
+            let lhs = lhs.into_expr()?;
             let rhs = self.type_annotation()?;
             self.save_meta(tok, |id, span| {
                 Expr {
                     id,
                     span,
-                    kind: ExprKind::As(lhs.as_expr().into(), rhs),
+                    kind: ExprKind::As(lhs.into(), rhs),
                 }
                 .into()
             })
@@ -2773,25 +2777,29 @@ impl<'a> Parser<'a> {
             };
             self.consume(TokenKind::Colon)?;
             let mode = self.arg_mode();
-            let value = self.expr_with_precedence(Precedence::Assignment)?;
+            let value = self
+                .expr_with_precedence(Precedence::Assignment)?
+                .into_expr()?;
             self.save_meta(tok, |id, span| CallArg {
                 id,
                 span,
                 label: label.into(),
                 label_span,
-                value: value.as_expr(),
+                value,
                 mode: mode.map(|(mode, _)| mode),
                 mode_span: mode.map(|(_, span)| span),
             })
         } else {
             let mode = self.arg_mode();
-            let value = self.expr_with_precedence(Precedence::Assignment)?;
+            let value = self
+                .expr_with_precedence(Precedence::Assignment)?
+                .into_expr()?;
             self.save_meta(tok, |id, span| CallArg {
                 id,
                 span,
                 label: Label::Positional(positional_index),
                 label_span: span,
-                value: value.as_expr(),
+                value,
                 mode: mode.map(|(mode, _)| mode),
                 mode_span: mode.map(|(_, span)| span),
             })
@@ -4056,17 +4064,18 @@ impl<'a> Parser<'a> {
 
         tracing::trace!("advance {:?}", self.next);
         self.current = self.next.take();
-        // A lexer error ends the token stream; the stored error is
-        // surfaced by parse_with_comments instead of being swallowed.
+        // A lexer error ends the token stream. Keep supplying EOF after
+        // the failure because parser recovery assumes the lexer does so.
+        // parse_with_comments still surfaces the stored lexer error.
         self.next = if self.lexer_error.is_some() {
-            None
+            Some(self.lexer.eof_token())
         } else {
             match self.lexer.next() {
                 Ok(token) => Some(token),
                 Err(error) => {
                     let (line, col) = self.lexer.line_col();
                     self.lexer_error = Some((error, line, col));
-                    None
+                    Some(self.lexer.eof_token())
                 }
             }
         };

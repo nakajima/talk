@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use crate::{
     analysis::{Diagnostic, DocumentInput, Workspace, completion::complete_in_workspace},
+    diagnostic::AnyDiagnostic,
     lexer::Lexer,
     node_id::FileID,
     parser::Parser,
-    parser_error::ParserError,
     token_kind::TokenKind,
 };
 
@@ -395,7 +395,15 @@ impl<'a> ReplInput<'a> {
     fn needs_more_input(&self) -> bool {
         let lexer = Lexer::new(self.source);
         let parser = Parser::new(REPL_DOCUMENT_ID, FileID(0), lexer);
-        matches!(parser.parse(), Err(ParserError::UnexpectedEndOfInput(_)))
+        match parser.parse() {
+            Err(error) => error.is_incomplete_input(),
+            Ok((_, diagnostics)) => diagnostics.iter().any(|diagnostic| {
+                matches!(
+                    diagnostic,
+                    AnyDiagnostic::Parsing(diagnostic) if diagnostic.kind.is_incomplete_input()
+                )
+            }),
+        }
     }
 
     fn is_declaration(&self) -> bool {
@@ -506,6 +514,13 @@ mod tests {
         let result = session.eval("func add_one(x) {\n  x + 1\n}");
         assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
         assert!(session.persistent_source().contains("add_one"));
+    }
+
+    #[test]
+    fn open_function_body_requests_more_input() {
+        let session = session();
+        assert!(session.needs_more_input("func fizz(name) {"));
+        assert!(!session.needs_more_input("func fizz(name) {\n  name\n}"));
     }
 
     #[test]

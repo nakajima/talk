@@ -562,6 +562,16 @@ impl<'a> Lexer<'a> {
         (self.line, self.col)
     }
 
+    pub(crate) fn eof_token(&self) -> Token {
+        Token {
+            kind: TokenKind::EOF,
+            start: self.current,
+            end: self.current,
+            line: self.line,
+            col: self.col,
+        }
+    }
+
     fn make(&mut self, kind: TokenKind) -> Result<Token, LexerError> {
         Ok(Token {
             kind,

@@ -88,6 +88,22 @@ pub enum ParserError {
 }
 
 impl ParserError {
+    pub(crate) fn is_incomplete_input(&self) -> bool {
+        match self {
+            Self::UnexpectedEndOfInput(_) => true,
+            Self::UnexpectedToken {
+                token: Some(token), ..
+            } => token.kind == TokenKind::EOF,
+            Self::Lexer { error, .. } => matches!(
+                error,
+                LexerError::UnexpectedEOF
+                    | LexerError::UnterminatedCharacterLiteral
+                    | LexerError::UnterminatedString
+            ),
+            _ => false,
+        }
+    }
+
     pub fn code(&self) -> &'static str {
         match self {
             Self::Lexer { .. } => "parser.lexer",

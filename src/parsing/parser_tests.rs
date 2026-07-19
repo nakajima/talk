@@ -248,6 +248,20 @@ pub mod tests {
     }
 
     #[test]
+    fn lexer_error_inside_function_is_reported_without_panicking() {
+        use crate::{lexer::LexerError, parser_error::ParserError};
+        let lexer = Lexer::new("func fizz(name) {\n#");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(matches!(
+            parser.parse(),
+            Err(ParserError::Lexer {
+                error: LexerError::UnexpectedInput('#'),
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn handles_semicolons() {
         let parsed = parse("123 ; 456");
         assert!(matches!(
@@ -5119,5 +5133,12 @@ pub mod tests {
             result.is_err(),
             "expected parse error for assignment in if condition"
         );
+    }
+
+    #[test]
+    fn assignment_in_array_does_not_panic() {
+        let lexer = Lexer::new("[x = 1]");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(parser.parse().is_err());
     }
 }
