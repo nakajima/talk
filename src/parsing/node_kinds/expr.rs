@@ -46,6 +46,9 @@ pub enum ExprKind {
     Binary(Box<Expr>, #[drive(skip)] TokenKind, Box<Expr>),
     Tuple(Vec<Expr>),
     Block(Block),
+    /// A lexical acknowledgement of the compiler-known `'unsafe` effect.
+    /// Unlike `@handle`, this installs no runtime handler.
+    Unsafe(Block),
     Call {
         callee: Box<Expr>,
         type_args: Vec<TypeAnnotation>,
@@ -100,6 +103,7 @@ impl ExprKind {
             // matters when it comes to generalization.
             ExprKind::If(..)
             | ExprKind::Block(..)
+            | ExprKind::Unsafe(..)
             | ExprKind::Match(..)
             | ExprKind::Call { .. }
             | ExprKind::Unary(..)

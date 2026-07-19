@@ -496,6 +496,7 @@ impl<'a> Formatter<'a> {
             ExprKind::Binary(lhs, op, rhs) => self.format_binary(lhs, op, rhs),
             ExprKind::Tuple(items) => self.format_tuple(items),
             ExprKind::Block(block) => self.format_block(block),
+            ExprKind::Unsafe(block) => text("@unsafe ") + self.format_block(block),
             ExprKind::Call {
                 callee,
                 type_args,

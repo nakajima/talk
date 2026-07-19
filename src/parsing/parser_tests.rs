@@ -195,6 +195,31 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_unsafe_block_expr() {
+        let parsed = parse("@unsafe { 123 }");
+
+        assert!(matches!(
+            &parsed.roots[0],
+            Node::Stmt(Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::Unsafe(Block { body, .. }),
+                    ..
+                }),
+                ..
+            }) if matches!(
+                body.as_slice(),
+                [Node::Stmt(Stmt {
+                    kind: StmtKind::Expr(Expr {
+                        kind: ExprKind::LiteralInt(_),
+                        ..
+                    }),
+                    ..
+                })]
+            )
+        ));
+    }
+
+    #[test]
     fn parses_string_literal() {
         let parsed = parse("\"hello world\"");
         assert!(matches!(

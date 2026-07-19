@@ -250,6 +250,7 @@ impl TypedTreeBuilder<'_> {
                 typed_ast::ExprKind::Tuple(items.iter().map(|i| self.expr(i)).collect())
             }
             expr::ExprKind::Block(block) => typed_ast::ExprKind::Block(self.block(block)),
+            expr::ExprKind::Unsafe(block) => typed_ast::ExprKind::Unsafe(self.block(block)),
             expr::ExprKind::Call {
                 callee,
                 type_args,

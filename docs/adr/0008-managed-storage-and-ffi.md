@@ -88,7 +88,8 @@ surface pieces:
 The raw-pointer storage implementation is still temporary. `RawPtr`
 remains visible in core storage, arrays, strings, and IO internals, but
 safe user sources cannot mention raw pointer types or inline IR unless
-the source opts into the unsafe boundary with `// unsafe`.
+the operation is covered by the intrinsic `'unsafe` effect, usually discharged
+lexically with `@unsafe { ... }`.
 
 ## Source Model
 
@@ -245,7 +246,7 @@ capture, it rejects the program instead of inferring an implicit heap box
 or reference count. Borrowed values should not be storable in owned heap
 data until the lifetime model is explicit enough to describe that
 soundly. Safe sources also reject `RawPtr` and inline IR; raw pointer
-tests and low-level examples must opt into `// unsafe`. The evaluator and
+tests and low-level examples must scope those operations with `@unsafe`. The evaluator and
 VM now track allocation records, reject double-free and use-after-free,
 and treat frees of static storage as no-ops. Drop lowering uses dynamic
 flags for conditional/open obligations so it can free more paths without
@@ -371,8 +372,8 @@ It also avoids reference counting everywhere. The preferred order is:
 1. Done: rename the current core allocation effect from `'heap` to
    `'alloc(allocation: Allocation)`.
 2. Done for the safe boundary: keep the existing raw pointer
-   implementation for core and `// unsafe` sources, while rejecting
-   `RawPtr` and inline IR in safe sources.
+   implementation for core and intrinsic `'unsafe` contexts, while rejecting
+   `RawPtr` and inline IR in safe contexts.
 3. In progress: introduce safe storage and view types. `Storage`,
    `ByteStorage`, and `Substring` exist, but low-level core internals
    still use `RawPtr`.
@@ -393,6 +394,6 @@ It also avoids reference counting everywhere. The preferred order is:
    double-free/use-after-free, and leave static storage frees as no-ops.
    Retain/release accounting is not implemented.
 9. Not started: add unsafe FFI pointer lending APIs.
-10. In progress: safe sources are gated away from `RawPtr`; replacing
-    the remaining `// unsafe` raw APIs with safe array, IO, and FFI
-    wrappers is still outstanding.
+10. In progress: safe contexts are gated away from `RawPtr`; replacing
+    the remaining `'unsafe` raw APIs with safe array, IO, and FFI wrappers
+    is still outstanding.

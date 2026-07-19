@@ -15,8 +15,35 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         reason: CtReason,
     ) -> Ty {
         let ty = self.infer_expr_kind(expr, ctx, reason);
+        if self.module_id != ModuleId::Core
+            && (matches!(expr.kind, ExprKind::InlineIR(_)) || Self::mentions_raw_ptr(&ty))
+        {
+            self.require_unsafe(expr.id, ctx);
+        }
         self.artifacts.node_types.insert(expr.id, ty.clone());
         ty
+    }
+
+    /// Add the intrinsic compile-time capability to this expression's
+    /// ambient row. It has no catalog operation and cannot be performed.
+    fn require_unsafe(&mut self, node: NodeID, ctx: &Ctx) {
+        let tail = self.store.fresh_eff(self.level, node);
+        self.emit_eff_eq(
+            EffectRow {
+                effects: vec![EffectEntry::label(Symbol::Unsafe)],
+                tail: Some(EffTail::Var(tail)),
+            },
+            ctx.eff.clone(),
+            node,
+        );
+    }
+
+    fn mentions_raw_ptr(ty: &Ty) -> bool {
+        ty.try_visit(&mut |item| match item {
+            Ty::Nominal(symbol, _) if *symbol == Symbol::RawPtr => ControlFlow::Break(()),
+            _ => ControlFlow::Continue(()),
+        })
+        .is_break()
     }
 
     /// Checking mode: push the expected type inward where syntax allows
@@ -68,6 +95,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 reason,
             );
             return;
+        }
+
+        if self.module_id != ModuleId::Core && Self::mentions_raw_ptr(expected) {
+            self.require_unsafe(expr.id, ctx);
         }
 
         match &expr.kind {
@@ -169,6 +200,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             }
             ExprKind::Block(block) => {
                 self.check_block_value(block, expected, ctx);
+                self.artifacts.node_types.insert(expr.id, expected.clone());
+            }
+            ExprKind::Unsafe(block) => {
+                let inner = self.enter_effect_mask(ctx, Symbol::Unsafe, expr.id);
+                self.check_block_value(block, expected, &inner);
                 self.artifacts.node_types.insert(expr.id, expected.clone());
             }
             ExprKind::If(..) => {
@@ -668,6 +704,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             ExprKind::Variable(name) => self.lookup(name, expr.id),
 
             ExprKind::Block(block) => self.infer_block_value(block, ctx),
+            ExprKind::Unsafe(block) => {
+                let inner = self.enter_effect_mask(ctx, Symbol::Unsafe, expr.id);
+                self.infer_block_value(block, &inner)
+            }
 
             ExprKind::If(..) => {
                 unreachable!("if expressions are desugared to match before type checking")
@@ -841,6 +881,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let Ok(symbol) = effect_name.symbol() else {
                     return Ty::Error;
                 };
+                if symbol == Symbol::Unsafe {
+                    self.unsupported(
+                        expr.id,
+                        "the intrinsic `'unsafe` effect cannot be performed; use `@unsafe { ... }`",
+                    );
+                    return Ty::Error;
+                }
                 let Some(sig) = self.catalog.effects.get(&symbol).cloned() else {
                     self.unsupported(expr.id, "calling an undeclared effect");
                     return Ty::Error;

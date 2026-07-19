@@ -1,5 +1,4 @@
 // no-core
-// unsafe
 use package::Optional
 use package::Iterable::{ Iterable, Iterator, IntoIterator, IndexIterable, IndexIterator, Skip, Map }
 use package::Memory::{ Storage, _storage, _load, _store, _swap, _is_unique, _retain }

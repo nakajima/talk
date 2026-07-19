@@ -211,7 +211,7 @@ pub mod tests {
             ),
             (
                 "types::types_alloc",
-                "// unsafe\nlet x: RawPtr = __IR(\"$? = alloc int 1\"); x",
+                "@unsafe { let x: RawPtr = __IR(\"$? = alloc int 1\"); x; () }",
                 true,
                 false,
             ),
@@ -2721,6 +2721,64 @@ pub mod tests {
     }
 
     // ----- Milestone 5: effects -----------------------------------------
+
+    #[test]
+    fn inline_ir_infers_the_intrinsic_unsafe_effect() {
+        let t = check("// no-core\nfunc raw() -> Int {\n\t@_ir { %? = add Int 1 2 }\n}");
+        assert_clean(&t);
+        let raw = ty_of(&t, "raw");
+        assert!(
+            raw.contains("'unsafe"),
+            "inline IR should add the intrinsic effect: {raw}"
+        );
+    }
+
+    #[test]
+    fn unsafe_block_masks_the_intrinsic_effect() {
+        let t = check(
+            "// no-core\nfunc safe() -> Int {\n\t@unsafe { @_ir { %? = add Int 1 2 } }\n}\nlet value = safe()",
+        );
+        assert_clean(&t);
+        let safe = ty_of(&t, "safe");
+        assert!(
+            !safe.contains("'unsafe"),
+            "the lexical boundary should discharge the effect: {safe}"
+        );
+    }
+
+    #[test]
+    fn unsafe_file_comment_no_longer_grants_authority() {
+        let t =
+            check("// no-core\n// unsafe\nlet pointer: RawPtr = __IR(\"$? = alloc int 1\")\n()");
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("No handler for 'unsafe")),
+            "the legacy file comment must not bypass the effect: {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn intrinsic_unsafe_cannot_be_performed_or_handled() {
+        let performed = check("// no-core\nfunc bad() { 'unsafe() }");
+        assert!(
+            type_errors(&performed)
+                .iter()
+                .any(|error| error.contains("cannot be performed")),
+            "expected an intrinsic-effect diagnostic: {:?}",
+            type_errors(&performed)
+        );
+
+        let handled = check("// no-core\n@handle 'unsafe { () }");
+        assert!(
+            type_errors(&handled)
+                .iter()
+                .any(|error| error.contains("cannot be handled")),
+            "expected an intrinsic-effect diagnostic: {:?}",
+            type_errors(&handled)
+        );
+    }
 
     #[test]
     fn performed_effects_stay_in_the_row_until_a_handler_extent() {

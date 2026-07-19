@@ -676,8 +676,8 @@ The 13-name tail, argued or open: `rejects_borrowed_global`,
 `rejects_whole_struct_use_after_owned_field_move`, and
 `rejects_function_assigning_a_globally_borrowed_global` (argued:
 donation and static-literal semantics make these programs sound
-here); the raw-pointer pragma pair (needs `// unsafe` source-pragma
-plumbing from driver to backend); `borrowed_marker_struct_cannot_
+here); the raw-pointer pair (now covered by the intrinsic `'unsafe`
+effect and lexical `@unsafe` blocks); `borrowed_marker_struct_cannot_
 escape_its_loan` (loan escape through struct fields);
 `loop_carried_mutable_borrow_lives_until_storage_dead` (loop-carried
 loan liveness); the two handler/trailing-block may-move rejects

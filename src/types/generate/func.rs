@@ -431,6 +431,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// effect, whatever the instantiation (label-scoped elimination —
     /// docs/generic-effects-plan.md).
     fn enter_handler_extent(&mut self, ctx: &Ctx, effect: Symbol, node: NodeID) -> Ctx {
+        self.enter_effect_mask(ctx, effect, node)
+    }
+
+    /// Check a lexical body under an effect that is discharged at the
+    /// boundary. Runtime handlers and compile-time `@unsafe` blocks share
+    /// this row operation, but only handlers lower to runtime machinery.
+    pub(super) fn enter_effect_mask(&mut self, ctx: &Ctx, effect: Symbol, node: NodeID) -> Ctx {
         let inner = EffectRow::open(self.store.fresh_eff(self.level, node));
         self.wanteds.push(Constraint::HandleEffect {
             inner: inner.clone(),

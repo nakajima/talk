@@ -1933,7 +1933,9 @@ impl<'a> ProgramBuilder<'a> {
     fn index_nested_expr(&mut self, expr: &'a Expr, program: usize) {
         match &expr.kind {
             ExprKind::Func(func) => self.index_func(func, program),
-            ExprKind::Block(block) => self.index_nested_funcs(block, program),
+            ExprKind::Block(block) | ExprKind::Unsafe(block) => {
+                self.index_nested_funcs(block, program)
+            }
             ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
                 for item in items {
                     self.index_nested_expr(item, program);
@@ -6211,7 +6213,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     ))
                 }
             }
-            ExprKind::Block(block) => self.compile_block(block),
+            ExprKind::Block(block) | ExprKind::Unsafe(block) => self.compile_block(block),
             ExprKind::Match(scrutinee, arms) => {
                 let value = self.compile_expr(scrutinee)?;
                 let scrutinee_ty = self.resolved(&scrutinee.ty);

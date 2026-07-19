@@ -203,6 +203,7 @@ impl std::fmt::Debug for Symbol {
             Symbol::Never => write!(f, "Never"),
             Symbol::RawPtr => write!(f, "RawPtr"),
             Symbol::Byte => write!(f, "Byte"),
+            Symbol::Unsafe => write!(f, "'unsafe"),
             Symbol::Struct(type_id) => write!(f, "@Struct({type_id:?}){name}"),
             Symbol::Effect(id) => write!(f, "@Effect({id:?}){name}"),
             Symbol::Enum(type_id) => write!(f, "@Enum({type_id:?}{name})"),
@@ -274,6 +275,12 @@ impl Symbol {
     pub const YIELD: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
         local_id: 10,
+    });
+    /// The compile-time-only unsafe capability. It participates in effect
+    /// rows but has no perform operation or runtime handler.
+    pub const Unsafe: Symbol = Symbol::Effect(EffectId {
+        module_id: ModuleId::Core,
+        local_id: u32::MAX,
     });
 
     pub const String: Symbol = Symbol::Struct(StructId {
@@ -644,6 +651,7 @@ impl Display for Symbol {
         match self {
             Symbol::Main => write!(f, "main"),
             Symbol::Library => write!(f, "lib"),
+            symbol if *symbol == Symbol::Unsafe => write!(f, "unsafe"),
             Symbol::Struct(type_id) => write!(f, "{}", type_id),
             Symbol::Enum(type_id) => write!(f, "{}", type_id),
             Symbol::TypeAlias(type_id) => write!(f, "{}", type_id),

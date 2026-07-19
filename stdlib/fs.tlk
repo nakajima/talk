@@ -1,4 +1,4 @@
-// unsafe
+// Unsafe operations are scoped in Directory.entries.
 let _directory_entry_directory = 1
 let _directory_entry_symlink = 3
 
@@ -41,56 +41,58 @@ public struct Directory {
 	let path: Path
 
 	func entries() -> Array<DirectoryEntry> {
-		let path_string = self.path.to_string()
-		let path_buf = _alloc<Byte>(path_string.byte_count + 1)
-		_copy(path_string.storage.base, path_buf, path_string.byte_count)
+		@unsafe {
+			let path_string = self.path.to_string()
+			let path_buf = _alloc<Byte>(path_string.byte_count + 1)
+			_copy(path_string.storage.base, path_buf, path_string.byte_count)
 
-		let real_count = _io_dir_count(path_buf)
-		if real_count < 0 {
-			_free(path_buf)
-			return []
-		}
-
-		let capacity = real_count
-		let storage = _storage<DirectoryEntry>(capacity)
-
-		let i = 0
-		let out = 0
-
-		loop i < real_count {
-			let name_len = _io_dir_entry_len(path_buf, i)
-			if name_len < 0 {
-				break
+			let real_count = _io_dir_count(path_buf)
+			if real_count < 0 {
+				_free(path_buf)
+				return []
 			}
 
-			let name_buf = _alloc<Byte>(name_len)
-			let copied = _io_dir_entry_copy(path_buf, i, name_buf)
-			if copied < 0 {
-				_free(name_buf)
-				break
-			}
+			let capacity = real_count
+			let storage = _storage<DirectoryEntry>(capacity)
 
-			let name = String(name_buf, copied, copied)
-			let entry_path = self.path.appending(name)
-			let kind = _io_dir_entry_kind(path_buf, i)
+			let i = 0
+			let out = 0
 
-			if kind == _directory_entry_directory { storage.set(
-				out,
-				DirectoryEntry.directory(Directory(path: entry_path))
-			) } else {
-				if kind == _directory_entry_symlink { storage.set(
-					out,
-					DirectoryEntry.symlink(entry_path)
-				) } else {
-					storage.set(out, DirectoryEntry.file(FsFile(path: entry_path)))
+			loop i < real_count {
+				let name_len = _io_dir_entry_len(path_buf, i)
+				if name_len < 0 {
+					break
 				}
-			}
-			i = i + 1
-			out = out + 1
-		}
 
-		_free(path_buf)
-		Array<DirectoryEntry>(storage: storage, count: out, capacity: capacity)
+				let name_buf = _alloc<Byte>(name_len)
+				let copied = _io_dir_entry_copy(path_buf, i, name_buf)
+				if copied < 0 {
+					_free(name_buf)
+					break
+				}
+
+				let name = String(name_buf, copied, copied)
+				let entry_path = self.path.appending(name)
+				let kind = _io_dir_entry_kind(path_buf, i)
+
+				if kind == _directory_entry_directory { storage.set(
+					out,
+					DirectoryEntry.directory(Directory(path: entry_path))
+				) } else {
+					if kind == _directory_entry_symlink { storage.set(
+						out,
+						DirectoryEntry.symlink(entry_path)
+					) } else {
+						storage.set(out, DirectoryEntry.file(FsFile(path: entry_path)))
+					}
+				}
+				i = i + 1
+				out = out + 1
+			}
+
+			_free(path_buf)
+			Array<DirectoryEntry>(storage: storage, count: out, capacity: capacity)
+		}
 	}
 
 	func walk(fn: (&DirectoryEntry) -> ()) {

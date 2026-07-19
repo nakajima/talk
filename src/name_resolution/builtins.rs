@@ -9,4 +9,5 @@ pub fn import_builtins(scope: &mut Scope) {
     scope.types.insert("RawPtr".into(), Symbol::RawPtr);
     scope.types.insert("__IR".into(), Symbol::IR);
     scope.types.insert("Byte".into(), Symbol::Byte);
+    scope.values.insert("unsafe".into(), Symbol::Unsafe);
 }

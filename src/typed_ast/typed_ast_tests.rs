@@ -57,7 +57,7 @@ fn collect_expr(e: &typed_ast::Expr, ids: &mut Vec<NodeID>) {
         K::LiteralArray(xs) | K::Tuple(xs) | K::Con { args: xs, .. } => {
             xs.iter().for_each(|x| collect_expr(x, ids))
         }
-        K::Block(b) => collect_block(b, ids),
+        K::Block(b) | K::Unsafe(b) => collect_block(b, ids),
         K::Call {
             callee,
             args,

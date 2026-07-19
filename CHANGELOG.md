@@ -9,6 +9,10 @@ while fixing several type-checker and lexer correctness bugs.
 
 ### Added
 
+- **Lexical unsafe boundaries.** Raw-pointer expressions and `@_ir` now carry
+  the compiler-known `'unsafe` effect. `@unsafe { ... }` discharges it
+  lexically without installing a runtime handler, replacing the file-wide
+  `// unsafe` pragma.
 - **Talk source tests run with the Rust test suite.** `cargo test` now invokes
   `talk test` from the repository root so checked-in `.test.tlk` tests cannot
   be omitted from CI.

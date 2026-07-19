@@ -254,6 +254,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             StmtKind::Handling {
                 effect_name, body, ..
             } => {
+                if effect_name.symbol() == Ok(Symbol::Unsafe) {
+                    self.unsupported(
+                        stmt.id,
+                        "the intrinsic `'unsafe` effect cannot be handled; use `@unsafe { ... }`",
+                    );
+                    return StmtValue::Unit;
+                }
                 // Handler block parameters take the effect's declared
                 // parameter types; unannotated effect parameters are refined
                 // by the perform sites that route to this handler.
@@ -420,7 +427,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             ExprKind::Binary(lhs, _, rhs) => {
                 Self::expr_breaks_current_loop(lhs) || Self::expr_breaks_current_loop(rhs)
             }
-            ExprKind::Block(block) => Self::block_breaks_current_loop(block),
+            ExprKind::Block(block) | ExprKind::Unsafe(block) => {
+                Self::block_breaks_current_loop(block)
+            }
             ExprKind::Call {
                 callee,
                 args,
@@ -545,7 +554,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 Self::expr_exits_mut_iteration(lhs, loop_depth)
                     || Self::expr_exits_mut_iteration(rhs, loop_depth)
             }
-            ExprKind::Block(block) => Self::block_exits_mut_iteration(block, loop_depth),
+            ExprKind::Block(block) | ExprKind::Unsafe(block) => {
+                Self::block_exits_mut_iteration(block, loop_depth)
+            }
             ExprKind::Call {
                 callee,
                 args,

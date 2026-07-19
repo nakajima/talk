@@ -1445,6 +1445,16 @@ impl<'a> Parser<'a> {
         if attr == "_ir" {
             return self.inline_ir(tok);
         }
+        if attr == "unsafe" {
+            let block = self.block(BlockContext::None, true)?;
+            return self.save_meta(tok, |id, span| {
+                Node::Expr(Expr {
+                    id,
+                    span,
+                    kind: ExprKind::Unsafe(block),
+                })
+            });
+        }
 
         Err(ParserError::CannotAssign) //TODO
     }
@@ -3400,7 +3410,9 @@ impl<'a> Parser<'a> {
             .into_iter()
             .flatten()
             .max(),
-            ExprKind::Block(block) => Self::max_positional_block_arg(block),
+            ExprKind::Block(block) | ExprKind::Unsafe(block) => {
+                Self::max_positional_block_arg(block)
+            }
             ExprKind::Call { callee, args, .. } => {
                 std::iter::once(Self::max_positional_block_arg_in_expr(callee))
                     .chain(

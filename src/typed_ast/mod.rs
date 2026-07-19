@@ -125,6 +125,9 @@ pub enum ExprKind {
     Lit(#[drive(skip)] Literal),
     Tuple(Vec<Expr>),
     Block(Block),
+    /// A lexical compile-time unsafe boundary. Lowering executes its body
+    /// as an ordinary block; the marker remains for validation.
+    Unsafe(Block),
     Call {
         callee: Box<Expr>,
         #[drive(skip)]

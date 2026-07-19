@@ -715,7 +715,7 @@ const STDIN_NAME: &str = "<stdin>";
 #[cfg(feature = "cli")]
 const LLM_REFERENCE: &str = r#"# Talk language reference for LLMs
 
-Talk is a statically typed, Swift-flavored language with local type inference, generics, protocols, algebraic effects, and value-semantics aggregates. This build compiles and executes programs through a register-bytecode backend, with ownership checking (implicit sharing: consumes retain when a value has later uses; exclusivity, linearity, and the `// unsafe` gate remain static errors). Files normally use `.tlk`; core library files live in `core/` and are implicitly imported unless a file starts with `// no-core`.
+Talk is a statically typed, Swift-flavored language with local type inference, generics, protocols, algebraic effects, and value-semantics aggregates. This build compiles and executes programs through a register-bytecode backend, with ownership checking (implicit sharing: consumes retain when a value has later uses; exclusivity, linearity, and the intrinsic `'unsafe` effect remain static errors). Files normally use `.tlk`; core library files live in `core/` and are implicitly imported unless a file starts with `// no-core`.
 
 ## CLI
 
@@ -788,7 +788,7 @@ Generics are written with angle brackets: `func id<T>(x: T) -> T`. Simple bounds
 
 Common operators are library-backed or builtin-resolved: arithmetic `+ - * /`, comparison `== != < <= > >=`, boolean values, string concatenation via `+`, member calls, and casts/ascriptions using `as` for protocol existentials where supported. `print(x)` prints Showable-ish values; `sleep(ms)` and I/O live in core effects. The core library defines protocols such as `Showable`, `Add`, `Equatable`, `Iterable`, `Iterator`, `From`, `Into`, `Borrowed`, and `Owner`.
 
-Low-level trusted IR escapes use `@_ir(args...) { ... }` and appear mainly in core. Operations include integer/float math, comparisons, `alloc`, `load`, `store`, `gep`, `copy`, and I/O shims. The type checker trusts the surrounding Talk type; keep `_ir` isolated.
+Low-level trusted IR escapes use `@_ir(args...) { ... }` and appear mainly in core. Operations include integer/float math, comparisons, `alloc`, `load`, `store`, `gep`, `copy`, and I/O shims. Outside core, `_ir` requires the intrinsic `'unsafe` effect; acknowledge and discharge it with a lexical `@unsafe { ... }` block.
 
 ## Effects
 

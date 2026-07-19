@@ -1,16 +1,13 @@
-//! Raw-pointer surface gating, restored from the reference checker:
-//! outside the core module, any expression whose type mentions `RawPtr` —
-//! and any inline IR — is only legal in a source file containing a line
-//! that is exactly `// unsafe`. The gate fails closed before any
-//! ownership analysis runs; it is one of the four error categories the
-//! implicit-sharing decision keeps (docs/ownership-rethink-plan.md).
+//! Raw-pointer surface gating: outside the core module, expressions whose
+//! type mentions `RawPtr` and inline IR require a lexical `@unsafe` block or
+//! a function whose checked effect row contains the intrinsic `'unsafe`
+//! effect. The gate fails closed before ownership analysis runs.
 
 use std::ops::ControlFlow;
 
 use super::{BackendError, ProgramInput};
-use crate::compiling::driver::Source;
 use crate::name_resolution::symbol::Symbol;
-use crate::typed_ast;
+use crate::typed_ast::{self, Expr, Func};
 use crate::types::ty::Ty;
 
 pub(super) fn check(programs: &[ProgramInput<'_>]) -> Result<(), BackendError> {
@@ -18,11 +15,11 @@ pub(super) fn check(programs: &[ProgramInput<'_>]) -> Result<(), BackendError> {
         if input.module == crate::compiling::module::ModuleId::Core {
             continue;
         }
-        for (source, file) in input.program.files() {
-            if source_allows_unsafe(source) {
-                continue;
-            }
-            let mut visitor = RawPtrVisitor { error: None };
+        for (_, file) in input.program.files() {
+            let mut visitor = UnsafeVisitor {
+                error: None,
+                contexts: vec![0],
+            };
             for root in &file.roots {
                 use derive_visitor::Drive;
                 root.drive(&mut visitor);
@@ -35,41 +32,85 @@ pub(super) fn check(programs: &[ProgramInput<'_>]) -> Result<(), BackendError> {
     Ok(())
 }
 
-/// A source opts into raw pointers with a line that is exactly `// unsafe`.
-fn source_allows_unsafe(source: &Source) -> bool {
-    source
-        .read()
-        .map(|text| text.lines().any(|line| line.trim() == "// unsafe"))
-        .unwrap_or(false)
-}
-
 #[derive(derive_visitor::Visitor)]
-#[visitor(typed_ast::Expr(enter))]
-struct RawPtrVisitor {
+#[visitor(Expr(enter, exit), Func(enter, exit))]
+struct UnsafeVisitor {
     error: Option<BackendError>,
+    // One independent context per function. A nested function does not
+    // inherit an enclosing block's lexical unsafe authority.
+    contexts: Vec<usize>,
 }
 
-impl RawPtrVisitor {
+impl UnsafeVisitor {
+    fn enter_func(&mut self, func: &typed_ast::Func) {
+        let requires_unsafe = matches!(
+            &func.scheme.ty,
+            Ty::Func(_, _, effects)
+                if effects
+                    .effects
+                    .iter()
+                    .any(|entry| entry.effect == Symbol::Unsafe)
+        );
+        self.contexts.push(usize::from(requires_unsafe));
+    }
+
+    fn exit_func(&mut self, _func: &typed_ast::Func) {
+        self.contexts.pop();
+    }
+
     fn enter_expr(&mut self, expr: &typed_ast::Expr) {
-        if self.error.is_some() {
+        if matches!(expr.kind, typed_ast::ExprKind::Unsafe(_)) {
+            // The wrapper itself is checked in the outer context so a raw
+            // pointer cannot escape merely by being the block's result.
+            if self.error.is_none() && !self.allows_unsafe() && mentions_raw_ptr(&expr.ty) {
+                self.raw_ptr_error(expr);
+            }
+            *self
+                .contexts
+                .last_mut()
+                .expect("unsafe visitor always has a context") += 1;
             return;
         }
-        if let typed_ast::ExprKind::InlineIR(_) = &expr.kind {
+
+        if self.error.is_some() || matches!(expr.kind, typed_ast::ExprKind::Func(_)) {
+            return;
+        }
+        if self.allows_unsafe() {
+            return;
+        }
+        if matches!(expr.kind, typed_ast::ExprKind::InlineIR(_)) {
             self.error = Some(BackendError::new(
-                "inline IR is only available in core or sources marked '// unsafe'".into(),
+                "inline IR requires `@unsafe { ... }` or an enclosing `'unsafe` function".into(),
                 expr.span,
             ));
             return;
         }
         if mentions_raw_ptr(&expr.ty) {
-            self.error = Some(BackendError::new(
-                format!(
-                    "`{}` is only available in core or sources marked '// unsafe'",
-                    expr.ty.render_mono()
-                ),
-                expr.span,
-            ));
+            self.raw_ptr_error(expr);
         }
+    }
+
+    fn exit_expr(&mut self, expr: &typed_ast::Expr) {
+        if matches!(expr.kind, typed_ast::ExprKind::Unsafe(_)) {
+            *self
+                .contexts
+                .last_mut()
+                .expect("unsafe visitor always has a context") -= 1;
+        }
+    }
+
+    fn allows_unsafe(&self) -> bool {
+        self.contexts.last().is_some_and(|depth| *depth > 0)
+    }
+
+    fn raw_ptr_error(&mut self, expr: &typed_ast::Expr) {
+        self.error = Some(BackendError::new(
+            format!(
+                "`{}` requires `@unsafe {{ ... }}` or an enclosing `'unsafe` function",
+                expr.ty.render_mono()
+            ),
+            expr.span,
+        ));
     }
 }
 

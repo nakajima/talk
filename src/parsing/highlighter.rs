@@ -521,7 +521,7 @@ impl<'a> Higlighter<'a> {
                 ExprKind::Tuple(items) => {
                     result.extend(self.tokens_from_exprs(items, ast));
                 }
-                ExprKind::Block(block) => {
+                ExprKind::Block(block) | ExprKind::Unsafe(block) => {
                     result.extend(self.tokens_from_exprs(&block.body, ast));
                 }
                 ExprKind::Call {

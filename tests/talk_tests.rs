@@ -1359,7 +1359,7 @@ fn run_performs_ambient_io_operations() {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("talk-io-{}-{unique}.txt", std::process::id()));
     let source = format!(
-        "// unsafe\n\
+        "@unsafe {{\n\
          let ok = sleep(0)\n\
          let fd = open_path(\"{}\", O_WRONLY + O_CREAT + O_TRUNC, S_IRUSR + S_IWUSR)\n\
          write_string(fd, \"hello\")\n\
@@ -1369,7 +1369,8 @@ fn run_performs_ambient_io_operations() {
          let count = _io_read(rfd, buf, 8)\n\
          _io_close(rfd)\n\
          _free(buf)\n\
-         print(count)\n",
+         print(count)\n\
+         }}\n",
         path.display(),
         path.display()
     );

@@ -771,6 +771,15 @@ impl NameResolver {
         Some(Name::Resolved(symbol, name.name_str()))
     }
 
+    /// The intrinsic effect is reserved independently of ordinary value
+    /// shadowing, so a local named `unsafe` cannot change effect syntax.
+    fn lookup_effect(&mut self, name: &Name) -> Option<Name> {
+        if name.name_str() == "unsafe" {
+            return Some(Name::Resolved(Symbol::Unsafe, "unsafe".into()));
+        }
+        self.lookup(name)
+    }
+
     pub(super) fn diagnostic(&mut self, id: NodeID, err: NameResolverError) {
         self.diagnostics.insert(Diagnostic::<NameResolverError> {
             kind: err,
@@ -1246,7 +1255,7 @@ impl NameResolver {
 
         if let TypeAnnotationKind::Func { effects, .. } = &mut ty.kind {
             for name in effects.names.iter_mut() {
-                let Some(resolved_name) = self.lookup(name) else {
+                let Some(resolved_name) = self.lookup_effect(name) else {
                     self.diagnostic(ty.id, NameResolverError::Unresolved(name.clone()));
                     continue;
                 };
@@ -1323,7 +1332,7 @@ impl NameResolver {
         }
 
         on!(&mut stmt.kind, StmtKind::Handling { effect_name, .. }, {
-            let Some(Name::Resolved(effect_sym, _)) = self.lookup(effect_name) else {
+            let Some(Name::Resolved(effect_sym, _)) = self.lookup_effect(effect_name) else {
                 self.diagnostic(stmt.id, NameResolverError::Unresolved(effect_name.clone()));
                 return;
             };
@@ -1462,7 +1471,7 @@ impl NameResolver {
         });
 
         on!(&mut expr.kind, ExprKind::CallEffect { effect_name, .. }, {
-            let Some(resolved_name) = self.lookup(effect_name) else {
+            let Some(resolved_name) = self.lookup_effect(effect_name) else {
                 self.diagnostic(
                     expr.id,
                     NameResolverError::UndefinedName(effect_name.name_str()),
@@ -1528,7 +1537,7 @@ impl NameResolver {
         }
 
         for name in func.effects.names.iter_mut() {
-            let Some(resolved_name) = self.lookup(name) else {
+            let Some(resolved_name) = self.lookup_effect(name) else {
                 self.diagnostic(func.id, NameResolverError::Unresolved(name.clone()));
                 continue;
             };

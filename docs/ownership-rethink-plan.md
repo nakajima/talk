@@ -96,10 +96,9 @@ Semantic rules:
    - **Declaration wellformedness.** Borrow-typed fields only in
      `Borrowed`-marked structs, `mut`-marker parameter rules, and the
      other type-shape checks — unchanged.
-   - **The unsafe gate.** `_alloc` and friends only in core or
-     sources marked `// unsafe`. This is a one-pass source
-     classification restored from the reference; it has no interaction
-     with the rest of the design.
+   - **The unsafe gate.** `_alloc` and friends require the intrinsic
+     `'unsafe` effect outside core. A lexical `@unsafe { ... }` block
+     discharges that effect without installing a runtime handler.
 
 The reject pins this retires are a deliberate language change: those
 programs stop being errors and start being valid programs with
