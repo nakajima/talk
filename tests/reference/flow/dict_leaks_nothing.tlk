@@ -1,0 +1,7 @@
+func check() -> Int {
+	let d = Dict<Int>()
+	d.insert("one", 1)
+	d.insert("two", 2)
+	d.count
+}
+check()

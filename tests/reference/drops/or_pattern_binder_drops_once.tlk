@@ -1,0 +1,11 @@
+enum E {
+	case a(String)
+	case b(String)
+}
+func main() -> Int {
+	let e = E.a("x" + "y")
+	match e {
+		.a(s) | .b(s) -> print(s),
+	}
+	0
+}

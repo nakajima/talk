@@ -1,0 +1,14 @@
+enum E {
+	case a
+	case b
+}
+func bad(e: E) -> Int {
+	let s = "hello" + " world"
+	match e {
+		.a -> {
+			let moved = s
+			s.byte_count
+		},
+		.b -> 0
+	}
+}

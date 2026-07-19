@@ -1,0 +1,12 @@
+// Archetype: tight scalar loop — Add/Mul/Div/Cmp with RK constant
+// operands, loop-carried variables, Branch/Jump economics.
+func bench(n: Int) -> Int {
+	let total = 0
+	let i = 0
+	loop i < n {
+		total = total + i * 3 - i / 2
+		i = i + 1
+	}
+	total
+}
+print(bench(1000000))

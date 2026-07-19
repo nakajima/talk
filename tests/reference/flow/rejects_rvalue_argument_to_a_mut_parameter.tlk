@@ -1,0 +1,10 @@
+struct Counter {
+	let count: Int
+}
+func bump(mut c: Counter) -> Int {
+	c.count = c.count + 1
+	c.count
+}
+func f() -> Int {
+	bump(Counter(count: 0))
+}

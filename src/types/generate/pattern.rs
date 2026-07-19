@@ -347,7 +347,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }
                 PatternRefinement::default()
             }
-            PatternKind::LiteralInt(_) => {
+            PatternKind::LiteralInt(source) => {
+                self.check_integer_literal(pattern.id, source);
                 self.emit_eq(
                     expected.clone(),
                     Ty::Nominal(Symbol::Int, vec![]),

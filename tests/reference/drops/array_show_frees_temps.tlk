@@ -1,0 +1,2 @@
+print_raw([1, 2].show())
+print_raw("\n")

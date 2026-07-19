@@ -1,0 +1,6 @@
+func ok() -> Int {
+	let s = "hello" + " world"
+	let borrow: &mut String = s
+	let n = borrow.byte_count
+	s.byte_count + n
+}

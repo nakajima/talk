@@ -54,14 +54,10 @@ pub enum Node {
 
 // ----- Expressions ---------------------------------------------------------
 
-/// Per-expression clone facts. Runtime moves live on checked MIR statements;
-/// expression nodes keep only the CheapClone marker lowering needs when it
-/// lowers an expression value.
+/// Per-expression clone facts selected by type checking.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExprOwnership {
-    /// This use clones instead of moving/borrowing: lowering retains the
-    /// value's buffers (CheapClone). Set by the type checker's borrowed-to-
-    /// owned coercion or the flow checker's borrowed-field extraction.
+    /// This expression contains an explicit clone coercion.
     pub auto_clone: bool,
 }
 
@@ -164,7 +160,7 @@ pub enum ExprKind {
         #[drive(skip)] Label,
         #[drive(skip)] crate::name_resolution::symbol::Symbol,
     ),
-    Func(Func),
+    Func(Box<Func>),
     Variable(#[drive(skip)] Name),
     Constructor(#[drive(skip)] Name),
     Match(Box<Expr>, Vec<MatchArm>),
@@ -482,9 +478,8 @@ pub enum DeclKind {
         #[drive(skip)]
         type_annotation: Option<TypeAnnotation>,
         rhs: Option<Expr>,
-        /// A `consume`/`mut` mark on the binding's source (a `for`
-        /// statement's elaborated hidden-source bind): flow checks the
-        /// rhs place with the marker's move semantics.
+        /// A `consume`/`mut` mark on the binding's source, preserved on
+        /// the elaborated hidden-source bind of a `for` statement.
         #[drive(skip)]
         source_mode: Option<crate::node_kinds::call_arg::ArgMode>,
     },

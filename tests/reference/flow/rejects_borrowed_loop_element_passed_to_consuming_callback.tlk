@@ -1,0 +1,8 @@
+enum Entry {
+	case doc(String)
+}
+func drain(entries: Array<Entry>, fn: (consume Entry) -> ()) {
+	for entry in entries {
+		fn(entry)
+	}
+}

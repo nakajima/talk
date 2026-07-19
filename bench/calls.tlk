@@ -1,0 +1,10 @@
+// Archetype: call machinery — recursion depth, frame pool, argument
+// passing, return delivery. fib touches almost nothing but calls.
+func fib(n: Int) -> Int {
+	if n < 2 {
+		n
+	} else {
+		fib(n - 1) + fib(n - 2)
+	}
+}
+print(fib(26))

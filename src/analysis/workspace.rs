@@ -33,11 +33,9 @@ pub struct Workspace {
     pub texts: Vec<String>,
     pub asts: Vec<Option<AST<NameResolved>>>,
     pub resolved_names: crate::name_resolution::name_resolver::ResolvedNames,
-    /// The checker's output tables (node types, schemes) — hover reads
+    /// The checker's output tables (node types, schemes) - hover reads
     /// them.
     pub types: crate::types::TypeOutput,
-    /// Move, borrow, and drop facts from the flow checker (editor product).
-    pub flow: crate::flow::FlowFacts,
     pub diagnostics: FxHashMap<DocumentId, Vec<Diagnostic>>,
     pub stdlib_module_ids: FxHashMap<ModuleId, String>,
 }
@@ -171,9 +169,6 @@ impl Workspace {
         let typed = resolved.type_check();
         let Driver { phase, .. } = typed;
         let (resolved_names, types) = phase.program.into_semantic_parts();
-        // The flow checker's editor facts: moves, borrows, drops — no
-        // second ownership walk.
-        let flow = phase.flow;
         let diagnostics_any = phase.diagnostics;
 
         let _symbol_guard = set_symbol_names(resolved_names.symbol_names.clone());
@@ -239,7 +234,6 @@ impl Workspace {
             asts,
             resolved_names,
             types,
-            flow,
             diagnostics,
             stdlib_module_ids,
         })
@@ -434,7 +428,6 @@ impl Workspace {
             // Name resolution only: the core workspace exists for symbol
             // rendering, not hover.
             types: Default::default(),
-            flow: Default::default(),
             diagnostics: FxHashMap::default(),
             stdlib_module_ids: FxHashMap::default(),
         })
@@ -493,7 +486,6 @@ impl Workspace {
             asts,
             resolved_names,
             types: Default::default(),
-            flow: Default::default(),
             diagnostics: FxHashMap::default(),
             stdlib_module_ids: FxHashMap::default(),
         })
@@ -576,14 +568,6 @@ pub(crate) fn diagnostic_for_any(
             diagnostic.id,
             diagnostic.kind.to_string(),
             DiagnosticKind::Types(diagnostic.kind.clone()),
-            None,
-            false,
-            &diagnostic.severity,
-        ),
-        AnyDiagnostic::Ownership(diagnostic) => (
-            diagnostic.id,
-            diagnostic.kind.to_string(),
-            DiagnosticKind::Ownership(diagnostic.kind.clone()),
             None,
             false,
             &diagnostic.severity,
@@ -748,29 +732,6 @@ mod tests {
     }
 
     #[test]
-    fn ownership_diagnostics_survive_into_the_workspace() {
-        let text = "let s = \"a\" + \"b\"\nlet t = s\ns.byte_count\n";
-        let docs = vec![DocumentInput {
-            id: "test.tlk".to_string(),
-            path: "test.tlk".to_string(),
-            version: 0,
-            text: text.to_string(),
-        }];
-        let workspace = Workspace::new(docs).expect("workspace");
-        let diagnostics = workspace
-            .diagnostics
-            .get("test.tlk")
-            .cloned()
-            .unwrap_or_default();
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.message.contains("Use of moved value")),
-            "expected ownership diagnostic, got {diagnostics:?}"
-        );
-    }
-
-    #[test]
     fn test_files_are_checked_with_the_test_harness() {
         let path = "example.test.tlk".to_string();
         let workspace = Workspace::new(vec![DocumentInput {
@@ -825,50 +786,6 @@ mod tests {
                 .any(|diagnostic| diagnostic.message.contains("mismatch")),
             "expected the imported file's type error to surface, got {:?}",
             workspace.diagnostics
-        );
-    }
-
-    #[test]
-    fn ownership_diagnostics_survive_unrelated_file_errors() {
-        let bad_text = "func bad() -> Int {\n\ttrue\n}\n";
-        let copy_text = "let thing = \"Pat\"\nlet a = thing\nlet b = thing\nprint(a)\nprint(b)\n";
-        let docs = vec![
-            DocumentInput {
-                id: "bad.tlk".to_string(),
-                path: "bad.tlk".to_string(),
-                version: 0,
-                text: bad_text.to_string(),
-            },
-            DocumentInput {
-                id: "copy.tlk".to_string(),
-                path: "copy.tlk".to_string(),
-                version: 0,
-                text: copy_text.to_string(),
-            },
-        ];
-        let workspace = Workspace::new(docs).expect("workspace");
-        let bad_diagnostics = workspace
-            .diagnostics
-            .get("bad.tlk")
-            .cloned()
-            .unwrap_or_default();
-        assert!(
-            bad_diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.message.contains("Type mismatch")),
-            "expected type diagnostic in bad.tlk, got {bad_diagnostics:?}"
-        );
-
-        let copy_diagnostics = workspace
-            .diagnostics
-            .get("copy.tlk")
-            .cloned()
-            .unwrap_or_default();
-        assert!(
-            copy_diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.message.contains("Use of moved value")),
-            "expected ownership diagnostic in copy.tlk, got {copy_diagnostics:?}"
         );
     }
 }

@@ -1,0 +1,11 @@
+struct Thing {
+	let count: Int
+	let name: String
+}
+
+let thing = Thing(count: 1, name: "Pat")
+let a = thing.name
+let b = thing.name
+
+print(a)
+print(b)

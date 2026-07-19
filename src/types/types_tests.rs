@@ -80,6 +80,38 @@ pub mod tests {
         );
     }
 
+    /// LIT-01: every integer literal must fit the signed 64-bit range, with
+    /// recovery instead of a panic (`docs/backend-parity-ledger.md`).
+    #[test]
+    fn rejects_an_integer_literal_above_the_signed_64_bit_range() {
+        let t = check("// no-core\nlet a = 9_223_372_036_854_775_808");
+        assert_eq!(
+            type_errors(&t),
+            ["Integer literal 9_223_372_036_854_775_808 is outside the signed 64-bit range"]
+        );
+    }
+
+    #[test]
+    fn accepts_the_signed_64_bit_integer_boundaries() {
+        let t = check(
+            "// no-core\nlet lo = -9_223_372_036_854_775_808\nlet hi = 9_223_372_036_854_775_807",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "lo"), "Int");
+        assert_eq!(ty_of(&t, "hi"), "Int");
+    }
+
+    #[test]
+    fn rejects_an_out_of_range_integer_pattern() {
+        let t = check(
+            "// no-core\nfunc f(x: Int) -> Int {\n\tmatch x {\n\t\t9_223_372_036_854_775_808 -> 1,\n\t\t_ -> 0\n\t}\n}",
+        );
+        assert_eq!(
+            type_errors(&t),
+            ["Integer literal 9_223_372_036_854_775_808 is outside the signed 64-bit range"]
+        );
+    }
+
     /// The previous type checker's suite, replayed against this one
     /// (every case dispositioned in docs/parity-test-audit.md; the
     /// handful tied to changed semantics or known gaps are listed
@@ -226,12 +258,11 @@ pub mod tests {
                 true,
                 false,
             ),
-            (
-                "types::types_nested_func",
-                "\n        func fizz(x) {\n            func buzz() { x }\n            buzz()\n        }\n\n        fizz(123)\n        ",
-                true,
-                false,
-            ),
+            // types::types_nested_func moved to docs/parity-test-audit.md's
+            // deliberate-design-changes list: inferred params are borrows
+            // (ownership plan 3.3(b)), and implicit closure captures of
+            // borrowed params are rejected until a capture mode is explicit
+            // — exactly like the annotated twin `func fizz<T>(x: T)`.
             (
                 "types::infers_simple_recursion",
                 "\n        func rec(x, y, z) {\n            if x == y { x } else { rec(y-z, y, z) }\n        }\n\n        rec(0, 2, 1)\n        rec(0.0, 2.0, 1.0)\n        ",
@@ -1288,6 +1319,57 @@ pub mod tests {
         );
     }
 
+    /// B4: an implicit existential pack must not launder a borrow into an
+    /// owned `any P`. A borrow-by-default parameter of a `'linear` type
+    /// packing into an owned existential would escape linearity — the value
+    /// stays consumable at the call site while the pack owns it too.
+    #[test]
+    fn implicit_pack_rejects_borrowed_linear_payload() {
+        let t = check(
+            "// no-core\nprotocol Fd {\n  func fd_value() -> Int\n}\nstruct Socket 'linear {\n\tlet fd: Int\n}\nextend Socket: Fd {\n  func fd_value() -> Int { self.fd }\n}\nfunc pack(s: Socket) -> any Fd {\n\ts\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Socket") && error.contains("&Socket")),
+            "expected borrowed linear payload to be rejected by the implicit pack, got {errors:?}"
+        );
+    }
+
+    /// B4 guard: an owned (consumed) payload still packs implicitly.
+    #[test]
+    fn implicit_pack_accepts_owned_consumed_payload() {
+        let t = check(
+            "// no-core\nprotocol Fd {\n  func fd_value() -> Int\n}\nstruct Socket 'linear {\n\tlet fd: Int\n}\nextend Socket: Fd {\n  func fd_value() -> Int { self.fd }\n}\nfunc pack(consume s: Socket) -> any Fd {\n\ts\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "pack"), "(Socket) -> any Fd");
+    }
+
+    /// B4: packing from a borrowed CheapClone payload compiles by retaining
+    /// (the same tier-2 coercion an owned argument slot gets), recorded for
+    /// lowering at the pack node. Core `String` is CheapClone.
+    #[test]
+    fn implicit_pack_of_borrowed_cheap_clone_payload_records_a_clone() {
+        let t = Driver::new(
+            vec![Source::from(
+                "protocol Sized {\n  func size() -> Int\n}\nextend String: Sized {\n  func size() -> Int { self.byte_count }\n}\nfunc pack(s: String) -> any Sized {\n\ts\n}",
+            )],
+            DriverConfig::new("TypesTest"),
+        )
+        .parse()
+        .expect("parse failed")
+        .resolve_names()
+        .expect("name resolution failed")
+        .type_check();
+        assert_clean(&t);
+        assert!(
+            !t.phase.program.types().coerce_clones.is_empty(),
+            "expected the borrowed CheapClone payload to record a retain for lowering"
+        );
+    }
+
     #[test]
     fn existential_self_conformance_satisfies_superprotocol_bounds() {
         let t = check(
@@ -1416,12 +1498,15 @@ pub mod tests {
     #[test]
     fn identity_generalizes() {
         // Damas-Milner generalization at the top-level binding group:
-        // identity gets a polymorphic scheme, each call site instantiates fresh.
+        // identity gets a polymorphic scheme, each call site instantiates
+        // fresh. The param is a borrow (ADR 0018 borrow-by-default applies
+        // to inferred params too — plan 3.3(b)), so identity returns a
+        // borrow of its argument; Copy instantiations erase the wrap.
         let t = check(
             "// no-core\nfunc identity(x) { x }\nlet a = identity(123)\nlet b = identity(1.5)",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "identity"), "<T0>(T0) -> T0");
+        assert_eq!(ty_of(&t, "identity"), "<T0>(&T0) -> &T0");
         assert_eq!(ty_of(&t, "a"), "Int");
         assert_eq!(ty_of(&t, "b"), "Float");
     }
@@ -1481,7 +1566,7 @@ pub mod tests {
         // happens after.
         let t = check("// no-core\nfunc f(n) { f(n) }");
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "f"), "<T0, T1>(T0) -> T1");
+        assert_eq!(ty_of(&t, "f"), "<T0, T1>(&T0) -> T1");
     }
 
     #[test]
@@ -1490,7 +1575,9 @@ pub mod tests {
         // generalize together (display elides pure/quantified-tail rows).
         let t = check("// no-core\nfunc apply(f) { f() }");
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "apply"), "<T0>(() -> T0) -> T0");
+        // The function-typed param is itself borrowed (calling through the
+        // borrow is a read), matching `func apply<T>(f: () -> T)`.
+        assert_eq!(ty_of(&t, "apply"), "<T0>(&() -> T0) -> T0");
     }
 
     #[test]
@@ -1507,7 +1594,7 @@ pub mod tests {
     fn return_statements_unify_with_return_type() {
         let t = check("// no-core\nfunc f(x) {\n\tif true { return x }\n\treturn x\n}");
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "f"), "<T0>(T0) -> T0");
+        assert_eq!(ty_of(&t, "f"), "<T0>(&T0) -> &T0");
     }
 
     #[test]
@@ -1572,6 +1659,57 @@ pub mod tests {
             !t.phase.program.types().node_types.is_empty(),
             "expected node types to be recorded"
         );
+    }
+
+    /// One authority per type question (ownership-soundness 7.4): binder
+    /// types live in `local_tys` (read via `binder_ty`), and binder NODES
+    /// never get a `node_types` entry — so a per-node fallback for a
+    /// binder can only ever miss, and consumers must not reach for one.
+    #[test]
+    fn binder_types_live_in_local_tys_not_node_types() {
+        use derive_visitor::{Drive, Visitor};
+
+        #[derive(Default)]
+        struct Binders {
+            found: Vec<(
+                crate::node_id::NodeID,
+                crate::name_resolution::symbol::Symbol,
+            )>,
+        }
+        impl Visitor for Binders {
+            fn visit(&mut self, item: &dyn std::any::Any, event: derive_visitor::Event) {
+                if matches!(event, derive_visitor::Event::Enter)
+                    && let Some(pattern) = item.downcast_ref::<crate::typed_ast::Pattern>()
+                {
+                    self.found.extend(pattern.collect_binders());
+                }
+            }
+        }
+
+        let t = check(
+            "// no-core\nenum Maybe<T> {\n\tcase definitely(T)\n\tcase nope\n}\nlet maybe = Maybe.definitely(1234)\nlet result = match maybe {\n\t.definitely(x) -> x,\n\t.nope -> 0\n}",
+        );
+        assert_clean(&t);
+        let types = t.phase.program.types();
+        let mut binders = Binders::default();
+        for file in t.phase.program.files().values() {
+            for root in &file.roots {
+                root.drive(&mut binders);
+            }
+        }
+        assert!(!binders.found.is_empty(), "expected pattern binders");
+        for (id, symbol) in binders.found {
+            assert!(
+                !types.node_types.contains_key(&id),
+                "binder node {id:?} unexpectedly has a node_types entry"
+            );
+            // Local binders resolve through `binder_ty`; top-level binders
+            // through `schemes`.
+            assert!(
+                types.binder_ty(symbol).is_some() || types.schemes.contains_key(&symbol),
+                "binder {symbol:?} resolves through neither binder_ty nor schemes"
+            );
+        }
     }
 
     // ----- Milestone 2: nominals, records, patterns ---------------------
@@ -1769,7 +1907,7 @@ pub mod tests {
             "// no-core\nprotocol Show {\n\tfunc show() -> Int\n}\nfunc showit(x) { x.show() }",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "showit"), "<T0: Show>(T0) -> Int");
+        assert_eq!(ty_of(&t, "showit"), "<T0: Show>(&T0) -> Int");
     }
 
     #[test]
@@ -1782,7 +1920,7 @@ pub mod tests {
             "// no-core\nstruct Box {\n\tlet val: Int\n}\nfunc get(b) { b.val }\nlet r = get(Box(val: 3))",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "get"), "<T0, T1>(T0) -> T1 where T0.val: T1");
+        assert_eq!(ty_of(&t, "get"), "<T0, T1>(&T0) -> T1 where &T0.val: T1");
         assert_eq!(ty_of(&t, "r"), "Int");
     }
 
@@ -1795,7 +1933,7 @@ pub mod tests {
             "// no-core\nprotocol A {\n\tfunc m() -> Int\n}\nprotocol B {\n\tfunc m() -> Int\n}\nfunc f(x) { x.m() }\nextend Int: A {\n\tfunc m() -> Int { 1 }\n}\nlet r = f(2)",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "f"), "<T0, T1>(T0) -> T1 where T0.m: () -> T1");
+        assert_eq!(ty_of(&t, "f"), "<T0, T1>(&T0) -> T1 where &T0.m: () -> T1");
         assert_eq!(ty_of(&t, "r"), "Int");
     }
 
@@ -1860,9 +1998,14 @@ pub mod tests {
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "x"), "Int");
+        // Borrow-by-default params (plan 3.3(b)): `n` is `&T0` and
+        // `return n` makes the result a borrow, so Add's Ret must equal
+        // `&T0`, while Subtract's Ret (fed back into the borrowed param at
+        // the Apply boundary, where the borrow peels) must equal bare
+        // `T0`. Both discharge at Int, where the borrow erases.
         assert_eq!(
             ty_of(&t, "fib"),
-            "<T0: Add<T0> & Comparable<Int> & Subtract<Int>>(T0) -> T0 where T0 == T0.Ret"
+            "<T0: Add<T0> & Comparable<Int> & Subtract<Int>>(&T0) -> &T0 where &T0 == T0.Ret && T0 == T0.Ret"
         );
     }
 
@@ -2073,6 +2216,132 @@ pub mod tests {
     }
 
     #[test]
+    fn mut_mode_on_borrow_annotation_is_a_declaration_site_conflict() {
+        // `func bump(mut c: &Counter)` used to silently drop the `mut`,
+        // leaving the user with contradictory downstream diagnostics.
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet count: Int\n}\nfunc bump(mut c: &Counter) {\n\tc.count\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("mut") && e.contains("already a borrow")),
+            "expected a declaration-site mode/borrow conflict, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn consume_mode_on_borrow_annotation_is_a_declaration_site_conflict() {
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet count: Int\n}\nfunc eat(consume c: &Counter) {\n\tc.count\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("consume") && e.contains("already a borrow")),
+            "expected a declaration-site mode/borrow conflict, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn modeless_borrow_annotation_stays_legal() {
+        // A bare `&T` annotation is the explicit spelling of the borrow
+        // default — no mode keyword, no conflict.
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet count: Int\n}\nfunc read(c: &Counter) -> Int {\n\tc.count\n}",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "read"), "(&Counter) -> Int");
+    }
+
+    #[test]
+    fn inferred_parameters_borrow_by_default() {
+        // Ownership plan 3.3(b): an unannotated param's solved type honors
+        // its stamped `Borrow` mode — `func peek(x)` with `x` solving to
+        // Counter is `func peek(x: Counter)`'s twin (a shared borrow), so
+        // the caller keeps ownership and can reuse the argument.
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet count: Int\n}\nfunc peek(x) -> Int {\n\tx.count\n}\nlet c = Counter(count: 3)\nlet n = peek(c)\nlet m = peek(c)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "n"), "Int");
+        assert_eq!(ty_of(&t, "m"), "Int");
+    }
+
+    #[test]
+    fn inferred_param_scheme_matches_annotated_generic_twin() {
+        // The coherence anchor: `func id(x) { x }` must end up semantically
+        // identical to `func id<T>(x: T) { x }` under borrow-by-default —
+        // borrow in, borrow-derived value out.
+        let inferred = check("// no-core\nfunc id(x) { x }");
+        assert_clean(&inferred);
+        let annotated = check("// no-core\nfunc idg<T>(x: T) { x }");
+        assert_clean(&annotated);
+        assert_eq!(ty_of(&inferred, "id"), "<T0>(&T0) -> &T0");
+        assert_eq!(ty_of(&annotated, "idg"), "<T0>(&T0) -> &T0");
+    }
+
+    #[test]
+    fn inferred_consume_param_stays_owned() {
+        // The stamped mode is the authority: an explicit `consume` on an
+        // unannotated param keeps today's owned-parameter typing.
+        let t = check(
+            "// no-core\nstruct S {}\nfunc eat(consume x) -> Int {\n\t0\n}\nlet s = S()\nlet n = eat(s)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "eat"), "<T0>(T0) -> Int");
+    }
+
+    #[test]
+    fn arithmetic_on_inferred_params_solves_at_int() {
+        // Copy erasure must stay decidable for inferred borrow params:
+        // `&?a` meeting Int erases to Int (the annotated twin's param never
+        // wraps a Copy head at all).
+        let t = check("func add(a, b) {\n\ta + b\n}\nlet r: Int = add(1, 2)");
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn inferred_param_cannot_be_returned_owned() {
+        // Callee-side twin of `func steal(x: Str) -> Str { x }`:
+        // a borrowed parameter cannot be returned as an owned value.
+        let t = check(
+            "// no-core\nstruct Str {}\nfunc steal(x) -> Str {\n\tx\n}\nlet s = Str()\nlet y = steal(s)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Str") && error.contains("&Str")),
+            "expected owned/borrowed mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn inferred_param_member_access_defaults_like_annotated() {
+        // With no caller constraining `x`, the member predicate rides the
+        // scheme and the final solve resolves it exactly as the owned
+        // inference used to — but through a borrowed receiver.
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet count: Int\n}\nfunc peek(x) -> Int {\n\tx.count\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn legacy_borrow_annotation_in_init_position_stays_legal() {
+        // `init` params are stamped `consume` by desugaring; a modeless
+        // legacy `&T` annotation there means "borrow" (ADR 0018 migration
+        // table) and must not report a conflict the user never wrote.
+        let t = check(
+            "// no-core\nstruct Counter {\n\tlet count: Int\n}\nstruct Reader {\n\tlet total: Int\n\tinit(c: &Counter) {\n\t\tself.total = c.count\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
     fn borrow_parameters_auto_borrow_owned_arguments() {
         let t = check(
             "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = len(s)\nlet z = s.length",
@@ -2120,12 +2389,27 @@ pub mod tests {
     }
 
     #[test]
-    fn delayed_auto_borrow_defaults_unresolved_argument_to_owned() {
+    fn delayed_auto_borrow_keeps_inferred_param_borrowed() {
+        // Plan 3.3(b) redefinition of the old owned-default: an inferred
+        // param is a borrow, so feeding it to a borrow slot solves its
+        // payload without any owned defaulting — `f` borrows exactly like
+        // its annotated twin `func f(x: S)`.
+        let t = check("// no-core\nstruct S {}\nfunc take(s: &S) {}\nfunc f(x) {\n\ttake(x)\n}");
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "f"), "(&S) -> ()");
+        // And the old test program — which then returned `x` as an owned
+        // `S` — now reports the annotated twin's mismatch instead of
+        // silently defaulting the param to owned.
         let t = check(
             "// no-core\nstruct S {}\nfunc take(s: &S) {}\nfunc f(x) -> S {\n\ttake(x)\n\tx\n}",
         );
-        assert_clean(&t);
-        assert_eq!(ty_of(&t, "f"), "(S) -> S");
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("S") && error.contains("&S")),
+            "expected owned/borrowed mismatch, got {errors:?}"
+        );
     }
 
     #[test]
@@ -2140,6 +2424,77 @@ pub mod tests {
                 .any(|error| error.contains("String") && error.contains("&String")),
             "expected owned/borrowed mismatch, got {errors:?}"
         );
+    }
+
+    /// S4: a borrow annotation is not an application — an owned rvalue temp
+    /// (a call result) must not satisfy `let x: &T = ...`; the temp would be
+    /// dropped at statement end while the alias lives on.
+    #[test]
+    fn borrow_annotation_rejects_owned_call_rvalue() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc mk() -> String {\n\tString(length: 4)\n}\nfunc use_it() -> Int {\n\tlet x: &String = mk()\n\tx.length\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("String") && error.contains("&String")),
+            "expected owned rvalue to be rejected by a borrow annotation, got {errors:?}"
+        );
+    }
+
+    /// S4, with the core prelude: `String` is CheapClone, but a borrow
+    /// annotation still demands a genuine borrow — CheapClone coercion is an
+    /// application-site (`Apply`) rule only.
+    #[test]
+    fn borrow_annotation_rejects_owned_call_rvalue_with_core_string() {
+        let t = Driver::new(
+            vec![Source::from(
+                "func mk() -> String {\n\t\"temp\" + \" heap string\"\n}\nfunc use_it() -> Int {\n\tlet x: &String = mk()\n\tx.byte_count\n}\nuse_it()",
+            )],
+            DriverConfig::new("TypesTest"),
+        )
+        .parse()
+        .expect("parse failed")
+        .resolve_names()
+        .expect("name resolution failed")
+        .type_check();
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("String") && error.contains("&String")),
+            "expected owned rvalue to be rejected by a borrow annotation, got {errors:?}"
+        );
+    }
+
+    /// S4 guard: annotating a borrow of a local place is the legitimate
+    /// borrow-introduction form and stays accepted.
+    #[test]
+    fn borrow_annotation_still_borrows_local_place() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc use_it() -> Int {\n\tlet s = String(length: 4)\n\tlet x: &String = s\n\tx.length\n}",
+        );
+        assert_clean(&t);
+    }
+
+    /// S4 guard: a field of a local place is a place too.
+    #[test]
+    fn borrow_annotation_still_borrows_field_place() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nstruct Box {\n\tlet value: String\n}\nfunc use_it() -> Int {\n\tlet b = Box(value: String(length: 4))\n\tlet x: &String = b.value\n\tx.length\n}",
+        );
+        assert_clean(&t);
+    }
+
+    /// S4 guard: a borrow-returning call still satisfies a borrow annotation
+    /// (the found type is a genuine borrow; no peel involved).
+    #[test]
+    fn borrow_annotation_accepts_borrow_returning_call() {
+        let t = check(
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc use_it() -> Int {\n\tlet s = String(length: 4)\n\tlet x: &String = id(s)\n\tx.length\n}",
+        );
+        assert_clean(&t);
     }
 
     #[test]
@@ -2354,20 +2709,6 @@ pub mod tests {
                 .iter()
                 .any(|error| error.contains("&mut String") && error.contains("&String")),
             "expected shared/mutable borrow mismatch, got {errors:?}"
-        );
-    }
-
-    #[test]
-    fn shared_method_receiver_cannot_assign_self_field() {
-        let t = check(
-            "// no-core\nstruct Counter {\n\tlet n: Int\n\n\tfunc bump() -> () {\n\t\tself.n = 2\n\t\t()\n\t}\n}",
-        );
-        let errors: Vec<String> = t.diagnostics().iter().map(|d| d.to_string()).collect();
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("Cannot assign through shared borrow 'self'")),
-            "expected shared receiver assignment error, got {errors:?}"
         );
     }
 
@@ -3931,7 +4272,7 @@ mod with_core {
             preserve_comments: false,
             workspace_root: None,
             source_root: None,
-            libraries: vec![],
+            libraries: Vec::new(),
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -3985,7 +4326,7 @@ mod with_core {
             preserve_comments: false,
             workspace_root: None,
             source_root: None,
-            libraries: vec![],
+            libraries: Vec::new(),
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -4048,7 +4389,7 @@ mod with_core {
             preserve_comments: false,
             workspace_root: None,
             source_root: None,
-            libraries: vec![],
+            libraries: Vec::new(),
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -4372,6 +4713,86 @@ mod with_core {
     }
 
     #[test]
+    fn marker_field_check_sees_generic_conformance_row() {
+        // A declared generic marker conformance (`extend Ref<T>: CheapClone`)
+        // is the authority for `Ref<ExprTag>` fields — the field check must
+        // consult the row, not re-derive its own per-argument rule (which
+        // rejected the phantom empty-enum tag).
+        let t = check_with_core(Source::from(
+            "enum ExprTag {}\nenum Ref<T> {\n\tcase expr(Int) -> Ref<ExprTag>\n}\nextend Ref<T>: CheapClone {}\nenum Work {\n\tcase dump(Ref<ExprTag>)\n\tcase text(String)\n}\nextend Work: CheapClone {}",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn marker_field_check_sees_generic_copy_row() {
+        let t = check_with_core(Source::from(
+            "enum ExprTag {}\nenum Ref<T> {\n\tcase expr(Int) -> Ref<ExprTag>\n}\nextend Ref<T>: Copy {}\nstruct Slot {\n\tlet target: Ref<ExprTag>\n}\nextend Slot: Copy {}",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn conditional_marker_conformance_validates_against_its_context() {
+        // The where-clause is the authority for a conditional row's own
+        // field check: `T` satisfies CheapClone because the context says so.
+        let t = check_with_core(Source::from(
+            "struct Box<T> {\n\tlet value: T\n}\nextend Box<T>: CheapClone where T: CheapClone {}\nstruct Holder {\n\tlet inner: Box<String>\n}\nextend Holder: CheapClone {}",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn bare_method_reference_is_a_type_error() {
+        // A method used as a value has no lowering yet; the TYPE CHECKER
+        // owns the rejection — an internal lowering error is not a
+        // diagnostic.
+        let t = check_with_core(Source::from("let f = \"fizz\".add\nprint(f(\"buzz\"))"));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("add")),
+            "expected a method-reference diagnostic, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn method_calls_and_unit_variants_still_resolve() {
+        // The rejection is scoped to bare VALUE-receiver method
+        // references: calls, operator desugars, fields, and type-receiver
+        // members stay legal.
+        let t = check_with_core(Source::from(
+            "let text = \"fizz\" + \"buzz\"\nlet count = text.byte_count\nlet empty: Int? = Optional.none\nprint(text.to_string())\nprint(count)\nmatch empty {\n\t.some(v) -> print(v),\n\t.none -> print(0)\n}",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn conditional_cheap_clone_satisfied_context_extracts_from_borrow() {
+        // The satisfied twin still extracts by silent clone.
+        let t = check_with_core(Source::from(
+            "struct Box<T> {\n\tlet value: T\n}\nextend Box<T>: CheapClone where T: CheapClone {}\nfunc peek(b: &Box<String>?) -> Box<String>? {\n\tmatch b {\n\t\t.some(found) -> Optional.some(found),\n\t\t.none -> Optional.none\n\t}\n}",
+        ));
+        assert!(
+            !t.has_errors(),
+            "expected the satisfied context to extract cleanly"
+        );
+    }
+
+    #[test]
+    fn conditional_marker_conformance_rejects_unsatisfied_context() {
+        // The same row must NOT satisfy a field whose argument fails the
+        // where-clause: Box<NotCheap> is not CheapClone.
+        let t = check_with_core(Source::from(
+            "struct Box<T> {\n\tlet value: T\n}\nextend Box<T>: CheapClone where T: CheapClone {}\nstruct NotCheap {\n\tlet value: String\n}\nstruct Holder {\n\tlet inner: Box<NotCheap>\n}\nextend Holder: CheapClone {}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("CheapClone")),
+            "expected a non-CheapClone-field error, got {errors:?}"
+        );
+    }
+
+    #[test]
     fn linear_struct_rejects_deinit_conformance() {
         // A linear value must be consumed explicitly; an automatic destructor
         // would defeat the point of declaring it linear.
@@ -4383,6 +4804,33 @@ mod with_core {
             errors.iter().any(|e| e.contains("linear")),
             "expected a linear/Deinit conflict error, got {errors:?}"
         );
+    }
+
+    #[test]
+    fn deinit_conformance_rejects_user_effects_in_its_row() {
+        // ADR 0027 (open question 2): drop glue calls deinit hooks through
+        // a fixed signature with no capability parameters, so an effectful
+        // deinit body could never receive its handler — the conformance
+        // must reject a user effect in the hook's row.
+        let t = check_with_core(Source::from(
+            "effect 'noise() -> Void\n@handle 'noise { continue () }\nstruct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\t'noise()\n\t}\n}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Deinit")),
+            "expected a Deinit-row error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn deinit_conformance_accepts_effects_handled_inside_the_body() {
+        // The twin: a deinit body may install its OWN handler and perform
+        // under it — the hook's row stays pure at the conformance
+        // boundary, so drop glue needs no capabilities.
+        let t = check_with_core(Source::from(
+            "effect 'noise() -> Void\nstruct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\t@handle 'noise { continue () }\n\t\t'noise()\n\t}\n}",
+        ));
+        assert_no_errors(&t);
     }
 
     #[test]

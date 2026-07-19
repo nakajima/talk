@@ -1,0 +1,3 @@
+let s = "hello" + " world"
+let record = { value: s }
+s.byte_count

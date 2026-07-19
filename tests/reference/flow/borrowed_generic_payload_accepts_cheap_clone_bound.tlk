@@ -1,0 +1,11 @@
+enum Box2<T> {
+	case full(T)
+}
+func wrap<T: CheapClone>(v: &T) -> Box2<T> {
+	Box2.full(v)
+}
+func main() -> Int {
+	let s = "a" + "b"
+	let b = wrap(s)
+	0
+}

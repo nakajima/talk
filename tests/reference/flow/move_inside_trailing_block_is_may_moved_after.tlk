@@ -1,0 +1,13 @@
+func take(consume s: String) -> Int {
+	s.byte_count
+}
+func run(f: () -> Int) -> Int {
+	f()
+}
+func check() -> Int {
+	let s = "a" + "b"
+	let n = run {
+		take(s)
+	}
+	s.byte_count
+}

@@ -1,13 +1,12 @@
 pub mod completion;
 pub mod definition;
 pub mod hover;
-pub mod ownership;
 pub mod rename;
 pub mod workspace;
 
 use crate::{
-    flow::OwnershipError, name_resolution::name_resolver::NameResolverError, node_id::NodeID,
-    parser_error::ParserError, types::TypeError,
+    name_resolution::name_resolver::NameResolverError, node_id::NodeID, parser_error::ParserError,
+    types::TypeError,
 };
 
 pub type DocumentId = String;
@@ -44,7 +43,6 @@ pub enum DiagnosticKind {
     Parsing(ParserError),
     NameResolution(NameResolverError),
     Types(TypeError),
-    Ownership(OwnershipError),
 }
 
 impl DiagnosticKind {
@@ -54,7 +52,6 @@ impl DiagnosticKind {
             Self::NameResolution(NameResolverError::UndefinedName(_)) => "name.undefined",
             Self::NameResolution(_) => "name.resolution",
             Self::Types(error) => error.code(),
-            Self::Ownership(_) => "ownership.error",
         }
     }
 }
@@ -96,7 +93,6 @@ pub struct CompletionItem {
 
 pub use definition::{Location, goto_definition};
 pub use hover::{Hover, hover_at};
-pub use ownership::{OwnershipInlayHint, OwnershipInlayHintKind, ownership_inlay_hints};
 pub use rename::{DocumentEdit, TextEdit, WorkspaceEdit, rename_at};
 pub use workspace::Workspace;
 

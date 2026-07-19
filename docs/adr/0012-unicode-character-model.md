@@ -1,6 +1,7 @@
 # 0012 — Characters are extended grapheme clusters
 
-Status: implemented (2026-07-03)
+Status: source and frontend semantics implemented (2026-07-03);
+replacement-backend representation accepted in ADR 0033
 
 (0011 is reserved by the dynamic-extent effect handlers ADR, in flight on
 the effects branch.)
@@ -39,6 +40,15 @@ talk works with characters; the byte API is demoted to an explicit view.
   `Borrowed`-marked), like `Substring` — iteration allocates nothing.
   `to_string()` is the owned escape hatch. (Departure from Swift's owned
   `Character` value; talk has first-class borrows.)
+
+For the replacement backend,
+[ADR 0033](0033-managed-storage-heap-regions-and-ffi-lifetimes.md) specifies that
+`Character`, `Substring`, and `UTF8View` lower to a non-owning
+managed-Byte-buffer reference plus byte start and byte count. The verified MIR
+loan keeps the owner live; lowering adds no retain. A checked initialized Byte
+buffer read produces the concrete Copy `Byte` consumed by the Unicode source
+implementation. `Character` does not regain the scalar representation that the
+current dormant Talk IR skeleton still contains.
 
 ## Self-hosted segmentation
 

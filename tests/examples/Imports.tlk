@@ -1,0 +1,3 @@
+use package::Exports::{ a }
+
+print(a)

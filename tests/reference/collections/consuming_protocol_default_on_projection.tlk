@@ -1,0 +1,16 @@
+protocol Paint where Self: Showable {
+	consuming func daub() -> String {
+		"*" + self.show()
+	}
+}
+extend String: Paint {}
+struct Item {
+	let name: String
+}
+func main() -> Int {
+	let items = [Item(name: "ab".to_string())]
+	for item in items {
+		print(Paint.daub(item.name))
+	}
+	0
+}

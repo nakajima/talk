@@ -1,0 +1,6 @@
+struct Person {
+	let name: String
+}
+let person = Person(name: "Pat" + "!")
+let moved = person
+person.name.byte_count

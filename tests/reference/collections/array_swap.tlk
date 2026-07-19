@@ -1,0 +1,6 @@
+func main() -> Int {
+	let a = [1, 2, 3]
+	a.swap(0, 2)
+	a.get(0) * 10 + a.get(2)
+}
+main()

@@ -82,12 +82,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .iter()
             .map(|param| {
                 let ty = match &param.type_annotation {
-                    Some(annotation) => {
-                        let ty = self.lower_annotation(annotation);
-                        elaborate::apply_param_mode(self.catalog, param.mode, ty)
-                    }
+                    Some(annotation) => self.lower_annotation(annotation),
+                    // An inferred param's fresh var wraps per the stamped
+                    // mode too (plan 3.3(b)): `func f(x)` and
+                    // `func f<T>(x: T)` route through the same machinery,
+                    // so the stored `ParamMode` and the solved type agree.
+                    // Copy erasure (a payload that solves to Int) is the
+                    // solver's deferred half of `copy_grade_head`.
                     None => Ty::Var(self.store.fresh_ty(self.level, param.id)),
                 };
+                let ty = elaborate::apply_param_mode(self.catalog, param, ty, self.diagnostics);
                 self.bind_param(param, &ty);
                 ty
             })
@@ -148,8 +152,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let ty = match &param.type_annotation {
                     Some(annotation) => {
                         let annotated = self.lower_annotation(annotation);
-                        let annotated =
-                            elaborate::apply_param_mode(self.catalog, param.mode, annotated);
+                        let annotated = elaborate::apply_param_mode(
+                            self.catalog,
+                            param,
+                            annotated,
+                            self.diagnostics,
+                        );
                         self.emit_eq(
                             expected.clone(),
                             annotated.clone(),
@@ -196,8 +204,19 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let ty = match &param.type_annotation {
                     Some(annotation) => {
                         let ty = self.lower_annotation(annotation);
-                        elaborate::apply_param_mode(self.catalog, param.mode, ty)
+                        elaborate::apply_param_mode(self.catalog, param, ty, self.diagnostics)
                     }
+                    // Deliberately NOT wrapped per the stamped Borrow mode
+                    // (unlike `infer_callable`): an inference-position
+                    // trailing block's binder types flow in from the
+                    // callee's function type when it resolves — and a call
+                    // THROUGH a still-unresolved function value constructs
+                    // its param types from the argument types, where a
+                    // pre-wrapped binder would demand a borrow at a
+                    // nested (invariant) boundary and reject owned
+                    // arguments the annotated twin accepts. Trailing-block
+                    // binders stay delayed-inference territory (plan
+                    // 3.3(b) staged scope).
                     None => Ty::Var(self.store.fresh_ty(self.level, param.id)),
                 };
                 self.bind_param(param, &ty);

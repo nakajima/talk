@@ -1,0 +1,10 @@
+func check() -> Int {
+	let d = Dict<String>()
+	d.insert("greet", "hello" + " world")
+	let got: Optional<&String> = d.get("greet")
+	match got {
+		.some(s) -> s.byte_count,
+		.none -> 0 - 1
+	}
+}
+check()

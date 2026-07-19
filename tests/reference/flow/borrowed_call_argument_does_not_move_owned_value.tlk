@@ -1,0 +1,6 @@
+func borrow(s: &String) -> Int {
+	s.byte_count
+}
+let s = "hello" + " world"
+let n = borrow(s)
+s.byte_count + n

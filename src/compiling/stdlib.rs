@@ -1,10 +1,8 @@
-use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use crate::compiling::{
-    core::LibraryTyped,
     driver::{CompilationMode, Driver, DriverConfig, Source, Typed},
     module::{Module, ModuleEnvironment, ModuleId},
 };
@@ -13,14 +11,7 @@ const TALK_STDLIB_PATH_ENV: &str = "TALK_STDLIB_PATH";
 
 pub const STDLIB_SOURCE_NAMES: &[&str] = &["fs.tlk", "ansi.tlk", "testing.tlk", "Package.tlk"];
 
-static STDLIB: OnceLock<Vec<Arc<Module>>> = OnceLock::new();
-/// Typed artifacts per (module, assigned id) — `Driver::lower()` asks
-/// for these on every compile (each REPL line, each test), so the full
-/// pipeline must run once per module, not once per call. The id is
-/// part of the key because the environment assigns it.
-type TypedModuleCache = FxHashMap<(&'static str, ModuleId), Arc<LibraryTyped>>;
-
-static STDLIB_TYPED: OnceLock<Mutex<TypedModuleCache>> = OnceLock::new();
+static STDLIB: OnceLock<Vec<CompiledStdlib>> = OnceLock::new();
 
 pub fn path_override() -> Option<PathBuf> {
     std::env::var_os(TALK_STDLIB_PATH_ENV)
@@ -87,47 +78,44 @@ pub fn source_document(name: &str) -> Option<(PathBuf, String)> {
 }
 
 pub fn modules() -> Vec<Arc<Module>> {
-    STDLIB.get_or_init(compile_all).clone()
-}
-
-pub fn typed_modules(module_env: &ModuleEnvironment) -> Vec<Arc<LibraryTyped>> {
-    compilation_sources()
-        .into_iter()
-        .filter_map(|(name, source)| {
-            let module_id = module_env.get_module_id_by_name(name)?;
-            #[allow(clippy::unwrap_used)]
-            let mut cache = STDLIB_TYPED.get_or_init(Mutex::default).lock().unwrap();
-            let typed = cache
-                .entry((name, module_id))
-                .or_insert_with(|| Arc::new(compile_typed_module(name, source, module_id)));
-            Some(Arc::clone(typed))
-        })
+    STDLIB
+        .get_or_init(compile_all)
+        .iter()
+        .map(|(_, module, _)| module.clone())
         .collect()
 }
 
-fn compile_all() -> Vec<Arc<Module>> {
+/// The typed bodies behind every stdlib module interface, by module name.
+/// The backend compiles the reachable source graph as one unit, so stdlib
+/// callables supply their bodies from here.
+pub(crate) fn typed_programs() -> Vec<(
+    &'static str,
+    Arc<crate::compiling::typed_program::TypedProgram>,
+)> {
+    STDLIB
+        .get_or_init(compile_all)
+        .iter()
+        .map(|(name, _, program)| (*name, program.clone()))
+        .collect()
+}
+
+type CompiledStdlib = (
+    &'static str,
+    Arc<Module>,
+    Arc<crate::compiling::typed_program::TypedProgram>,
+);
+
+fn compile_all() -> Vec<CompiledStdlib> {
     compilation_sources()
         .into_iter()
         .map(|(name, source)| compile_module(name, source))
         .collect()
 }
 
-fn compile_module(name: &'static str, source: Source) -> Arc<Module> {
+fn compile_module(name: &'static str, source: Source) -> CompiledStdlib {
     let typed = compile_driver(name, source, ModuleId::Current);
-    Arc::new(typed.module(name))
-}
-
-fn compile_typed_module(name: &'static str, source: Source, module_id: ModuleId) -> LibraryTyped {
-    let typed = compile_driver(name, source, module_id);
-    let Typed {
-        program,
-        checked_mir,
-        ..
-    } = typed.phase;
-    LibraryTyped {
-        program,
-        checked_mir,
-    }
+    let program = typed.phase.program.clone();
+    (name, Arc::new(typed.module(name)), Arc::new(program))
 }
 
 fn active_stdlib_dir() -> PathBuf {
@@ -220,28 +208,4 @@ fn compile_driver(name: &'static str, source: Source, module_id: ModuleId) -> Dr
     );
 
     typed
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn typed_modules_are_cached() {
-        // Driver::lower() calls typed_modules() on every compile (each
-        // REPL line, each test): the full parse/resolve/check pipeline
-        // must run once per module, not once per call.
-        let mut env = ModuleEnvironment::default();
-        env.import_core(crate::compiling::core::compile());
-        for module in modules() {
-            env.import((*module).clone());
-        }
-        let first = typed_modules(&env);
-        let second = typed_modules(&env);
-        assert!(!first.is_empty(), "stdlib has modules");
-        assert!(
-            first.iter().zip(&second).all(|(a, b)| Arc::ptr_eq(a, b)),
-            "repeated calls must return the cached artifacts"
-        );
-    }
 }

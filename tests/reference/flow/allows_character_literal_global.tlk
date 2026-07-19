@@ -1,0 +1,4 @@
+let newline = '\n'
+let lambda = 'λ'
+print(newline)
+print(lambda)

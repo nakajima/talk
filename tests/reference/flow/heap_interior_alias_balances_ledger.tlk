@@ -1,0 +1,15 @@
+struct Node 'heap {
+	let value: Int
+	let next: Node?
+}
+func make() -> Node {
+	let root = Node(value: 7, next: Optional.none)
+	let child = Node(value: 9, next: Optional.none)
+	root.next = Optional.some(child)
+	child
+}
+func check() -> Int {
+	let a = make()
+	a.value
+}
+check()

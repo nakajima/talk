@@ -164,7 +164,7 @@ impl TypedTreeBuilder<'_> {
             // blocks the file, but an unattributed solver error blocks
             // nothing), so it bakes as the poison type rather than a panic.
             // `erase_eff_args`: effect args on nominal heads are
-            // typing-internal; flow and lowering never see them.
+            // type-checker internals and are not part of TypedProgram.
             ty: self
                 .types
                 .node_types
@@ -283,7 +283,8 @@ impl TypedTreeBuilder<'_> {
                 // that resolves to a stored field is a projection.
                 if let Some(receiver) = recv
                     && let Some(field) = crate::types::output::stored_field_symbol(
-                        self.types,
+                        &self.types.catalog,
+                        &self.types.schemes,
                         self.types.member_resolutions.get(&e.id),
                     )
                 {
@@ -292,7 +293,7 @@ impl TypedTreeBuilder<'_> {
                     typed_ast::ExprKind::Member(recv.as_ref().map(|r| self.boxed(r)), label.clone())
                 }
             }
-            expr::ExprKind::Func(func) => typed_ast::ExprKind::Func(self.func(func)),
+            expr::ExprKind::Func(func) => typed_ast::ExprKind::Func(Box::new(self.func(func))),
             expr::ExprKind::Variable(name) => typed_ast::ExprKind::Variable(name.clone()),
             expr::ExprKind::Constructor(name) => typed_ast::ExprKind::Constructor(name.clone()),
             expr::ExprKind::If(..) => {
@@ -507,9 +508,8 @@ impl TypedTreeBuilder<'_> {
         }
     }
 
-    /// Elaborate a first-class `for` into ordinary typed nodes — the same
-    /// program Rust's HIR desugar would produce, built once here so every
-    /// later pass (liveness, flow, MIR, lowering) sees real code:
+    /// Elaborate a first-class `for` into ordinary typed nodes once, so the
+    /// final TypedProgram contains its semantic form:
     ///
     /// ```text
     /// {                                       // scope: hidden locals die here
@@ -527,8 +527,8 @@ impl TypedTreeBuilder<'_> {
     /// The `iter()`/`next()`/mut-store calls are rebuilt at
     /// the checker's ForPlan ids, so their member resolutions and
     /// instantiations bake on exactly like source-written calls. A `for`
-    /// with no plan was rejected by typing: only the source expression
-    /// survives (flow still sees its reads).
+    /// with no plan was rejected by typing, so only its source expression
+    /// survives in the typed tree.
     fn elaborate_for(
         &self,
         stmt_id: crate::node_id::NodeID,

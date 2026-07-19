@@ -1,0 +1,10 @@
+struct Node 'heap {
+	let value: Int
+}
+func check() -> Int {
+	let n = Node(value: 1)
+	let pair = (n, 2)
+	let opt = Optional.some(n)
+	0
+}
+check()

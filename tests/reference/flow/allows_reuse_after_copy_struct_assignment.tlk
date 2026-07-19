@@ -1,0 +1,6 @@
+struct Point {
+	let x: Int
+}
+let point = Point(x: 1)
+let copy = point
+point.x + copy.x

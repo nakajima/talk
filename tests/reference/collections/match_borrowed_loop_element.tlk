@@ -1,0 +1,13 @@
+enum Entry {
+	case doc(String)
+}
+func main() -> Int {
+	let entries = [Entry.doc("a" + "b")]
+	for entry in entries {
+		match entry {
+			.doc(s) -> print(s)
+		}
+	}
+	print(entries.count)
+	0
+}

@@ -1,0 +1,8 @@
+struct Person {
+	let name: String
+	let age: Int
+}
+let person = Person(name: "Pat" + "!", age: 40)
+let name = person.name
+person.name = "Sue" + "!"
+person.name.byte_count + person.age

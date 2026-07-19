@@ -21,11 +21,17 @@ public func assert(condition: Bool) 'fail {
 	if !condition { 'fail("assertion failed") }
 }
 
+// The pre-reset stdlib's name for assert_message; existing programs
+// (talk-syntax among them) call it, so it stays as an alias.
 public func assertMessage(condition: Bool, message: String) 'fail {
+	assert_message(condition, message)
+}
+
+public func assert_message(condition: Bool, message: String) 'fail {
 	if !condition { 'fail(message) }
 }
 
-public func report(tests: Array<TestCase>, failures: Array<Failure>) {
+public func report(tests: [TestCase], failures: [Failure]) {
 	if failures.is_empty() {
 		print(tests.count.show() + " tests passed.")
 	} else {

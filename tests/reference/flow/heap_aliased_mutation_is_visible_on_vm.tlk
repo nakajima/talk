@@ -1,0 +1,10 @@
+struct Node 'heap {
+	let value: Int
+}
+func check() -> Int {
+	let a = Node(value: 1)
+	let b = a
+	b.value = 42
+	a.value
+}
+check()

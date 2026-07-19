@@ -1,0 +1,5 @@
+func check() -> Int {
+	let o = Optional.some("hello" + " world")
+	0
+}
+check()

@@ -1,0 +1,7 @@
+// unsafe
+func first_byte(s: String) -> Int {
+	let b: Byte = s.utf8().at(0)
+	@_ir(b) { %? = btoi $0 }
+}
+print(first_byte("A"))
+print("é".utf8().at(0)._toInt())

@@ -1,0 +1,23 @@
+// Archetype: struct construction and field reads — direct RecordNew,
+// GetField traffic, CoW value semantics on records.
+struct Point {
+	let x: Int
+	let y: Int
+}
+func dist2(p: &Point, q: &Point) -> Int {
+	let dx = p.x - q.x
+	let dy = p.y - q.y
+	dx * dx + dy * dy
+}
+func bench(n: Int) -> Int {
+	let total = 0
+	let i = 0
+	loop i < n {
+		let p = Point(x: i, y: i + 1)
+		let q = Point(x: i * 2, y: i - 3)
+		total = total + dist2(p, q) / 1000
+		i = i + 1
+	}
+	total
+}
+print(bench(300000))

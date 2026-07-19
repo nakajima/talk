@@ -1,0 +1,7 @@
+func bad() -> Int {
+	let s = "hello" + " world"
+	let borrow: &mut String = s
+	let n = s.byte_count
+	borrow.byte_count + n
+}
+0

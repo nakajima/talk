@@ -136,12 +136,15 @@ impl<'s> Solver<'s> {
                     // already restricts this to variables this group
                     // owns, so nominal information always wins, and the
                     // row tail generalizes if it survives the group.
+                    // Bind the PEELED receiver: a borrowed receiver (an
+                    // inferred borrow-default param) keeps its borrow and
+                    // its payload becomes the record.
                     let tail = self.store.fresh_row(self.level, origin.node);
                     let probe = Ty::Record(Row {
                         fields: vec![(label.clone(), member.clone())],
                         tail: Some(RowTail::Var(tail)),
                     });
-                    queue.push(Constraint::Eq(receiver, probe, origin));
+                    queue.push(Constraint::Eq(lookup_receiver, probe, origin));
                     improved = true;
                 }
                 _many => {

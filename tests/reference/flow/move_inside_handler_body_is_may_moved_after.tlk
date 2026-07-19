@@ -1,0 +1,12 @@
+func take(consume s: String) -> Int {
+	s.byte_count
+}
+effect 'oops(error) -> Never
+func check() -> Int {
+	let s = "a" + "b"
+	@handle 'oops { err in
+		take(s)
+		0
+	}
+	s.byte_count
+}

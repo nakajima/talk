@@ -1,0 +1,4 @@
+// unsafe
+let p = _alloc<Int>(1)
+_free(p)
+0

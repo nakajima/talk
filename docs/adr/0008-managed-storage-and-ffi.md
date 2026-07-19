@@ -1,6 +1,7 @@
 # ADR 0008: Managed Storage, Allocation Effects, and FFI
 
-Status: accepted
+Status: accepted for source-language direction; backend implementation sections
+superseded by ADR 0031; R1 executable semantics refined by accepted ADR 0033
 
 Date: 2026-06-23
 
@@ -48,6 +49,14 @@ bump arena, stack storage, or native backend allocation primitives.
 Raw pointers remain available only behind an unsafe or FFI boundary.
 The compiler and backend may still use pointer-shaped IR values
 internally.
+
+For the replacement backend, the concrete managed-buffer, heap-region,
+pinning, host-handle, teardown, and resource-balance design is defined in
+[ADR 0033](0033-managed-storage-heap-regions-and-ffi-lifetimes.md). Under ADR
+0032, v1 `'alloc` is an inferred core effect supplied by the runtime's implicit
+handler. User-installed allocation handlers and lexical arenas remain future
+work; the handler examples below describe that future direction rather than an
+R1 implementation requirement.
 
 ## Current Implementation Status
 
@@ -339,6 +348,12 @@ policy, such as borrowed, opaque, or owned with a known free function.
 
 This keeps the surface language safe without pretending the compiler can
 avoid pointers internally.
+
+ADR 0033 refines this source direction for R1: managed buffers use
+type-specific CoW ownership, direct `'heap` object cycles use merge-only
+ownership regions, FFI addresses are scoped pins, and host resources remain
+opaque affine handles. It does not restore the historical lowering or make the
+quarantined runtime representation authoritative.
 
 It also avoids reference counting everywhere. The preferred order is:
 

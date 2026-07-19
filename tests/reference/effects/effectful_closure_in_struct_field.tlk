@@ -1,0 +1,15 @@
+effect 'ask(prompt) -> Int
+struct Wrapper {
+	let f: () -> Int
+}
+@handle 'ask { p in
+	print(p)
+	continue 42
+}
+func go() 'ask -> Int {
+	let w = Wrapper(f: func() {
+		'ask("meaning?") + 1
+	})
+	w.f()
+}
+go()

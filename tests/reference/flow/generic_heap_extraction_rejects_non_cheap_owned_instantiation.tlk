@@ -1,0 +1,15 @@
+struct Wrap {
+	let name: String
+}
+struct Holder<Value> 'heap {
+	let value: Value
+}
+func extract<Value: CheapClone>(h: Holder<Value>) -> Value {
+	h.value
+}
+func check() -> Int {
+	let h = Holder(value: Wrap(name: "hi" + "!"))
+	let w = extract(h)
+	0
+}
+check()

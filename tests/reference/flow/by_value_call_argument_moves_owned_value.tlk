@@ -1,0 +1,6 @@
+func take(consume s: String) -> Int {
+	s.byte_count
+}
+let s = "hello" + " world"
+let n = take(s)
+s.byte_count + n

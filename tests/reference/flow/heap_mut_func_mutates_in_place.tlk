@@ -1,0 +1,15 @@
+struct Counter 'heap {
+	let count: Int
+	mut func bump() -> Int {
+		self.count = self.count + 1
+		self.count
+	}
+}
+func check() -> Int {
+	let c = Counter(count: 0)
+	let d = c
+	let n1 = c.bump()
+	let n2 = d.bump()
+	n1 * 10 + n2
+}
+check()

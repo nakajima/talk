@@ -1,0 +1,8 @@
+effect 'boost() -> Int
+func run() -> Int {
+	@handle 'boost { continue 100 }
+	let f = func() -> Int { 'boost() }
+	@handle 'boost { continue 200 }
+	f() + 'boost()
+}
+run()

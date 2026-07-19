@@ -1,0 +1,15 @@
+func check() -> Int {
+	let server = HTTP.Server()
+	server.get("/", func() -> String { "home" })
+	server.get("/a", func() -> String { "aaa" })
+	server.get("/b", func() -> String { "bbb" })
+	server.get("/c", func() -> String { "ccc" })
+	server.get("/d", func() -> String { "ddd" })
+	server.get("/e", func() -> String { "eee" })
+	let wire = server.handle("GET /d HTTP/1.1")
+	match wire.find("ddd") {
+		.some(i) -> i,
+		.none -> 0 - 1
+	}
+}
+check()

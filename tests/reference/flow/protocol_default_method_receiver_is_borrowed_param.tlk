@@ -1,0 +1,6 @@
+protocol P {
+	func name() -> &String
+	func first() -> Substring {
+		self.name().utf8().slice(0, 1)
+	}
+}

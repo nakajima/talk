@@ -1,0 +1,7 @@
+struct Wrapper {
+	let sub: Substring
+}
+func make() -> Wrapper {
+	let s = "ab" + "cd"
+	Wrapper(sub: s.utf8().slice(0, 2))
+}

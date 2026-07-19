@@ -1,0 +1,6 @@
+struct Person {
+	let name: String
+}
+func ok(person: &Person) -> String {
+	person.name
+}

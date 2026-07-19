@@ -1,0 +1,6 @@
+func main() -> Int {
+	let a = ["a", "bbb"]
+	a.swap(0, 1)
+	a.get(0).byte_count * 10 + a.get(1).byte_count
+}
+main()

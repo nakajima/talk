@@ -123,6 +123,8 @@ pub enum InlineIRInstructionKind {
     },
     #[doc = "free $ptr"]
     Free { ptr: Value },
+    #[doc = "retain $ty $value"]
+    Retain { ty: TypeAnnotation, value: Value },
     #[doc = "copy $ty $from $to $length"]
     Copy {
         ty: TypeAnnotation,
@@ -369,6 +371,9 @@ impl Display for InlineIRInstruction {
             }
             InlineIRInstructionKind::Free { ptr } => {
                 write!(f, "free {ptr}")
+            }
+            InlineIRInstructionKind::Retain { ty, value } => {
+                write!(f, "retain {} {}", ty.simple_display(), value)
             }
             InlineIRInstructionKind::Copy {
                 ty,

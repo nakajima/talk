@@ -1,0 +1,9 @@
+let s = "hello" + " world"
+let flag = true
+if flag {
+	let t = s
+	1
+} else {
+	2
+}
+s.byte_count

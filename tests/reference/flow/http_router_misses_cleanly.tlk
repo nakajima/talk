@@ -1,0 +1,10 @@
+func check() -> Int {
+	let server = HTTP.Server()
+	server.get("/", func() -> String { "home" })
+	let wire = server.handle("GET /nope HTTP/1.1")
+	match wire.find("404") {
+		.some(i) -> i,
+		.none -> 0 - 1
+	}
+}
+check()

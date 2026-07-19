@@ -1,0 +1,8 @@
+func main() -> Int {
+	let numbers = [7, 8]
+	let it = numbers.iter()
+	let it2 = numbers.iter()
+	let r1 = it.next()
+	let r2 = it2.next()
+	0
+}

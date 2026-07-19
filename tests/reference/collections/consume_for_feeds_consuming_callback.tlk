@@ -1,0 +1,10 @@
+func takes(consume s: String) {
+	print(s)
+}
+func main() -> Int {
+	let xs = ["a" + "b"]
+	for x in consume xs {
+		takes(consume x)
+	}
+	0
+}

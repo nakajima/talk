@@ -1,0 +1,8 @@
+func main() -> Int {
+	let a = [1, 2, 3]
+	let doubled = a.iter().map() { i in i * 2 }
+	for i in doubled {
+		print(i)
+	}
+	0
+}

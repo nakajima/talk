@@ -1,0 +1,6 @@
+func take(consume s: String) -> Int { 0 }
+func f(consume s: String) -> Int {
+	let a = take(copy s)
+	let b = take(s)
+	a + b
+}

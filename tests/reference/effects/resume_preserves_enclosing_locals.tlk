@@ -1,0 +1,10 @@
+effect 'ask(prompt) -> Int
+func f() -> Int {
+	let s = "hello" + " world"
+	@handle 'ask { p in
+		continue 41
+	}
+	let answer = 'ask("q")
+	answer + s.byte_count
+}
+print(f())

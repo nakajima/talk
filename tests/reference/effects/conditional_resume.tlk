@@ -1,0 +1,12 @@
+effect 'check(n) -> Int
+@handle 'check { n in
+	if n > 0 {
+		continue n
+	}
+	0 - 1
+}
+func go(x: Int) 'check -> Int {
+	let v = 'check(x)
+	v * 10
+}
+go(5)

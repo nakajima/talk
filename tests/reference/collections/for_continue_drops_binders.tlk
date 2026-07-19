@@ -1,0 +1,12 @@
+func main() -> Int {
+	let xs = ["a" + "b", "c" + "d"]
+	let i = 0
+	for x in xs {
+		i = i + 1
+		if i == 1 {
+			continue
+		}
+		print(x)
+	}
+	0
+}

@@ -2,10 +2,9 @@ struct TickEvent;
 
 use async_lsp::LanguageClient;
 use async_lsp::lsp_types::{
-    CodeActionProviderCapability, CompletionOptions, Diagnostic, DiagnosticSeverity, InlayHint,
-    InlayHintKind, InlayHintLabel, InlayHintOptions, InlayHintServerCapabilities, InlayHintTooltip,
-    MessageType, NumberOrString, Position, Range, SemanticTokens, SemanticTokensResult,
-    ShowMessageParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    CodeActionProviderCapability, CompletionOptions, Diagnostic, DiagnosticSeverity, MessageType,
+    NumberOrString, Position, Range, SemanticTokens, SemanticTokensResult, ShowMessageParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
     TextDocumentSyncSaveOptions, TextEdit,
 };
 use async_lsp::{
@@ -244,12 +243,6 @@ pub async fn start() {
                             hover_provider: Some(HoverProviderCapability::Simple(true)),
                             rename_provider: Some(OneOf::Left(true)),
                             completion_provider: Some(completion_options()),
-                            inlay_hint_provider: Some(OneOf::Right(
-                                InlayHintServerCapabilities::Options(InlayHintOptions {
-                                    resolve_provider: Some(false),
-                                    ..Default::default()
-                                }),
-                            )),
                             document_formatting_provider: Some(OneOf::Left(true)),
                             code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                             semantic_tokens_provider: Some(
@@ -446,26 +439,6 @@ pub async fn start() {
                     _ => None,
                 };
                 async move { Ok(result) }
-            })
-            .request::<request::InlayHintRequest, _>(|st, params| {
-                let uri = params.text_document.uri.clone();
-                let byte_range = st.documents.get(&uri).and_then(|document| {
-                    Some(crate::analysis::TextRange::new(
-                        document.byte_offset(params.range.start)? as u32,
-                        document.byte_offset(params.range.end)? as u32,
-                    ))
-                });
-                let workspace = workspace_analysis(st, &uri);
-                let result = match (byte_range, workspace) {
-                    (Some(byte_range), Some(workspace)) => {
-                        recover_lsp(st, Some(&uri), "computing inlay hints", Vec::new(), || {
-                            ownership_inlay_hints_lsp(&workspace, &uri, byte_range)
-                        })
-                    }
-                    _ => Vec::new(),
-                };
-
-                async move { Ok(Some(result)) }
             })
             .request::<request::GotoDefinition, _>(|st, params| {
                 let uri = params
@@ -1025,43 +998,6 @@ fn completion_options() -> CompletionOptions {
     }
 }
 
-pub(crate) fn ownership_inlay_hints_lsp(
-    workspace: &AnalysisWorkspace,
-    uri: &Url,
-    byte_range: crate::analysis::TextRange,
-) -> Vec<InlayHint> {
-    let document_id = document_id_for_uri(uri);
-    let Some(text) = workspace.text_for(&document_id) else {
-        return vec![];
-    };
-    crate::analysis::ownership_inlay_hints(workspace, &document_id, byte_range)
-        .into_iter()
-        .filter_map(|hint| {
-            let position = byte_offset_to_utf16_position(text, hint.position)?;
-            let kind = match hint.kind {
-                crate::analysis::ownership::OwnershipInlayHintKind::Move
-                | crate::analysis::ownership::OwnershipInlayHintKind::Drop
-                | crate::analysis::ownership::OwnershipInlayHintKind::Clone => {
-                    Some(InlayHintKind::TYPE)
-                }
-                crate::analysis::ownership::OwnershipInlayHintKind::Borrow => {
-                    Some(InlayHintKind::PARAMETER)
-                }
-            };
-            Some(InlayHint {
-                position,
-                label: InlayHintLabel::String(hint.label),
-                kind,
-                text_edits: None,
-                tooltip: Some(InlayHintTooltip::String(hint.tooltip)),
-                padding_left: Some(true),
-                padding_right: Some(false),
-                data: None,
-            })
-        })
-        .collect()
-}
-
 fn document_path_for_uri(uri: &Url) -> String {
     uri.to_file_path()
         .map(|p| p.display().to_string())
@@ -1119,7 +1055,6 @@ mod tests {
     use crate::lsp::document::Document;
     use async_lsp::ClientSocket;
     use async_lsp::lsp_types::HoverContents;
-    use async_lsp::lsp_types::InlayHintLabel;
     use async_lsp::lsp_types::Range;
     use async_lsp::lsp_types::Url;
     use async_lsp::lsp_types::WorkspaceEdit;
@@ -1232,7 +1167,6 @@ mod tests {
             asts,
             resolved_names: Default::default(),
             types: Default::default(),
-            flow: Default::default(),
             diagnostics: diagnostics_by_document,
             stdlib_module_ids: Default::default(),
         }
@@ -1257,7 +1191,6 @@ mod tests {
         let typed = resolved.type_check();
         let Driver { phase, .. } = typed;
         let (resolved_names, types) = phase.program.into_semantic_parts();
-        let flow = phase.flow;
         let diagnostics_any = phase.diagnostics;
         let document_id = super::document_id_for_uri(uri);
         let file_id_to_document = vec![document_id.clone()];
@@ -1293,7 +1226,6 @@ mod tests {
             asts,
             resolved_names,
             types,
-            flow,
             diagnostics,
             stdlib_module_ids: Default::default(),
         }
@@ -1991,35 +1923,6 @@ mod tests {
     }
 
     #[test]
-    fn inlay_hints_show_ownership_events() {
-        let code = "func f() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet b: &String = s\n\tlet t = s\n\t0\n}\nf()";
-        let uri = Url::from_file_path(std::env::temp_dir().join("ownership_inlay_hints.tlk"))
-            .expect("file uri");
-        let module = workspace_for_docs(vec![(uri.clone(), code)]);
-        let hints = super::ownership_inlay_hints_lsp(
-            &module,
-            &uri,
-            crate::analysis::TextRange::new(0, code.len() as u32),
-        );
-        let labels: Vec<_> = hints
-            .iter()
-            .filter_map(|hint| match &hint.label {
-                InlayHintLabel::String(label) => Some(label.as_str()),
-                InlayHintLabel::LabelParts(_) => None,
-            })
-            .collect();
-        assert!(labels.iter().any(|label| label.contains("&")), "{hints:?}");
-        assert!(
-            labels.iter().any(|label| label.contains("move")),
-            "{hints:?}"
-        );
-        assert!(
-            labels.iter().any(|label| label.contains("drop")),
-            "{hints:?}"
-        );
-    }
-
-    #[test]
     fn hover_shows_generic_function_type_not_instantiation() {
         let code = "func id(x) { x }\nid(123)\nid(1.23)\n";
         let uri =
@@ -2034,7 +1937,7 @@ mod tests {
                 panic!("unexpected hover: {hover:?}");
             };
             // The scheme, not a use site's instantiation.
-            assert!(markup.value.contains("id: <T0>(T0) -> T0"), "{markup:?}");
+            assert!(markup.value.contains("id: <T0>(&T0) -> &T0"), "{markup:?}");
             assert!(!markup.value.contains("Int"), "{markup:?}");
             assert!(!markup.value.contains("Float"), "{markup:?}");
         }

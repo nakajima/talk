@@ -38,6 +38,11 @@ pub struct ModuleId(pub u16);
 impl ModuleId {
     pub const Current: ModuleId = ModuleId(0);
     pub const Core: ModuleId = ModuleId(1);
+    /// A stable stamp for the program under compilation when its config
+    /// carries no real module id. `Current`-tagged symbols re-stamp under
+    /// whatever module re-canonicalizes them, which mis-files a user type
+    /// inside another program's generic instance; this id never does.
+    pub const Main: ModuleId = ModuleId(u16::MAX);
     pub const fn External(i: u16) -> ModuleId {
         ModuleId(i + 2)
     }
@@ -104,6 +109,14 @@ impl ModuleEnvironment {
     /// Get the local module ID assigned to an imported module name.
     pub fn get_module_id_by_name(&self, name: &str) -> Option<ModuleId> {
         self.modules_by_name.get(name).copied()
+    }
+
+    /// Every local module id with its stable identity (for unifying
+    /// re-export aliases).
+    pub fn locals_with_stable_ids(&self) -> impl Iterator<Item = (ModuleId, StableModuleId)> + '_ {
+        self.modules_by_local
+            .iter()
+            .map(|(local, stable)| (*local, *stable))
     }
 
     pub fn imported_symbol_names(&self) -> FxHashMap<Symbol, String> {

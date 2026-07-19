@@ -1,0 +1,8 @@
+func main() -> Int {
+	let a = [["x" + "y"]]
+	for row in a {
+		print(row.count)
+	}
+	print(a.count)
+	0
+}

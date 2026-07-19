@@ -1,0 +1,7 @@
+struct Socket 'linear {
+	let fd: Int
+}
+func close(consume s: Socket) -> Int { 0 }
+func f(consume s: Socket) -> Int {
+	close(copy s)
+}

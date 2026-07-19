@@ -1,0 +1,14 @@
+effect 'ask(prompt) -> Int
+@handle 'ask { p in
+	continue 21
+}
+func go() 'ask -> Int {
+	if 'ask("q") > 10 {
+		'ask("a") + 'ask("b")
+	} else {
+		0
+	}
+}
+let r = go()
+print(r)
+r

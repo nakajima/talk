@@ -1,0 +1,6 @@
+func f() -> Int {
+	let xs = [1, 2]
+	for x in consume xs {
+	}
+	0
+}

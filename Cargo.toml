@@ -13,7 +13,6 @@ default-run = "talk"
 ctor = "0.4.2"
 prettydiff = "0.8.0"
 color-eyre = "0.6"
-criterion = "0.8.2"
 
 [dependencies]
 clap = { version = "4.5.39", features = ["derive"], optional = true }
@@ -48,15 +47,6 @@ flate2 = "1.1.5"
 tar = { version = "0.4.44", default-features = false }
 ignore = { version = "0.4", optional = true }
 talk-runtime = { path = "talk-runtime" }
-
-# POSIX io (StdioIO's file and socket operations); wasm builds use the
-# non-unix stubs in src/vm/io.rs instead.
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
-[[bench]]
-name = "vm_e2e"
-harness = false
 
 [features]
 default = ["cli"]

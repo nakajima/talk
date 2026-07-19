@@ -12,6 +12,14 @@ use crate::symbol::Symbol;
 use crate::{Chunk, Insn, MemKind, Module};
 use std::rc::Rc;
 
+/// Whether `TALK_TRACE_MEM` is set, read once: the check guards the
+/// interpreter's hottest paths, and a per-instruction `getenv` costs
+/// more than the instruction itself.
+fn trace_mem() -> bool {
+    static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRACE.get_or_init(|| std::env::var_os("TALK_TRACE_MEM").is_some())
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     I64(i64),
@@ -72,6 +80,51 @@ pub fn run(module: &Module, io: &mut dyn IO) -> Result<Value, String> {
     Ok(run_machine(module, io)?.0)
 }
 
+/// Allocation balance at VM exit, read before the machine is dropped —
+/// the test-suite leak fences assert `live == result` on both counters
+/// (everything still live must be owned by the result value itself),
+/// but only when the result footprint is exact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunBalance {
+    /// Live allocation records at exit.
+    pub live_allocations: usize,
+    /// Live `'heap` objects at exit.
+    pub live_objects: usize,
+    /// Allocation records reachable from the result value.
+    pub result_allocations: usize,
+    /// `'heap` objects kept live by regions the result value holds.
+    pub result_objects: usize,
+    /// Whether the footprint walk saw the result's whole ownership tree.
+    /// Raw buffer contents are untyped bytes the walk can't see through,
+    /// so a buffer big enough to hold a word (pointers and boxed-aggregate
+    /// handles are 8-byte words) makes the counts a lower bound:
+    /// allocations reachable only through element loads (e.g. an
+    /// array-of-Strings result) go uncounted. Fences must then check only
+    /// `live >= result`. Shorter buffers (a short String's bytes) can't
+    /// reference anything and stay exact.
+    pub result_exact: bool,
+}
+
+/// Run and report the allocation balance alongside the value — the VM
+/// counterpart of the reference evaluator's leak fence.
+pub fn run_counted(module: &Module, io: &mut dyn IO) -> Result<(Value, RunBalance), String> {
+    let (value, machine) = run_machine(module, io)?;
+    let balance = machine.balance(&value);
+    Ok((value, balance))
+}
+
+/// `run_displayed` with the allocation balance — the REPL tests' fence.
+pub fn run_displayed_counted(
+    module: &Module,
+    io: &mut dyn IO,
+    names: &ValueNames,
+) -> Result<(Value, String, RunBalance), String> {
+    let (value, machine) = run_machine(module, io)?;
+    let display = render_value(&machine, names, &value)?;
+    let balance = machine.balance(&value);
+    Ok((value, display, balance))
+}
+
 /// Run and render the program value Talk-style while the machine is
 /// still alive (strings point into its byte memory).
 pub fn run_displayed(
@@ -85,18 +138,6 @@ pub fn run_displayed(
 }
 
 fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Machine<'io>), String> {
-    let entry = chunk(module, module.entry)?;
-    let empty_env: Rc<Vec<Value>> = Rc::new(vec![]);
-    let mut next_frame_id: u64 = 0;
-    let mut frames = vec![Frame {
-        chunk: module.entry,
-        pc: 0,
-        regs: vec![Value::Void; entry.n_regs as usize],
-        env: empty_env.clone(),
-        dest: 0,
-        id: next_frame_id,
-    }];
-    next_frame_id += 1;
     let mut machine = Machine {
         slots: vec![],
         mem: module.statics.clone(),
@@ -108,16 +149,62 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
         objects: Objects::default(),
         io,
     };
+    match run_loop(module, &mut machine) {
+        Ok(value) => Ok((value, machine)),
+        // Balance-at-trap: a runtime trap (double free, use-after-free, …)
+        // reports the allocation-balance state alongside the message — the
+        // cheap diagnostic for the ownership test fences.
+        Err(err) => Err(format!(
+            "{err} [balance at trap: {} live allocations, {} live 'heap objects]",
+            machine.allocations.live_count(),
+            machine.objects.live_objects()
+        )),
+    }
+}
+
+fn run_loop(module: &Module, machine: &mut Machine) -> Result<Value, String> {
+    let entry = chunk(module, module.entry)?;
+    let empty_env: Rc<Vec<Value>> = Rc::new(vec![]);
+    let mut next_frame_id: u64 = 0;
+    let mut regs_pool: Vec<Vec<Value>> = Vec::new();
+    let mut frames = vec![Frame {
+        chunk: module.entry,
+        pc: 0,
+        regs: vec![Value::Void; entry.n_regs as usize],
+        env: empty_env.clone(),
+        dest: 0,
+        id: next_frame_id,
+    }];
+    next_frame_id += 1;
 
     // Finalizer frames currently on the stack: the teardown walk must not
     // advance (and above all must not bulk-free) while one is running.
     let mut finalizer_frames: usize = 0;
+    // Installed deep handlers (ADR 0032 dynamic nearest-handler routing).
+    // Entries tie to their installing frame by (depth, frame id) and go
+    // stale with it — no pop-site bookkeeping.
+    struct HandlerEntry {
+        effect: u32,
+        clause: Value,
+        cont: Value,
+        depth: usize,
+        frame_id: u64,
+    }
+    let mut handlers: Vec<HandlerEntry> = Vec::new();
+    // A clause runs outside its own handler (CHG-01): performs inside it
+    // search below this floor.
+    let mut handler_floor: usize = usize::MAX;
+    // An effect abort in progress (ADR 0027): the delimiter's frame index
+    // and the value to deliver once every frame above it has run its
+    // unwind entry and popped.
+    let mut unwinding: Option<(usize, Value)> = None;
     loop {
         // Region-teardown pump: while a region is finalizing, run its
         // members' finalizer thunks (reverse allocation order) as ordinary
         // frames before executing anything else; the walk's bulk free
         // happens inside `next_finalizer` when members are exhausted.
         if finalizer_frames == 0
+            && machine.objects.finalizing()
             && let Some((thunk, object)) = machine.objects.next_finalizer()
         {
             if frames.len() >= MAX_FRAMES {
@@ -128,7 +215,8 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
             };
             let target = chunk(module, fin_chunk)?;
             check_call_shape(target, 1)?;
-            let mut regs = vec![Value::Void; target.n_regs as usize];
+            let mut regs = regs_pool.pop().unwrap_or_default();
+            regs.resize(target.n_regs as usize, Value::Void);
             regs[0] = Value::Object(object);
             frames.push(Frame {
                 chunk: fin_chunk,
@@ -169,14 +257,14 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                 }
                 let target = chunk(module, callee)?;
                 check_call_shape(target, args_len)?;
-                let args = arg_values(module, &frames[frame_index], args_start, args_len)?;
-                let mut regs = vec![Value::Void; target.n_regs as usize];
-                for (i, value) in args.into_iter().enumerate() {
-                    let Some(slot) = regs.get_mut(i) else {
-                        return Err("vm: call argument count exceeds callee frame".into());
-                    };
-                    *slot = value;
-                }
+                let regs = call_regs(
+                    module,
+                    &frames[frame_index],
+                    args_start,
+                    args_len,
+                    target.n_regs,
+                    &mut regs_pool,
+                )?;
                 frames.push(Frame {
                     chunk: callee,
                     pc: 0,
@@ -208,14 +296,14 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                 };
                 let target_chunk = chunk(module, target)?;
                 check_call_shape(target_chunk, args_len)?;
-                let args = arg_values(module, &frames[frame_index], args_start, args_len)?;
-                let mut regs = vec![Value::Void; target_chunk.n_regs as usize];
-                for (i, value) in args.into_iter().enumerate() {
-                    let Some(slot) = regs.get_mut(i) else {
-                        return Err("vm: call argument count exceeds callee frame".into());
-                    };
-                    *slot = value;
-                }
+                let regs = call_regs(
+                    module,
+                    &frames[frame_index],
+                    args_start,
+                    args_len,
+                    target_chunk.n_regs,
+                    &mut regs_pool,
+                )?;
                 frames.push(Frame {
                     chunk: target,
                     pc: 0,
@@ -231,17 +319,10 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
             }
             Insn::Ret { src } => {
                 let value = frames[frame_index].regs[src as usize].clone();
-                let dest = frames[frame_index].dest;
-                frames.pop();
-                match frames.last_mut() {
-                    // A finalizer frame (pushed by the teardown pump) has no
-                    // destination: its value is discarded, and the paused
-                    // teardown walk may resume.
-                    Some(_) if dest == FINALIZER_DEST => {
-                        finalizer_frames = finalizer_frames.saturating_sub(1);
-                    }
-                    Some(caller) => caller.regs[dest as usize] = value,
-                    None => return Ok((value, machine)),
+                if let Some(value) =
+                    deliver_return(&mut frames, &mut finalizer_frames, &mut regs_pool, value)
+                {
+                    return Ok(value);
                 }
             }
             Insn::Trap { message } => {
@@ -255,7 +336,67 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                 let id = frames[frame_index].id;
                 frames[frame_index].regs[dest as usize] = Value::Cont(frame_index as u32, id);
             }
+            Insn::PushHandler {
+                effect,
+                clause,
+                cont,
+            } => {
+                while handlers.last().is_some_and(|entry| {
+                    frames
+                        .get(entry.depth)
+                        .is_none_or(|frame| frame.id != entry.frame_id)
+                }) {
+                    handlers.pop();
+                }
+                let frame = &frames[frame_index];
+                handlers.push(HandlerEntry {
+                    effect,
+                    clause: frame.regs[clause as usize].clone(),
+                    cont: frame.regs[cont as usize].clone(),
+                    depth: frame_index,
+                    frame_id: frame.id,
+                });
+            }
+            Insn::FindHandler {
+                clause,
+                cont,
+                index,
+                effect,
+            } => {
+                let limit = handler_floor.min(handlers.len());
+                let found = handlers[..limit]
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, entry)| {
+                        entry.effect == effect
+                            && frames
+                                .get(entry.depth)
+                                .is_some_and(|frame| frame.id == entry.frame_id)
+                    });
+                let Some((position, entry)) = found else {
+                    return Err("vm: perform with no installed handler".into());
+                };
+                let (clause_value, cont_value) = (entry.clause.clone(), entry.cont.clone());
+                let regs = &mut frames[frame_index].regs;
+                regs[clause as usize] = clause_value;
+                regs[cont as usize] = cont_value;
+                regs[index as usize] = Value::I64(position as i64);
+            }
+            Insn::GetFloor { dest } => {
+                let floor = i64::try_from(handler_floor).unwrap_or(i64::MAX);
+                frames[frame_index].regs[dest as usize] = Value::I64(floor);
+            }
+            Insn::SetFloor { src } => {
+                let Value::I64(floor) = frames[frame_index].regs[src as usize] else {
+                    return Err("vm: handler floor must be an Int".into());
+                };
+                handler_floor = usize::try_from(floor).unwrap_or(usize::MAX);
+            }
             Insn::CallCont { callee, src } => {
+                if unwinding.is_some() {
+                    return Err("vm: abort during abort unwinding".into());
+                }
                 let cont = frames[frame_index].regs[callee as usize].clone();
                 let value = frames[frame_index].regs[src as usize].clone();
                 let Value::Cont(target, id) = cont else {
@@ -267,28 +408,216 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
                         "vm: continuation is no longer live (its scope already exited)".into(),
                     );
                 }
-                // Unwind to the continuation's frame, then return from it
-                // — one-shot delimited abort (Hieb, Dybvig & Bruggeman,
-                // PLDI 1990's stack slice, restricted to downward use).
-                while frames.len() > target + 1 {
-                    #[allow(clippy::expect_used)]
-                    let discarded = frames.pop().expect("frames above target");
-                    if discarded.dest == FINALIZER_DEST {
-                        finalizer_frames = finalizer_frames.saturating_sub(1);
+                // The aborted computation's handler-search floor dies with
+                // it.
+                handler_floor = usize::MAX;
+                if target == frames.len() - 1 {
+                    // The continuation targets the executing frame itself:
+                    // the delimiter is the aborting frame, whose drops
+                    // already ran on its path here — deliver in place as a
+                    // Ret would. No suspended frames, so no unwind walk.
+                    if let Some(value) =
+                        deliver_return(&mut frames, &mut finalizer_frames, &mut regs_pool, value)
+                    {
+                        return Ok(value);
                     }
-                }
-                let dest = frames[target].dest;
-                frames.pop();
-                match frames.last_mut() {
-                    Some(_) if dest == FINALIZER_DEST => {
-                        finalizer_frames = finalizer_frames.saturating_sub(1);
+                } else {
+                    // Begin the unwind (ADR 0027): pop the aborting
+                    // handler's own frame (its drops already ran on its
+                    // path to the abort), then walk down to the delimiter's
+                    // frame, entering each suspended frame once at its
+                    // unwind entry (one-shot delimited abort — Hieb, Dybvig
+                    // & Bruggeman, PLDI 1990's stack slice — consumed
+                    // through its cleanup, OCaml's `discontinue`).
+                    pop_frame(&mut frames, &mut finalizer_frames, &mut regs_pool);
+                    unwinding = Some((target, value));
+                    if let Some(value) = advance_unwind(
+                        module,
+                        &mut frames,
+                        &mut finalizer_frames,
+                        &mut regs_pool,
+                        &mut unwinding,
+                    )? {
+                        return Ok(value);
                     }
-                    Some(caller) => caller.regs[dest as usize] = value,
-                    None => return Ok((value, machine)),
                 }
             }
-            local => exec_local(module, &mut frames[frame_index], &mut machine, local)?,
+            Insn::UnwindRet => {
+                // An unwind entry finished. If this was the delimiter's
+                // frame, deliver the stashed value (the unchanged tail of
+                // the pre-ADR-0027 CallCont); otherwise pop the cleaned
+                // frame and continue the unwind toward the delimiter.
+                let Some((target, _)) = unwinding else {
+                    return Err("vm: unwind_ret outside an abort unwind".into());
+                };
+                if frames.len() - 1 == target {
+                    #[allow(clippy::expect_used)]
+                    let (_, value) = unwinding.take().expect("unwinding checked above");
+                    if let Some(value) =
+                        deliver_return(&mut frames, &mut finalizer_frames, &mut regs_pool, value)
+                    {
+                        return Ok(value);
+                    }
+                } else {
+                    pop_frame(&mut frames, &mut finalizer_frames, &mut regs_pool);
+                    if let Some(value) = advance_unwind(
+                        module,
+                        &mut frames,
+                        &mut finalizer_frames,
+                        &mut regs_pool,
+                        &mut unwinding,
+                    )? {
+                        return Ok(value);
+                    }
+                }
+            }
+            local => {
+                if trace_mem() {
+                    let traced = match local {
+                        Insn::Free { ptr, .. } => Some(("free-site", ptr)),
+                        Insn::Retain { ptr, .. } => Some(("retain-site", ptr)),
+                        _ => None,
+                    };
+                    // Allocation sites print after execution (the
+                    // pointer only exists then), keyed by dest.
+                    if let Insn::Alloc { .. } = local
+                        && let Ok(target) = chunk(module, current_chunk)
+                    {
+                        eprintln!("MEM alloc-site in {} at {pc}", target.name.as_str());
+                    }
+                    if let Some((kind, ptr)) = traced
+                        && let Value::Ptr(address) = frames[frame_index].regs[ptr as usize]
+                    {
+                        eprintln!(
+                            "MEM {kind} ptr={address} in {} at {pc}",
+                            chunk(module, current_chunk)
+                                .map(|target| target.name.as_str())
+                                .unwrap_or("?")
+                        );
+                        // TALK_TRACE_MEM_PTR=<address>: show the site's
+                        // surrounding code, the same window a trap prints.
+                        if std::env::var("TALK_TRACE_MEM_PTR")
+                            .is_ok_and(|filter| filter == address.to_string())
+                            && let Ok(target) = chunk(module, current_chunk)
+                        {
+                            let start = pc.saturating_sub(10);
+                            let end = (pc + 4).min(target.code.len());
+                            for (offset, insn) in target.code[start..end].iter().enumerate() {
+                                eprintln!("  [{}] {insn:?}", start + offset);
+                            }
+                        }
+                    }
+                }
+                exec_local(module, &mut frames[frame_index], machine, local).map_err(|error| {
+                    if trace_mem()
+                        && let Ok(target) = chunk(module, current_chunk)
+                    {
+                        let start = pc.saturating_sub(8);
+                        let end = (pc + 4).min(target.code.len());
+                        for (offset, insn) in target.code[start..end].iter().enumerate() {
+                            eprintln!("  [{}] {insn:?}", start + offset);
+                        }
+                    }
+                    format!(
+                        "{error} [in {} (chunk {current_chunk}) at {pc}]",
+                        chunk(module, current_chunk)
+                            .map(|target| target.name.as_str())
+                            .unwrap_or("?")
+                    )
+                })?
+            }
         }
+    }
+}
+
+/// Pop the top frame, keeping the finalizer-pump count in step — every
+/// frame discarded on the abort-unwind paths shares this bookkeeping.
+fn pop_frame(frames: &mut Vec<Frame>, finalizer_frames: &mut usize, pool: &mut Vec<Vec<Value>>) {
+    if let Some(frame) = frames.pop() {
+        if frame.dest == FINALIZER_DEST {
+            *finalizer_frames = finalizer_frames.saturating_sub(1);
+        }
+        recycle(pool, frame.regs);
+    }
+}
+
+/// Return a popped frame's register buffer to the pool: values drop
+/// now (exactly as the frame drop would), the allocation survives for
+/// the next call. The cap bounds idle memory.
+fn recycle(pool: &mut Vec<Vec<Value>>, mut regs: Vec<Value>) {
+    regs.clear();
+    if pool.len() < 64 {
+        pool.push(regs);
+    }
+}
+
+/// Pop the returning frame and deliver `value` to its destination: a
+/// finalizer frame's value is discarded (the teardown pump may resume),
+/// an ordinary caller receives it in the saved dest register, and with
+/// no caller left it is the program's value (returned as `Some`).
+fn deliver_return(
+    frames: &mut Vec<Frame>,
+    finalizer_frames: &mut usize,
+    pool: &mut Vec<Vec<Value>>,
+    value: Value,
+) -> Option<Value> {
+    #[allow(clippy::expect_used)]
+    let dest = frames.last().expect("a frame is returning").dest;
+    if let Some(frame) = frames.pop() {
+        recycle(pool, frame.regs);
+    }
+    match frames.last_mut() {
+        Some(_) if dest == FINALIZER_DEST => {
+            *finalizer_frames = finalizer_frames.saturating_sub(1);
+            None
+        }
+        Some(caller) => {
+            caller.regs[dest as usize] = value;
+            None
+        }
+        None => Some(value),
+    }
+}
+
+/// Walk the abort unwind (ADR 0027) down toward the delimiter's frame:
+/// for each frame from the top, look its suspension pc up in its chunk's
+/// unwind table. A hit steers the frame into its unwind entry (return
+/// `Ok(None)`: normal dispatch runs the drops in that frame — they may
+/// make real calls — and the entry's `UnwindRet` resumes the walk). A
+/// miss means nothing owned is live there: pop and continue. Reaching
+/// the delimiter's frame with a miss delivers the stashed value to its
+/// caller (`Ok(Some(v))` = the program's value when there is no caller).
+fn advance_unwind(
+    module: &Module,
+    frames: &mut Vec<Frame>,
+    finalizer_frames: &mut usize,
+    pool: &mut Vec<Vec<Value>>,
+    unwinding: &mut Option<(usize, Value)>,
+) -> Result<Option<Value>, String> {
+    loop {
+        let Some((target, _)) = *unwinding else {
+            return Err("vm: unwind walk without an unwind in progress".into());
+        };
+        let Some(frame) = frames.last() else {
+            return Err("vm: unwind walk ran out of frames".into());
+        };
+        let table = &chunk(module, frame.chunk)?.unwind;
+        let entry = table
+            .binary_search_by_key(&(frame.pc as u32), |&(suspension, _)| suspension)
+            .ok()
+            .map(|i| table[i].1);
+        if let Some(entry_pc) = entry {
+            #[allow(clippy::expect_used)]
+            let top = frames.last_mut().expect("frame checked above");
+            top.pc = entry_pc as usize;
+            return Ok(None);
+        }
+        if frames.len() - 1 == target {
+            #[allow(clippy::expect_used)]
+            let (_, value) = unwinding.take().expect("unwinding checked above");
+            return Ok(deliver_return(frames, finalizer_frames, pool, value));
+        }
+        pop_frame(frames, finalizer_frames, pool);
     }
 }
 
@@ -445,6 +774,80 @@ struct Machine<'io> {
 }
 
 impl Machine<'_> {
+    /// The exit balance for a finished run's result value.
+    fn balance(&self, value: &Value) -> RunBalance {
+        let (result_allocations, result_objects, result_exact) = self.result_footprint(value);
+        RunBalance {
+            live_allocations: self.allocations.live_count(),
+            live_objects: self.objects.live_objects(),
+            result_allocations,
+            result_objects,
+            result_exact,
+        }
+    }
+
+    /// (allocation records, `'heap` objects, exactness) the program's
+    /// result value legitimately holds at exit: interior pointers resolve
+    /// to their owning records; a held object handle keeps its whole
+    /// region live. Raw buffer CONTENTS are opaque to this walk — the
+    /// bytes carry no type information, so the walk can't follow whatever
+    /// pointers or handles the elements hold. Reaching a buffer big
+    /// enough to hold a word therefore flips exactness off: the counts
+    /// become a lower bound (see [`RunBalance::result_exact`]).
+    fn result_footprint(&self, value: &Value) -> (usize, usize, bool) {
+        use std::collections::BTreeSet;
+        let mut bases: BTreeSet<u32> = BTreeSet::new();
+        let mut objects: BTreeSet<u32> = BTreeSet::new();
+        let mut cells: BTreeSet<usize> = BTreeSet::new();
+        let mut exact = true;
+        let mut stack: Vec<Value> = vec![value.clone()];
+        while let Some(value) = stack.pop() {
+            match value {
+                Value::Ptr(addr) => {
+                    if let Some(record) = self.allocations.live_record(self.static_len, addr) {
+                        bases.insert(record.start);
+                        // Pointers and boxed handles are 8-byte words: a
+                        // shorter buffer's contents can't own anything.
+                        exact &= record.len < 8;
+                    }
+                }
+                Value::Record(_, items) | Value::Tuple(items) | Value::Variant(_, _, items) => {
+                    stack.extend(items.iter().cloned());
+                }
+                Value::Existential(_, payload, witnesses) => {
+                    stack.push((*payload).clone());
+                    stack.extend(witnesses.iter().cloned());
+                }
+                Value::Closure(_, env) => stack.extend(env.iter().cloned()),
+                Value::Cell(index) => {
+                    if cells.insert(index)
+                        && let Some(slot) = self.slots.get(index)
+                    {
+                        stack.push(slot.clone());
+                    }
+                }
+                Value::Object(handle) => {
+                    for member in self.objects.region_live_members(handle) {
+                        if objects.insert(member) {
+                            let record = &self.objects.records[member as usize];
+                            stack.extend(record.fields.iter().cloned());
+                            if let Some(finalizer) = &record.finalizer {
+                                stack.push(finalizer.clone());
+                            }
+                        }
+                    }
+                }
+                Value::I64(_)
+                | Value::F64(_)
+                | Value::Bool(_)
+                | Value::Byte(_)
+                | Value::Void
+                | Value::Cont(..) => {}
+            }
+        }
+        (bases.len(), objects.len(), exact)
+    }
+
     fn read_word(&self, addr: u32) -> Result<u64, String> {
         self.check_access(addr, 8, "load")?;
         let start = addr as usize;
@@ -496,9 +899,12 @@ impl Machine<'_> {
     }
 
     fn free(&mut self, ptr: u32) -> Result<(), String> {
+        if trace_mem() {
+            eprintln!("MEM free {ptr}");
+        }
         self.allocations
             .free(self.static_len, ptr)
-            .map_err(vm_memory_error)
+            .map_err(|error| format!("{} (ptr {ptr})", vm_memory_error(error)))
     }
 
     fn check_access(&self, addr: u32, len: usize, op: &str) -> Result<(), String> {
@@ -801,8 +1207,8 @@ fn exec_local(
         Insn::Add { dest, a, b } => {
             frame.regs[dest as usize] = arith(
                 ArithOp::Add,
-                &frame.regs[a as usize],
-                &frame.regs[b as usize],
+                rk(module, frame, a)?,
+                rk(module, frame, b)?,
                 i64::wrapping_add,
                 |x, y| x + y,
             )?
@@ -810,8 +1216,8 @@ fn exec_local(
         Insn::Sub { dest, a, b } => {
             frame.regs[dest as usize] = arith(
                 ArithOp::Sub,
-                &frame.regs[a as usize],
-                &frame.regs[b as usize],
+                rk(module, frame, a)?,
+                rk(module, frame, b)?,
                 i64::wrapping_sub,
                 |x, y| x - y,
             )?
@@ -819,14 +1225,14 @@ fn exec_local(
         Insn::Mul { dest, a, b } => {
             frame.regs[dest as usize] = arith(
                 ArithOp::Mul,
-                &frame.regs[a as usize],
-                &frame.regs[b as usize],
+                rk(module, frame, a)?,
+                rk(module, frame, b)?,
                 i64::wrapping_mul,
                 |x, y| x * y,
             )?
         }
         Insn::Div { dest, a, b } => {
-            let (a, b) = (&frame.regs[a as usize], &frame.regs[b as usize]);
+            let (a, b) = (rk(module, frame, a)?, rk(module, frame, b)?);
             frame.regs[dest as usize] = match (a, b) {
                 (Value::I64(_), Value::I64(0)) => return Err("vm: division by zero".into()),
                 (Value::I64(x), Value::I64(y)) => Value::I64(x.wrapping_div(*y)),
@@ -835,7 +1241,7 @@ fn exec_local(
             };
         }
         Insn::Cmp { dest, a, b, op } => {
-            let result = compare(&frame.regs[a as usize], &frame.regs[b as usize], op)?;
+            let result = compare(rk(module, frame, a)?, rk(module, frame, b)?, op)?;
             frame.regs[dest as usize] = Value::Bool(result);
         }
         Insn::Trunc { dest, src } => {
@@ -1015,6 +1421,9 @@ fn exec_local(
                 .allocations
                 .allocate(&mut machine.mem, count)
                 .map_err(vm_memory_error)?;
+            if trace_mem() {
+                eprintln!("MEM alloc ptr={addr} count={count}");
+            }
             frame.regs[dest as usize] = Value::Ptr(addr);
         }
         Insn::Free { dest, ptr } => {
@@ -1028,6 +1437,9 @@ fn exec_local(
             let Value::Ptr(ptr) = frame.regs[ptr as usize] else {
                 return Err("vm: retain of a non-pointer".into());
             };
+            if trace_mem() {
+                eprintln!("MEM retain ptr={ptr}");
+            }
             machine
                 .allocations
                 .retain(machine.static_len, ptr)
@@ -1238,7 +1650,12 @@ fn exec_local(
         | Insn::Ret { .. }
         | Insn::Trap { .. }
         | Insn::MakeCont { .. }
-        | Insn::CallCont { .. } => {
+        | Insn::CallCont { .. }
+        | Insn::UnwindRet
+        | Insn::PushHandler { .. }
+        | Insn::FindHandler { .. }
+        | Insn::GetFloor { .. }
+        | Insn::SetFloor { .. } => {
             return Err("vm: non-local instruction in exec_local".into());
         }
     }
@@ -1302,6 +1719,39 @@ fn vm_object_error(error: ObjectError) -> String {
     format!("vm: {}", error.message())
 }
 
+/// A callee frame's registers in one allocation: argument registers
+/// cloned from the caller into the low slots, the rest Void. The
+/// two-step version (collect the arguments, allocate a zeroed frame,
+/// move them in) was two allocations and a drop on every call — the
+/// interpreter's hottest edge.
+fn call_regs(
+    module: &Module,
+    frame: &Frame,
+    args_start: u32,
+    args_len: u16,
+    n_regs: u16,
+    pool: &mut Vec<Vec<Value>>,
+) -> Result<Vec<Value>, String> {
+    let start = usize::try_from(args_start).map_err(|_| "vm: bad argument pool range")?;
+    let end = start
+        .checked_add(usize::from(args_len))
+        .ok_or("vm: bad argument pool range")?;
+    let arg_regs = module
+        .arg_pool
+        .get(start..end)
+        .ok_or("vm: bad argument pool range")?;
+    if args_len > n_regs {
+        return Err("vm: call argument count exceeds callee frame".into());
+    }
+    let mut regs = pool.pop().unwrap_or_default();
+    regs.reserve(usize::from(n_regs));
+    for &src in arg_regs {
+        regs.push(rk(module, frame, src)?.clone());
+    }
+    regs.resize(usize::from(n_regs), Value::Void);
+    Ok(regs)
+}
+
 fn arg_values(
     module: &Module,
     frame: &Frame,
@@ -1318,14 +1768,25 @@ fn arg_values(
         .ok_or("vm: bad argument pool range")?;
     arg_regs
         .iter()
-        .map(|&src| {
-            frame
-                .regs
-                .get(src as usize)
-                .cloned()
-                .ok_or_else(|| format!("vm: argument register r{src} out of range"))
-        })
+        .map(|&src| rk(module, frame, src).cloned())
         .collect()
+}
+
+/// Read a register-or-constant operand field (RK encoding — see
+/// `RK_CONST` in the crate root).
+#[inline]
+fn rk<'a>(module: &'a Module, frame: &'a Frame, field: u16) -> Result<&'a Value, String> {
+    if field & crate::RK_CONST != 0 {
+        module
+            .consts
+            .get(usize::from(field & crate::RK_INDEX))
+            .ok_or_else(|| format!("vm: bad constant operand {}", field & crate::RK_INDEX))
+    } else {
+        frame
+            .regs
+            .get(usize::from(field))
+            .ok_or_else(|| format!("vm: operand register r{field} out of range"))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1465,6 +1926,7 @@ mod tests {
                     code,
                     arity: 0,
                     n_regs: 8,
+                    unwind: vec![],
                 },
                 // Finalizer: λ(self) — read a field (memory must still be
                 // live mid-walk), write one byte, return void.
@@ -1490,6 +1952,7 @@ mod tests {
                     ],
                     arity: 1,
                     n_regs: 6,
+                    unwind: vec![],
                 },
             ],
             consts: vec![Value::I64(10), Value::I64(42), Value::I64(1), Value::Ptr(0)],
@@ -1553,6 +2016,7 @@ mod tests {
                 ],
                 arity: 0,
                 n_regs: 5,
+                unwind: vec![],
             }],
             consts: vec![Value::I64(8), Value::I64(111), Value::I64(222)],
             arg_pool: vec![0],
@@ -1600,6 +2064,7 @@ mod tests {
                 ],
                 arity: 0,
                 n_regs: 5,
+                unwind: vec![],
             }],
             consts: vec![Value::I64(0), Value::I64(42)],
             arg_pool: vec![0],
@@ -1614,5 +2079,36 @@ mod tests {
             Value::I64(42),
             "mutation through one alias visible through the other"
         );
+    }
+
+    #[test]
+    fn call_cont_on_the_executing_frame_delivers_in_place() {
+        // A frame aborting to its own continuation (target == executing
+        // frame) returns the value in place, as a Ret would — its drops
+        // already ran on the path to the abort, so no unwind entry runs
+        // and no walk starts.
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::MakeCont { dest: 0 },
+                    Insn::Const { dest: 1, k: 0 },
+                    Insn::CallCont { callee: 0, src: 1 },
+                    Insn::Trap { message: 0 },
+                ],
+                arity: 0,
+                n_regs: 2,
+                unwind: vec![],
+            }],
+            consts: vec![Value::I64(7)],
+            arg_pool: vec![0],
+            switch_pool: vec![],
+            traps: vec!["vm: resumed past a same-frame abort".into()],
+            statics: vec![],
+            entry: 0,
+        };
+        let mut io = CaptureIO::default();
+        let value = run(&module, &mut io).expect("same-frame CallCont delivers its value");
+        assert_eq!(value, Value::I64(7));
     }
 }

@@ -1,0 +1,43 @@
+enum E {
+	case a(String)
+	case b(Int)
+}
+
+struct Cursor {
+	let i: Int
+
+	init() {
+		self.i = 0
+	}
+
+	extend Self: Iterator {
+		mut func next() -> E? {
+			self.i = self.i + 1
+			if (self.i < 3) {
+				Optional.some(E.a("x" + "y"))
+			} else {
+				Optional.none
+			}
+		}
+	}
+}
+
+struct Src {
+	let n: Int
+
+	extend Self: Iterable {
+		func iter() -> Cursor {
+			Cursor()
+		}
+	}
+}
+
+func check() -> Int {
+	for e in Src(n: 1) { e in
+		match e {
+			.a(s) -> print(s),
+			.b(n) -> print(n)
+		}
+	}
+	0
+}

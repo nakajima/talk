@@ -1,0 +1,4 @@
+func take(consume s: String) -> Int { 0 }
+func f(s: String) -> Int {
+	take(borrow s)
+}

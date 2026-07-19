@@ -1,0 +1,6 @@
+struct Box<Item> {
+	let value: Item
+}
+let box = Box(value: "hello" + " world")
+let moved = box
+box.value.byte_count

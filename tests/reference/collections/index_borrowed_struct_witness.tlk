@@ -1,0 +1,13 @@
+struct Pt {
+	let x: Int
+}
+extend Pt: Equatable<Pt> {
+	func equals(rhs: &Pt) -> Bool {
+		self.x == rhs.x
+	}
+}
+let xs = [Pt(x: 1), Pt(x: 2), Pt(x: 3)]
+match xs.iter().index(Pt(x: 2)) {
+	.some(i) -> print(i),
+	.none -> print("not found")
+}

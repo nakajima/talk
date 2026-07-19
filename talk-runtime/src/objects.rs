@@ -235,6 +235,13 @@ impl<V: Clone> Objects<V> {
     /// highest object index first (reverse allocation order). Marks the
     /// object finalized. When a region's walk is done its objects are
     /// bulk-freed and the walk pops. `None` means no teardown is pending.
+    /// Whether a region teardown walk is in progress. Inline: the
+    /// interpreter checks this before every instruction.
+    #[inline]
+    pub fn finalizing(&self) -> bool {
+        !self.finalize_stack.is_empty()
+    }
+
     pub fn next_finalizer(&mut self) -> Option<(V, u32)> {
         loop {
             let state = self.finalize_stack.last()?;
@@ -276,6 +283,26 @@ impl<V: Clone> Objects<V> {
 
     pub fn live_objects(&self) -> usize {
         self.records.iter().filter(|record| record.live).count()
+    }
+
+    /// Live members of the region `object` belongs to, resolved read-only
+    /// (no path compression). The test-suite leak fences count a
+    /// result-held region's objects as the result's own footprint: while
+    /// the result owns a handle, the whole region legitimately stays live.
+    pub fn region_live_members(&self, object: u32) -> Vec<u32> {
+        let Some(record) = self.records.get(object as usize) else {
+            return vec![];
+        };
+        let mut root = record.region;
+        while self.regions[root as usize].parent != root {
+            root = self.regions[root as usize].parent;
+        }
+        self.regions[root as usize]
+            .members
+            .iter()
+            .copied()
+            .filter(|&member| self.records[member as usize].live)
+            .collect()
     }
 
     fn find(&mut self, region: u32) -> u32 {

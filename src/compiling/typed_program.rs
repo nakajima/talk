@@ -57,19 +57,6 @@ impl TypedProgram {
         &self.files
     }
 
-    pub(crate) fn files_and_types_mut(
-        &mut self,
-    ) -> (
-        &mut IndexMap<Source, crate::typed_ast::TypedFile>,
-        &TypeOutput,
-    ) {
-        (&mut self.files, &self.types)
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.files.is_empty()
-    }
-
     pub(crate) fn into_semantic_parts(self) -> (ResolvedNames, TypeOutput) {
         (self.resolved_names, self.types)
     }

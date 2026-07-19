@@ -1,0 +1,10 @@
+func main() -> Int {
+	let xs = ["a" + "b", "c" + "d"]
+	for s in mut xs {
+		s = s + "!"
+	}
+	for s in xs {
+		print(s)
+	}
+	0
+}

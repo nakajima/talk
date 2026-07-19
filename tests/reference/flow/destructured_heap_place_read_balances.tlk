@@ -1,0 +1,9 @@
+struct Node 'heap {
+	let value: Int
+}
+func check() -> Int {
+	let pair = (Node(value: 1), Node(value: 2))
+	let (a, b) = pair
+	a.value + b.value
+}
+check()

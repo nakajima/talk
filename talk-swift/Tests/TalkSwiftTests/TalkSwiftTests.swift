@@ -13,7 +13,12 @@ final class TalkSwiftTests: XCTestCase {
         XCTAssertFalse(tokens.isEmpty)
     }
 
-    func testPackageCreateRunAndTest() throws {
+    func testRunProgram() throws {
+        let result = try Talk.runProgram(source: "print(40 + 2)\n")
+        XCTAssertEqual(result, .output(stdout: "42\n", stderr: "", value: nil))
+    }
+
+    func testPackageCreateInstallAndRun() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("talk-swift-package-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -28,16 +33,15 @@ final class TalkSwiftTests: XCTestCase {
         try TalkPackage.create(at: directory, name: "sample")
         try TalkPackage.install(at: directory, provider: TarProvider(), offline: true)
 
-        let run = try TalkPackage.run(at: directory, offline: true)
-        guard case .output(let stdout, _, _) = run else {
-            return XCTFail("expected package output, got \(run)")
-        }
-        XCTAssertEqual(stdout, "Hello, Talk!\n")
+        let result = try TalkPackage.run(at: directory, offline: true)
+        XCTAssertEqual(result, .output(stdout: "Hello, Talk!\n", stderr: "", value: nil))
 
-        let result = try TalkPackage.test(at: directory, offline: true)
-        guard case .finished(_, let failures) = result else {
-            return XCTFail("expected package tests to run")
+        // The starter package ships one passing test suite.
+        let tests = try TalkPackage.test(at: directory, offline: true)
+        guard case .finished(let output, let failures) = tests else {
+            return XCTFail("expected a finished test run, got \(tests)")
         }
         XCTAssertEqual(failures, 0)
+        XCTAssertTrue(output.contains("1 tests passed"), output)
     }
 }

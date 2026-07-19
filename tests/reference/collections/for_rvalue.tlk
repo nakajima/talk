@@ -1,0 +1,9 @@
+func make() -> Array<String> {
+	["a" + "b", "c" + "d"]
+}
+func main() -> Int {
+	for x in make() {
+		print(x)
+	}
+	0
+}

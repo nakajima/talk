@@ -1,0 +1,4 @@
+func bad() -> &String {
+	let xs = ["a" + "b"]
+	xs.get(0)
+}

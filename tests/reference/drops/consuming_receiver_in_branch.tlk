@@ -1,0 +1,11 @@
+extend String {
+	consuming func consume_len() -> Int {
+		self.byte_count
+	}
+}
+func f(flag: Bool) -> Int {
+	let s = "a" + "b"
+	if flag { s.consume_len() }
+	1
+}
+f(true)

@@ -1,0 +1,3 @@
+struct Ref {
+	let inner: &String
+}

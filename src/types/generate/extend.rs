@@ -18,6 +18,11 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         let extend_wanted_start = self.wanteds.len();
 
         let mut outputs: Vec<(Symbol, Ty, DeclaredSchemeContext)> = vec![];
+        // `Deinit` witnesses to row-check after solving: drop glue calls
+        // deinit through a fixed signature with no capability parameters,
+        // so a user effect in the hook's row could never be handled
+        // (ADR 0027, open question 2).
+        let mut deinit_rows: Vec<(NodeID, Ty)> = vec![];
         // Associated types without a declared binding are inferred from
         // the member bodies: remember the fresh variables so the solved
         // bindings can be written back into the conformance row (the
@@ -122,6 +127,9 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         touchable_level: None,
                     })));
                 }
+                if owner.protocol == Symbol::Deinit {
+                    deinit_rows.push((member.id, ty.clone()));
+                }
                 break;
             }
 
@@ -146,6 +154,27 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         let wanteds = std::mem::take(self.wanteds);
         let residuals = self.run_solver(wanteds);
         self.report_unresolved_residuals(residuals);
+
+        for (node, ty) in deinit_rows {
+            let zonked = self.store.zonk_ty(&ty);
+            let Ty::Func(_, _, eff) = &zonked else {
+                continue;
+            };
+            for entry in &eff.effects {
+                if entry.effect.external_module_id()
+                    == Some(crate::compiling::module::ModuleId::Core)
+                {
+                    continue;
+                }
+                self.diagnostics.errors.push((
+                    TypeError::DeinitEffectRow {
+                        ty: work.self_ty.render_mono(),
+                        effect: entry.effect.to_string(),
+                    },
+                    node,
+                ));
+            }
+        }
 
         for (symbol, ty, declared) in outputs {
             let zonked = self.store.zonk_ty(&ty);

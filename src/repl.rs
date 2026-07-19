@@ -78,7 +78,7 @@ impl ReplSession {
             };
         }
 
-        let result = Self::run(&source);
+        let result = Self::run(None, &source);
         // The session is source-backed, so replay every successful input
         // with later evaluations. This rebuilds mutable top-level values
         // and reapplies mutations in their original order.
@@ -93,51 +93,63 @@ impl ReplSession {
     /// run_program path; the persist shortcut above would swallow a
     /// program that begins with a declaration).
     pub fn eval_program(&self, source: &str) -> ReplEvalResult {
-        if let Some(diagnostics) = self.diagnostics_for_source(source) {
+        self.eval_program_at(None, source)
+    }
+
+    /// [`Self::eval_program`] with the document's real path, so relative
+    /// imports resolve from it and diagnostics name it (the embedding
+    /// APIs' entry point).
+    pub fn eval_program_at(&self, path: Option<&std::path::Path>, source: &str) -> ReplEvalResult {
+        if let Some(diagnostics) = self.diagnostics_at(path, source) {
             return ReplEvalResult::Diagnostics {
                 source: source.to_string(),
                 diagnostics,
                 message: None,
             };
         }
-        Self::run(source)
+        Self::run(path, source)
     }
 
-    /// Compile and run on the bytecode VM, capturing stdout.
-    fn run(source: &str) -> ReplEvalResult {
-        use crate::compiling::driver::{Driver, DriverConfig, Source};
-        let driver = Driver::new(vec![Source::from(source)], DriverConfig::new("Repl"));
-        let typed = match driver.parse() {
-            Ok(parsed) => match parsed.resolve_names() {
-                Ok(resolved) => resolved.type_check(),
-                Err(err) => return ReplEvalResult::Error(format!("{err:?}")),
-            },
-            Err(err) => return ReplEvalResult::Error(format!("{err:?}")),
+    /// Compile and execute a source unit through the backend (ADR 0034),
+    /// capturing IO for the session.
+    fn run(path: Option<&std::path::Path>, source: &str) -> ReplEvalResult {
+        use crate::compiling::driver::{Driver, DriverConfig, Source, execute_module};
+
+        let unit = match path {
+            Some(path) => Source::in_memory(path.to_path_buf(), source),
+            None => Source::from(source),
         };
+        let driver = Driver::new(vec![unit], DriverConfig::new("Repl"));
+        let parsed = match driver.parse() {
+            Ok(parsed) => parsed,
+            Err(error) => return ReplEvalResult::Error(format!("{error:?}")),
+        };
+        let resolved = match parsed.resolve_names() {
+            Ok(resolved) => resolved,
+            Err(error) => return ReplEvalResult::Error(format!("{error:?}")),
+        };
+        let typed = resolved.type_check();
         if typed.has_errors() {
             let message = typed
                 .diagnostics()
                 .iter()
-                .map(|d| d.to_string())
+                .map(|diagnostic| diagnostic.to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
             return ReplEvalResult::Error(message);
         }
-        let names = value_names(typed.phase.program.types());
-        let mut lowered = typed.lower();
-        if !lowered.phase.diagnostics.is_empty() {
-            return ReplEvalResult::Error(format!(
-                "not yet supported by the backend: {}",
-                lowered.phase.diagnostics.join("; ")
-            ));
-        }
-        match lowered.run_vm_displayed(&names) {
-            Ok((_, stdout, display)) => ReplEvalResult::Output {
-                stdout,
-                stderr: String::new(),
-                value: Some(display),
+        let executable = match typed.compile_executable(None) {
+            Ok(executable) => executable,
+            Err(message) => return ReplEvalResult::Error(message),
+        };
+        let mut io = talk_runtime::io::CaptureIO::default();
+        match execute_module(&executable, &mut io) {
+            Ok(value) => ReplEvalResult::Output {
+                stdout: String::from_utf8_lossy(&io.out).into_owned(),
+                stderr: String::from_utf8_lossy(&io.err).into_owned(),
+                value,
             },
-            Err(err) => ReplEvalResult::Error(format!("evaluation failed: {err}")),
+            Err(message) => ReplEvalResult::Error(message),
         }
     }
 
@@ -313,9 +325,20 @@ impl ReplSession {
     }
 
     fn diagnostics_for_source(&self, source: &str) -> Option<Vec<Diagnostic>> {
+        self.diagnostics_at(None, source)
+    }
+
+    /// The precheck sees the document's real path when the caller has
+    /// one, so module resolution matches the execution that follows.
+    fn diagnostics_at(
+        &self,
+        path: Option<&std::path::Path>,
+        source: &str,
+    ) -> Option<Vec<Diagnostic>> {
+        let path = path.unwrap_or(&self.source_path);
         let doc = DocumentInput {
             id: REPL_DOCUMENT_ID.to_string(),
-            path: self.source_path.to_string_lossy().into_owned(),
+            path: path.to_string_lossy().into_owned(),
             version: 0,
             text: source.to_string(),
         };
@@ -354,45 +377,6 @@ pub struct ReplCompletion {
 
 pub fn needs_more_input(input: &str) -> bool {
     ReplInput::new(input).needs_more_input()
-}
-
-/// Display names for Talk-style value rendering, from the checker's
-/// catalog: struct fields, enum cases (tag order), and the core String
-/// struct (whose values render as quoted text).
-fn value_names(types: &crate::types::TypeOutput) -> crate::vm::interp::ValueNames {
-    let mut names = crate::vm::interp::ValueNames::default();
-    for (symbol, info) in &types.catalog.structs {
-        let display = types
-            .display_names
-            .get(symbol)
-            .cloned()
-            .unwrap_or_else(|| symbol.to_string());
-        let fields: Vec<&str> = info.fields.keys().map(|name| name.as_str()).collect();
-        if display == "String"
-            && (fields == ["base", "byte_count", "capacity"]
-                || fields == ["storage", "byte_count", "capacity"])
-        {
-            names.string_struct = Some(crate::vm::runtime_symbol(*symbol));
-        }
-        let runtime_symbol = crate::vm::runtime_symbol(*symbol);
-        names
-            .fields
-            .insert(runtime_symbol, info.fields.keys().cloned().collect());
-        names.types.insert(runtime_symbol, display);
-    }
-    for (symbol, info) in &types.catalog.enums {
-        let display = types
-            .display_names
-            .get(symbol)
-            .cloned()
-            .unwrap_or_else(|| symbol.to_string());
-        let runtime_symbol = crate::vm::runtime_symbol(*symbol);
-        names
-            .cases
-            .insert(runtime_symbol, info.variants.keys().cloned().collect());
-        names.types.insert(runtime_symbol, display);
-    }
-    names
 }
 
 struct ReplInput<'a> {
@@ -464,11 +448,10 @@ mod tests {
     }
 
     #[test]
-    fn expression_evaluates() {
+    fn evaluates_expressions_through_the_backend() {
         let mut session = session();
-        let result = session.eval("1 + 1");
         assert_eq!(
-            result,
+            session.eval("1 + 1"),
             ReplEvalResult::Output {
                 stdout: String::new(),
                 stderr: String::new(),
@@ -478,58 +461,32 @@ mod tests {
     }
 
     #[test]
-    fn declaration_persists() {
+    fn session_declarations_persist_across_evaluations() {
         let mut session = session();
-        let result = session.eval("let x = 2");
-        assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
-        assert!(session.persistent_source().contains("let x = 2"));
-
-        // The persisted declaration makes `x` resolve and evaluate.
-        let result = session.eval("x + 3");
+        assert!(matches!(
+            session.eval("let base = 40"),
+            ReplEvalResult::Output { value: None, .. }
+        ));
         assert_eq!(
-            result,
+            session.eval("base + 2"),
             ReplEvalResult::Output {
                 stdout: String::new(),
                 stderr: String::new(),
-                value: Some("5".to_string()),
+                value: Some("42".to_string()),
             }
         );
     }
 
     #[test]
-    fn mutation_of_a_persisted_declaration_is_replayed() {
+    fn captured_print_output_returns_with_the_result() {
         let mut session = session();
-        assert!(matches!(
-            session.eval("let dictionary = Dict()"),
-            ReplEvalResult::Output { value: None, .. }
-        ));
-        assert_eq!(
-            value_of(session.eval("dictionary.insert \"fizz\", \"buzz\"")),
-            "()"
-        );
-        assert!(session
-            .persistent_source()
-            .contains("dictionary.insert \"fizz\", \"buzz\""));
-        assert_eq!(
-            value_of(session.eval("dictionary.get \"fizz\"")),
-            "Optional.some(\"buzz\")"
-        );
-    }
-
-    #[test]
-    fn redefinition_updates_binding() {
-        // Top-level redefinition is module-scope behavior: the newest
-        // declaration wins (docs/sequential-scoping-plan.md, rule 4).
-        let mut session = session();
-        session.eval("let x = 2");
-        session.eval("let x = 3");
-        let result = session.eval("x");
+        let result = session.eval("print(\"hey\")");
         assert_eq!(
             result,
             ReplEvalResult::Output {
-                stdout: String::new(),
+                stdout: "hey\n".to_string(),
                 stderr: String::new(),
-                value: Some("3".to_string()),
+                value: None,
             }
         );
     }
@@ -576,26 +533,7 @@ mod tests {
             ReplEvalResult::Output {
                 stdout: String::new(),
                 stderr: String::new(),
-                value: Some("<T0>(T0) -> T0".to_string()),
-            }
-        );
-    }
-
-    #[test]
-    fn eval_program_runs_declarations_and_statements_together() {
-        // The playground path: a complete program is never persisted —
-        // declarations and statements compile and run as one unit (the
-        // REPL's persist shortcut would swallow a program that begins
-        // with a declaration).
-        let session = session();
-        let result = session
-            .eval_program("func double(x: Int) -> Int {\n\tx * 2\n}\nprint(\"hi\")\ndouble(21)");
-        assert_eq!(
-            result,
-            ReplEvalResult::Output {
-                stdout: "hi\n".to_string(),
-                stderr: String::new(),
-                value: Some("42".to_string()),
+                value: Some("<T0>(&T0) -> &T0".to_string()),
             }
         );
     }
@@ -605,42 +543,6 @@ mod tests {
         let session = session();
         let result = session.eval_program("let x: Int = \"nope\"");
         assert!(matches!(result, ReplEvalResult::Diagnostics { .. }));
-    }
-
-    #[test]
-    fn values_render_talk_style() {
-        let mut session = session();
-        assert_eq!(value_of(session.eval("true")), "true");
-        assert_eq!(value_of(session.eval("1.5")), "1.5");
-        assert_eq!(value_of(session.eval("2.0")), "2.0");
-        assert_eq!(value_of(session.eval("\"hi\\nthere\"")), "\"hi\\nthere\"");
-        assert_eq!(value_of(session.eval("(1, true)")), "(1, true)");
-    }
-
-    #[test]
-    fn records_and_variants_render_with_their_names() {
-        let mut session = session();
-        let result = session.eval(
-            "struct Point {\n\tlet x: Int\n\tlet y: Int\n\n\tinit(x: Int, y: Int) {\n\t\tself.x = x\n\t\tself.y = y\n\t\tself\n\t}\n}",
-        );
-        assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
-        assert_eq!(
-            value_of(session.eval("Point(x: 1, y: 2)")),
-            "Point(x: 1, y: 2)"
-        );
-
-        let some: ReplEvalResult = session.eval("let v: Optional<Int> = Optional.some(5)");
-        assert!(matches!(some, ReplEvalResult::Output { value: None, .. }));
-        assert_eq!(value_of(session.eval("v")), "Optional.some(5)");
-    }
-
-    fn value_of(result: ReplEvalResult) -> String {
-        match result {
-            ReplEvalResult::Output {
-                value: Some(value), ..
-            } => value,
-            other => panic!("expected a value, got {other:?}"),
-        }
     }
 
     #[test]

@@ -1,0 +1,13 @@
+struct Dog {
+	let age: Int
+	let count: Int
+
+	init(age: Int) {
+		self.age = age
+		self.count = 0
+		self
+	}
+}
+
+let person = Dog(age: 123)
+print(person.age)

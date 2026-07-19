@@ -1,0 +1,9 @@
+enum Wrapped { case tagged(String) }
+func f(flag: Bool) -> Int {
+	let w = Wrapped.tagged("a" + "b")
+	if flag {
+		match w { .tagged(s) -> s.byte_count }
+	}
+	0
+}
+f(true)

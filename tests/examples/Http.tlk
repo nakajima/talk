@@ -1,0 +1,9 @@
+let http = HTTP.Server()
+
+http.get("/", func() {
+		print("GET /")
+		"it worked"
+	})
+
+print("running on :3000")
+http.run(3000)

@@ -1,0 +1,3 @@
+let s = "hello" + " world"
+let pair = (s, s)
+0

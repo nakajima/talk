@@ -1,0 +1,9 @@
+func main() -> Int {
+	let xs = [5]
+	for x in mut xs {
+		x = x + 1
+	}
+	print(xs.count)
+	print(xs.get(0))
+	0
+}

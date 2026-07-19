@@ -1,0 +1,9 @@
+func main() -> Int {
+	let a = [7, 8]
+	let it1 = a.iter()
+	let it2 = a.iter()
+	if let .some(v) = it1.next() { print(v) }
+	if let .some(v) = it2.next() { print(v) }
+	if let .some(v) = it1.next() { print(v) }
+	0
+}

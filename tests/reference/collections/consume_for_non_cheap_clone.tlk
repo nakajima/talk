@@ -1,0 +1,10 @@
+struct Item {
+	let name: String
+}
+func main() -> Int {
+	let xs = [Item(name: "a" + "b")]
+	for item in consume xs {
+		print(item.name)
+	}
+	0
+}

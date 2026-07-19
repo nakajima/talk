@@ -1,0 +1,14 @@
+struct Token 'linear {
+	let id: Int
+	consuming func close() -> Int {
+		self.id
+	}
+}
+func make(flag: Bool) -> Int {
+	let token = Token(id: 1)
+	if flag {
+		token.close()
+	} else {
+		0
+	}
+}

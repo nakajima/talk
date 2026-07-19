@@ -1,0 +1,7 @@
+func bad(flag: Bool) -> Substring {
+	let s = "hello" + " world"
+	match flag {
+		true -> s.utf8().slice(0, 1),
+		false -> s.utf8().slice(1, 1)
+	}
+}

@@ -1,0 +1,9 @@
+struct Node 'heap {
+	let value: Int
+}
+let root = Node(value: 1)
+func bump() -> Int {
+	root.value = root.value + 10
+	root.value
+}
+bump() + root.value

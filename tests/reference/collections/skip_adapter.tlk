@@ -1,0 +1,8 @@
+func main() -> Int {
+	let a = [1, 2, 3]
+	for i in a.iter().skip(1) {
+		print(i)
+	}
+	print(a.count)
+	0
+}

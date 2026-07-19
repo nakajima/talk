@@ -1,0 +1,9 @@
+effect 'oops(error) -> Never
+@handle 'oops { err in
+	let local = "x" + "y"
+	local.byte_count
+}
+func boom() 'oops -> Int {
+	'oops("bang")
+}
+boom()

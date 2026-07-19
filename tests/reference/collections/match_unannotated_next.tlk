@@ -1,0 +1,9 @@
+func main() {
+	let a = [42]
+	let i = a.iter()
+	let opt = i.next()
+	match opt {
+		.some(x) -> print(x),
+		.none -> print(0)
+	}
+}

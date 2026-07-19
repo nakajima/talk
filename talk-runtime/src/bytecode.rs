@@ -4,7 +4,7 @@ use crate::symbol::{LocalSymbolId, ModuleId, ModuleSymbolId, Symbol};
 use crate::{Chunk, Insn, IoOp, MemKind, Module};
 
 const MAGIC: &[u8; 7] = b"TALKBC\0";
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EncodeError {
@@ -107,6 +107,12 @@ impl Encoder {
             self.len("code", chunk.code.len())?;
             for insn in &chunk.code {
                 self.insn(*insn);
+            }
+            // The unwind table (ADR 0027): (suspension pc, entry pc).
+            self.len("unwind", chunk.unwind.len())?;
+            for &(suspension, entry) in &chunk.unwind {
+                self.u32(suspension);
+                self.u32(entry);
             }
         }
         Ok(())
@@ -294,6 +300,37 @@ impl Encoder {
                 self.u16(dest);
             }
             Insn::CallCont { callee, src } => self.reg2(47, callee, src),
+            Insn::UnwindRet => self.u8(50),
+            Insn::PushHandler {
+                effect,
+                clause,
+                cont,
+            } => {
+                self.u8(51);
+                self.u32(effect);
+                self.u16(clause);
+                self.u16(cont);
+            }
+            Insn::FindHandler {
+                clause,
+                cont,
+                index,
+                effect,
+            } => {
+                self.u8(52);
+                self.u32(effect);
+                self.u16(clause);
+                self.u16(cont);
+                self.u16(index);
+            }
+            Insn::GetFloor { dest } => {
+                self.u8(53);
+                self.u16(dest);
+            }
+            Insn::SetFloor { src } => {
+                self.u8(54);
+                self.u16(src);
+            }
             Insn::Load { dest, ptr, kind } => {
                 self.u8(25);
                 self.u16(dest);
@@ -588,7 +625,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn chunks(&mut self) -> Result<Vec<Chunk>, DecodeError> {
-        let len = self.len()?;
+        let len = self.len_of(16)?;
         let mut chunks = Vec::with_capacity(len);
         for _ in 0..len {
             let name = self.string()?;
@@ -599,11 +636,19 @@ impl<'a> Decoder<'a> {
             for _ in 0..code_len {
                 code.push(self.insn()?);
             }
+            let unwind_len = self.len_of(8)?;
+            let mut unwind = Vec::with_capacity(unwind_len);
+            for _ in 0..unwind_len {
+                let suspension = self.u32()?;
+                let entry = self.u32()?;
+                unwind.push((suspension, entry));
+            }
             chunks.push(Chunk {
                 name,
                 code,
                 arity,
                 n_regs,
+                unwind,
             });
         }
         Ok(chunks)
@@ -840,6 +885,20 @@ impl<'a> Decoder<'a> {
                 b: self.u16()?,
                 kind: self.mem_kind()?,
             }),
+            50 => Ok(Insn::UnwindRet),
+            51 => Ok(Insn::PushHandler {
+                effect: self.u32()?,
+                clause: self.u16()?,
+                cont: self.u16()?,
+            }),
+            52 => Ok(Insn::FindHandler {
+                effect: self.u32()?,
+                clause: self.u16()?,
+                cont: self.u16()?,
+                index: self.u16()?,
+            }),
+            53 => Ok(Insn::GetFloor { dest: self.u16()? }),
+            54 => Ok(Insn::SetFloor { src: self.u16()? }),
             _ => Err(DecodeError::InvalidTag("instruction", tag)),
         }
     }
@@ -947,7 +1006,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn strings(&mut self) -> Result<Vec<String>, DecodeError> {
-        let len = self.len()?;
+        let len = self.len_of(4)?;
         let mut strings = Vec::with_capacity(len);
         for _ in 0..len {
             strings.push(self.string()?);
@@ -961,7 +1020,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn u16_vec(&mut self) -> Result<Vec<u16>, DecodeError> {
-        let len = self.len()?;
+        let len = self.len_of(2)?;
         let mut values = Vec::with_capacity(len);
         for _ in 0..len {
             values.push(self.u16()?);
@@ -970,7 +1029,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn u32_vec(&mut self) -> Result<Vec<u32>, DecodeError> {
-        let len = self.len()?;
+        let len = self.len_of(4)?;
         let mut values = Vec::with_capacity(len);
         for _ in 0..len {
             values.push(self.u32()?);
@@ -984,7 +1043,24 @@ impl<'a> Decoder<'a> {
     }
 
     fn len(&mut self) -> Result<usize, DecodeError> {
-        usize::try_from(self.u32()?).map_err(|_| DecodeError::IntegerOverflow)
+        self.len_of(1)
+    }
+
+    /// Read a section count and reject it against the bytes actually
+    /// present: images are untrusted, and every element of the section
+    /// occupies at least `min_element_bytes` of input, so a count whose
+    /// encoded size exceeds the remainder is a lie — caught before any
+    /// allocation is sized from it, bounding amplification to the
+    /// in-memory/encoded ratio of one honest element.
+    fn len_of(&mut self, min_element_bytes: usize) -> Result<usize, DecodeError> {
+        let len = usize::try_from(self.u32()?).map_err(|_| DecodeError::IntegerOverflow)?;
+        let needed = len
+            .checked_mul(min_element_bytes)
+            .ok_or(DecodeError::IntegerOverflow)?;
+        if needed > self.bytes.len() - self.cursor {
+            return Err(DecodeError::TooShort);
+        }
+        Ok(len)
     }
 
     fn bool(&mut self) -> Result<bool, DecodeError> {
@@ -1057,14 +1133,36 @@ impl Chunk {
             return Err(DecodeError::InvalidIndex("chunk arity"));
         }
         for insn in &self.code {
-            insn.validate(module, self.n_regs)?;
+            insn.validate(module, self.n_regs, self.code.len())?;
+        }
+        let mut previous_suspension = None;
+        for &(suspension, entry) in &self.unwind {
+            let suspension =
+                usize::try_from(suspension).map_err(|_| DecodeError::IntegerOverflow)?;
+            let entry = usize::try_from(entry).map_err(|_| DecodeError::IntegerOverflow)?;
+            if suspension == 0 || suspension > self.code.len() {
+                return Err(DecodeError::InvalidIndex("unwind suspension pc"));
+            }
+            if entry >= self.code.len() {
+                return Err(DecodeError::InvalidIndex("unwind entry pc"));
+            }
+            if previous_suspension.is_some_and(|previous| suspension <= previous) {
+                return Err(DecodeError::InvalidIndex("unwind table order"));
+            }
+            if !matches!(
+                self.code[suspension - 1],
+                Insn::Call { .. } | Insn::CallIndirect { .. }
+            ) {
+                return Err(DecodeError::InvalidIndex("unwind suspension instruction"));
+            }
+            previous_suspension = Some(suspension);
         }
         Ok(())
     }
 }
 
 impl Insn {
-    fn validate(&self, module: &Module, n_regs: u16) -> Result<(), DecodeError> {
+    fn validate(&self, module: &Module, n_regs: u16, code_len: usize) -> Result<(), DecodeError> {
         match *self {
             Insn::Const { dest, k } => {
                 Register::new(n_regs).check(dest)?;
@@ -1093,11 +1191,31 @@ impl Insn {
                 Register::new(n_regs).check_many(&[dest, src])?
             }
             Insn::MakeCont { dest } => Register::new(n_regs).check(dest)?,
+            // UnwindRet touches no registers; its legality is dynamic
+            // (only during an abort unwind).
+            Insn::UnwindRet => {}
+            Insn::PushHandler { clause, cont, .. } => {
+                Register::new(n_regs).check_many(&[clause, cont])?;
+            }
+            Insn::FindHandler {
+                clause,
+                cont,
+                index,
+                ..
+            } => {
+                Register::new(n_regs).check_many(&[clause, cont, index])?;
+            }
+            Insn::GetFloor { dest } => Register::new(n_regs).check(dest)?,
+            Insn::SetFloor { src } => Register::new(n_regs).check(src)?,
             Insn::Add { dest, a, b }
             | Insn::Sub { dest, a, b }
             | Insn::Mul { dest, a, b }
             | Insn::Div { dest, a, b }
-            | Insn::Cmp { dest, a, b, .. } => Register::new(n_regs).check_many(&[dest, a, b])?,
+            | Insn::Cmp { dest, a, b, .. } => {
+                Register::new(n_regs).check(dest)?;
+                Register::new(n_regs).check_rk(a, module)?;
+                Register::new(n_regs).check_rk(b, module)?;
+            }
             Insn::CellSet { cell, src } => Register::new(n_regs).check_many(&[cell, src])?,
             Insn::RecordNew {
                 dest,
@@ -1186,15 +1304,15 @@ impl Insn {
                 Register::new(n_regs).check_many(&[dest, callee])?;
                 module.check_arg_registers(args_start, args_len, n_regs)?;
             }
-            Insn::Jump { target } => Self::check_target(target)?,
+            Insn::Jump { target } => Self::check_target(target, code_len)?,
             Insn::Branch {
                 cond,
                 then_target,
                 else_target,
             } => {
                 Register::new(n_regs).check(cond)?;
-                Self::check_target(then_target)?;
-                Self::check_target(else_target)?;
+                Self::check_target(then_target, code_len)?;
+                Self::check_target(else_target, code_len)?;
             }
             Insn::Switch {
                 tag,
@@ -1203,6 +1321,10 @@ impl Insn {
             } => {
                 Register::new(n_regs).check(tag)?;
                 module.check_switch_range(targets_start, targets_len)?;
+                let start = targets_start as usize;
+                for target in &module.switch_pool[start..start + targets_len as usize] {
+                    Self::check_target(*target, code_len)?;
+                }
             }
             Insn::Ret { src } => Register::new(n_regs).check(src)?,
             Insn::Trap { message } => {
@@ -1214,8 +1336,13 @@ impl Insn {
         Ok(())
     }
 
-    fn check_target(target: u32) -> Result<(), DecodeError> {
-        let _ = usize::try_from(target).map_err(|_| DecodeError::IntegerOverflow)?;
+    /// A control-flow target must land inside the chunk it jumps
+    /// within: validation happens before execution, not during it.
+    fn check_target(target: u32, code_len: usize) -> Result<(), DecodeError> {
+        let target = usize::try_from(target).map_err(|_| DecodeError::IntegerOverflow)?;
+        if target >= code_len {
+            return Err(DecodeError::InvalidIndex("control-flow target"));
+        }
         Ok(())
     }
 }
@@ -1239,7 +1366,11 @@ impl Module {
     }
 
     fn check_arg_registers(&self, start: u32, len: u16, n_regs: u16) -> Result<(), DecodeError> {
-        Register::new(n_regs).check_many(self.arg_registers(start, len)?)
+        let checker = Register::new(n_regs);
+        for &field in self.arg_registers(start, len)? {
+            checker.check_rk(field, self)?;
+        }
+        Ok(())
     }
 
     fn check_call_arity(&self, chunk: u32, args_len: u16) -> Result<(), DecodeError> {
@@ -1254,6 +1385,12 @@ impl Module {
     }
 
     fn check_switch_range(&self, start: u32, len: u16) -> Result<(), DecodeError> {
+        // The interpreter requires at least the default target: an
+        // empty switch must not cross the validate-before-execute
+        // boundary.
+        if len == 0 {
+            return Err(DecodeError::InvalidIndex("empty switch"));
+        }
         let start = usize::try_from(start).map_err(|_| DecodeError::IntegerOverflow)?;
         let end = start
             .checked_add(usize::from(len))
@@ -1272,6 +1409,18 @@ struct Register {
 impl Register {
     fn new(n_regs: u16) -> Self {
         Self { n_regs }
+    }
+
+    /// A register-or-constant operand: the constant half validates
+    /// against the module pool instead of the frame width.
+    fn check_rk(&self, field: u16, module: &Module) -> Result<(), DecodeError> {
+        if field & crate::RK_CONST != 0 {
+            if usize::from(field & crate::RK_INDEX) >= module.consts.len() {
+                return Err(DecodeError::InvalidIndex("constant operand"));
+            }
+            return Ok(());
+        }
+        self.check(field)
     }
 
     fn check(&self, reg: u16) -> Result<(), DecodeError> {
@@ -1294,6 +1443,132 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rejects_counts_that_violate_element_widths() {
+        // A count can fit the one-byte lower bound while still lying
+        // about a wider section: eight remaining bytes cannot hold
+        // three u32s.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        let mut decoder = Decoder {
+            bytes: &bytes,
+            cursor: 0,
+        };
+        assert!(decoder.u32_vec().is_err());
+    }
+
+    #[test]
+    fn rejects_empty_switches() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::Switch {
+                        tag: 0,
+                        targets_start: 0,
+                        targets_len: 0,
+                    },
+                    Insn::Ret { src: 0 },
+                ],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            }],
+            consts: vec![Value::I64(0)],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let encoded = module.encode_bytecode().unwrap();
+        assert!(Module::decode_bytecode(&encoded).is_err());
+    }
+
+    #[test]
+    fn rejects_section_counts_larger_than_the_image() {
+        // A malformed image may claim a section of billions of entries:
+        // the decoder must reject it against the bytes actually present
+        // instead of allocating for the claim (images are untrusted).
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![Insn::Const { dest: 0, k: 0 }, Insn::Ret { src: 0 }],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            }],
+            consts: vec![Value::I64(42)],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let encoded = module.encode_bytecode().unwrap();
+        // Corrupt every u32 in the image to the maximum count in turn:
+        // wherever a section length lives, the claim now exceeds the
+        // input, and decoding must fail cleanly rather than abort.
+        for offset in 0..encoded.len().saturating_sub(4) {
+            let mut corrupted = encoded.clone();
+            corrupted[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+            let _ = Module::decode_bytecode(&corrupted);
+        }
+        let mut huge_chunks = encoded.clone();
+        let counts_at = MAGIC.len() + 4;
+        huge_chunks[counts_at..counts_at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(Module::decode_bytecode(&huge_chunks).is_err());
+    }
+
+    #[test]
+    fn rejects_control_flow_targets_outside_the_chunk() {
+        let jump = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![Insn::Jump { target: 9 }, Insn::Ret { src: 0 }],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            }],
+            consts: vec![],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let encoded = jump.encode_bytecode().unwrap();
+        assert!(Module::decode_bytecode(&encoded).is_err(), "jump");
+
+        let switch = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::Switch {
+                        tag: 0,
+                        targets_start: 0,
+                        targets_len: 1,
+                    },
+                    Insn::Ret { src: 0 },
+                ],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            }],
+            consts: vec![Value::I64(0)],
+            arg_pool: vec![],
+            switch_pool: vec![77],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+        let encoded = switch.encode_bytecode().unwrap();
+        assert!(Module::decode_bytecode(&encoded).is_err(), "switch pool");
+    }
+
+    #[test]
     fn round_trips_simple_module() {
         let module = Module {
             chunks: vec![Chunk {
@@ -1301,6 +1576,7 @@ mod tests {
                 code: vec![Insn::Const { dest: 0, k: 0 }, Insn::Ret { src: 0 }],
                 arity: 0,
                 n_regs: 1,
+                unwind: vec![],
             }],
             consts: vec![Value::I64(42)],
             arg_pool: vec![],
@@ -1316,6 +1592,104 @@ mod tests {
     }
 
     #[test]
+    fn round_trips_unwind_table_and_unwind_ret() {
+        // ADR 0027: the chunk's unwind table and the UnwindRet insn
+        // survive the encode/decode round trip.
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::Call {
+                        dest: 0,
+                        chunk: 0,
+                        args_start: 0,
+                        args_len: 0,
+                    },
+                    Insn::UnwindRet,
+                ],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![(2, 2)],
+            }],
+            consts: vec![Value::I64(42)],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        let decoded = Module::decode_bytecode(&encoded).unwrap();
+        assert_eq!(decoded.render(), module.render());
+        assert_eq!(decoded.chunks[0].unwind, vec![(2, 2)]);
+        assert_eq!(decoded.chunks[0].code[2], Insn::UnwindRet);
+    }
+
+    #[test]
+    fn rejects_invalid_unwind_tables() {
+        fn module_with(unwind: Vec<(u32, u32)>) -> Module {
+            Module {
+                chunks: vec![Chunk {
+                    name: "main".into(),
+                    code: vec![
+                        Insn::Call {
+                            dest: 0,
+                            chunk: 0,
+                            args_start: 0,
+                            args_len: 0,
+                        },
+                        Insn::Call {
+                            dest: 0,
+                            chunk: 0,
+                            args_start: 0,
+                            args_len: 0,
+                        },
+                        Insn::UnwindRet,
+                    ],
+                    arity: 0,
+                    n_regs: 1,
+                    unwind,
+                }],
+                consts: vec![],
+                arg_pool: vec![],
+                switch_pool: vec![],
+                traps: vec![],
+                statics: vec![],
+                entry: 0,
+            }
+        }
+
+        for (unwind, expected) in [
+            (
+                vec![(0, 2)],
+                DecodeError::InvalidIndex("unwind suspension pc"),
+            ),
+            (
+                vec![(4, 2)],
+                DecodeError::InvalidIndex("unwind suspension pc"),
+            ),
+            (vec![(1, 3)], DecodeError::InvalidIndex("unwind entry pc")),
+            (
+                vec![(1, 2), (1, 2)],
+                DecodeError::InvalidIndex("unwind table order"),
+            ),
+            (
+                vec![(2, 2), (1, 2)],
+                DecodeError::InvalidIndex("unwind table order"),
+            ),
+            (
+                vec![(3, 2)],
+                DecodeError::InvalidIndex("unwind suspension instruction"),
+            ),
+        ] {
+            let encoded = module_with(unwind).encode_bytecode().unwrap();
+            assert_eq!(Module::decode_bytecode(&encoded).unwrap_err(), expected);
+        }
+    }
+
+    #[test]
     fn round_trips_bool_to_int_opcode() {
         let module = Module {
             chunks: vec![Chunk {
@@ -1327,6 +1701,7 @@ mod tests {
                 ],
                 arity: 0,
                 n_regs: 2,
+                unwind: vec![],
             }],
             consts: vec![Value::Bool(true)],
             arg_pool: vec![],
@@ -1356,6 +1731,7 @@ mod tests {
                 ],
                 arity: 0,
                 n_regs: 2,
+                unwind: vec![],
             }],
             consts: vec![],
             arg_pool: vec![],
@@ -1399,6 +1775,7 @@ mod tests {
                 ],
                 arity: 0,
                 n_regs: 3,
+                unwind: vec![],
             }],
             consts: vec![Value::I64(7)],
             arg_pool: vec![0],
@@ -1484,12 +1861,14 @@ mod tests {
                     ],
                     arity: 0,
                     n_regs: 11,
+                    unwind: vec![],
                 },
                 Chunk {
                     name: "callee".into(),
                     code: vec![Insn::EnvGet { dest: 1, index: 0 }, Insn::Ret { src: 0 }],
                     arity: 1,
                     n_regs: 2,
+                    unwind: vec![],
                 },
             ],
             consts: vec![
@@ -1526,6 +1905,7 @@ mod tests {
                 code: vec![Insn::Const { dest: 0, k: 99 }],
                 arity: 0,
                 n_regs: 1,
+                unwind: vec![],
             }],
             consts: vec![],
             arg_pool: vec![],
@@ -1555,6 +1935,7 @@ mod tests {
                 ],
                 arity: 0,
                 n_regs: 1,
+                unwind: vec![],
             }],
             consts: vec![],
             arg_pool: vec![1],
@@ -1586,12 +1967,14 @@ mod tests {
                     ],
                     arity: 0,
                     n_regs: 1,
+                    unwind: vec![],
                 },
                 Chunk {
                     name: "callee".into(),
                     code: vec![Insn::Ret { src: 0 }],
                     arity: 1,
                     n_regs: 1,
+                    unwind: vec![],
                 },
             ],
             consts: vec![],
@@ -1615,6 +1998,7 @@ mod tests {
                 code: vec![],
                 arity: 1,
                 n_regs: 0,
+                unwind: vec![],
             }],
             consts: vec![],
             arg_pool: vec![],
@@ -1653,12 +2037,14 @@ mod tests {
                     ],
                     arity: 0,
                     n_regs: 3,
+                    unwind: vec![],
                 },
                 Chunk {
                     name: "callee".into(),
                     code: vec![Insn::Ret { src: 0 }],
                     arity: 1,
                     n_regs: 1,
+                    unwind: vec![],
                 },
             ],
             consts: vec![Value::I64(7)],

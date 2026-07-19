@@ -1000,10 +1000,7 @@ impl<'a> Parser<'a> {
             TokenKind::Continue => {
                 let tok = self.push_source_location();
                 self.consume(TokenKind::Continue)?;
-                let expr = if self.peek_is(TokenKind::Newline)
-                    || self.peek_is(TokenKind::Semicolon)
-                    || self.peek_is(TokenKind::EOF)
-                {
+                let expr = if self.at_implicit_statement_end() {
                     None
                 } else {
                     Some(self.expr()?.as_expr())
@@ -1045,6 +1042,31 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    /// A control-flow condition: trailing-block calls are disabled (the
+    /// following `{` belongs to the construct's body, exactly as in `for`
+    /// and `match` headers), and the full operator ladder binds — `a || b`
+    /// is a condition, not a parse error.
+    fn condition(&mut self, context: ParseContext) -> Result<Node, ParserError> {
+        self.push_context(context);
+        let cond = self.expr();
+        self.pop_context();
+        match cond {
+            // Assignments parse as statements; a condition must be an
+            // expression.
+            Ok(Node::Stmt(_)) => Err(ParserError::CannotAssign),
+            other => other,
+        }
+    }
+
+    /// A value-carrying statement keyword (`return`, `continue`) followed
+    /// by any of these carries no value.
+    fn at_implicit_statement_end(&self) -> bool {
+        self.peek_is(TokenKind::Newline)
+            || self.peek_is(TokenKind::Semicolon)
+            || self.peek_is(TokenKind::RightBrace)
+            || self.peek_is(TokenKind::EOF)
+    }
+
     pub(super) fn if_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
@@ -1053,7 +1075,7 @@ impl<'a> Parser<'a> {
             return self.if_let_match(tok, true);
         }
 
-        let cond = self.expr_with_precedence(Precedence::Or)?;
+        let cond = self.condition(ParseContext::If)?;
         let body = self.block(BlockContext::If, true)?;
         let alt = if self.did_match(TokenKind::Else)? {
             self.else_block(true)?
@@ -1106,9 +1128,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        self.push_context(ParseContext::If);
-        let cond = self.expr_with_precedence(Precedence::Or)?;
-        self.pop_context();
+        let cond = self.condition(ParseContext::If)?;
         let body = self.block(BlockContext::If, true)?;
 
         if self.did_match(TokenKind::Else)? {
@@ -1349,10 +1369,7 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Loop)?;
 
         let cond = if !self.peek_is(TokenKind::LeftBrace) {
-            self.push_context(ParseContext::Loop);
-            let result = Some(self.expr_with_precedence(Precedence::Or)?);
-            self.pop_context();
-            result
+            Some(self.condition(ParseContext::Loop)?)
         } else {
             None
         };
@@ -1404,7 +1421,7 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Return)?;
 
-        if self.peek_is(TokenKind::Newline) || self.peek_is(TokenKind::RightBrace) {
+        if self.at_implicit_statement_end() {
             return self.save_meta(tok, |id, span| Stmt {
                 id,
                 span,
@@ -1644,6 +1661,17 @@ impl<'a> Parser<'a> {
                         kind: InlineIRInstructionKind::Free { ptr },
                     })
                 }
+                "retain" => {
+                    let ty = self.type_annotation()?;
+                    let value = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Retain { ty, value },
+                    })
+                }
                 "copy" => {
                     let ty = self.type_annotation()?;
                     let from = self.ir_value()?;
@@ -1700,7 +1728,15 @@ impl<'a> Parser<'a> {
 
         let val = match current.kind {
             TokenKind::IRRegister => Value::Reg(parse_lexed(self.lexeme(&current))),
-            TokenKind::Int => Value::Int(parse_lexed(self.lexeme(&current))),
+            TokenKind::Int => {
+                let source = self.lexeme(&current);
+                let normalized = source.replace('_', "");
+                Value::Int(normalized.parse().map_err(|_| {
+                    ParserError::IntegerLiteralOutOfRange {
+                        literal: source.into(),
+                    }
+                })?)
+            }
             TokenKind::Float => Value::Float(parse_lexed(self.lexeme(&current))),
             TokenKind::True => Value::Bool(true),
             TokenKind::False => Value::Bool(false),
@@ -2815,28 +2851,39 @@ impl<'a> Parser<'a> {
     /// (ADR 0018, borrow-by-default): unadorned parameters become shared
     /// borrows, `mut` becomes an exclusive borrow, `consume` (and
     /// `consume mut`, which only differs callee-locally) stays the bare
-    /// owned type. Explicit `&`/`&mut` spellings are left as written.
+    /// owned type. A modeless `&`/`&mut` spelling is left as written, but
+    /// a `mut`/`consume` mode on an annotation that already spells a
+    /// borrow is a conflict — the mode and the `&` are rival spellings of
+    /// the same decision.
     fn apply_func_type_param_mode(
         &mut self,
         mode: Option<ParamMode>,
         annotation: TypeAnnotation,
-    ) -> TypeAnnotation {
+    ) -> Result<TypeAnnotation, ParserError> {
+        if let Some(mode @ (ParamMode::Mut | ParamMode::Consume | ParamMode::ConsumeMut)) = mode
+            && matches!(annotation.kind, TypeAnnotationKind::Borrow { .. })
+        {
+            return Err(ParserError::ParamModeBorrowConflict {
+                mode: mode.keyword(),
+                annotation: annotation.span,
+            });
+        }
         let mutable = match mode {
-            Some(ParamMode::Consume | ParamMode::ConsumeMut) => return annotation,
+            Some(ParamMode::Consume | ParamMode::ConsumeMut) => return Ok(annotation),
             Some(ParamMode::Mut) => true,
             None | Some(ParamMode::Borrow) => false,
         };
         if matches!(annotation.kind, TypeAnnotationKind::Borrow { .. }) {
-            return annotation;
+            return Ok(annotation);
         }
-        TypeAnnotation {
+        Ok(TypeAnnotation {
             id: self.next_id(),
             span: annotation.span,
             kind: TypeAnnotationKind::Borrow {
                 mutable,
                 inner: Box::new(annotation),
             },
-        }
+        })
     }
 
     fn next_starts_type_annotation(&self) -> bool {
@@ -2901,7 +2948,7 @@ impl<'a> Parser<'a> {
                 let params = sig_args
                     .into_iter()
                     .map(|(mode, annotation)| self.apply_func_type_param_mode(mode, annotation))
-                    .collect();
+                    .collect::<Result<_, _>>()?;
                 return self.save_meta(tok, |id, span| TypeAnnotation {
                     id,
                     span,

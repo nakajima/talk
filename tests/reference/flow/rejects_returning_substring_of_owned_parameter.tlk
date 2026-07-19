@@ -1,0 +1,3 @@
+func first(consume s: String) -> Substring {
+	s.utf8().slice(0, 1)
+}

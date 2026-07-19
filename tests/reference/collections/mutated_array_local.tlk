@@ -1,0 +1,6 @@
+func main() -> Int {
+	let xs = [5]
+	xs.push(6)
+	print(xs.count)
+	0
+}

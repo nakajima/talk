@@ -20,19 +20,16 @@
 pub mod parsing;
 pub use parsing::*;
 pub mod analysis;
+pub(crate) mod backend;
 pub mod common;
 pub mod compiling;
 pub use common::*;
 pub mod desugar;
-pub mod flow;
-pub mod lambda_g;
-pub mod lower;
 pub mod name_resolution;
 pub mod repl;
 pub mod testing;
 pub mod typed_ast;
 pub mod types;
-pub mod vm;
 
 #[cfg(feature = "cli")]
 pub mod cli;

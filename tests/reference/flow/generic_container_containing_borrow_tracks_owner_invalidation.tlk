@@ -1,0 +1,13 @@
+enum Maybe<T> {
+	case some(T)
+	case none
+}
+func bad() -> Int {
+	let s = "hello" + " world"
+	let maybe = Maybe.some(s.utf8().slice(0, 1))
+	let moved = s
+	match maybe {
+		.some(sub) -> sub.byte_count,
+		.none -> 0
+	}
+}

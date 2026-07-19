@@ -19,6 +19,20 @@ Notable decisions and departures made while landing:
   head lowers to the bare type (`&Int` never surfaces), extending
   ADR 0014's unification-time erasure to annotations and modes. This
   keeps schemes, flow provenance, and renderings scalar-shaped.
+- **Inferred params honor the stamped mode (2026-07-12,
+  ownership-soundness plan 3.3(b)).** `func f(x)` wraps its fresh
+  inference variable per the stamped `Borrow` mode, so it is
+  `func f<T>(x: T)`'s twin: same scheme (`(&T0) -> …`), member access
+  through the borrowed receiver (lookup peels; the residual HasMember
+  predicate keys on the peeled payload variable), and deferred Copy
+  erasure (`&?v ~ Int` erases in unification; a shared borrow of a
+  Copy head that only resolves during solving erases at finalize).
+  The old owned-defaulting of an unresolved argument to a borrow slot
+  is gone with it. Staged out: inference-position TRAILING-BLOCK
+  binders stay delayed-inference (owned) — a call through a
+  still-unresolved function value builds its param types from the
+  argument types at an invariant boundary, where a pre-wrapped binder
+  would reject owned arguments the annotated twin accepts.
 - **V1 inout has one write-back slot**: the receiver, or a free
   function's first parameter (`func bump(mut c: Counter)` works
   end-to-end on both engines). A `mut` parameter anywhere else, or on a
@@ -39,10 +53,13 @@ Notable decisions and departures made while landing:
   `Storage.set`, `_store`, `Dict.insert`, `Iterator.map`'s fn,
   `Http.get`, `testing.test`, `fs.appending`.
 - **Known gaps**: implicitly packed existentials can return a borrowed
-  payload as owned (the pack path bypasses the borrowed-return check);
-  call-site markers are not yet enforced on `perform` arguments; the
-  tooling pass (hovers, semantic tokens, a copies report) has not been
-  done.
+  payload as owned (the pack path bypasses the borrowed-return check) —
+  confirmed 2026-07-11 to be worse than written: the pack also defeats
+  linearity (a `'linear` payload packs from a borrow into an owned
+  `any P` and stays consumable). Still open; fix in flight per
+  `docs/ownership-soundness-plan.md` track 3.2. Also: call-site markers
+  are not yet enforced on `perform` arguments; the tooling pass (hovers,
+  semantic tokens, a copies report) has not been done.
 
 ## Context
 

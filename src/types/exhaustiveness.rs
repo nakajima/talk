@@ -3,13 +3,11 @@
 //! question of Maranget, *Warnings for pattern matching* (JFP 2007): given
 //! the rows above, is there a value this pattern row matches that they
 //! miss? A match is exhaustive when a catch-all row appended below every
-//! arm would be useless (§5); an arm is unreachable when its own row is
-//! useless against the arms above it (§6). The matrix machinery
-//! (specialization S(c, P) and the default matrix D(P), §3.1) is the same
-//! one the lowerer's decision-tree compiler uses (`src/lower/patterns.rs`,
-//! Maranget ICFP 2008) — there it picks tests to compile, here it answers
-//! the coverage question, so it runs over the checker's types and reports
-//! example values for anything missed. For GADTs, constructor universes are
+//! arm would be useless (section 5); an arm is unreachable when its own row is
+//! useless against the arms above it (section 6). The matrix machinery uses
+//! specialization S(c, P) and the default matrix D(P) (section 3.1) to answer the
+//! coverage question over checked types and report example values for anything
+//! missed. For GADTs, constructor universes are
 //! filtered by satisfiability of the constructor result against the scrutinee
 //! type, matching the type-directed applicability condition from Peyton
 //! Jones, Vytiniotis, Weirich, and Washburn (ICFP 2006).

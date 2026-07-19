@@ -1,0 +1,10 @@
+struct Sink {
+	let id: Int
+	func take(consume value: String) -> Int {
+		value.byte_count
+	}
+}
+let sink = Sink(id: 1)
+let s = "hello" + " world"
+let n = sink.take(s)
+s.byte_count + n

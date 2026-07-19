@@ -1,0 +1,8 @@
+struct Node 'heap {
+	let value: Int
+}
+func bad() -> Int {
+	let items = [Node(value: 1)]
+	0
+}
+0

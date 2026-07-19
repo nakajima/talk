@@ -1,0 +1,10 @@
+func consume(x: String) -> Int {
+	x.byte_count
+}
+func f(n: Int) -> Int {
+	let s = "a" + "b"
+	let x = if n > 0 { consume(s) } else { 0 }
+	x
+}
+print(f(1))
+print(f(0))

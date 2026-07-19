@@ -1,0 +1,4 @@
+func read(s: String) -> Int { 0 }
+func f(s: String) -> Int {
+	read(borrow s)
+}

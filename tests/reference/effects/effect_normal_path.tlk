@@ -1,0 +1,13 @@
+effect 'oops(error) -> Never
+@handle 'oops { err in
+	print(err)
+	0
+}
+func check(x: Bool) 'oops -> Int {
+	if x {
+		'oops("nope")
+	}
+	42
+}
+let result = check(false)
+result + 1

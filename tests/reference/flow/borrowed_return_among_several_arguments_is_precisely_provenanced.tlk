@@ -1,0 +1,9 @@
+func choose(a: &String, b: &String) -> Substring {
+	a.utf8().slice(0, 1)
+}
+func bad() -> Int {
+	let a = "hello" + " world"
+	let b = "bye" + " now"
+	let sub = choose(a, b)
+	sub.byte_count
+}

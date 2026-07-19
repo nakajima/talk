@@ -1,0 +1,7 @@
+let numbers = [1, 2, 3]
+let it = numbers.iter()
+func stomp() {
+	numbers = [9]
+}
+stomp()
+print(it.next())

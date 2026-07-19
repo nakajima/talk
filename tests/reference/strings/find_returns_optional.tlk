@@ -1,0 +1,8 @@
+match "hello world".find("world") {
+	.some(i) -> print_raw(i.show()),
+	.none -> print_raw("none")
+}
+match "hello".find("zzz") {
+	.some(i) -> print_raw(i.show()),
+	.none -> print_raw("none")
+}

@@ -1,17 +1,14 @@
-# What this directory is
+# Editor analysis
 
-The editor-facing analysis API, with no LSP protocol types in it:
-`Workspace` (runs the compiler pipeline leniently over open documents,
-keeps the source-faithful ASTs the compile pipeline later lowers away,
-and stores texts, resolved names, types, flow facts, and diagnostics),
-`hover.rs` (type or scheme at a position, plus ownership details),
-`ownership.rs` (move/borrow/clone/drop hover details and inlay hints from
-`FlowFacts`), and `completion.rs` (scope-based completions,
-type-backed member completions, and conformance requirement completions).
+This directory provides editor-facing frontend analysis without LSP protocol
+types. `Workspace` runs parsing, name resolution, and type checking leniently
+over open documents while retaining source-faithful ASTs, text, resolved names,
+types, and structured diagnostics.
 
-It exists as a separate layer so the same functionality serves the
-LSP server, the REPL's tab completion, and tests, without any of them
-touching protocol types. The full picture of how it's used — and the
-division of labor with the protocol layer — is documented in
-`src/lsp/README.md`; the pipeline it runs is documented in
-`src/compiling/README.md`.
+Modules provide type and scheme hover, scope- and type-backed completion,
+go-to-definition, and rename. The same interface serves the LSP, C/Swift
+embedding, wasm tooling, REPL completion, and tests.
+
+Ownership-flow facts and ownership inlay hints are intentionally absent while
+the compiler is frontend-only. See `src/lsp/README.md` for protocol adaptation
+and `src/compiling/README.md` for the frontend pipeline.

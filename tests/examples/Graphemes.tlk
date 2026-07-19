@@ -1,0 +1,24 @@
+// Unicode characters
+// Strings iterate by user-perceived character (extended grapheme
+// clusters, UAX #29); the utf8() view exposes the raw bytes.
+
+let greeting = "héllo 👋🏽"
+
+// Characters vs bytes: 7 perceived characters, 15 UTF-8 bytes.
+print(greeting.count())
+print(greeting.utf8().count())
+
+// Iteration yields one Character per perceived character.
+for ch in "héllo" {
+	print(ch)
+}
+
+// A family emoji is four scalars joined by zero-width joiners — and one
+// character.
+print("👨‍👩‍👧‍👦".count())
+
+// Flags are regional-indicator pairs: four indicators, two flags.
+print("🇺🇳🇺🇳".count())
+
+// Devanagari conjuncts join through the virama.
+print("क्ष".count())

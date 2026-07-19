@@ -1,0 +1,9 @@
+let xs = [10, 20, 30]
+match xs.iter().index(20) {
+	.some(i) -> print(i),
+	.none -> print("not found")
+}
+match xs.iter().index(99) {
+	.some(i) -> print(i),
+	.none -> print("not found")
+}

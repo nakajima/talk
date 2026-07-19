@@ -1,0 +1,11 @@
+func main() -> Int {
+	let xs = ["a" + "b"]
+	let it = xs.iter()
+	if let .some(s) = it.next() { print(s) }
+	match it.next() {
+		.some(s) -> print(s),
+		.none -> print(0 - 1)
+	}
+	print(xs.count)
+	0
+}

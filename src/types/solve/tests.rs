@@ -626,3 +626,74 @@ fn substitute_replaces_perm_params() {
     perms.insert(param, Perm::Exclusive);
     assert_eq!(ty.substitute_perms(&perms), borrowed_int(Perm::Exclusive));
 }
+
+#[test]
+fn instantiation_substitutes_perms_into_predicates() {
+    // A scheme quantifying a perm param that appears in BOTH its type and
+    // its qualified context: instantiation must give the predicate the
+    // same fresh perm variable the type gets — a rigid `Perm::Param` left
+    // behind in the predicate would never unify with the call site.
+    let mut h = Harness::new();
+    let mut symbols = crate::name_resolution::symbol::Symbols::default();
+    let param = Symbol::TypeParameter(symbols.next_type_parameter(ModuleId::Current));
+    let protocol = Symbol::Protocol(ProtocolId::new(ModuleId::Current, 1));
+    let scheme = Scheme {
+        params: vec![],
+        eff_params: vec![],
+        row_params: vec![],
+        perm_params: vec![param],
+        predicates: vec![Predicate::Conforms {
+            ty: borrowed_int(Perm::Param(param)),
+            protocol: ProtocolRef::bare(protocol),
+        }],
+        ty: borrowed_int(Perm::Param(param)),
+    };
+    let mut queue = vec![];
+    let mut solver = Solver {
+        store: &mut h.store,
+        errors: &mut h.errors,
+        catalog: &h.catalog,
+        schemes: &h.schemes,
+        mono: &h.mono,
+        instantiations: &mut h.instantiations,
+        member_resolutions: &mut h.member_resolutions,
+        coerce_clones: &mut h.coerce_clones,
+        level: Level(1),
+        defaulting: false,
+        givens: vec![],
+        touchable_level: None,
+        local_params: vec![],
+        derived_seen: Default::default(),
+        conformance_edges: Default::default(),
+    };
+    let instantiated = solver.instantiate_scheme(&scheme, NodeID::ANY, &mut queue);
+    let Ty::Borrow(Perm::Var(ty_var), _) = instantiated else {
+        panic!("expected a fresh perm var in the instantiated type, got {instantiated:?}");
+    };
+    assert_eq!(queue.len(), 1);
+    let Constraint::Conforms {
+        ty: Ty::Borrow(predicate_perm, _),
+        ..
+    } = &queue[0]
+    else {
+        panic!(
+            "expected a borrow-typed Conforms wanted, got {:?}",
+            queue[0]
+        );
+    };
+    assert_eq!(*predicate_perm, Perm::Var(ty_var));
+}
+
+// ExportSanitizer's perm arm is store-free, so it must only run on
+// post-`final_ty` input (which contains no perm vars at all —
+// `default_unsolved_perms` bound them). A pre-finalize type could carry a
+// var the store solved to `Exclusive`; sanitizing it store-free would
+// launder the borrow to shared.
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "ExportSanitizer saw a Perm::Var")]
+fn export_sanitizer_rejects_unfinalized_perm_vars() {
+    let mut h = Harness::new();
+    let p = h.store.fresh_perm(Level(1), NodeID::ANY);
+    let _ = borrowed_int(Perm::Var(p)).sanitize_for_export(Symbol::Int);
+}

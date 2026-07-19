@@ -1,0 +1,15 @@
+func check() -> Int {
+	let a: String? = .some("x" + "y")
+	let b = Optional.some("p" + "q")
+	let c: String? = .none
+	let n = match a {
+		.some(s) -> s.byte_count,
+		.none -> 0
+	}
+	let m = match b {
+		.some(s) -> s.byte_count,
+		.none -> 0
+	}
+	n + m
+}
+check()

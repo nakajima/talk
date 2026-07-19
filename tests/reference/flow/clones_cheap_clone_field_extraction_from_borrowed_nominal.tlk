@@ -1,0 +1,4 @@
+func ok(sub: Substring) -> Int {
+	let storage = sub.storage
+	0
+}

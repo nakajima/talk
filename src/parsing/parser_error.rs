@@ -62,12 +62,22 @@ pub enum ParserError {
     ExpectedIdentifier(Option<Token>),
     UnbalancedLocationStack,
     BadLabel(String),
+    IntegerLiteralOutOfRange {
+        literal: String,
+    },
     CannotAssign,
     ExpectedDecl(TokenKind),
     LetNotAllowed(BlockContext),
     InitNotAllowed(BlockContext),
     ExplicitSelfParameterNotAllowed {
         parameter: Span,
+    },
+    /// A `mut`/`consume` mode on a function-type parameter whose
+    /// annotation already spells a borrow (ADR 0018): the mode and the
+    /// `&` are rival spellings of the same decision.
+    ParamModeBorrowConflict {
+        mode: &'static str,
+        annotation: Span,
     },
     ConformanceListNotAllowed {
         context: BlockContext,
@@ -87,11 +97,13 @@ impl ParserError {
             Self::ExpectedIdentifier(_) => "parser.expected-identifier",
             Self::UnbalancedLocationStack => "parser.unbalanced-location-stack",
             Self::BadLabel(_) => "parser.bad-label",
+            Self::IntegerLiteralOutOfRange { .. } => "parser.integer-literal-out-of-range",
             Self::CannotAssign => "parser.cannot-assign",
             Self::ExpectedDecl(_) => "parser.expected-declaration",
             Self::LetNotAllowed(_) => "parser.let-not-allowed",
             Self::InitNotAllowed(_) => "parser.init-not-allowed",
             Self::ExplicitSelfParameterNotAllowed { .. } => "parser.explicit-self-parameter",
+            Self::ParamModeBorrowConflict { .. } => "parser.param-mode-borrow-conflict",
             Self::ConformanceListNotAllowed { .. } => "parser.conformance-list-not-allowed",
             Self::IncompleteFuncSignature(_) => "parser.incomplete-function-signature",
             Self::ConversionError(_) => "parser.conversion",
@@ -136,6 +148,10 @@ impl Display for ParserError {
                 write!(f, "Expected identifier, got: {current:?}")
             }
             Self::BadLabel(label) => write!(f, "Unable to parse label: {label}"),
+            Self::IntegerLiteralOutOfRange { literal } => write!(
+                f,
+                "Integer literal {literal} is outside the signed 64-bit range"
+            ),
             Self::CannotAssign => write!(f, "Cannot assign in this context"),
             Self::ExpectedDecl(actual) => write!(f, "Expected declaration, got {actual:?}"),
             Self::LetNotAllowed(context) => write!(f, "Cannot use `let` in {context:?} body"),
@@ -144,6 +160,12 @@ impl Display for ParserError {
                 write!(
                     f,
                     "Methods do not declare `self`; use `func`, `mut func`, or `consuming func`"
+                )
+            }
+            Self::ParamModeBorrowConflict { mode, .. } => {
+                write!(
+                    f,
+                    "Parameter mode `{mode}` conflicts with its type: the annotation is already a borrow. The mode decides borrowing — drop the `&` from the annotation, or drop the mode"
                 )
             }
             Self::ConformanceListNotAllowed { context, .. } => write!(

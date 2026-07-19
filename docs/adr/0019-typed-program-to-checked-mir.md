@@ -1,6 +1,33 @@
 # 0019 - Type checking returns TypedProgram; lowering consumes CheckedMir
 
-Status: accepted (2026-07-05)
+Status: superseded by ADR 0031 (2026-07-13)
+
+## Implementation status
+
+The public compiler seam is now real: type checking returns `TypedProgram`,
+`mir::build_checked` privately builds and flow-annotates structural bodies,
+and lowering can obtain only `CheckedMir`. ADR 0030's cutover completed the
+ownership half of the seam: a distinct `CheckedBody` contains attached
+`CheckedDrop` operations and explicit runtime transfer sets, while
+freestanding candidates, flow-only reads, and scope bookkeeping remain
+private to construction/flow. Source-language moves and runtime ownership
+transfers are separate flow lanes. The whole-CFG cleanup planner completes
+normal/unwind temp actions from static temp identities, and the checked-MIR
+verifier rejects missing, duplicate, conflicting, or path-unbalanced temp
+obligations before lowering. `CleanupAction` distinguishes full value teardown,
+regions-only cleanup, and their specialization-conditional generic forms.
+Temp dispositions are attached to the exact checked statement or terminator
+that changes them; a body's eventual disposition cannot rewrite earlier
+suspension cleanup. Named places and temps share one initialization-order
+domain, so unwind plans
+match normal reverse-initialization order. Call lowering no longer synthesizes
+temp releases, and lowering's positional candidate scans are deleted.
+
+Still open from this ADR's full decision: flattening terminator expressions to
+operands, making match payload ownership explicit before the pattern lowerer,
+and deleting the remaining lowering-side region/acquire derivations and
+value-level drop metadata. Those are follow-up deepening work, not alternate
+compiler paths.
 
 ## Context
 
@@ -117,7 +144,7 @@ ownership operations.
 The lowering input does not contain:
 
 - `DropCandidate` with optional elaboration;
-- `statement.ownership.moves`;
+- source-move annotations masquerading as runtime transfers;
 - HIR `expr.ownership.consumes` flags;
 - side maps keyed by `NodeID`;
 - arbitrary HIR expressions in terminators.

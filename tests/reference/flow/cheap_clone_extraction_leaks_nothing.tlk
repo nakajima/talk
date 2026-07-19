@@ -1,0 +1,12 @@
+struct Person {
+	let name: String
+}
+func extract(person: &Person) -> String {
+	person.name
+}
+func check() -> Int {
+	let p = Person(name: "hello" + " world")
+	let n = extract(p)
+	n.byte_count
+}
+check()

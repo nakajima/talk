@@ -1,0 +1,7 @@
+struct Person {
+	let name: String
+}
+func ok(person: &Person) -> Int {
+	let name = person.name
+	name.byte_count
+}

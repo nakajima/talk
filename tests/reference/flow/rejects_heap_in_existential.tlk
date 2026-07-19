@@ -1,0 +1,13 @@
+struct Node 'heap {
+	let value: Int
+}
+extend Node: Showable {
+	func show() -> String {
+		"node"
+	}
+}
+func bad() -> Int {
+	let s: any Showable = Node(value: 1)
+	0
+}
+0

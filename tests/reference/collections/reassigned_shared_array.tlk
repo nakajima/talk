@@ -1,0 +1,9 @@
+func main() -> Int {
+	let xs = [5]
+	xs.push(6)
+	let ys = xs
+	xs = [7]
+	print(xs.count)
+	print(ys.count)
+	0
+}

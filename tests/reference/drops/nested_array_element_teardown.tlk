@@ -1,0 +1,2 @@
+let xs = [["a" + "b"], ["c" + "d"]]
+print(xs.count)

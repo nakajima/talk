@@ -1,0 +1,10 @@
+struct Inner {
+	let value: Int
+	mut func bump() -> Int {
+		self.value = self.value + 1
+		self.value
+	}
+}
+func f(inner: &Inner) -> Int {
+	inner.bump()
+}

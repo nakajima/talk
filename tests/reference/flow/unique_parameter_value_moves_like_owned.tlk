@@ -1,0 +1,4 @@
+func bad(consume x: *String) -> Int {
+	let y = x
+	x.byte_count
+}

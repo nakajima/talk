@@ -522,12 +522,24 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     // qualifies the binder's scheme (held here, attached
                     // after generalization — Jones, *Qualified Types*,
                     // 1994); anything else may be solved later and floats.
-                    let group_owned = match self.store.shallow(receiver) {
-                        Ty::Var(v) => {
+                    // A borrow of such a variable (an inferred
+                    // borrow-default param's receiver — plan 3.3(b)) is the
+                    // same case: member lookup peels the borrow, so the
+                    // payload variable is what the predicate waits on.
+                    let receiver_var = match self.store.shallow(receiver) {
+                        Ty::Var(v) => Some(v),
+                        Ty::Borrow(_, inner) => match self.store.shallow(&inner) {
+                            Ty::Var(v) => Some(v),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let group_owned = match receiver_var {
+                        Some(v) => {
                             let root = self.store.find(v.0);
                             self.store.level(root) > OUTER_LEVEL
                         }
-                        _ => false,
+                        None => false,
                     };
                     if generalizable && group_owned {
                         held_members.push((

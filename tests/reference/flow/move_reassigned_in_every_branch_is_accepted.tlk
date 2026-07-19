@@ -1,0 +1,13 @@
+func consume(consume s: String) -> Int {
+	s.byte_count
+}
+func f(flag: Bool) -> Int {
+	let s = "a" + "b"
+	let n = consume(s)
+	if flag {
+		s = "c" + "d"
+	} else {
+		s = "e" + "f"
+	}
+	consume(s) + n
+}

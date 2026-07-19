@@ -1,0 +1,20 @@
+enum E {
+	case a(String)
+	case b(Int)
+}
+func check() -> Int {
+	let items = [E.a("hello" + " world"), E.b(31)]
+	let total = 0
+	for e in items {
+		match e {
+			.a(s) -> {
+				total = total + s.byte_count
+			},
+			.b(n) -> {
+				total = total + n
+			}
+		}
+	}
+	total
+}
+check()

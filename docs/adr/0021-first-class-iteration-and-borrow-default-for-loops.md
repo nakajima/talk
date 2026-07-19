@@ -1,6 +1,10 @@
 # 0021 - First-class iteration with access-marked sources
 
-Status: proposed (revised 2026-07-08)
+Status: implemented (revised 2026-07-08; status updated 2026-07-11 —
+`for` is typed first-class over the resolved AST's `StmtKind::For`, its
+`ForPlan` is consumed by `elaborate_for` in
+`src/compiling/typed_program/build.rs`, and no `for` form survives into
+the typed tree, exactly as "Type checker product" specifies)
 
 ## Context
 

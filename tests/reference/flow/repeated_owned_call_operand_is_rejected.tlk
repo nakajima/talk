@@ -1,0 +1,5 @@
+func take(consume a: String, consume b: String) -> Int {
+	a.byte_count + b.byte_count
+}
+let s = "hello" + " world"
+take(s, s)

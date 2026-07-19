@@ -1,0 +1,11 @@
+struct Node 'heap {
+	let value: Int
+}
+func make() -> Node {
+	Node(value: 7)
+}
+func check() -> Int {
+	let n = make()
+	n.value
+}
+check()

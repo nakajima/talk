@@ -1,0 +1,12 @@
+effect 'oops(error) -> Never
+@handle 'oops { err in print(err) }
+func inner() 'oops -> () {
+	'oops("deep")
+	print("inner after")
+}
+func outer() 'oops -> () {
+	inner()
+	print("outer after")
+}
+outer()
+print("main after")

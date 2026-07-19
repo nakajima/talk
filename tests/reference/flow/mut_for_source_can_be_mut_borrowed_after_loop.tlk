@@ -1,0 +1,11 @@
+func touch(xs: &mut Array<Int>) -> Int {
+	xs.push(3)
+	xs.count
+}
+func f() -> Int {
+	let xs = [1, 2]
+	for x in mut xs {
+		x = x + 1
+	}
+	touch(xs)
+}

@@ -1,0 +1,11 @@
+struct Name {
+	let text: String
+}
+struct User {
+	let name: Name
+}
+func check() -> Int {
+	let u = User(name: Name(text: "ada" + " lovelace"))
+	u.name.text.byte_count
+}
+check()

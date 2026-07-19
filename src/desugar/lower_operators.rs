@@ -34,6 +34,13 @@ impl LowerOperators {
 
     fn enter_expr(&mut self, expr: &mut Expr) {
         let kind = match expr.kind.clone() {
+            ExprKind::Unary(
+                TokenKind::Minus,
+                box Expr {
+                    kind: ExprKind::LiteralInt(value),
+                    ..
+                },
+            ) => ExprKind::LiteralInt(format!("-{value}")),
             ExprKind::Unary(op, rhs) => {
                 let label = match op {
                     TokenKind::Bang => Label::Named("not".into()),
@@ -181,6 +188,19 @@ pub mod tests {
         parser_tests::tests::parse,
         span::Span,
     };
+
+    #[test]
+    fn folds_negative_integer_literals_before_operator_lowering() {
+        let mut parsed = parse("-9_223_372_036_854_775_808");
+        LowerOperators::run(&mut parsed);
+
+        assert_eq_diff!(
+            *parsed.roots[0].as_stmt(),
+            any_stmt!(StmtKind::Expr(any_expr!(ExprKind::LiteralInt(
+                "-9_223_372_036_854_775_808".into()
+            ))))
+        )
+    }
 
     #[test]
     fn lowers_plus() {

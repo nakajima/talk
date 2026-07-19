@@ -46,7 +46,10 @@ public struct Directory {
 		_copy(path_string.storage.base, path_buf, path_string.byte_count)
 
 		let real_count = _io_dir_count(path_buf)
-		if real_count < 0 { return [] }
+		if real_count < 0 {
+			_free(path_buf)
+			return []
+		}
 
 		let capacity = real_count
 		let storage = _storage<DirectoryEntry>(capacity)
@@ -63,6 +66,7 @@ public struct Directory {
 			let name_buf = _alloc<Byte>(name_len)
 			let copied = _io_dir_entry_copy(path_buf, i, name_buf)
 			if copied < 0 {
+				_free(name_buf)
 				break
 			}
 
@@ -85,10 +89,11 @@ public struct Directory {
 			out = out + 1
 		}
 
+		_free(path_buf)
 		Array<DirectoryEntry>(storage: storage, count: out, capacity: capacity)
 	}
 
-	func walk(fn: (DirectoryEntry) -> ()) {
+	func walk(fn: (&DirectoryEntry) -> ()) {
 		for entry in self.entries() {
 			match entry {
 				.directory(directory) -> {

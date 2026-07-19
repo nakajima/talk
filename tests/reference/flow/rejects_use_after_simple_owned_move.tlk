@@ -1,0 +1,3 @@
+let s = "hello" + " world"
+let t = s
+s.byte_count

@@ -1,0 +1,17 @@
+let failures = 0
+if _grapheme_category(97) != _GC_OTHER { failures = failures + 1 }
+if _grapheme_category(13) != _GC_CR { failures = failures + 2 }
+if _grapheme_category(10) != _GC_LF { failures = failures + 4 }
+if _grapheme_category(0) != _GC_CONTROL { failures = failures + 8 }
+if _grapheme_category(127) != _GC_CONTROL { failures = failures + 16 }
+if _grapheme_category(769) != _GC_EXTEND_INCB_EXTEND { failures = failures + 32 }
+if _grapheme_category(8205) != _GC_ZWJ { failures = failures + 64 }
+if _grapheme_category(127482) != _GC_REGIONAL_INDICATOR { failures = failures + 128 }
+if _grapheme_category(2381) != _GC_EXTEND_INCB_LINKER { failures = failures + 256 }
+if _grapheme_category(2325) != _GC_INCB_CONSONANT { failures = failures + 512 }
+if _grapheme_category(128512) != _GC_EXT_PICT { failures = failures + 1024 }
+if _grapheme_category(4352) != _GC_HANGUL_L { failures = failures + 2048 }
+if _grapheme_category(44032) != _GC_HANGUL_LV { failures = failures + 4096 }
+if _grapheme_category(44033) != _GC_HANGUL_LVT { failures = failures + 8192 }
+if _grapheme_category(1114111) != _GC_OTHER { failures = failures + 16384 }
+failures

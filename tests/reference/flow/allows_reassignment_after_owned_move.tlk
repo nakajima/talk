@@ -1,0 +1,4 @@
+let s = "hello" + " world"
+let t = s
+s = "new" + " value"
+s.byte_count

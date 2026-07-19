@@ -1,0 +1,3 @@
+let xs = [10, 20, 30]
+let m = xs.iter().map() { x in x }
+print("ok")

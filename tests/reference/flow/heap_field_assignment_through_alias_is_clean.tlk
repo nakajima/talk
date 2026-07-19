@@ -1,0 +1,10 @@
+struct Node 'heap {
+	let value: Int
+}
+func ok() -> Int {
+	let a = Node(value: 1)
+	let b = a
+	b.value = 9
+	a.value
+}
+0

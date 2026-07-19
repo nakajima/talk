@@ -1,0 +1,18 @@
+func check() -> Int {
+	let d = Dict<Int>()
+	d.insert("one", 1)
+	d.insert("two", 2)
+	d.insert("three", 3)
+	let two = d.get("two")
+	let four = d.get("four")
+	let hit = match two {
+		.some(v) -> v + 0,
+		.none -> 0 - 1
+	}
+	let miss = match four {
+		.some(v) -> v + 0,
+		.none -> 0 - 1
+	}
+	hit * 10 + miss
+}
+check()

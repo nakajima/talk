@@ -1,0 +1,2 @@
+let s: String
+s.byte_count

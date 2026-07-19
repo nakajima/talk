@@ -1,0 +1,21 @@
+let counter = 0
+struct Guard {
+	let id: Int
+}
+extend Guard: Deinit {
+	consuming func deinit() -> Void {
+		counter = counter + 1
+		()
+	}
+}
+extend Guard: Showable {
+	func show() -> String {
+		"guard"
+	}
+}
+func scope() -> Int {
+	let x: any Showable = Guard(id: 1)
+	0
+}
+let n = scope()
+counter

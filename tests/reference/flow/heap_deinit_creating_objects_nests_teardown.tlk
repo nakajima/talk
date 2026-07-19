@@ -1,0 +1,26 @@
+let counter = 0
+struct Inner 'heap {
+	let id: Int
+}
+extend Inner: Deinit {
+	consuming func deinit() -> Void {
+		counter = counter + 1
+		()
+	}
+}
+struct Outer 'heap {
+	let id: Int
+}
+extend Outer: Deinit {
+	consuming func deinit() -> Void {
+		let extra = Inner(id: 9)
+		counter = counter + 100
+		()
+	}
+}
+func scope() -> Int {
+	let o = Outer(id: 1)
+	0
+}
+let n = scope()
+counter

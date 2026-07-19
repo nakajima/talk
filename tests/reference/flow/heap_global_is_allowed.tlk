@@ -1,0 +1,5 @@
+struct Node 'heap {
+	let value: Int
+}
+let root = Node(value: 1)
+root.value

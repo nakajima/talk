@@ -1,0 +1,18 @@
+enum Wrapped {
+	case tagged(String)
+}
+extend Wrapped: CheapClone {}
+struct Holder<Value> 'heap {
+	let value: Value
+}
+func extract<Value: CheapClone>(h: Holder<Value>) -> Value {
+	h.value
+}
+func check() -> Int {
+	let h = Holder(value: Wrapped.tagged("hello" + " world"))
+	let w = extract(h)
+	match w {
+		.tagged(s) -> s.byte_count
+	}
+}
+check()

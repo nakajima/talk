@@ -36,14 +36,11 @@ pub fn run_program(source: &str) -> Result<Object, JsValue> {
 }
 
 #[wasm_bindgen]
-pub fn show_ir(source: &str) -> Result<Object, JsValue> {
+pub fn show_ir(_source: &str) -> Result<Object, JsValue> {
     init();
-    let ir = talk::compiling::driver::render_lowered("Playground", source)
-        .map_err(|message| JsValue::from_str(&message))?;
-    let obj = Object::new();
-    set_str(&obj, "ir", &ir)?;
-    set_str(&obj, "highlightedIr", &highlight_source_html(&ir))?;
-    Ok(obj)
+    Err(JsValue::from_str(
+        "lowered output is unavailable while Talk is frontend-only",
+    ))
 }
 
 #[wasm_bindgen]

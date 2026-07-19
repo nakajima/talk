@@ -1,0 +1,4 @@
+func take<T>(consume x: T) -> Int { 0 }
+func f<T>(consume x: T) -> Int {
+	take(consume x) + take(x)
+}

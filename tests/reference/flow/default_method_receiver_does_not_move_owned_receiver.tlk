@@ -1,0 +1,9 @@
+struct Box {
+	let value: String
+	func len() -> Int {
+		self.value.byte_count
+	}
+}
+let box = Box(value: "hello" + " world")
+let n = box.len()
+box.value.byte_count + n

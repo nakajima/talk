@@ -34,6 +34,10 @@ use std::{
 
 pub trait DriverPhase {}
 
+/// An ownership rejection: the message and, when the span maps to a
+/// source document, that document's path and byte range.
+pub type OwnershipRejection = (String, Option<(String, u32, u32)>);
+
 pub struct Initial {}
 impl DriverPhase for Initial {}
 
@@ -53,29 +57,11 @@ pub struct NameResolved {
     pub diagnostics: Vec<AnyDiagnostic>,
 }
 
-impl DriverPhase for Lowered {}
-pub struct Lowered {
-    pub program: crate::lambda_g::Program,
-    pub main: crate::lambda_g::Label,
-    pub result_ty: crate::lambda_g::expr::TyId,
-    /// Chunk-forming function labels (demanded specializations + main);
-    /// the scheduler turns everything else into blocks.
-    pub entry_funcs: rustc_hash::FxHashSet<crate::lambda_g::Label>,
-    /// Lowering issues (constructs the backend does not support yet).
-    pub diagnostics: Vec<String>,
-    pub prior_diagnostics: Vec<AnyDiagnostic>,
-}
-
 impl DriverPhase for Typed {}
 pub struct Typed {
-    /// The checked typed program. Later compiler phases must go through this
-    /// artifact rather than coordinating a public type side-table with a
-    /// separate compiler-tree phase.
+    /// The final frontend artifact: a checked typed program and its semantic
+    /// facts. The frontend performs no ownership analysis or code generation.
     pub program: crate::compiling::typed_program::TypedProgram,
-    /// Flow-checked MIR built behind the MIR seam. Lowering consumes this
-    /// checked artifact; callers never receive the structural MIR store.
-    pub(crate) checked_mir: crate::lower::mir::CheckedMir,
-    pub flow: crate::flow::FlowFacts,
     pub diagnostics: Vec<AnyDiagnostic>,
 }
 
@@ -114,7 +100,13 @@ pub struct DriverConfig {
     pub preserve_comments: bool,
     pub workspace_root: Option<PathBuf>,
     pub source_root: Option<PathBuf>,
-    pub(crate) libraries: Vec<std::sync::Arc<super::core::LibraryTyped>>,
+    /// Dependency libraries' typed bodies (package graphs), by the module
+    /// id they were compiled and imported under. The backend compiles the
+    /// reachable source graph as one unit from these.
+    pub libraries: Vec<(
+        ModuleId,
+        std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
+    )>,
 }
 
 impl std::fmt::Debug for DriverConfig {
@@ -128,7 +120,6 @@ impl std::fmt::Debug for DriverConfig {
             .field("preserve_comments", &self.preserve_comments)
             .field("workspace_root", &self.workspace_root)
             .field("source_root", &self.source_root)
-            .field("library_count", &self.libraries.len())
             .finish()
     }
 }
@@ -144,7 +135,7 @@ impl DriverConfig {
             preserve_comments: false,
             workspace_root: None,
             source_root: None,
-            libraries: vec![],
+            libraries: Vec::new(),
         }
     }
 
@@ -543,12 +534,41 @@ impl Driver<Parsed> {
     }
 }
 
+/// The compiled program handed between `compile_executable` and
+/// `execute_module`.
+pub use crate::backend::Executable;
+
+/// Validate and execute a serialized bytecode image (TOOL-14). Images are
+/// untrusted bytes: decoding validates every index, register, and opcode
+/// before execution (ADR 0034's trust seam).
+pub fn execute_image(
+    bytes: &[u8],
+    io: &mut dyn talk_runtime::io::IO,
+) -> Result<Option<String>, String> {
+    let module = talk_runtime::Module::decode_bytecode(bytes)
+        .map_err(|error| format!("invalid bytecode image: {error:?}"))?;
+    let executable = crate::backend::Executable {
+        module,
+        names: Default::default(),
+    };
+    crate::backend::execute(&executable, io)
+}
+
+/// The backend's execution seam (ADR 0034): run a compiled program and
+/// return its Talk-rendered result (`None` for Unit). Runtime failures and
+/// resource leaks come back as the error message.
+pub fn execute_module(
+    executable: &Executable,
+    io: &mut dyn talk_runtime::io::IO,
+) -> Result<Option<String>, String> {
+    crate::backend::execute(executable, io)
+}
+
 fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
     diagnostics.iter().any(|diag| match diag {
         AnyDiagnostic::Parsing(diagnostic) => diagnostic.severity == Severity::Error,
         AnyDiagnostic::NameResolution(diagnostic) => diagnostic.severity == Severity::Error,
         AnyDiagnostic::Types(diagnostic) => diagnostic.severity == Severity::Error,
-        AnyDiagnostic::Ownership(diagnostic) => diagnostic.severity == Severity::Error,
     })
 }
 
@@ -559,7 +579,6 @@ fn error_diagnostic_files(diagnostics: &[AnyDiagnostic]) -> FxHashSet<FileID> {
             AnyDiagnostic::Parsing(diagnostic) => (diagnostic.id, &diagnostic.severity),
             AnyDiagnostic::NameResolution(diagnostic) => (diagnostic.id, &diagnostic.severity),
             AnyDiagnostic::Types(diagnostic) => (diagnostic.id, &diagnostic.severity),
-            AnyDiagnostic::Ownership(diagnostic) => (diagnostic.id, &diagnostic.severity),
         };
         if *severity != Severity::Error {
             continue;
@@ -615,23 +634,18 @@ impl Driver<NameResolved> {
         );
         diagnostics.extend(type_diagnostics);
         let blocked_files = error_diagnostic_files(&diagnostics);
-        let mut program = crate::compiling::typed_program::TypedProgram::from_checked_asts(
+        let program = crate::compiling::typed_program::TypedProgram::from_checked_asts(
             asts,
             resolved_names,
             types,
             &blocked_files,
         );
-        let (checked_mir, flow, flow_diagnostics) =
-            crate::lower::mir::build_checked(&mut program, self.config.module_id);
-        diagnostics.extend(flow_diagnostics);
 
         Driver {
             files: self.files,
             config: self.config,
             phase: Typed {
                 program,
-                checked_mir,
-                flow,
                 diagnostics,
             },
         }
@@ -639,79 +653,142 @@ impl Driver<NameResolved> {
 }
 
 impl Driver<Typed> {
-    /// Lower to λ_G (whole-program, with core and stdlib typed artifacts — see
-    /// src/lower). Infallible; unsupported constructs surface as lowering
-    /// diagnostics.
-    pub fn lower(self) -> Driver<Lowered> {
-        use crate::lower::{LowerUnit, lower_program};
-
-        let Typed {
-            program,
-            checked_mir,
-            flow: _,
-            diagnostics,
-        } = self.phase;
-
-        let core = if self.config.module_id == ModuleId::Core {
-            None
-        } else {
-            Some(crate::compiling::core::typed())
-        };
-        let stdlib = crate::compiling::stdlib::typed_modules(self.config.modules.as_ref());
-        let mut units = vec![];
-        if let Some(core) = core.as_ref() {
-            units.push(LowerUnit {
-                asts: core.program.files(),
-                types: core.program.types(),
-                resolved: core.program.resolved_names(),
-                bodies: &core.checked_mir,
-            });
-        }
-        for module in &stdlib {
-            units.push(LowerUnit {
-                asts: module.program.files(),
-                types: module.program.types(),
-                resolved: module.program.resolved_names(),
-                bodies: &module.checked_mir,
-            });
-        }
-        for library in &self.config.libraries {
-            units.push(LowerUnit {
-                asts: library.program.files(),
-                types: library.program.types(),
-                resolved: library.program.resolved_names(),
-                bodies: &library.checked_mir,
-            });
-        }
-        units.push(LowerUnit {
-            asts: program.files(),
-            types: program.types(),
-            resolved: program.resolved_names(),
-            bodies: &checked_mir,
-        });
-        let entry = units.len() - 1;
-        let lowered = lower_program(units, entry);
-
-        Driver {
-            files: self.files,
-            config: self.config,
-            phase: Lowered {
-                program: lowered.program,
-                main: lowered.main,
-                result_ty: lowered.result_ty,
-                entry_funcs: lowered.entry_funcs,
-                diagnostics: lowered.diagnostics,
-                prior_diagnostics: diagnostics,
-            },
-        }
-    }
-
     pub fn has_errors(&self) -> bool {
         has_error_diagnostics(&self.phase.diagnostics)
     }
 
     pub fn diagnostics(&self) -> &[AnyDiagnostic] {
         &self.phase.diagnostics
+    }
+
+    /// The backend seam (ADR 0034): compile the checked program and its
+    /// reachable dependency bodies into an executable runtime module.
+    ///
+    /// `entry` selects a zero-parameter public function; without it the
+    /// script's top-level statements run and the final top-level expression
+    /// is the program result.
+    pub fn compile_executable(&self, entry: Option<&str>) -> Result<Executable, String> {
+        self.with_backend_inputs(entry, |programs, aliases, entry| {
+            crate::backend::compile(programs, aliases, entry)
+        })
+        .map_err(|error| self.locate_backend_error(&error))
+    }
+
+    /// Run the ownership analysis without lowering (`talk check`). A
+    /// rejection comes back with its message and, when the span maps to
+    /// a source document, that document's path and byte range.
+    pub fn check_ownership(&self) -> Result<(), OwnershipRejection> {
+        self.with_backend_inputs(None, |programs, aliases, entry| {
+            crate::backend::check(programs, aliases, entry)
+        })
+        .map_err(|error| {
+            let span = error.span;
+            if span == crate::parsing::span::Span::SYNTHESIZED {
+                return (error.message.clone(), None);
+            }
+            for (source, file) in self.phase.program.files() {
+                if file.file_id == span.file_id {
+                    return (
+                        error.message.clone(),
+                        Some((source.path().to_string(), span.start, span.end)),
+                    );
+                }
+            }
+            (error.message.clone(), None)
+        })
+    }
+
+    /// Render the backend's middle representation for inspection
+    /// (TOOL-10). Same inputs as `compile_executable`.
+    pub fn render_mir(&self, entry: Option<&str>) -> Result<String, String> {
+        self.with_backend_inputs(entry, |programs, aliases, entry| {
+            crate::backend::render_mir(programs, aliases, entry)
+        })
+        .map_err(|error| self.locate_backend_error(&error))
+    }
+
+    /// Assemble the reachable source graph (this program, core, imported
+    /// stdlib modules, dependency libraries) and the module-alias map, and
+    /// hand them to the backend.
+    fn with_backend_inputs<R>(
+        &self,
+        entry: Option<&str>,
+        run: impl FnOnce(
+            &[crate::backend::ProgramInput<'_>],
+            rustc_hash::FxHashMap<u16, u16>,
+            crate::backend::Entry<'_>,
+        ) -> R,
+    ) -> R {
+        let core = crate::compiling::core::typed_program();
+        let entry = match entry {
+            Some(name) => crate::backend::Entry::Named(name),
+            None => crate::backend::Entry::Script,
+        };
+        let stdlib = crate::compiling::stdlib::typed_programs();
+        // The user program needs a real module stamp: `Current`-tagged
+        // symbols re-stamp under whichever program re-canonicalizes them
+        // (a core generic instance would file a user type into core's
+        // symbol space).
+        let user_module = if self.config.module_id == crate::compiling::module::ModuleId::Current {
+            crate::compiling::module::ModuleId::Main
+        } else {
+            self.config.module_id
+        };
+        let mut programs = vec![
+            crate::backend::ProgramInput {
+                program: &self.phase.program,
+                module: user_module,
+            },
+            crate::backend::ProgramInput {
+                program: &core,
+                module: crate::compiling::module::ModuleId::Core,
+            },
+        ];
+        for (name, program) in &stdlib {
+            if let Some(module) = self.config.modules.get_module_id_by_name(name) {
+                programs.push(crate::backend::ProgramInput { program, module });
+            }
+        }
+        for (module, program) in &self.config.libraries {
+            programs.push(crate::backend::ProgramInput {
+                program,
+                module: *module,
+            });
+        }
+        // One module can carry several local ids in this environment (a
+        // direct import plus a re-export); unify them by stable identity.
+        let mut canonical_by_stable: rustc_hash::FxHashMap<StableModuleId, ModuleId> =
+            rustc_hash::FxHashMap::default();
+        let mut aliases: rustc_hash::FxHashMap<u16, u16> = rustc_hash::FxHashMap::default();
+        let mut locals: Vec<(ModuleId, StableModuleId)> =
+            self.config.modules.locals_with_stable_ids().collect();
+        locals.sort_unstable_by_key(|(local, _)| *local);
+        for (local, stable) in locals {
+            let unified = *canonical_by_stable.entry(stable).or_insert(local);
+            if unified != local {
+                aliases.insert(local.0, unified.0);
+            }
+        }
+        run(&programs, aliases, entry)
+    }
+
+    /// Render a backend rejection with its source location when the span
+    /// points into one of this driver's files.
+    fn locate_backend_error(&self, error: &crate::backend::BackendError) -> String {
+        let span = error.span;
+        if span == crate::parsing::span::Span::SYNTHESIZED {
+            return error.message.clone();
+        }
+        for (source, file) in self.phase.program.files() {
+            if file.file_id != span.file_id {
+                continue;
+            }
+            let Ok(text) = source.read() else { break };
+            let start = usize::try_from(span.start).unwrap_or(0).min(text.len());
+            let line = text[..start].bytes().filter(|byte| *byte == b'\n').count() + 1;
+            return format!("{} ({}:{line})", error.message, source.path());
+        }
+        error.message.clone()
     }
 
     /// Build a module carrying its type payload: every binder's scheme
@@ -767,204 +844,6 @@ impl Driver<Typed> {
             types: ModuleTypes { schemes, catalog },
         }
     }
-}
-
-impl Driver<Lowered> {
-    /// Execute on the reference evaluator (the trusted baseline the
-    /// bytecode VM is tested against). Mutates the program (substitution
-    /// adds functions), so schedule for the VM *before* running the
-    /// evaluator.
-    pub fn eval_for_tests(
-        &mut self,
-    ) -> Result<crate::lambda_g::eval::EvalValue, crate::lambda_g::eval::EvalError> {
-        Ok(self.eval_with_output()?.0)
-    }
-
-    /// Reference-evaluator run returning (value, captured stdout). On
-    /// success, asserts the leak invariant: every allocation and `'heap`
-    /// object torn down by exit. Leak detection is suite policy (CPython's
-    /// refleak buildbots), not per-test opt-in.
-    pub fn eval_with_output(
-        &mut self,
-    ) -> Result<(crate::lambda_g::eval::EvalValue, String), crate::lambda_g::eval::EvalError> {
-        use crate::lambda_g::eval::EvalValue;
-        let (value, out, live_objects, live_allocations) = self.eval_counted()?;
-        // A program whose VALUE carries buffers legitimately holds them at
-        // exit; exact balance is asserted for scalar-valued programs (the
-        // vast majority — and where a leak can hide nowhere else).
-        if matches!(
-            value,
-            EvalValue::I64(_) | EvalValue::F64(_) | EvalValue::Bool(_) | EvalValue::Void
-        ) {
-            assert_eq!(live_objects, 0, "{live_objects} 'heap objects leaked");
-            assert_eq!(live_allocations, 0, "{live_allocations} allocations leaked");
-        }
-        Ok((value, out))
-    }
-
-    fn eval_counted(
-        &mut self,
-    ) -> Result<
-        (crate::lambda_g::eval::EvalValue, String, usize, usize),
-        crate::lambda_g::eval::EvalError,
-    > {
-        let mut evaluator = crate::lambda_g::eval::Evaluator::new();
-        let value = evaluator.run_main(
-            &mut self.phase.program,
-            self.phase.main,
-            self.phase.result_ty,
-        )?;
-        Ok((
-            value,
-            String::from_utf8_lossy(&evaluator.io.out).into_owned(),
-            evaluator.live_objects(),
-            evaluator.live_allocations(),
-        ))
-    }
-
-    /// Schedule to bytecode and execute on the VM against host stdio.
-    /// (`&mut`: scheduling computes free-variable caches for closure
-    /// environments; the program's terms are untouched.)
-    pub fn run_vm(&mut self) -> Result<crate::vm::interp::Value, String> {
-        let module = self.schedule()?;
-        let mut io = crate::vm::io::StdioIO;
-        crate::vm::interp::run(&module, &mut io)
-    }
-
-    /// VM run returning (value, captured stdout) — tests and the REPL.
-    pub fn run_vm_with_output(&mut self) -> Result<(crate::vm::interp::Value, String), String> {
-        let module = self.schedule()?;
-        let mut io = crate::vm::io::CaptureIO::default();
-        let value = crate::vm::interp::run(&module, &mut io)?;
-        Ok((value, String::from_utf8_lossy(&io.out).into_owned()))
-    }
-
-    /// VM run returning (value, captured stdout, Talk-style rendering of
-    /// the value) — the REPL and the playground display the rendering.
-    pub fn run_vm_displayed(
-        &mut self,
-        names: &crate::vm::interp::ValueNames,
-    ) -> Result<(crate::vm::interp::Value, String, String), String> {
-        let module = self.schedule()?;
-        let mut io = crate::vm::io::CaptureIO::default();
-        let (value, display) = crate::vm::interp::run_displayed(&module, &mut io, names)?;
-        Ok((
-            value,
-            String::from_utf8_lossy(&io.out).into_owned(),
-            display,
-        ))
-    }
-
-    pub fn encode_bytecode(&mut self) -> Result<Vec<u8>, String> {
-        self.schedule()?
-            .encode_bytecode()
-            .map_err(|err| err.to_string())
-    }
-
-    fn schedule(&mut self) -> Result<crate::vm::Module, String> {
-        crate::vm::schedule::schedule(
-            &mut self.phase.program,
-            self.phase.main,
-            &self.phase.entry_funcs,
-        )
-    }
-}
-
-/// Compile a source string through the whole pipeline and render its
-/// λ_G program — the playground's show_ir.
-pub fn render_lowered(name: &str, source: &str) -> Result<String, String> {
-    render_lowered_from(
-        name,
-        Source::from(source),
-        &crate::lambda_g::print::Styles::plain(),
-    )
-}
-
-/// `render_lowered` over any Source (`talk lower <file>` reads from disk
-/// or stdin); `styles` picks plain or ANSI-colored text.
-pub fn render_lowered_from(
-    name: &str,
-    source: Source,
-    styles: &crate::lambda_g::print::Styles,
-) -> Result<String, String> {
-    let mut lowered = lower_for_display(name, source)?;
-    Ok(lowered.phase.program.render_styled(styles))
-}
-
-/// Compile and schedule, rendering the VM bytecode (`talk ir <file>`).
-pub fn render_bytecode_from(
-    name: &str,
-    source: Source,
-    styles: &crate::lambda_g::print::Styles,
-) -> Result<String, String> {
-    let mut lowered = lower_for_display(name, source)?;
-    let module = lowered.schedule()?;
-    let vm_styles = crate::vm::Styles {
-        keyword: styles.keyword,
-        func: styles.func,
-        reset: styles.reset,
-    };
-    Ok(module.render_styled(&vm_styles))
-}
-
-/// Compile, schedule, and encode a VM module as Talk bytecode.
-pub fn compile_bytecode_from(name: &str, source: Source) -> Result<Vec<u8>, String> {
-    compile_bytecode_sources(name, vec![source])
-}
-
-/// Compile sources, schedule, and encode a VM module as Talk bytecode.
-pub fn compile_bytecode_sources(name: &str, sources: Vec<Source>) -> Result<Vec<u8>, String> {
-    let driver = Driver::new(sources, DriverConfig::new(name));
-    let parsed = driver.parse().map_err(|err| format!("{err:?}"))?;
-    let resolved = parsed.resolve_names().map_err(|err| format!("{err:?}"))?;
-    let typed = resolved.type_check();
-    if typed.has_errors() {
-        return Err(typed
-            .diagnostics()
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n"));
-    }
-    let mut lowered = typed.lower();
-    if !lowered.phase.diagnostics.is_empty() {
-        return Err(format!(
-            "not yet supported by the backend: {}",
-            lowered.phase.diagnostics.join("; ")
-        ));
-    }
-    let module = lowered.schedule()?;
-    module.encode_bytecode().map_err(|err| err.to_string())
-}
-
-/// Compile and schedule, dumping the raw VM module (`talk bytecode <file>`).
-pub fn render_raw_bytecode_from(name: &str, source: Source) -> Result<String, String> {
-    let mut lowered = lower_for_display(name, source)?;
-    let module = lowered.schedule()?;
-    Ok(format!("{module:#?}"))
-}
-
-fn lower_for_display(name: &str, source: Source) -> Result<Driver<Lowered>, String> {
-    let driver = Driver::new(vec![source], DriverConfig::new(name));
-    let parsed = driver.parse().map_err(|err| format!("{err:?}"))?;
-    let resolved = parsed.resolve_names().map_err(|err| format!("{err:?}"))?;
-    let typed = resolved.type_check();
-    if typed.has_errors() {
-        return Err(typed
-            .diagnostics()
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n"));
-    }
-    let lowered = typed.lower();
-    if !lowered.phase.diagnostics.is_empty() {
-        return Err(format!(
-            "not yet supported by the backend: {}",
-            lowered.phase.diagnostics.join("; ")
-        ));
-    }
-    Ok(lowered)
 }
 
 #[cfg(test)]
@@ -1036,7 +915,7 @@ pub mod tests {
     #[test]
     fn synthesized_error_blocks_no_file() {
         // A solver diagnostic with no origin node (NodeID::SYNTHESIZED)
-        // names no file, so it must not block typed-program/flow for the whole
+        // names no file, so it must not block typed-program building for the whole
         // workspace — only diagnostics attributed to a file block that file.
         use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
         use crate::node_id::{FileID, NodeID};
@@ -1064,83 +943,6 @@ pub mod tests {
             !blocked.contains(&FileID(0)),
             "an unattributed error must not block unrelated files"
         );
-    }
-
-    #[test]
-    fn render_lowered_shows_the_program_plainly() {
-        let ir = render_lowered("IrTest", "func double(x: Int) -> Int { x * 2 }\ndouble(21)")
-            .expect("ir");
-        assert!(ir.contains("func main(k: fn"), "{ir}");
-        assert!(ir.contains("func double(x: int, k: fn(int))"), "{ir}");
-        assert!(ir.contains("var double.x"), "{ir}");
-        assert!(
-            !ir.contains('\u{21a6}') && !ir.contains('\u{22a5}'),
-            "no notation: {ir}"
-        );
-    }
-
-    #[test]
-    fn render_lowered_names_types_and_specializations() {
-        // Struct heads print by name, and a generic's specialization is
-        // named by its concrete types, not a counter.
-        let ir = render_lowered("IrTest", "func id(x) { x }\nprint(id(\"hi\"))").expect("ir");
-        assert!(ir.contains("id<String>"), "{ir}");
-        assert!(ir.contains("boxed(String)"), "{ir}");
-        assert!(!ir.contains("Struct(C:"), "{ir}");
-    }
-
-    #[test]
-    fn render_lowered_annotates_string_statics() {
-        // A string literal's static pointer shows the bytes it points at.
-        let ir = render_lowered("IrTest", "print(\"hi\")").expect("ir");
-        assert!(
-            ir.contains("record_new(ByteStorage, static+0) (\"hi\")"),
-            "{ir}"
-        );
-    }
-
-    #[test]
-    fn render_lowered_reports_type_errors() {
-        let result = render_lowered("IrTest", "let x: Int = \"nope\"\nx");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn render_bytecode_lists_chunks() {
-        let listing = render_bytecode_from(
-            "IrTest",
-            Source::from("func double(x: Int) -> Int { x * 2 }\ndouble(21)"),
-            &crate::lambda_g::print::Styles::plain(),
-        )
-        .expect("bytecode");
-        assert!(listing.contains("chunk 0: main"), "{listing}");
-        assert!(listing.contains("ret r"), "{listing}");
-    }
-
-    #[test]
-    fn render_raw_bytecode_dumps_module() {
-        let dump = render_raw_bytecode_from(
-            "BytecodeTest",
-            Source::from("func double(x: Int) -> Int { x * 2 }\ndouble(21)"),
-        )
-        .expect("bytecode");
-        assert!(dump.contains("Module {"), "{dump}");
-        assert!(dump.contains("chunks:"), "{dump}");
-        assert!(dump.contains("code:"), "{dump}");
-        assert!(dump.contains("entry:"), "{dump}");
-    }
-
-    #[test]
-    fn compile_bytecode_from_runs_decoded_module() {
-        let bytes = compile_bytecode_from(
-            "BytecodeTest",
-            Source::from("func double(x: Int) -> Int { x * 2 }\ndouble(21)"),
-        )
-        .expect("bytecode");
-        let module = crate::vm::Module::decode_bytecode(&bytes).expect("decode");
-        let mut io = crate::vm::io::CaptureIO::default();
-        let value = crate::vm::interp::run(&module, &mut io).expect("vm");
-        assert_eq!(value, crate::vm::interp::Value::I64(42));
     }
 
     #[test]
@@ -1194,7 +996,7 @@ pub mod tests {
             preserve_comments: false,
             workspace_root: None,
             source_root: None,
-            libraries: vec![],
+            libraries: Vec::new(),
         };
 
         let driver_b = Driver::new(
@@ -1243,7 +1045,7 @@ pub mod tests {
             preserve_comments: false,
             workspace_root: None,
             source_root: None,
-            libraries: vec![],
+            libraries: Vec::new(),
         };
 
         let driver_b = Driver::new(

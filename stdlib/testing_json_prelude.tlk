@@ -57,9 +57,11 @@ func __talktalk_event_end(status: String) {
 
 @handle 'registerTest { testCase in
 	if __talktalk_filter_enabled {
-		if testCase.name == __talktalk_filter_name { __talktalk_tests.push(testCase) }
+		if testCase.name == __talktalk_filter_name {
+			__talktalk_tests.push(TestCase(name: testCase.name.to_string(), block: testCase.block))
+		}
 	} else {
-		__talktalk_tests.push(testCase)
+		__talktalk_tests.push(TestCase(name: testCase.name.to_string(), block: testCase.block))
 	}
 	continue ()
 }

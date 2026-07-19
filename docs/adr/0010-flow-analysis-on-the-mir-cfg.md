@@ -1,6 +1,6 @@
 # 0010 — Flow analysis runs on the MIR CFG
 
-Status: implemented (2026-07-02)
+Status: superseded by ADR 0031 (2026-07-13)
 
 ## Context
 

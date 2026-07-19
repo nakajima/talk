@@ -1,0 +1,12 @@
+struct Box {
+	let value: String
+	mut func touch() -> Int {
+		self.value.byte_count
+	}
+}
+func ok() -> Int {
+	let box = Box(value: "hello" + " world")
+	let sub = box.value.utf8().slice(0, 1)
+	let n = sub.byte_count
+	box.touch() + n
+}

@@ -1,0 +1,7 @@
+struct Counter {
+	let n: Int
+	mut func bump() -> () {
+		self.n = self.n + 1
+		()
+	}
+}

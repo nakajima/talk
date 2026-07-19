@@ -1,0 +1,14 @@
+struct Item {
+	let name: String
+}
+enum Box2<T> {
+	case full(T)
+}
+func wrap<T>(v: &T) -> Box2<T> {
+	Box2.full(v)
+}
+func main() -> Int {
+	let item = Item(name: "a" + "b")
+	let b = wrap(item)
+	0
+}

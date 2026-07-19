@@ -2,7 +2,7 @@
 // unsafe
 use package::Optional
 use package::Iterable::{ Iterable, Iterator, IntoIterator, IndexIterable, IndexIterator, Skip, Map }
-use package::Memory::{ Storage, _storage, _load, _store, _swap, _is_unique }
+use package::Memory::{ Storage, _storage, _load, _store, _swap, _is_unique, _retain }
 use package::String::{ String }
 use package::Operators::{ Add, Subtract, Multiply, Comparable, Equatable }
 use package::Showable::{ Showable }
@@ -45,13 +45,25 @@ public struct Array<Element> {
 			self.uniqued_storage()
 		}
 
-		self.set(self.count, value)
+		self._init_slot(self.count, value)
 		self.count = self.count + 1
 	}
 
+	// Overwrite: the replaced element is loaded out and dropped at scope
+	// exit (deep, per its own deinit) after the new value is written.
 	mut func set(index: Int, consume value: Element) -> Void {
-		let storage = self.uniqued_storage()
-		storage.set(index, value)
+		self.uniqued_storage()
+		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
+		let old: Element = _load<Element>(ptr)
+		_store<Element>(ptr, value)
+	}
+
+	// Raw write into a slot that holds no element yet (push's fresh
+	// slot): nothing to drop, and the caller has already uniqued the
+	// buffer.
+	mut func _init_slot(index: Int, consume value: Element) -> Void {
+		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
+		_store<Element>(ptr, value)
 	}
 
 	mut func swap(i: Int, j: Int) -> Void {
@@ -68,13 +80,6 @@ public struct Array<Element> {
 
 	consuming func skip(count: Int) -> ArrayIntoIterator<Element> {
 		self.into_iter().skip(count)
-	}
-
-	mut func _replace(index: Int, consume value: Element) -> Void {
-		self.uniqued_storage()
-		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
-		let old: Element = _load<Element>(ptr)
-		_store<Element>(ptr, value)
 	}
 
 	// Copy-on-write: a buffer shared with another Array (or with
@@ -94,10 +99,17 @@ public struct Array<Element> {
 		// If capacity is 0, it'll never double.
 		if capacity == 0 { capacity = 1 }
 		let fresh = _storage<Element>(capacity)
+		// A shared (or static) source buffer survives this copy, so both
+		// buffers end up owning the elements: retain each one as it is
+		// written. A unique source is a grow-in-place MOVE — its elements
+		// are donated and its shell is freed (shallowly) when the caller
+		// replaces self.storage.
+		let source_survives = _is_unique(self.storage.base) == false
 		let i = 0
 		loop i < self.count {
 			let from: RawPtr = @_ir(self.storage.base, i) { %? = gep Element $0 $1 }
 			let to: RawPtr = @_ir(fresh.base, i) { %? = gep Element $0 $1 }
+			if source_survives { _retain<Element>(self.get(i)) }
 			_store<Element>(to, _load<Element>(from))
 			i = i + 1
 		}
@@ -118,7 +130,7 @@ extend Array<Element> where Element: Comparable<Element> {
 
 			// Search for the smallest element in the unsorted portion
 			let j = i + 1
-			loop j < self.count - 1 {
+			loop j < self.count {
 				if fn(self.get(j), self.get(min)) { min = j }
 				j = j + 1
 			}

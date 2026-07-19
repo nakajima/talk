@@ -1,0 +1,17 @@
+// Archetype: ownership traffic — owned buffers created and dropped
+// per iteration: shared drop functions, frees, retain balance.
+struct Pair {
+	let a: String
+	let b: String
+}
+func bench(n: Int) -> Int {
+	let total = 0
+	let i = 0
+	loop i < n {
+		let p = Pair(a: "left" + "-side", b: "right" + "-side")
+		total = total + p.a.byte_count + p.b.byte_count
+		i = i + 1
+	}
+	total
+}
+print(bench(80000))

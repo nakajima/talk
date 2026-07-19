@@ -1,0 +1,10 @@
+func run(f: () -> Int) -> Int {
+	f()
+}
+func check() -> Int {
+	run {
+		let local = "x" + "y"
+		local.byte_count
+	}
+}
+check()

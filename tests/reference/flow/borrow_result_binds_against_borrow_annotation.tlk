@@ -1,0 +1,4 @@
+func first(xs: &Array<String>) -> Int {
+	let e: &String = xs.get(0)
+	0
+}

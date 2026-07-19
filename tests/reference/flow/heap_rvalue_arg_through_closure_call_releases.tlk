@@ -1,0 +1,10 @@
+struct Node 'heap {
+	let value: Int
+}
+func check() -> Int {
+	let f = func(n: Node) -> Int {
+		n.value
+	}
+	f(Node(value: 5))
+}
+check()

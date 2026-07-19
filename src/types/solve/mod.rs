@@ -544,14 +544,8 @@ impl<'s> Solver<'s> {
                             .get(&param)
                             .cloned()
                             .unwrap_or_default();
-                        let copy = self
-                            .catalog
-                            .bounds_satisfy(&bounds, &ProtocolRef::bare(Symbol::Copy));
-                        let cheap_clone = self
-                            .catalog
-                            .bounds_satisfy(&bounds, &ProtocolRef::bare(Symbol::CheapClone));
-                        if copy || cheap_clone {
-                            if !copy {
+                        if let Some(kind) = self.catalog.bounds_coerce_kind(&bounds) {
+                            if kind == crate::types::catalog::CoerceKind::CheapClone {
                                 self.coerce_clones.insert(origin.node);
                             }
                             queue.push(Constraint::Eq(
@@ -572,8 +566,8 @@ impl<'s> Solver<'s> {
                         return;
                     }
                     Ty::Nominal(symbol, _) => {
-                        if self.catalog.copies_out_of_borrow(symbol) {
-                            if self.catalog.grade_of(symbol) != crate::types::catalog::Grade::Copy {
+                        if let Some(kind) = self.catalog.coerce_kind(symbol) {
+                            if kind == crate::types::catalog::CoerceKind::CheapClone {
                                 self.coerce_clones.insert(origin.node);
                             }
                             queue.push(Constraint::Eq(
@@ -603,11 +597,22 @@ impl<'s> Solver<'s> {
         }
     }
 
+    /// Commit still-variable auto-borrow/owned-slot arguments to their
+    /// plain-equality reading. Defaulting a var another stuck constraint
+    /// will WRITE once its own head resolves (a `HasVariant` payload, a
+    /// `HasMember` member type) races that resolution: the chain floats to
+    /// the final solve, so the premature owned equality contradicts the
+    /// borrow the chain delivers (ADR 0017 bug B — a loop binder over a
+    /// borrowed-receiver method source pinned owned inside its group,
+    /// mismatching the `&Element` the `.some` payload resolves to). Such
+    /// vars stay stuck and float out with their chain; everything else
+    /// defaults here so in-group generalization still sees one type.
     fn default_apply_borrows(
         &mut self,
         stuck: &mut Vec<Constraint>,
         queue: &mut Vec<Constraint>,
     ) -> bool {
+        let pending_outputs = self.pending_output_vars(stuck);
         let mut remaining = Vec::with_capacity(stuck.len());
         let mut defaulted = false;
         for constraint in stuck.drain(..) {
@@ -616,8 +621,10 @@ impl<'s> Solver<'s> {
                     expected,
                     found,
                     origin,
-                } if matches!(self.store.shallow(&found), Ty::Var(_))
-                    || matches!(self.store.shallow(&expected), Ty::Var(_)) =>
+                } if (matches!(self.store.shallow(&found), Ty::Var(_))
+                    || matches!(self.store.shallow(&expected), Ty::Var(_)))
+                    && !self.mentions_pending_output(&found, &pending_outputs)
+                    && !self.mentions_pending_output(&expected, &pending_outputs) =>
                 {
                     queue.push(Constraint::Eq(expected, found, origin.nested()));
                     defaulted = true;
@@ -627,7 +634,9 @@ impl<'s> Solver<'s> {
                     found,
                     origin,
                     ..
-                } if matches!(self.store.shallow(&found), Ty::Var(_)) => {
+                } if matches!(self.store.shallow(&found), Ty::Var(_))
+                    && !self.mentions_pending_output(&found, &pending_outputs) =>
+                {
                     queue.push(Constraint::Eq(expected_inner, found, origin.nested()));
                     defaulted = true;
                 }
@@ -636,6 +645,50 @@ impl<'s> Solver<'s> {
         }
         *stuck = remaining;
         defaulted
+    }
+
+    /// Root ids of variables a stuck constraint will still write when its
+    /// pending head resolves: `HasVariant` payload/ctor slots and
+    /// `HasMember` member types. These are outputs — the constraint waits
+    /// on its receiver/enum head, not on them — so they may not be
+    /// defaulted out from under the chain.
+    fn pending_output_vars(&mut self, stuck: &[Constraint]) -> rustc_hash::FxHashSet<u32> {
+        let mut outputs = rustc_hash::FxHashSet::default();
+        let mut tys: Vec<Ty> = vec![];
+        for constraint in stuck {
+            match constraint {
+                Constraint::HasVariant { payload, ctor, .. } => {
+                    tys.extend(payload.iter().map(|(_, ty)| ty.clone()));
+                    tys.extend(ctor.clone());
+                }
+                Constraint::HasMember { member, .. } => tys.push(member.clone()),
+                _ => {}
+            }
+        }
+        for ty in tys {
+            let ty = self.store.zonk_ty(&ty);
+            let mut vars = vec![];
+            let _ = ty.try_visit(&mut |ty| {
+                if let Ty::Var(var) = ty {
+                    vars.push(var.0);
+                }
+                std::ops::ControlFlow::<()>::Continue(())
+            });
+            for var in vars {
+                outputs.insert(self.store.find(var));
+            }
+        }
+        outputs
+    }
+
+    fn mentions_pending_output(&mut self, ty: &Ty, pending: &rustc_hash::FxHashSet<u32>) -> bool {
+        if pending.is_empty() {
+            return false;
+        }
+        match self.store.shallow(ty) {
+            Ty::Var(var) => pending.contains(&self.store.find(var.0)),
+            _ => false,
+        }
     }
 
     pub(super) fn eq_residual_guard(
@@ -958,7 +1011,6 @@ impl<'s> Solver<'s> {
 pub use generalize::Generalizer;
 pub(crate) use generalize::quantify_leftover_eff_vars;
 pub use normalize::normalize_ty;
-pub(crate) use normalize::reduce_projection;
 use normalize::stuck_projection;
 pub(crate) use pattern::bind_param_pattern;
 pub(crate) use var_store::TyNode;

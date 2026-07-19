@@ -1,0 +1,7 @@
+effect 'oops(error) -> Never
+@handle 'oops { err in print(err) }
+func boom() 'oops -> () {
+	'oops("bang")
+	print("after perform")
+}
+boom()

@@ -1,0 +1,8 @@
+struct Ref {
+	let inner: &String
+}
+extend Ref: Borrowed {}
+func escape() -> Ref {
+	let s = "a" + "b"
+	Ref(inner: s)
+}

@@ -1,0 +1,7 @@
+func f() -> Int {
+	let xs = [1, 2]
+	for x in mut xs {
+		x = x + 1
+	}
+	xs.count
+}

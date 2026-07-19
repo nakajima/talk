@@ -1,0 +1,16 @@
+struct Node 'heap {
+	let value: Int
+}
+protocol Taker {
+	func take(n: Node) -> Int
+}
+struct Sink {}
+extend Sink: Taker {
+	func take(n: Node) -> Int {
+		n.value
+	}
+}
+func check<T: Taker>(sink: T) -> Int {
+	sink.take(Node(value: 3))
+}
+check(Sink())

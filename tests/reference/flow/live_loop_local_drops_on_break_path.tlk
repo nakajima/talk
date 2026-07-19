@@ -1,0 +1,13 @@
+func f() -> Int {
+	let i = 0
+	loop i < 3 {
+		i = i + 1
+		let s = "a" + "b"
+		if i == 2 {
+			break
+		}
+		let n = s.byte_count
+	}
+	7
+}
+f()

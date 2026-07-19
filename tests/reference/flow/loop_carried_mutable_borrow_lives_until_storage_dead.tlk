@@ -1,0 +1,17 @@
+func observe(s: &String) -> Int {
+	s.byte_count
+}
+func mutate(s: &mut String) -> Int {
+	s.byte_count
+}
+func bad() -> Int {
+	let s = "hello" + " world"
+	let r: &mut String = s
+	let i = 0
+	loop i < 2 {
+		let n = observe(r)
+		let m = mutate(s)
+		i = i + 1
+	}
+	0
+}

@@ -1,0 +1,6 @@
+struct Box {
+	let value: String
+}
+let s = "hello" + " world"
+let box = Box(value: s)
+s.byte_count

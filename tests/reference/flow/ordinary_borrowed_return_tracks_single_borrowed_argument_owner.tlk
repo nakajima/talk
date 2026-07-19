@@ -1,0 +1,9 @@
+func first(s: &String) -> Substring {
+	s.utf8().slice(0, 1)
+}
+func bad() -> Int {
+	let s = "hello" + " world"
+	let sub = first(s)
+	let moved = s
+	sub.byte_count
+}

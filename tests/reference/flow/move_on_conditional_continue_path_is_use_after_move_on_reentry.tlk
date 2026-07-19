@@ -1,0 +1,17 @@
+func consume(consume s: String) -> Int {
+	s.byte_count
+}
+func f() -> Int {
+	let s = "a" + "b"
+	let i = 0
+	let n = 0
+	loop i < 2 {
+		i = i + 1
+		if i == 1 {
+			n = consume(s)
+			continue
+		}
+	}
+	n
+}
+f()

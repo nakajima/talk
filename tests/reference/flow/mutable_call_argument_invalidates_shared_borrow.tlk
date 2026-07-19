@@ -1,0 +1,9 @@
+func mutate(s: &mut String) -> Int {
+	s.byte_count
+}
+func bad() -> Int {
+	let s = "hello" + " world"
+	let sub = s.utf8().slice(0, 1)
+	let n = mutate(s)
+	sub.byte_count + n
+}

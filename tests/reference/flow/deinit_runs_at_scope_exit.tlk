@@ -1,0 +1,16 @@
+let counter = 0
+struct Guard {
+	let id: Int
+}
+extend Guard: Deinit {
+	consuming func deinit() -> Void {
+		counter = counter + 1
+		()
+	}
+}
+func scope() -> Int {
+	let g = Guard(id: 1)
+	0
+}
+let n = scope() + scope()
+counter

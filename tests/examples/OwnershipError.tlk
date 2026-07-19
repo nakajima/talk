@@ -1,0 +1,4 @@
+func nope() {
+	let string = "sup"
+	string.utf8().slice(0, 1) + "?"
+}

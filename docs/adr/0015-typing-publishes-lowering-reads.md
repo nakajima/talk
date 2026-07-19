@@ -1,6 +1,6 @@
 # 0015 — Typing publishes, lowering reads
 
-Status: implemented (2026-07-04)
+Status: superseded for post-typechecking architecture by ADR 0031 (2026-07-13)
 
 ## Context
 

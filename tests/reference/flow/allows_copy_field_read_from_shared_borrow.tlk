@@ -1,0 +1,6 @@
+struct Person {
+	let age: Int
+}
+func ok(person: &Person) -> Int {
+	person.age
+}

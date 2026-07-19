@@ -1,0 +1,8 @@
+func take(name: String) -> Int {
+	name.byte_count
+}
+func check() -> Int {
+	let s = "hello" + " world"
+	take(s)
+}
+check()

@@ -1,0 +1,6 @@
+func take(s: String) -> Int {
+	s.byte_count
+}
+func ok(s: &String) -> Int {
+	take(s)
+}

@@ -1,0 +1,8 @@
+enum Maybe<T> {
+	case some(T)
+	case none
+}
+func bad() -> Maybe<Substring> {
+	let s = "hello" + " world"
+	Maybe.some(s.utf8().slice(0, 1))
+}

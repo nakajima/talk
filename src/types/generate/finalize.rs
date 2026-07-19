@@ -68,6 +68,62 @@ impl<'a> TypecheckSession<'a> {
         zonk_predicate(&mut self.store, &self.catalog, predicate)
     }
 
+    /// The borrowed-to-owned judgment for an implicit existential pack's
+    /// payload (the deferred twin of `solve_coerce_owned`'s tier-2 rule):
+    /// a borrow of a Copy payload is a value copy, a CheapClone payload
+    /// retains (recorded in `coerce_clones` for lowering), and anything
+    /// else — linear or uniquely-owned — is an error. Returns the owned
+    /// payload type the pack carries forward.
+    fn check_pack_payload_ownership(&mut self, node: NodeID, payload: Ty) -> Ty {
+        let Ty::Borrow(perm, inner) = payload else {
+            return payload;
+        };
+        let coerces = match &*inner {
+            Ty::Nominal(symbol, _) => match self.catalog.coerce_kind(*symbol) {
+                Some(kind) => {
+                    if kind == crate::types::catalog::CoerceKind::CheapClone {
+                        self.artifacts.coerce_clones.insert(node);
+                    }
+                    true
+                }
+                None => false,
+            },
+            Ty::Param(param) => {
+                let bounds = self
+                    .catalog
+                    .param_bounds
+                    .get(param)
+                    .cloned()
+                    .unwrap_or_default();
+                match self.catalog.bounds_coerce_kind(&bounds) {
+                    Some(kind) => {
+                        if kind == crate::types::catalog::CoerceKind::CheapClone {
+                            self.artifacts.coerce_clones.insert(node);
+                        }
+                        true
+                    }
+                    None => false,
+                }
+            }
+            _ => false,
+        };
+        if coerces {
+            *inner
+        } else {
+            let expected = self.store.render(&inner);
+            let found = self.store.render(&Ty::Borrow(perm, inner.clone()));
+            self.diagnostics.errors.push((
+                TypeError::Mismatch {
+                    expected,
+                    found,
+                    reason: CtReason::Body,
+                },
+                node,
+            ));
+            Ty::Borrow(perm, inner)
+        }
+    }
+
     pub(super) fn finalize(mut self) -> (TypeOutput, Vec<AnyDiagnostic>) {
         let mut schemes = FxHashMap::default();
         for (symbol, mut scheme) in std::mem::take(&mut self.schemes) {
@@ -188,11 +244,23 @@ impl<'a> TypecheckSession<'a> {
         self.catalog = catalog;
         let mut existential_packs = FxHashMap::default();
         for (node, pack) in std::mem::take(&mut self.artifacts.existential_packs) {
+            let existential = self.final_ty(&pack.existential);
+            let payload = self.final_ty(&pack.payload);
+            // An implicit pack OWNS its payload, so a borrowed source gets
+            // the same judgment as every other borrowed-to-owned coercion:
+            // a free copy (Copy), an O(1) retain (CheapClone, recorded for
+            // lowering at the pack node), or a type error. Without this a
+            // borrowed payload launders into an owned `any P` — and a
+            // borrowed `'linear` value stays consumable at the call site
+            // (ownership-soundness plan B4 / ADR 0018's known gap). Sits
+            // here, post-solve, so payloads that resolve late (deferred
+            // member results, pattern binders) get the same gate.
+            let payload = self.check_pack_payload_ownership(node, payload);
             existential_packs.insert(
                 node,
                 ExistentialPack {
-                    existential: self.final_ty(&pack.existential),
-                    payload: self.final_ty(&pack.payload),
+                    existential,
+                    payload,
                 },
             );
         }
@@ -211,6 +279,7 @@ impl<'a> TypecheckSession<'a> {
                 schemes,
                 instantiations,
                 member_resolutions,
+                integer_literals: self.artifacts.integer_literals,
                 for_plans,
                 synthetic_floors: self.artifacts.synthetic_next,
                 coerce_clones: self.artifacts.coerce_clones,
@@ -283,6 +352,21 @@ impl TyFold for Normalizer<'_> {
         let rebuilt = self.fold_children(&normalized);
         match &rebuilt {
             Ty::Proj(..) => normalize_ty(self.store, self.catalog, &rebuilt),
+            // `&Int` never surfaces (ADR 0014): a shared borrow of a
+            // Copy-grade head IS the value. Annotation lowering erases the
+            // wrap eagerly; this is the deferred twin for borrows whose
+            // payload only resolved to a Copy head during solving (inferred
+            // borrow-default params — plan 3.3(b) — and generic
+            // instantiations at Int). Finalize-time only, so in-solve perm
+            // unification (`&Int` vs `&mut Int`) is untouched.
+            Ty::Borrow(perm, inner)
+                if matches!(self.store.shallow_perm(*perm), Perm::Shared)
+                    && matches!(&**inner, Ty::Nominal(symbol, _)
+                        if self.catalog.grade_of(*symbol)
+                            == crate::types::catalog::Grade::Copy) =>
+            {
+                (**inner).clone()
+            }
             _ => rebuilt,
         }
     }

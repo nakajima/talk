@@ -1,6 +1,6 @@
 # ADR 0009: Standalone Executables via Bundled Bytecode VM
 
-Status: accepted
+Status: superseded by ADR 0031 (2026-07-13)
 
 Date: 2026-06-24
 

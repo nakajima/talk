@@ -1,0 +1,7 @@
+enum View {
+	case path(Substring)
+}
+func make() -> View {
+	let s = "ab" + "cd"
+	View.path(s.utf8().slice(0, 2))
+}

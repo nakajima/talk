@@ -1,0 +1,17 @@
+// Archetype: string and UTF-8 machinery — buffer loads, grapheme
+// decoding in the hot leaf functions, byte_count, slicing.
+func bench(n: Int) -> Int {
+	let text = "naïve café — 100% übermäßig 🎯 done"
+	let total = 0
+	let i = 0
+	loop i < n {
+		let sum = 0
+		for ch in text {
+			sum = sum + 1
+		}
+		total = total + sum + text.byte_count
+		i = i + 1
+	}
+	total
+}
+print(bench(1500))

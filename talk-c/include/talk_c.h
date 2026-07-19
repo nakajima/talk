@@ -210,6 +210,9 @@ TalkDiagnostics *talk_check_utf8(
     size_t source_len
 );
 
+/* Compile and execute a program through the bytecode backend. The
+ * supplied path names the document: relative local imports resolve
+ * from it and diagnostics cite it. */
 TalkEvalResult *talk_run_program_utf8(
     const uint8_t *path_ptr,
     size_t path_len,
@@ -262,6 +265,8 @@ TalkResult talk_package_create_utf8(
     size_t binary_name_len
 );
 
+/* Compile and execute a package binary (with an optional dependency
+ * provider below). */
 TalkEvalResult *talk_package_run_utf8(
     const uint8_t *root_ptr,
     size_t root_len,
@@ -292,6 +297,9 @@ TalkTestResult *talk_package_test_with_provider_utf8(
     bool offline
 );
 
+/* Render the middle representation / bytecode compiled from the
+ * source (the inspection surfaces behind `talk mir` and
+ * `talk bytecode`). */
 TalkResult talk_render_lowered_utf8(
     const uint8_t *path_ptr,
     size_t path_len,
@@ -357,6 +365,7 @@ TalkCompletions *talk_workspace_completions_utf8(
     uint32_t byte_offset
 );
 
+/* Compatibility entry point: ownership analysis is unavailable. */
 TalkInlayHints *talk_workspace_inlay_hints_utf8(
     TalkWorkspace *workspace,
     const uint8_t *id_ptr,

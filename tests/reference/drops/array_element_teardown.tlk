@@ -1,0 +1,2 @@
+let xs = ["hello " + "world", "foo " + "bar"]
+print(xs.count)

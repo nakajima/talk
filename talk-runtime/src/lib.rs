@@ -35,6 +35,28 @@ pub enum MemKind {
     Boxed,
 }
 
+/// Register-or-constant operand encoding (Lua 5's RK design —
+/// Ierusalimschy, de Figueiredo & Celes, *The Implementation of
+/// Lua 5.0*, J.UCS 2005): when the high bit of an operand field is
+/// set, the low 15 bits index the module constant pool; otherwise
+/// the field is a frame register. RK fields are the arithmetic and
+/// comparison operands (`Add`/`Sub`/`Mul`/`Div`/`Cmp` `a`/`b`) and
+/// every argument-pool entry — a constant argument or operand costs
+/// no materializing instruction. Constant pool indexes past 15 bits
+/// fall back to `Const` materialization at lowering.
+pub const RK_CONST: u16 = 0x8000;
+/// The index mask under [`RK_CONST`].
+pub const RK_INDEX: u16 = 0x7FFF;
+
+/// Render an RK operand field the way the disassembly reads.
+pub fn rk_display(field: u16) -> String {
+    if field & RK_CONST != 0 {
+        format!("k[{}]", field & RK_INDEX)
+    } else {
+        format!("r{field}")
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Insn {
     Const {
@@ -268,12 +290,44 @@ pub enum Insn {
         dest: u16,
     },
     /// Invoke a reified continuation with a value: unwind every frame
-    /// above the continuation's frame, then return from that frame with
-    /// the value. Traps if the frame is gone — continuations are
-    /// one-shot, and a handler that escapes its scope finds a dead
-    /// delimiter.
+    /// above the continuation's frame — entering each one a final time at
+    /// its unwind entry when its chunk's unwind table has one for the
+    /// suspension pc (ADR 0027) — then return from that frame with the
+    /// value. Traps if the frame is gone — continuations are one-shot,
+    /// and a handler that escapes its scope finds a dead delimiter.
     CallCont {
         callee: u16,
+        src: u16,
+    },
+    /// Terminates an unwind entry (ADR 0027): pop the frame that just ran
+    /// its cleanup and continue the unwind toward the delimiter. Only
+    /// legal while a `CallCont` unwind is in progress.
+    UnwindRet,
+    /// Install a deep handler for `effect`: the clause function value and
+    /// the delimiter continuation, tied to the installing frame (popped
+    /// with it).
+    PushHandler {
+        effect: u32,
+        clause: u16,
+        cont: u16,
+    },
+    /// Nearest-handler routing: find the innermost live handler for
+    /// `effect` below the current search floor. Writes the clause, the
+    /// delimiter continuation, and the handler's index (for the clause's
+    /// own floor). Traps if no handler is installed.
+    FindHandler {
+        clause: u16,
+        cont: u16,
+        index: u16,
+        effect: u32,
+    },
+    /// Read the current handler-search floor (an Int; `i64::MAX` = open).
+    GetFloor {
+        dest: u16,
+    },
+    /// Set the handler-search floor (a clause runs outside its own
+    /// handler, CHG-01).
+    SetFloor {
         src: u16,
     },
     Trap {
@@ -315,6 +369,12 @@ pub struct Chunk {
     pub code: Vec<Insn>,
     pub arity: u16,
     pub n_regs: u16,
+    /// The unwind table (ADR 0027): (suspension pc, entry pc) pairs,
+    /// sorted by suspension pc. A frame of this chunk suspended at a
+    /// capability-passing call holds the suspension pc; an effect abort
+    /// unwinding through it enters the frame once at the entry pc (the
+    /// site's scope-exit drops, ending in `UnwindRet`) before popping it.
+    pub unwind: Vec<(u32, u32)>,
 }
 
 #[derive(Debug, Default)]
@@ -370,14 +430,24 @@ impl Module {
         match insn {
             Insn::Const { dest, k } => format!("const r{dest} <- consts[{k}]"),
             Insn::Move { dest, src } => format!("move r{dest} <- r{src}"),
-            Insn::Add { dest, a, b } => format!("add r{dest} <- r{a}, r{b}"),
-            Insn::Sub { dest, a, b } => format!("sub r{dest} <- r{a}, r{b}"),
-            Insn::Mul { dest, a, b } => format!("mul r{dest} <- r{a}, r{b}"),
-            Insn::Div { dest, a, b } => format!("div r{dest} <- r{a}, r{b}"),
+            Insn::Add { dest, a, b } => {
+                format!("add r{dest} <- {}, {}", rk_display(*a), rk_display(*b))
+            }
+            Insn::Sub { dest, a, b } => {
+                format!("sub r{dest} <- {}, {}", rk_display(*a), rk_display(*b))
+            }
+            Insn::Mul { dest, a, b } => {
+                format!("mul r{dest} <- {}, {}", rk_display(*a), rk_display(*b))
+            }
+            Insn::Div { dest, a, b } => {
+                format!("div r{dest} <- {}, {}", rk_display(*a), rk_display(*b))
+            }
             Insn::Cmp { dest, a, b, op } => {
                 format!(
-                    "cmp_{} r{dest} <- r{a}, r{b}",
-                    format!("{op:?}").to_lowercase()
+                    "cmp_{} r{dest} <- {}, {}",
+                    format!("{op:?}").to_lowercase(),
+                    rk_display(*a),
+                    rk_display(*b)
                 )
             }
             Insn::Trunc { dest, src } => format!("trunc r{dest} <- r{src}"),
@@ -526,6 +596,24 @@ impl Module {
             Insn::RegionRelease { dest, src } => format!("region_release r{dest} <- r{src}"),
             Insn::MakeCont { dest } => format!("make_cont r{dest}"),
             Insn::CallCont { callee, src } => format!("call_cont r{callee} <- r{src}"),
+            Insn::UnwindRet => "unwind_ret".to_string(),
+            Insn::PushHandler {
+                effect,
+                clause,
+                cont,
+            } => {
+                format!("push_handler eff{effect} clause r{clause} cont r{cont}")
+            }
+            Insn::FindHandler {
+                clause,
+                cont,
+                index,
+                effect,
+            } => {
+                format!("find_handler eff{effect} -> r{clause}, r{cont}, r{index}")
+            }
+            Insn::GetFloor { dest } => format!("get_floor r{dest}"),
+            Insn::SetFloor { src } => format!("set_floor r{src}"),
         }
     }
 }

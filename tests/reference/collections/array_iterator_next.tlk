@@ -1,0 +1,20 @@
+func main() -> Int {
+	let numbers = [7, 8]
+	let it = numbers.iter()
+	let r1: Optional<Int> = it.next()
+	match r1 {
+		.some(v) -> print(v),
+		.none -> print(0 - 1)
+	}
+	let r2: Optional<Int> = it.next()
+	match r2 {
+		.some(v) -> print(v),
+		.none -> print(0 - 1)
+	}
+	let r3: Optional<Int> = it.next()
+	match r3 {
+		.some(v) -> print(v),
+		.none -> print(0 - 1)
+	}
+	0
+}

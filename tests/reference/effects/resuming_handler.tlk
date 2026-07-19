@@ -1,0 +1,11 @@
+effect 'ask(prompt) -> Int
+@handle 'ask { p in
+	print(p)
+	continue 42
+}
+func question() 'ask -> Int {
+	let answer = 'ask("meaning?")
+	answer + 1
+}
+let r = question()
+r * 2

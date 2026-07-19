@@ -1,0 +1,14 @@
+func touch(xs: &mut Array<Int>) -> Int {
+	xs.push(9)
+	xs.count
+}
+func main() -> Int {
+	let xs = [5]
+	for x in mut xs {
+		x = x + 1
+	}
+	print(touch(xs))
+	print(xs.get(0))
+	print(xs.get(1))
+	0
+}

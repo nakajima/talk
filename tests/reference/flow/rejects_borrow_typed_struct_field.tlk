@@ -1,0 +1,3 @@
+struct Holder {
+	let r: &String
+}

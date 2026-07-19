@@ -1,6 +1,35 @@
 # 0017 — Structural temp drops and a free-balance verifier
 
-Status: proposed (2026-07-05)
+Status: superseded by ADR 0031 (2026-07-13)
+
+Stage checklist (see "Stages" below; the open stages are tracked by
+`docs/ownership-soundness-plan.md`):
+
+- Stage 1 (repro tests): bug A's shapes landed with stage 3; bug B's
+  shape is now a running both-engine test
+  (`stdlib_fs_directory_runner_runs_balanced_on_both_engines`,
+  plan track 8.3, landed 2026-07-11).
+- Stage 2 (free-balance verifier): **landed** — `src/lambda_g/balance.rs`
+  (plan track 6.1), ON by default in cfg(test) at `Driver::lower` since
+  the 6.2 accounting sweep (2026-07-12), alongside VM + evaluator leak
+  fences on every driver run path.
+- Stage 3 (structural temp drops): **landed** — `pending_temp_drops`,
+  `note_pending_temp`, and `drain_temp_drops` are deleted; statements
+  emit their own `TemporaryEnd` candidates. Bug A is fixed.
+- Stage 4 (`lower_embedded_body`): **landed** (2026-07-12, plan track
+  7.3) — `StatementScope` bundles the statement-scoped builder fields
+  (including `scope_floor`, which makes embedded-body early-exit
+  isolation structural rather than classification-neutralized), and
+  `lower_embedded_body` swaps it wholesale at both sites. The swap of
+  the previously-unmasked fields fixed a latent `block_value_temps`
+  leak (a trailing block's value tail inside a block expression
+  delivered to the enclosing block's temp — λ_G T-App panic), per this
+  ADR's thesis: no per-field handling left to forget.
+- Stage 5 (bug B typing fix): **landed** (2026-07-11, plan track 8.3) —
+  root cause was solver `default_apply_borrows` pinning output-position
+  vars of stuck constraint chains to owned at group quiescence; the
+  borrowed-receiver method for-source now compiles and runs balanced on
+  both engines.
 
 ## Context
 

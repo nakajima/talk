@@ -21,22 +21,6 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
-        /// Show the λ_G program produced by lowering ().
-        Lower {
-            #[arg(value_hint = ValueHint::FilePath)]
-            filename: Option<String>,
-        },
-        /// Show the VM bytecode for the input: chunks,
-        /// registers, instructions.
-        Ir {
-            #[arg(value_hint = ValueHint::FilePath)]
-            filename: Option<String>,
-        },
-        /// Show the raw scheduled VM bytecode module for the input
-        Bytecode {
-            #[arg(value_hint = ValueHint::FilePath)]
-            filename: Option<String>,
-        },
         /// The Type at a position (byte offset, or 1-based
         /// line/column).
         Hover {
@@ -70,27 +54,60 @@ async fn main() {
             #[arg(long)]
             json: bool,
         },
-        /// Run the input or a package binary in the current directory.
+        /// Compile and execute the input (or the current package's binary
+        /// when no filenames are given inside a package).
         Run {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
-            #[arg(long)]
+            /// Execute this zero-parameter public function instead of the
+            /// script's top-level statements.
+            #[arg(long, value_name = "NAME")]
+            entry: Option<String>,
+            /// Select the package binary to run.
+            #[arg(long, value_name = "NAME")]
             bin: Option<String>,
+            /// Use only locally installed package sources.
             #[arg(long)]
             offline: bool,
         },
-        /// Discover and run .test.tlk files, or package tests in the current directory.
+        /// Discover and execute `.test.tlk` Talk tests.
         Test {
-            #[arg(value_hint = ValueHint::AnyPath)]
+            #[arg(value_hint = ValueHint::FilePath)]
             paths: Vec<String>,
-            /// Emit machine-readable JSON.
             #[arg(long)]
             json: bool,
-            /// Run only tests whose name exactly matches this value.
+            /// Run only the test with this exact name.
             #[arg(long, value_name = "NAME")]
             filter: Option<String>,
-            #[arg(long)]
-            offline: bool,
+        },
+        /// Compile the input to a bytecode image.
+        Build {
+            #[arg(value_hint = ValueHint::FilePath)]
+            filenames: Vec<String>,
+            /// Where to write the image.
+            #[arg(short, long, value_name = "FILE")]
+            output: String,
+            #[arg(long, value_name = "NAME")]
+            entry: Option<String>,
+        },
+        /// Validate and execute a bytecode image.
+        RunImage {
+            #[arg(value_hint = ValueHint::FilePath)]
+            filename: String,
+        },
+        /// Render the bytecode compiled from the input.
+        Bytecode {
+            #[arg(value_hint = ValueHint::FilePath)]
+            filenames: Vec<String>,
+            #[arg(long, value_name = "NAME")]
+            entry: Option<String>,
+        },
+        /// Render the backend's middle representation for the input.
+        Mir {
+            #[arg(value_hint = ValueHint::FilePath)]
+            filenames: Vec<String>,
+            #[arg(long, value_name = "NAME")]
+            entry: Option<String>,
         },
         /// Create a new package directory.
         New {
@@ -108,14 +125,7 @@ async fn main() {
             #[arg(long)]
             offline: bool,
         },
-        /// Compile Talk source to bytecode or a standalone executable.
-        Build(BuildArgs),
-        /// Run a serialized Talk bytecode image.
-        RunBytecode {
-            #[arg(value_hint = ValueHint::FilePath)]
-            filename: String,
-        },
-        /// Read-eval-print-loop
+        /// Interactive frontend for declarations, type queries, and completion.
         Repl,
         /// Print a dense Talk language reference for LLMs.
         Llm,
@@ -151,28 +161,6 @@ async fn main() {
     }
 
     #[derive(Debug, Args)]
-    struct BuildArgs {
-        #[arg(value_hint = ValueHint::FilePath)]
-        filenames: Vec<String>,
-        #[arg(short, long, value_hint = ValueHint::FilePath)]
-        output: String,
-        #[arg(long)]
-        emit_bytecode: bool,
-        #[arg(long, value_hint = ValueHint::FilePath)]
-        runtime: Option<String>,
-        #[arg(long)]
-        cc: Option<String>,
-        #[arg(long)]
-        keep_temps: bool,
-        #[arg(long)]
-        no_strip: bool,
-        #[arg(long)]
-        bin: Option<String>,
-        #[arg(long)]
-        offline: bool,
-    }
-
-    #[derive(Debug, Args)]
     struct LspArgs {
         #[arg(long)]
         stdio: bool,
@@ -192,38 +180,6 @@ async fn main() {
                 Ok(parsed) => println!("{:#?}", parsed.phase.asts),
                 Err(err) => {
                     eprintln!("failed to parse: {err:?}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        Commands::Lower { filename } => {
-            let (module_name, source) = single_source_for(filename.as_deref());
-            let styles = talk::lambda_g::print::Styles::auto();
-            match talk::compiling::driver::render_lowered_from(&module_name, source, &styles) {
-                Ok(ir) => println!("{ir}"),
-                Err(message) => {
-                    eprintln!("{message}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        Commands::Ir { filename } => {
-            let (module_name, source) = single_source_for(filename.as_deref());
-            let styles = talk::lambda_g::print::Styles::auto();
-            match talk::compiling::driver::render_bytecode_from(&module_name, source, &styles) {
-                Ok(listing) => println!("{listing}"),
-                Err(message) => {
-                    eprintln!("{message}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        Commands::Bytecode { filename } => {
-            let (module_name, source) = single_source_for(filename.as_deref());
-            match talk::compiling::driver::render_raw_bytecode_from(&module_name, source) {
-                Ok(listing) => println!("{listing}"),
-                Err(message) => {
-                    eprintln!("{message}");
                     std::process::exit(1);
                 }
             }
@@ -317,259 +273,6 @@ async fn main() {
         Commands::Llm => {
             println!("{LLM_REFERENCE}");
         }
-        Commands::RunBytecode { filename } => {
-            let bytes = match std::fs::read(filename) {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    eprintln!("error: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let module = match talk::vm::Module::decode_bytecode(&bytes) {
-                Ok(module) => module,
-                Err(err) => {
-                    eprintln!("error: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let mut io = talk::vm::io::StdioIO;
-            match talk::vm::interp::run(&module, &mut io) {
-                Ok(talk::vm::interp::Value::Void) => {}
-                Ok(value) => println!("{value:?}"),
-                Err(err) => {
-                    eprintln!("{err}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        Commands::Build(args) => {
-            let bytecode = if args.filenames.is_empty() && package_exists_here() {
-                let project = match current_package(args.offline) {
-                    Ok(project) => project,
-                    Err(err) => {
-                        eprintln!("error: {err}");
-                        std::process::exit(1);
-                    }
-                };
-                let mut lowered = match project.compile_binary(args.bin.as_deref()) {
-                    Ok(lowered) => lowered,
-                    Err(err) => {
-                        eprintln!("error: {err}");
-                        std::process::exit(1);
-                    }
-                };
-                match lowered.encode_bytecode() {
-                    Ok(bytecode) => bytecode,
-                    Err(err) => {
-                        eprintln!("error: {err}");
-                        std::process::exit(1);
-                    }
-                }
-            } else {
-                if args.bin.is_some() {
-                    eprintln!("error: --bin is only valid when building a package");
-                    std::process::exit(1);
-                }
-                let module_name = args
-                    .filenames
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| STDIN_NAME.to_string());
-                let sources = sources_for_filenames(&args.filenames);
-                match talk::compiling::driver::compile_bytecode_sources(&module_name, sources) {
-                    Ok(bytecode) => bytecode,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        std::process::exit(1);
-                    }
-                }
-            };
-            if args.emit_bytecode {
-                if let Err(err) = std::fs::write(&args.output, &bytecode) {
-                    eprintln!("error: {err}");
-                    std::process::exit(1);
-                }
-            } else if let Err(err) = build_static_executable(
-                &bytecode,
-                std::path::Path::new(&args.output),
-                args.runtime.as_deref(),
-                args.cc.as_deref(),
-                args.keep_temps,
-                !args.no_strip,
-            ) {
-                eprintln!("error: {err}");
-                std::process::exit(1);
-            }
-        }
-        Commands::Run {
-            filenames,
-            bin,
-            offline,
-        } => {
-            use talk::compiling::driver::Driver;
-
-            if filenames.is_empty() && package_exists_here() {
-                let project = match current_package(*offline) {
-                    Ok(project) => project,
-                    Err(err) => {
-                        eprintln!("error: {err}");
-                        std::process::exit(1);
-                    }
-                };
-                let mut lowered = match project.compile_binary(bin.as_deref()) {
-                    Ok(lowered) => lowered,
-                    Err(err) => {
-                        eprintln!("error: {err}");
-                        std::process::exit(1);
-                    }
-                };
-                run_lowered(&mut lowered);
-                return;
-            }
-            if bin.is_some() {
-                eprintln!("error: --bin is only valid when running a package");
-                std::process::exit(1);
-            }
-            let module_name = filenames
-                .first()
-                .cloned()
-                .unwrap_or_else(|| STDIN_NAME.to_string());
-            let sources = sources_for_filenames(filenames);
-            let driver = Driver::new(sources, DriverConfig::new(module_name));
-            let parsed = match driver.parse() {
-                Ok(parsed) => parsed,
-                Err(err) => {
-                    eprintln!("error: {err:?}");
-                    std::process::exit(1);
-                }
-            };
-            let resolved = match parsed.resolve_names() {
-                Ok(resolved) => resolved,
-                Err(err) => {
-                    eprintln!("error: {err:?}");
-                    std::process::exit(1);
-                }
-            };
-            let typed = resolved.type_check();
-            if typed.has_errors() {
-                for diagnostic in typed.diagnostics() {
-                    eprintln!("{diagnostic:?}");
-                }
-                std::process::exit(1);
-            }
-            let mut lowered = typed.lower();
-            if !lowered.phase.diagnostics.is_empty() {
-                for diagnostic in &lowered.phase.diagnostics {
-                    eprintln!("{diagnostic}");
-                }
-                std::process::exit(1);
-            }
-            run_lowered(&mut lowered);
-        }
-        Commands::Test {
-            paths,
-            json,
-            filter,
-            offline,
-        } => {
-            if package_exists_here() {
-                let project = match current_package(*offline) {
-                    Ok(project) => project,
-                    Err(err) => {
-                        if *json {
-                            println!(
-                                "{}",
-                                talk::testing::JsonOutcome::error_json("package", &err.to_string())
-                            );
-                        } else {
-                            eprintln!("error: {err}");
-                        }
-                        std::process::exit(1);
-                    }
-                };
-                let package_test_paths = paths
-                    .iter()
-                    .map(std::path::PathBuf::from)
-                    .collect::<Vec<_>>();
-                if *json {
-                    match project.run_tests_json_at_paths(&package_test_paths, filter.clone()) {
-                        Ok(outcome) => {
-                            println!("{}", outcome.to_json());
-                            if outcome.failed() {
-                                std::process::exit(1);
-                            }
-                        }
-                        Err(err) => {
-                            println!(
-                                "{}",
-                                talk::testing::JsonOutcome::error_json("package", &err.to_string())
-                            );
-                            std::process::exit(1);
-                        }
-                    }
-                } else {
-                    match project
-                        .run_tests_at_paths_with_filter(&package_test_paths, filter.clone())
-                    {
-                        Ok(talk::testing::Outcome::NoTests) => {
-                            eprintln!("no .test.tlk files found")
-                        }
-                        Ok(talk::testing::Outcome::Finished(summary)) => {
-                            print!("{}", summary.output);
-                            if summary.failed() {
-                                eprintln!("{} test assertion(s) failed", summary.failures);
-                                std::process::exit(1);
-                            }
-                        }
-                        Err(err) => {
-                            eprintln!("error: {err}");
-                            std::process::exit(1);
-                        }
-                    }
-                }
-            } else {
-                let runner = talk::testing::Runner::new(paths.iter().map(std::path::PathBuf::from))
-                    .with_filter(filter.clone());
-                if *json {
-                    match runner.run_json() {
-                        Ok(outcome) => {
-                            println!("{}", outcome.to_json());
-                            if outcome.failed() {
-                                std::process::exit(1);
-                            }
-                        }
-                        Err(err) => {
-                            println!("{}", err.to_json());
-                            std::process::exit(1);
-                        }
-                    }
-                } else {
-                    match runner.run() {
-                        Ok(talk::testing::Outcome::NoTests) => {
-                            eprintln!("no .test.tlk files found")
-                        }
-                        Ok(talk::testing::Outcome::Finished(summary)) => {
-                            print!("{}", summary.output);
-                            if summary.failed() {
-                                eprintln!("{} test assertion(s) failed", summary.failures);
-                                std::process::exit(1);
-                            }
-                        }
-                        Err(talk::testing::TestError::CompileDiagnostics(diagnostics)) => {
-                            eprint!(
-                                "{}",
-                                diagnostics.render_text(talk::cli::diagnostics::ColorMode::Auto)
-                            );
-                            std::process::exit(1);
-                        }
-                        Err(err) => {
-                            eprintln!("error: {err}");
-                            std::process::exit(1);
-                        }
-                    }
-                }
-            }
-        }
         Commands::New { name } => {
             let valid_name = matches!(
                 std::path::Path::new(name).components().next(),
@@ -638,6 +341,18 @@ async fn main() {
                 });
             }
 
+            // The ownership pass below re-compiles from the same text:
+            // stdin can only be read once, so the sources it uses are
+            // rebuilt from what was already read, never re-fetched.
+            let compile_sources: Vec<talk::compiling::driver::Source> = docs
+                .iter()
+                .map(|doc| {
+                    talk::compiling::driver::Source::in_memory(
+                        std::path::PathBuf::from(&doc.path),
+                        doc.text.clone(),
+                    )
+                })
+                .collect();
             let Some(workspace) = Workspace::new(docs) else {
                 return;
             };
@@ -666,12 +381,311 @@ async fn main() {
                 }
             }
 
+            // The ownership analysis is the check's second half: what
+            // `talk run` rejects at the MIR stage — ownership,
+            // exclusivity, the unsafe gate — reports here too (wave F
+            // of docs/ownership-rethink-plan.md). Frontend errors gate
+            // it: the backend assumes a well-typed program.
+            if !has_errors {
+                use talk::compiling::driver::{Driver, DriverConfig};
+                // Check every declaration, not just the entry's
+                // reachable set. Single-threaded at this point.
+                unsafe { std::env::set_var("TALK_CHECK_ALL", "1") };
+                let driver = Driver::new(compile_sources, DriverConfig::new("Main"));
+                if let Ok(parsed) = driver.parse()
+                    && let Ok(resolved) = parsed.resolve_names()
+                {
+                    let typed = resolved.type_check();
+                    if !typed.has_errors()
+                        && let Err((message, location)) = typed.check_ownership()
+                    {
+                        has_errors = true;
+                        let (path, start, end) = location.unwrap_or((String::new(), 0, 0));
+                        let text = workspace
+                            .text_for(&path)
+                            .map(str::to_string)
+                            .or_else(|| std::fs::read_to_string(&path).ok())
+                            .unwrap_or_default();
+                        let to_utf16 = |byte: u32| {
+                            text.get(..byte as usize)
+                                .map(|prefix| prefix.encode_utf16().count())
+                                .unwrap_or(0) as u32
+                        };
+                        let diagnostic = talk::analysis::Diagnostic {
+                            node_id: None,
+                            kind: None,
+                            range: talk::analysis::TextRange::new(to_utf16(start), to_utf16(end)),
+                            severity: talk::analysis::DiagnosticSeverity::Error,
+                            message,
+                        };
+                        if *json {
+                            json_entries.push(render_json_entry(&path, &text, &diagnostic));
+                        } else {
+                            print!(
+                                "{}",
+                                render_text(&path, &text, &diagnostic, ColorMode::Auto)
+                            );
+                        }
+                    }
+                }
+            }
+
             if *json {
                 println!("{}", render_json_output(&json_entries));
             }
 
             if has_errors {
                 std::process::exit(1);
+            }
+        }
+        Commands::Run {
+            filenames,
+            entry,
+            bin,
+            offline,
+        } => {
+            use talk::compiling::driver::{Driver, DriverConfig, execute_module};
+
+            if *offline
+                && (filenames.is_empty()
+                    && !talk::compiling::package::PackageProject::exists_at(std::path::Path::new(
+                        ".",
+                    )))
+            {
+                eprintln!("error: --offline requires package execution");
+                std::process::exit(1);
+            }
+            if filenames.is_empty()
+                && talk::compiling::package::PackageProject::exists_at(std::path::Path::new("."))
+            {
+                let project = match talk::compiling::package::PackageProject::open_at(
+                    std::path::PathBuf::from("."),
+                    *offline,
+                ) {
+                    Ok(project) => project,
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
+                };
+                let executable =
+                    match project.compile_binary_entry(bin.as_deref(), entry.as_deref()) {
+                        Ok(executable) => executable,
+                        Err(err) => {
+                            eprintln!("error: {err}");
+                            std::process::exit(1);
+                        }
+                    };
+                let mut io = talk_runtime::io::StdioIO;
+                match execute_module(&executable, &mut io) {
+                    Ok(Some(rendered)) => println!("{rendered}"),
+                    Ok(None) => {}
+                    Err(message) => {
+                        eprintln!("error: {message}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+
+            let sources = sources_for_filenames(filenames);
+            let driver = Driver::new(sources, DriverConfig::new("Main"));
+            let parsed = match driver.parse() {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    eprintln!("error: {err:?}");
+                    std::process::exit(1);
+                }
+            };
+            let resolved = match parsed.resolve_names() {
+                Ok(resolved) => resolved,
+                Err(err) => {
+                    eprintln!("error: {err:?}");
+                    std::process::exit(1);
+                }
+            };
+            let typed = resolved.type_check();
+            if typed.has_errors() {
+                for diagnostic in typed.diagnostics() {
+                    eprintln!("{diagnostic}");
+                }
+                std::process::exit(1);
+            }
+
+            let module = match typed.compile_executable(entry.as_deref()) {
+                Ok(module) => module,
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    std::process::exit(1);
+                }
+            };
+            let mut io = talk_runtime::io::StdioIO;
+            match execute_module(&module, &mut io) {
+                Ok(Some(rendered)) => println!("{rendered}"),
+                Ok(None) => {}
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Test {
+            paths,
+            json,
+            filter,
+        } => {
+            // A path argument names the project under test: anchor at its
+            // enclosing package root (walking up from the first path), so
+            // `package::` imports resolve the same from anywhere. With no
+            // paths, the current directory is the project as before.
+            let project_root = paths
+                .first()
+                .and_then(talk::compiling::package::PackageProject::enclosing_root)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            if talk::compiling::package::PackageProject::exists_at(&project_root) {
+                let project =
+                    match talk::compiling::package::PackageProject::open_at(project_root, false) {
+                        Ok(project) => project,
+                        Err(err) => {
+                            eprintln!("error: {err}");
+                            std::process::exit(1);
+                        }
+                    };
+                let package_paths: Vec<std::path::PathBuf> =
+                    paths.iter().map(std::path::PathBuf::from).collect();
+                if *json {
+                    match project.run_tests_json_at_paths(&package_paths, filter.clone()) {
+                        Ok(outcome) => {
+                            println!("{}", outcome.to_json());
+                            if let talk::testing::JsonOutcome::Finished(summary) = outcome
+                                && summary.failed()
+                            {
+                                std::process::exit(1);
+                            }
+                        }
+                        Err(err) => {
+                            println!(
+                                "{}",
+                                talk::testing::JsonOutcome::error_json("package", &err.to_string())
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    match project.run_tests_at_paths_with_filter(&package_paths, filter.clone()) {
+                        Ok(talk::testing::Outcome::NoTests) => {
+                            eprintln!("no .test.tlk files found")
+                        }
+                        Ok(talk::testing::Outcome::Finished(summary)) => {
+                            print!("{}", summary.output);
+                            if summary.failed() {
+                                eprintln!("{} test assertion(s) failed", summary.failures);
+                                std::process::exit(1);
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("error: {err}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                return;
+            }
+            let runner = talk::testing::Runner::new(paths.iter().map(std::path::PathBuf::from))
+                .with_filter(filter.clone());
+            if *json {
+                match runner.run_json() {
+                    Ok(outcome) => {
+                        println!("{}", outcome.to_json());
+                        if let talk::testing::JsonOutcome::Finished(summary) = outcome
+                            && summary.failed()
+                        {
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(err) => {
+                        println!(
+                            "{}",
+                            talk::testing::JsonOutcome::error_json(err.kind(), &err.to_string())
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                match runner.run() {
+                    Ok(talk::testing::Outcome::NoTests) => {
+                        eprintln!("no .test.tlk files found")
+                    }
+                    Ok(talk::testing::Outcome::Finished(summary)) => {
+                        print!("{}", summary.output);
+                        if summary.failed() {
+                            eprintln!("{} test assertion(s) failed", summary.failures);
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(talk::testing::TestError::CompileDiagnostics(diagnostics)) => {
+                        eprint!(
+                            "{}",
+                            diagnostics.render_text(talk::cli::diagnostics::ColorMode::Auto)
+                        );
+                        std::process::exit(1);
+                    }
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        Commands::Build {
+            filenames,
+            output,
+            entry,
+        } => {
+            let executable = compile_or_exit(filenames, entry.as_deref());
+            let bytes = match executable.encode_bytecode() {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    eprintln!("error: failed to encode bytecode: {err:?}");
+                    std::process::exit(1);
+                }
+            };
+            if let Err(err) = std::fs::write(output, bytes) {
+                eprintln!("error: failed to write {output}: {err}");
+                std::process::exit(1);
+            }
+        }
+        Commands::RunImage { filename } => {
+            use talk::compiling::driver::execute_image;
+            let bytes = match std::fs::read(filename) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    eprintln!("error: failed to read {filename}: {err}");
+                    std::process::exit(1);
+                }
+            };
+            let mut io = talk_runtime::io::StdioIO;
+            match execute_image(&bytes, &mut io) {
+                Ok(Some(rendered)) => println!("{rendered}"),
+                Ok(None) => {}
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Bytecode { filenames, entry } => {
+            let executable = compile_or_exit(filenames, entry.as_deref());
+            print!("{}", executable.render_bytecode());
+        }
+        Commands::Mir { filenames, entry } => {
+            let typed = check_or_exit(filenames);
+            match typed.render_mir(entry.as_deref()) {
+                Ok(rendered) => print!("{rendered}"),
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    std::process::exit(1);
+                }
             }
         }
         Commands::Html { filename } => {
@@ -701,28 +715,29 @@ const STDIN_NAME: &str = "<stdin>";
 #[cfg(feature = "cli")]
 const LLM_REFERENCE: &str = r#"# Talk language reference for LLMs
 
-Talk is a statically typed, Swift-flavored language with local type inference, generics, protocols, algebraic effects, value-semantics aggregates, and a bytecode VM backend. Files normally use `.tlk`; core library files live in `core/` and are implicitly imported unless a file starts with `// no-core`.
+Talk is a statically typed, Swift-flavored language with local type inference, generics, protocols, algebraic effects, and value-semantics aggregates. This build compiles and executes programs through a register-bytecode backend, with ownership checking (implicit sharing: consumes retain when a value has later uses; exclusivity, linearity, and the `// unsafe` gate remain static errors). Files normally use `.tlk`; core library files live in `core/` and are implicitly imported unless a file starts with `// no-core`.
 
 ## CLI
 
-    talk run [files...]       parse, resolve, typecheck, lower, and run; no file reads stdin
-    talk test [--json] [--filter NAME] [paths...] discover and run .test.tlk files
-    talk check [--json] files typecheck and print diagnostics
-    talk repl                 interactive declarations and expressions
-    talk format [file]        format source from file or stdin
+    talk run [--entry NAME] files   compile and execute (or the current package's binary; --bin selects one, --offline skips fetches)
+    talk test [paths]               discover and run `.test.tlk` tests
+    talk build files -o FILE        compile to a bytecode image
+    talk run-image FILE             validate and execute a bytecode image
+    talk check [--json] files       typecheck, ownership-check, print diagnostics
+    talk bytecode / talk mir files  render lowered output
+    talk new / install / update     package management
+    talk repl                       interactive type queries and completion
+    talk format [file]              format source from file or stdin
     talk hover file --line N --column N | --byte-offset N | --node-id ID
-    talk lower file           print lowered lambda-G IR
-    talk ir file              print scheduled VM bytecode listing
-    talk bytecode file        print raw bytecode module
-    talk html/debug/parse     development views
-    talk lsp --stdio          language server
-    talk setup nvim           install Neovim runtime support files
-    talk completions SHELL    shell completion script
-    talk llm                  print this reference
+    talk html / talk parse          development views
+    talk lsp --stdio                language server
+    talk setup nvim                 install Neovim runtime support files
+    talk completions SHELL          shell completion script
+    talk llm                        print this reference
 
 ## Lexical and module basics
 
-Comments are `//` line comments. Identifiers are ordinary words; type names are conventionally upper camel case. Semicolons are not used. Blocks are `{ ... }`. Top-level declarations may be prefixed with `public` to export them. Imports are explicit: `use package::path::{ Foo, bar }`, `use package::path::{ Foo as LocalFoo }`, `use package::path`, or dependency imports such as `use dependency::{ Foo }` / `use dependency`.
+Comments are `//` line comments. Identifiers are ordinary words; type names are conventionally upper camel case. Statements are separated by newlines; semicolons are accepted but conventionally omitted. Blocks are `{ ... }`. Top-level declarations may be prefixed with `public` to export them. Imports are explicit: `use package::path::{ Foo, bar }`, `use package::path::{ Foo as LocalFoo }`, `use package::path`, or dependency imports such as `use dependency::{ Foo }` / `use dependency`.
 
 ## Declarations
 
@@ -734,21 +749,21 @@ Comments are `//` line comments. Identifiers are ordinary words; type names are 
         init(x: Int, y: Int) { self.x = x; self.y = y; self }
     }
     enum Optional<T> { case some(T) case none }
-    protocol P { associated type Element func next() -> Element? }
+    protocol P { associated Element func next() -> Element? }
     extend Type: P { typealias Element = Int func next() -> Int? { ... } }
     extend Type { func method() -> R { ... } static func make() -> Type { ... } }
     typealias Name = Type
     effect 'name(payload: Type) -> ReturnType
 
-Function result annotations are optional when inferable. `init` bodies assign `self.field` and return `self`. Methods have implicit `self`; do not declare a self parameter. Receiver modes: plain `func` reads a shared value, `mut func` may update `self` and writes the receiver back at the call site, `consuming func` takes ownership. `static func` is called on the type/protocol namespace.
+Function result annotations are optional when inferable, and so are effect payload type annotations (`effect 'oops(error) -> Never`). `init` bodies assign `self.field` and return `self`. Methods have implicit `self`; do not declare a self parameter. Receiver modes: plain `func` reads a shared value, `mut func` may update `self` and writes the receiver back at the call site, `consuming func` takes ownership. Parameters take ownership with the `consume` modifier: `func eat(consume xs: Array<Int>)`. `static func` is called on the type/protocol namespace.
 
 ## Expressions and control flow
 
-Literals: integers, floats, strings, `true`, `false`, arrays `[a, b]`, closures `func(x: Int) -> Int { x + 1 }`. Calls use labels only through ordinary parameter order: `f(a, b)`. Constructors look like calls: `Point(x: 1, y: 2)`, enum cases may be qualified or inferred: `Optional<Int>.some(1)` or `.some(1)`. Field/member access is `value.field` and `value.method(args)`. Generic arguments may be explicit: `id<Int>(1)`.
+Literals: integers, floats, strings, `true`, `false`, arrays `[a, b]`, records `{ field: expr, other: expr }`, closures `func(x: Int) -> Int { x + 1 }`. Call arguments are positional (`f(a, b)`) or labeled (`f(x: 1, y: 2)`). Constructors look like calls: `Point(x: 1, y: 2)`, enum cases may be qualified or inferred: `Optional<Int>.some(1)` or `.some(1)`. Field/member access is `value.field` and `value.method(args)`. Generic arguments may be explicit: `id<Int>(1)`. Arguments are always passed plainly — `&x` is not expression syntax; a parameter's `&T`/`&mut T` type alone makes the call site a borrow.
 
 Bindings and mutation: `let x = expr`; assignment is `x = expr` or `self.field = expr`. `let` variables are mutable by assignment in current Talk. Type ascription is `let x: Type = expr`.
 
-Blocks are expressions. `if cond { a } else { b }` is an expression; branches must agree. `loop { ... }` loops forever until `break`; `loop condition { ... }` is while-like. `break`, `continue`, and `return expr` are supported. `for x in iterable { ... }` uses the iterable/iterator protocols.
+Blocks are expressions. `if cond { a } else { b }` is an expression; branches must agree. `if let .some(x) = expr { ... }` matches a single pattern. `loop { ... }` loops forever until `break`; `loop condition { ... }` is while-like. `break`, `continue`, and `return expr` are supported. `for x in iterable { ... }` uses the iterable/iterator protocols.
 
 Pattern matching:
 
@@ -765,9 +780,9 @@ Trailing block syntax passes a final closure argument: `f { body }` is `f(func()
 
 ## Types
 
-Builtin scalar/value types include `Int`, `Float`, `Bool`, `Byte`, `RawPtr`, `Void`/`()`, and `Never`. Core nominal types include `String`, `Substring`, `Array<T>`, and `Optional<T>`; `T?` is syntax for optional. Function types are `(A, B) -> R`; effectful functions write effects before the arrow, e.g. `(A) 'io -> R` or `func read() 'io -> Int`. Borrow types use `&T` and exclusive borrows use `&mut T`. Protocol existential types use `any P`; associated type constraints use `any Iterator<Element = Int>`. Protocol composition in constraints uses `&`; where clauses and qualified predicates are supported internally and in declarations where implemented.
+Builtin scalar/value types include `Int`, `Float`, `Bool`, `Byte`, `RawPtr`, `Void`/`()`, and `Never`. Core nominal types include `String`, `Substring`, `Array<T>`, and `Optional<T>`; `T?` is syntax for optional. Structural record types are written `{ field: Type }` and match record literals and patterns. Function types are `(A, B) -> R`; effectful functions write effects before the arrow, e.g. `(A) 'io -> R` or `func read() 'io -> Int`. Borrow types use `&T` and exclusive borrows use `&mut T`. Protocol existential types use `any P`; associated type constraints use `any P<Element = Int>` (only protocols whose requirements keep `Self` in receiver position can form existentials — core `Iterator` cannot). Protocol composition uses `&` in where clauses: `where T: A & B`, with multiple predicates chained by `&&`; inline bounds take a single protocol.
 
-Generics are written with angle brackets: `func id<T>(x: T) -> T`. Simple bounds use `T: Protocol`; associated types use `associated type Name` in protocols and `typealias Name = Type` in conforming extensions. Protocol requirements can include funcs, mut/consuming funcs, static funcs, associated types, and defaults in extensions.
+Generics are written with angle brackets: `func id<T>(x: T) -> T`. Simple bounds use `T: Protocol`; associated types use `associated Name` in protocols and `typealias Name = Type` in conforming extensions. Protocol requirements can include funcs, mut/consuming funcs, static funcs, associated types, and defaults in extensions.
 
 ## Operators and builtins
 
@@ -777,29 +792,20 @@ Low-level trusted IR escapes use `@_ir(args...) { ... }` and appear mainly in co
 
 ## Effects
 
-Effects are named with a leading tick: `effect 'throws(error: String) -> Never`. Calling an effect is expression syntax: `'throws("bad")`. Effect rows appear on functions before `->`: `func f() 'throws -> ()`. Handlers use `@handle 'effect { payload in body }` for abortive handling and handler forms can resume when the effect return type is not `Never`. Handlers are statically routed by name resolution/lowering rather than dynamically searched by the VM.
+Effects are named with a leading tick: `effect 'throws(error: String) -> Never`. Calling an effect is expression syntax: `'throws("bad")`. Effect rows appear on functions before `->`: `func f() 'throws -> ()`. Handlers use `@handle 'effect { payload in body }` for abortive handling; when the effect return type is not `Never`, `continue expr` inside the handler resumes at the perform site with that value.
 
 ## Memory and value model
 
-Source-level structs, enums, arrays, strings, records, and function values have value semantics. Struct/record updates rebuild values unless stored in a mutable cell; mutable locals/captures lower to cells when needed. Aggregates are represented in the VM as boxed handles; scalars are unboxed. Raw memory exists only through `RawPtr` and core `_alloc`, `_load`, `_store`, `_copy`, pointer arithmetic, and host I/O intrinsics. `Int` is 64-bit in raw memory; `Float` is 64-bit; `Bool` and `Byte` are one byte; `RawPtr` and boxed handles are pointer-sized. The backend uses copy-on-write-style mutable value semantics for source receivers; `mut func` receiver calls write the new self back to the original place.
-
-Ownership checking is source-near: `&T` borrows, `&mut T` is exclusive, `consuming` moves, and marker protocols like `Owner`/`Borrowed` describe library-level ownership roles. The low-level allocator is an effect (`'alloc`); memory safety around `@_ir` is trusted code responsibility.
+Source-level structs, enums, arrays, strings, records, and function values have value semantics. `&T` and `&mut T` express borrow permissions, `consuming` expresses ownership transfer, and marker protocols like `Owner`/`Borrowed` describe library-level ownership roles. The backend enforces ownership with implicit sharing: a consume of a value with later uses retains automatically, snapshots preserve live views across owner mutation, and only exclusivity violations, linear-value misuse, borrow escapes (returning or globally storing a view of frame-owned data), and ungated `unsafe` constructs are static errors.
 
 ## Compiler model
 
-Pipeline: parse -> name resolution/imports -> OutsideIn-style type checking with qualified predicates, protocols, associated types, existentials, and GADT refinements -> lambda-G CPS-like graph IR -> scheduling -> register bytecode VM. Useful inspection commands: `talk check`, `talk hover`, `talk lower`, `talk ir`, and `talk bytecode`.
+Pipeline: parse -> name resolution/imports -> OutsideIn-style type checking with qualified predicates, protocols, associated types, existentials, and GADT refinements -> TypedProgram -> register MIR with ownership checking and drop elaboration -> register bytecode executed by the runtime VM (the static C runtime and the Wasm embedding host the same VM). Useful inspection commands are `talk check`, `talk hover`, and `talk mir`.
 "#;
 
 #[cfg(feature = "cli")]
 const NVIM_RUNTIME_RAW_BASE: &str =
     "https://raw.githubusercontent.com/nakajima/talk/main/dev/editors/nvim";
-
-#[cfg(feature = "cli")]
-const TALK_STATIC_ARCHIVE_BASE: &str =
-    "https://raw.githubusercontent.com/nakajima/talk/static-runtimes";
-
-#[cfg(feature = "cli")]
-const TALK_STATIC_ARCHIVE_NAME: &str = "libtalk_static.a";
 
 #[cfg(feature = "cli")]
 const NVIM_RUNTIME_FILES: &[&str] = &[
@@ -975,317 +981,6 @@ impl Downloader {
 }
 
 #[cfg(feature = "cli")]
-fn build_static_executable(
-    bytecode: &[u8],
-    output: &std::path::Path,
-    runtime: Option<&str>,
-    cc: Option<&str>,
-    keep_temps: bool,
-    strip: bool,
-) -> Result<(), String> {
-    let runtime = match runtime {
-        Some(path) => std::path::PathBuf::from(path),
-        None => RuntimeArchive::locate()?,
-    };
-    let temp = BuildTemp::new(output)?;
-    temp.write_launcher(bytecode)?;
-    let compiler = cc.unwrap_or("cc");
-    let status = std::process::Command::new(compiler)
-        .arg(temp.launcher())
-        .arg(&runtime)
-        .arg("-o")
-        .arg(output)
-        .status()
-        .map_err(|err| format!("failed to run {compiler}: {err}"))?;
-    if !status.success() {
-        return Err(format!("{compiler} failed with status {status}"));
-    }
-    if strip {
-        Strip::run(output)?;
-    }
-    if !keep_temps {
-        temp.clean()?;
-    } else {
-        eprintln!("kept temporary build files in {}", temp.dir().display());
-    }
-    Ok(())
-}
-
-#[cfg(feature = "cli")]
-struct Strip;
-
-#[cfg(feature = "cli")]
-impl Strip {
-    fn run(output: &std::path::Path) -> Result<(), String> {
-        match std::process::Command::new("strip").arg(output).status() {
-            Ok(status) if status.success() => Ok(()),
-            Ok(status) => Err(format!(
-                "strip failed with status {status}; pass --no-strip to keep the unstripped executable"
-            )),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(format!("failed to run strip: {err}")),
-        }
-    }
-}
-
-#[cfg(feature = "cli")]
-struct RuntimeArchive;
-
-#[cfg(feature = "cli")]
-impl RuntimeArchive {
-    fn locate() -> Result<std::path::PathBuf, String> {
-        if let Some(candidate) = Self::locate_local() {
-            return Ok(candidate);
-        }
-
-        Self::download_current().map_err(|err| {
-            format!(
-                "could not find {TALK_STATIC_ARCHIVE_NAME} locally and {err}; run `cargo build -p talk-static` or pass --runtime"
-            )
-        })
-    }
-
-    fn locate_local() -> Option<std::path::PathBuf> {
-        Self::local_candidates()
-            .into_iter()
-            .find(|candidate| candidate.exists())
-    }
-
-    fn local_candidates() -> Vec<std::path::PathBuf> {
-        let mut candidates = Vec::new();
-        if let Ok(exe) = std::env::current_exe()
-            && let Some(dir) = exe.parent()
-        {
-            if let Some(profile_dir) = dir.parent() {
-                candidates.push(profile_dir.join(format!("release/{TALK_STATIC_ARCHIVE_NAME}")));
-            }
-            candidates.push(dir.join(TALK_STATIC_ARCHIVE_NAME));
-            candidates.push(dir.join(format!("../lib/{TALK_STATIC_ARCHIVE_NAME}")));
-            if let Some(profile_dir) = dir.parent() {
-                candidates.push(profile_dir.join(format!("debug/{TALK_STATIC_ARCHIVE_NAME}")));
-            }
-        }
-        candidates.push(std::path::PathBuf::from(format!(
-            "target/release/{TALK_STATIC_ARCHIVE_NAME}"
-        )));
-        candidates.push(std::path::PathBuf::from(format!(
-            "target/debug/{TALK_STATIC_ARCHIVE_NAME}"
-        )));
-        candidates
-    }
-
-    fn download_current() -> Result<std::path::PathBuf, String> {
-        let target = Self::current_target()?;
-        let build_sha = Self::build_sha()?;
-        let cached = Self::cache_path(target, build_sha);
-        if Self::is_usable_archive(&cached) {
-            return Ok(cached);
-        }
-
-        let asset = Self::asset_name(target);
-        let url = format!("{TALK_STATIC_ARCHIVE_BASE}/{build_sha}/{asset}");
-        let checksum_url = format!("{url}.sha256");
-
-        eprintln!("downloading Talk static runtime {build_sha} for {target}");
-        let checksum = Downloader::download_url(&checksum_url)
-            .map_err(|err| format!("could not download {checksum_url}: {err:#}"))?;
-        let archive = Downloader::download_url(&url)
-            .map_err(|err| format!("could not download {url}: {err:#}"))?;
-        Self::verify_sha256(&archive, &checksum, &asset)?;
-        Self::write_cached(&cached, &archive)?;
-        Ok(cached)
-    }
-
-    fn current_target() -> Result<&'static str, String> {
-        if cfg!(all(
-            target_os = "linux",
-            target_env = "gnu",
-            target_arch = "x86_64"
-        )) {
-            Ok("x86_64-unknown-linux-gnu")
-        } else if cfg!(all(
-            target_os = "linux",
-            target_env = "gnu",
-            target_arch = "aarch64"
-        )) {
-            Ok("aarch64-unknown-linux-gnu")
-        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            Ok("aarch64-apple-darwin")
-        } else {
-            Err(format!(
-                "automatic runtime download is not supported for {}-{}",
-                std::env::consts::ARCH,
-                std::env::consts::OS
-            ))
-        }
-    }
-
-    fn cache_path(target: &str, build_sha: &str) -> std::path::PathBuf {
-        Self::cache_root()
-            .join("talk")
-            .join("static-runtimes")
-            .join(build_sha)
-            .join(target)
-            .join(TALK_STATIC_ARCHIVE_NAME)
-    }
-
-    fn cache_root() -> std::path::PathBuf {
-        if let Some(path) =
-            std::env::var_os("XDG_CACHE_HOME").filter(|value| !value.as_os_str().is_empty())
-        {
-            return std::path::PathBuf::from(path);
-        }
-        if let Some(home) = std::env::var_os("HOME").filter(|value| !value.as_os_str().is_empty()) {
-            return std::path::PathBuf::from(home).join(".cache");
-        }
-        std::env::temp_dir()
-    }
-
-    fn build_sha() -> Result<&'static str, String> {
-        let build_sha = option_env!("TALK_BUILD_SHA").unwrap_or("").trim();
-        if build_sha.is_empty() {
-            Err("this talk binary was built without a git SHA, so it cannot choose a static runtime archive".into())
-        } else {
-            Ok(build_sha)
-        }
-    }
-
-    fn asset_name(target: &str) -> String {
-        format!("libtalk_static-{target}.a")
-    }
-
-    fn is_usable_archive(path: &std::path::Path) -> bool {
-        path.metadata()
-            .map(|metadata| metadata.is_file() && metadata.len() > 0)
-            .unwrap_or(false)
-    }
-
-    fn verify_sha256(bytes: &[u8], checksum: &[u8], asset: &str) -> Result<(), String> {
-        use sha2::Digest as _;
-
-        let checksum = std::str::from_utf8(checksum)
-            .map_err(|err| format!("invalid sha256 metadata for {asset}: {err}"))?;
-        let expected = checksum
-            .split_whitespace()
-            .next()
-            .ok_or_else(|| format!("empty sha256 metadata for {asset}"))?;
-        if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(format!("invalid sha256 metadata for {asset}"));
-        }
-
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(bytes);
-        let actual = format!("{:x}", hasher.finalize());
-        if !expected.eq_ignore_ascii_case(&actual) {
-            return Err(format!("checksum mismatch for downloaded {asset}"));
-        }
-        Ok(())
-    }
-
-    fn write_cached(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
-        let parent = path
-            .parent()
-            .ok_or_else(|| format!("invalid runtime cache path: {}", path.display()))?;
-        std::fs::create_dir_all(parent).map_err(|err| {
-            format!(
-                "failed to create runtime cache directory {}: {err}",
-                parent.display()
-            )
-        })?;
-        let temp = path.with_file_name(format!(
-            "{TALK_STATIC_ARCHIVE_NAME}.{}.tmp",
-            std::process::id()
-        ));
-        std::fs::write(&temp, bytes)
-            .map_err(|err| format!("failed to write {}: {err}", temp.display()))?;
-        std::fs::rename(&temp, path).map_err(|err| {
-            format!(
-                "failed to move {} to {}: {err}",
-                temp.display(),
-                path.display()
-            )
-        })
-    }
-}
-
-#[cfg(feature = "cli")]
-struct BuildTemp {
-    dir: std::path::PathBuf,
-    launcher: std::path::PathBuf,
-}
-
-#[cfg(feature = "cli")]
-impl BuildTemp {
-    fn new(output: &std::path::Path) -> Result<Self, String> {
-        let stem = output
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("talk-build");
-        let dir = std::env::temp_dir().join(format!("talk-static-{}-{stem}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|err| format!("failed to create temp dir: {err}"))?;
-        let launcher = dir.join("main.c");
-        Ok(Self { dir, launcher })
-    }
-
-    fn dir(&self) -> &std::path::Path {
-        &self.dir
-    }
-
-    fn launcher(&self) -> &std::path::Path {
-        &self.launcher
-    }
-
-    fn write_launcher(&self, bytecode: &[u8]) -> Result<(), String> {
-        let mut c = String::new();
-        c.push_str("#include <stdint.h>\n#include <stddef.h>\n\n");
-        c.push_str("extern int talk_runtime_run(const uint8_t *bytes, size_t len);\n\n");
-        c.push_str("static const uint8_t TALK_PROGRAM[] = {\n");
-        for (i, byte) in bytecode.iter().enumerate() {
-            if i % 12 == 0 {
-                c.push_str("    ");
-            }
-            c.push_str(&format!("0x{byte:02x}, "));
-            if i % 12 == 11 {
-                c.push('\n');
-            }
-        }
-        if !bytecode.len().is_multiple_of(12) {
-            c.push('\n');
-        }
-        c.push_str("};\n\n");
-        c.push_str("int main(int argc, char **argv) {\n");
-        c.push_str("    (void)argc;\n    (void)argv;\n");
-        c.push_str("    return talk_runtime_run(TALK_PROGRAM, sizeof(TALK_PROGRAM));\n");
-        c.push_str("}\n");
-        std::fs::write(&self.launcher, c).map_err(|err| format!("failed to write launcher: {err}"))
-    }
-
-    fn clean(&self) -> Result<(), String> {
-        std::fs::remove_dir_all(&self.dir)
-            .map_err(|err| format!("failed to remove temp dir: {err}"))
-    }
-}
-
-#[cfg(feature = "cli")]
-fn package_exists_here() -> bool {
-    std::env::current_dir()
-        .map(talk::compiling::package::PackageProject::exists_at)
-        .unwrap_or(false)
-}
-
-#[cfg(feature = "cli")]
-fn current_package(
-    offline: bool,
-) -> Result<talk::compiling::package::PackageProject, talk::compiling::package::PackageError> {
-    let root =
-        std::env::current_dir().map_err(|source| talk::compiling::package::PackageError::Io {
-            context: "failed to determine the current directory".into(),
-            source,
-        })?;
-    talk::compiling::package::PackageProject::open_at(root, offline)
-}
-
-#[cfg(feature = "cli")]
 fn install_current_package(
     offline: bool,
     update: bool,
@@ -1309,18 +1004,6 @@ fn update_current_package(
             source,
         })?;
     talk::compiling::package::PackageProject::update_at(root, offline, packages)
-}
-
-#[cfg(feature = "cli")]
-fn run_lowered(lowered: &mut talk::compiling::driver::Driver<talk::compiling::driver::Lowered>) {
-    match lowered.run_vm() {
-        Ok(talk::vm::interp::Value::Void) => {}
-        Ok(value) => println!("{value:?}"),
-        Err(err) => {
-            eprintln!("{err}");
-            std::process::exit(1);
-        }
-    }
 }
 
 #[cfg(feature = "cli")]
@@ -1351,6 +1034,51 @@ fn single_source_for(filename: Option<&str>) -> (String, talk::compiling::driver
     };
 
     (module_name, source)
+}
+
+#[cfg(feature = "cli")]
+fn check_or_exit(
+    filenames: &[String],
+) -> talk::compiling::driver::Driver<talk::compiling::driver::Typed> {
+    use talk::compiling::driver::{Driver, DriverConfig};
+    let sources = sources_for_filenames(filenames);
+    let driver = Driver::new(sources, DriverConfig::new("Main"));
+    let parsed = match driver.parse() {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            eprintln!("error: {err:?}");
+            std::process::exit(1);
+        }
+    };
+    let resolved = match parsed.resolve_names() {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            eprintln!("error: {err:?}");
+            std::process::exit(1);
+        }
+    };
+    let typed = resolved.type_check();
+    if typed.has_errors() {
+        for diagnostic in typed.diagnostics() {
+            eprintln!("{diagnostic}");
+        }
+        std::process::exit(1);
+    }
+    typed
+}
+
+#[cfg(feature = "cli")]
+fn compile_or_exit(
+    filenames: &[String],
+    entry: Option<&str>,
+) -> talk::compiling::driver::Executable {
+    match check_or_exit(filenames).compile_executable(entry) {
+        Ok(executable) => executable,
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(feature = "cli")]

@@ -1,0 +1,14 @@
+// Hello world
+protocol Foo {
+	func foo() -> Int
+}
+
+// Person doesn't implement Foo
+struct Thing {}
+extend Thing: Foo {
+	func foo() { 123 }
+}
+
+func fizz<T: Foo>(t: T) { t.foo() }
+
+fizz(Thing())

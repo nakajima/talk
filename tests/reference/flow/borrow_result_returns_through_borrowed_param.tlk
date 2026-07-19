@@ -1,0 +1,3 @@
+func first(xs: &Array<String>) -> &String {
+	xs.get(0)
+}

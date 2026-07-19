@@ -1,0 +1,11 @@
+func take(name: String) -> Int {
+	name.byte_count
+}
+func f(s: String, flag: Bool) -> Int {
+	let n = 0
+	if flag {
+		n = take(s)
+	}
+	n
+}
+f("hello" + " world", true) + f("bye" + " now", false)

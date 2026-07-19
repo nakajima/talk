@@ -1,6 +1,6 @@
 # 0011 — Dynamic-extent effect handlers compile capability-passing CPS
 
-Status: implemented (2026-07-03)
+Status: superseded by ADR 0031 (2026-07-13)
 
 ## Context
 
@@ -97,10 +97,17 @@ splitter (`try_mir_effect_split`, `rest_mir_closure`), `HandlerCap` /
   capture the delimiter continuation instead, sound because λ_G
   continuations are heap closures on the evaluator and reified one-shot
   `Cont`s on the VM.
-- Aborts still skip frame cleanups (drops, region write-backs) between
-  the perform and the delimiter — unchanged from the slot design;
-  abort-heavy corpus programs sit in the container-leak fence until
-  Track B lands.
+- ~~Aborts still skip frame cleanups (drops, region write-backs) between
+  the perform and the delimiter~~ — DISCHARGED for supported suspension
+  sites by ADR 0027 and its R9/F-B and F-C follow-ups (2026-07-12).
+  Direct, function-value, and witness calls carry lowerer-emitted unwind
+  entries. Direct aggregate/heap operands, including object-only aggregates
+  whose Rule-B owner is not reflected by `needs_drop`, materialize before
+  performs and suspension-capable ordinary calls; emitted drops and region
+  releases run before delimiter delivery. This is not an unrestricted claim: abort during an
+  active abort unwind traps, `@handle` inside a nested block remains
+  unsupported, and the normal-path balance verifier does not independently
+  analyze abort/unwind paths.
 - Top-level ambient rows are position-aware: a computation (statement or
   `let` rhs, by its group's earliest binder) sees only the `@handle`s
   installed before it in source order — use-before-install is

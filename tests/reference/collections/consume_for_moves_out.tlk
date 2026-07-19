@@ -1,0 +1,7 @@
+func main() -> Int {
+	let xs = ["a" + "b", "c" + "d"]
+	for x in consume xs {
+		print(x)
+	}
+	0
+}

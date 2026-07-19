@@ -1,0 +1,13 @@
+struct Holder {
+	let name: String
+}
+
+func f(flag: Bool) -> Int {
+	let h = Holder(name: "a" + "b")
+	if flag {
+		match h.name { s -> s.byte_count }
+	}
+	0
+}
+
+f(true)

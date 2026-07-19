@@ -1,0 +1,11 @@
+struct Person {
+	let firstName: String
+	let lastName: String
+
+	consuming func greet() {
+		// Strings can be concat'd
+		print("hi i'm " + self.firstName + " " + self.lastName)
+	}
+}
+
+Person(firstName: "Pat", lastName: "N").greet()

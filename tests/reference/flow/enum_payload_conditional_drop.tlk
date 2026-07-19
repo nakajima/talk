@@ -1,0 +1,12 @@
+func take(o: String?) -> Int {
+	0
+}
+func check(flag: Bool) -> Int {
+	let o = Optional.some("hello" + " world")
+	if flag {
+		take(o)
+	} else {
+		0
+	}
+}
+check(true) + check(false)

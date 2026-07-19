@@ -1,0 +1,7 @@
+struct Token 'linear {
+	let id: Int
+}
+func make() -> Int {
+	let token = Token(id: 1)
+	0
+}

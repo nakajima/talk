@@ -1,0 +1,5 @@
+print("café".utf8().count())
+print("café".utf8().at(4)._toInt())
+let s = "hello world"
+let sub: Substring = s.utf8().slice(6, 5)
+sub.byte_count

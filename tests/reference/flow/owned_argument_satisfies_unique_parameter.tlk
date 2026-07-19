@@ -1,0 +1,7 @@
+func take(x: *String) -> Int {
+	x.byte_count
+}
+func ok() -> Int {
+	let s = "hello" + " world"
+	take(s)
+}

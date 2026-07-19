@@ -1,0 +1,13 @@
+func shout(s: String) -> Int {
+	s.byte_count
+}
+func make(flag: Bool) -> Int {
+	let s = "hello" + " world"
+	if flag {
+		let t = s
+		shout(t)
+	} else {
+		2
+	}
+}
+make(true)

@@ -1,0 +1,13 @@
+func main() -> Int {
+	let xs = ["a" + "b", "c" + "d", "e" + "f"]
+	let i = 0
+	for x in xs {
+		if i == 1 {
+			break
+		}
+		print(x)
+		i = i + 1
+	}
+	print(xs.count)
+	0
+}

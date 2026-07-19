@@ -1,0 +1,19 @@
+enum Expr<ReturnType> {
+	case int(Int) -> Expr<Int>
+	case string(String) -> Expr<String>
+}
+
+// The return type T can be refined by the
+func evaluate<T>(expr: Expr<T>) -> T {
+	match expr {
+		.int(i) -> i,
+		.string(s) -> s
+	}
+	// T is Int
+	// T is String
+}
+
+let i = evaluate(.int(123))
+let s = evaluate(.string("sup"))
+print(i) // typed as Int
+print(s) // typed as String

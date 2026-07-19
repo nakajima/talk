@@ -1,0 +1,9 @@
+let raw = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+match raw.find(" ") {
+	.some(idx) -> {
+		print(raw.byte_count)
+		print(idx)
+		print(raw.byte_count - (idx + 1))
+	},
+	.none -> print(0 - 1)
+}

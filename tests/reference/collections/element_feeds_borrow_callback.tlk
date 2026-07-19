@@ -1,0 +1,12 @@
+func each(entries: Array<String>, fn: (&String) -> ()) {
+	for e in entries {
+		fn(e)
+	}
+}
+func main() -> Int {
+	let xs = ["a" + "b", "c" + "d"]
+	each(xs) { e in
+		print(e)
+	}
+	0
+}

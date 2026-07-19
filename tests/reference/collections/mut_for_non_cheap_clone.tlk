@@ -1,0 +1,13 @@
+struct Item {
+	let name: String
+}
+func main() -> Int {
+	let xs = [Item(name: "a" + "b")]
+	for item in mut xs {
+		item = Item(name: item.name + "!")
+	}
+	for item in xs {
+		print(item.name)
+	}
+	0
+}

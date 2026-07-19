@@ -1,0 +1,7 @@
+func first(s: &String, flag: Bool) -> Substring {
+	let v = s.utf8()
+	match flag {
+		true -> v.slice(0, 1),
+		false -> v.slice(1, 1)
+	}
+}

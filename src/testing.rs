@@ -9,9 +9,8 @@ use indexmap::IndexMap;
 use crate::{
     analysis::{Diagnostic, DocumentId},
     ast::{AST, NameResolved},
-    compiling::driver::{Driver, DriverConfig, Source},
+    compiling::driver::{Driver, DriverConfig, Source, Typed, execute_module},
     diagnostic::AnyDiagnostic,
-    vm::interp::Value,
 };
 
 const HARNESS_PRELUDE_SOURCE: &str = include_str!("../stdlib/testing_prelude.tlk");
@@ -439,9 +438,8 @@ impl Runner {
         }
 
         let sources = self.suite_sources(test_sources, HarnessMode::Human)?;
-        let mut lowered = self.compile_sources(sources)?;
-        let (value, output) = lowered.run_vm_with_output().map_err(TestError::Runtime)?;
-        let failures = Self::harness_failures(value)?;
+        let typed = self.compile_sources(sources)?;
+        let (output, failures) = Self::execute(&typed)?;
         Ok(Outcome::Finished(Summary { output, failures }))
     }
 
@@ -452,9 +450,8 @@ impl Runner {
         }
 
         let sources = self.suite_sources(test_sources, HarnessMode::Json)?;
-        let mut lowered = self.compile_sources(sources)?;
-        let (value, output) = lowered.run_vm_with_output().map_err(TestError::Runtime)?;
-        let failures = Self::harness_failures(value)?;
+        let typed = self.compile_sources(sources)?;
+        let (output, failures) = Self::execute(&typed)?;
         let events = JsonEventParser::parse(&output)?;
         Ok(JsonOutcome::Finished(events.into_summary(failures)))
     }
@@ -539,19 +536,33 @@ impl Runner {
         Ok(sources)
     }
 
-    fn harness_failures(value: Value) -> Result<i64, TestError> {
-        match value {
-            Value::I64(failures) => Ok(failures),
-            other => Err(TestError::UnexpectedReturn(format!(
-                "test harness returned {other:?}, expected Int"
-            ))),
+    /// Run the composed suite through the backend (ADR 0034) with captured
+    /// IO; the harness postlude's value is the failure count.
+    fn execute(typed: &Driver<Typed>) -> Result<(String, i64), TestError> {
+        // Diagnostic: dump the composed suite's middle representation.
+        if std::env::var_os("TALK_DUMP_MIR").is_some() {
+            match typed.render_mir(None) {
+                Ok(rendered) => eprintln!("{rendered}"),
+                Err(error) => eprintln!("mir render failed: {error}"),
+            }
         }
+        let executable = typed.compile_executable(None).map_err(TestError::Compile)?;
+        let mut io = talk_runtime::io::CaptureIO::default();
+        let value = execute_module(&executable, &mut io).map_err(TestError::Runtime)?;
+        let output = String::from_utf8_lossy(&io.out).into_owned();
+        let failures = value
+            .as_deref()
+            .unwrap_or_default()
+            .parse::<i64>()
+            .map_err(|_| {
+                TestError::UnexpectedReturn(format!(
+                    "test harness returned {value:?}, expected Int"
+                ))
+            })?;
+        Ok((output, failures))
     }
 
-    fn compile_sources(
-        &self,
-        sources: Vec<Source>,
-    ) -> Result<Driver<crate::compiling::driver::Lowered>, TestError> {
+    fn compile_sources(&self, sources: Vec<Source>) -> Result<Driver<Typed>, TestError> {
         let driver = match &self.config {
             Some(config) => Driver::new_bare(sources, config.clone()),
             None => Driver::new(sources, Self::compile_config()),
@@ -578,11 +589,7 @@ impl Runner {
             }
             return Err(TestError::CompileDiagnostics(diagnostics));
         }
-        let lowered = typed.lower();
-        if !lowered.phase.diagnostics.is_empty() {
-            return Err(TestError::Compile(lowered.phase.diagnostics.join("\n")));
-        }
-        Ok(lowered)
+        Ok(typed)
     }
 
     fn compile_config() -> DriverConfig {
@@ -651,7 +658,6 @@ impl Runner {
             AnyDiagnostic::Parsing(diagnostic) => diagnostic.id.0.0 as usize,
             AnyDiagnostic::NameResolution(diagnostic) => diagnostic.id.0.0 as usize,
             AnyDiagnostic::Types(diagnostic) => diagnostic.id.0.0 as usize,
-            AnyDiagnostic::Ownership(diagnostic) => diagnostic.id.0.0 as usize,
         }
     }
 
@@ -816,7 +822,7 @@ test(\"ok\") {\n\tassert(1 + 1 == 2)\n}\n",
         let project = temp_project("failing-test-runner");
         std::fs::write(
             project.join("math.test.tlk"),
-            "test(\"bad\") {\n\tassertMessage(false, \"nope\")\n}\n",
+            "test(\"bad\") {\n\tassert_message(false, \"nope\")\n}\n",
         )
         .expect("test file");
 
@@ -837,7 +843,7 @@ test(\"ok\") {\n\tassert(1 + 1 == 2)\n}\n",
         std::fs::write(
             project.join("math.test.tlk"),
             "test \"selected\" {\n\tassert(true)\n}\n\n\
-test(\"not selected\") {\n\tassertMessage(false, \"nope\")\n}\n",
+test(\"not selected\") {\n\tassert_message(false, \"nope\")\n}\n",
         )
         .expect("test file");
 
@@ -858,7 +864,7 @@ test(\"not selected\") {\n\tassertMessage(false, \"nope\")\n}\n",
         std::fs::write(
             project.join("math.test.tlk"),
             "test \"prints\" {\n\tprint_raw(\"hello\")\n\tassert(true)\n}\n\n\
-test(\"bad \\\"quote\\\"\") {\n\tprint_raw(\"hello\")\n\tassertMessage(false, \"nope\\nline\")\n}\n",
+test(\"bad \\\"quote\\\"\") {\n\tprint_raw(\"hello\")\n\tassert_message(false, \"nope\\nline\")\n}\n",
         )
         .expect("test file");
 

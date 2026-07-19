@@ -1,0 +1,5 @@
+func f(xs: &Array<Int>) -> Int {
+	for x in consume xs {
+	}
+	0
+}

@@ -1,0 +1,6 @@
+enum Wrapped { case tagged(String) case empty }
+func f() -> Int {
+	let w = Wrapped.tagged("a" + "b")
+	match w { .empty -> 0, x -> 1 }
+}
+f()

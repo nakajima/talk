@@ -1,0 +1,9 @@
+struct Counter {
+	let count: Int
+}
+func read(c: Counter) -> Int {
+	c.count
+}
+func f(mut c: Counter) -> Int {
+	read(mut c)
+}

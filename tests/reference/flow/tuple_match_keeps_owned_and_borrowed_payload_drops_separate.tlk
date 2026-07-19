@@ -1,0 +1,15 @@
+enum MaybeText {
+	case some(String)
+	case none
+}
+func inspect(lhs: MaybeText) -> Int {
+	match (lhs, MaybeText.some("owned" + " payload")) {
+		(MaybeText.some(value), MaybeText.some(_)) -> value.byte_count,
+		_ -> 0
+	}
+}
+func check() -> Int {
+	let lhs = MaybeText.some("borrowed" + " payload")
+	inspect(lhs) + inspect(lhs)
+}
+check()

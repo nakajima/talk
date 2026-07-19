@@ -1,0 +1,4 @@
+func bad() -> Substring {
+	let s = "hello" + " world"
+	s.utf8().slice(0, 1)
+}

@@ -70,7 +70,9 @@ use crate::types::catalog::{
 };
 use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
-use crate::types::output::{ExistentialPack, ForPlan, MemberResolution, TypeOutput};
+use crate::types::output::{
+    CheckedIntegerLiteral, ExistentialPack, ForPlan, MemberResolution, TypeOutput,
+};
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
     EffTail, EffectEntry, EffectRow, Perm, Predicate, ProtocolRef, Row, RowTail, Scheme,
@@ -410,7 +412,73 @@ impl<'a> TypecheckSession<'a> {
         }
 
         self.check_matches(asts);
+        self.check_member_references(asts);
         self.finalize()
+    }
+
+    /// A method used as a VALUE (`x.method` with no call) has no lowering
+    /// yet: reject it here with a real diagnostic so it can never reach
+    /// the lowerer's internal fallthrough. Scoped to value receivers —
+    /// type-name receivers (`Optional.none`, statics) resolve through the
+    /// variant/static machinery.
+    fn check_member_references(&mut self, asts: &IndexMap<Source, AST<NameResolved>>) {
+        use crate::parsing::label::Label;
+        use derive_visitor::Drive;
+        let mut callees: rustc_hash::FxHashSet<NodeID> = Default::default();
+        let mut sites: Vec<(NodeID, String)> = vec![];
+        {
+            let mut collector = derive_visitor::visitor_enter_fn(|expr: &Expr| match &expr.kind {
+                ExprKind::Call { callee, .. } => {
+                    callees.insert(callee.id);
+                }
+                ExprKind::Member(Some(receiver), Label::Named(label), _) => {
+                    let type_receiver = matches!(&receiver.kind, ExprKind::Constructor(_))
+                        || matches!(
+                            &receiver.kind,
+                            ExprKind::Variable(name) if matches!(
+                                name.symbol(),
+                                Ok(Symbol::Struct(_)
+                                    | Symbol::Enum(_)
+                                    | Symbol::Protocol(_)
+                                    | Symbol::TypeAlias(_)
+                                    | Symbol::TypeParameter(_))
+                            )
+                        );
+                    if !type_receiver {
+                        sites.push((expr.id, label.clone()));
+                    }
+                }
+                _ => {}
+            });
+            for ast in asts.values() {
+                for root in &ast.roots {
+                    root.drive(&mut collector);
+                }
+            }
+        }
+        for (node, label) in sites {
+            if callees.contains(&node) {
+                continue;
+            }
+            // The solver's published resolution is the authority for
+            // field-vs-method (the same judgment the typed-tree build uses
+            // for projections). No resolution means the member never
+            // resolved — the solver already diagnosed it.
+            let resolution = self.artifacts.member_resolutions.get(&node);
+            if resolution.is_none()
+                || crate::types::output::stored_field_symbol(
+                    &self.catalog,
+                    &self.schemes,
+                    resolution,
+                )
+                .is_some()
+            {
+                continue;
+            }
+            self.diagnostics
+                .errors
+                .push((TypeError::MethodReference { label }, node));
+        }
     }
 
     fn check_matches(&mut self, asts: &IndexMap<Source, AST<NameResolved>>) {

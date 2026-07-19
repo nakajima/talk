@@ -8,12 +8,9 @@ use std::sync::Arc;
 
 use talk::analysis::{
     CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentId, DocumentInput,
-    Hover, Location, OwnershipInlayHint, OwnershipInlayHintKind, TextRange, Workspace,
+    Hover, Location, TextRange, Workspace,
 };
-use talk::compiling::{
-    driver::{Driver, DriverConfig, Source},
-    package::{PackageProject, PackageSourceCapabilities, PackageSourceProvider},
-};
+use talk::compiling::package::{PackageProject, PackageSourceCapabilities, PackageSourceProvider};
 use talk::repl::{ReplCompletions, ReplEvalResult, ReplSession};
 
 const STATUS_OK: i32 = 0;
@@ -43,17 +40,9 @@ const COMPLETION_KEYWORD: i32 = 11;
 const COMPLETION_MODULE: i32 = 12;
 const COMPLETION_EFFECT: i32 = 13;
 
-const INLAY_MOVE: i32 = 1;
-const INLAY_BORROW: i32 = 2;
-const INLAY_DROP: i32 = 3;
-const INLAY_CLONE: i32 = 4;
-
 const EVAL_OUTPUT: i32 = 1;
 const EVAL_DIAGNOSTICS: i32 = 2;
 const EVAL_ERROR: i32 = 3;
-
-const TEST_NO_TESTS: i32 = 1;
-const TEST_FINISHED: i32 = 2;
 
 const PACKAGE_SOURCE_TAR: i32 = 1;
 
@@ -542,18 +531,18 @@ impl PackageSourceProvider for CPackageSourceProvider {
 }
 
 impl TalkResult {
-    fn ok_bytes(bytes: Vec<u8>) -> Self {
-        Self {
-            status: STATUS_OK,
-            data: TalkBuffer::from_vec(bytes),
-            error: TalkBuffer::empty(),
-        }
-    }
-
     fn ok_string(value: String) -> Self {
         Self {
             status: STATUS_OK,
             data: TalkBuffer::from_string(value),
+            error: TalkBuffer::empty(),
+        }
+    }
+
+    fn ok_bytes(value: Vec<u8>) -> Self {
+        Self {
+            status: STATUS_OK,
+            data: TalkBuffer::from_vec(value),
             error: TalkBuffer::empty(),
         }
     }
@@ -581,14 +570,6 @@ impl Boundary {
     fn string(call: impl FnOnce() -> ApiResult<String>) -> TalkResult {
         match catch_unwind(AssertUnwindSafe(call)) {
             Ok(Ok(value)) => TalkResult::ok_string(value),
-            Ok(Err(error)) => TalkResult::err(error),
-            Err(payload) => TalkResult::err(ApiError::panic(payload.as_ref())),
-        }
-    }
-
-    fn bytes(call: impl FnOnce() -> ApiResult<Vec<u8>>) -> TalkResult {
-        match catch_unwind(AssertUnwindSafe(call)) {
-            Ok(Ok(value)) => TalkResult::ok_bytes(value),
             Ok(Err(error)) => TalkResult::err(error),
             Err(payload) => TalkResult::err(ApiError::panic(payload.as_ref())),
         }
@@ -819,13 +800,6 @@ impl TalkCompletions {
 }
 
 impl TalkInlayHints {
-    fn ok(items: Vec<InlayHintRecord>) -> *mut Self {
-        Box::into_raw(Box::new(Self {
-            status: HandleStatus::ok(),
-            items,
-        }))
-    }
-
     fn err(error: ApiError) -> *mut Self {
         Box::into_raw(Box::new(Self {
             status: error.into(),
@@ -946,44 +920,9 @@ impl TalkEvalResult {
             },
         }
     }
-
-    fn diagnostics(
-        source: String,
-        diagnostics: Vec<DiagnosticRecord>,
-        message: Option<String>,
-    ) -> Self {
-        Self {
-            status: HandleStatus::ok(),
-            kind: EVAL_DIAGNOSTICS,
-            stdout: String::new(),
-            stderr: String::new(),
-            value: None,
-            source,
-            message,
-            diagnostics,
-        }
-    }
 }
 
 impl TalkTestResult {
-    fn no_tests() -> Self {
-        Self {
-            status: HandleStatus::ok(),
-            kind: TEST_NO_TESTS,
-            output: String::new(),
-            failures: 0,
-        }
-    }
-
-    fn finished(output: String, failures: i64) -> Self {
-        Self {
-            status: HandleStatus::ok(),
-            kind: TEST_FINISHED,
-            output,
-            failures,
-        }
-    }
-
     fn boxed(value: Self) -> *mut Self {
         Box::into_raw(Box::new(value))
     }
@@ -1027,107 +966,42 @@ struct ProgramRunner;
 
 impl ProgramRunner {
     fn run(path: String, source: String) -> ApiResult<TalkEvalResult> {
-        let doc = DocumentInput {
-            id: path.clone(),
-            path: path.clone(),
-            version: 0,
-            text: source.clone(),
-        };
-        let workspace = Workspace::new(vec![doc])
-            .ok_or_else(|| ApiError::failed("failed to analyze program"))?;
-        let diagnostics = diagnostic_records_from_workspace(&workspace, None);
-        if !diagnostics.is_empty() {
-            return Ok(TalkEvalResult::diagnostics(
-                source,
-                diagnostics,
-                Some("program has diagnostics".to_string()),
-            ));
-        }
+        let session = ReplSession::new();
+        // The caller's document path travels with the source: relative
+        // imports resolve from it and diagnostics name it.
+        let path = PathBuf::from(path_or_stdin(path));
+        let result = session.eval_program_at(Some(&path), &source);
+        Ok(TalkEvalResult::from_repl_result(HandleStatus::ok(), result))
+    }
 
-        let driver = Driver::new(
-            vec![Source::in_memory(PathBuf::from(&path), source)],
-            DriverConfig::new("App"),
-        );
+    /// Check a single in-memory program and hand back the typed driver
+    /// the backend inspection surfaces compile from.
+    fn typed(
+        path: String,
+        source: String,
+    ) -> ApiResult<talk::compiling::driver::Driver<talk::compiling::driver::Typed>> {
+        use talk::compiling::driver::{Driver, DriverConfig, Source};
+        let sources = vec![Source::in_memory(
+            PathBuf::from(path_or_stdin(path)),
+            source,
+        )];
+        let driver = Driver::new(sources, DriverConfig::new("Main"));
         let parsed = driver
             .parse()
-            .map_err(|err| ApiError::failed(format!("failed to parse: {err:?}")))?;
+            .map_err(|error| ApiError::failed(format!("{error:?}")))?;
         let resolved = parsed
             .resolve_names()
-            .map_err(|err| ApiError::failed(format!("failed to resolve names: {err:?}")))?;
+            .map_err(|error| ApiError::failed(format!("{error:?}")))?;
         let typed = resolved.type_check();
         if typed.has_errors() {
-            let message = typed
+            let rendered: Vec<String> = typed
                 .diagnostics()
                 .iter()
                 .map(|diagnostic| diagnostic.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            return Ok(TalkEvalResult::from_repl_result(
-                HandleStatus::ok(),
-                ReplEvalResult::Error(message),
-            ));
+                .collect();
+            return Err(ApiError::failed(rendered.join("\n")));
         }
-        let names = Self::value_names(typed.phase.program.types());
-        let mut lowered = typed.lower();
-        if !lowered.phase.diagnostics.is_empty() {
-            return Ok(TalkEvalResult::from_repl_result(
-                HandleStatus::ok(),
-                ReplEvalResult::Error(format!(
-                    "not yet supported by the backend: {}",
-                    lowered.phase.diagnostics.join("; ")
-                )),
-            ));
-        }
-        match lowered.run_vm_displayed(&names) {
-            Ok((_, stdout, display)) => Ok(TalkEvalResult::from_repl_result(
-                HandleStatus::ok(),
-                ReplEvalResult::Output {
-                    stdout,
-                    stderr: String::new(),
-                    value: Some(display),
-                },
-            )),
-            Err(err) => Ok(TalkEvalResult::from_repl_result(
-                HandleStatus::ok(),
-                ReplEvalResult::Error(format!("evaluation failed: {err}")),
-            )),
-        }
-    }
-
-    fn value_names(types: &talk::types::TypeOutput) -> talk::vm::interp::ValueNames {
-        let mut names = talk::vm::interp::ValueNames::default();
-        for (symbol, info) in &types.catalog.structs {
-            let display = types
-                .display_names
-                .get(symbol)
-                .cloned()
-                .unwrap_or_else(|| symbol.to_string());
-            let fields: Vec<&str> = info.fields.keys().map(|name| name.as_str()).collect();
-            if display == "String"
-                && (fields == ["base", "byte_count", "capacity"]
-                    || fields == ["storage", "byte_count", "capacity"])
-            {
-                names.string_struct = Some(talk::vm::runtime_symbol(*symbol));
-            }
-            let runtime_symbol = talk::vm::runtime_symbol(*symbol);
-            names
-                .fields
-                .insert(runtime_symbol, info.fields.keys().cloned().collect());
-            names.types.insert(runtime_symbol, display);
-        }
-        for (symbol, info) in &types.catalog.enums {
-            let display = types
-                .display_names
-                .get(symbol)
-                .cloned()
-                .unwrap_or_else(|| symbol.to_string());
-            let runtime_symbol = talk::vm::runtime_symbol(*symbol);
-            names
-                .cases
-                .insert(runtime_symbol, info.variants.keys().cloned().collect());
-            names.types.insert(runtime_symbol, display);
-        }
-        names
+        Ok(typed)
     }
 }
 
@@ -1166,24 +1040,28 @@ impl PackageRunner {
         offline: bool,
         provider: Option<&TalkPackageProvider>,
     ) -> ApiResult<TalkEvalResult> {
-        let project = Self::open(root, offline, provider)?;
-        let mut lowered = project
+        let root = Self::root(root)?;
+        let project = match provider {
+            Some(provider) => {
+                PackageProject::open_at_with_provider(root, offline, provider.provider.clone())
+            }
+            None => PackageProject::open_at(root, offline),
+        }
+        .map_err(|error| ApiError::failed(error.to_string()))?;
+        let executable = project
             .compile_binary(binary_name.as_deref())
             .map_err(|error| ApiError::failed(error.to_string()))?;
-        match lowered.run_vm_with_output() {
-            Ok((value, stdout)) => Ok(TalkEvalResult::from_repl_result(
+        let mut io = talk_runtime::io::CaptureIO::default();
+        match talk::compiling::driver::execute_module(&executable, &mut io) {
+            Ok(value) => Ok(TalkEvalResult::from_repl_result(
                 HandleStatus::ok(),
                 ReplEvalResult::Output {
-                    stdout,
-                    stderr: String::new(),
-                    value: (!matches!(value, talk::vm::interp::Value::Void))
-                        .then(|| format!("{value:?}")),
+                    stdout: String::from_utf8_lossy(&io.out).into_owned(),
+                    stderr: String::from_utf8_lossy(&io.err).into_owned(),
+                    value,
                 },
             )),
-            Err(error) => Ok(TalkEvalResult::from_repl_result(
-                HandleStatus::ok(),
-                ReplEvalResult::Error(format!("evaluation failed: {error}")),
-            )),
+            Err(message) => Err(ApiError::failed(message)),
         }
     }
 
@@ -1192,31 +1070,31 @@ impl PackageRunner {
         offline: bool,
         provider: Option<&TalkPackageProvider>,
     ) -> ApiResult<TalkTestResult> {
-        let project = Self::open(root, offline, provider)?;
-        match project
-            .run_tests()
-            .map_err(|error| ApiError::failed(error.to_string()))?
-        {
-            talk::testing::Outcome::NoTests => Ok(TalkTestResult::no_tests()),
-            talk::testing::Outcome::Finished(summary) => {
-                Ok(TalkTestResult::finished(summary.output, summary.failures))
-            }
-        }
-    }
-
-    fn open(
-        root: String,
-        offline: bool,
-        provider: Option<&TalkPackageProvider>,
-    ) -> ApiResult<PackageProject> {
         let root = Self::root(root)?;
-        match provider {
+        let project = match provider {
             Some(provider) => {
                 PackageProject::open_at_with_provider(root, offline, provider.provider.clone())
             }
             None => PackageProject::open_at(root, offline),
         }
-        .map_err(|error| ApiError::failed(error.to_string()))
+        .map_err(|error| ApiError::failed(error.to_string()))?;
+        let outcome = project
+            .run_tests_at_paths_with_filter(&[], None)
+            .map_err(|error| ApiError::failed(error.to_string()))?;
+        Ok(match outcome {
+            talk::testing::Outcome::NoTests => TalkTestResult {
+                status: HandleStatus::ok(),
+                kind: 1,
+                output: String::new(),
+                failures: 0,
+            },
+            talk::testing::Outcome::Finished(summary) => TalkTestResult {
+                status: HandleStatus::ok(),
+                kind: 2,
+                output: summary.output,
+                failures: summary.failures,
+            },
+        })
     }
 
     fn root(root: String) -> ApiResult<PathBuf> {
@@ -1304,15 +1182,6 @@ fn completion_kind(kind: Option<CompletionItemKind>) -> i32 {
     }
 }
 
-fn inlay_kind(kind: OwnershipInlayHintKind) -> i32 {
-    match kind {
-        OwnershipInlayHintKind::Move => INLAY_MOVE,
-        OwnershipInlayHintKind::Borrow => INLAY_BORROW,
-        OwnershipInlayHintKind::Drop => INLAY_DROP,
-        OwnershipInlayHintKind::Clone => INLAY_CLONE,
-    }
-}
-
 fn highlight_kind(kind: talk::highlighter::Kind) -> i32 {
     match kind {
         talk::highlighter::Kind::DECORATOR => HIGHLIGHT_DECORATOR,
@@ -1358,18 +1227,6 @@ fn completion_records(items: Vec<CompletionItem>) -> Vec<CompletionRecord> {
             detail: item.detail,
             insert_text: item.insert_text,
             insert_text_is_snippet: i32::from(item.insert_text_is_snippet),
-        })
-        .collect()
-}
-
-fn inlay_hint_records(items: Vec<OwnershipInlayHint>) -> Vec<InlayHintRecord> {
-    items
-        .into_iter()
-        .map(|item| InlayHintRecord {
-            position: item.position,
-            label: item.label,
-            tooltip: item.tooltip,
-            kind: inlay_kind(item.kind),
         })
         .collect()
 }
@@ -1769,15 +1626,11 @@ pub extern "C" fn talk_render_lowered_utf8(
     source_len: usize,
 ) -> TalkResult {
     Boundary::string(|| {
-        let path = path_or_stdin(RawBytes::new(path_ptr, path_len, "path").string()?);
+        let path = RawBytes::new(path_ptr, path_len, "path").string()?;
         let source = RawBytes::new(source_ptr, source_len, "source").string()?;
-        let styles = talk::lambda_g::print::Styles::plain();
-        talk::compiling::driver::render_lowered_from(
-            "App",
-            Source::in_memory(PathBuf::from(path), source),
-            &styles,
-        )
-        .map_err(ApiError::failed)
+        ProgramRunner::typed(path, source)?
+            .render_mir(None)
+            .map_err(ApiError::failed)
     })
 }
 
@@ -1789,15 +1642,12 @@ pub extern "C" fn talk_render_bytecode_utf8(
     source_len: usize,
 ) -> TalkResult {
     Boundary::string(|| {
-        let path = path_or_stdin(RawBytes::new(path_ptr, path_len, "path").string()?);
+        let path = RawBytes::new(path_ptr, path_len, "path").string()?;
         let source = RawBytes::new(source_ptr, source_len, "source").string()?;
-        let styles = talk::lambda_g::print::Styles::plain();
-        talk::compiling::driver::render_bytecode_from(
-            "App",
-            Source::in_memory(PathBuf::from(path), source),
-            &styles,
-        )
-        .map_err(ApiError::failed)
+        let executable = ProgramRunner::typed(path, source)?
+            .compile_executable(None)
+            .map_err(ApiError::failed)?;
+        Ok(executable.render_bytecode())
     })
 }
 
@@ -1808,15 +1658,20 @@ pub extern "C" fn talk_compile_bytecode_utf8(
     source_ptr: *const u8,
     source_len: usize,
 ) -> TalkResult {
-    Boundary::bytes(|| {
-        let path = path_or_stdin(RawBytes::new(path_ptr, path_len, "path").string()?);
+    match catch_unwind(AssertUnwindSafe(|| {
+        let path = RawBytes::new(path_ptr, path_len, "path").string()?;
         let source = RawBytes::new(source_ptr, source_len, "source").string()?;
-        talk::compiling::driver::compile_bytecode_from(
-            "App",
-            Source::in_memory(PathBuf::from(path), source),
-        )
-        .map_err(ApiError::failed)
-    })
+        let executable = ProgramRunner::typed(path, source)?
+            .compile_executable(None)
+            .map_err(ApiError::failed)?;
+        executable
+            .encode_bytecode()
+            .map_err(|error| ApiError::failed(error.to_string()))
+    })) {
+        Ok(Ok(bytes)) => TalkResult::ok_bytes(bytes),
+        Ok(Err(error)) => TalkResult::err(error),
+        Err(payload) => TalkResult::err(ApiError::panic(payload.as_ref())),
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1968,18 +1823,10 @@ pub extern "C" fn talk_workspace_inlay_hints_utf8(
     start: u32,
     end: u32,
 ) -> *mut TalkInlayHints {
-    Boundary::handle(
-        || {
-            let id = RawBytes::new(id_ptr, id_len, "id").string()?;
-            let mut handle = WorkspacePtr::new(workspace);
-            let workspace = handle.get_mut()?.ensure_analysis()?;
-            let items =
-                talk::analysis::ownership_inlay_hints(workspace, &id, TextRange::new(start, end));
-            Ok(inlay_hint_records(items))
-        },
-        TalkInlayHints::ok,
-        TalkInlayHints::err,
-    )
+    let _ = (workspace, id_ptr, id_len, start, end);
+    TalkInlayHints::err(ApiError::failed(
+        "ownership inlay hints are unavailable while Talk is frontend-only",
+    ))
 }
 
 #[unsafe(no_mangle)]
@@ -2641,4 +2488,79 @@ pub extern "C" fn talk_repl_completions_get(
 pub extern "C" fn talk_repl_completions_free(ptr: *mut TalkReplCompletions) {
     // SAFETY: The pointer was allocated by this crate or is null.
     unsafe { free_box(ptr) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buffer_string(buffer: &TalkBuffer) -> String {
+        if buffer.ptr.is_null() {
+            return String::new();
+        }
+        // SAFETY: the buffer was produced by this library and stays alive
+        // until the enclosing TalkResult is freed.
+        let bytes = unsafe { std::slice::from_raw_parts(buffer.ptr, buffer.len) };
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+
+    #[test]
+    fn program_execution_resolves_imports_from_the_supplied_path() {
+        // The caller's document path travels with the source: a relative
+        // local import must resolve from it, not from the process cwd.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("talk-c-path-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        std::fs::write(dir.join("helper.tlk"), "public func seven() -> Int { 7 }\n")
+            .expect("helper");
+        let main = dir.join("main.tlk");
+        let source = "use package::helper::{ seven }\nseven()\n";
+        let Ok(program) = ProgramRunner::run(main.to_string_lossy().into_owned(), source.into())
+        else {
+            panic!("program execution with a path");
+        };
+        assert_eq!(program.kind, EVAL_OUTPUT, "{:?}", program.message);
+        assert_eq!(program.value.as_deref(), Some("7"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn program_execution_goes_through_the_backend() {
+        let Ok(program) = ProgramRunner::run("test.tlk".into(), "1".into()) else {
+            panic!("program execution goes through the backend");
+        };
+        assert_eq!(program.kind, EVAL_OUTPUT);
+        assert_eq!(program.value.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn inspection_entries_render_lowered_and_bytecode_output() {
+        let source = b"40 + 2\n";
+        let lowered = talk_render_lowered_utf8(std::ptr::null(), 0, source.as_ptr(), source.len());
+        assert_eq!(lowered.status, STATUS_OK);
+        assert!(buffer_string(&lowered.data).contains("script"));
+        talk_result_free(lowered);
+
+        let bytecode =
+            talk_render_bytecode_utf8(std::ptr::null(), 0, source.as_ptr(), source.len());
+        assert_eq!(bytecode.status, STATUS_OK);
+        assert!(!buffer_string(&bytecode.data).is_empty());
+        talk_result_free(bytecode);
+
+        let image = talk_compile_bytecode_utf8(std::ptr::null(), 0, source.as_ptr(), source.len());
+        assert_eq!(image.status, STATUS_OK);
+        assert!(image.data.len > 0);
+        talk_result_free(image);
+    }
+
+    #[test]
+    fn inlay_hints_stay_unavailable() {
+        let hints =
+            talk_workspace_inlay_hints_utf8(std::ptr::null_mut(), std::ptr::null(), 0, 0, 0);
+        assert_eq!(talk_inlay_hints_status(hints), STATUS_FAILED);
+        talk_inlay_hints_free(hints);
+    }
 }

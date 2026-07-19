@@ -95,7 +95,7 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
             }
             let ty = workspace.types.node_types.get(&expr.id)?;
             Some(Hover {
-                contents: with_ownership_details(workspace, expr.id, ty.render_mono(), Some(ty)),
+                contents: ty.render_mono(),
                 range: TextRange::new(expr.span.start, expr.span.end),
             })
         }
@@ -103,12 +103,7 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
             let symbol = func.name.symbol().ok()?;
             let scheme = workspace.types.schemes.get(&symbol)?;
             Some(Hover {
-                contents: with_ownership_details(
-                    workspace,
-                    func.id,
-                    format!("{}: {}", func.name.name_str(), scheme.render()),
-                    Some(&scheme.ty),
-                ),
+                contents: format!("{}: {}", func.name.name_str(), scheme.render()),
                 range: TextRange::new(func.name_span.start, func.name_span.end),
             })
         }
@@ -159,7 +154,7 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
                     format!("{enum_name}.{case}({})", payloads.join(", "))
                 };
                 Some(Hover {
-                    contents: with_ownership_details(workspace, pattern.id, contents, None),
+                    contents,
                     range: TextRange::new(pattern.span.start, pattern.span.end),
                 })
             }
@@ -183,7 +178,7 @@ fn hover_for_name(
 
 fn hover_for_symbol(
     workspace: &Workspace,
-    node: crate::node_id::NodeID,
+    _node: crate::node_id::NodeID,
     symbol: crate::name_resolution::symbol::Symbol,
     name: &str,
     range: TextRange,
@@ -191,45 +186,19 @@ fn hover_for_symbol(
 ) -> Option<Hover> {
     if let Some(scheme) = workspace.types.schemes.get(&symbol) {
         return Some(Hover {
-            contents: with_ownership_details(
-                workspace,
-                node,
-                format!("{name}: {}", scheme.render()),
-                Some(&scheme.ty),
-            ),
+            contents: format!("{name}: {}", scheme.render()),
             range,
         });
     }
 
     if let Some(ty) = workspace.types.local_tys.get(&symbol).or(fallback_ty) {
         return Some(Hover {
-            contents: with_ownership_details(
-                workspace,
-                node,
-                format!("{name}: {}", ty.render_mono()),
-                Some(ty),
-            ),
+            contents: format!("{name}: {}", ty.render_mono()),
             range,
         });
     }
 
     None
-}
-
-fn with_ownership_details(
-    workspace: &Workspace,
-    node: crate::node_id::NodeID,
-    contents: String,
-    ty: Option<&crate::types::ty::Ty>,
-) -> String {
-    let details = crate::analysis::ownership::hover_details_for_node(workspace, node, ty);
-    if details.is_empty() {
-        return contents;
-    }
-
-    let mut lines = vec![contents, String::new(), "ownership:".to_string()];
-    lines.extend(details.into_iter().map(|detail| format!("  {detail}")));
-    lines.join("\n")
 }
 
 #[cfg(test)]

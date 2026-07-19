@@ -1,0 +1,10 @@
+struct Name {
+	let value: String
+}
+struct Person {
+	let name: Name
+}
+func bad(person: &Person) -> Int {
+	let name = person.name
+	0
+}

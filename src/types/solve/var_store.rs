@@ -114,19 +114,37 @@ impl VarStore {
     }
 
     /// Resolve the head of a type: follow solved variables until we reach a
-    /// non-variable constructor or an unsolved root.
+    /// non-variable constructor or an unsolved root. Chains through
+    /// *solved* variables compress like union-find paths do — the entry
+    /// variable's binding is rewritten to point straight at the final
+    /// constructor, so repeat queries resolve in one hop and clone once
+    /// (the same amortization argument as Tarjan's path compression;
+    /// rebinding to an equal, further-resolved value is transparent to
+    /// every observer).
     pub fn shallow(&mut self, ty: &Ty) -> Ty {
-        let mut current = ty.clone();
+        let Ty::Var(v) = ty else {
+            return ty.clone();
+        };
+        let first = self.find(v.0);
+        let mut root = first;
+        let mut hops = 0u32;
         loop {
-            match current {
-                Ty::Var(v) => match self.value(v.0) {
-                    Some(VarValue::Ty(inner)) => current = inner,
-                    Some(_) => unreachable!("type var bound to non-type value"),
-                    None => return Ty::Var(TyVar(self.find(v.0))),
-                },
-                other => return other,
-            }
+            let next = match &self.vars[root as usize].value {
+                Some(VarValue::Ty(Ty::Var(next))) => next.0,
+                Some(VarValue::Ty(_)) => break,
+                Some(_) => unreachable!("type var bound to non-type value"),
+                None => return Ty::Var(TyVar(root)),
+            };
+            root = self.find(next);
+            hops += 1;
         }
+        let Some(VarValue::Ty(resolved)) = self.vars[root as usize].value.clone() else {
+            unreachable!("loop breaks only on a bound constructor");
+        };
+        if hops > 0 {
+            self.vars[first as usize].value = Some(VarValue::Ty(resolved.clone()));
+        }
+        resolved
     }
 
     /// Resolve a borrow permission: follow solved perm variables until a
@@ -410,4 +428,46 @@ pub(crate) enum TyNode<'a> {
     Ty(&'a Ty),
     RowTail(&'a RowTail),
     EffTail(&'a EffTail),
+}
+
+#[cfg(test)]
+mod compression_tests {
+    use super::*;
+    use crate::parsing::node_id::NodeID;
+
+    fn origin() -> NodeID {
+        NodeID(Default::default(), 0)
+    }
+
+    #[test]
+    fn shallow_compresses_solved_chains_to_one_hop() {
+        let mut store = VarStore::default();
+        let a = store.fresh(Level(0), origin());
+        let b = store.fresh(Level(0), origin());
+        let c = store.fresh(Level(0), origin());
+        // a -> Var(b), b -> Var(c), c -> Int-like nominal.
+        store.bind(a, VarValue::Ty(Ty::Var(TyVar(b))));
+        store.bind(b, VarValue::Ty(Ty::Var(TyVar(c))));
+        let end = Ty::Nominal(crate::name_resolution::symbol::Symbol::Int, Vec::new());
+        store.bind(c, VarValue::Ty(end.clone()));
+
+        assert_eq!(store.shallow(&Ty::Var(TyVar(a))), end);
+        // The chain compressed: a's binding now points straight at the
+        // constructor, not at Var(b).
+        assert!(
+            matches!(
+                &store.vars[a as usize].value,
+                Some(VarValue::Ty(Ty::Nominal(_, _)))
+            ),
+            "solved chain should compress onto the entry variable"
+        );
+    }
+
+    #[test]
+    fn shallow_of_an_unsolved_root_stays_unsolved() {
+        let mut store = VarStore::default();
+        let a = store.fresh(Level(0), origin());
+        assert_eq!(store.shallow(&Ty::Var(TyVar(a))), Ty::Var(TyVar(a)));
+        assert!(store.vars[a as usize].value.is_none());
+    }
 }

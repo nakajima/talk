@@ -1,6 +1,7 @@
 # Ownership soundness: findings and repair plan
 
-Status: proposed (2026-07-11)
+Status: all tracks landed (2026-07-12 — track 8.4's fuzzer was the last;
+open residuals live in the findings inventory: B11, B12, and F-D below)
 
 ## Context
 
@@ -51,6 +52,22 @@ Bugs (leaks, laundering, false rejections; all repro'd unless noted):
 | B6 | ADR 0017 bug B is defanged, not fixed: the borrowed-receiver-method for-source shape now fails to compile (`&Array<String>` vs `Array<String>`, reason Pattern) instead of double-freeing. Valid-per-ADR code rejected; stage 5 still open | for-source typing over borrowed-receiver method results |
 | B7 | `sort_by` never compares the last element (`j < self.count - 1`); `[1,3,2].sort_by { $0 > $1 }` → `[3,1,2]`. Core's own test passes by coincidence | `core/Array.tlk:121` |
 
+Discovered during wave-2 implementation (pre-existing; status inline):
+
+| ID | Finding | Locus |
+|----|---------|-------|
+| B11 | Field writes through a scheme-generalized inferred/generic param (`func bump(consume c) { c.count = ... }`) fail at lowering with "not a stored field" — reproduced with owned semantics pre-inferred-params, so pre-existing | lowering of field stores through generic params |
+| B12 | `let r = add(1, 2)` can leave the let's captured scheme an unsolved `?N` — final-solve defaulting doesn't reach let-captured schemes | solver final-solve defaulting |
+| R9 | **FIXED 2026-07-12.** Calls through function values and witness dispatch now claim the MIR-published unwind entry before lowering nested closures/capabilities and attach it to the application. F-B is the runnable indirect-call repro; `function_value_abort_drops_enclosing_owned_value` balances both engines, with structural witness attachment/no-entry controls in `lower_tests`. | `src/lower/closures.rs`, `src/lower/calls.rs` |
+
+Semantic change flagged for Pat (wave-2 stream 5): corpus case
+`types::types_nested_func` (`func fizz(x) { func buzz() { x } buzz() }`)
+now errors — implicit closure capture of a borrowed param is rejected.
+The annotated twins already rejected identically, so this is the
+coherence anchor working, not new strictness; moved to
+docs/parity-test-audit.md's deliberate-design-changes list. Revisit if
+capture rules should relax for shared borrows.
+
 Discovered during wave-1 implementation (pre-existing, confirmed by minimal
 probes while fixing B2; not yet assigned to a track — triage into wave 2):
 
@@ -61,6 +78,16 @@ probes while fixing B2; not yet assigned to a track — triage into wave 2):
 | R8 | Temp classification is per-temp static: a temp consumed on the normal path but not on an exit path won't drain on the exit edge (leak-only, never double-free) — verifier corner for Track 6 | `src/flow/cfg.rs` temp classification |
 | S7 | Place-read arguments stored into a `'heap` constructor are never buffer-retained: flow's rule-B path records no move and annotates the arg's scope-exit drop Static; lowering emits no `Op::Retain` at the init call. Straight-line double free on unmodified main: `struct Node 'heap { let key: String, ... }` + `let n = Node(key: key, ...)` with `consume key` params crashes both engines. R5/6.3 (retain-walk) territory | flow rule-B / `'heap` init lowering |
 | B10 | A body whose tail is a branch join reaches `Terminator::Return` with ScopeExit DropCandidates unclaimed (no ReturnValue statement to run `wrap_cont_with_following_drops`) — owned **parameters** on that shape silently leak (locals survive via StorageDead pairing). The drain fix is written but backed out: it unmasks S7 (double-frees `Dict.insert`'s consume params). Sequencing: land S7's rule-B buffer retain FIRST, then the drain. Documented at `src/lower/mir_lowering.rs:1434-1452` | `src/lower/mir_lowering.rs:1434-1452` |
+
+Discovered by the 8.4 fuzzer (wave 4, 2026-07-12; pre-existing; status
+inline, with fixed regressions retained as named tests):
+
+| ID | Finding | Locus |
+|----|---------|-------|
+| F-A | **FIXED 2026-07-12.** Clone rvalues under borrow arguments and projection receivers now materialize MIR temps with `TemporaryEnd` cleanup. `clone_temp_passed_to_borrow_param_does_not_leak` and `clone_receiver_under_projection_does_not_leak` run on both engines. | `src/lower/mir.rs`; `src/vm/vm_tests.rs` |
+| F-B | **FIXED with R9 2026-07-12.** The runnable indirect-call repro now carries the pending unwind entry and balances on both engines (`function_value_abort_drops_enclosing_owned_value`); the direct-call twin remains the control. | `src/lower/closures.rs`, `src/lower/calls.rs` |
+| F-C | **FIXED 2026-07-12.** Perform arguments and suspension-capable ordinary-call operands materialize direct aggregate/heap rvalues as well as nested call temps. Object-carrying aggregates qualify even when `needs_drop` is false because Rule B adds a region owner. All are included in unwind candidates and stay caller/performer-owned at runtime. String, Array, `'heap`, and `(Node, Int)` regressions balance on resume/abort across both engines. | `src/lower/mir.rs`, `src/flow/cfg.rs`, `src/lower/mir_lowering.rs` |
+| F-D | False rejection: an operator-call result meta (`?N.Ret`) never solves against pattern-position constraints — `match "a" + "b" { "lit" -> …, _ -> … }` and `match Optional.some("a" + "b") { .some(v) -> … }` both reject (`Mismatch reason Pattern` plus a spurious `UnreachableMatchArm`); the `let`-bound twins and declared-function-call scrutinees (B8's shape) compile | solver: Pattern-reason constraints on unsolved call-result metas |
 
 Design risks (no repro found, but not correct by construction):
 
@@ -153,7 +180,36 @@ guard); 1.3 before/with 1.4 (the bugs cancel); 2.1 and 2.2 share
 (it fails on whatever wave 1 missed — that is its job); 6.3 retain/drop
 symmetry (deferred from wave 1 because it edits the same `statements.rs`
 regions as the deinit stream); 5.1 implementation once the ADR is
-approved.
+approved. Wave-2 triage additions from wave-1 discoveries: **S7 before
+B10** (the branch-join drain is written but double-frees `Dict.insert`
+until the `'heap`-constructor buffer retain lands — S7 is 6.3/R5
+territory); B8 (pattern-compiler literal-arm occurrence drop); B9 (temps
+for calls under projections); R8 rides the 6.1 verifier.
+
+**Decisions recorded 2026-07-11 (Pat):** ADR 0027's shape is approved and
+mid-finalizer aborts ARE in v1 scope (5.1 implementation is a wave-2
+item; flow must model not-yet-freed finalizer fields as live owned
+places). **Inferred params really are borrows**: 3.3(b) is re-scoped
+from a seeding fix to its own project — apply the stamped mode at
+generalization/finalization (post-solve, when Copy erasure is decidable)
+or teach the solver deferred borrow constraints (`Borrow(p, ?v) ~ T`,
+borrow peeling in HasMember/HasField/operator paths); the pinned
+`delayed_auto_borrow_defaults_unresolved_argument_to_owned` semantics
+change with it. The wave-1 param-modes report inventories the three
+solver gaps (scheme generalization bakes borrows, member resolution on
+unsolved borrowed receivers, deferred Copy erasure).
+
+**Wave-2 execution note (2026-07-11)**: wave 1 is integrated but
+uncommitted in the main tree, so worktrees (which fork from HEAD) can't
+see it — wave 2 runs SEQUENTIALLY in the main tree, one stream at a
+time, which is the serial-landing protocol anyway. Order: (1) 6.3+S7,
+then B10 in the same stream (S7 gates B10); (2) B8; (3) B9; (4) 6.2
+accounting sweep + 6.1 enablement (after B8/B9 so the sweep isn't
+drowned by known leaks); (5) ADR 0027 implementation; (6) the
+inferred-params-are-borrows project. A snapshot of the integrated
+wave-1 state lives in the session scratchpad (wave2/
+wave1-integrated-*.patch). If wave 1 gets committed mid-wave, later
+streams can parallelize into worktrees again.
 
 **Wave 3, one at a time**: track 7's refactors are broad and mechanical —
 7.2 rewrites the `cfg.rs`/`moves.rs` that track 2 just touched, 7.4 and
@@ -321,6 +377,16 @@ for anything keyed on mode (inout write-back selection, LSP hover).
 *Tests first:* declaration-site error for `mut c: &T`; inferred-param
 program whose caller can reuse the argument after the call (borrow
 semantics observable), which currently move-errors.
+**(b) LANDED 2026-07-12** (wave-2 stream 6): `infer_callable` routes the
+fresh var through `apply_param_mode`; the solver gained deferred Copy
+erasure (`&?v ~ Nominal` in unify, plus shared-Copy-borrow erasure at
+finalize), HasMember residuals peel borrowed receivers when qualifying
+schemes, the record-improvement probe binds the peeled receiver, and
+flow's `call_provenance` learned the protocol-static callee shape.
+Staged out: inference-position trailing-block binders stay
+delayed-inference (see ADR 0018 implementation notes);
+`types_nested_func` moved to parity-test-audit.md's
+deliberate-design-changes list.
 
 ## Track 4 — drop insertion
 
@@ -426,6 +492,21 @@ Flow emits `EarlyExit` candidates covering the standalone-body path so
 `Some(Static) | None =>` fallthroughs become diagnostics (a candidate flow
 failed to classify is an internal error, not a guess). ADR 0010 already
 mandates this; Track 6's verifier makes it safe to do.
+**LANDED 2026-07-12** (wave 3): instrumentation across the full suite
+showed the remainder loop already dead — waves 1-2 (early-exit temps,
+B10's unclaimed-drop drain, ADR 0027 unwind entries) left no shape it
+still covered — so it was deleted outright along with its plumbing
+(`stack_from`, `LoopBinding::drop_depth`, `lower_drop_bindings_then`,
+`lower_dynamic_drop_binding_then`); both `None` fallthroughs
+(`lower_candidate_drop_then`, `lower_mir_storage_dead`) now diagnose +
+debug-assert and emit nothing (leak-safe; flow classifies every
+needs-release candidate including generic ones, so no sanctioned `None`
+exists at either site — the pre-monomorphization carve-out elides on the
+elaborated candidate's concrete type, not via missing elaborations).
+`Ctx::drop_stack` survives only as value-level candidate metadata
+(symbol → concrete type / drop-flag keys / deinit-self), documented as
+such. Six early-exit characterization tests pin the shapes in
+`lower_tests.rs`.
 
 **7.2 (M5) The flow engine's three passes take a `Pass` enum.**
 Replace `report_errors`/`recording`/`annotate` ambient booleans with one
@@ -433,6 +514,27 @@ explicit `Pass::{Fixpoint, Record, Report}` parameter threaded through
 `transfer_block`/`transfer_statement`, deleting the save/restore
 choreography at `cfg.rs:43-87`. Mechanical; makes the mode contract
 type-visible.
+**LANDED 2026-07-12** (wave 3): `Pass` lives in `cfg.rs` (doc comment
+pins its relationship to `BodyRole` — role picks the passes, pass steers
+the side effects); `transfer_block` takes it as a parameter and mirrors
+it onto `MoveChecker.pass` (the single mode field replacing
+`report_errors` + `recording`) for the deep transfer walks in
+`moves.rs`/`loans.rs`, so terminator edge effects inherit it too. The
+save/restore is gone; `check_bodies` ends by resetting the checker to
+its documented resting mode (`Report` — `check_flow`'s pre/post passes
+are error-only walks, also the constructor default). `error()` matches
+exhaustively so a future fourth pass reports nothing by default.
+Runtime-transfer policy stays orthogonal to pass phasing. Source moves now
+update source availability independently from runtime transfers: effect
+payloads and +0 object parameters retain cleanup while becoming unavailable
+to source. +0 parameters are runtime-borrowed within the callee, so field
+moves retain or reject rather than aliasing caller-owned teardown. The old
+overlapping temp sets are one `TempOwnership` map, including conditional
+object cleanup that survives generic specialization. Named places and temps
+share an initialization-order domain for unwind ordering. A characterization
+test pins top-level errors reporting exactly once under the
+twice-checked role convention
+(`flow_tests.rs::reports_top_level_flow_error_exactly_once`).
 
 **7.3 (M6) ADR 0017 stage 4: `lower_embedded_body`.**
 Bundle the statement-scoped builder fields (`loop_stack`,
@@ -442,6 +544,28 @@ two embedded-body sites. Also scope `scope_stack` so a `return` inside a
 trailing block stops minting early-exit candidates for the *enclosing
 function's* locals (currently neutralized by classification, not
 structure).
+**LANDED 2026-07-12** (wave 3): `StatementScope` in `mir.rs` bundles
+`loop_stack`, `handler_stack`, `continuation_temps`, `join_depth`,
+`block_value_temps`, `enclosing_temps`, `root_tail_is_return`, and the
+new `scope_floor`; `Builder::lower_embedded_body` is the one way in
+(handler site passes the resume join, trailing site passes none) and
+swaps the bundle wholesale via `mem::replace`. The `scope_floor` clamp
+in `emit_early_exit_drops` (and `loop_scope_depth`'s fallback) makes the
+early-exit isolation structural; a MIR test pins it
+(`return_inside_trailing_block_mints_no_early_exit_for_enclosing_locals`).
+Swapping the previously-unmasked fields fixed a real bug the old
+per-field discipline had missed, exactly per the ADR's thesis:
+`block_value_temps` leaked into trailing bodies, so a trailing block's
+value tail inside a block expression delivered to the ENCLOSING block's
+temp and λ_G construction panicked (T-App domain mismatch) — pinned
+fixed by `trailing_block_tail_inside_value_block_returns_to_its_own_caller`
+(vm_tests, plus the `continuation_temps` match-arm twin). Two full-bundle
+characterization tests (trailing block + handler body, both engines,
+balance-asserted) landed first. `pending_unwind` (ADR 0027) was checked
+and stays out: it lives on the λ_G lowerer, scoped per call-evaluation
+statement, not on the MIR builder. `@handle` still only lowers at a
+body's root (nested-block fence), so no enclosing loop/temp statement
+can surround the handler site today.
 
 **7.4 (M3) One authority per type question.**
 "Expression type" = the typed tree; "binder type" = `local_tys`. Make the
@@ -449,6 +573,37 @@ accessors enforce it and delete the `.or_else()` fallback chains over
 `node_types` (`mir.rs:406,618,1113,1168,1221`, `moves.rs:383`,
 `cfg.rs:581`). `node_types` shrinks to whatever genuinely has no tree home
 — if that set is empty, it's deleted.
+**LANDED 2026-07-12** (wave 3): instrumentation across the full suite
+first established the key structural fact — typing writes `node_types`
+for expression and parameter nodes ONLY (pattern binders go to `mono` →
+`local_tys`), and the build bakes exactly that map onto the tree as
+`expr.ty`/`param.ty` — so every per-node fallback reached with a binder
+id or behind a baked tree field was PROVABLY dead (zero fires: the
+binder arms in `arm_release_binders`, the former temp-unwind builder path,
+`cfg.rs local_ty`, `check_let` ×2, `check_global_storage`, and the
+param arms in `owned_param_locals`/`seed_params`/`lower_function` —
+including their scheme-params third arms, all deleted along with the
+now-unneeded `owner`/`func_ty`/`signature_params` plumbing). The ONE
+live arm was `lower_expr`'s Call `result_ty` map read, which leaked
+typing-internal effect args (`Ty::Eff` on nominal heads) into MIR
+`result_ty` where the tree's baked type is erased — all 128 suite
+firings differed by exactly `erase_eff_args`; it now reads `expr.ty`
+(Block/Perform twins too), suite + verifier + both fences green, so the
+raw flavor was demonstrably inert. `TypeOutput::binder_ty(symbol)` is
+the one binder accessor (`local_tys` behind it, doc-pinned);
+`node_types`' field doc now names its only two sanctioned consumers
+(typed-tree bake, IDE surfaces over the surface AST) plus the one
+flow-side residue (clone-fact rendering in `flow/mod.rs`, display-only,
+bare ids in hand). The map itself stays — it IS the carrier the tree is
+built from — but flow/lowering no longer touch it, and
+`types_tests.rs::binder_types_live_in_local_tys_not_node_types` pins
+the invariant that makes the deleted fallbacks unrepresentable. The
+`seed_arm_binders` warning comment reduced to the pattern-viewing note.
+Found (not fixed, bug-for-bug): `check_let`'s header claimed
+"destructuring binders carry their own node types" — that arm never
+fired, so destructuring and uninitialized binders have always
+classified via `Ty::Error` (comment corrected to say so); switching
+them to `binder_ty` is a real semantic change left for its own change.
 
 **7.5 (M4) One spelling per ownership predicate.**
 Route `symbol_has_conformance`'s CheapClone check and
@@ -459,12 +614,62 @@ header, that typing's declared-grade Copy and flow's structural
 with one example — so nobody "unifies" them and silently changes
 semantics. The pre-monomorphization needs-drop carve-out is the one
 sanctioned dual; it moves into the flow README (8.1) as such.
+**LANDED 2026-07-12** (wave 3): the three named spellings are gone —
+`symbol_has_conformance` deleted outright (`auto_clone_action_for_ty`
+asks `is_cheap_clone_type`, a `grade_views()` wrapper over
+`GradeView::is_cheap_clone` beside `needs_drop_type`), lowering's
+`symbol_is_borrowed` delegates to the new
+`GradeView::symbol_is_borrowed_value` (the symbol-level twin
+`is_borrowed_value` now shares), and `stores_borrow` moved verbatim
+into `grades.rs` with its deliberate difference from
+`contains_borrowed` documented (syntactic declaration-position check:
+`Borrowed`-marker nominals are storable, nominal fields were checked at
+their own declaration). The audit found and routed three more:
+`check_borrow_storage`'s two raw `has_bare_conformance(_, Borrowed)`
+reads (`loans.rs`), `moves.rs::ty_is_linear` (now
+`GradeView::is_linear`, which `contains_owned`'s linear clause shares),
+and lowering's `symbol_is_heap` + `demand.rs`'s inlined copy (now
+`GradeView::symbol_is_object`, which `is_object` shares). Every raw
+classification read of the catalog in `lower/` and `flow/` now lives
+inside `grades.rs`. Left with reason: `deinit_witness`/`deinit_theta`
+fetch conformance VALUES (witness symbol, self-args θ), not a
+classification; perm reads/borrow peels (`Ty::Borrow(perm, _)`
+matches) ask "which permission", not "is it borrowed"; wave-2's
+`auto_clone_action_for_ty` is per-instantiation policy COMPOSED of
+GradeView judgments, not a new spelling. The declared-vs-structural
+Copy split is documented in the `grades.rs` header with the `Point`
+example; the sanctioned pre-monomorphization dual was already in the
+flow README (8.1).
 
 **7.6 (R7) Perm hygiene.**
 `instantiate()` substitutes perms into predicates alongside tys/effs/rows;
 `ExportSanitizer::fold_perm` gets a debug assertion that it only ever sees
 post-`final_ty` types (or is changed to resolve through the store). Both
 latent-only; both one-liners plus a unit test each.
+**LANDED 2026-07-12** (wave 3): `Predicate::substitute_perms` (the
+mirror of `Ty::substitute_perms`) now chains after `.substitute(..)` at
+BOTH instantiation sites — `generate/instantiate.rs::instantiate` and
+its solver twin `solve/member.rs::instantiate_scheme`, which had the
+identical hole. The five near-identical per-variant matches on
+`Predicate` collapsed into one `fold_with(TyFold)` owner
+(`substitute`/`substitute_perms`/`sanitize_for_export`/`import_symbols`
+are one-liners over it). Both holes confirmed LATENT: `Perm::Var` has
+no generation-phase producer — vars are minted only when instantiating
+a scheme that already has `perm_params`, and `generalize.rs` mints
+those only upon seeing a `Perm::Var` — so no source program reaches
+either path today; the unit test hand-builds a perm-quantified scheme
+whose predicate mentions the param and asserts the instantiated
+predicate carries the SAME fresh var as the scheme type
+(`solve/tests.rs::instantiation_substitutes_perms_into_predicates`).
+`ExportSanitizer::fold_perm`'s `Var → Shared` arm got the contract
+pinned as a comment + `debug_assert!`: `final_ty` runs
+`default_unsolved_perms` (binding every unsolved perm var to Shared in
+the store), so finalized input contains NO `Perm::Var` and the arm is
+belt-and-suspenders — on pre-finalize input the store-free rewrite
+would launder a solved-to-Exclusive var to a shared borrow. The
+assertion held over the full suite (empirically: every sanitize path is
+post-finalize or perm-var-free), and
+`export_sanitizer_rejects_unfinalized_perm_vars` pins that it fires.
 
 ## Track 8 — hygiene and the long tail
 
@@ -504,6 +709,25 @@ borrowed receiver × method × loop, handler × consume) that every recent
 ownership bug lived in and hand-written tests keep sampling one point of.
 Seeded, deterministic in CI; failures shrink to corpus entries in
 `tests/programs/`.
+**LANDED 2026-07-12** (`tests/fuzz.rs`, a dedicated Cargo test target gated
+by the `fuzz-tests` feature, which also enables the balance verifier and VM
+fence in the oracle): typed grammar
+with a scope stack (owned/borrowed/consumed tracking; loop, for, and
+closure bodies are consume barriers; ~10% "spice" deliberately violates
+the tracking to keep the reject path populated), hand-rolled xorshift64*
++ splitmix64 per-program seeds, greedy tree shrinking
+(remove/unwrap/zero ops re-running the oracle), failures written to
+`target/fuzz/`. CI runs 60 programs at a fixed base seed in ~7s at an
+88% compile rate (floor asserted at 60%). Run it with
+`cargo test --test fuzz --features fuzz-tests`; `TALK_FUZZ_SEED` /
+`TALK_FUZZ_COUNT` / `TALK_FUZZ_SHRINK_BUDGET` drive exploratory runs,
+`TALK_FUZZ_PROBE` runs one file through the exact oracle with per-engine
+leak attribution. First session (5,000+ generated programs) found
+findings F-A/F-B/F-C/F-D above — every failure shrank to one of those
+four roots. F-A, F-B/R9, and F-C are fixed and retained as named
+regressions; the R9/F-B and F-C default-seed skips (indices 67 and 155)
+were removed, and `DEFAULT_SKIPS` is empty. F-D remains an open checker
+false rejection and is not a runtime-oracle skip.
 
 ## Citations
 

@@ -1,7 +1,5 @@
 use super::*;
 
-use crate::types::catalog::Grade;
-
 impl<'s, 'a> CatalogBuilder<'s, 'a> {
     // ----- Declaration collection ---------------------------------------
 
@@ -351,8 +349,37 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             if protocol == Symbol::Deinit {
                 continue;
             }
+            // The claim's own conformance row is the authority for its
+            // arguments: its where-clause context legalizes `T`-typed
+            // fields, and its self-args rebind the declaration's params
+            // (fields are stored under the DECLARATION's param symbols,
+            // the row's context speaks about the EXTEND's).
+            let row = self
+                .catalog
+                .conformances
+                .get(&(head, ProtocolRef::bare(protocol)));
+            let context = row.map(|row| row.context.clone()).unwrap_or_default();
+            let self_args = row.map(|row| row.self_args.clone()).unwrap_or_default();
+            let decl_params = self
+                .catalog
+                .structs
+                .get(&head)
+                .map(|info| info.params.clone())
+                .or_else(|| {
+                    self.catalog
+                        .enums
+                        .get(&head)
+                        .map(|info| info.params.clone())
+                })
+                .unwrap_or_default();
+            let rebind: FxHashMap<Symbol, Ty> = decl_params
+                .iter()
+                .copied()
+                .zip(self_args.iter().cloned())
+                .collect();
             for (field, ty) in self.marker_checked_fields(head) {
-                if !self.satisfies_marker(&ty, protocol) {
+                let ty = ty.substitute(&rebind, &FxHashMap::default(), &FxHashMap::default());
+                if !self.catalog.ty_satisfies_marker(&ty, protocol, &context) {
                     self.diagnostics.errors.push((
                         TypeError::NonConformingField {
                             protocol: protocol.to_string(),
@@ -390,55 +417,6 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .collect();
         }
         vec![]
-    }
-
-    fn satisfies_marker(&self, ty: &Ty, marker: Symbol) -> bool {
-        match ty {
-            // Error is poison; a variable here means the field type is still
-            // being collected — the conformance's own use sites will re-check.
-            Ty::Error | Ty::Var(_) => true,
-            // A unique value is the sole reference: never Copy/CheapClone.
-            Ty::Unique(_) => false,
-            Ty::Nominal(symbol, args) => {
-                // Storage and Array are refcounted buffers: cloning bumps
-                // the buffer without touching elements, so element grade is
-                // irrelevant.
-                if marker == Symbol::CheapClone
-                    && matches!(*symbol, Symbol::Storage | Symbol::Array)
-                {
-                    return true;
-                }
-                let head_ok = match marker {
-                    Symbol::Copy => self.catalog.grade_of(*symbol) == Grade::Copy,
-                    // CheapClone: Copy fields are fine, and CheapClone-
-                    // conforming fields are fine.
-                    _ => {
-                        self.catalog.grade_of(*symbol) == Grade::Copy
-                            || self
-                                .catalog
-                                .has_bare_conformance(*symbol, Symbol::CheapClone)
-                    }
-                };
-                head_ok && args.iter().all(|arg| self.satisfies_marker(arg, marker))
-            }
-            Ty::Param(symbol) => self
-                .catalog
-                .param_bounds
-                .get(symbol)
-                .is_some_and(|bounds| bounds.contains(&ProtocolRef::bare(marker))),
-            Ty::Tuple(items) => items.iter().all(|item| self.satisfies_marker(item, marker)),
-            Ty::Record(row) => {
-                row.tail.is_none()
-                    && row
-                        .fields
-                        .iter()
-                        .all(|(_, field)| self.satisfies_marker(field, marker))
-            }
-            // An effect argument is runtime-inert: it never blocks a
-            // marker (Copy/CheapClone judge values, not rows).
-            Ty::Eff(_) => true,
-            Ty::Borrow(..) | Ty::Func(..) | Ty::Any { .. } | Ty::Proj(..) => false,
-        }
     }
 
     pub(super) fn register_struct(&mut self, symbol: Symbol, decl: &Decl) {
@@ -882,7 +860,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             .map(|p| match &p.type_annotation {
                 Some(annotation) => {
                     let ty = self.lower_annotation(annotation);
-                    elaborate::apply_param_mode(self.catalog, p.mode, ty)
+                    elaborate::apply_param_mode(self.catalog, p, ty, self.diagnostics)
                 }
                 None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),
             })
@@ -976,7 +954,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             .map(|p| match &p.type_annotation {
                 Some(annotation) => {
                     let ty = self.lower_annotation(annotation);
-                    elaborate::apply_param_mode(self.catalog, p.mode, ty)
+                    elaborate::apply_param_mode(self.catalog, p, ty, self.diagnostics)
                 }
                 None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),
             })
@@ -1156,7 +1134,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             .map(|p| match &p.type_annotation {
                 Some(annotation) => {
                     let ty = self.lower_annotation(annotation);
-                    elaborate::apply_param_mode(self.catalog, p.mode, ty)
+                    elaborate::apply_param_mode(self.catalog, p, ty, self.diagnostics)
                 }
                 // Unannotated effect params share an outer variable that
                 // perform sites and handlers refine during checking.
@@ -1471,7 +1449,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .map(|p| match &p.type_annotation {
                     Some(annotation) => {
                         let ty = self.lower_annotation(annotation);
-                        elaborate::apply_param_mode(self.catalog, p.mode, ty)
+                        elaborate::apply_param_mode(self.catalog, p, ty, self.diagnostics)
                     }
                     None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),
                 })
@@ -1540,7 +1518,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             .map(|p| {
                 p.type_annotation.as_ref().map(|annotation| {
                     let ty = self.lower_annotation(annotation);
-                    elaborate::apply_param_mode(self.catalog, p.mode, ty)
+                    elaborate::apply_param_mode(self.catalog, p, ty, self.diagnostics)
                 })
             })
             .collect();

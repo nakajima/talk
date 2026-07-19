@@ -1,0 +1,13 @@
+struct Node 'heap {
+	let value: Int
+}
+func make() -> Node? {
+	Optional.some(Node(value: 7))
+}
+func check() -> Int {
+	match make() {
+		.some(n) -> n.value,
+		.none -> 0
+	}
+}
+check()

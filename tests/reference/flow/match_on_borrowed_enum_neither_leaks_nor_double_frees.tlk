@@ -1,0 +1,17 @@
+enum E {
+	case a(String)
+	case b(Int)
+}
+func f(e: &E) -> Int {
+	match e {
+		.a(s) -> s.byte_count,
+		.b(n) -> n
+	}
+}
+func check() -> Int {
+	let e = E.a("hello" + " world")
+	let first = f(e)
+	let second = f(e)
+	first + second
+}
+check()

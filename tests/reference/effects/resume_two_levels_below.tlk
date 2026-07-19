@@ -1,0 +1,14 @@
+effect 'ask(prompt) -> Int
+@handle 'ask { p in
+	continue 10
+}
+func inner() 'ask -> Int {
+	let v = 'ask("x")
+	v + 1
+}
+func outer() 'ask -> Int {
+	let w = inner()
+	w + 100
+}
+let o = outer()
+print(o + 1000)

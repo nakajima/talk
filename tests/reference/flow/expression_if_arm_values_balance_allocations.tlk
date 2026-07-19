@@ -1,0 +1,9 @@
+func check(flag: Bool) -> Int {
+	let s = if (flag) {
+		"hello" + " world"
+	} else {
+		"bye" + " now"
+	}
+	s.byte_count
+}
+check(true) + check(false)

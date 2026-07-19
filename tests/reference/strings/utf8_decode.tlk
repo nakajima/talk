@@ -1,0 +1,42 @@
+let failures = 0
+let v0 = "A"
+if _utf8_decode(v0.storage, 0, v0.byte_count) != 521 { failures = failures + 1 }
+let v1 = "é"
+if _utf8_decode(v1.storage, 0, v1.byte_count) != 1866 { failures = failures + 1 }
+let v2 = "€"
+if _utf8_decode(v2.storage, 0, v2.byte_count) != 66915 { failures = failures + 1 }
+let v3 = "😀"
+if _utf8_decode(v3.storage, 0, v3.byte_count) != 1028100 { failures = failures + 1 }
+let v4 = "\u{7FF}"
+if _utf8_decode(v4.storage, 0, v4.byte_count) != 16378 { failures = failures + 1 }
+let v5 = "\u{800}"
+if _utf8_decode(v5.storage, 0, v5.byte_count) != 16387 { failures = failures + 1 }
+let v6 = "\u{D7FF}"
+if _utf8_decode(v6.storage, 0, v6.byte_count) != 442363 { failures = failures + 1 }
+let v7 = "\u{E000}"
+if _utf8_decode(v7.storage, 0, v7.byte_count) != 458755 { failures = failures + 1 }
+let v8 = "\u{FFFF}"
+if _utf8_decode(v8.storage, 0, v8.byte_count) != 524283 { failures = failures + 1 }
+let v9 = "\u{10000}"
+if _utf8_decode(v9.storage, 0, v9.byte_count) != 524292 { failures = failures + 1 }
+let v10 = "\u{10FFFF}"
+if _utf8_decode(v10.storage, 0, v10.byte_count) != 8912892 { failures = failures + 1 }
+let w0 = "é"
+let sub0: Substring = w0.utf8().slice(0, 1)
+if _utf8_decode(sub0.storage, sub0.start, sub0.start + sub0.byte_count) != 524265 { failures = failures + 1 }
+let w1 = "é"
+let sub1: Substring = w1.utf8().slice(1, 1)
+if _utf8_decode(sub1.storage, sub1.start, sub1.start + sub1.byte_count) != 524265 { failures = failures + 1 }
+let w2 = "€"
+let sub2: Substring = w2.utf8().slice(0, 1)
+if _utf8_decode(sub2.storage, sub2.start, sub2.start + sub2.byte_count) != 524265 { failures = failures + 1 }
+let w3 = "€"
+let sub3: Substring = w3.utf8().slice(0, 2)
+if _utf8_decode(sub3.storage, sub3.start, sub3.start + sub3.byte_count) != 524266 { failures = failures + 1 }
+let w4 = "😀"
+let sub4: Substring = w4.utf8().slice(0, 3)
+if _utf8_decode(sub4.storage, sub4.start, sub4.start + sub4.byte_count) != 524267 { failures = failures + 1 }
+let w5 = "😀"
+let sub5: Substring = w5.utf8().slice(2, 2)
+if _utf8_decode(sub5.storage, sub5.start, sub5.start + sub5.byte_count) != 524265 { failures = failures + 1 }
+failures

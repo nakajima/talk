@@ -1,0 +1,9 @@
+struct Box {
+	let value: String
+	consuming func consume() -> Int {
+		self.value.byte_count
+	}
+}
+let box = Box(value: "hello" + " world")
+let n = box.consume()
+box.value.byte_count + n

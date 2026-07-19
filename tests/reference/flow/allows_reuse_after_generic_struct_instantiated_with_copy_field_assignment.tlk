@@ -1,0 +1,6 @@
+struct Box<Item> {
+	let value: Item
+}
+let box = Box(value: 1)
+let copy = box
+box.value + copy.value

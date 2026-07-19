@@ -1,0 +1,13 @@
+struct Inner {
+	let value: Int
+	mut func bump() -> Int {
+		self.value = self.value + 1
+		self.value
+	}
+}
+struct Outer {
+	let inner: Inner
+	mut func poke() -> Int {
+		self.inner.bump()
+	}
+}

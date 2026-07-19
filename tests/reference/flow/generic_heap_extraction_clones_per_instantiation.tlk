@@ -1,0 +1,17 @@
+struct Holder<Value> 'heap {
+	let value: Value
+}
+func extract_clone<Value: CheapClone>(h: Holder<Value>) -> Value {
+	h.value
+}
+func extract_copy<Value: Copy>(h: Holder<Value>) -> Value {
+	h.value
+}
+func check() -> Int {
+	let h = Holder(value: "hello" + " world")
+	let s = extract_clone(h)
+	let i = Holder(value: 41)
+	let n = extract_copy(i)
+	s.byte_count + n
+}
+check()

@@ -156,16 +156,64 @@ extend Int: Comparable<Int> {
 	func gt(rhs: Int) -> Bool {
 		@_ir { %? = cmp Int %0 > %1 }
 	}
+
+	// Direct scalar bodies for the derived comparisons: the protocol
+	// defaults build them from `gt`/`equals` with short-circuit
+	// branches, which blocks call-site inlining of the hottest loop
+	// guards (`i < n`).
+	func gte(rhs: Int) -> Bool {
+		@_ir { %? = cmp Int %0 >= %1 }
+	}
+
+	func lt(rhs: Int) -> Bool {
+		@_ir { %? = cmp Int %0 < %1 }
+	}
+
+	func lte(rhs: Int) -> Bool {
+		@_ir { %? = cmp Int %0 <= %1 }
+	}
 }
 
 extend Float: Comparable<Float> {
 	func gt(rhs: Float) -> Bool {
 		@_ir { %? = cmp Float %0 > %1 }
 	}
+
+	// Direct scalar bodies for the derived comparisons: the protocol
+	// defaults build them from `gt`/`equals` with short-circuit
+	// branches, which blocks call-site inlining of the hottest loop
+	// guards (`i < n`).
+	func gte(rhs: Float) -> Bool {
+		@_ir { %? = cmp Float %0 >= %1 }
+	}
+
+	func lt(rhs: Float) -> Bool {
+		@_ir { %? = cmp Float %0 < %1 }
+	}
+
+	func lte(rhs: Float) -> Bool {
+		@_ir { %? = cmp Float %0 <= %1 }
+	}
 }
 
 extend Byte: Comparable<Byte> {
 	func gt(rhs: Byte) -> Bool {
 		@_ir { %? = cmp Byte %0 > %1 }
+	}
+
+	// Direct scalar bodies for the derived comparisons: the protocol
+	// defaults build them from `gt`/`equals` with short-circuit
+	// branches, which blocks call-site inlining of the hottest loop
+	// guards (`i < n`).
+	func gte(rhs: Byte) -> Bool {
+		@_ir { %? = cmp Byte %0 >= %1 }
+	}
+
+	func lt(rhs: Byte) -> Bool {
+		@_ir { %? = cmp Byte %0 < %1 }
+	}
+
+	func lte(rhs: Byte) -> Bool {
+		@_ir { %? = cmp Byte %0 <= %1 }
 	}
 }

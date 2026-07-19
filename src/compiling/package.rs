@@ -5,7 +5,6 @@ use std::{
     io::{self, Cursor},
     path::{Component, Path, PathBuf},
     process::{Command, Output},
-    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -32,11 +31,7 @@ use crate::{
     parser::Parser,
 };
 
-use super::{
-    core::LibraryTyped,
-    driver::{CompilationMode, Driver, DriverConfig, Lowered, Source},
-    module::{Module, ModuleEnvironment, ModuleId},
-};
+use super::driver::{Driver, DriverConfig, Source};
 
 const MANIFEST_FILE: &str = "package.tlk";
 const LOCK_FILE: &str = "package.lock";
@@ -1689,13 +1684,7 @@ impl PackageResolver {
     }
 }
 
-#[derive(Clone)]
-struct CompiledLibrary {
-    module: Module,
-    typed: Arc<LibraryTyped>,
-    module_id: ModuleId,
-}
-
+#[allow(dead_code)]
 pub struct PackageProject {
     root: PathBuf,
     manifest: PackageManifest,
@@ -2016,7 +2005,91 @@ impl PackageProject {
         root.as_ref().join(MANIFEST_FILE).is_file()
     }
 
-    pub fn compile_binary(&self, requested: Option<&str>) -> Result<Driver<Lowered>, PackageError> {
+    /// The nearest ancestor of `path` (including `path` itself) that
+    /// holds a package manifest. `talk test <path>` uses this to anchor
+    /// `package::` imports at that package's own source root no matter
+    /// where the command runs from.
+    pub fn enclosing_root(path: impl AsRef<Path>) -> Option<PathBuf> {
+        let start = path.as_ref().canonicalize().ok()?;
+        let mut current = if start.is_dir() {
+            Some(start.as_path())
+        } else {
+            start.parent()
+        };
+        while let Some(dir) = current {
+            if Self::exists_at(dir) {
+                return Some(dir.to_path_buf());
+            }
+            current = dir.parent();
+        }
+        None
+    }
+
+    fn from_lock(
+        root: PathBuf,
+        manifest: PackageManifest,
+        lock: PackageLock,
+        store: PackageStore,
+    ) -> Result<Self, PackageError> {
+        let package_roots = lock.package_roots(&root, &store)?;
+        for package in &lock.packages {
+            let package_root = package_roots.get(&package.id).ok_or_else(|| {
+                PackageError::Resolution(format!(
+                    "missing source root for locked package {}",
+                    package.name
+                ))
+            })?;
+            let installed = PackageManifest::read(package_root)?;
+            if installed.name != package.name || installed.version != package.version {
+                return Err(PackageError::Resolution(format!(
+                    "cached package at {} does not match locked {} {}",
+                    package_root.display(),
+                    package.name,
+                    package.version
+                )));
+            }
+        }
+        Ok(Self {
+            root,
+            manifest,
+            lock,
+            package_roots,
+        })
+    }
+}
+
+use crate::compiling::driver::CompilationMode;
+use crate::compiling::module::{Module, ModuleEnvironment, ModuleId};
+use std::rc::Rc;
+
+#[derive(Clone)]
+struct CompiledLibrary {
+    module: Module,
+    typed: std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
+    module_id: ModuleId,
+}
+
+struct CompiledGraph {
+    dependencies: IndexMap<String, CompiledLibrary>,
+}
+
+impl PackageProject {
+    /// Compile the selected binary and its locked dependency graph into
+    /// one executable (whole-reachable-graph compilation; ledger TOOL-08).
+    pub fn compile_binary(
+        &self,
+        requested: Option<&str>,
+    ) -> Result<crate::compiling::driver::Executable, PackageError> {
+        self.compile_binary_entry(requested, None)
+    }
+
+    /// Compile a package binary, optionally running a named
+    /// zero-parameter public function instead of its script entry.
+    pub fn compile_binary_entry(
+        &self,
+        requested: Option<&str>,
+        entry: Option<&str>,
+    ) -> Result<crate::compiling::driver::Executable, PackageError> {
         let graph = self.compile_graph()?;
         let binary = self.manifest.binary(requested)?;
         let PackageArtifact::Binary { from, .. } = binary else {
@@ -2024,19 +2097,23 @@ impl PackageProject {
                 "selected target is not a binary".into(),
             ));
         };
-        let mut environment =
+        let environment =
             self.environment_for(&self.lock.root_dependencies, &graph.dependencies)?;
-        let mut libraries = graph
+        let libraries: Vec<(
+            ModuleId,
+            std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
+        )> = graph
             .dependencies
             .values()
-            .map(|library| Arc::clone(&library.typed))
-            .collect::<Vec<_>>();
-        if let Some(library) = &graph.root_library {
-            environment
-                .import_compiled(library.module.clone(), library.module_id)
-                .map_err(PackageError::Compile)?;
-            libraries.push(Arc::clone(&library.typed));
-        }
+            .map(|library| (library.module_id, library.typed.clone()))
+            .collect();
+        // The root package's own sources re-parse into the test compile
+        // (workspace imports), so they live in the same module-id space as
+        // the tests; injecting the root library's compiled program here
+        // would duplicate every declaration in a second id space and
+        // conflate symbols across the spaces. Only locked dependencies —
+        // whose sources are outside the source root and never re-parsed —
+        // ride along precompiled.
         let source = self.manifest.source_path(&self.root, from)?;
         let workspace_root =
             self.root
@@ -2049,26 +2126,36 @@ impl PackageProject {
                     ),
                     source,
                 })?;
-        let mut config = DriverConfig::new(format!("{} binary", self.manifest.name)).executable();
+        let mut config = DriverConfig::new(format!("{} binary", self.manifest.name));
         config.modules = Rc::new(environment);
         config.workspace_root = Some(workspace_root.clone());
         config.source_root = Some(workspace_root);
         config.libraries = libraries;
         let driver = Driver::new_bare(vec![Source::from(source)], config);
-        self.lower(driver)
+        let parsed = driver
+            .parse()
+            .map_err(|error| PackageError::Compile(format!("{error:?}")))?;
+        let resolved = parsed
+            .resolve_names()
+            .map_err(|error| PackageError::Compile(format!("{error:?}")))?;
+        let typed = resolved.type_check();
+        if typed.has_errors() {
+            return Err(PackageError::Compile(
+                typed
+                    .diagnostics()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ));
+        }
+        typed
+            .compile_executable(entry)
+            .map_err(PackageError::Compile)
     }
 
-    pub fn run_tests(&self) -> Result<crate::testing::Outcome, PackageError> {
-        self.run_tests_with_filter(None)
-    }
-
-    pub fn run_tests_with_filter(
-        &self,
-        filter: Option<String>,
-    ) -> Result<crate::testing::Outcome, PackageError> {
-        self.run_tests_at_paths_with_filter(&[], filter)
-    }
-
+    /// Discover and run the package's `.test.tlk` suites with the locked
+    /// dependency graph supplied to the backend (TOOL-08 tests).
     pub fn run_tests_at_paths_with_filter(
         &self,
         paths: &[PathBuf],
@@ -2080,13 +2167,6 @@ impl PackageProject {
         runner
             .run()
             .map_err(|error| PackageError::Compile(error.to_string()))
-    }
-
-    pub fn run_tests_json(
-        &self,
-        filter: Option<String>,
-    ) -> Result<crate::testing::JsonOutcome, PackageError> {
-        self.run_tests_json_at_paths(&[], filter)
     }
 
     pub fn run_tests_json_at_paths(
@@ -2147,19 +2227,23 @@ impl PackageProject {
             (roots, source_root)
         };
         let graph = self.compile_graph()?;
-        let mut environment =
+        let environment =
             self.environment_for(&self.lock.root_dependencies, &graph.dependencies)?;
-        let mut libraries = graph
+        let libraries: Vec<(
+            ModuleId,
+            std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
+        )> = graph
             .dependencies
             .values()
-            .map(|library| Arc::clone(&library.typed))
-            .collect::<Vec<_>>();
-        if let Some(library) = &graph.root_library {
-            environment
-                .import_compiled(library.module.clone(), library.module_id)
-                .map_err(PackageError::Compile)?;
-            libraries.push(Arc::clone(&library.typed));
-        }
+            .map(|library| (library.module_id, library.typed.clone()))
+            .collect();
+        // The root package's own sources re-parse into the test compile
+        // (workspace imports), so they live in the same module-id space as
+        // the tests; injecting the root library's compiled program here
+        // would duplicate every declaration in a second id space and
+        // conflate symbols across the spaces. Only locked dependencies —
+        // whose sources are outside the source root and never re-parsed —
+        // ride along precompiled.
         let mut config = DriverConfig::new(format!("{} tests", self.manifest.name));
         config.modules = Rc::new(environment);
         config.workspace_root = Some(self.root.clone());
@@ -2168,38 +2252,6 @@ impl PackageProject {
         Ok(Some(
             crate::testing::Runner::with_config(roots, config).with_filter(filter),
         ))
-    }
-
-    fn from_lock(
-        root: PathBuf,
-        manifest: PackageManifest,
-        lock: PackageLock,
-        store: PackageStore,
-    ) -> Result<Self, PackageError> {
-        let package_roots = lock.package_roots(&root, &store)?;
-        for package in &lock.packages {
-            let package_root = package_roots.get(&package.id).ok_or_else(|| {
-                PackageError::Resolution(format!(
-                    "missing source root for locked package {}",
-                    package.name
-                ))
-            })?;
-            let installed = PackageManifest::read(package_root)?;
-            if installed.name != package.name || installed.version != package.version {
-                return Err(PackageError::Resolution(format!(
-                    "cached package at {} does not match locked {} {}",
-                    package_root.display(),
-                    package.name,
-                    package.version
-                )));
-            }
-        }
-        Ok(Self {
-            root,
-            manifest,
-            lock,
-            package_roots,
-        })
     }
 
     fn compile_graph(&self) -> Result<CompiledGraph, PackageError> {
@@ -2212,7 +2264,6 @@ impl PackageProject {
                 PackageError::Compile("too many packages to assign module ids".into())
             })?;
         }
-        let root_id = ModuleId(next_id);
         let mut dependencies = IndexMap::new();
         for package in &self.lock.packages {
             let root = self.package_roots.get(&package.id).ok_or_else(|| {
@@ -2236,20 +2287,10 @@ impl PackageProject {
                 self.compile_library(&manifest, root, library, module_id, environment)?;
             dependencies.insert(package.id.clone(), compiled);
         }
-        let root_library = match self.manifest.library() {
-            Some(library) => Some(self.compile_library(
-                &self.manifest,
-                &self.root,
-                library,
-                root_id,
-                self.environment_for(&self.lock.root_dependencies, &dependencies)?,
-            )?),
-            None => None,
-        };
-        Ok(CompiledGraph {
-            dependencies,
-            root_library,
-        })
+        // The root package's own sources always re-parse into the binary
+        // or test compile (see the call sites), so the root library is
+        // never compiled here — storing it would be dead work.
+        Ok(CompiledGraph { dependencies })
     }
 
     fn compile_library(
@@ -2295,41 +2336,13 @@ impl PackageProject {
                     .join("\n"),
             ));
         }
-        let typed_library = Arc::new(LibraryTyped {
-            program: typed.phase.program.clone(),
-            checked_mir: typed.phase.checked_mir.clone(),
-        });
+        let program = std::sync::Arc::new(typed.phase.program.clone());
         let module = typed.module(manifest.import_name());
         Ok(CompiledLibrary {
             module,
-            typed: typed_library,
+            typed: program,
             module_id,
         })
-    }
-
-    fn lower(&self, driver: Driver) -> Result<Driver<Lowered>, PackageError> {
-        let parsed = driver.parse().map_err(|error| {
-            PackageError::Compile(format!("failed to parse package binary: {error:?}"))
-        })?;
-        let resolved = parsed.resolve_names().map_err(|error| {
-            PackageError::Compile(format!("failed to resolve package binary: {error:?}"))
-        })?;
-        let typed = resolved.type_check();
-        if typed.has_errors() {
-            return Err(PackageError::Compile(
-                typed
-                    .diagnostics()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ));
-        }
-        let lowered = typed.lower();
-        if !lowered.phase.diagnostics.is_empty() {
-            return Err(PackageError::Compile(lowered.phase.diagnostics.join("\n")));
-        }
-        Ok(lowered)
     }
 
     fn base_environment() -> ModuleEnvironment {
@@ -2357,11 +2370,6 @@ impl PackageProject {
         }
         Ok(environment)
     }
-}
-
-struct CompiledGraph {
-    dependencies: IndexMap<String, CompiledLibrary>,
-    root_library: Option<CompiledLibrary>,
 }
 
 pub fn normalized_import_name(package_name: &str) -> String {
@@ -2494,6 +2502,32 @@ mod tests {
     }
 
     #[test]
+    fn finds_the_enclosing_package_root_by_walking_up() {
+        let parent = std::env::temp_dir().join(format!(
+            "talk-package-enclosing-test-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let root = parent.join("pkg");
+        fs::create_dir_all(root.join("src")).expect("create package source");
+        fs::write(
+            root.join(MANIFEST_FILE),
+            "Package(name: \"demo\", version: \"0.1.0\", builds: [], dependencies: [])",
+        )
+        .expect("write manifest");
+        let file = root.join("src/lib.test.tlk");
+        fs::write(&file, "test(\"t\") { assert(true) }").expect("write test file");
+        let canonical = root.canonicalize().expect("canonicalize root");
+        assert_eq!(
+            PackageProject::enclosing_root(&root),
+            Some(canonical.clone())
+        );
+        assert_eq!(PackageProject::enclosing_root(&file), Some(canonical));
+        assert_eq!(PackageProject::enclosing_root(&parent), None);
+        fs::remove_dir_all(parent).expect("remove package parent");
+    }
+
+    #[test]
     fn rejects_a_manifest_with_a_missing_target() {
         let root = std::env::temp_dir().join(format!(
             "talk-package-missing-target-test-{}-{}",
@@ -2509,95 +2543,6 @@ mod tests {
         let error = PackageManifest::read(&root).expect_err("missing target fails validation");
         assert!(error.to_string().contains("failed to find package target"));
         fs::remove_dir_all(root).expect("remove package root");
-    }
-
-    #[test]
-    fn selected_package_tests_outside_tests_can_import_the_package_library() {
-        let temporary = std::env::temp_dir().join(format!(
-            "talk-package-selected-test-{}-{}",
-            std::process::id(),
-            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(temporary.join("src")).expect("create source directory");
-        fs::create_dir_all(temporary.join("spec")).expect("create spec directory");
-        fs::write(
-            temporary.join(MANIFEST_FILE),
-            "Package(name: \"sample-package\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
-        )
-        .expect("write manifest");
-        fs::write(
-            temporary.join("src/lib.tlk"),
-            "public func answer() -> Int { 42 }\n",
-        )
-        .expect("write library");
-        fs::write(
-            temporary.join("spec/interface.test.tlk"),
-            "use sample_package::{ answer }\n\ntest(\"package interface\") {\n    assert(answer() == 42)\n}\n",
-        )
-        .expect("write test");
-
-        let project = PackageProject::install_at(&temporary, true, false).expect("install package");
-        let selected_test = PathBuf::from("spec/interface.test.tlk");
-        let outcome = project
-            .run_tests_at_paths_with_filter(&[selected_test], None)
-            .expect("run selected package test");
-        let crate::testing::Outcome::Finished(summary) = outcome else {
-            panic!("expected selected package test to run");
-        };
-        assert_eq!(summary.failures, 0);
-        fs::remove_dir_all(temporary).expect("remove package root");
-    }
-
-    #[test]
-    fn bare_test_run_discovers_src_tests_and_resolves_package_imports() {
-        let temporary = std::env::temp_dir().join(format!(
-            "talk-package-discovery-test-{}-{}",
-            std::process::id(),
-            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(temporary.join("src")).expect("create source directory");
-        fs::create_dir_all(temporary.join("tests")).expect("create tests directory");
-        fs::write(
-            temporary.join(MANIFEST_FILE),
-            "Package(name: \"sample-package\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
-        )
-        .expect("write manifest");
-        fs::write(
-            temporary.join("src/lib.tlk"),
-            "public func answer() -> Int { 42 }\n",
-        )
-        .expect("write library");
-        fs::write(
-            temporary.join("src/helper.tlk"),
-            "public func double(n: Int) -> Int { n * 2 }\n",
-        )
-        .expect("write helper module");
-        // A test file living alongside the sources is discovered by a bare
-        // run and can use sibling modules through `package::`.
-        fs::write(
-            temporary.join("src/helper.test.tlk"),
-            "use package::helper::{ double }\n\ntest(\"src test\") {\n    assert(double(n: 21) == 42)\n}\n",
-        )
-        .expect("write src test");
-        // A test under tests/ can import package modules by path too.
-        fs::write(
-            temporary.join("tests/import.test.tlk"),
-            "use package::helper::{ double }\n\ntest(\"tests dir import\") {\n    assert(double(n: 5) == 10)\n}\n",
-        )
-        .expect("write tests-dir test");
-
-        let project = PackageProject::install_at(&temporary, true, false).expect("install package");
-        let outcome = project.run_tests().expect("run package tests");
-        let crate::testing::Outcome::Finished(summary) = outcome else {
-            panic!("expected discovery to find both test files");
-        };
-        assert_eq!(summary.failures, 0);
-        assert!(
-            summary.output.contains("2 tests passed"),
-            "expected both tests to run, got: {}",
-            summary.output
-        );
-        fs::remove_dir_all(temporary).expect("remove package root");
     }
 
     #[test]

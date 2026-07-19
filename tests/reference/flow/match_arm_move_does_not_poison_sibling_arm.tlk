@@ -1,0 +1,14 @@
+enum E {
+	case a
+	case b
+}
+func ok(e: E) -> Int {
+	let s = "hello" + " world"
+	match e {
+		.a -> {
+			let moved = s
+			0
+		},
+		.b -> s.byte_count
+	}
+}

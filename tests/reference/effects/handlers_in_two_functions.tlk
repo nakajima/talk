@@ -1,0 +1,15 @@
+effect 'fizz() -> Int
+func a() -> Int {
+	@handle 'fizz {
+		continue 1
+	}
+	'fizz()
+}
+func b() -> Int {
+	@handle 'fizz {
+		continue 2
+	}
+	'fizz()
+}
+print_raw(a().show())
+print_raw(b().show())

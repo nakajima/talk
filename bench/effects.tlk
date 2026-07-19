@@ -1,0 +1,17 @@
+// Archetype: effect dispatch — handler install, nearest-handler
+// routing, resumable perform in a hot loop.
+effect 'step(n) -> Int
+func run(n: Int) 'step -> Int {
+	let total = 0
+	let i = 0
+	loop i < n {
+		total = total + 'step(i)
+		i = i + 1
+	}
+	total
+}
+func bench(n: Int) -> Int {
+	@handle 'step { v in continue v + 1 }
+	run(n)
+}
+print(bench(150000))

@@ -1,0 +1,5 @@
+func f() -> Int {
+	for x in [1] { }
+	2
+}
+f()

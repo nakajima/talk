@@ -65,13 +65,12 @@ While walking, the resolver records the facts later stages need in
   annotations and catalog construction;
 - `public_symbols`, which become module exports and importable file
   symbols;
-- `mutated_symbols`, read by the type checker's value restriction and by
-  lowering's assignment conversion.
+- `mutated_symbols`, read by the type checker's value restriction.
 
-Explicit closure capture lists are resolved here because they are just
-names in source. Implicit closure-capture analysis is flow-sensitive and
-lives in `src/flow`, not in the resolver. Binding-group dependency
-analysis is also a type-checker concern (`src/types/generate/support.rs`).
+Explicit closure capture lists are resolved here because they are names in
+source. Flow-sensitive implicit capture and ownership analysis are not part of
+the frontend-only compiler. Binding-group dependency analysis remains a
+type-checker concern (`src/types/generate/support.rs`).
 
 ## Imports and qualified names
 

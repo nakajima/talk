@@ -1,0 +1,17 @@
+enum MaybeText {
+	case some(String)
+	case none
+}
+func lengths(lhs: MaybeText, rhs: MaybeText) -> Int {
+	match (lhs, rhs) {
+		(MaybeText.some(a), MaybeText.some(b)) -> a.byte_count + b.byte_count,
+		(MaybeText.none, MaybeText.none) -> 0,
+		_ -> 1
+	}
+}
+func check() -> Int {
+	let lhs = MaybeText.some("ab" + "cd")
+	let rhs = MaybeText.some("ef" + "gh")
+	lengths(lhs, rhs) + lengths(lhs, rhs)
+}
+check()

@@ -8,16 +8,6 @@ use crate::compiling::{
     module::{Module, ModuleId},
 };
 
-/// A bundled library's typed artifacts (core, stdlib), retained for
-/// whole-program lowering: lazy monomorphization needs the library's
-/// *bodies* (witnesses, protocol defaults, @_ir splices) at user-program
-/// lower time — the MLton whole-program model rather than polymorphic IR
-/// in modules.
-pub struct LibraryTyped {
-    pub(crate) program: crate::compiling::typed_program::TypedProgram,
-    pub(crate) checked_mir: crate::lower::mir::CheckedMir,
-}
-
 const TALK_CORE_PATH_ENV: &str = "TALK_CORE_PATH";
 
 pub fn path_override() -> Option<PathBuf> {
@@ -29,14 +19,22 @@ pub fn path_override() -> Option<PathBuf> {
         })
 }
 
-static CORE: OnceLock<(Arc<Module>, Arc<LibraryTyped>)> = OnceLock::new();
-
-pub fn compile() -> Arc<Module> {
-    CORE.get_or_init(_compile).0.clone()
+struct CoreArtifacts {
+    module: Arc<Module>,
+    typed: Arc<crate::compiling::typed_program::TypedProgram>,
 }
 
-pub fn typed() -> Arc<LibraryTyped> {
-    CORE.get_or_init(_compile).1.clone()
+static CORE: OnceLock<CoreArtifacts> = OnceLock::new();
+
+pub fn compile() -> Arc<Module> {
+    CORE.get_or_init(_compile).module.clone()
+}
+
+/// The typed bodies behind the core interface. The backend compiles the
+/// reachable source graph as one unit, so core callables supply their
+/// bodies from here.
+pub(crate) fn typed_program() -> Arc<crate::compiling::typed_program::TypedProgram> {
+    CORE.get_or_init(_compile).typed.clone()
 }
 
 /// The filenames of all core source files.
@@ -110,7 +108,7 @@ fn compilation_sources() -> Vec<Source> {
         .collect()
 }
 
-fn _compile() -> (Arc<Module>, Arc<LibraryTyped>) {
+fn _compile() -> CoreArtifacts {
     let _s = tracing::trace_span!("compile_prelude", prelude = true).entered();
     let mut config = DriverConfig::new("Core");
     config.module_id = ModuleId::Core;
@@ -131,11 +129,12 @@ fn _compile() -> (Arc<Module>, Arc<LibraryTyped>) {
         typed.diagnostics()
     );
 
-    let core_typed = LibraryTyped {
-        program: typed.phase.program.clone(),
-        checked_mir: typed.phase.checked_mir.clone(),
-    };
-    (Arc::new(typed.module("Core")), Arc::new(core_typed))
+    let program = typed.phase.program.clone();
+    let module = Arc::new(typed.module("Core"));
+    CoreArtifacts {
+        module,
+        typed: Arc::new(program),
+    }
 }
 
 #[cfg(test)]
@@ -146,15 +145,15 @@ mod tests {
     #[test]
     fn core_resolves_without_errors() {
         // _compile() asserts there are no error diagnostics.
-        let (module, typed) = _compile();
+        let module = _compile().module;
         assert_eq!(module.name, "Core");
         assert!(!module.exports.is_empty());
-        assert!(!typed.program.types().schemes.is_empty());
+        assert!(!module.types.schemes.is_empty());
     }
 
     #[test]
     fn core_exports_use_well_known_symbols() {
-        let (module, typed) = _compile();
+        let module = _compile().module;
 
         assert_eq!(module.exports.get("String").copied(), Some(Symbol::String));
         assert_eq!(module.exports.get("Array").copied(), Some(Symbol::Array));
@@ -172,18 +171,18 @@ mod tests {
         );
         assert_eq!(module.exports.get("Owner").copied(), Some(Symbol::Owner));
 
-        let types = typed.program.types();
-        assert!(types.catalog.structs.contains_key(&Symbol::String));
-        assert!(types.catalog.structs.contains_key(&Symbol::Array));
-        assert!(types.catalog.structs.contains_key(&Symbol::Storage));
-        assert!(types.catalog.structs.contains_key(&Symbol::Character));
-        assert!(types.catalog.protocols.contains_key(&Symbol::Borrowed));
-        assert!(types.catalog.protocols.contains_key(&Symbol::Owner));
+        let catalog = &module.types.catalog;
+        assert!(catalog.structs.contains_key(&Symbol::String));
+        assert!(catalog.structs.contains_key(&Symbol::Array));
+        assert!(catalog.structs.contains_key(&Symbol::Storage));
+        assert!(catalog.structs.contains_key(&Symbol::Character));
+        assert!(catalog.protocols.contains_key(&Symbol::Borrowed));
+        assert!(catalog.protocols.contains_key(&Symbol::Owner));
     }
 
     #[test]
     fn core_iterator_into_array_conformance_is_exported() {
-        let (module, typed) = _compile();
+        let module = _compile().module;
         let array_into_iterator = module.exports["ArrayIntoIterator"];
         let into = module.exports["Into"];
         let target = crate::types::ty::ProtocolRef {
@@ -193,7 +192,7 @@ mod tests {
                 vec![crate::types::ty::Ty::Nominal(Symbol::Int, vec![])],
             )],
         };
-        let catalog = &typed.program.types().catalog;
+        let catalog = &module.types.catalog;
         let matches = catalog.matching_conformances(
             array_into_iterator,
             &[crate::types::ty::Ty::Nominal(Symbol::Int, vec![])],

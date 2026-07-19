@@ -1,0 +1,2 @@
+func len(s: String) -> Int { s.byte_count }
+len "abc"

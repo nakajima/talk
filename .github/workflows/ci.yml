@@ -21,9 +21,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --verbose --locked
+        run: cargo build --workspace --verbose --locked
       - name: Run tests
-        run: cargo test --verbose --locked
+        run: cargo test --workspace --all-targets --verbose --locked
 
   talk-swift:
     name: TalkSwift

@@ -1,0 +1,8 @@
+struct Named 'heap {
+	let name: String
+}
+func check() -> Int {
+	let n = Named(name: "hello" + " world")
+	n.name.byte_count
+}
+check()
