@@ -493,7 +493,12 @@ impl<'a> Formatter<'a> {
             ExprKind::LiteralTrue => text("true"),
             ExprKind::LiteralFalse => text("false"),
             ExprKind::Unary(op, rhs) => self.format_unary(op, rhs),
+            ExprKind::Propagate(inner) => concat(self.format_expr(inner), text("?")),
             ExprKind::Binary(lhs, op, rhs) => self.format_binary(lhs, op, rhs),
+            ExprKind::Subscript(value, index) => concat(
+                self.format_expr(value),
+                concat(text("["), concat(self.format_expr(index), text("]"))),
+            ),
             ExprKind::Tuple(items) => self.format_tuple(items),
             ExprKind::Block(block) => self.format_block(block),
             ExprKind::Unsafe(block) => text("@unsafe ") + self.format_block(block),

@@ -1,3 +1,26 @@
+struct SubscriptSlot {
+	let value: Int
+}
+
+extend SubscriptSlot: SubscriptRead<Int> {
+	func subscript_read(at: Int) -> &Int {
+		self.value
+	}
+}
+
+extend SubscriptSlot: SubscriptWrite<Int, Int> {
+	mut func subscript_write(at: Int, consume value: Int) -> Void {
+		self.value = value
+	}
+}
+
+test "custom types can implement subscript protocols" {
+	let slot = SubscriptSlot(value: 1)
+	assert(slot[0] == 1)
+	slot[0] = 2
+	assert(slot[0] == 2)
+}
+
 test "has a count" {
 	assert([1].count == 1)
 	assert([1, 2].count == 2)
@@ -14,6 +37,17 @@ test "can set" {
 	let a = [1, 2, 3]
 	a.set(0, 4)
 	assert(a == [4, 2, 3])
+}
+
+test "can read through a subscript" {
+	let a = [1, 2, 3]
+	assert(a.get(1) == a[1])
+}
+
+test "can write through a subscript" {
+	let a = [1, 2, 3]
+	a[1] = 123
+	assert(a.get(1) == 123)
 }
 
 test "can swap" {

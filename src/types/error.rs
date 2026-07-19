@@ -186,6 +186,9 @@ pub enum TypeError {
     UnresolvedVariant {
         label: String,
     },
+    InvalidEarlyPropagation {
+        reason: String,
+    },
     RecursiveConformance {
         constraint: String,
     },
@@ -248,6 +251,7 @@ impl TypeError {
             Self::HeapConformance { .. } => "type.heap-conformance",
             Self::DeinitEffectRow { .. } => "type.deinit-effect-row",
             Self::UnresolvedVariant { .. } => "type.unresolved-variant",
+            Self::InvalidEarlyPropagation { .. } => "type.invalid-early-propagation",
             Self::RecursiveConformance { .. } => "type.recursive-conformance",
             Self::SolverOverflow { .. } => "type.solver-overflow",
             Self::Unsupported(_) => "type.unsupported",
@@ -560,6 +564,9 @@ impl Display for TypeError {
                     f,
                     "Cannot infer the enum for '.{label}'; add a type annotation"
                 )
+            }
+            TypeError::InvalidEarlyPropagation { reason } => {
+                write!(f, "Cannot use '?' here: {reason}")
             }
             TypeError::RecursiveConformance { constraint } => {
                 write!(

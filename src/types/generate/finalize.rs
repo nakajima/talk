@@ -281,6 +281,7 @@ impl<'a> TypecheckSession<'a> {
                 member_resolutions,
                 integer_literals: self.artifacts.integer_literals,
                 for_plans,
+                propagation_plans: self.artifacts.propagation_plans,
                 synthetic_floors: self.artifacts.synthetic_next,
                 coerce_clones: self.artifacts.coerce_clones,
                 local_tys,

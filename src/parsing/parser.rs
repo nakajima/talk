@@ -1823,6 +1823,37 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub(super) fn subscript(&mut self, can_assign: bool, lhs: Expr) -> Result<Node, ParserError> {
+        let tok = self.push_lhs_location(lhs.id);
+        self.consume(TokenKind::LeftBracket)?;
+        let index = self
+            .expr_with_precedence(Precedence::Assignment)?
+            .into_expr()?;
+        self.consume_or_recover_closer(TokenKind::RightBracket)?;
+        let subscript = self.add_expr(ExprKind::Subscript(Box::new(lhs), Box::new(index)), tok)?;
+
+        if self.did_match(TokenKind::Equals)? {
+            if !can_assign {
+                return Err(ParserError::CannotAssign);
+            }
+            let tok = self.push_lhs_location(subscript.id);
+            let rhs = self
+                .expr_with_precedence(Precedence::Assignment)?
+                .into_expr()?;
+            self.save_meta(tok, |id, span| {
+                Stmt {
+                    id,
+                    span,
+                    kind: StmtKind::Assignment(Box::new(subscript), Box::new(rhs)),
+                }
+                .into()
+            })
+        } else {
+            Ok(subscript.into())
+        }
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn match_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Match)?;
@@ -2268,6 +2299,15 @@ impl<'a> Parser<'a> {
 
         Ok(self
             .add_expr(ExprKind::Unary(op.kind, Box::new(rhs)), tok)?
+            .into())
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub fn propagate(&mut self, _can_assign: bool, lhs: Expr) -> Result<Node, ParserError> {
+        let tok = self.push_lhs_location(lhs.id);
+        self.consume(TokenKind::QuestionMark)?;
+        Ok(self
+            .add_expr(ExprKind::Propagate(Box::new(lhs)), tok)?
             .into())
     }
 
@@ -3427,10 +3467,10 @@ impl<'a> Parser<'a> {
                 .iter()
                 .filter_map(Self::max_positional_block_arg_in_expr)
                 .max(),
-            ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
+            ExprKind::Unary(_, inner) | ExprKind::Propagate(inner) | ExprKind::As(inner, _) => {
                 Self::max_positional_block_arg_in_expr(inner)
             }
-            ExprKind::Binary(lhs, _, rhs) => [
+            ExprKind::Binary(lhs, _, rhs) | ExprKind::Subscript(lhs, rhs) => [
                 Self::max_positional_block_arg_in_expr(lhs),
                 Self::max_positional_block_arg_in_expr(rhs),
             ]

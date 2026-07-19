@@ -18,10 +18,8 @@
 
 # Grammar
 
-- Bitwise operators
 - Force type annotations in conformance extends
 - Subscriptable protocol for allowing thing[idx]
-- Character literals
 - #[attributes]
 
 # Stdlib

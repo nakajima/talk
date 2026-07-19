@@ -22,6 +22,16 @@ public protocol Divide<RHS> {
 	func divide(rhs: RHS) -> Ret
 }
 
+public protocol SubscriptRead<I> {
+	associated T
+
+	func subscript_read(at: I) -> T
+}
+
+public protocol SubscriptWrite<I, T> {
+	mut func subscript_write(at: I, consume value: T) -> Void
+}
+
 public protocol Equatable<RHS = Self> {
 	func equals(rhs: RHS) -> Bool
 

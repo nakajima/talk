@@ -58,6 +58,42 @@ fn assert_runs(source: &[u8], arguments: &[&str], expected_stdout: &[u8]) {
     assert!(output.stderr.is_empty());
 }
 
+fn for_each_corpus_case<T: Sync>(cases: &[T], run: impl Fn(&T) + Sync) {
+    if cases.is_empty() {
+        return;
+    }
+    let available = std::thread::available_parallelism().map_or(1, usize::from);
+    let configured = std::env::var("TALK_TEST_JOBS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|jobs| *jobs > 0);
+    // Corpus tests themselves run concurrently under libtest. Use half the
+    // host by default, capped at eight, to remove the serial tail without each
+    // corpus monopolizing the machine. TALK_TEST_JOBS can tune CI runners.
+    let default_workers = if available == 1 {
+        1
+    } else {
+        available.div_ceil(2).min(8)
+    };
+    let workers = configured.unwrap_or(default_workers).min(cases.len());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let run = &run;
+            let next = &next;
+            scope.spawn(move || {
+                loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(case) = cases.get(index) else {
+                        break;
+                    };
+                    run(case);
+                }
+            });
+        }
+    });
+}
+
 #[test]
 fn run_renders_a_scalar_script_result_in_talk_syntax() {
     assert_runs(b"// no-core\nlet answer = 42\nanswer\n", &[], b"42\n");
@@ -69,6 +105,73 @@ fn run_executes_core_operators() {
     assert_runs(b"(1 + 2) <= 3\n", &[], b"true\n");
     assert_runs(b"1.5 + 2.25\n", &[], b"3.75\n");
     assert_runs(b"!(1 == 2)\n", &[], b"true\n");
+}
+
+#[test]
+fn postfix_question_mark_propagates_second_enum_variant() {
+    assert_runs(
+        b"enum Outcome<Value, Failure> {\n\
+          \tcase success(Value)\n\
+          \tcase failure(Failure)\n\
+          }\n\
+          func source(ok: Bool) -> Outcome<Int, String> {\n\
+          \tif ok { .success(41) } else { .failure(\"nope\") }\n\
+          }\n\
+          func outer(ok: Bool) -> Outcome<Bool, String> {\n\
+          \tlet value = source(ok)?\n\
+          \tOutcome.success(value == 41)\n\
+          }\n\
+          match outer(true) { .success(value) -> print(value), .failure(message) -> print(message) }\n\
+          match outer(false) { .success(value) -> print(value), .failure(message) -> print(message) }\n",
+        &[],
+        b"true\nnope\n",
+    );
+
+    assert_runs(
+        b"func source(ok: Bool) -> Int? {\n\
+          \tif ok { .some(41) } else { .none }\n\
+          }\n\
+          func outer(ok: Bool) -> Bool? {\n\
+          \tlet value = source(ok)?\n\
+          \tOptional.some(value == 41)\n\
+          }\n\
+          match outer(true) { .some(value) -> print(value), .none -> print(false) }\n\
+          match outer(false) { .some(value) -> print(value), .none -> print(false) }\n",
+        &[],
+        b"true\nfalse\n",
+    );
+
+    assert_runs(
+        b"func source(ok: Bool) -> Result<Int, String> {\n\
+          \tif ok { .ok(41) } else { .error(\"nope\") }\n\
+          }\n\
+          func outer(ok: Bool) -> Result<Bool, String> {\n\
+          \tlet value = source(ok)?\n\
+          \tResult.ok(value == 41)\n\
+          }\n\
+          match outer(true) { .ok(value) -> print(value), .error(message) -> print(message) }\n\
+          match outer(false) { .ok(value) -> print(value), .error(message) -> print(message) }\n",
+        &[],
+        b"true\nnope\n",
+    );
+
+    assert_runs(
+        b"effect 'ask() -> Int\n\
+          func source(ok: Bool) -> Result<Int, String> {\n\
+          \tif ok { .ok(41) } else { .error(\"nope\") }\n\
+          }\n\
+          func outer(ok: Bool) -> Result<Int, String> {\n\
+          \t@handle 'ask {\n\
+          \t\tlet value = source(ok)?\n\
+          \t\tcontinue value\n\
+          \t}\n\
+          \tResult.ok('ask())\n\
+          }\n\
+          match outer(true) { .ok(value) -> print(value), .error(message) -> print(message) }\n\
+          match outer(false) { .ok(value) -> print(value), .error(message) -> print(message) }\n",
+        &[],
+        b"41\nnope\n",
+    );
 }
 
 #[test]
@@ -523,7 +626,6 @@ fn assert_parity_program(name: &str) {
 #[test]
 fn bench_corpus_runs() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench");
-    let mut checked = 0;
     let mut entries: Vec<_> = std::fs::read_dir(&root)
         .expect("bench directory")
         .filter_map(Result::ok)
@@ -531,7 +633,12 @@ fn bench_corpus_runs() {
         .filter(|path| path.extension().is_some_and(|ext| ext == "tlk"))
         .collect();
     entries.sort();
-    for program in entries {
+    assert!(
+        entries.len() >= 8,
+        "bench corpus shrank: {} programs",
+        entries.len()
+    );
+    for_each_corpus_case(&entries, |program| {
         let name = program
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -541,7 +648,7 @@ fn bench_corpus_runs() {
             .expect("pinned stdout");
         let output = Command::new(env!("CARGO_BIN_EXE_talk"))
             .arg("run")
-            .arg(&program)
+            .arg(program)
             .output()
             .expect("run benchmark");
         assert!(
@@ -559,9 +666,7 @@ fn bench_corpus_runs() {
             "{name} stderr not empty (leak?):\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        checked += 1;
-    }
-    assert!(checked >= 8, "bench corpus shrank: {checked} programs");
+    });
 }
 
 /// Bytecode-shape assertions over the benchmark corpus: assignments
@@ -985,21 +1090,28 @@ fn structural_drops_share_one_teardown_body() {
 fn assert_corpus_dir(programs: &str, known_failing: &[&str], minimum: usize) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(programs);
     let expected_dir = format!("{programs}/expected");
-    let mut checked = 0;
-    for entry in std::fs::read_dir(root.join("expected")).expect("list expected outputs") {
-        let expected_path = entry.expect("read entry").path();
-        let name = expected_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .expect("expected-output name")
-            .to_string();
-        if known_failing.contains(&name.as_str()) {
-            continue;
-        }
-        assert_corpus_program(programs, &expected_dir, &name);
-        checked += 1;
-    }
-    assert!(checked >= minimum, "corpus shrank: only {checked} checked");
+    let mut names: Vec<_> = std::fs::read_dir(root.join("expected"))
+        .expect("list expected outputs")
+        .map(|entry| {
+            entry
+                .expect("read entry")
+                .path()
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .expect("expected-output name")
+                .to_string()
+        })
+        .filter(|name| !known_failing.contains(&name.as_str()))
+        .collect();
+    names.sort();
+    assert!(
+        names.len() >= minimum,
+        "corpus shrank: only {} checked",
+        names.len()
+    );
+    for_each_corpus_case(&names, |name| {
+        assert_corpus_program(programs, &expected_dir, name);
+    });
 }
 
 /// The reference's user-effects behavior pins (G6 effects cluster),
@@ -1045,9 +1157,17 @@ fn assert_flow_corpus(
     minimum: usize,
 ) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(programs);
-    let mut checked = 0;
-    for entry in std::fs::read_dir(root.join("expected")).expect("list expected outputs") {
-        let expected_path = entry.expect("read entry").path();
+    let mut expected_paths: Vec<_> = std::fs::read_dir(root.join("expected"))
+        .expect("list expected outputs")
+        .map(|entry| entry.expect("read entry").path())
+        .collect();
+    expected_paths.sort();
+    assert!(
+        expected_paths.len() >= minimum,
+        "flow corpus shrank: only {} checked",
+        expected_paths.len()
+    );
+    for_each_corpus_case(&expected_paths, |expected_path| {
         let name = expected_path
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -1074,8 +1194,7 @@ fn assert_flow_corpus(
                     output.status.success(),
                     "{name}: now rejects — remove it from PENDING_REJECTION so the pin is enforced"
                 );
-                checked += 1;
-                continue;
+                return;
             }
             let fragment = std::fs::read_to_string(&expected_path)
                 .expect("read expected error")
@@ -1099,8 +1218,7 @@ fn assert_flow_corpus(
                     !output.status.success(),
                     "{name}: now runs — remove it from KNOWN_STRICTER so its output pin is enforced"
                 );
-                checked += 1;
-                continue;
+                return;
             }
             let expected = std::fs::read_to_string(&expected_path).expect("read expected stdout");
             let empty_pin = expected.trim_end_matches('\n').is_empty();
@@ -1109,8 +1227,7 @@ fn assert_flow_corpus(
             // runs — an argued divergence from the reference's
             // whole-program flow pass).
             if empty_pin && stderr.contains("nothing to run") {
-                checked += 1;
-                continue;
+                return;
             }
             assert!(output.status.success(), "{name} failed:\n{stderr}");
             if !empty_pin {
@@ -1123,12 +1240,7 @@ fn assert_flow_corpus(
             }
             assert!(output.stderr.is_empty(), "{name} stderr not empty");
         }
-        checked += 1;
-    }
-    assert!(
-        checked >= minimum,
-        "flow corpus shrank: only {checked} checked"
-    );
+    });
 }
 
 /// The flow/ownership rule corpus, adjudicated under the implicit-
@@ -2637,10 +2749,10 @@ fn parity_programs_still_pass_frontend_checking() {
         .collect();
     sources.sort();
 
-    for source in sources {
+    for_each_corpus_case(&sources, |source| {
         let output = Command::new(env!("CARGO_BIN_EXE_talk"))
             .arg("check")
-            .arg(&source)
+            .arg(source)
             .current_dir(root)
             .output()
             .expect("run `talk check` for parity program");
@@ -2651,5 +2763,5 @@ fn parity_programs_still_pass_frontend_checking() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
-    }
+    });
 }

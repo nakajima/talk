@@ -3203,6 +3203,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// parameters return `(result, final values…)` for the caller's
     /// writeback.
     fn emit_return(&mut self, value: Operand) {
+        if let Some(delimiter) = self.clause_delimiter {
+            self.emit_discontinue(Operand::Local(delimiter), value);
+        } else {
+            self.emit_frame_return(value);
+        }
+    }
+
+    fn emit_frame_return(&mut self, value: Operand) {
         // A bare `&T` return is the one value that cannot carry
         // ownership out of the frame: it has no owning representation
         // on the caller's side, so a loan of this frame's own data
@@ -3272,6 +3280,21 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             return;
         }
         self.terminate(Term::Return(value));
+    }
+
+    fn emit_discontinue(&mut self, delimiter: Operand, value: Operand) {
+        self.consume_operand(value);
+        // Keep the abort in its own block. The release planner places this
+        // clause frame's cleanup on the edge into it before the runtime
+        // discontinues the suspended handled extent.
+        let abort = self.new_block();
+        self.terminate(Term::Goto(abort, Vec::new()));
+        self.switch_to(abort);
+        self.push(Inst::AbortTo {
+            cont: delimiter,
+            value,
+        });
+        self.terminate(Term::Trap("unreachable after discontinue"));
     }
 
     /// Emit scope-exit drops for every scope at depth >= `depth`, without
@@ -5803,7 +5826,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         Some(value) => self.compile_expr(value)?,
                         None => Operand::Const(Constant::Unit),
                     };
-                    self.emit_return(value);
+                    self.emit_frame_return(value);
                     return Ok(Operand::Const(Constant::Unit));
                 }
                 if value.is_some() {
@@ -8034,7 +8057,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 callee.span,
             ));
         }
-        let receiver = mut_receiver.then(|| receiver_place.clone().map(WritebackTarget::Place));
+        // Protocol-static calls spell the receiver as their first argument,
+        // so its exclusive-borrow parameter must drive writeback below. Only
+        // reserve the separate receiver slot for an actual value-member call.
+        let receiver = (mut_receiver && value_receiver_ty.is_some())
+            .then(|| receiver_place.clone().map(WritebackTarget::Place));
         let callee_ty = self.resolved(&callee.ty);
         let args_operand_offset = usize::from(value_receiver_ty.is_some());
         let targets = self.writeback_targets(
@@ -8390,18 +8417,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             // A clause that finishes without `continue` discontinues: its
             // value becomes the delimiter frame's return (CHG-03), after
             // this clause's own cleanup.
-            fx.consume_operand(value);
-            // A dedicated block for the discontinue: the frame's owned
-            // values are inactive on its edge, so the release planner's
-            // frontier covers the clause's cleanup.
-            let abort = fx.new_block();
-            fx.terminate(Term::Goto(abort, Vec::new()));
-            fx.switch_to(abort);
-            fx.push(Inst::AbortTo {
-                cont: Operand::Local(delimiter),
-                value,
-            });
-            fx.terminate(Term::Trap("unreachable after discontinue"));
+            fx.emit_discontinue(Operand::Local(delimiter), value);
         }
         fx.elaborate_and_verify();
         fx.deferred_error()?;

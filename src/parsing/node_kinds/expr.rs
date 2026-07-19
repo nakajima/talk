@@ -43,7 +43,11 @@ pub enum ExprKind {
     LiteralCharacter(#[drive(skip)] String),
 
     Unary(#[drive(skip)] TokenKind, Box<Expr>),
+    /// Postfix early propagation. Typing elaborates this into a two-arm
+    /// enum match: the first variant continues and the second returns.
+    Propagate(Box<Expr>),
     Binary(Box<Expr>, #[drive(skip)] TokenKind, Box<Expr>),
+    Subscript(Box<Expr>, Box<Expr>),
     Tuple(Vec<Expr>),
     Block(Block),
     /// A lexical acknowledgement of the compiler-known `'unsafe` effect.
@@ -107,7 +111,9 @@ impl ExprKind {
             | ExprKind::Match(..)
             | ExprKind::Call { .. }
             | ExprKind::Unary(..)
+            | ExprKind::Propagate(..)
             | ExprKind::Binary(..)
+            | ExprKind::Subscript(..)
             | ExprKind::Member(..)
             | ExprKind::As(..)
             | ExprKind::InlineIR(..)

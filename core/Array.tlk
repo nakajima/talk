@@ -3,7 +3,7 @@ use package::Optional
 use package::Iterable::{ Iterable, Iterator, IntoIterator, IndexIterable, IndexIterator, Skip, Map }
 use package::Memory::{ Storage, _storage, _load, _store, _swap, _is_unique, _retain }
 use package::String::{ String }
-use package::Operators::{ Add, Subtract, Multiply, Comparable, Equatable }
+use package::Operators::{ Add, Subtract, Multiply, Comparable, Equatable, SubscriptRead, SubscriptWrite }
 use package::Showable::{ Showable }
 use package::Ownership::{ Borrowed, CheapClone, Deinit }
 
@@ -141,6 +141,18 @@ extend Array<Element> where Element: Comparable<Element> {
 		}
 
 		self
+	}
+}
+
+extend Array<Element>: SubscriptRead<Int> {
+	func subscript_read(at: Int) -> &Element {
+		self.get(at)
+	}
+}
+
+extend Array<Element>: SubscriptWrite<Int, Element> {
+	mut func subscript_write(at: Int, consume value: Element) -> Void {
+		self.set(at, value)
 	}
 }
 

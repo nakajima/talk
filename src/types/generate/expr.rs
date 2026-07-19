@@ -503,6 +503,25 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // equalities are givens, arm-local unification variables are
         // touchable, and outer variables stay untouchable.
         let scrutinee_ty = self.infer_expr(scrutinee, ctx);
+        self.check_match_arms_against_known_scrutinee(
+            scrutinee,
+            scrutinee_ty,
+            arms,
+            expected,
+            checking_reason,
+            ctx,
+        );
+    }
+
+    fn check_match_arms_against_known_scrutinee(
+        &mut self,
+        scrutinee: &Expr,
+        scrutinee_ty: Ty,
+        arms: &[MatchArm],
+        expected: &Ty,
+        checking_reason: Option<CtReason>,
+        ctx: &Ctx,
+    ) {
         // Every arm shares one view of the root occurrence. Recursive
         // aggregate projections create their own views in `check_pattern`.
         let pattern_scrutinee_ty = match self.store.shallow(&scrutinee_ty) {
@@ -552,6 +571,266 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 })));
             }
         }
+    }
+
+    fn propagation_binders(
+        &mut self,
+        source: &Expr,
+        prefix: &str,
+        count: usize,
+    ) -> Vec<(Pattern, Name)> {
+        (0..count)
+            .map(|index| {
+                let id = self.artifacts.synthetic_id(source.id.0);
+                let symbol = Symbol::PatternBindLocal(self.symbols.next_pattern_bind());
+                let text = format!("__{prefix}_{index}_{}", source.id.1);
+                self.artifacts.display_names.insert(symbol, text.clone());
+                let name = Name::Resolved(symbol, text);
+                (
+                    Pattern {
+                        id,
+                        kind: PatternKind::Bind(name.clone()),
+                        span: source.span,
+                    },
+                    name,
+                )
+            })
+            .collect()
+    }
+
+    fn propagation_value(&mut self, source: &Expr, binders: &[(Pattern, Name)]) -> Expr {
+        let mut values = binders
+            .iter()
+            .map(|(_, name)| Expr {
+                id: self.artifacts.synthetic_id(source.id.0),
+                kind: ExprKind::Variable(name.clone()),
+                span: source.span,
+            })
+            .collect::<Vec<_>>();
+        let kind = match values.len() {
+            0 => ExprKind::Tuple(vec![]),
+            1 => values
+                .pop()
+                .map_or(ExprKind::Tuple(vec![]), |value| value.kind),
+            _ => ExprKind::Tuple(values),
+        };
+        Expr {
+            id: self.artifacts.synthetic_id(source.id.0),
+            kind,
+            span: source.span,
+        }
+    }
+
+    fn propagation_constructor(
+        &mut self,
+        source: &Expr,
+        enum_symbol: Symbol,
+        enum_name: &str,
+        variant_name: &str,
+        variant: &Variant,
+        binders: &[(Pattern, Name)],
+    ) -> Expr {
+        let receiver = Expr {
+            id: self.artifacts.synthetic_id(source.id.0),
+            kind: ExprKind::Constructor(Name::Resolved(enum_symbol, enum_name.into())),
+            span: source.span,
+        };
+        let member = Expr {
+            id: self.artifacts.synthetic_id(source.id.0),
+            kind: ExprKind::Member(
+                Some(Box::new(receiver)),
+                Label::Named(variant_name.into()),
+                source.span,
+            ),
+            span: source.span,
+        };
+        if binders.is_empty() {
+            return member;
+        }
+        let args = binders
+            .iter()
+            .enumerate()
+            .map(|(index, (_, name))| CallArg {
+                id: self.artifacts.synthetic_id(source.id.0),
+                span: source.span,
+                label: variant
+                    .payload_labels
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .map_or(Label::Positional(index), |label| {
+                        Label::Named(label.clone())
+                    }),
+                label_span: source.span,
+                value: Expr {
+                    id: self.artifacts.synthetic_id(source.id.0),
+                    kind: ExprKind::Variable(name.clone()),
+                    span: source.span,
+                },
+                mode: None,
+                mode_span: None,
+            })
+            .collect();
+        Expr {
+            id: self.artifacts.synthetic_id(source.id.0),
+            kind: ExprKind::Call {
+                callee: Box::new(member),
+                type_args: vec![],
+                args,
+                trailing_block: None,
+                desugared_operator: Some(TokenKind::QuestionMark),
+            },
+            span: source.span,
+        }
+    }
+
+    fn propagation_arm(
+        &mut self,
+        source: &Expr,
+        enum_symbol: Symbol,
+        enum_name: &str,
+        variant_name: &str,
+        variant: &Variant,
+        returns: bool,
+    ) -> MatchArm {
+        let binders =
+            self.propagation_binders(source, variant_name, variant.argument_types().len());
+        let pattern = Pattern {
+            id: self.artifacts.synthetic_id(source.id.0),
+            kind: PatternKind::Variant {
+                enum_name: Some(Name::Resolved(enum_symbol, enum_name.into())),
+                variant_name: variant_name.into(),
+                variant_name_span: source.span,
+                fields: binders.iter().map(|(pattern, _)| pattern.clone()).collect(),
+                field_labels: variant
+                    .payload_labels
+                    .iter()
+                    .map(|label| label.as_ref().map(|label| Name::Raw(label.clone())))
+                    .collect(),
+            },
+            span: source.span,
+        };
+        let value = if returns {
+            self.propagation_constructor(
+                source,
+                enum_symbol,
+                enum_name,
+                variant_name,
+                variant,
+                &binders,
+            )
+        } else {
+            self.propagation_value(source, &binders)
+        };
+        let body_node = if returns {
+            Node::Stmt(Stmt {
+                id: self.artifacts.synthetic_id(source.id.0),
+                kind: StmtKind::Return(Some(value)),
+                span: source.span,
+            })
+        } else {
+            Node::Expr(value)
+        };
+        MatchArm {
+            id: self.artifacts.synthetic_id(source.id.0),
+            pattern,
+            body: Block {
+                id: self.artifacts.synthetic_id(source.id.0),
+                args: vec![],
+                body: vec![body_node],
+                span: source.span,
+            },
+            span: source.span,
+        }
+    }
+
+    fn infer_propagation(&mut self, expr: &Expr, source: &Expr, ctx: &Ctx) -> Ty {
+        let source_ty = self.infer_expr(source, ctx);
+        if !ctx.has_return_boundary {
+            self.diagnostics.errors.push((
+                TypeError::InvalidEarlyPropagation {
+                    reason: "there is no enclosing function return boundary".into(),
+                },
+                expr.id,
+            ));
+            return Ty::Error;
+        }
+
+        let nominal_symbol = |ty: Ty| match ty {
+            Ty::Nominal(symbol, _) if self.catalog.enums.contains_key(&symbol) => Some(symbol),
+            Ty::Borrow(_, inner) => match *inner {
+                Ty::Nominal(symbol, _) if self.catalog.enums.contains_key(&symbol) => Some(symbol),
+                _ => None,
+            },
+            _ => None,
+        };
+        let source_symbol = nominal_symbol(self.store.shallow(&source_ty));
+        let return_symbol = nominal_symbol(self.store.shallow(&ctx.ret));
+        let enum_symbol = match (source_symbol, return_symbol) {
+            (Some(source), Some(ret)) if source != ret => {
+                self.diagnostics.errors.push((
+                    TypeError::InvalidEarlyPropagation {
+                        reason: format!(
+                            "the operand and enclosing return type use different enums ({} and {})",
+                            self.store.render(&source_ty),
+                            self.store.render(&ctx.ret)
+                        ),
+                    },
+                    expr.id,
+                ));
+                return Ty::Error;
+            }
+            (Some(symbol), _) | (_, Some(symbol)) => symbol,
+            _ => {
+                self.diagnostics.errors.push((
+                    TypeError::InvalidEarlyPropagation {
+                        reason: "the operand or enclosing return type must identify an enum".into(),
+                    },
+                    expr.id,
+                ));
+                return Ty::Error;
+            }
+        };
+        let Some(info) = self.catalog.enums.get(&enum_symbol).cloned() else {
+            unreachable!("the selected propagation symbol was checked as an enum")
+        };
+        if info.variants.len() != 2 {
+            self.diagnostics.errors.push((
+                TypeError::InvalidEarlyPropagation {
+                    reason: format!(
+                        "{} has {} variants; propagation requires exactly two",
+                        self.store.render(&Ty::Nominal(enum_symbol, vec![])),
+                        info.variants.len()
+                    ),
+                },
+                expr.id,
+            ));
+            return Ty::Error;
+        }
+        let enum_name = self
+            .artifacts
+            .display_names
+            .get(&enum_symbol)
+            .cloned()
+            .unwrap_or_else(|| enum_symbol.to_string());
+        let (first_name, first) = info.variants.get_index(0).expect("two variants");
+        let (second_name, second) = info.variants.get_index(1).expect("two variants");
+        let arms = vec![
+            self.propagation_arm(source, enum_symbol, &enum_name, first_name, first, false),
+            self.propagation_arm(source, enum_symbol, &enum_name, second_name, second, true),
+        ];
+        let lowered_id = self.artifacts.synthetic_id(source.id.0);
+        let result = Ty::Var(self.store.fresh_ty(self.level, expr.id));
+        self.check_match_arms_against_known_scrutinee(source, source_ty, &arms, &result, None, ctx);
+        let lowered = Expr {
+            id: lowered_id,
+            kind: ExprKind::Match(Box::new(source.clone()), arms),
+            span: expr.span,
+        };
+        self.artifacts.node_types.insert(lowered_id, result.clone());
+        self.artifacts
+            .propagation_plans
+            .insert(expr.id, PropagationPlan { lowered });
+        result
     }
 
     /// Try to resolve `.variant`/`.variant(args)` against an expected enum
@@ -673,6 +952,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 Ty::Nominal(Symbol::Array, vec![element])
             }
 
+            ExprKind::Propagate(source) => self.infer_propagation(expr, source, ctx),
             ExprKind::Tuple(items) => match items.as_slice() {
                 // `()` is the unit value, `(e)` is grouping.
                 [] => Ty::unit(),
@@ -961,9 +1241,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 Ty::Var(self.store.fresh_ty(self.level, expr.id))
             }
             ExprKind::Unary(..) | ExprKind::Binary(..) => {
-                // Operators are desugared to method calls during name
+                // Operators are desugared to protocol calls before name
                 // resolution; reaching one here is a transform bug.
                 self.unsupported(expr.id, "raw operator expression");
+                Ty::Error
+            }
+            ExprKind::Subscript(..) => {
+                self.unsupported(expr.id, "raw subscript expression");
                 Ty::Error
             }
             ExprKind::Incomplete(crate::node_kinds::incomplete_expr::IncompleteExpr::Member(

@@ -421,10 +421,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
                 items.iter().any(Self::expr_breaks_current_loop)
             }
-            ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
+            ExprKind::Unary(_, inner) | ExprKind::Propagate(inner) | ExprKind::As(inner, _) => {
                 Self::expr_breaks_current_loop(inner)
             }
-            ExprKind::Binary(lhs, _, rhs) => {
+            ExprKind::Binary(lhs, _, rhs) | ExprKind::Subscript(lhs, rhs) => {
                 Self::expr_breaks_current_loop(lhs) || Self::expr_breaks_current_loop(rhs)
             }
             ExprKind::Block(block) | ExprKind::Unsafe(block) => {
@@ -547,10 +547,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => items
                 .iter()
                 .any(|item| Self::expr_exits_mut_iteration(item, loop_depth)),
+            ExprKind::Propagate(_) => true,
             ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
                 Self::expr_exits_mut_iteration(inner, loop_depth)
             }
-            ExprKind::Binary(lhs, _, rhs) => {
+            ExprKind::Binary(lhs, _, rhs) | ExprKind::Subscript(lhs, rhs) => {
                 Self::expr_exits_mut_iteration(lhs, loop_depth)
                     || Self::expr_exits_mut_iteration(rhs, loop_depth)
             }

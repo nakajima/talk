@@ -7,6 +7,7 @@ pub(super) struct TypeArtifacts {
     pub(super) member_resolutions: FxHashMap<NodeID, MemberResolution>,
     pub(super) integer_literals: FxHashMap<NodeID, CheckedIntegerLiteral>,
     pub(super) for_plans: FxHashMap<NodeID, ForPlan>,
+    pub(super) propagation_plans: FxHashMap<NodeID, PropagationPlan>,
     pub(super) coerce_clones: FxHashSet<NodeID>,
     pub(super) existential_packs: FxHashMap<NodeID, ExistentialPack>,
     pub(super) display_names: FxHashMap<Symbol, String>,

@@ -5151,6 +5151,45 @@ struct Pair {
     }
 
     #[test]
+    fn question_mark_types_as_first_payload_and_returns_second_variant() {
+        let t = super::tests::check(
+            "// no-core
+             enum Outcome<Value, Failure> {
+                 case success(Value)
+                 case failure(Failure)
+             }
+             func source() -> Outcome<Int, Bool> { .success(41) }
+             func outer() -> Outcome<Bool, Bool> {
+                 let value = source()?
+                 Outcome.success(true)
+             }",
+        );
+        super::tests::assert_clean(&t);
+        assert_eq!(
+            super::tests::ty_of(&t, "outer"),
+            "() -> Outcome<Bool, Bool>"
+        );
+    }
+
+    #[test]
+    fn question_mark_rejects_enums_without_exactly_two_variants() {
+        let t = super::tests::check(
+            "// no-core
+             enum Choice<T> { case first(T) case second case third }
+             func bad() -> Choice<Int> {
+                 Choice.first(1)?
+             }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("propagation requires exactly two")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
     fn instance_method_can_construct_its_own_type() {
         let t = super::tests::check(
             "// no-core

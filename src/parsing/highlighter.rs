@@ -515,8 +515,10 @@ impl<'a> Higlighter<'a> {
                 ExprKind::LiteralFalse => (),
                 ExprKind::LiteralString(_) => (),
                 ExprKind::LiteralCharacter(_) => (),
-                ExprKind::Unary(.., box expr) => result.extend(self.tokens_from_expr(expr, ast)),
-                ExprKind::Binary(box lhs, _, box rhs) => {
+                ExprKind::Unary(.., box expr) | ExprKind::Propagate(box expr) => {
+                    result.extend(self.tokens_from_expr(expr, ast));
+                }
+                ExprKind::Binary(box lhs, _, box rhs) | ExprKind::Subscript(box lhs, box rhs) => {
                     result.extend(self.tokens_from_expr(lhs, ast));
                     result.extend(self.tokens_from_expr(rhs, ast));
                 }

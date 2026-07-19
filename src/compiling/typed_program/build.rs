@@ -70,6 +70,14 @@ impl TypedTreeBuilder<'_> {
             expr::ExprKind::Tuple(items) if items.len() == 1 => {
                 return self.graft(e, &items[0]);
             }
+            expr::ExprKind::Propagate(_) => {
+                let plan = self
+                    .types
+                    .propagation_plans
+                    .get(&e.id)
+                    .unwrap_or_else(|| panic!("checked propagation {:?} has no plan", e.id));
+                return self.graft(e, &plan.lowered);
+            }
             // Variant construction: the checker resolves `.some(x)` at the
             // call node (checking mode) and `Optional.some(x)` at the
             // member callee node; either way the resolution is the variant
@@ -329,9 +337,17 @@ impl TypedTreeBuilder<'_> {
                     }
                 }
             }
+            expr::ExprKind::Propagate(..) => {
+                unreachable!("Propagate is elaborated in expr(); expr_kind never sees it")
+            }
             expr::ExprKind::Unary(..) | expr::ExprKind::Binary(..) => {
                 unreachable!(
                     "Unary/Binary should be desugared by LowerOperators before typed-program build"
+                )
+            }
+            expr::ExprKind::Subscript(..) => {
+                unreachable!(
+                    "Subscript should be desugared by LowerSubscripts before typed-program build"
                 )
             }
             expr::ExprKind::Incomplete(_) => {

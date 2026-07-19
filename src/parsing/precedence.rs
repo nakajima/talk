@@ -157,7 +157,7 @@ impl Precedence {
 
             TokenKind::LeftBracket => ParseHandler {
                 prefix: Some(Parser::array),
-                infix: None,
+                infix: Some(Parser::subscript),
                 precedence: Precedence::Call,
             },
 
@@ -305,6 +305,12 @@ impl Precedence {
             TokenKind::SlashEquals => ParseHandler::NONE,
 
             TokenKind::TildeEquals => ParseHandler::NONE,
+
+            TokenKind::QuestionMark => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::propagate),
+                precedence: Precedence::Call,
+            },
 
             TokenKind::CaretEquals => ParseHandler::NONE,
 

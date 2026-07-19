@@ -71,7 +71,7 @@ use crate::types::catalog::{
 use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
 use crate::types::output::{
-    CheckedIntegerLiteral, ExistentialPack, ForPlan, MemberResolution, TypeOutput,
+    CheckedIntegerLiteral, ExistentialPack, ForPlan, MemberResolution, PropagationPlan, TypeOutput,
 };
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
@@ -314,6 +314,7 @@ struct Ctx {
     eff: EffectRow,
     handler_ret: Option<Ty>,
     binder: Option<Symbol>,
+    has_return_boundary: bool,
 }
 
 impl Ctx {
@@ -323,6 +324,7 @@ impl Ctx {
             eff: EffectRow::pure(),
             handler_ret: None,
             binder: None,
+            has_return_boundary: false,
         }
     }
 
@@ -340,6 +342,7 @@ impl Ctx {
             eff,
             handler_ret: None,
             binder: self.binder,
+            has_return_boundary: true,
         }
     }
 
