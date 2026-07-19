@@ -74,6 +74,18 @@ pub(crate) enum ScalarOp {
     FloatSub,
     FloatMul,
     FloatDiv,
+    IntAnd,
+    IntOr,
+    IntXor,
+    IntShl,
+    IntShr,
+    IntNot,
+    ByteAnd,
+    ByteOr,
+    ByteXor,
+    ByteShl,
+    ByteShr,
+    ByteNot,
     IntCmp(CmpKind),
     FloatCmp(CmpKind),
     ByteCmp(CmpKind),
@@ -9093,6 +9105,36 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.ir_value(instruction, a, expr.span)?,
                 Some(self.ir_value(instruction, b, expr.span)?),
             ),
+            K::And { ty, a, b, .. } => (
+                self.bit_op(&ty.simple_name(), Bit::And, expr.span)?,
+                self.ir_value(instruction, a, expr.span)?,
+                Some(self.ir_value(instruction, b, expr.span)?),
+            ),
+            K::Or { ty, a, b, .. } => (
+                self.bit_op(&ty.simple_name(), Bit::Or, expr.span)?,
+                self.ir_value(instruction, a, expr.span)?,
+                Some(self.ir_value(instruction, b, expr.span)?),
+            ),
+            K::Xor { ty, a, b, .. } => (
+                self.bit_op(&ty.simple_name(), Bit::Xor, expr.span)?,
+                self.ir_value(instruction, a, expr.span)?,
+                Some(self.ir_value(instruction, b, expr.span)?),
+            ),
+            K::Shl { ty, a, b, .. } => (
+                self.bit_op(&ty.simple_name(), Bit::Shl, expr.span)?,
+                self.ir_value(instruction, a, expr.span)?,
+                Some(self.ir_value(instruction, b, expr.span)?),
+            ),
+            K::Shr { ty, a, b, .. } => (
+                self.bit_op(&ty.simple_name(), Bit::Shr, expr.span)?,
+                self.ir_value(instruction, a, expr.span)?,
+                Some(self.ir_value(instruction, b, expr.span)?),
+            ),
+            K::Not { ty, a, .. } => (
+                self.bit_op(&ty.simple_name(), Bit::Not, expr.span)?,
+                self.ir_value(instruction, a, expr.span)?,
+                None,
+            ),
             K::Cmp {
                 ty, lhs, rhs, op, ..
             } => {
@@ -9175,6 +9217,30 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         Ok(op)
     }
 
+    fn bit_op(&self, ty: &str, bit: Bit, span: Span) -> Result<ScalarOp, BackendError> {
+        let op = match (ty, bit) {
+            ("Int", Bit::And) => ScalarOp::IntAnd,
+            ("Int", Bit::Or) => ScalarOp::IntOr,
+            ("Int", Bit::Xor) => ScalarOp::IntXor,
+            ("Int", Bit::Shl) => ScalarOp::IntShl,
+            ("Int", Bit::Shr) => ScalarOp::IntShr,
+            ("Int", Bit::Not) => ScalarOp::IntNot,
+            ("Byte", Bit::And) => ScalarOp::ByteAnd,
+            ("Byte", Bit::Or) => ScalarOp::ByteOr,
+            ("Byte", Bit::Xor) => ScalarOp::ByteXor,
+            ("Byte", Bit::Shl) => ScalarOp::ByteShl,
+            ("Byte", Bit::Shr) => ScalarOp::ByteShr,
+            ("Byte", Bit::Not) => ScalarOp::ByteNot,
+            _ => {
+                return Err(BackendError::unsupported(
+                    format!("inline IR bitwise operation on `{ty}` is not supported yet"),
+                    span,
+                ));
+            }
+        };
+        Ok(op)
+    }
+
     /// Inline-IR operands: `%N` is the N-th parameter (with the receiver at
     /// `%0` in methods), `$N` is a bound sub-expression, immediates carry
     /// their value.
@@ -9218,6 +9284,16 @@ enum Arith {
     Sub,
     Mul,
     Div,
+}
+
+#[derive(Clone, Copy)]
+enum Bit {
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    Not,
 }
 
 trait SimpleName {

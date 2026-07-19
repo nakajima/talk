@@ -45,6 +45,7 @@ impl LowerOperators {
                 let label = match op {
                     TokenKind::Bang => Label::Named("not".into()),
                     TokenKind::Minus => Label::Named("negated".into()),
+                    TokenKind::Tilde => Label::Named("complement".into()),
                     _ => return,
                 };
 
@@ -121,6 +122,15 @@ impl LowerOperators {
                         // Equatables
                         TokenKind::EqualsEquals => ("Equatable", Label::Named("equals".into())),
                         TokenKind::BangEquals => ("Equatable", Label::Named("notEquals".into())),
+
+                        // Bitwise
+                        TokenKind::Amp => ("BitwiseAnd", Label::Named("bitAnd".into())),
+                        TokenKind::Pipe => ("BitwiseOr", Label::Named("bitOr".into())),
+                        TokenKind::Caret => ("BitwiseXor", Label::Named("bitXor".into())),
+                        TokenKind::LessLess => ("ShiftLeft", Label::Named("shiftLeft".into())),
+                        TokenKind::GreaterGreater => {
+                            ("ShiftRight", Label::Named("shiftRight".into()))
+                        }
                         _ => return,
                     };
 
@@ -336,5 +346,60 @@ pub mod tests {
                 ]
             )))
         )
+    }
+
+    fn assert_lowers_binary(source: &'static str, expected_protocol: &str, expected_method: &str) {
+        let mut parsed = parse(source);
+        LowerOperators::run(&mut parsed);
+
+        let StmtKind::Expr(expr) = &parsed.roots[0].as_stmt().kind else {
+            panic!("expected expression statement");
+        };
+        let ExprKind::Call { callee, args, .. } = &expr.kind else {
+            panic!("expected call, got {:?}", expr.kind);
+        };
+        let ExprKind::Member(Some(receiver), Label::Named(method), _) = &callee.kind else {
+            panic!("expected protocol method callee, got {:?}", callee.kind);
+        };
+        let ExprKind::Variable(protocol) = &receiver.kind else {
+            panic!("expected protocol receiver, got {:?}", receiver.kind);
+        };
+
+        assert_eq!(protocol.name_str(), expected_protocol);
+        assert_eq!(method, expected_method);
+        assert_eq!(args.len(), 2);
+    }
+
+    #[test]
+    fn lowers_bitwise_binary_operators() {
+        for (source, protocol, method) in [
+            ("1 & 2", "BitwiseAnd", "bitAnd"),
+            ("1 | 2", "BitwiseOr", "bitOr"),
+            ("1 ^ 2", "BitwiseXor", "bitXor"),
+            ("1 << 2", "ShiftLeft", "shiftLeft"),
+            ("1 >> 2", "ShiftRight", "shiftRight"),
+        ] {
+            assert_lowers_binary(source, protocol, method);
+        }
+    }
+
+    #[test]
+    fn lowers_bitwise_complement() {
+        let mut parsed = parse("~1");
+        LowerOperators::run(&mut parsed);
+
+        let StmtKind::Expr(expr) = &parsed.roots[0].as_stmt().kind else {
+            panic!("expected expression statement");
+        };
+        let ExprKind::Call { callee, args, .. } = &expr.kind else {
+            panic!("expected call, got {:?}", expr.kind);
+        };
+        let ExprKind::Member(Some(receiver), Label::Named(method), _) = &callee.kind else {
+            panic!("expected complement method callee, got {:?}", callee.kind);
+        };
+
+        assert_eq!(method, "complement");
+        assert!(matches!(receiver.kind, ExprKind::LiteralInt(_)));
+        assert!(args.is_empty());
     }
 }

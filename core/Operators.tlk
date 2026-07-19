@@ -40,6 +40,42 @@ public protocol Negatable {
 	func negated() -> Ret
 }
 
+public protocol BitwiseAnd<RHS> {
+	associated Ret
+
+	func bitAnd(rhs: RHS) -> Ret
+}
+
+public protocol BitwiseOr<RHS> {
+	associated Ret
+
+	func bitOr(rhs: RHS) -> Ret
+}
+
+public protocol BitwiseXor<RHS> {
+	associated Ret
+
+	func bitXor(rhs: RHS) -> Ret
+}
+
+public protocol ShiftLeft<RHS> {
+	associated Ret
+
+	func shiftLeft(rhs: RHS) -> Ret
+}
+
+public protocol ShiftRight<RHS> {
+	associated Ret
+
+	func shiftRight(rhs: RHS) -> Ret
+}
+
+public protocol Complement {
+	associated Ret
+
+	func complement() -> Ret
+}
+
 public protocol Not {
 	associated Ret
 
@@ -127,6 +163,78 @@ extend Byte: Equatable<Byte> {
 extend Int: Negatable {
 	func negated() -> Int {
 		@_ir { %? = sub Int 0 %0 }
+	}
+}
+
+extend Int: BitwiseAnd<Int> {
+	func bitAnd(rhs: Int) -> Int {
+		@_ir { %? = and Int %0 %1 }
+	}
+}
+
+extend Int: BitwiseOr<Int> {
+	func bitOr(rhs: Int) -> Int {
+		@_ir { %? = or Int %0 %1 }
+	}
+}
+
+extend Int: BitwiseXor<Int> {
+	func bitXor(rhs: Int) -> Int {
+		@_ir { %? = xor Int %0 %1 }
+	}
+}
+
+extend Int: ShiftLeft<Int> {
+	func shiftLeft(rhs: Int) -> Int {
+		@_ir { %? = shl Int %0 %1 }
+	}
+}
+
+extend Int: ShiftRight<Int> {
+	func shiftRight(rhs: Int) -> Int {
+		@_ir { %? = shr Int %0 %1 }
+	}
+}
+
+extend Int: Complement {
+	func complement() -> Int {
+		@_ir { %? = not Int %0 }
+	}
+}
+
+extend Byte: BitwiseAnd<Byte> {
+	func bitAnd(rhs: Byte) -> Byte {
+		@_ir { %? = and Byte %0 %1 }
+	}
+}
+
+extend Byte: BitwiseOr<Byte> {
+	func bitOr(rhs: Byte) -> Byte {
+		@_ir { %? = or Byte %0 %1 }
+	}
+}
+
+extend Byte: BitwiseXor<Byte> {
+	func bitXor(rhs: Byte) -> Byte {
+		@_ir { %? = xor Byte %0 %1 }
+	}
+}
+
+extend Byte: ShiftLeft<Int> {
+	func shiftLeft(rhs: Int) -> Byte {
+		@_ir { %? = shl Byte %0 %1 }
+	}
+}
+
+extend Byte: ShiftRight<Int> {
+	func shiftRight(rhs: Int) -> Byte {
+		@_ir { %? = shr Byte %0 %1 }
+	}
+}
+
+extend Byte: Complement {
+	func complement() -> Byte {
+		@_ir { %? = not Byte %0 }
 	}
 }
 

@@ -1240,6 +1240,58 @@ fn exec_local(
                 _ => return Err(format!("vm: div on {a:?} and {b:?}")),
             };
         }
+        Insn::And { dest, a, b } => {
+            frame.regs[dest as usize] = bitwise(
+                "and",
+                rk(module, frame, a)?,
+                rk(module, frame, b)?,
+                |x, y| x & y,
+                |x, y| x & y,
+            )?
+        }
+        Insn::Or { dest, a, b } => {
+            frame.regs[dest as usize] = bitwise(
+                "or",
+                rk(module, frame, a)?,
+                rk(module, frame, b)?,
+                |x, y| x | y,
+                |x, y| x | y,
+            )?
+        }
+        Insn::Xor { dest, a, b } => {
+            frame.regs[dest as usize] = bitwise(
+                "xor",
+                rk(module, frame, a)?,
+                rk(module, frame, b)?,
+                |x, y| x ^ y,
+                |x, y| x ^ y,
+            )?
+        }
+        Insn::Shl { dest, a, b } => {
+            frame.regs[dest as usize] = shift(
+                "shl",
+                rk(module, frame, a)?,
+                rk(module, frame, b)?,
+                i64::wrapping_shl,
+                u8::wrapping_shl,
+            )?
+        }
+        Insn::Shr { dest, a, b } => {
+            frame.regs[dest as usize] = shift(
+                "shr",
+                rk(module, frame, a)?,
+                rk(module, frame, b)?,
+                i64::wrapping_shr,
+                u8::wrapping_shr,
+            )?
+        }
+        Insn::Not { dest, src } => {
+            frame.regs[dest as usize] = match &frame.regs[src as usize] {
+                Value::I64(x) => Value::I64(!x),
+                Value::Byte(x) => Value::Byte(!x),
+                value => return Err(format!("vm: not on {value:?}")),
+            };
+        }
         Insn::Cmp { dest, a, b, op } => {
             let result = compare(rk(module, frame, a)?, rk(module, frame, b)?, op)?;
             frame.regs[dest as usize] = Value::Bool(result);
@@ -1814,6 +1866,37 @@ fn arith(
             Ok(Value::Ptr((*p as i64 - off) as u32))
         }
         _ => Err(format!("vm: arithmetic on {a:?} and {b:?}")),
+    }
+}
+
+fn bitwise(
+    name: &str,
+    a: &Value,
+    b: &Value,
+    ints: fn(i64, i64) -> i64,
+    bytes: fn(u8, u8) -> u8,
+) -> Result<Value, String> {
+    match (a, b) {
+        (Value::I64(x), Value::I64(y)) => Ok(Value::I64(ints(*x, *y))),
+        (Value::Byte(x), Value::Byte(y)) => Ok(Value::Byte(bytes(*x, *y))),
+        _ => Err(format!("vm: {name} on {a:?} and {b:?}")),
+    }
+}
+
+/// Shifts mask the shift amount to the operand's bit width via
+/// `wrapping_sh*`: Int masks to 6 bits and Byte masks to 3 bits.
+fn shift(
+    name: &str,
+    a: &Value,
+    b: &Value,
+    ints: fn(i64, u32) -> i64,
+    bytes: fn(u8, u32) -> u8,
+) -> Result<Value, String> {
+    match (a, b) {
+        (Value::I64(x), Value::I64(y)) => Ok(Value::I64(ints(*x, *y as u32))),
+        (Value::Byte(x), Value::I64(y)) => Ok(Value::Byte(bytes(*x, *y as u32))),
+        (Value::Byte(x), Value::Byte(y)) => Ok(Value::Byte(bytes(*x, u32::from(*y)))),
+        _ => Err(format!("vm: {name} on {a:?} and {b:?}")),
     }
 }
 

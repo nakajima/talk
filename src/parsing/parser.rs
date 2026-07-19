@@ -1509,7 +1509,7 @@ impl<'a> Parser<'a> {
                         },
                     })
                 }
-                op @ ("add" | "sub" | "mul" | "div") => {
+                op @ ("add" | "sub" | "mul" | "div" | "and" | "or" | "xor" | "shl" | "shr") => {
                     let ty = self.type_annotation()?;
                     let a = self.ir_value()?;
                     let b = self.ir_value()?;
@@ -1518,6 +1518,11 @@ impl<'a> Parser<'a> {
                         "sub" => InlineIRInstructionKind::Sub { dest, ty, a, b },
                         "mul" => InlineIRInstructionKind::Mul { dest, ty, a, b },
                         "div" => InlineIRInstructionKind::Div { dest, ty, a, b },
+                        "and" => InlineIRInstructionKind::And { dest, ty, a, b },
+                        "or" => InlineIRInstructionKind::Or { dest, ty, a, b },
+                        "xor" => InlineIRInstructionKind::Xor { dest, ty, a, b },
+                        "shl" => InlineIRInstructionKind::Shl { dest, ty, a, b },
+                        "shr" => InlineIRInstructionKind::Shr { dest, ty, a, b },
                         _ => unreachable!(),
                     };
                     self.save_meta(tok, |id, span| InlineIRInstruction {
@@ -1526,6 +1531,17 @@ impl<'a> Parser<'a> {
                         binds,
                         instr_name_span: instr_span,
                         kind,
+                    })
+                }
+                "not" => {
+                    let ty = self.type_annotation()?;
+                    let a = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Not { dest, ty, a },
                     })
                 }
                 "alloc" => {
@@ -2246,7 +2262,7 @@ impl<'a> Parser<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn unary(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
-        let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
+        let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang, TokenKind::Tilde])?;
         let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
         let rhs = self.expr_with_precedence(current_precedence)?.into_expr()?;
 
@@ -2273,7 +2289,10 @@ impl<'a> Parser<'a> {
             TokenKind::Caret,
             TokenKind::Pipe,
             TokenKind::PipePipe,
+            TokenKind::Amp,
             TokenKind::AmpAmp,
+            TokenKind::LessLess,
+            TokenKind::GreaterGreater,
         ])?;
 
         let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
@@ -3052,7 +3071,7 @@ impl<'a> Parser<'a> {
         }
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
-            while !self.did_match(TokenKind::Greater)? {
+            while !self.did_match_generic_close()? {
                 let generic = self.type_annotation()?;
                 generics.push(generic);
                 self.consume(TokenKind::Comma).ok();
@@ -3114,7 +3133,7 @@ impl<'a> Parser<'a> {
         let mut assoc_bindings = vec![];
 
         if self.did_match(TokenKind::Less)? {
-            while !self.did_match(TokenKind::Greater)? {
+            while !self.did_match_generic_close()? {
                 let binding_tok = self.push_source_location();
                 let (name, name_span) = self.identifier()?;
                 self.consume(TokenKind::Equals)?;
@@ -3264,7 +3283,15 @@ impl<'a> Parser<'a> {
     fn type_annotations(&mut self, closer: TokenKind) -> Result<Vec<TypeAnnotation>, ParserError> {
         let mut annotations: Vec<TypeAnnotation> = vec![];
 
-        while !self.did_match(closer)? {
+        loop {
+            let closed = if closer == TokenKind::Greater {
+                self.did_match_generic_close()?
+            } else {
+                self.did_match(closer)?
+            };
+            if closed {
+                break;
+            }
             annotations.push(self.type_annotation()?);
             self.consume(TokenKind::Comma).ok();
         }
@@ -3796,7 +3823,7 @@ impl<'a> Parser<'a> {
     fn generics(&mut self) -> Result<Vec<GenericDecl>, ParserError> {
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
-            while !self.did_match(TokenKind::Greater)? && !self.did_match(TokenKind::EOF)? {
+            while !self.did_match_generic_close()? && !self.did_match(TokenKind::EOF)? {
                 generics.push(self.generic()?);
                 self.consume(TokenKind::Comma).ok();
             }
@@ -3953,6 +3980,34 @@ impl<'a> Parser<'a> {
         };
 
         Ok(false)
+    }
+
+    // Consumes the `>` closing a generic argument/parameter list. A `>>`
+    // (right shift) token is split back into two `>` tokens so nested
+    // generics like `Array<Array<Int>>` parse.
+    pub(super) fn did_match_generic_close(&mut self) -> Result<bool, ParserError> {
+        self.skip_newlines();
+
+        let Some(current) = self.current.clone() else {
+            return Ok(false);
+        };
+
+        match current.kind {
+            TokenKind::Greater => {
+                self.advance();
+                Ok(true)
+            }
+            TokenKind::GreaterGreater => {
+                self.current = Some(Token {
+                    kind: TokenKind::Greater,
+                    start: current.start + 1,
+                    col: current.col + 1,
+                    ..current
+                });
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
 
     fn consume_or_recover_closer(&mut self, expected: TokenKind) -> Result<bool, ParserError> {

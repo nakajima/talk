@@ -15,9 +15,13 @@ pub enum Precedence {
     And,
     Equality,
     Comparison,
+    BitOr,  // |
+    BitXor, // ^
+    BitAnd, // &
+    Shift,  // << >>
     Term,
     Factor, // *
-    Unary,  // - !
+    Unary,  // - ! ~
     Call,
     Primary,
     Any,
@@ -244,13 +248,13 @@ impl Precedence {
             TokenKind::Caret => ParseHandler {
                 prefix: None,
                 infix: Some(Parser::binary),
-                precedence: Precedence::Factor,
+                precedence: Precedence::BitXor,
             },
 
             TokenKind::Pipe => ParseHandler {
                 prefix: None,
                 infix: Some(Parser::binary),
-                precedence: Precedence::Factor,
+                precedence: Precedence::BitOr,
             },
 
             TokenKind::Identifier => ParseHandler {
@@ -290,7 +294,11 @@ impl Precedence {
                 precedence: Precedence::Factor,
             },
 
-            TokenKind::Tilde => ParseHandler::NONE,
+            TokenKind::Tilde => ParseHandler {
+                prefix: Some(Parser::unary),
+                infix: None,
+                precedence: Precedence::Unary,
+            },
             TokenKind::PlusEquals => ParseHandler::NONE,
             TokenKind::MinusEquals => ParseHandler::NONE,
             TokenKind::StarEquals => ParseHandler::NONE,
@@ -300,8 +308,18 @@ impl Precedence {
 
             TokenKind::CaretEquals => ParseHandler::NONE,
 
-            TokenKind::Amp => ParseHandler::NONE,
+            TokenKind::Amp => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::BitAnd,
+            },
             TokenKind::AmpEquals => ParseHandler::NONE,
+
+            TokenKind::LessLess | TokenKind::GreaterGreater => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Shift,
+            },
 
             TokenKind::RightBrace => ParseHandler::NONE,
             TokenKind::RightParen => ParseHandler::NONE,

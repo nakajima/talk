@@ -580,6 +580,30 @@ impl Lowering<'_> {
                         let b = self.rk(*b);
                         self.code.push(Insn::Div { dest, a, b });
                     }
+                    (ScalarOp::IntAnd | ScalarOp::ByteAnd, Some(b)) => {
+                        let b = self.rk(*b);
+                        self.code.push(Insn::And { dest, a, b });
+                    }
+                    (ScalarOp::IntOr | ScalarOp::ByteOr, Some(b)) => {
+                        let b = self.rk(*b);
+                        self.code.push(Insn::Or { dest, a, b });
+                    }
+                    (ScalarOp::IntXor | ScalarOp::ByteXor, Some(b)) => {
+                        let b = self.rk(*b);
+                        self.code.push(Insn::Xor { dest, a, b });
+                    }
+                    (ScalarOp::IntShl | ScalarOp::ByteShl, Some(b)) => {
+                        let b = self.rk(*b);
+                        self.code.push(Insn::Shl { dest, a, b });
+                    }
+                    (ScalarOp::IntShr | ScalarOp::ByteShr, Some(b)) => {
+                        let b = self.rk(*b);
+                        self.code.push(Insn::Shr { dest, a, b });
+                    }
+                    (ScalarOp::IntNot | ScalarOp::ByteNot, None) => {
+                        let src = self.demote_rk(a);
+                        self.code.push(Insn::Not { dest, src });
+                    }
                     (
                         ScalarOp::IntCmp(kind)
                         | ScalarOp::FloatCmp(kind)

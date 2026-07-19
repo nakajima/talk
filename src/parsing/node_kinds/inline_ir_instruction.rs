@@ -97,6 +97,47 @@ pub enum InlineIRInstructionKind {
         a: Value,
         b: Value,
     },
+    #[doc = "$dest = and $ty $a $b"]
+    And {
+        dest: Register,
+        ty: TypeAnnotation,
+        a: Value,
+        b: Value,
+    },
+    #[doc = "$dest = or $ty $a $b"]
+    Or {
+        dest: Register,
+        ty: TypeAnnotation,
+        a: Value,
+        b: Value,
+    },
+    #[doc = "$dest = xor $ty $a $b"]
+    Xor {
+        dest: Register,
+        ty: TypeAnnotation,
+        a: Value,
+        b: Value,
+    },
+    #[doc = "$dest = shl $ty $a $b"]
+    Shl {
+        dest: Register,
+        ty: TypeAnnotation,
+        a: Value,
+        b: Value,
+    },
+    #[doc = "$dest = shr $ty $a $b"]
+    Shr {
+        dest: Register,
+        ty: TypeAnnotation,
+        a: Value,
+        b: Value,
+    },
+    #[doc = "$dest = not $ty $a"]
+    Not {
+        dest: Register,
+        ty: TypeAnnotation,
+        a: Value,
+    },
     #[doc = "$dest = alloc $ty $count"]
     Alloc {
         dest: Register,
@@ -356,6 +397,24 @@ impl Display for InlineIRInstruction {
             }
             InlineIRInstructionKind::Div { dest, ty, a, b } => {
                 write!(f, "{dest} = div {} {} {}", ty.simple_display(), a, b)
+            }
+            InlineIRInstructionKind::And { dest, ty, a, b } => {
+                write!(f, "{dest} = and {} {} {}", ty.simple_display(), a, b)
+            }
+            InlineIRInstructionKind::Or { dest, ty, a, b } => {
+                write!(f, "{dest} = or {} {} {}", ty.simple_display(), a, b)
+            }
+            InlineIRInstructionKind::Xor { dest, ty, a, b } => {
+                write!(f, "{dest} = xor {} {} {}", ty.simple_display(), a, b)
+            }
+            InlineIRInstructionKind::Shl { dest, ty, a, b } => {
+                write!(f, "{dest} = shl {} {} {}", ty.simple_display(), a, b)
+            }
+            InlineIRInstructionKind::Shr { dest, ty, a, b } => {
+                write!(f, "{dest} = shr {} {} {}", ty.simple_display(), a, b)
+            }
+            InlineIRInstructionKind::Not { dest, ty, a } => {
+                write!(f, "{dest} = not {} {}", ty.simple_display(), a)
             }
             InlineIRInstructionKind::Alloc { dest, ty, count } => {
                 write!(f, "{dest} = alloc {} {}", ty.simple_display(), count)

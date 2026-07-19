@@ -786,9 +786,9 @@ Generics are written with angle brackets: `func id<T>(x: T) -> T`. Simple bounds
 
 ## Operators and builtins
 
-Common operators are library-backed or builtin-resolved: arithmetic `+ - * /`, comparison `== != < <= > >=`, boolean values, string concatenation via `+`, member calls, and casts/ascriptions using `as` for protocol existentials where supported. `print(x)` prints Showable-ish values; `sleep(ms)` and I/O live in core effects. The core library defines protocols such as `Showable`, `Add`, `Equatable`, `Iterable`, `Iterator`, `From`, `Into`, `Borrowed`, and `Owner`.
+Common operators are library-backed or builtin-resolved: arithmetic `+ - * /`, comparison `== != < <= > >=`, bitwise `& | ^ ~ << >>`, boolean values, string concatenation via `+`, member calls, and casts/ascriptions using `as` for protocol existentials where supported. Bitwise shifts mask the amount to the operand width. `print(x)` prints Showable-ish values; `sleep(ms)` and I/O live in core effects. The core library defines protocols such as `Showable`, `Add`, `Equatable`, `BitwiseAnd`, `ShiftLeft`, `Iterable`, `Iterator`, `From`, `Into`, `Borrowed`, and `Owner`.
 
-Low-level trusted IR escapes use `@_ir(args...) { ... }` and appear mainly in core. Operations include integer/float math, comparisons, `alloc`, `load`, `store`, `gep`, `copy`, and I/O shims. Outside core, `_ir` requires the intrinsic `'unsafe` effect; acknowledge and discharge it with a lexical `@unsafe { ... }` block.
+Low-level trusted IR escapes use `@_ir(args...) { ... }` and appear mainly in core. Operations include integer/float math, bitwise operations, comparisons, `alloc`, `load`, `store`, `gep`, `copy`, and I/O shims. Outside core, `_ir` requires the intrinsic `'unsafe` effect; acknowledge and discharge it with a lexical `@unsafe { ... }` block.
 
 ## Effects
 

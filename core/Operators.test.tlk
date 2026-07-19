@@ -1,0 +1,36 @@
+test "integer bitwise operators" {
+	assert((6 & 3) == 2)
+	assert((4 | 1) == 5)
+	assert((7 ^ 3) == 4)
+	assert((~0) == -1)
+}
+
+test "integer shifts mask the amount" {
+	assert((1 << 3) == 8)
+	assert((8 >> 2) == 2)
+	assert((1 << 64) == 1)
+	assert((8 >> 67) == 1)
+}
+
+test "bitwise operators use Rust-like precedence" {
+	assert((1 | 2 ^ 3 & 6 << 1 + 1) == 3)
+	assert(1 | 2 == 3)
+}
+
+test "byte bitwise operators" {
+	let a = "a".storage.get(0)
+	let b = "b".storage.get(0)
+
+	assert((a & b)._toInt() == 96)
+	assert((a | b)._toInt() == 99)
+	assert((a ^ b)._toInt() == 3)
+	assert((~a)._toInt() == 158)
+}
+
+test "byte shifts mask the amount and result" {
+	let a = "a".storage.get(0)
+
+	assert((a << 1)._toInt() == 194)
+	assert((a >> 1)._toInt() == 48)
+	assert((a << 8)._toInt() == 97)
+}

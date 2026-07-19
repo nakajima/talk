@@ -833,6 +833,7 @@ impl<'a> Formatter<'a> {
         let op_text = match op {
             TokenKind::Minus => "-",
             TokenKind::Bang => "!",
+            TokenKind::Tilde => "~",
             _ => &format!("{op}"),
         };
 
@@ -853,7 +854,11 @@ impl<'a> Formatter<'a> {
             TokenKind::BangEquals => "!=",
             TokenKind::Caret => "^",
             TokenKind::Pipe => "|",
+            TokenKind::Amp => "&",
+            TokenKind::LessLess => "<<",
+            TokenKind::GreaterGreater => ">>",
             TokenKind::PipePipe => "||",
+            TokenKind::AmpAmp => "&&",
             _ => &format!("{op}"),
         };
 

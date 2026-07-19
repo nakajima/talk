@@ -331,6 +331,12 @@ impl Encoder {
                 self.u8(54);
                 self.u16(src);
             }
+            Insn::And { dest, a, b } => self.reg3(55, dest, a, b),
+            Insn::Or { dest, a, b } => self.reg3(56, dest, a, b),
+            Insn::Xor { dest, a, b } => self.reg3(57, dest, a, b),
+            Insn::Shl { dest, a, b } => self.reg3(58, dest, a, b),
+            Insn::Shr { dest, a, b } => self.reg3(59, dest, a, b),
+            Insn::Not { dest, src } => self.reg2(60, dest, src),
             Insn::Load { dest, ptr, kind } => {
                 self.u8(25);
                 self.u16(dest);
@@ -899,6 +905,15 @@ impl<'a> Decoder<'a> {
             }),
             53 => Ok(Insn::GetFloor { dest: self.u16()? }),
             54 => Ok(Insn::SetFloor { src: self.u16()? }),
+            55 => self.reg3(|dest, a, b| Insn::And { dest, a, b }),
+            56 => self.reg3(|dest, a, b| Insn::Or { dest, a, b }),
+            57 => self.reg3(|dest, a, b| Insn::Xor { dest, a, b }),
+            58 => self.reg3(|dest, a, b| Insn::Shl { dest, a, b }),
+            59 => self.reg3(|dest, a, b| Insn::Shr { dest, a, b }),
+            60 => Ok(Insn::Not {
+                dest: self.u16()?,
+                src: self.u16()?,
+            }),
             _ => Err(DecodeError::InvalidTag("instruction", tag)),
         }
     }
@@ -1174,6 +1189,7 @@ impl Insn {
             | Insn::Trunc { dest, src }
             | Insn::IToF { dest, src }
             | Insn::BToI { dest, src }
+            | Insn::Not { dest, src }
             | Insn::Extract { dest, src, .. }
             | Insn::GetPayload { dest, src, .. }
             | Insn::ExistentialWitness { dest, src, .. }
@@ -1211,6 +1227,11 @@ impl Insn {
             | Insn::Sub { dest, a, b }
             | Insn::Mul { dest, a, b }
             | Insn::Div { dest, a, b }
+            | Insn::And { dest, a, b }
+            | Insn::Or { dest, a, b }
+            | Insn::Xor { dest, a, b }
+            | Insn::Shl { dest, a, b }
+            | Insn::Shr { dest, a, b }
             | Insn::Cmp { dest, a, b, .. } => {
                 Register::new(n_regs).check(dest)?;
                 Register::new(n_regs).check_rk(a, module)?;
@@ -1802,6 +1823,32 @@ mod tests {
                         Insn::Const { dest: 0, k: 0 },
                         Insn::Const { dest: 1, k: 1 },
                         Insn::Const { dest: 2, k: 2 },
+                        Insn::And {
+                            dest: 2,
+                            a: 0,
+                            b: 1,
+                        },
+                        Insn::Or {
+                            dest: 2,
+                            a: 0,
+                            b: 1,
+                        },
+                        Insn::Xor {
+                            dest: 2,
+                            a: 0,
+                            b: 1,
+                        },
+                        Insn::Shl {
+                            dest: 2,
+                            a: 0,
+                            b: 1,
+                        },
+                        Insn::Shr {
+                            dest: 2,
+                            a: 0,
+                            b: 1,
+                        },
+                        Insn::Not { dest: 2, src: 0 },
                         Insn::RecordNew {
                             dest: 3,
                             symbol: struct_symbol,

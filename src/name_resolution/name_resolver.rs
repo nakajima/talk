@@ -1431,6 +1431,12 @@ impl NameResolver {
                 | InlineIRInstructionKind::Sub { ty, .. }
                 | InlineIRInstructionKind::Mul { ty, .. }
                 | InlineIRInstructionKind::Div { ty, .. }
+                | InlineIRInstructionKind::And { ty, .. }
+                | InlineIRInstructionKind::Or { ty, .. }
+                | InlineIRInstructionKind::Xor { ty, .. }
+                | InlineIRInstructionKind::Shl { ty, .. }
+                | InlineIRInstructionKind::Shr { ty, .. }
+                | InlineIRInstructionKind::Not { ty, .. }
                 | InlineIRInstructionKind::Alloc { ty, .. }
                 | InlineIRInstructionKind::Load { ty, .. }
                 | InlineIRInstructionKind::Take { ty, .. }

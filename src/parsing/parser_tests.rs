@@ -672,6 +672,57 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_amp_and_shifts() {
+        for (source, expected) in [
+            ("1 & 2", TokenKind::Amp),
+            ("1 << 2", TokenKind::LessLess),
+            ("1 >> 2", TokenKind::GreaterGreater),
+        ] {
+            let parsed = parse(source);
+            let StmtKind::Expr(Expr {
+                kind: ExprKind::Binary(_, op, _),
+                ..
+            }) = &parsed.roots[0].as_stmt().kind
+            else {
+                panic!("expected binary expression for {source}");
+            };
+            assert_eq!(*op, expected);
+        }
+    }
+
+    #[test]
+    fn parses_bitwise_complement() {
+        let parsed = parse("~1");
+        assert!(matches!(
+            parsed.roots[0].as_stmt(),
+            expr_stmt!(ExprKind::Unary(TokenKind::Tilde, box expr!(ExprKind::LiteralInt(_))))
+        ));
+    }
+
+    #[test]
+    fn parses_rust_like_bitwise_precedence() {
+        fn operands(expr: &Expr, expected: TokenKind) -> (&Expr, &Expr) {
+            let ExprKind::Binary(lhs, actual, rhs) = &expr.kind else {
+                panic!("expected {expected:?}, got {:?}", expr.kind);
+            };
+            assert_eq!(*actual, expected);
+            (lhs, rhs)
+        }
+
+        let parsed = parse("1 | 2 ^ 3 & 4 << 5 + 6 == 7");
+        let StmtKind::Expr(expr) = &parsed.roots[0].as_stmt().kind else {
+            panic!("expected expression statement");
+        };
+
+        let (bit_or, _) = operands(expr, TokenKind::EqualsEquals);
+        let (_, bit_xor) = operands(bit_or, TokenKind::Pipe);
+        let (_, bit_and) = operands(bit_xor, TokenKind::Caret);
+        let (_, shift) = operands(bit_and, TokenKind::Amp);
+        let (_, addition) = operands(shift, TokenKind::LessLess);
+        operands(addition, TokenKind::Plus);
+    }
+
+    #[test]
     fn parses_correct_precedence() {
         let parsed = parse("1 + 2 * 2");
 
@@ -834,6 +885,35 @@ pub mod tests {
                 }]
             }
         );
+    }
+
+    #[test]
+    fn parses_nested_angle_bracket_generics() {
+        let parsed = parse("func c(a: Array<Array<Int>>) { a }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("didn't get func");
+        };
+
+        let Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Nominal { generics, .. },
+            ..
+        }) = &params[0].type_annotation
+        else {
+            panic!("expected outer nominal type");
+        };
+        assert!(matches!(
+            generics.as_slice(),
+            [TypeAnnotation {
+                kind: TypeAnnotationKind::Nominal { generics, .. },
+                ..
+            }] if matches!(
+                generics.as_slice(),
+                [TypeAnnotation {
+                    kind: TypeAnnotationKind::Nominal { generics, .. },
+                    ..
+                }] if generics.is_empty()
+            )
+        ));
     }
 
     #[test]

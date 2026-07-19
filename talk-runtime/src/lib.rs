@@ -87,6 +87,35 @@ pub enum Insn {
         a: u16,
         b: u16,
     },
+    And {
+        dest: u16,
+        a: u16,
+        b: u16,
+    },
+    Or {
+        dest: u16,
+        a: u16,
+        b: u16,
+    },
+    Xor {
+        dest: u16,
+        a: u16,
+        b: u16,
+    },
+    Shl {
+        dest: u16,
+        a: u16,
+        b: u16,
+    },
+    Shr {
+        dest: u16,
+        a: u16,
+        b: u16,
+    },
+    Not {
+        dest: u16,
+        src: u16,
+    },
     Cmp {
         dest: u16,
         a: u16,
@@ -442,6 +471,22 @@ impl Module {
             Insn::Div { dest, a, b } => {
                 format!("div r{dest} <- {}, {}", rk_display(*a), rk_display(*b))
             }
+            Insn::And { dest, a, b } => {
+                format!("and r{dest} <- {}, {}", rk_display(*a), rk_display(*b))
+            }
+            Insn::Or { dest, a, b } => {
+                format!("or r{dest} <- {}, {}", rk_display(*a), rk_display(*b))
+            }
+            Insn::Xor { dest, a, b } => {
+                format!("xor r{dest} <- {}, {}", rk_display(*a), rk_display(*b))
+            }
+            Insn::Shl { dest, a, b } => {
+                format!("shl r{dest} <- {}, {}", rk_display(*a), rk_display(*b))
+            }
+            Insn::Shr { dest, a, b } => {
+                format!("shr r{dest} <- {}, {}", rk_display(*a), rk_display(*b))
+            }
+            Insn::Not { dest, src } => format!("not r{dest} <- r{src}"),
             Insn::Cmp { dest, a, b, op } => {
                 format!(
                     "cmp_{} r{dest} <- {}, {}",

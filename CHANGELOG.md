@@ -36,6 +36,11 @@ while fixing several type-checker and lexer correctness bugs.
 - **Byte comparisons.** `Byte` now conforms to `Equatable<Byte>` and
   `Comparable<Byte>`, enabling normal `==`, `!=`, `<`, `<=`, `>`, and `>=`
   operations without converting through `_toInt()`.
+- **Bitwise operators.** `Int` and `Byte` now support `&`, `|`, `^`, `~`,
+  `<<`, and `>>` through core protocols and scalar IR/runtime instructions.
+  Operators use Rust-like precedence; shifts mask the amount to the operand
+  width, and `>>` is split into generic closers where needed so nested types
+  such as `Array<Array<Int>>` remain valid.
 - **Unicode character classification.** `Character` now provides
   `is_whitespace`, `is_alphabetic`, `is_numeric`, `is_alphanumeric`,
   `is_ascii_digit`, and `is_ascii_hexdigit`. Classification uses the first
