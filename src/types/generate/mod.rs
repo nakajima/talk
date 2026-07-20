@@ -52,10 +52,12 @@ use crate::node_kinds::func_signature::FuncSignature;
 use crate::node_kinds::generic_decl::GenericDecl;
 use crate::node_kinds::{
     block::Block,
+    body::Body,
     call_arg::CallArg,
     decl::{Decl, DeclKind},
     expr::{Expr, ExprKind},
     func::{EffectSet, Func},
+    generic_arg::{GenericArg, StaticExpr, StaticExprKind, StaticOpKind},
     match_arm::MatchArm,
     parameter::{ParamMode, Parameter},
     pattern::{Pattern, PatternKind, RecordFieldPatternKind},
@@ -76,7 +78,7 @@ use crate::types::output::{
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
     EffTail, EffectEntry, EffectRow, Perm, Predicate, ProtocolRef, Row, RowTail, Scheme,
-    SchemeParam, Ty, TyFold,
+    SchemeParam, StaticInt, StaticValue, Ty, TyFold,
 };
 use crate::types::variant::VariantInstantiation;
 
@@ -179,6 +181,9 @@ struct Collected<'a> {
     destructuring_lets: Vec<&'a Decl>,
     extends: Vec<ExtendWork<'a>>,
     protocol_defaults: Vec<(Symbol, Symbol, &'a Func)>,
+    /// Declaration-level static formation obligations, solved before the
+    /// first binding group.
+    obligations: Vec<Constraint>,
 }
 
 struct TypecheckSession<'a> {
@@ -217,6 +222,11 @@ struct CatalogBuilder<'s, 'a> {
     marker_claims: Vec<(Symbol, Symbol, NodeID)>,
     self_types: Vec<Ty>,
     level: Level,
+    /// Static formation obligations from declaration annotations
+    /// (ADR 0035 §2): collection has no solver, so they queue here —
+    /// wrapped under their declaration's givens — and the first checking
+    /// solve discharges them. See `CatalogBuilder::absorb_obligations`.
+    obligations: Vec<Constraint>,
 }
 
 struct BodyChecker<'s, 'a> {
@@ -386,6 +396,7 @@ impl<'a> TypecheckSession<'a> {
                 marker_claims: vec![],
                 self_types: vec![],
                 level: OUTER_LEVEL,
+                obligations: vec![],
             };
             builder.collect(asts)
         };

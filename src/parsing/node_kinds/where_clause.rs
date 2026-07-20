@@ -23,11 +23,19 @@ pub struct WherePredicate {
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum WherePredicateKind {
     TypeEq {
-        lhs: TypeAnnotation,
-        rhs: TypeAnnotation,
+        lhs: crate::node_kinds::generic_arg::GenericArg,
+        rhs: crate::node_kinds::generic_arg::GenericArg,
     },
     Conforms {
         ty: TypeAnnotation,
         protocols: Vec<TypeAnnotation>,
+    },
+    /// An ADR 0035 static integer comparison: `lhs < rhs` when `strict`,
+    /// otherwise `lhs <= rhs`.
+    StaticCmp {
+        #[drive(skip)]
+        strict: bool,
+        lhs: crate::node_kinds::generic_arg::GenericArg,
+        rhs: crate::node_kinds::generic_arg::GenericArg,
     },
 }

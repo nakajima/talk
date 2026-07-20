@@ -16,6 +16,7 @@ use crate::node_kinds::decl::{
 use crate::node_kinds::expr::{Expr, ExprKind};
 use crate::node_kinds::func::{CaptureMode, CaptureSpec, EffectSet, Func};
 use crate::node_kinds::func_signature::FuncSignature;
+use crate::node_kinds::generic_arg::{GenericArg, StaticExpr, StaticExprKind, StaticOpKind};
 use crate::node_kinds::generic_decl::GenericDecl;
 use crate::node_kinds::incomplete_expr::IncompleteExpr;
 use crate::node_kinds::inline_ir_instruction::{
@@ -106,6 +107,12 @@ pub struct Parser<'a> {
     diagnostics: Vec<AnyDiagnostic>,
     context_stack: Vec<ParseContext>,
     lexer_error: Option<(LexerError, u32, u32)>,
+    /// In where-predicate operands `<` doubles as the static comparison
+    /// operator (ADR 0035), so a generic-argument list there must be
+    /// adjacent to its head (`Foo<Int>`, not `Foo < Int`), matching the
+    /// call-site rule in `check_call`. Inherent to `<` ambiguity after a
+    /// bare name — no argument-node refactor removes it.
+    angle_args_require_adjacency: bool,
 }
 
 #[allow(clippy::expect_used)]
@@ -124,6 +131,7 @@ impl<'a> Parser<'a> {
             diagnostics: Default::default(),
             context_stack: vec![ParseContext::TopLevel],
             lexer_error: None,
+            angle_args_require_adjacency: false,
             ast: AST::<NewAST> {
                 path: path.into(),
                 roots: Default::default(),
@@ -2569,7 +2577,7 @@ impl<'a> Parser<'a> {
         // Parse optional type arguments: 'effect<Type>(...)
         let type_args = if self.peek_is(TokenKind::Less) {
             self.consume(TokenKind::Less)?;
-            self.type_annotations(TokenKind::Greater)?
+            self.generic_args()?
         } else {
             vec![]
         };
@@ -2634,7 +2642,7 @@ impl<'a> Parser<'a> {
 
         if self.peek_is(TokenKind::Less) && prev.end == cur.start {
             self.consume(TokenKind::Less)?;
-            let type_args = self.type_annotations(TokenKind::Greater)?;
+            let type_args = self.generic_args()?;
             self.consume(TokenKind::LeftParen)?;
             return Ok(Some(self.call(can_assign, type_args, callee.clone())?));
         }
@@ -2722,7 +2730,7 @@ impl<'a> Parser<'a> {
     pub(crate) fn call(
         &mut self,
         can_assign: bool,
-        type_args: Vec<TypeAnnotation>,
+        type_args: Vec<GenericArg>,
         callee: Expr,
     ) -> Result<Expr, ParserError> {
         let tok = self.push_lhs_location(callee.id);
@@ -2877,8 +2885,12 @@ impl<'a> Parser<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn type_annotation(&mut self) -> Result<TypeAnnotation, ParserError> {
-        let mut base = self.type_annotation_base()?;
+        let base = self.type_annotation_base()?;
+        self.optional_sugar(base)
+    }
 
+    /// Postfix `?` sugar: each wraps the base in `Optional<...>`.
+    fn optional_sugar(&mut self, mut base: TypeAnnotation) -> Result<TypeAnnotation, ParserError> {
         while self.did_match(TokenKind::QuestionMark)? {
             let tok = self.push_lhs_location(base.id);
             base = self.save_meta(tok, |id, span| TypeAnnotation {
@@ -2887,12 +2899,70 @@ impl<'a> Parser<'a> {
                 kind: TypeAnnotationKind::Nominal {
                     name: "Optional".into(),
                     name_span: span,
-                    generics: vec![base],
+                    generics: vec![GenericArg::Type(base)],
                 },
             })?;
         }
-
         Ok(base)
+    }
+
+    /// The tail of a parenthesized type — a func type or tuple — with the
+    /// opening `(` already consumed and `initial` elements already parsed.
+    /// `closed` marks the `)` as consumed too (a single-element list whose
+    /// caller peeked past it).
+    fn finish_paren_type_annotation(
+        &mut self,
+        tok: LocToken,
+        initial: Vec<(Option<ParamMode>, TypeAnnotation)>,
+        closed: bool,
+    ) -> Result<TypeAnnotation, ParserError> {
+        let mut sig_args = initial;
+        let mut saw_param_mode = false;
+        if !closed {
+            while !self.did_match(TokenKind::RightParen)? {
+                sig_args.push(self.func_type_param(&mut saw_param_mode)?);
+                self.consume(TokenKind::Comma).ok();
+            }
+        }
+        let has_effects = self.peek_is(TokenKind::SingleQuote)
+            || matches!(
+                self.current.as_ref().map(|t| &t.kind),
+                Some(TokenKind::EffectName)
+            );
+        let effects = self.effect_set()?;
+        if self.did_match(TokenKind::Arrow)? {
+            let ret = self.type_annotation()?;
+            let params = sig_args
+                .into_iter()
+                .map(|(mode, annotation)| self.apply_func_type_param_mode(mode, annotation))
+                .collect::<Result<_, _>>()?;
+            self.save_meta(tok, |id, span| TypeAnnotation {
+                id,
+                span,
+                kind: TypeAnnotationKind::Func {
+                    params,
+                    effects,
+                    returns: Box::new(ret),
+                },
+            })
+        } else {
+            if has_effects || saw_param_mode {
+                return Err(ParserError::UnexpectedToken {
+                    expected: TokenKind::Arrow.into(),
+                    actual: format!("{:?}", self.current),
+                    token: self.current.clone(),
+                });
+            }
+            let items = sig_args
+                .into_iter()
+                .map(|(_, annotation)| annotation)
+                .collect();
+            self.save_meta(tok, |id, span| TypeAnnotation {
+                id,
+                span,
+                kind: TypeAnnotationKind::Tuple(items),
+            })
+        }
     }
 
     /// A parameter of a function TYPE annotation (ADR 0018): an optional
@@ -3007,52 +3077,7 @@ impl<'a> Parser<'a> {
         }
 
         if self.did_match(TokenKind::LeftParen)? {
-            // it's a func type or tuple repr
-            let mut sig_args = vec![];
-            let mut saw_param_mode = false;
-            while !self.did_match(TokenKind::RightParen)? {
-                sig_args.push(self.func_type_param(&mut saw_param_mode)?);
-                self.consume(TokenKind::Comma).ok();
-            }
-            let has_effects = self.peek_is(TokenKind::SingleQuote)
-                || matches!(
-                    self.current.as_ref().map(|t| &t.kind),
-                    Some(TokenKind::EffectName)
-                );
-            let effects = self.effect_set()?;
-            if self.did_match(TokenKind::Arrow)? {
-                let ret = self.type_annotation()?;
-                let params = sig_args
-                    .into_iter()
-                    .map(|(mode, annotation)| self.apply_func_type_param_mode(mode, annotation))
-                    .collect::<Result<_, _>>()?;
-                return self.save_meta(tok, |id, span| TypeAnnotation {
-                    id,
-                    span,
-                    kind: TypeAnnotationKind::Func {
-                        params,
-                        effects,
-                        returns: Box::new(ret),
-                    },
-                });
-            } else {
-                if has_effects || saw_param_mode {
-                    return Err(ParserError::UnexpectedToken {
-                        expected: TokenKind::Arrow.into(),
-                        actual: format!("{:?}", self.current),
-                        token: self.current.clone(),
-                    });
-                }
-                let items = sig_args
-                    .into_iter()
-                    .map(|(_, annotation)| annotation)
-                    .collect();
-                return self.save_meta(tok, |id, span| TypeAnnotation {
-                    id,
-                    span,
-                    kind: TypeAnnotationKind::Tuple(items),
-                });
-            }
+            return self.finish_paren_type_annotation(tok, vec![], false);
         }
 
         if self.did_match(TokenKind::Any)? {
@@ -3069,7 +3094,7 @@ impl<'a> Parser<'a> {
                     name: "Array".into(),
                     // Array is implied by the brackets, so it has no source name.
                     name_span: Span::SYNTHESIZED,
-                    generics: vec![element],
+                    generics: vec![GenericArg::Type(element)],
                 },
             })?;
             return self.nominal_type_path(base);
@@ -3110,10 +3135,9 @@ impl<'a> Parser<'a> {
             name.push_str(&segment);
         }
         let mut generics = vec![];
-        if self.did_match(TokenKind::Less)? {
+        if self.angle_generic_args_allowed() && self.did_match(TokenKind::Less)? {
             while !self.did_match_generic_close()? {
-                let generic = self.type_annotation()?;
-                generics.push(generic);
+                generics.push(self.generic_argument()?);
                 self.consume(TokenKind::Comma).ok();
             }
         }
@@ -3143,11 +3167,12 @@ impl<'a> Parser<'a> {
             let tok = self.push_source_location();
             let (member_name, member_span) = self.identifier()?;
             let member: Label = member_name.into();
-            let member_generics = if self.did_match(TokenKind::Less)? {
-                self.type_annotations(TokenKind::Greater)?
-            } else {
-                vec![]
-            };
+            let member_generics =
+                if self.angle_generic_args_allowed() && self.did_match(TokenKind::Less)? {
+                    self.generic_args()?
+                } else {
+                    vec![]
+                };
 
             base = self.save_meta(tok, |id, span| TypeAnnotation {
                 id,
@@ -3273,23 +3298,61 @@ impl<'a> Parser<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn where_predicate(&mut self) -> Result<WherePredicate, ParserError> {
+        let saved = std::mem::replace(&mut self.angle_args_require_adjacency, true);
+        let result = self.where_predicate_operand_restricted();
+        self.angle_args_require_adjacency = saved;
+        result
+    }
+
+    fn where_predicate_operand_restricted(&mut self) -> Result<WherePredicate, ParserError> {
         let tok = self.push_source_location();
-        let lhs = self.type_annotation()?;
+        let lhs = self.generic_argument()?;
         let kind = if self.did_match(TokenKind::EqualsEquals)? {
             WherePredicateKind::TypeEq {
                 lhs,
-                rhs: self.type_annotation()?,
+                rhs: self.generic_argument()?,
+            }
+        } else if self.did_match(TokenKind::Less)? {
+            WherePredicateKind::StaticCmp {
+                strict: true,
+                lhs,
+                rhs: self.generic_argument()?,
+            }
+        } else if self.did_match(TokenKind::LessEquals)? {
+            WherePredicateKind::StaticCmp {
+                strict: false,
+                lhs,
+                rhs: self.generic_argument()?,
             }
         } else {
             self.consume(TokenKind::Colon)?;
+            let GenericArg::Type(ty) = lhs else {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "a type before `:` in a where predicate".into(),
+                    actual: format!("{:?}", self.current),
+                    token: self.current.clone(),
+                });
+            };
             let mut protocols = vec![self.type_annotation()?];
             while self.did_match(TokenKind::Amp)? {
                 protocols.push(self.type_annotation()?);
             }
-            WherePredicateKind::Conforms { ty: lhs, protocols }
+            WherePredicateKind::Conforms { ty, protocols }
         };
 
         self.save_meta(tok, |id, span| WherePredicate { id, span, kind })
+    }
+
+    /// Whether `<` in the current position opens a generic-argument list.
+    /// See `angle_args_require_adjacency`.
+    fn angle_generic_args_allowed(&self) -> bool {
+        if !self.angle_args_require_adjacency {
+            return true;
+        }
+        match (&self.previous, &self.current) {
+            (Some(prev), Some(cur)) if cur.kind == TokenKind::Less => prev.end == cur.start,
+            _ => true,
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -3320,23 +3383,215 @@ impl<'a> Parser<'a> {
         Ok((payloads, labels))
     }
 
-    fn type_annotations(&mut self, closer: TokenKind) -> Result<Vec<TypeAnnotation>, ParserError> {
-        let mut annotations: Vec<TypeAnnotation> = vec![];
-
-        loop {
-            let closed = if closer == TokenKind::Greater {
-                self.did_match_generic_close()?
-            } else {
-                self.did_match(closer)?
-            };
-            if closed {
-                break;
-            }
-            annotations.push(self.type_annotation()?);
+    /// A `<`-opened generic-argument list, closed by `>` (with `>>`
+    /// splitting). Arguments admit static value expressions (ADR 0035).
+    fn generic_args(&mut self) -> Result<Vec<GenericArg>, ParserError> {
+        let mut args: Vec<GenericArg> = vec![];
+        while !self.did_match_generic_close()? {
+            args.push(self.generic_argument()?);
             self.consume(TokenKind::Comma).ok();
         }
+        Ok(args)
+    }
 
-        Ok(annotations)
+    /// One generic argument or static-predicate operand (ADR 0035). A
+    /// literal or arithmetic form is a static expression; anything else
+    /// parses as a type annotation — and if arithmetic FOLLOWS it, the
+    /// annotation becomes the name-like left operand of a static
+    /// expression (`N + 1`).
+    fn generic_argument(&mut self) -> Result<GenericArg, ParserError> {
+        if self.starts_static_literal() {
+            return Ok(GenericArg::Static(self.static_expr()?));
+        }
+        if self.peek_is(TokenKind::LeftParen) {
+            return self.parenthesized_generic_argument();
+        }
+        let annotation = self.type_annotation()?;
+        if self.peek_is(TokenKind::Plus)
+            || self.peek_is(TokenKind::Minus)
+            || self.peek_is(TokenKind::Star)
+        {
+            let lhs = self.static_path(annotation)?;
+            let expr = self.static_expr_from(lhs)?;
+            return Ok(GenericArg::Static(expr));
+        }
+        Ok(GenericArg::Type(annotation))
+    }
+
+    /// `(` in generic-argument position is ambiguous: a static group
+    /// (`(2 + 2)`, `(N + 1) * 2`), a parenthesized type, a tuple type, or
+    /// a function type. Parse the inner as a generic argument and let the
+    /// following token decide (ADR 0035).
+    fn parenthesized_generic_argument(&mut self) -> Result<GenericArg, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::LeftParen)?;
+
+        // Unit `()` and mode-led parameter lists are function-type
+        // territory outright.
+        if self.peek_is(TokenKind::RightParen)
+            || self.peek_is(TokenKind::Mut)
+            || (self.peek_identifier("consume") && self.next_starts_type_annotation())
+        {
+            let annotation = self.finish_paren_type_annotation(tok, vec![], false)?;
+            return Ok(GenericArg::Type(self.optional_sugar(annotation)?));
+        }
+
+        let inner = self.generic_argument()?;
+        match inner {
+            GenericArg::Static(expr) => {
+                self.consume(TokenKind::RightParen)?;
+                let group = self.save_meta(tok, |id, span| StaticExpr {
+                    id,
+                    span,
+                    kind: StaticExprKind::Group(Box::new(expr)),
+                })?;
+                Ok(GenericArg::Static(self.static_expr_from(group)?))
+            }
+            GenericArg::Type(annotation) => {
+                if self.did_match(TokenKind::Comma)? {
+                    // A tuple or function type continuing after its first
+                    // element.
+                    let annotation =
+                        self.finish_paren_type_annotation(tok, vec![(None, annotation)], false)?;
+                    return Ok(GenericArg::Type(self.optional_sugar(annotation)?));
+                }
+                self.consume(TokenKind::RightParen)?;
+                if self.peek_is(TokenKind::Plus)
+                    || self.peek_is(TokenKind::Minus)
+                    || self.peek_is(TokenKind::Star)
+                {
+                    // `(N) * 2`: the parenthesized name was a static
+                    // operand after all.
+                    let path = self.static_path(annotation)?;
+                    let group = self.save_meta(tok, |id, span| StaticExpr {
+                        id,
+                        span,
+                        kind: StaticExprKind::Group(Box::new(path)),
+                    })?;
+                    return Ok(GenericArg::Static(self.static_expr_from(group)?));
+                }
+                // `(A) -> B` (and effect rows) are single-parameter
+                // function types; a bare `(A)` is the 1-tuple spelling.
+                let annotation =
+                    self.finish_paren_type_annotation(tok, vec![(None, annotation)], true)?;
+                Ok(GenericArg::Type(self.optional_sugar(annotation)?))
+            }
+        }
+    }
+
+    fn starts_static_literal(&self) -> bool {
+        self.peek_is(TokenKind::Int)
+            || self.peek_is(TokenKind::True)
+            || self.peek_is(TokenKind::False)
+    }
+
+    /// The static index language (ADR 0035 §3): `+`/`-` over terms,
+    /// terms are `*` over primaries.
+    fn static_expr(&mut self) -> Result<StaticExpr, ParserError> {
+        let lhs = self.static_expr_term()?;
+        self.static_expr_from(lhs)
+    }
+
+    /// Continue `+`/`-` chains after an already-parsed left operand.
+    fn static_expr_from(&mut self, mut lhs: StaticExpr) -> Result<StaticExpr, ParserError> {
+        // The left operand may still want `*` terms (`N * 2 + 1` arrives
+        // here with `N` alone parsed).
+        while self.did_match(TokenKind::Star)? {
+            let rhs = self.static_expr_primary()?;
+            lhs = self.static_op(StaticOpKind::Mul, lhs, rhs)?;
+        }
+        loop {
+            let op = if self.did_match(TokenKind::Plus)? {
+                StaticOpKind::Add
+            } else if self.did_match(TokenKind::Minus)? {
+                StaticOpKind::Sub
+            } else {
+                break;
+            };
+            let rhs = self.static_expr_term()?;
+            lhs = self.static_op(op, lhs, rhs)?;
+        }
+        Ok(lhs)
+    }
+
+    fn static_expr_term(&mut self) -> Result<StaticExpr, ParserError> {
+        let mut lhs = self.static_expr_primary()?;
+        while self.did_match(TokenKind::Star)? {
+            let rhs = self.static_expr_primary()?;
+            lhs = self.static_op(StaticOpKind::Mul, lhs, rhs)?;
+        }
+        Ok(lhs)
+    }
+
+    fn static_expr_primary(&mut self) -> Result<StaticExpr, ParserError> {
+        if self.peek_is(TokenKind::Int) {
+            let tok = self.push_source_location();
+            let literal = self
+                .current
+                .as_ref()
+                .map(|token| self.lexeme(token).to_string())
+                .ok_or(ParserError::UnexpectedEndOfInput(None))?;
+            self.advance();
+            return self.save_meta(tok, |id, span| StaticExpr {
+                id,
+                span,
+                kind: StaticExprKind::Int(literal),
+            });
+        }
+        if self.peek_is(TokenKind::True) || self.peek_is(TokenKind::False) {
+            let tok = self.push_source_location();
+            let value = self.peek_is(TokenKind::True);
+            self.advance();
+            return self.save_meta(tok, |id, span| StaticExpr {
+                id,
+                span,
+                kind: StaticExprKind::Bool(value),
+            });
+        }
+        // In committed static context `(` is grouping, not a tuple type.
+        if self.peek_is(TokenKind::LeftParen) {
+            let tok = self.push_source_location();
+            self.consume(TokenKind::LeftParen)?;
+            let inner = self.static_expr()?;
+            self.consume(TokenKind::RightParen)?;
+            return self.save_meta(tok, |id, span| StaticExpr {
+                id,
+                span,
+                kind: StaticExprKind::Group(Box::new(inner)),
+            });
+        }
+        let annotation = self.type_annotation()?;
+        self.static_path(annotation)
+    }
+
+    /// Wrap an already-parsed annotation as a static Path operand. The
+    /// operand mints its own id and meta (from the annotation's tokens)
+    /// so diagnostics locate it like any node.
+    fn static_path(&mut self, annotation: TypeAnnotation) -> Result<StaticExpr, ParserError> {
+        let tok = self.push_lhs_location(annotation.id);
+        self.save_meta(tok, |id, span| StaticExpr {
+            id,
+            span,
+            kind: StaticExprKind::Path(annotation),
+        })
+    }
+
+    fn static_op(
+        &mut self,
+        op: StaticOpKind,
+        lhs: StaticExpr,
+        rhs: StaticExpr,
+    ) -> Result<StaticExpr, ParserError> {
+        let tok = self.push_lhs_location(lhs.id);
+        self.save_meta(tok, |id, span| StaticExpr {
+            id,
+            span,
+            kind: StaticExprKind::Op {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+        })
     }
 
     fn body_block(&mut self, context: BlockContext) -> Result<Body, ParserError> {
@@ -3834,6 +4089,36 @@ impl<'a> Parser<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn generic(&mut self) -> Result<GenericDecl, ParserError> {
         let tok = self.push_source_location();
+
+        // ADR 0035: `static N: Int` declares a static value parameter. The
+        // colon introduces its declared value type, not a conformance list.
+        if self.did_match(TokenKind::Static)? {
+            let (name, name_span) = self.identifier()?;
+            if !name.chars().next().is_some_and(char::is_uppercase) {
+                return Err(ParserError::LowercaseStaticParameter {
+                    name,
+                    span: name_span,
+                });
+            }
+            self.consume(TokenKind::Colon)?;
+            let static_ty = self.type_annotation()?;
+            let default = if self.did_match(TokenKind::Equals)? {
+                Some(GenericArg::Static(self.static_expr()?))
+            } else {
+                None
+            };
+            return self.save_meta(tok, |id, span| GenericDecl {
+                id,
+                span,
+                name: name.into(),
+                name_span,
+                generics: vec![],
+                conformances: vec![],
+                default,
+                static_ty: Some(static_ty),
+            });
+        }
+
         let (name, name_span) = self.identifier()?;
         let generics = self.generics()?;
 
@@ -3843,7 +4128,7 @@ impl<'a> Parser<'a> {
             vec![]
         };
         let default = if self.did_match(TokenKind::Equals)? {
-            Some(self.type_annotation()?)
+            Some(GenericArg::Type(self.type_annotation()?))
         } else {
             None
         };
@@ -3856,6 +4141,7 @@ impl<'a> Parser<'a> {
             generics,
             conformances,
             default,
+            static_ty: None,
         })
     }
 

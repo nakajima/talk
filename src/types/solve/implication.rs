@@ -80,7 +80,8 @@ impl<'s> Solver<'s> {
             | Constraint::CoerceOwned { origin, .. }
             | Constraint::PatternView { origin, .. }
             | Constraint::StringPattern { origin, .. }
-            | Constraint::HandleEffect { origin, .. } => Some(*origin),
+            | Constraint::HandleEffect { origin, .. }
+            | Constraint::StaticCmp { origin, .. } => Some(*origin),
             Constraint::Implic(_) => None,
         }
     }
@@ -171,6 +172,9 @@ impl<'s> Solver<'s> {
                 .ty_mentions_params(scrutinee, params)
                 .or_else(|| self.ty_mentions_params(view, params)),
             Constraint::StringPattern { ty, .. } => self.ty_mentions_params(ty, params),
+            Constraint::StaticCmp { lhs, rhs, .. } => self
+                .ty_mentions_params(lhs, params)
+                .or_else(|| self.ty_mentions_params(rhs, params)),
             Constraint::Implic(implication) => implication
                 .givens
                 .iter()
@@ -221,6 +225,9 @@ impl<'s> Solver<'s> {
             } => self
                 .ty_mentions_params(receiver, params)
                 .or_else(|| self.ty_mentions_params(member, params)),
+            Predicate::StaticCmp { lhs, rhs, .. } => self
+                .ty_mentions_params(lhs, params)
+                .or_else(|| self.ty_mentions_params(rhs, params)),
         }
     }
 

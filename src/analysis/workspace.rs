@@ -732,6 +732,31 @@ mod tests {
     }
 
     #[test]
+    fn static_argument_diagnostics_locate_the_argument() {
+        // A static kind mismatch must point at the offending argument's
+        // own tokens, not fall back to 1:1 (ADR 0035).
+        let text = "struct Grid<static Rows: Int> {}\nfunc f(consume g: Grid<true>) -> Int { 1 }\n";
+        let docs = vec![DocumentInput {
+            id: "static.tlk".to_string(),
+            path: "static.tlk".to_string(),
+            version: 0,
+            text: text.to_string(),
+        }];
+        let workspace = Workspace::new(docs).expect("workspace");
+        let diagnostics = workspace
+            .diagnostics
+            .get("static.tlk")
+            .expect("diagnostics for the document");
+        let literal = text.find("true").expect("the static argument") as u32;
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.range.start == literal && d.range.end == literal + 4),
+            "expected a diagnostic spanning `true`, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
     fn test_files_are_checked_with_the_test_harness() {
         let path = "example.test.tlk".to_string();
         let workspace = Workspace::new(vec![DocumentInput {

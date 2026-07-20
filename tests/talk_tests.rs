@@ -108,6 +108,117 @@ fn run_executes_core_operators() {
 }
 
 #[test]
+fn static_value_generics_reach_runtime() {
+    // ADR 0035 §6: a static parameter is usable as an ordinary value in
+    // its declaration body; the backend substitutes the concrete value
+    // during specialization. Exercises explicit static arguments, closed
+    // arithmetic, inference from an argument type, and two distinct
+    // instantiations of one generic body.
+    assert_runs(
+        b"struct Grid<static Rows: Int> {}\n\
+          func width<static N: Int>() -> Int {\n\
+          \tN\n\
+          }\n\
+          func rows<static R: Int>(g: Grid<R>) -> Int {\n\
+          \tR\n\
+          }\n\
+          let g = Grid<7>()\n\
+          width<4>() + width<2 + 1>() + rows(g)\n",
+        &[],
+        b"14\n",
+    );
+}
+
+#[test]
+fn func_static_default_reaches_runtime() {
+    assert_runs(
+        b"func number<static N: Int = 4>() -> Int {\n\
+          \tN\n\
+          }\n\
+          number() + number<10>()\n",
+        &[],
+        b"14\n",
+    );
+}
+
+#[test]
+fn static_enum_case_param_usable_as_value() {
+    assert_runs(
+        b"enum Color {\n\
+          \tcase red\n\
+          \tcase green\n\
+          }\n\
+          struct Paint<static C: Color> {}\n\
+          func shade<static C: Color>(p: Paint<C>) -> Color {\n\
+          \tC\n\
+          }\n\
+          let p = Paint<Color.green>()\n\
+          match shade(p) { .red -> print(0), .green -> print(1) }\n",
+        &[],
+        b"1\n",
+    );
+}
+
+#[test]
+fn protocol_default_body_reads_owner_static_param() {
+    // ADR 0035 §6 applies to protocol defaults too: the conformance's
+    // protocol application pins the owner's static parameter, and the
+    // default body reads it as a value.
+    assert_runs(
+        b"protocol Sized<static N: Int> {\n\
+          \tfunc size() -> Int { N }\n\
+          }\n\
+          struct Four {}\n\
+          extend Four: Sized<4> {}\n\
+          struct Nine {}\n\
+          extend Nine: Sized<9> {}\n\
+          Four().size() + Nine().size()\n",
+        &[],
+        b"13\n",
+    );
+}
+
+#[test]
+fn static_generic_func_as_value_specializes_when_type_pins_statics() {
+    assert_runs(
+        b"struct Grid<static Rows: Int> {}\n\
+          func rows<static R: Int>(g: Grid<R>) -> Int {\n\
+          \tR\n\
+          }\n\
+          func apply(f: (Grid<3>) -> Int, g: Grid<3>) -> Int {\n\
+          \tf(g)\n\
+          }\n\
+          let g = Grid<3>()\n\
+          apply(rows, g)\n",
+        &[],
+        b"3\n",
+    );
+}
+
+#[test]
+fn static_generic_func_as_value_rejects_unpinned_statics() {
+    let output = run_source(
+        b"func width<static N: Int>() -> Int {\n\
+          \tN\n\
+          }\n\
+          func apply0(f: () -> Int) -> Int {\n\
+          \tf()\n\
+          }\n\
+          apply0(width)\n",
+        &[],
+    );
+    assert!(
+        !output.status.success(),
+        "unpinned static use should be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("static") || stderr.contains("infer"),
+        "stderr should explain the unpinned static: {stderr}"
+    );
+}
+
+#[test]
 fn postfix_question_mark_propagates_second_enum_variant() {
     assert_runs(
         b"enum Outcome<Value, Failure> {\n\
@@ -2023,6 +2134,44 @@ fn check_reads_stdin_once_for_both_passes() {
     assert!(
         !output.status.success(),
         "check accepted a rejected program over stdin"
+    );
+}
+
+#[test]
+fn check_accepts_uncalled_static_generic_bodies() {
+    // `talk check` compiles every callable rigidly (TALK_CHECK_ALL); a
+    // static parameter read in a generic body is an abstract value
+    // there (ADR 0035 §6), not an error — for plain funcs, nominal
+    // methods, and protocol defaults alike, called or not.
+    use std::io::Write as _;
+    let source = b"func width<static N: Int>() -> Int { N }\n\
+        struct Grid<static Rows: Int> {\n\
+        \tfunc size() -> Int { Rows }\n\
+        }\n\
+        protocol Sized<static N: Int> {\n\
+        \tfunc area() -> Int { N }\n\
+        }\n";
+    let mut child = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .arg("check")
+        .arg("-")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn talk check");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(source)
+        .expect("write source");
+    let output = child.wait_with_output().expect("talk check");
+    assert!(
+        output.status.success(),
+        "check rejected valid static-generic declarations:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
 }
 

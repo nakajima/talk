@@ -147,6 +147,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             destructuring_lets,
             extends,
             protocol_defaults,
+            obligations: std::mem::take(&mut self.obligations),
         }
     }
 
@@ -223,7 +224,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             let ty = self.lower_type_alias(symbol, alias.rhs.id, None);
             let params = alias
                 .owner
-                .map(|owner| nominal_params(self.catalog, owner))
+                .map(|owner| param_symbols(&nominal_params(self.catalog, owner)))
                 .unwrap_or_default();
             self.catalog.type_aliases.insert(
                 symbol,
@@ -240,27 +241,27 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         top_decls: &[&'a Decl],
         struct_decls: &[(Symbol, &'a Decl)],
     ) {
+        // This pass pre-scans conformance heads; `register_extend`
+        // re-lowers each with its row context and owns the formation
+        // obligations, so this pass's duplicates are discarded below.
+        let obligation_start = self.obligations.len();
         for decl in top_decls {
             if let DeclKind::Extend {
                 name,
                 conformances,
                 generics,
+                row_generics,
                 ..
             } = &decl.kind
                 && let Ok(head) = name.symbol()
             {
+                // The row's generics (including ADR 0035 static params)
+                // must be registered before its conformance heads lower;
+                // registration is idempotent with `register_extend`'s.
+                self.register_generic_bounds(row_generics);
+                self.register_generic_bounds(generics);
                 let self_params: Vec<Symbol> = if generics.is_empty() {
-                    self.catalog
-                        .structs
-                        .get(&head)
-                        .map(|info| info.params.clone())
-                        .or_else(|| {
-                            self.catalog
-                                .enums
-                                .get(&head)
-                                .map(|info| info.params.clone())
-                        })
-                        .unwrap_or_default()
+                    param_symbols(&nominal_params(self.catalog, head))
                 } else {
                     generic_symbols(generics)
                 };
@@ -285,7 +286,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .catalog
                 .structs
                 .get(head)
-                .map(|info| info.params.clone())
+                .map(|info| param_symbols(&info.params))
                 .unwrap_or_default();
             let self_ty = Ty::Nominal(*head, self_params.iter().copied().map(Ty::Param).collect());
             for member in &body.decls {
@@ -301,6 +302,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 }
             }
         }
+        self.obligations.truncate(obligation_start);
     }
 
     fn record_marker_claim(&mut self, head: Symbol, protocol: Symbol, node: NodeID) {
@@ -374,7 +376,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .unwrap_or_default();
             let rebind: FxHashMap<Symbol, Ty> = decl_params
                 .iter()
-                .copied()
+                .map(|param| param.symbol)
                 .zip(self_args.iter().cloned())
                 .collect();
             for (field, ty) in self.marker_checked_fields(head) {
@@ -431,20 +433,33 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         else {
             return;
         };
-        self.register_generic_bounds(generics);
-        self.register_where_bounds(where_clause.as_ref());
-        let params = generic_symbols(generics);
-        let self_ty = Ty::Nominal(symbol, params.iter().map(|p| Ty::Param(*p)).collect());
-        self.self_types.push(self_ty);
-        let predicates = self.declared_predicates(generics, where_clause.as_ref());
-        self.self_types.pop();
-        let mut info = StructInfo {
-            linear: *linear,
-            heap: *heap,
-            params,
-            predicates,
-            ..Default::default()
-        };
+        let self_ty = Ty::Nominal(
+            symbol,
+            generic_symbols(generics)
+                .into_iter()
+                .map(Ty::Param)
+                .collect(),
+        );
+        let info = self.in_declaration_context(
+            Some(self_ty),
+            generics,
+            where_clause.as_ref(),
+            |this, context| {
+                let mut info = StructInfo {
+                    linear: *linear,
+                    heap: *heap,
+                    params: context.params.clone(),
+                    predicates: context.predicates.clone(),
+                    ..Default::default()
+                };
+                this.collect_struct_members(&mut info, symbol, body);
+                info
+            },
+        );
+        self.catalog.structs.insert(symbol, info);
+    }
+
+    fn collect_struct_members(&mut self, info: &mut StructInfo, symbol: Symbol, body: &Body) {
         for member in &body.decls {
             match &member.kind {
                 DeclKind::Property {
@@ -496,11 +511,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 other => self.unsupported(member.id, decl_kind_name(other)),
             }
         }
-        self.mint_field_eff_params(&mut info);
+        self.mint_field_eff_params(info);
         for label in info.fields.keys().chain(info.methods.keys()) {
             self.catalog.add_owner(label, MemberOwner::Nominal(symbol));
         }
-        self.catalog.structs.insert(symbol, info);
     }
 
     /// Quantify the struct's closure-field effect rows: every free row
@@ -558,133 +572,165 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         else {
             return;
         };
-        self.register_generic_bounds(generics);
-        self.register_where_bounds(where_clause.as_ref());
-        let params = generic_symbols(generics);
-        let result = Ty::Nominal(symbol, params.iter().map(|p| Ty::Param(*p)).collect());
-        self.self_types.push(result.clone());
-        let predicates = self.declared_predicates(generics, where_clause.as_ref());
-        self.self_types.pop();
-        let mut info = Enum {
-            linear: *linear,
-            params,
-            predicates,
-            ..Default::default()
-        };
-        for member in &body.decls {
-            match &member.kind {
-                DeclKind::EnumVariant {
-                    name,
-                    generics: case_generics,
-                    payloads: payload_annotations,
-                    payload_labels: declared_payload_labels,
-                    result: case_result,
-                    ..
-                } => {
-                    let Ok(variant) = name.symbol() else { continue };
-                    self.register_generic_bounds(case_generics);
-                    self.report_variant_generic_shadowing(generics, case_generics);
-
-                    let payloads = payload_annotations
-                        .iter()
-                        .map(|a| self.lower_annotation(a))
-                        .collect();
-                    let payload_labels: Vec<Option<String>> = declared_payload_labels
-                        .iter()
-                        .map(|label| label.as_ref().map(Name::name_str))
-                        .collect();
-                    let mut seen_labels = FxHashSet::default();
-                    for label in payload_labels.iter().flatten() {
-                        if !seen_labels.insert(label.clone()) {
-                            self.diagnostics.errors.push((
-                                TypeError::DuplicateVariantPayloadLabel {
-                                    variant: name.name_str(),
-                                    label: label.clone(),
-                                },
-                                member.id,
-                            ));
+        let result = Ty::Nominal(
+            symbol,
+            generic_symbols(generics)
+                .into_iter()
+                .map(Ty::Param)
+                .collect(),
+        );
+        let info = self.in_declaration_context(
+            Some(result.clone()),
+            generics,
+            where_clause.as_ref(),
+            |this, context| {
+                let mut info = Enum {
+                    linear: *linear,
+                    params: context.params.clone(),
+                    predicates: context.predicates.clone(),
+                    ..Default::default()
+                };
+                for member in &body.decls {
+                    match &member.kind {
+                        DeclKind::EnumVariant { .. } => {
+                            this.register_enum_variant(&mut info, symbol, generics, member, &result)
                         }
-                    }
-                    let case_result_ty = case_result
-                        .as_ref()
-                        .map(|annotation| self.lower_annotation(annotation))
-                        .unwrap_or_else(|| result.clone());
-                    if !self.valid_variant_result(symbol, info.params.len(), &case_result_ty) {
-                        self.diagnostics.errors.push((
-                            TypeError::InvalidVariantResultType {
-                                variant: name.name_str(),
-                            },
-                            case_result
-                                .as_ref()
-                                .map_or(member.id, |annotation| annotation.id),
-                        ));
-                    } else if case_result.is_some() && case_result_ty == result {
-                        self.diagnostics.warnings.push((
-                            TypeError::RedundantVariantResultType {
-                                variant: name.name_str(),
-                            },
-                            case_result
-                                .as_ref()
-                                .map_or(member.id, |annotation| annotation.id),
-                        ));
-                    }
-
-                    let predicates = self.declared_predicates(case_generics, None);
-                    let all_params: Vec<Symbol> = info
-                        .params
-                        .iter()
-                        .copied()
-                        .chain(
-                            case_generics
-                                .iter()
-                                .filter_map(|generic| generic.name.symbol().ok()),
-                        )
-                        .collect();
-                    let universe: FxHashSet<Symbol> = all_params.iter().copied().collect();
-                    let mut mentioned = FxHashSet::default();
-                    for payload in &payloads {
-                        collect_ty_params(payload, Some(&universe), &mut mentioned);
-                    }
-                    collect_ty_params(&case_result_ty, Some(&universe), &mut mentioned);
-                    for predicate in &predicates {
-                        collect_predicate_params(predicate, Some(&universe), &mut mentioned);
-                    }
-                    let scheme_params = all_params
-                        .into_iter()
-                        .filter(|param| mentioned.contains(param))
-                        .map(|symbol| SchemeParam { symbol })
-                        .collect();
-                    let constructor_scheme = Scheme {
-                        params: scheme_params,
-                        eff_params: vec![],
-                        row_params: vec![],
-                        perm_params: vec![],
-                        predicates,
-                        ty: Ty::Func(payloads, Box::new(case_result_ty), EffectRow::pure()),
-                    };
-                    info.variants.insert(
-                        name.name_str(),
-                        Variant {
-                            symbol: variant,
-                            payload_labels,
-                            constructor_scheme,
-                        },
-                    );
-                }
-                DeclKind::Method {
-                    func,
-                    is_static: false,
-                    ..
-                } => {
-                    if let Ok(method) = func.name.symbol() {
-                        info.methods.insert(func.name.name_str(), method);
+                        DeclKind::Method {
+                            func,
+                            is_static: false,
+                            ..
+                        } => {
+                            if let Ok(method) = func.name.symbol() {
+                                info.methods.insert(func.name.name_str(), method);
+                            }
+                        }
+                        DeclKind::TypeAlias(..) => {}
+                        other => this.unsupported(member.id, decl_kind_name(other)),
                     }
                 }
-                DeclKind::TypeAlias(..) => {}
-                other => self.unsupported(member.id, decl_kind_name(other)),
-            }
-        }
+                info
+            },
+        );
         self.catalog.enums.insert(symbol, info);
+    }
+
+    fn register_enum_variant(
+        &mut self,
+        info: &mut Enum,
+        symbol: Symbol,
+        enum_generics: &[GenericDecl],
+        member: &Decl,
+        result: &Ty,
+    ) {
+        let DeclKind::EnumVariant {
+            name,
+            generics: case_generics,
+            payloads: payload_annotations,
+            payload_labels: declared_payload_labels,
+            result: case_result,
+            ..
+        } = &member.kind
+        else {
+            return;
+        };
+        let Ok(variant) = name.symbol() else { return };
+        self.report_variant_generic_shadowing(enum_generics, case_generics);
+        // A case's own generics form a nested declaration context: its
+        // payload annotations prove their formation obligations under
+        // the case's predicates before the enum's.
+        let (payloads, payload_labels, case_result_ty, predicates) =
+            self.in_declaration_context(None, case_generics, None, |this, case_context| {
+                let payloads: Vec<Ty> = payload_annotations
+                    .iter()
+                    .map(|a| this.lower_annotation(a))
+                    .collect();
+                let payload_labels: Vec<Option<String>> = declared_payload_labels
+                    .iter()
+                    .map(|label| label.as_ref().map(Name::name_str))
+                    .collect();
+                let mut seen_labels = FxHashSet::default();
+                for label in payload_labels.iter().flatten() {
+                    if !seen_labels.insert(label.clone()) {
+                        this.diagnostics.errors.push((
+                            TypeError::DuplicateVariantPayloadLabel {
+                                variant: name.name_str(),
+                                label: label.clone(),
+                            },
+                            member.id,
+                        ));
+                    }
+                }
+                let case_result_ty = case_result
+                    .as_ref()
+                    .map(|annotation| this.lower_annotation(annotation))
+                    .unwrap_or_else(|| result.clone());
+                (
+                    payloads,
+                    payload_labels,
+                    case_result_ty,
+                    case_context.predicates.clone(),
+                )
+            });
+        if !self.valid_variant_result(symbol, info.params.len(), &case_result_ty) {
+            self.diagnostics.errors.push((
+                TypeError::InvalidVariantResultType {
+                    variant: name.name_str(),
+                },
+                case_result
+                    .as_ref()
+                    .map_or(member.id, |annotation| annotation.id),
+            ));
+        } else if case_result.is_some() && case_result_ty == *result {
+            self.diagnostics.warnings.push((
+                TypeError::RedundantVariantResultType {
+                    variant: name.name_str(),
+                },
+                case_result
+                    .as_ref()
+                    .map_or(member.id, |annotation| annotation.id),
+            ));
+        }
+
+        let all_params: Vec<Symbol> = info
+            .params
+            .iter()
+            .map(|param| param.symbol)
+            .chain(
+                case_generics
+                    .iter()
+                    .filter_map(|generic| generic.name.symbol().ok()),
+            )
+            .collect();
+        let universe: FxHashSet<Symbol> = all_params.iter().copied().collect();
+        let mut mentioned = FxHashSet::default();
+        for payload in &payloads {
+            collect_ty_params(payload, Some(&universe), &mut mentioned);
+        }
+        collect_ty_params(&case_result_ty, Some(&universe), &mut mentioned);
+        for predicate in &predicates {
+            collect_predicate_params(predicate, Some(&universe), &mut mentioned);
+        }
+        let scheme_params = all_params
+            .into_iter()
+            .filter(|param| mentioned.contains(param))
+            .map(|symbol| scheme_param(self.catalog, symbol))
+            .collect();
+        let constructor_scheme = Scheme {
+            params: scheme_params,
+            eff_params: vec![],
+            row_params: vec![],
+            perm_params: vec![],
+            predicates,
+            ty: Ty::Func(payloads, Box::new(case_result_ty), EffectRow::pure()),
+        };
+        info.variants.insert(
+            name.name_str(),
+            Variant {
+                symbol: variant,
+                payload_labels,
+                constructor_scheme,
+            },
+        );
     }
 
     pub(super) fn report_variant_generic_shadowing(
@@ -739,108 +785,124 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             return;
         };
         self.self_types.push(Ty::Param(symbol));
-        let params = generic_symbols(generics);
-        let param_defaults = generics
-            .iter()
-            .map(|generic| {
-                generic
-                    .default
-                    .as_ref()
-                    .map(|default| self.lower_annotation(default))
-            })
-            .collect();
-        let self_ty = Ty::Param(symbol);
-        let supers: Vec<ProtocolRef> = conformances
-            .iter()
-            .filter_map(|c| {
-                self.lower_protocol_ref_with_self(c, Some(&self_ty))
-                    .map(|(protocol, _)| protocol)
-            })
-            .collect();
+        // The protocol's where clause lowers mid-body (associated types
+        // must register first so the clause can mention them), so the
+        // context opens without it; the body extends the predicates and
+        // the exit wrap honors the final set.
+        let info = self.in_declaration_context(None, generics, None, |this, context| {
+            let self_ty = Ty::Param(symbol);
+            let supers: Vec<ProtocolRef> = conformances
+                .iter()
+                .filter_map(|c| {
+                    this.lower_protocol_ref_with_self(c, Some(&self_ty))
+                        .map(|(protocol, _)| protocol)
+                })
+                .collect();
 
-        let mut info = ProtocolInfo {
-            params: params.clone(),
-            param_defaults,
-            supers,
-            ..Default::default()
-        };
-        self.register_where_bounds(where_clause.as_ref());
-        self.catalog.param_bounds.entry(symbol).or_insert_with(|| {
-            vec![ProtocolRef {
-                protocol: symbol,
-                args: params.iter().copied().map(Ty::Param).collect(),
-            }]
-        });
-        for member in &body.decls {
-            if let DeclKind::Associated {
-                generic,
-                where_clause,
-            } = &member.kind
-                && let Ok(assoc) = generic.name.symbol()
-            {
-                info.assoc.insert(generic.name.name_str(), assoc);
-                // `associated T: Iterator` — bounds on the assoc
-                // param discharge member access through it.
-                self.register_generic_bounds(std::slice::from_ref(generic));
-                self.register_where_bounds(where_clause.as_ref());
-                let assoc_predicates =
-                    self.declared_predicates(std::slice::from_ref(generic), where_clause.as_ref());
-                for predicate in assoc_predicates {
+            let mut info = ProtocolInfo {
+                params: context.params.clone(),
+                supers,
+                ..Default::default()
+            };
+            this.register_where_bounds(where_clause.as_ref());
+            this.catalog.param_bounds.entry(symbol).or_insert_with(|| {
+                vec![ProtocolRef {
+                    protocol: symbol,
+                    args: context.params.iter().map(|p| Ty::Param(p.symbol)).collect(),
+                }]
+            });
+            for member in &body.decls {
+                if let DeclKind::Associated {
+                    generic,
+                    where_clause,
+                } = &member.kind
+                    && let Ok(assoc) = generic.name.symbol()
+                {
+                    info.assoc.insert(generic.name.name_str(), assoc);
+                    // `associated T: Iterator` — bounds on the assoc
+                    // param discharge member access through it.
+                    this.register_generic_bounds(std::slice::from_ref(generic));
+                    this.register_where_bounds(where_clause.as_ref());
+                    let assoc_predicates = this
+                        .declared_predicates(std::slice::from_ref(generic), where_clause.as_ref());
+                    for predicate in assoc_predicates {
+                        if !info.predicates.contains(&predicate) {
+                            info.predicates.push(predicate);
+                        }
+                    }
+                }
+            }
+            this.catalog.protocols.insert(symbol, info.clone());
+            // The protocol's own params and associated types are the
+            // where clause's context (a static `where 0 < N` mentions
+            // them alongside Self).
+            let context_params: FxHashSet<Symbol> = generics
+                .iter()
+                .filter_map(|generic| generic.name.symbol().ok())
+                .chain(self_context_param(&self_ty))
+                .chain(info.assoc.values().copied())
+                .collect();
+            if let Some(where_clause) = where_clause {
+                for predicate in this.lower_where_clause_predicates(
+                    where_clause,
+                    &context_params,
+                    Some(&self_ty),
+                ) {
                     if !info.predicates.contains(&predicate) {
                         info.predicates.push(predicate);
                     }
                 }
             }
-        }
-        self.catalog.protocols.insert(symbol, info.clone());
-        for predicate in self.declared_predicates(&[], where_clause.as_ref()) {
-            if !info.predicates.contains(&predicate) {
-                info.predicates.push(predicate);
-            }
-        }
-        for predicate in &info.predicates {
-            if let Predicate::Conforms { ty, protocol } = predicate
-                && *ty == Ty::Param(symbol)
-                && !info.supers.contains(protocol)
-            {
-                info.supers.push(protocol.clone());
-            }
-        }
-        for member in &body.decls {
-            match &member.kind {
-                DeclKind::Associated { .. } => {}
-                DeclKind::MethodRequirement { signature, .. }
-                | DeclKind::FuncSignature(signature) => {
-                    if let Some(requirement) = self.lower_requirement(signature, false) {
-                        info.requirements
-                            .insert(signature.name.name_str(), requirement);
-                    }
+            for predicate in &info.predicates {
+                if let Predicate::Conforms { ty, protocol } = predicate
+                    && *ty == Ty::Param(symbol)
+                    && !info.supers.contains(protocol)
+                {
+                    info.supers.push(protocol.clone());
                 }
-                // Default-bodied requirements: register the signature now;
-                // the body checks generically over Self after all groups.
-                DeclKind::Method { func, .. } => {
-                    if let Some(requirement) = self.lower_default_requirement(func) {
-                        protocol_defaults.push((symbol, requirement.symbol, func));
-                        info.requirements.insert(func.name.name_str(), requirement);
-                    }
-                }
-                DeclKind::TypeAlias(..) => {}
-                other => self.unsupported(member.id, decl_kind_name(other)),
             }
-        }
-        self.self_types.pop();
+            for member in &body.decls {
+                match &member.kind {
+                    DeclKind::Associated { .. } => {}
+                    DeclKind::MethodRequirement { signature, .. }
+                    | DeclKind::FuncSignature(signature) => {
+                        if let Some(requirement) = this.lower_requirement(signature, false) {
+                            info.requirements
+                                .insert(signature.name.name_str(), requirement);
+                        }
+                    }
+                    // Default-bodied requirements: register the signature now;
+                    // the body checks generically over Self after all groups.
+                    DeclKind::Method { func, .. } => {
+                        if let Some(requirement) = this.lower_default_requirement(func) {
+                            protocol_defaults.push((symbol, requirement.symbol, func));
+                            info.requirements.insert(func.name.name_str(), requirement);
+                        }
+                    }
+                    DeclKind::TypeAlias(..) => {}
+                    other => this.unsupported(member.id, decl_kind_name(other)),
+                }
+            }
 
-        for label in info.requirements.keys() {
-            self.catalog.add_owner(label, MemberOwner::Protocol(symbol));
-        }
-        // Showable and same-type Equatable are auto-derived for structs and
-        // enums. The lowerer synthesizes their required witnesses.
-        if let DeclKind::Protocol { name, .. } = &decl.kind
-            && matches!(name.name_str().as_str(), "Showable" | "Equatable")
-            && !self.catalog.derivable.contains(&symbol)
-        {
-            self.catalog.derivable.push(symbol);
-        }
+            for label in info.requirements.keys() {
+                this.catalog.add_owner(label, MemberOwner::Protocol(symbol));
+            }
+            // Showable and same-type Equatable are auto-derived for structs and
+            // enums. The lowerer synthesizes their required witnesses.
+            if let DeclKind::Protocol { name, .. } = &decl.kind
+                && matches!(name.name_str().as_str(), "Showable" | "Equatable")
+                && !this.catalog.derivable.contains(&symbol)
+            {
+                this.catalog.derivable.push(symbol);
+            }
+            for predicate in &info.predicates {
+                if !context.predicates.contains(predicate) {
+                    context.predicates.push(predicate.clone());
+                }
+            }
+            info
+        });
+        self.self_types.pop();
         self.catalog.protocols.insert(symbol, info);
     }
 
@@ -849,32 +911,39 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         signature: &FuncSignature,
         has_default: bool,
     ) -> Option<Requirement> {
-        self.register_generic_bounds(&signature.generics);
-        self.register_where_bounds(signature.where_clause.as_ref());
-        let predicates =
-            self.declared_predicates(&signature.generics, signature.where_clause.as_ref());
         let symbol = signature.name.symbol().ok()?;
-        let params: Vec<Ty> = signature
-            .params
-            .iter()
-            .map(|p| match &p.type_annotation {
-                Some(annotation) => {
-                    let ty = self.lower_annotation(annotation);
-                    elaborate::apply_param_mode(self.catalog, p, ty, self.diagnostics)
-                }
-                None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),
-            })
-            .collect();
-        let ret = match &signature.ret {
-            Some(annotation) => self.lower_annotation(annotation),
-            None => {
-                self.unsupported(
-                    signature.id,
-                    "protocol requirements without a return type annotation",
-                );
-                Ty::Error
-            }
-        };
+        // The requirement's generics and where clause are their own
+        // declaration context: its signature's formation obligations
+        // prove under the requirement's predicates, not the protocol's.
+        let (params, ret, predicates) = self.in_declaration_context(
+            None,
+            &signature.generics,
+            signature.where_clause.as_ref(),
+            |this, context| {
+                let params: Vec<Ty> = signature
+                    .params
+                    .iter()
+                    .map(|p| match &p.type_annotation {
+                        Some(annotation) => {
+                            let ty = this.lower_annotation(annotation);
+                            elaborate::apply_param_mode(this.catalog, p, ty, this.diagnostics)
+                        }
+                        None => Ty::Var(this.store.fresh_ty(OUTER_LEVEL, p.id)),
+                    })
+                    .collect();
+                let ret = match &signature.ret {
+                    Some(annotation) => this.lower_annotation(annotation),
+                    None => {
+                        this.unsupported(
+                            signature.id,
+                            "protocol requirements without a return type annotation",
+                        );
+                        Ty::Error
+                    }
+                };
+                (params, ret, context.predicates.clone())
+            },
+        );
         // An omitted annotation is effect-polymorphic and gets a fresh tail
         // at every use. An explicit annotation is the requirement's closed
         // effect contract and must survive into witness dispatch.
@@ -933,7 +1002,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             Scheme {
                 params: generics
                     .into_iter()
-                    .map(|symbol| SchemeParam { symbol })
+                    .map(|symbol| scheme_param(self.catalog, symbol))
                     .collect(),
                 eff_params,
                 row_params: vec![],
@@ -945,24 +1014,30 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
     }
 
     pub(super) fn lower_default_requirement(&mut self, func: &Func) -> Option<Requirement> {
-        self.register_func_bounds(func);
-        let predicates = self.declared_predicates(&func.generics, func.where_clause.as_ref());
         let symbol = func.name.symbol().ok()?;
-        let params: Vec<Ty> = func
-            .params
-            .iter()
-            .map(|p| match &p.type_annotation {
-                Some(annotation) => {
-                    let ty = self.lower_annotation(annotation);
-                    elaborate::apply_param_mode(self.catalog, p, ty, self.diagnostics)
-                }
-                None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),
-            })
-            .collect();
-        let ret = match &func.ret {
-            Some(annotation) => self.lower_annotation(annotation),
-            None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, func.id)),
-        };
+        let (params, ret, predicates) = self.in_declaration_context(
+            None,
+            &func.generics,
+            func.where_clause.as_ref(),
+            |this, context| {
+                let params: Vec<Ty> = func
+                    .params
+                    .iter()
+                    .map(|p| match &p.type_annotation {
+                        Some(annotation) => {
+                            let ty = this.lower_annotation(annotation);
+                            elaborate::apply_param_mode(this.catalog, p, ty, this.diagnostics)
+                        }
+                        None => Ty::Var(this.store.fresh_ty(OUTER_LEVEL, p.id)),
+                    })
+                    .collect();
+                let ret = match &func.ret {
+                    Some(annotation) => this.lower_annotation(annotation),
+                    None => Ty::Var(this.store.fresh_ty(OUTER_LEVEL, func.id)),
+                };
+                (params, ret, context.predicates.clone())
+            },
+        );
         let eff = if func.effects.is_open {
             EffectRow {
                 effects: Default::default(),
@@ -1072,45 +1147,45 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             return;
         }
         self.self_types.push(Ty::Param(protocol));
-        self.register_where_bounds(where_clause.as_ref());
-        let extension_predicates = self.declared_predicates(&[], where_clause.as_ref());
-        for member in &body.decls {
-            let DeclKind::Method { func, .. } = &member.kind else {
-                self.unsupported(member.id, decl_kind_name(&member.kind));
-                continue;
-            };
-            let label = func.name.name_str();
-            if self
-                .catalog
-                .protocols
-                .get(&protocol)
-                .is_some_and(|info| info.requirements.contains_key(&label))
-            {
-                self.unsupported(
-                    member.id,
-                    "redeclaring an existing protocol member in a protocol extension",
-                );
-                continue;
-            }
-            let Some(requirement) = self.lower_default_requirement(func) else {
-                continue;
-            };
-            // The extension-level where clause joins the requirement's
-            // scheme context (the scheme is the signature carrier).
-            if let Some(scheme) = self.schemes.get_mut(&requirement.symbol) {
-                for predicate in &extension_predicates {
-                    if !scheme.predicates.contains(predicate) {
-                        scheme.predicates.push(predicate.clone());
+        self.in_declaration_context(None, &[], where_clause.as_ref(), |this, context| {
+            for member in &body.decls {
+                let DeclKind::Method { func, .. } = &member.kind else {
+                    this.unsupported(member.id, decl_kind_name(&member.kind));
+                    continue;
+                };
+                let label = func.name.name_str();
+                if this
+                    .catalog
+                    .protocols
+                    .get(&protocol)
+                    .is_some_and(|info| info.requirements.contains_key(&label))
+                {
+                    this.unsupported(
+                        member.id,
+                        "redeclaring an existing protocol member in a protocol extension",
+                    );
+                    continue;
+                }
+                let Some(requirement) = this.lower_default_requirement(func) else {
+                    continue;
+                };
+                // The extension-level where clause joins the requirement's
+                // scheme context (the scheme is the signature carrier).
+                if let Some(scheme) = this.schemes.get_mut(&requirement.symbol) {
+                    for predicate in &context.predicates {
+                        if !scheme.predicates.contains(predicate) {
+                            scheme.predicates.push(predicate.clone());
+                        }
                     }
                 }
+                protocol_defaults.push((protocol, requirement.symbol, func));
+                if let Some(info) = this.catalog.protocols.get_mut(&protocol) {
+                    info.requirements.insert(label.clone(), requirement);
+                }
+                this.catalog
+                    .add_owner(&label, MemberOwner::Protocol(protocol));
             }
-            protocol_defaults.push((protocol, requirement.symbol, func));
-            if let Some(info) = self.catalog.protocols.get_mut(&protocol) {
-                info.requirements.insert(label.clone(), requirement);
-            }
-            self.catalog
-                .add_owner(&label, MemberOwner::Protocol(protocol));
-        }
+        });
         self.self_types.pop();
     }
 
@@ -1122,35 +1197,28 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         params: &[Parameter],
         ret: &TypeAnnotation,
     ) {
-        self.register_generic_bounds(generics);
-        self.register_where_bounds(where_clause);
-        let predicates = self.declared_predicates(generics, where_clause);
-        let generics: Vec<Symbol> = generics
-            .iter()
-            .filter_map(|generic| generic.name.symbol().ok())
-            .collect();
-        let params = params
-            .iter()
-            .map(|p| match &p.type_annotation {
-                Some(annotation) => {
-                    let ty = self.lower_annotation(annotation);
-                    elaborate::apply_param_mode(self.catalog, p, ty, self.diagnostics)
-                }
-                // Unannotated effect params share an outer variable that
-                // perform sites and handlers refine during checking.
-                None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),
-            })
-            .collect();
-        let ret = self.lower_annotation(ret);
-        self.catalog.effects.insert(
-            symbol,
+        let sig = self.in_declaration_context(None, generics, where_clause, |this, context| {
+            let params = params
+                .iter()
+                .map(|p| match &p.type_annotation {
+                    Some(annotation) => {
+                        let ty = this.lower_annotation(annotation);
+                        elaborate::apply_param_mode(this.catalog, p, ty, this.diagnostics)
+                    }
+                    // Unannotated effect params share an outer variable that
+                    // perform sites and handlers refine during checking.
+                    None => Ty::Var(this.store.fresh_ty(OUTER_LEVEL, p.id)),
+                })
+                .collect();
+            let ret = this.lower_annotation(ret);
             crate::types::catalog::EffectSig {
-                generics,
-                predicates,
+                generics: context.params.clone(),
+                predicates: context.predicates.clone(),
                 params,
                 ret,
-            },
-        );
+            }
+        });
+        self.catalog.effects.insert(symbol, sig);
     }
 
     /// Register an `extend`: conformance rows (witness map + associated-type
@@ -1168,10 +1236,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         let DeclKind::Extend {
             name,
             row_generics,
-            conformances,
             generics,
             where_clause,
-            body,
             ..
         } = &decl.kind
         else {
@@ -1186,9 +1252,6 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             self.unsupported(decl.id, "generic protocol extensions");
             return None;
         }
-        self.register_generic_bounds(row_generics);
-        self.register_generic_bounds(generics);
-        self.register_where_bounds(where_clause.as_ref());
 
         // The row's own rigid params and the head application they index:
         // a nested extend uses the enclosing struct's generics; a top-level
@@ -1199,12 +1262,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         let self_params: Vec<Symbol> = if protocol_head {
             vec![]
         } else if enclosing.is_some() || generics.is_empty() {
-            self.catalog
-                .structs
-                .get(&head)
-                .map(|i| i.params.clone())
-                .or_else(|| self.catalog.enums.get(&head).map(|i| i.params.clone()))
-                .unwrap_or_default()
+            param_symbols(&nominal_params(self.catalog, head))
         } else {
             generic_symbols(generics)
         };
@@ -1213,7 +1271,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         if protocol_head {
             params.push(head);
             if let Some(info) = self.catalog.protocols.get(&head) {
-                params.extend(info.params.iter().copied());
+                params.extend(info.params.iter().map(|param| param.symbol));
                 params.extend(info.assoc.values().copied());
             }
         }
@@ -1223,13 +1281,46 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         } else {
             Ty::Nominal(head, self_args.clone())
         };
-        self.self_types.push(self_ty.clone());
         let context_generics: Vec<GenericDecl> = row_generics
             .iter()
             .cloned()
             .chain(generics.iter().cloned())
             .collect();
-        let mut context = self.declared_predicates(&context_generics, where_clause.as_ref());
+        self.in_declaration_context(
+            Some(self_ty.clone()),
+            &context_generics,
+            where_clause.as_ref(),
+            |this, decl_context| {
+                this.register_extend_body(
+                    decl,
+                    head,
+                    protocol_head,
+                    params,
+                    self_args,
+                    self_ty,
+                    decl_context,
+                )
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn register_extend_body(
+        &mut self,
+        decl: &'a Decl,
+        head: Symbol,
+        protocol_head: bool,
+        params: Vec<Symbol>,
+        self_args: Vec<Ty>,
+        self_ty: Ty,
+        decl_context: &mut elaborate::DeclContext,
+    ) -> Option<ExtendWork<'a>> {
+        let DeclKind::Extend {
+            conformances, body, ..
+        } = &decl.kind
+        else {
+            return None;
+        };
         if protocol_head {
             let head_protocol = ProtocolRef {
                 protocol: head,
@@ -1237,10 +1328,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     .catalog
                     .protocols
                     .get(&head)
-                    .map(|info| info.params.iter().copied().map(Ty::Param).collect())
+                    .map(|info| info.params.iter().map(|p| Ty::Param(p.symbol)).collect())
                     .unwrap_or_default(),
             };
-            context.insert(
+            decl_context.predicates.insert(
                 0,
                 Predicate::Conforms {
                     ty: self_ty.clone(),
@@ -1251,13 +1342,13 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .catalog
                 .declared_associated_types_in_ref(&head_protocol)
             {
-                context.push(Predicate::TypeEq(
+                decl_context.predicates.push(Predicate::TypeEq(
                     Ty::Param(assoc),
                     Ty::Proj(Box::new(self_ty.clone()), owner, assoc),
                 ));
             }
         }
-        self.self_types.pop();
+        let context = &decl_context.predicates;
 
         // Collect declared members (witnesses and inherent methods).
         let mut members: IndexMap<String, (Symbol, &'a Func)> = IndexMap::default();
@@ -1318,7 +1409,13 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 // `typealias` declarations or witness inference below.
                 if conformed == protocol {
                     for (assoc_symbol, arg) in info.assoc.values().zip(&assoc_args) {
-                        let binding = self.lower_annotation(arg);
+                        let Some(annotation) = arg.as_type() else {
+                            self.diagnostics
+                                .errors
+                                .push((TypeError::StaticValueInTypePosition, arg.id()));
+                            continue;
+                        };
+                        let binding = self.lower_annotation(annotation);
                         conformance.assoc.insert(*assoc_symbol, binding);
                     }
                 }
@@ -1430,7 +1527,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             }
             return Some(ExtendWork {
                 self_ty,
-                context,
+                context: context.clone(),
                 decl,
                 protocols,
             });
@@ -1443,21 +1540,33 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             if witnessed.contains(label) {
                 continue;
             }
-            let sig_params: Vec<Ty> = func
-                .params
-                .iter()
-                .map(|p| match &p.type_annotation {
-                    Some(annotation) => {
-                        let ty = self.lower_annotation(annotation);
-                        elaborate::apply_param_mode(self.catalog, p, ty, self.diagnostics)
-                    }
-                    None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, p.id)),
-                })
-                .collect();
-            let ret = match &func.ret {
-                Some(annotation) => self.lower_annotation(annotation),
-                None => Ty::Var(self.store.fresh_ty(OUTER_LEVEL, func.id)),
-            };
+            // The method's own generics and where clause are a nested
+            // declaration context: its bounds (including static value
+            // params) register before its annotations lower, and its
+            // formation obligations prove under its own predicates.
+            let (sig_params, ret, predicates) = self.in_declaration_context(
+                None,
+                &func.generics,
+                func.where_clause.as_ref(),
+                |this, method_context| {
+                    let sig_params: Vec<Ty> = func
+                        .params
+                        .iter()
+                        .map(|p| match &p.type_annotation {
+                            Some(annotation) => {
+                                let ty = this.lower_annotation(annotation);
+                                elaborate::apply_param_mode(this.catalog, p, ty, this.diagnostics)
+                            }
+                            None => Ty::Var(this.store.fresh_ty(OUTER_LEVEL, p.id)),
+                        })
+                        .collect();
+                    let ret = match &func.ret {
+                        Some(annotation) => this.lower_annotation(annotation),
+                        None => Ty::Var(this.store.fresh_ty(OUTER_LEVEL, func.id)),
+                    };
+                    (sig_params, ret, method_context.predicates.clone())
+                },
+            );
             let eff = EffectRow {
                 effects: Default::default(),
                 tail: Some(EffTail::Param(*method)),
@@ -1466,7 +1575,6 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             // one signature carrier); `check_extend` replaces it with the
             // inferred, zonked scheme after the body checks. The catalog
             // keeps only the instance-head pattern.
-            let predicates = self.declared_predicates(&func.generics, func.where_clause.as_ref());
             self.insert_requirement_scheme(
                 *method,
                 Ty::Func(sig_params, Box::new(ret), eff),
@@ -1489,7 +1597,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
 
         Some(ExtendWork {
             self_ty,
-            context,
+            context: context.clone(),
             decl,
             protocols,
         })

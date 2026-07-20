@@ -828,6 +828,7 @@ pub mod tests {
                         generics: vec![],
                         conformances: vec![],
                         default: None,
+                        static_ty: None,
                     }],
                     captures: vec![],
                     where_clause: None,
@@ -854,6 +855,74 @@ pub mod tests {
                 })),),
             })
         );
+    }
+
+    #[test]
+    fn resolves_static_generic_params() {
+        let resolved = resolve("func width<static N: Int>() -> Int { N }");
+        let DeclKind::Let { rhs: Some(rhs), .. } = &resolved.0.roots[0].as_decl().kind else {
+            panic!("expected desugared func let")
+        };
+        let ExprKind::Func(func) = &rhs.kind else {
+            panic!("expected func")
+        };
+        let param_symbol = func.generics[0]
+            .name
+            .symbol()
+            .expect("resolved static param");
+        assert!(matches!(param_symbol, Symbol::TypeParameter(_)));
+        let static_ty = func.generics[0]
+            .static_ty
+            .as_ref()
+            .expect("static value type");
+        assert!(matches!(
+            &static_ty.kind,
+            TypeAnnotationKind::Nominal { name, .. } if name.symbol().ok() == Some(Symbol::Int)
+        ));
+        // A static parameter is usable as an ordinary value in its body
+        // (ADR 0035 §6), so the body variable resolves to the parameter.
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Variable(body_name),
+            ..
+        }) = &func.body.body[0].as_stmt().kind
+        else {
+            panic!("expected body variable")
+        };
+        assert_eq!(body_name.symbol().ok(), Some(param_symbol));
+    }
+
+    #[test]
+    fn resolves_static_generic_argument_reference() {
+        let resolved = resolve(
+            "
+        struct Grid<static Rows: Int> {}
+        func f<static M: Int>(g: Grid<M>) -> Int { M }
+        ",
+        );
+        let DeclKind::Let { rhs: Some(rhs), .. } = &resolved.0.roots[1].as_decl().kind else {
+            panic!("expected desugared func let")
+        };
+        let ExprKind::Func(func) = &rhs.kind else {
+            panic!("expected func")
+        };
+        let param_symbol = func.generics[0]
+            .name
+            .symbol()
+            .expect("resolved static param");
+        let Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Nominal { generics, .. },
+            ..
+        }) = &func.params[0].type_annotation
+        else {
+            panic!("expected nominal parameter annotation")
+        };
+        assert!(matches!(
+            &generics[0],
+            crate::node_kinds::generic_arg::GenericArg::Type(TypeAnnotation {
+                kind: TypeAnnotationKind::Nominal { name, .. },
+                ..
+            }) if name.symbol().ok() == Some(param_symbol)
+        ));
     }
 
     #[test]
@@ -1105,6 +1174,7 @@ pub mod tests {
                     generics: vec![],
                     conformances: vec![],
                     default: None,
+                    static_ty: None,
                     span: Span::ANY
                 }],
                 where_clause: None,
@@ -1655,6 +1725,7 @@ pub mod tests {
                             generics: vec![],
                             conformances: vec![],
                             default: None,
+                            static_ty: None,
                             span: Span::ANY
                         },
                         where_clause: None

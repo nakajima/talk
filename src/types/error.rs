@@ -77,6 +77,39 @@ pub enum TypeError {
         predicate: String,
     },
     InvalidWherePredicate,
+    /// A static value expression (ADR 0035) appeared where a type is
+    /// required. Static expressions are only meaningful as generic
+    /// arguments to a declared `static` parameter.
+    StaticValueInTypePosition,
+    /// A `static` generic parameter declared a value type outside the
+    /// admitted static domain (ADR 0035): `Int`, `Bool`, or a fieldless
+    /// enum.
+    UnsupportedStaticParamType {
+        ty: String,
+    },
+    /// A generic argument to a `static` parameter was an ordinary type
+    /// (or an unsupported expression form) rather than a static value.
+    ExpectedStaticArgument {
+        found: String,
+    },
+    /// The static index language is affine (ADR 0035): multiplication
+    /// needs a literal operand.
+    NonlinearStaticExpression,
+    /// A static ordering obligation the checker could not prove within
+    /// the supported linear-integer theory (ADR 0035 §4). The checker
+    /// never assumes a predicate.
+    UnprovenStaticPredicate {
+        predicate: String,
+    },
+    /// A generic-parameter default that breaks the declaration rules
+    /// (ADR 0035 §1): forward reference or negative static Int value.
+    InvalidGenericDefault {
+        reason: String,
+    },
+    /// A static argument the solve left without a unique solution
+    /// (ADR 0035 §5): inference solves only uniquely-determined static
+    /// equalities, so this use needs explicit generic arguments.
+    UnderdeterminedStaticArgument,
     EscapingExistential {
         param: String,
     },
@@ -224,6 +257,13 @@ impl TypeError {
             Self::AmbiguousTypeParameter { .. } => "type.ambiguous-type-parameter",
             Self::DuplicatePredicate { .. } => "type.duplicate-predicate",
             Self::InvalidWherePredicate => "type.invalid-where-predicate",
+            Self::StaticValueInTypePosition => "type.static-value-in-type-position",
+            Self::UnsupportedStaticParamType { .. } => "type.unsupported-static-param-type",
+            Self::ExpectedStaticArgument { .. } => "type.expected-static-argument",
+            Self::NonlinearStaticExpression => "type.nonlinear-static-expression",
+            Self::UnprovenStaticPredicate { .. } => "type.unproven-static-predicate",
+            Self::InvalidGenericDefault { .. } => "type.invalid-generic-default",
+            Self::UnderdeterminedStaticArgument => "type.underdetermined-static-argument",
             Self::EscapingExistential { .. } => "type.escaping-existential",
             Self::GenericShadowing { .. } => "type.generic-shadowing",
             Self::InvalidVariantResultType { .. } => "type.invalid-variant-result-type",
@@ -404,6 +444,45 @@ impl Display for TypeError {
                 write!(
                     f,
                     "Where predicates must mention a declaration type parameter or Self"
+                )
+            }
+            TypeError::StaticValueInTypePosition => {
+                write!(
+                    f,
+                    "A static value expression is not a type; it can only be a generic argument to a `static` parameter"
+                )
+            }
+            TypeError::UnsupportedStaticParamType { ty } => {
+                write!(
+                    f,
+                    "A static parameter's value type must be Int, Bool, or a fieldless enum; got {ty}"
+                )
+            }
+            TypeError::ExpectedStaticArgument { found } => {
+                write!(
+                    f,
+                    "This generic argument supplies a static parameter, so it must be a static value expression; got {found}"
+                )
+            }
+            TypeError::NonlinearStaticExpression => {
+                write!(
+                    f,
+                    "Static multiplication needs an integer literal operand; the product of two symbolic values is outside the affine index language"
+                )
+            }
+            TypeError::UnprovenStaticPredicate { predicate } => {
+                write!(
+                    f,
+                    "Cannot prove the static predicate {predicate}; add it to (or strengthen) the declaration's where clause"
+                )
+            }
+            TypeError::InvalidGenericDefault { reason } => {
+                write!(f, "Invalid generic parameter default: {reason}")
+            }
+            TypeError::UnderdeterminedStaticArgument => {
+                write!(
+                    f,
+                    "Cannot infer this static argument; supply explicit generic arguments"
                 )
             }
             TypeError::EscapingExistential { param } => {

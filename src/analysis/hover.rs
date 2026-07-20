@@ -257,6 +257,17 @@ mod tests {
     }
 
     #[test]
+    fn hover_marks_static_parameters() {
+        let source = "func width<static N: Int>() -> Int {\n\tN\n}\nwidth<4>()";
+        let hover = hover(source, "width<4>").expect("hover");
+        assert!(
+            hover.contents.contains("static T0: Int"),
+            "{}",
+            hover.contents
+        );
+    }
+
+    #[test]
     fn hover_on_a_call_to_a_named_function_shows_its_scheme() {
         let source = "func double(x: Int) -> Int {\n\tx * 2\n}\ndouble(21)";
         let hover = hover(source, "double(21)").expect("hover");

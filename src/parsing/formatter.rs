@@ -1167,7 +1167,7 @@ impl<'a> Formatter<'a> {
         &self,
         call: &Expr,
         callee: &Expr,
-        type_args: &[TypeAnnotation],
+        type_args: &[crate::node_kinds::generic_arg::GenericArg],
         args: &[CallArg],
         trailing_block: Option<&Block>,
     ) -> Doc {
@@ -1176,7 +1176,7 @@ impl<'a> Formatter<'a> {
         if !type_args.is_empty() {
             let type_docs: Vec<_> = type_args
                 .iter()
-                .map(|ty| self.format_type_annotation(ty))
+                .map(|ty| self.format_generic_arg(ty))
                 .collect();
 
             result = concat(
@@ -1722,20 +1722,25 @@ impl<'a> Formatter<'a> {
                 )
             }
             TypeAnnotationKind::Nominal { name, generics, .. }
-                if name.name_str() == "Optional" && generics.len() == 1 =>
+                if name.name_str() == "Optional"
+                    && generics.len() == 1
+                    && generics[0].as_type().is_some() =>
             {
-                if matches!(generics[0].kind, TypeAnnotationKind::Borrow { .. }) {
+                let inner = generics[0].as_type().expect("guarded above");
+                if matches!(inner.kind, TypeAnnotationKind::Borrow { .. }) {
                     self.format_nominal_type_annotation(name.name_str(), generics)
                 } else {
-                    concat(self.format_type_annotation(&generics[0]), text("?"))
+                    concat(self.format_type_annotation(inner), text("?"))
                 }
             }
             TypeAnnotationKind::Nominal { name, generics, .. }
-                if name.name_str() == "Array" && generics.len() == 1 =>
+                if name.name_str() == "Array"
+                    && generics.len() == 1
+                    && generics[0].as_type().is_some() =>
             {
                 wrap(
                     text("["),
-                    self.format_type_annotation(&generics[0]),
+                    self.format_type_annotation(generics[0].as_type().expect("guarded above")),
                     text("]"),
                 )
             }
@@ -1756,17 +1761,42 @@ impl<'a> Formatter<'a> {
         }
     }
 
+    fn format_generic_arg(&self, arg: &crate::node_kinds::generic_arg::GenericArg) -> Doc {
+        use crate::node_kinds::generic_arg::GenericArg;
+        match arg {
+            GenericArg::Type(annotation) => self.format_type_annotation(annotation),
+            GenericArg::Static(expr) => self.format_static_expr(expr),
+        }
+    }
+
+    fn format_static_expr(&self, expr: &crate::node_kinds::generic_arg::StaticExpr) -> Doc {
+        use crate::node_kinds::generic_arg::StaticExprKind;
+        match &expr.kind {
+            StaticExprKind::Int(literal) => text(literal.clone()),
+            StaticExprKind::Bool(value) => text(if *value { "true" } else { "false" }),
+            StaticExprKind::Path(annotation) => self.format_type_annotation(annotation),
+            StaticExprKind::Group(inner) => {
+                concat(text("("), concat(self.format_static_expr(inner), text(")")))
+            }
+            StaticExprKind::Op { op, lhs, rhs } => {
+                self.format_static_expr(lhs)
+                    + text(format!(" {} ", op.as_str()))
+                    + self.format_static_expr(rhs)
+            }
+        }
+    }
+
     fn format_nominal_type_annotation<T: Into<String>>(
         &self,
         name: T,
-        generics: &[TypeAnnotation],
+        generics: &[crate::node_kinds::generic_arg::GenericArg],
     ) -> Doc {
         let mut result = text(name);
 
         if !generics.is_empty() {
             let generic_docs: Vec<_> = generics
                 .iter()
-                .map(|g| self.format_type_annotation(g))
+                .map(|g| self.format_generic_arg(g))
                 .collect();
 
             result = concat(
@@ -2331,9 +2361,9 @@ impl<'a> Formatter<'a> {
                     .iter()
                     .map(|predicate| match &predicate.kind {
                         WherePredicateKind::TypeEq { lhs, rhs } => {
-                            self.format_type_annotation(lhs)
+                            self.format_generic_arg(lhs)
                                 + text(" == ")
-                                + self.format_type_annotation(rhs)
+                                + self.format_generic_arg(rhs)
                         }
                         WherePredicateKind::Conforms { ty, protocols } => {
                             self.format_type_annotation(ty)
@@ -2346,6 +2376,11 @@ impl<'a> Formatter<'a> {
                                     text(" & "),
                                 )
                         }
+                        WherePredicateKind::StaticCmp { strict, lhs, rhs } => {
+                            self.format_generic_arg(lhs)
+                                + text(if *strict { " < " } else { " <= " })
+                                + self.format_generic_arg(rhs)
+                        }
                     })
                     .collect(),
                 text(" && "),
@@ -2353,6 +2388,23 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_generic_decl(&self, generic: &GenericDecl) -> Doc {
+        if let Some(static_ty) = &generic.static_ty {
+            let mut result = concat(
+                text("static "),
+                concat(
+                    self.format_name(&generic.name),
+                    concat(text(": "), self.format_type_annotation(static_ty)),
+                ),
+            );
+            if let Some(default) = &generic.default {
+                result = concat(
+                    result,
+                    concat(text(" = "), self.format_generic_arg(default)),
+                );
+            }
+            return result;
+        }
+
         let mut result = self.format_name(&generic.name);
 
         if !generic.generics.is_empty() {
@@ -2385,7 +2437,7 @@ impl<'a> Formatter<'a> {
         if let Some(default) = &generic.default {
             result = concat(
                 result,
-                concat(text(" = "), self.format_type_annotation(default)),
+                concat(text(" = "), self.format_generic_arg(default)),
             );
         }
 
@@ -2771,6 +2823,19 @@ mod formatter_tests {
             format_code("func f(fn: (&Foo, &mut Bar) -> Void) {}", 100),
             "func f(fn: (Foo, mut Bar) -> Void) {}"
         );
+    }
+
+    #[test]
+    fn formats_static_generics() {
+        // ADR 0035 spellings round-trip.
+        let decl = "struct InlineArray<static Count: Int, Element> {}";
+        assert_eq!(format_code(decl, 100), decl);
+        let func = "func first<static Count: Int, Element>(values: InlineArray<Count, Element>) -> Element where 0 < Count {\n}";
+        assert_eq!(format_code(func, 120), func);
+        let args = "func c<static N: Int, T>(a: InlineArray<2 * N + 1, T>) {\n}";
+        assert_eq!(format_code(args, 100), args);
+        let le = "func f<static N: Int, static M: Int>() where N <= M {\n}";
+        assert_eq!(format_code(le, 100), le);
     }
 
     #[test]

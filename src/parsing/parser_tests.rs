@@ -15,6 +15,7 @@ pub mod tests {
             expr::{Expr, ExprKind},
             func::{CaptureMode, EffectSet, Func},
             func_signature::FuncSignature,
+            generic_arg::{GenericArg, StaticExpr, StaticExprKind, StaticOpKind},
             generic_decl::GenericDecl,
             incomplete_expr::IncompleteExpr,
             inline_ir_instruction::{
@@ -874,7 +875,7 @@ pub mod tests {
             TypeAnnotationKind::Nominal {
                 name: "Array".into(),
                 name_span: Span::ANY,
-                generics: vec![TypeAnnotation {
+                generics: vec![GenericArg::Type(TypeAnnotation {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     kind: TypeAnnotationKind::Nominal {
@@ -882,7 +883,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         generics: vec![]
                     }
-                }]
+                })]
             }
         );
     }
@@ -903,15 +904,15 @@ pub mod tests {
         };
         assert!(matches!(
             generics.as_slice(),
-            [TypeAnnotation {
+            [GenericArg::Type(TypeAnnotation {
                 kind: TypeAnnotationKind::Nominal { generics, .. },
                 ..
-            }] if matches!(
+            })] if matches!(
                 generics.as_slice(),
-                [TypeAnnotation {
+                [GenericArg::Type(TypeAnnotation {
                     kind: TypeAnnotationKind::Nominal { generics, .. },
                     ..
-                }] if generics.is_empty()
+                })] if generics.is_empty()
             )
         ));
     }
@@ -928,11 +929,11 @@ pub mod tests {
             TypeAnnotationKind::Nominal {
                 name: "Array".into(),
                 name_span: Span::ANY,
-                generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                generics: vec![GenericArg::Type(annotation!(TypeAnnotationKind::Nominal {
                     name: "Int".into(),
                     name_span: Span::ANY,
                     generics: vec![]
-                })]
+                }))]
             }
         );
         assert_eq!(
@@ -940,15 +941,15 @@ pub mod tests {
             TypeAnnotationKind::Nominal {
                 name: "Array".into(),
                 name_span: Span::ANY,
-                generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                generics: vec![GenericArg::Type(annotation!(TypeAnnotationKind::Nominal {
                     name: "Array".into(),
                     name_span: Span::ANY,
-                    generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                    generics: vec![GenericArg::Type(annotation!(TypeAnnotationKind::Nominal {
                         name: "String".into(),
                         name_span: Span::ANY,
                         generics: vec![]
-                    })]
-                })]
+                    }))]
+                }))]
             }
         );
     }
@@ -979,11 +980,11 @@ pub mod tests {
                 inner: Box::new(annotation!(TypeAnnotationKind::Nominal {
                     name: "Array".into(),
                     name_span: Span::ANY,
-                    generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                    generics: vec![GenericArg::Type(annotation!(TypeAnnotationKind::Nominal {
                         name: "Int".into(),
                         name_span: Span::ANY,
                         generics: vec![]
-                    })]
+                    }))]
                 }))
             }
         );
@@ -1002,7 +1003,7 @@ pub mod tests {
             TypeAnnotationKind::Nominal {
                 name: "Optional".into(),
                 name_span: Span::ANY,
-                generics: vec![TypeAnnotation {
+                generics: vec![GenericArg::Type(TypeAnnotation {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     kind: TypeAnnotationKind::Nominal {
@@ -1010,7 +1011,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         generics: vec![]
                     }
-                }]
+                })]
             }
         );
     }
@@ -1028,13 +1029,13 @@ pub mod tests {
             TypeAnnotationKind::Nominal {
                 name: "Optional".into(),
                 name_span: Span::ANY,
-                generics: vec![TypeAnnotation {
+                generics: vec![GenericArg::Type(TypeAnnotation {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     kind: TypeAnnotationKind::Nominal {
                         name: "Optional".into(),
                         name_span: Span::ANY,
-                        generics: vec![TypeAnnotation {
+                        generics: vec![GenericArg::Type(TypeAnnotation {
                             id: NodeID::ANY,
                             span: Span::ANY,
                             kind: TypeAnnotationKind::Nominal {
@@ -1042,9 +1043,9 @@ pub mod tests {
                                 name_span: Span::ANY,
                                 generics: vec![]
                             }
-                        }]
+                        })]
                     }
-                }]
+                })]
             }
         );
     }
@@ -1110,6 +1111,7 @@ pub mod tests {
                     generics: vec![],
                     conformances: vec![],
                     default: None,
+                    static_ty: None,
                 }],
                 captures: vec![],
                 where_clause: None,
@@ -1168,10 +1170,287 @@ pub mod tests {
         };
         assert_eq!(generics.len(), 1);
         let default = generics[0].default.as_ref().expect("generic default");
-        let TypeAnnotationKind::Nominal { name, .. } = &default.kind else {
+        let GenericArg::Type(TypeAnnotation {
+            kind: TypeAnnotationKind::Nominal { name, .. },
+            ..
+        }) = default
+        else {
             panic!("expected nominal default")
         };
         assert_eq!(name.name_str(), "Self");
+    }
+
+    #[test]
+    fn parses_static_generic_param() {
+        let parsed = parse("struct InlineArray<static Count: Int, Element> {}");
+        let DeclKind::Struct { generics, .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected struct")
+        };
+        assert_eq!(generics.len(), 2);
+        assert_eq!(generics[0].name, "Count".into());
+        let static_ty = generics[0].static_ty.as_ref().expect("static value type");
+        assert!(matches!(
+            &static_ty.kind,
+            TypeAnnotationKind::Nominal { name, .. } if name.name_str() == "Int"
+        ));
+        assert!(generics[0].conformances.is_empty());
+        assert_eq!(generics[1].name, "Element".into());
+        assert!(generics[1].static_ty.is_none());
+    }
+
+    #[test]
+    fn parses_static_param_on_func() {
+        let parsed = parse("func width<static N: Int>() -> Int { N }");
+        let DeclKind::Func(func) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        assert_eq!(func.generics.len(), 1);
+        assert_eq!(func.generics[0].name, "N".into());
+        assert!(func.generics[0].static_ty.is_some());
+    }
+
+    #[test]
+    fn parses_static_int_generic_argument() {
+        let parsed = parse("func c(a: InlineArray<4, Int>) { a }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        let Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Nominal { generics, .. },
+            ..
+        }) = &params[0].type_annotation
+        else {
+            panic!("expected nominal annotation");
+        };
+        assert!(matches!(
+            &generics[0],
+            GenericArg::Static(StaticExpr {
+                kind: StaticExprKind::Int(lit),
+                ..
+            }) if lit == "4"
+        ));
+        assert!(matches!(
+            &generics[1],
+            GenericArg::Type(TypeAnnotation {
+                kind: TypeAnnotationKind::Nominal { name, .. },
+                ..
+            }) if name.name_str() == "Int"
+        ));
+    }
+
+    #[test]
+    fn static_generic_arguments_record_node_meta() {
+        // Diagnostics resolve a node's range through `ast.meta`; a static
+        // argument must locate at its own tokens, not fall back to 1:1.
+        let code = "func c(a: InlineArray<4 + 1, Int>) { a }";
+        let parsed = parse(code);
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        let Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Nominal { generics, .. },
+            ..
+        }) = &params[0].type_annotation
+        else {
+            panic!("expected nominal annotation");
+        };
+        let GenericArg::Static(expr) = &generics[0] else {
+            panic!("expected static argument, got {:?}", generics[0]);
+        };
+        let meta = parsed.meta.get(&expr.id).expect("static expr records meta");
+        assert_eq!(meta.start.start as usize, code.find("4 + 1").unwrap());
+        assert_eq!(
+            meta.end.end as usize,
+            code.find("4 + 1").unwrap() + "4 + 1".len()
+        );
+        let StaticExprKind::Op { lhs, rhs, .. } = &expr.kind else {
+            panic!("expected static arithmetic, got {:?}", expr.kind);
+        };
+        let lhs_meta = parsed.meta.get(&lhs.id).expect("lhs records meta");
+        assert_eq!(lhs_meta.start.start as usize, code.find('4').unwrap());
+        let rhs_meta = parsed.meta.get(&rhs.id).expect("rhs records meta");
+        assert_eq!(rhs_meta.start.start as usize, code.find("1,").unwrap());
+    }
+
+    #[test]
+    fn parses_static_arithmetic_generic_argument() {
+        let parsed = parse("func c<static N: Int, T>(a: InlineArray<N + 1, T>) { a }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        let Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Nominal { generics, .. },
+            ..
+        }) = &params[0].type_annotation
+        else {
+            panic!("expected nominal annotation");
+        };
+        let GenericArg::Static(StaticExpr {
+            kind: StaticExprKind::Op { op, lhs, rhs },
+            ..
+        }) = &generics[0]
+        else {
+            panic!("expected static arithmetic, got {:?}", generics[0])
+        };
+        assert_eq!(*op, StaticOpKind::Add);
+        assert!(matches!(
+            &lhs.kind,
+            StaticExprKind::Path(TypeAnnotation {
+                kind: TypeAnnotationKind::Nominal { name, .. },
+                ..
+            }) if name.name_str() == "N"
+        ));
+        assert!(matches!(
+            &rhs.kind,
+            StaticExprKind::Int(lit) if lit == "1"
+        ));
+    }
+
+    #[test]
+    fn parses_static_mul_binds_tighter_than_add() {
+        let parsed = parse("func c<static N: Int, T>(a: InlineArray<2 * N + 1, T>) { a }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        let Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Nominal { generics, .. },
+            ..
+        }) = &params[0].type_annotation
+        else {
+            panic!("expected nominal annotation");
+        };
+        let GenericArg::Static(StaticExpr {
+            kind: StaticExprKind::Op { op, lhs, rhs },
+            ..
+        }) = &generics[0]
+        else {
+            panic!("expected static arithmetic, got {:?}", generics[0])
+        };
+        assert_eq!(*op, StaticOpKind::Add);
+        assert!(matches!(
+            &lhs.kind,
+            StaticExprKind::Op {
+                op: StaticOpKind::Mul,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &rhs.kind,
+            StaticExprKind::Int(lit) if lit == "1"
+        ));
+    }
+
+    #[test]
+    fn parses_parenthesized_static_group() {
+        // Committed static context: `(` after an operator is grouping.
+        let parsed = parse("func c<static N: Int, T>(a: InlineArray<2 * (N + 1), T>) { a }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        let Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Nominal { generics, .. },
+            ..
+        }) = &params[0].type_annotation
+        else {
+            panic!("expected nominal annotation");
+        };
+        let GenericArg::Static(StaticExpr {
+            kind: StaticExprKind::Op { op, rhs, .. },
+            ..
+        }) = &generics[0]
+        else {
+            panic!("expected static arithmetic, got {:?}", generics[0])
+        };
+        assert_eq!(*op, StaticOpKind::Mul);
+        assert!(matches!(&rhs.kind, StaticExprKind::Group(_)));
+    }
+
+    #[test]
+    fn parses_where_static_less_than() {
+        let parsed = parse(
+            "func first<static Count: Int, Element>(values: InlineArray<Count, Element>) -> Element where 0 < Count { values }",
+        );
+        let DeclKind::Func(func) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        let where_clause = func.where_clause.as_ref().expect("where clause");
+        let WherePredicateKind::StaticCmp { strict, lhs, rhs } = &where_clause.predicates[0].kind
+        else {
+            panic!(
+                "expected static comparison, got {:?}",
+                where_clause.predicates[0].kind
+            )
+        };
+        assert!(*strict);
+        assert!(matches!(
+            lhs,
+            GenericArg::Static(StaticExpr {
+                kind: StaticExprKind::Int(lit),
+                ..
+            }) if lit == "0"
+        ));
+        assert!(matches!(
+            rhs,
+            GenericArg::Type(TypeAnnotation {
+                kind: TypeAnnotationKind::Nominal { name, .. },
+                ..
+            }) if name.name_str() == "Count"
+        ));
+    }
+
+    #[test]
+    fn parses_where_static_less_equal_between_params() {
+        let parsed = parse("func f<static N: Int, static M: Int>() where N <= M { }");
+        let DeclKind::Func(func) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        let where_clause = func.where_clause.as_ref().expect("where clause");
+        assert!(matches!(
+            &where_clause.predicates[0].kind,
+            WherePredicateKind::StaticCmp { strict: false, .. }
+        ));
+    }
+
+    #[test]
+    fn parses_where_static_less_between_params() {
+        let parsed = parse("func f<static N: Int, static M: Int>() where N < M { }");
+        let DeclKind::Func(func) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        let where_clause = func.where_clause.as_ref().expect("where clause");
+        assert!(matches!(
+            &where_clause.predicates[0].kind,
+            WherePredicateKind::StaticCmp { strict: true, .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_lowercase_static_param_name() {
+        let lexer = Lexer::new("func f<static n: Int>() { }");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(matches!(
+            parser.parse(),
+            Err(ParserError::LowercaseStaticParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn parses_static_call_type_argument() {
+        let parsed = parse("width<4>()");
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Call { type_args, .. },
+            ..
+        }) = &parsed.roots[0].as_stmt().kind
+        else {
+            panic!("expected call")
+        };
+        assert!(matches!(
+            &type_args[0],
+            GenericArg::Static(StaticExpr {
+                kind: StaticExprKind::Int(lit),
+                ..
+            }) if lit == "4"
+        ));
     }
 
     #[test]
@@ -1181,7 +1460,7 @@ pub mod tests {
             *parsed.roots[0].as_stmt(),
             any_expr_stmt!(ExprKind::Call {
                 callee: any_expr!(ExprKind::Variable("foo".into())).into(),
-                type_args: vec![TypeAnnotation {
+                type_args: vec![GenericArg::Type(TypeAnnotation {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     kind: TypeAnnotationKind::Nominal {
@@ -1189,7 +1468,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         generics: vec![]
                     }
-                }],
+                })],
                 args: vec![],
                 trailing_block: None,
                 desugared_operator: None,
@@ -1800,11 +2079,13 @@ pub mod tests {
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                         name: "A".into(),
                         name_span: Span::ANY,
-                        generics: vec![annotation!(TypeAnnotationKind::Nominal {
-                            name: "B".into(),
-                            name_span: Span::ANY,
-                            generics: vec![]
-                        })]
+                        generics: vec![GenericArg::Type(annotation!(
+                            TypeAnnotationKind::Nominal {
+                                name: "B".into(),
+                                name_span: Span::ANY,
+                                generics: vec![]
+                            }
+                        ))]
                     })),
                     rhs: None,
                 }
@@ -2236,6 +2517,7 @@ pub mod tests {
                         generics: vec![],
                         conformances: vec![],
                         default: None,
+                        static_ty: None,
                     },
                     GenericDecl {
                         id: NodeID::ANY,
@@ -2245,6 +2527,7 @@ pub mod tests {
                         generics: vec![],
                         conformances: vec![],
                         default: None,
+                        static_ty: None,
                     },
                 ],
                 where_clause: None,
@@ -2935,7 +3218,7 @@ pub mod tests {
                     kind: TypeAnnotationKind::Nominal {
                         name: "Something".into(),
                         name_span: Span::ANY,
-                        generics: vec![TypeAnnotation {
+                        generics: vec![GenericArg::Type(TypeAnnotation {
                             id: NodeID::ANY,
                             span: Span::ANY,
                             kind: TypeAnnotationKind::Nominal {
@@ -2943,7 +3226,7 @@ pub mod tests {
                                 name_span: Span::ANY,
                                 generics: vec![]
                             }
-                        }]
+                        })]
                     }
                 }],
                 where_clause: None,
@@ -3394,11 +3677,11 @@ pub mod tests {
                 annotation!(TypeAnnotationKind::Nominal {
                     name: "Bar".into(),
                     name_span: Span::ANY,
-                    generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                    generics: vec![GenericArg::Type(annotation!(TypeAnnotationKind::Nominal {
                         name: "Int".into(),
                         name_span: Span::ANY,
                         generics: vec![]
-                    })]
+                    }))]
                 })
             ))
         );
@@ -3497,20 +3780,24 @@ pub mod tests {
                     base: annotation!(TypeAnnotationKind::Nominal {
                         name: "Fizz".into(),
                         name_span: Span::ANY,
-                        generics: vec![annotation!(TypeAnnotationKind::Nominal {
-                            name: "T".into(),
-                            name_span: Span::ANY,
-                            generics: vec![]
-                        })]
+                        generics: vec![GenericArg::Type(annotation!(
+                            TypeAnnotationKind::Nominal {
+                                name: "T".into(),
+                                name_span: Span::ANY,
+                                generics: vec![]
+                            }
+                        ))]
                     })
                     .into(),
                     member: "Buzz".into(),
                     member_span: Span::ANY,
-                    member_generics: vec![annotation!(TypeAnnotationKind::Nominal {
-                        name: "U".into(),
-                        name_span: Span::ANY,
-                        generics: vec![]
-                    })]
+                    member_generics: vec![GenericArg::Type(annotation!(
+                        TypeAnnotationKind::Nominal {
+                            name: "U".into(),
+                            name_span: Span::ANY,
+                            generics: vec![]
+                        }
+                    ))]
                 })
             ))
         );
@@ -3542,6 +3829,7 @@ pub mod tests {
                         generics: vec![],
                         conformances: vec![],
                         default: None,
+                        static_ty: None,
                         span: Span::ANY
                     },
                     where_clause: None

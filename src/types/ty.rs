@@ -270,9 +270,168 @@ pub enum Ty {
     /// value's type; appears only inside a Nominal's argument list (and
     /// substitution payloads).
     Eff(EffectRow),
+    /// A static value in generic-argument position (ADR 0035) — the second
+    /// kind-restricted argument alongside `Ty::Eff`. Never a value's type;
+    /// appears only where a declared `static` parameter is being supplied.
+    /// Integer content is kept in canonical affine form so `N + 1` and
+    /// `1 + N` are one type; a bare parameter or metavariable is NOT
+    /// wrapped here — it stays `Ty::Param`/`Ty::Var` (the canonical
+    /// collapse in [`StaticInt::into_ty`]), so arithmetic-free programs
+    /// ride the ordinary generic machinery.
+    Static(StaticValue),
     /// Poison type for error recovery: equalities involving it succeed
     /// silently so one mistake doesn't cascade.
     Error,
+}
+
+/// A static generic argument's canonical content (ADR 0035). The initial
+/// static domain is nonnegative `Int`, `Bool`, and fieldless enum cases;
+/// only the integer domain has arithmetic.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum StaticValue {
+    /// A canonical affine integer index. Follows the restricted-index
+    /// tradition (Xi & Pfenning, *Dependent Types in Practical
+    /// Programming*, POPL 1999): a decidable arithmetic domain separate
+    /// from ordinary expressions.
+    Int(StaticInt),
+    Bool(bool),
+    /// A case of a fieldless enum: the owning enum (carried for
+    /// source-oriented rendering, `Color.red`) and the variant.
+    Case(Symbol, Symbol),
+}
+
+/// One symbolic unknown inside an affine index: a rigid static parameter
+/// or a solver metavariable minted at instantiation.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub enum StaticAtom {
+    Param(Symbol),
+    Var(TyVar),
+}
+
+impl StaticAtom {
+    pub(crate) fn as_ty(&self) -> Ty {
+        match self {
+            StaticAtom::Param(symbol) => Ty::Param(*symbol),
+            StaticAtom::Var(var) => Ty::Var(*var),
+        }
+    }
+}
+
+/// An affine integer index in canonical form: `constant + Σ coeff·atom`,
+/// terms sorted by atom with no zero coefficients. Arithmetic is over the
+/// mathematical integers (ADR 0035 §3: normalization cannot overflow); a
+/// concrete result is validated against the signed 64-bit `Int` range
+/// only once it becomes a closed generic argument.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct StaticInt {
+    pub constant: num_bigint::BigInt,
+    pub terms: Vec<(StaticAtom, num_bigint::BigInt)>,
+}
+
+impl StaticInt {
+    pub fn constant(value: impl Into<num_bigint::BigInt>) -> StaticInt {
+        StaticInt {
+            constant: value.into(),
+            terms: vec![],
+        }
+    }
+
+    pub fn atom(atom: StaticAtom) -> StaticInt {
+        StaticInt {
+            constant: 0.into(),
+            terms: vec![(atom, 1.into())],
+        }
+    }
+
+    /// Read a type as an affine index: a bare param/var is a single-term
+    /// form, `Ty::Static(Int)` is itself. Anything else has the wrong kind.
+    pub fn from_ty(ty: &Ty) -> Option<StaticInt> {
+        match ty {
+            Ty::Param(symbol) => Some(StaticInt::atom(StaticAtom::Param(*symbol))),
+            Ty::Var(var) => Some(StaticInt::atom(StaticAtom::Var(*var))),
+            Ty::Static(StaticValue::Int(int)) => Some(int.clone()),
+            _ => None,
+        }
+    }
+
+    /// The canonical type for this index: a closed form or genuine affine
+    /// content stays `Ty::Static`; `0 + 1·atom` collapses to the bare
+    /// `Ty::Param`/`Ty::Var` so arithmetic-free arguments are ordinary
+    /// generic arguments.
+    pub fn into_ty(self) -> Ty {
+        if self.constant == 0.into()
+            && let [(atom, coeff)] = self.terms.as_slice()
+            && *coeff == 1.into()
+        {
+            return atom.as_ty();
+        }
+        Ty::Static(StaticValue::Int(self))
+    }
+
+    pub fn as_constant(&self) -> Option<&num_bigint::BigInt> {
+        self.terms.is_empty().then_some(&self.constant)
+    }
+
+    /// The closed value when it fits Talk's signed 64-bit `Int`.
+    pub fn as_i64(&self) -> Option<i64> {
+        i64::try_from(self.as_constant()?.clone()).ok()
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.terms.is_empty() && self.constant == 0.into()
+    }
+
+    pub fn add(&self, other: &StaticInt) -> StaticInt {
+        let constant = &self.constant + &other.constant;
+        let mut terms: FxHashMap<StaticAtom, num_bigint::BigInt> = FxHashMap::default();
+        for (atom, coeff) in self.terms.iter().chain(&other.terms) {
+            *terms.entry(*atom).or_insert_with(|| 0.into()) += coeff;
+        }
+        let mut terms: Vec<(StaticAtom, num_bigint::BigInt)> = terms
+            .into_iter()
+            .filter(|(_, coeff)| *coeff != 0.into())
+            .collect();
+        terms.sort_by_key(|(atom, _)| *atom);
+        StaticInt { constant, terms }
+    }
+
+    pub fn sub(&self, other: &StaticInt) -> StaticInt {
+        self.add(&other.scale(&(-1).into()))
+    }
+
+    pub fn scale(&self, factor: &num_bigint::BigInt) -> StaticInt {
+        if *factor == 0.into() {
+            return StaticInt::constant(0);
+        }
+        StaticInt {
+            constant: &self.constant * factor,
+            terms: self
+                .terms
+                .iter()
+                .map(|(atom, coeff)| (*atom, coeff * factor))
+                .collect(),
+        }
+    }
+
+    /// Divide every coefficient by `divisor`, only when exact — the
+    /// integer-domain guard on equation solving.
+    pub fn div_exact(&self, divisor: &num_bigint::BigInt) -> Option<StaticInt> {
+        let zero = num_bigint::BigInt::from(0);
+        if *divisor == zero || &self.constant % divisor != zero {
+            return None;
+        }
+        let terms = self
+            .terms
+            .iter()
+            .map(|(atom, coeff)| (coeff % divisor == zero).then(|| (*atom, coeff / divisor)))
+            .collect::<Option<Vec<_>>>()?;
+        Some(StaticInt {
+            constant: &self.constant / divisor,
+            terms,
+        })
+    }
 }
 
 /// One logical predicate in the checker's constraint domain. Jones's
@@ -306,6 +465,30 @@ pub enum Predicate {
         label: Label,
         member: Ty,
     },
+    /// A static integer relation (ADR 0035): equality or ordering over
+    /// static-Int-kinded operands (canonical affine forms, bare static
+    /// params, or metavariables). Entailment is quantifier-free linear
+    /// integer arithmetic in the Xi/Pfenning restricted-index tradition;
+    /// evidence erases.
+    StaticCmp { op: StaticCmpOp, lhs: Ty, rhs: Ty },
+}
+
+/// The relations of the static integer theory (ADR 0035 §4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum StaticCmpOp {
+    Eq,
+    Lt,
+    Le,
+}
+
+impl StaticCmpOp {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StaticCmpOp::Eq => "==",
+            StaticCmpOp::Lt => "<",
+            StaticCmpOp::Le => "<=",
+        }
+    }
 }
 
 impl Predicate {
@@ -333,6 +516,10 @@ impl Predicate {
             } => {
                 receiver.try_visit(visitor)?;
                 member.try_visit(visitor)?;
+            }
+            Predicate::StaticCmp { lhs, rhs, .. } => {
+                lhs.try_visit(visitor)?;
+                rhs.try_visit(visitor)?;
             }
             Predicate::EffectEq(..) => {}
         }
@@ -390,6 +577,14 @@ impl Ty {
                     }
                 }
             }
+            // Affine atoms surface as the param/var leaves they stand for,
+            // so var- and param-collectors see through static content.
+            Ty::Static(StaticValue::Int(int)) => {
+                for (atom, _) in &int.terms {
+                    atom.as_ty().try_visit(visitor)?;
+                }
+            }
+            Ty::Static(StaticValue::Bool(_) | StaticValue::Case(..)) => {}
             Ty::Var(_) | Ty::Param(_) | Ty::Error => {}
         }
         ControlFlow::Continue(())
@@ -458,6 +653,9 @@ impl Ty {
                         .all(|(left, right)| left.try_zip(right, visitor))
                     && left_base.try_zip(right_base, visitor)
             }
+            // Canonical forms compare structurally; there are no child
+            // type pairs to visit.
+            (Ty::Static(left), Ty::Static(right)) => left == right,
             (Ty::Var(_), Ty::Var(_))
             | (Ty::Param(_), Ty::Param(_))
             | (Ty::Eff(_), Ty::Eff(_))
@@ -552,7 +750,39 @@ pub(crate) trait TyFold {
                 self.fold_symbol(*assoc),
             ),
             Ty::Eff(eff) => Ty::Eff(self.fold_eff(eff)),
+            Ty::Static(value) => self.fold_static(value),
             Ty::Error => Ty::Error,
+        }
+    }
+
+    /// Rebuild static content, renormalizing affine forms: each atom folds
+    /// as the param/var leaf it stands for, and whatever comes back (a
+    /// bare atom, another affine form, or a closed value) is folded back
+    /// in arithmetically. Substitution through static arguments therefore
+    /// cannot leave a non-canonical form behind.
+    fn fold_static(&mut self, value: &StaticValue) -> Ty {
+        match value {
+            StaticValue::Int(int) => {
+                let mut acc = StaticInt::constant(int.constant.clone());
+                for (atom, coeff) in &int.terms {
+                    let folded = match atom {
+                        StaticAtom::Param(symbol) => self.fold_param(*symbol),
+                        StaticAtom::Var(var) => self.fold_var(*var),
+                    };
+                    // A non-index substitution target is a kind error
+                    // reported where the substitution was formed; poison.
+                    let Some(term) = StaticInt::from_ty(&folded) else {
+                        return Ty::Error;
+                    };
+                    acc = acc.add(&term.scale(coeff));
+                }
+                acc.into_ty()
+            }
+            StaticValue::Bool(value) => Ty::Static(StaticValue::Bool(*value)),
+            StaticValue::Case(owner, case) => Ty::Static(StaticValue::Case(
+                self.fold_symbol(*owner),
+                self.fold_symbol(*case),
+            )),
         }
     }
 
@@ -851,6 +1081,11 @@ impl Ty {
                 base.has_unification_vars() || protocol.has_unification_vars()
             }
             Ty::Eff(eff) => eff.has_unification_vars(),
+            Ty::Static(StaticValue::Int(int)) => int
+                .terms
+                .iter()
+                .any(|(atom, _)| matches!(atom, StaticAtom::Var(_))),
+            Ty::Static(StaticValue::Bool(_) | StaticValue::Case(..)) => false,
         }
     }
 }
@@ -891,6 +1126,9 @@ impl Predicate {
             Predicate::HasMember {
                 receiver, member, ..
             } => receiver.has_unification_vars() || member.has_unification_vars(),
+            Predicate::StaticCmp { lhs, rhs, .. } => {
+                lhs.has_unification_vars() || rhs.has_unification_vars()
+            }
         }
     }
 
@@ -932,6 +1170,11 @@ impl Predicate {
                 receiver: folder.fold_ty(receiver),
                 label: label.clone(),
                 member: folder.fold_ty(member),
+            },
+            Predicate::StaticCmp { op, lhs, rhs } => Predicate::StaticCmp {
+                op: *op,
+                lhs: folder.fold_ty(lhs),
+                rhs: folder.fold_ty(rhs),
             },
         }
     }
@@ -1000,6 +1243,13 @@ impl Scheme {
                 .iter()
                 .map(|p| SchemeParam {
                     symbol: import_symbol(p.symbol, target),
+                    kind: match &p.kind {
+                        ParamKind::Type => ParamKind::Type,
+                        ParamKind::Static(value_ty) => {
+                            ParamKind::Static(value_ty.import_symbols(target))
+                        }
+                    },
+                    default: p.default.as_ref().map(|d| d.import_symbols(target)),
                 })
                 .collect(),
             eff_params: self
@@ -1136,6 +1386,10 @@ fn match_pattern_with_options(
                         match_pattern_with_options(left, right, bindings, peel_pattern_borrows)
                     })
         }
+        // Concrete static arguments (ADR 0035) match by canonical
+        // equality; a rigid static param in the pattern binds through the
+        // `Param` arm above like any other parameter.
+        (Ty::Static(left), Ty::Static(right)) => left == right,
         (Ty::Borrow(left_kind, left_inner), Ty::Borrow(right_kind, right_inner)) => {
             left_kind == right_kind
                 && match_pattern_with_options(
@@ -1295,16 +1549,52 @@ fn pattern_occurs(param: Symbol, ty: &Ty, bindings: &FxHashMap<Symbol, Ty>) -> b
                 .iter()
                 .any(|ty| pattern_occurs(param, ty, bindings))
         }),
+        Ty::Static(StaticValue::Int(int)) => int
+            .terms
+            .iter()
+            .any(|(atom, _)| pattern_occurs(param, &atom.as_ty(), bindings)),
+        Ty::Static(StaticValue::Bool(_) | StaticValue::Case(..)) => false,
         Ty::Var(_) | Ty::Error => false,
     }
 }
 
-/// A quantified type parameter. The qualified context lives on `Scheme` as
-/// predicates, not on individual parameters, matching Jones's qualified-type
-/// shape while letting inline bounds and declaration `where` share one P.
+/// The kind of a declared generic parameter: an ordinary type parameter,
+/// or an ADR 0035 static value parameter carrying its declared value type.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ParamKind {
+    Type,
+    Static(Ty),
+}
+
+/// A quantified generic parameter: its symbol, its kind, and its declared
+/// default (if any). The qualified context lives on `Scheme` as
+/// predicates, not on individual parameters, matching Jones's
+/// qualified-type shape while letting inline bounds and declaration
+/// `where` share one P.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SchemeParam {
     pub symbol: Symbol,
+    #[serde(default)]
+    pub kind: ParamKind,
+    #[serde(default)]
+    pub default: Option<Ty>,
+}
+
+impl Default for ParamKind {
+    fn default() -> Self {
+        ParamKind::Type
+    }
+}
+
+impl SchemeParam {
+    /// An ordinary type parameter with no default.
+    pub fn ty(symbol: Symbol) -> SchemeParam {
+        SchemeParam {
+            symbol,
+            kind: ParamKind::Type,
+            default: None,
+        }
+    }
 }
 
 /// A type scheme `forall params. P => type`. Monomorphic bindings are schemes
@@ -1336,8 +1626,10 @@ impl Scheme {
     }
 
     /// Render for display/tests: quantified type params are named
-    /// positionally (T0, T1, …); simple parameter conformances render inline,
-    /// and the remaining qualified context renders after `where`.
+    /// positionally (T0, T1, …); static value parameters (ADR 0035) render
+    /// with `static` and their declared value type; simple parameter
+    /// conformances render inline, and the remaining qualified context
+    /// renders after `where`.
     pub fn render(&self) -> String {
         let mut names = FxHashMap::default();
         for (i, param) in self.params.iter().enumerate() {
@@ -1378,17 +1670,22 @@ impl Scheme {
                 .params
                 .iter()
                 .enumerate()
-                .map(|(i, param)| match inline_bounds.get(&param.symbol) {
-                    Some(bounds) if !bounds.is_empty() => {
-                        let mut bounds: Vec<String> = bounds
-                            .iter()
-                            .map(|b| render_protocol_ref(b, &names))
-                            .collect();
-                        bounds.sort();
-                        bounds.dedup();
-                        format!("T{i}: {}", bounds.join(" & "))
+                .map(|(i, param)| {
+                    if let ParamKind::Static(value_ty) = &param.kind {
+                        return format!("static T{i}: {}", render_ty(value_ty, &names));
                     }
-                    _ => format!("T{i}"),
+                    match inline_bounds.get(&param.symbol) {
+                        Some(bounds) if !bounds.is_empty() => {
+                            let mut bounds: Vec<String> = bounds
+                                .iter()
+                                .map(|b| render_protocol_ref(b, &names))
+                                .collect();
+                            bounds.sort();
+                            bounds.dedup();
+                            format!("T{i}: {}", bounds.join(" & "))
+                        }
+                        _ => format!("T{i}"),
+                    }
                 })
                 .collect();
             format!("<{}>{}", params.join(", "), body)
@@ -1481,7 +1778,47 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
                 rendered.trim_start().to_string()
             }
         }
+        Ty::Static(value) => render_static_value(value, param_names),
         Ty::Error => "<error>".to_string(),
+    }
+}
+
+pub(crate) fn render_static_value(
+    value: &StaticValue,
+    param_names: &FxHashMap<Symbol, String>,
+) -> String {
+    match value {
+        StaticValue::Int(int) => {
+            let mut parts = vec![];
+            if int.constant != 0.into() || int.terms.is_empty() {
+                parts.push(int.constant.to_string());
+            }
+            for (atom, coeff) in &int.terms {
+                let atom = render_ty(&atom.as_ty(), param_names);
+                if *coeff == 1.into() {
+                    parts.push(atom);
+                } else if *coeff == (-1).into() {
+                    parts.push(format!("-{atom}"));
+                } else {
+                    parts.push(format!("{coeff} * {atom}"));
+                }
+            }
+            let mut rendered = String::new();
+            for (i, part) in parts.iter().enumerate() {
+                if i == 0 {
+                    rendered.push_str(part);
+                } else if let Some(negated) = part.strip_prefix('-') {
+                    rendered.push_str(" - ");
+                    rendered.push_str(negated);
+                } else {
+                    rendered.push_str(" + ");
+                    rendered.push_str(part);
+                }
+            }
+            rendered
+        }
+        StaticValue::Bool(value) => value.to_string(),
+        StaticValue::Case(owner, case) => format!("{owner}.{case}"),
     }
 }
 
@@ -1535,6 +1872,12 @@ fn render_predicate(predicate: &Predicate, param_names: &FxHashMap<Symbol, Strin
             render_ty(receiver, param_names),
             label,
             render_ty(member, param_names)
+        ),
+        Predicate::StaticCmp { op, lhs, rhs } => format!(
+            "{} {} {}",
+            render_ty(lhs, param_names),
+            op.as_str(),
+            render_ty(rhs, param_names)
         ),
     }
 }

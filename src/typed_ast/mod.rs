@@ -118,7 +118,7 @@ pub enum ExprKind {
         #[drive(skip)]
         effect_name: Name,
         #[drive(skip)]
-        type_args: Vec<TypeAnnotation>,
+        type_args: Vec<crate::node_kinds::generic_arg::GenericArg>,
         args: Vec<CallArg>,
     },
     LiteralArray(Vec<Expr>),
@@ -131,7 +131,7 @@ pub enum ExprKind {
     Call {
         callee: Box<Expr>,
         #[drive(skip)]
-        type_args: Vec<TypeAnnotation>,
+        type_args: Vec<crate::node_kinds::generic_arg::GenericArg>,
         args: Vec<CallArg>,
         trailing_block: Option<Block>,
     },

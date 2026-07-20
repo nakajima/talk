@@ -8,7 +8,16 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             destructuring_lets,
             extends,
             protocol_defaults,
+            obligations,
         } = collected;
+
+        // Declaration-level static formation obligations (ADR 0035 §2)
+        // solve first, under the givens their declarations wrapped them
+        // in — collection queued them because it has no solver.
+        if !obligations.is_empty() {
+            let residuals = self.run_solver(obligations);
+            self.report_unresolved_residuals(residuals);
+        }
 
         // The closed base of every top-level ambient row: the core
         // effects (the runtime's implicit handler). Top-level `@handle`s
@@ -663,12 +672,11 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         where_clause: Option<&WhereClause>,
     ) -> DeclaredSchemeContext {
         let mut context = DeclaredSchemeContext::default();
+        context.params = self.declared_params(generics);
         for generic in generics {
-            let Ok(symbol) = generic.name.symbol() else {
-                continue;
-            };
-            context.params.push(SchemeParam { symbol });
-            context.param_nodes.push((symbol, generic.id));
+            if let Ok(symbol) = generic.name.symbol() {
+                context.param_nodes.push((symbol, generic.id));
+            }
         }
         context.predicates = self.declared_predicates(generics, where_clause);
         context
@@ -684,6 +692,12 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
 
         let declared_symbols: FxHashSet<Symbol> =
             declared.params.iter().map(|param| param.symbol).collect();
+        let static_symbols: FxHashSet<Symbol> = declared
+            .params
+            .iter()
+            .filter(|param| matches!(param.kind, crate::types::ty::ParamKind::Static(_)))
+            .map(|param| param.symbol)
+            .collect();
         let mut constrained = FxHashSet::default();
         for predicate in &declared.predicates {
             collect_predicate_params(predicate, Some(&declared_symbols), &mut constrained);
@@ -691,6 +705,87 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
 
         let mut determined = FxHashSet::default();
         collect_ty_params(&scheme.ty, Some(&declared_symbols), &mut determined);
+
+        // ADR 0035 §5: a static parameter is determined by a BARE argument
+        // occurrence or by unique affine solvability, never by mere
+        // mention inside a compound index (no call can solve `C - A` for
+        // both unknowns). Canonical forms carry one term per atom and the
+        // type walk visits each atom once, so a bare occurrence exists
+        // exactly when mentions exceed form memberships.
+        if !static_symbols.is_empty() {
+            determined.retain(|symbol| !static_symbols.contains(symbol));
+            let mut mentions: FxHashMap<Symbol, usize> = FxHashMap::default();
+            let mut forms: Vec<crate::types::ty::StaticInt> = vec![];
+            let _ = scheme
+                .ty
+                .try_visit(&mut |ty: &Ty| -> std::ops::ControlFlow<()> {
+                    match ty {
+                        Ty::Param(param) if static_symbols.contains(param) => {
+                            *mentions.entry(*param).or_default() += 1;
+                        }
+                        Ty::Static(StaticValue::Int(int)) => forms.push(int.clone()),
+                        _ => {}
+                    }
+                    std::ops::ControlFlow::Continue(())
+                });
+            let mut memberships: FxHashMap<Symbol, usize> = FxHashMap::default();
+            for form in &forms {
+                for (atom, _) in &form.terms {
+                    if let crate::types::ty::StaticAtom::Param(param) = atom
+                        && static_symbols.contains(param)
+                    {
+                        *memberships.entry(*param).or_default() += 1;
+                    }
+                }
+            }
+            let mut solved: FxHashSet<Symbol> = static_symbols
+                .iter()
+                .copied()
+                .filter(|param| {
+                    mentions.get(param).copied().unwrap_or(0)
+                        > memberships.get(param).copied().unwrap_or(0)
+                })
+                .collect();
+            // Declared static equalities are affine equations too
+            // (`lhs - rhs = 0`), usable for solving but not occurrences.
+            for predicate in &declared.predicates {
+                if let Predicate::StaticCmp {
+                    op: crate::types::ty::StaticCmpOp::Eq,
+                    lhs,
+                    rhs,
+                } = predicate
+                    && let (Some(lhs), Some(rhs)) = (
+                        crate::types::ty::StaticInt::from_ty(lhs),
+                        crate::types::ty::StaticInt::from_ty(rhs),
+                    )
+                {
+                    forms.push(lhs.sub(&rhs));
+                }
+            }
+            // Fixpoint: a form whose only unsolved atom is one declared
+            // static param at unit coefficient has a unique integer
+            // solution given the others.
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for form in &forms {
+                    let mut unknowns = form.terms.iter().filter(|(atom, _)| match atom {
+                        crate::types::ty::StaticAtom::Param(param) => {
+                            static_symbols.contains(param) && !solved.contains(param)
+                        }
+                        crate::types::ty::StaticAtom::Var(_) => true,
+                    });
+                    let (first, second) = (unknowns.next(), unknowns.next());
+                    if second.is_none()
+                        && let Some((crate::types::ty::StaticAtom::Param(param), coeff)) = first
+                        && (*coeff == 1.into() || *coeff == (-1).into())
+                    {
+                        changed |= solved.insert(*param);
+                    }
+                }
+            }
+            determined.extend(solved);
+        }
 
         let mut changed = true;
         while changed {
@@ -705,14 +800,20 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 collect_ty_params(rhs, Some(&declared_symbols), &mut rhs_params);
                 let lhs_known = lhs_params.iter().any(|param| determined.contains(param));
                 let rhs_known = rhs_params.iter().any(|param| determined.contains(param));
+                // Mention-based propagation is only sound for type
+                // params; statics go through the affine fixpoint above.
                 if lhs_known {
                     for param in rhs_params {
-                        changed |= determined.insert(param);
+                        if !static_symbols.contains(&param) {
+                            changed |= determined.insert(param);
+                        }
                     }
                 }
                 if rhs_known {
                     for param in lhs_params {
-                        changed |= determined.insert(param);
+                        if !static_symbols.contains(&param) {
+                            changed |= determined.insert(param);
+                        }
                     }
                 }
             }
@@ -751,7 +852,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     .map(|info| info.params.clone())
             })
             .unwrap_or_default();
-        let self_ty = Ty::Nominal(symbol, params.iter().map(|p| Ty::Param(*p)).collect());
+        let self_ty = Ty::Nominal(symbol, params.iter().map(|p| Ty::Param(p.symbol)).collect());
 
         let mut work = vec![];
         let (DeclKind::Struct { body, .. } | DeclKind::Enum { body, .. }) = &decl.kind else {

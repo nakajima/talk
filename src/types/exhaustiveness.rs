@@ -259,7 +259,12 @@ impl Coverage<'_> {
         }
         let info = self.catalog.enums.get(&enum_symbol)?;
         let variant = info.variants.get(name)?;
-        let tys: FxHashMap<Symbol, Ty> = info.params.iter().copied().zip(args.clone()).collect();
+        let tys: FxHashMap<Symbol, Ty> = info
+            .params
+            .iter()
+            .map(|param| param.symbol)
+            .zip(args.clone())
+            .collect();
         let no_effs = FxHashMap::default();
         let no_rows = FxHashMap::default();
         variant

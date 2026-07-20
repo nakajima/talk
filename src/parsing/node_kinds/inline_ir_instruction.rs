@@ -247,6 +247,30 @@ impl Display for Value {
     }
 }
 
+fn simple_display_generic_arg(arg: &crate::node_kinds::generic_arg::GenericArg) -> String {
+    use crate::node_kinds::generic_arg::GenericArg;
+    match arg {
+        GenericArg::Type(annotation) => annotation.simple_display(),
+        GenericArg::Static(expr) => simple_display_static_expr(expr),
+    }
+}
+
+fn simple_display_static_expr(expr: &crate::node_kinds::generic_arg::StaticExpr) -> String {
+    use crate::node_kinds::generic_arg::StaticExprKind;
+    match &expr.kind {
+        StaticExprKind::Int(literal) => literal.clone(),
+        StaticExprKind::Bool(value) => value.to_string(),
+        StaticExprKind::Path(annotation) => annotation.simple_display(),
+        StaticExprKind::Group(inner) => format!("({})", simple_display_static_expr(inner)),
+        StaticExprKind::Op { op, lhs, rhs } => format!(
+            "{} {} {}",
+            simple_display_static_expr(lhs),
+            op.as_str(),
+            simple_display_static_expr(rhs)
+        ),
+    }
+}
+
 impl TypeAnnotation {
     fn simple_display(&self) -> String {
         match &self.kind {
@@ -266,7 +290,7 @@ impl TypeAnnotation {
                 } else {
                     let args = generics
                         .iter()
-                        .map(TypeAnnotation::simple_display)
+                        .map(simple_display_generic_arg)
                         .collect::<Vec<_>>()
                         .join(", ");
                     format!("{}<{args}>", name.name_str())
@@ -283,7 +307,7 @@ impl TypeAnnotation {
                 } else {
                     let args = member_generics
                         .iter()
-                        .map(TypeAnnotation::simple_display)
+                        .map(simple_display_generic_arg)
                         .collect::<Vec<_>>()
                         .join(", ");
                     format!("{}.{}<{args}>", base.simple_display(), member)

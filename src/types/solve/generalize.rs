@@ -104,6 +104,11 @@ impl<'s> Generalizer<'s> {
                 label: label.clone(),
                 member: self.quantify_ty(member),
             },
+            Predicate::StaticCmp { op, lhs, rhs } => Predicate::StaticCmp {
+                op: *op,
+                lhs: self.quantify_ty(lhs),
+                rhs: self.quantify_ty(rhs),
+            },
         }
     }
 
@@ -225,7 +230,7 @@ impl TyFold for Generalizer<'_> {
                 if self.store.level(root) > self.base_level {
                     let param = self.mint_param();
                     self.store.bind(root, VarValue::Ty(Ty::Param(param)));
-                    self.params.push(SchemeParam { symbol: param });
+                    self.params.push(SchemeParam::ty(param));
                     if let Some(predicates) = self.var_predicates.remove(&root) {
                         for predicate in predicates {
                             let predicate = self.quantify_predicate(&predicate);
@@ -248,7 +253,7 @@ impl TyFold for Generalizer<'_> {
         // parameter list too (params are per-scheme). Rigid params from
         // elsewhere (a nominal's generics) stay free.
         if self.minted.contains(&symbol) && !self.params.iter().any(|p| p.symbol == symbol) {
-            self.params.push(SchemeParam { symbol });
+            self.params.push(SchemeParam::ty(symbol));
         }
         Ty::Param(symbol)
     }

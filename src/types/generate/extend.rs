@@ -70,9 +70,8 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
                 tys.insert(owner.protocol, work.self_ty.clone());
                 if let Some(info) = self.catalog.protocols.get(&owner.protocol) {
-                    for (param, arg) in info.params.iter().copied().zip(owner.args.iter().cloned())
-                    {
-                        tys.insert(param, arg);
+                    for (param, arg) in info.params.iter().zip(owner.args.iter().cloned()) {
+                        tys.insert(param.symbol, arg);
                     }
                 }
                 // Method-level generics unify against the witness's own
@@ -232,7 +231,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     .catalog
                     .protocols
                     .get(&protocol)
-                    .map(|info| info.params.iter().copied().map(Ty::Param).collect())
+                    .map(|info| info.params.iter().map(|p| Ty::Param(p.symbol)).collect())
                     .unwrap_or_default();
                 vec![ProtocolRef { protocol, args }]
             });

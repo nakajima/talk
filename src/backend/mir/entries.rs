@@ -106,7 +106,10 @@ impl<'a> ProgramBuilder<'a> {
         }
 
         // Register the global slots first: later statements (and clause
-        // bodies) resolve reads against them.
+        // bodies) resolve reads against them. A function quantifying
+        // static value parameters gets NO slot (ADR 0035): it has no
+        // single generic clause, so every use — call or first-class —
+        // resolves through the callables registry and specializes.
         for node in &script {
             if let Node::Decl(decl) = node
                 && let DeclKind::Let {
@@ -119,6 +122,15 @@ impl<'a> ProgramBuilder<'a> {
                     ..
                 } = &decl.kind
             {
+                if let Some((_, func)) = let_bound_func(decl)
+                    && func
+                        .scheme
+                        .params
+                        .iter()
+                        .any(|param| matches!(param.kind, ParamKind::Static(_)))
+                {
+                    continue;
+                }
                 let ty = canonical_ty(&rhs.ty, self.programs[0].module);
                 let slot = u32::try_from(self.global_slots.len()).unwrap_or_default();
                 self.global_slots.insert(*symbol, slot);
@@ -144,6 +156,20 @@ impl<'a> ProgramBuilder<'a> {
                         ..
                     } = &decl.kind =>
                 {
+                    // ADR 0035: a static-value-generic function has no
+                    // slot (see registration above) and no generic clause
+                    // to compile — skip its initializer entirely.
+                    if let Some((_, func)) = let_bound_func(decl)
+                        && func
+                            .scheme
+                            .params
+                            .iter()
+                            .any(|param| matches!(param.kind, ParamKind::Static(_)))
+                    {
+                        fx.flush_stmt_temps(None);
+                        value = Operand::Const(Constant::Unit);
+                        continue;
+                    }
                     let initializer = fx.compile_expr(rhs)?;
                     // A view rooted in a temporary cannot be stored: the
                     // owner dies with this statement (a view of another

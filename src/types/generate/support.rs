@@ -9,13 +9,36 @@ pub(super) fn generic_symbols(
         .collect()
 }
 
-pub(super) fn param_subst(params: &[Symbol], args: &[Ty]) -> FxHashMap<Symbol, Ty> {
-    params.iter().copied().zip(args.iter().cloned()).collect()
+/// A scheme parameter for a declared generic symbol: kind from the
+/// catalog's static registry, no default (defaults attach where the
+/// GenericDecl is in hand).
+pub(super) fn scheme_param(catalog: &TypeCatalog, symbol: Symbol) -> SchemeParam {
+    SchemeParam {
+        symbol,
+        kind: catalog.static_params.get(&symbol).cloned().map_or(
+            crate::types::ty::ParamKind::Type,
+            crate::types::ty::ParamKind::Static,
+        ),
+        default: None,
+    }
 }
 
-/// A nominal's declared type parameters (struct or enum). Catalog-only, so
+pub(super) fn param_subst(params: &[SchemeParam], args: &[Ty]) -> FxHashMap<Symbol, Ty> {
+    params
+        .iter()
+        .map(|param| param.symbol)
+        .zip(args.iter().cloned())
+        .collect()
+}
+
+/// The bare symbols of a canonical parameter list, for positional zips.
+pub(super) fn param_symbols(params: &[SchemeParam]) -> Vec<Symbol> {
+    params.iter().map(|param| param.symbol).collect()
+}
+
+/// A nominal's declared parameters (struct or enum). Catalog-only, so
 /// both the elaborator and the collector can call it.
-pub(super) fn nominal_params(catalog: &TypeCatalog, symbol: Symbol) -> Vec<Symbol> {
+pub(super) fn nominal_params(catalog: &TypeCatalog, symbol: Symbol) -> Vec<SchemeParam> {
     catalog
         .structs
         .get(&symbol)
@@ -168,6 +191,9 @@ pub(super) fn predicate_mentions_context(
             } => ty_mentions_self(receiver, self_ty) || ty_mentions_self(member, self_ty),
             Predicate::RowEq(lhs, rhs) => {
                 row_mentions_self(lhs, self_ty) || row_mentions_self(rhs, self_ty)
+            }
+            Predicate::StaticCmp { lhs, rhs, .. } => {
+                ty_mentions_self(lhs, self_ty) || ty_mentions_self(rhs, self_ty)
             }
             Predicate::EffectEq(..) => false,
         })

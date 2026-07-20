@@ -2455,6 +2455,28 @@ extend Person {
     }
 
     #[test]
+    fn goto_definition_reaches_right_static_operand() {
+        let code = "struct Grid<static Rows: Int> {}\nfunc f<static N: Int, static M: Int>(consume g: Grid<N + M>) -> Int where 0 < N { 1 }\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_static_rhs.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let m_offset = code.find("N + M>").expect("static argument") + "N + ".len();
+        let target = super::goto_definition(&module, None, &uri, m_offset as u32)
+            .expect("the right operand of static arithmetic must navigate");
+        let func_line = code.lines().nth(1).expect("func line");
+        let m_char = func_line.find("static M").expect("M declaration") + "static ".len();
+        assert_eq!(
+            (
+                target.range.start.line,
+                target.range.start.character as usize
+            ),
+            (1, m_char),
+            "must navigate to `static M`'s declaration, not another symbol"
+        );
+    }
+
+    #[test]
     fn goto_definition_on_imported_symbol_navigates_to_definition() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

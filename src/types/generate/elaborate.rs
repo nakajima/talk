@@ -49,7 +49,7 @@ pub(super) fn copy_grade_head(catalog: &TypeCatalog, ty: &Ty) -> bool {
         if catalog.grade_of(*symbol) == crate::types::catalog::Grade::Copy)
 }
 
-struct Elaborator<'e> {
+pub(super) struct Elaborator<'e> {
     store: &'e mut VarStore,
     catalog: &'e TypeCatalog,
     schemes: &'e FxHashMap<Symbol, Scheme>,
@@ -59,7 +59,7 @@ struct Elaborator<'e> {
     self_types: &'e [Ty],
     resolved: &'e ResolvedNames,
     level: Level,
-    obligations: Vec<Constraint>,
+    pub(super) obligations: Vec<Constraint>,
 }
 
 impl<'e> Elaborator<'e> {
@@ -134,7 +134,7 @@ impl<'e> Elaborator<'e> {
         &mut self,
         base: &TypeAnnotation,
         member: &Label,
-        member_generics: &[TypeAnnotation],
+        member_generics: &[GenericArg],
         node: NodeID,
     ) -> Ty {
         let base_ty = self.lower_annotation(base);
@@ -163,7 +163,7 @@ impl<'e> Elaborator<'e> {
         owner: Symbol,
         args: Vec<Ty>,
         label: &str,
-        member_generics: &[TypeAnnotation],
+        member_generics: &[GenericArg],
         node: NodeID,
     ) -> Ty {
         let Some(child) = self
@@ -209,10 +209,7 @@ impl<'e> Elaborator<'e> {
                 Ty::Param(child)
             }
             Symbol::Struct(_) | Symbol::Enum(_) | Symbol::Protocol(_) | Symbol::Builtin(_) => {
-                let lowered_args = member_generics
-                    .iter()
-                    .map(|generic| self.lower_annotation(generic))
-                    .collect();
+                let lowered_args = self.lower_generic_args(child, member_generics);
                 Ty::Nominal(child, lowered_args)
             }
             _ => {
@@ -325,9 +322,20 @@ impl<'e> Elaborator<'e> {
                     }
                     return self.lower_type_alias(symbol, annotation.id, None);
                 }
-                let mut args: Vec<Ty> = generics.iter().map(|g| self.lower_annotation(g)).collect();
+                let mut args: Vec<Ty> = self.lower_generic_args(symbol, generics);
+                self.pad_default_args(symbol, &mut args, annotation.id);
                 match symbol {
-                    Symbol::TypeParameter(_) | Symbol::AssociatedType(_) => Ty::Param(symbol),
+                    Symbol::TypeParameter(_) | Symbol::AssociatedType(_) => {
+                        // A static parameter is a value, not a type; only
+                        // generic-argument slots (ADR 0035) may name it.
+                        if self.catalog.static_params.contains_key(&symbol) {
+                            self.diagnostics
+                                .errors
+                                .push((TypeError::StaticValueInTypePosition, annotation.id));
+                            return Ty::Error;
+                        }
+                        Ty::Param(symbol)
+                    }
                     _ => {
                         self.require_nominal_well_formed(symbol, &args, annotation.id);
                         // Implicit effect args: annotations never spell
@@ -392,6 +400,277 @@ impl<'e> Elaborator<'e> {
                 member_generics,
                 ..
             } => self.lower_nominal_path(base, member, member_generics, annotation.id),
+        }
+    }
+
+    /// Lower a nominal application's generic arguments, interpreting each
+    /// slot according to its declared parameter (ADR 0035 §1): a slot
+    /// declared `static` takes a static value expression; every other
+    /// slot takes a type.
+    fn lower_generic_args(&mut self, head: Symbol, generics: &[GenericArg]) -> Vec<Ty> {
+        let params = nominal_params(self.catalog, head);
+        generics
+            .iter()
+            .enumerate()
+            .map(|(index, generic)| {
+                let expected = params.get(index).and_then(|param| match &param.kind {
+                    crate::types::ty::ParamKind::Static(value_ty) => Some(value_ty.clone()),
+                    crate::types::ty::ParamKind::Type => None,
+                });
+                match expected {
+                    Some(expected) => {
+                        let arg = self.lower_static_argument(generic, &expected);
+                        self.emit_static_nonneg(&expected, &arg, generic.id());
+                        arg
+                    }
+                    None => match generic {
+                        GenericArg::Type(annotation) => self.lower_annotation(annotation),
+                        GenericArg::Static(expr) => {
+                            self.diagnostics
+                                .errors
+                                .push((TypeError::StaticValueInTypePosition, expr.id));
+                            Ty::Error
+                        }
+                    },
+                }
+            })
+            .collect()
+    }
+
+    /// Fill omitted trailing generic arguments from declared defaults,
+    /// substituting earlier arguments left-to-right — the nominal twin of
+    /// the protocol-application defaulting in `lower_protocol_ref_with_self`.
+    /// A slot without a default keeps today's under-applied behavior (the
+    /// mismatch surfaces at unification).
+    fn pad_default_args(&mut self, head: Symbol, args: &mut Vec<Ty>, node: NodeID) {
+        let params = nominal_params(self.catalog, head);
+        if args.len() >= params.len() {
+            return;
+        }
+        let mut substitution: FxHashMap<Symbol, Ty> = params
+            .iter()
+            .map(|param| param.symbol)
+            .zip(args.iter().cloned())
+            .collect();
+        for index in args.len()..params.len() {
+            let Some(default) = params[index].default.clone() else {
+                return;
+            };
+            let default =
+                default.substitute(&substitution, &Default::default(), &Default::default());
+            // A materialized default is a formed static argument like any
+            // explicit one (ADR 0035 §2): it owes the same nonnegativity
+            // obligation, so `Pair<static A, static B = A - 1>` demands a
+            // context proving `0 <= A - 1`.
+            if let crate::types::ty::ParamKind::Static(expected) = &params[index].kind {
+                self.emit_static_nonneg(expected, &default, node);
+            }
+            substitution.insert(params[index].symbol, default.clone());
+            args.push(default);
+        }
+    }
+
+    /// ADR 0035 §2: forming an application emits a nonnegativity wanted
+    /// for every integer static argument.
+    pub(super) fn emit_static_nonneg(&mut self, expected: &Ty, arg: &Ty, node: NodeID) {
+        if matches!(expected, Ty::Nominal(symbol, _) if *symbol == Symbol::Int)
+            && !matches!(arg, Ty::Error)
+        {
+            self.obligations.push(Constraint::StaticCmp {
+                op: crate::types::ty::StaticCmpOp::Le,
+                lhs: Ty::Static(StaticValue::Int(StaticInt::constant(0))),
+                rhs: arg.clone(),
+                origin: CtOrigin::new(node, CtReason::Annotation),
+            });
+        }
+    }
+
+    /// Lower a static generic argument (ADR 0035 §3): a static
+    /// expression, or a name-like annotation reinterpreted against the
+    /// declared parameter (a bare static-param reference or a fieldless
+    /// enum case path).
+    pub(super) fn lower_static_argument(&mut self, arg: &GenericArg, expected: &Ty) -> Ty {
+        match arg {
+            GenericArg::Static(expr) => self.lower_static_expr(expr, expected),
+            GenericArg::Type(annotation) => self.lower_static_path(annotation, expected),
+        }
+    }
+
+    /// The static index language proper: literals, grouping, `+`, `-`,
+    /// and multiplication by a literal, normalized to canonical affine
+    /// form.
+    pub(super) fn lower_static_expr(&mut self, expr: &StaticExpr, expected: &Ty) -> Ty {
+        let expected_head = match expected {
+            Ty::Nominal(symbol, _) => *symbol,
+            _ => return Ty::Error,
+        };
+        let mismatch = |this: &mut Self, found: &str| {
+            this.diagnostics.errors.push((
+                TypeError::Mismatch {
+                    expected: expected.render_mono(),
+                    found: found.to_string(),
+                    reason: CtReason::Annotation,
+                },
+                expr.id,
+            ));
+            Ty::Error
+        };
+        match &expr.kind {
+            StaticExprKind::Int(literal) => {
+                if expected_head != Symbol::Int {
+                    return mismatch(self, "Int");
+                }
+                match literal.parse::<i64>() {
+                    Ok(value) => Ty::Static(StaticValue::Int(StaticInt::constant(value))),
+                    Err(_) => {
+                        self.diagnostics.errors.push((
+                            TypeError::IntegerLiteralOutOfRange {
+                                literal: literal.clone(),
+                            },
+                            expr.id,
+                        ));
+                        Ty::Error
+                    }
+                }
+            }
+            StaticExprKind::Bool(value) => {
+                if expected_head != Symbol::Bool {
+                    return mismatch(self, "Bool");
+                }
+                Ty::Static(StaticValue::Bool(*value))
+            }
+            StaticExprKind::Group(inner) => self.lower_static_expr(inner, expected),
+            StaticExprKind::Path(annotation) => self.lower_static_path(annotation, expected),
+            StaticExprKind::Op { op, lhs, rhs } => {
+                if expected_head != Symbol::Int {
+                    return mismatch(self, "Int");
+                }
+                let lhs = self.lower_static_expr(lhs, expected);
+                let rhs = self.lower_static_expr(rhs, expected);
+                let (Some(lhs), Some(rhs)) = (StaticInt::from_ty(&lhs), StaticInt::from_ty(&rhs))
+                else {
+                    // A poisoned or non-index operand already reported.
+                    return Ty::Error;
+                };
+                let combined = match op {
+                    StaticOpKind::Add => lhs.add(&rhs),
+                    StaticOpKind::Sub => lhs.sub(&rhs),
+                    StaticOpKind::Mul => match (lhs.as_constant(), rhs.as_constant()) {
+                        (Some(factor), _) => rhs.scale(&factor.clone()),
+                        (_, Some(factor)) => lhs.scale(&factor.clone()),
+                        (None, None) => {
+                            self.diagnostics
+                                .errors
+                                .push((TypeError::NonlinearStaticExpression, expr.id));
+                            return Ty::Error;
+                        }
+                    },
+                };
+                // Normalization is over the mathematical integers; a
+                // CLOSED result must fit Talk's signed 64-bit Int
+                // (ADR 0035 §3) the moment it is formed.
+                match combined.as_constant() {
+                    Some(constant) if i64::try_from(constant.clone()).is_err() => {
+                        self.diagnostics.errors.push((
+                            TypeError::IntegerLiteralOutOfRange {
+                                literal: constant.to_string(),
+                            },
+                            expr.id,
+                        ));
+                        Ty::Error
+                    }
+                    _ => combined.into_ty(),
+                }
+            }
+        }
+    }
+
+    /// A name-like static operand: a bare reference to a declared static
+    /// parameter, or a fieldless enum case path (`Color.red`).
+    fn lower_static_path(&mut self, annotation: &TypeAnnotation, expected: &Ty) -> Ty {
+        let expected_head = match expected {
+            Ty::Nominal(symbol, _) => *symbol,
+            _ => return Ty::Error,
+        };
+        match &annotation.kind {
+            // A parenthesized name parses as the 1-tuple spelling.
+            TypeAnnotationKind::Tuple(items) if items.len() == 1 => {
+                self.lower_static_path(&items[0], expected)
+            }
+            TypeAnnotationKind::Nominal { name, generics, .. } if generics.is_empty() => {
+                let Ok(symbol) = name.symbol() else {
+                    return Ty::Error;
+                };
+                match self.catalog.static_params.get(&symbol) {
+                    Some(declared) if declared == expected => Ty::Param(symbol),
+                    Some(declared) => {
+                        let declared = declared.render_mono();
+                        self.diagnostics.errors.push((
+                            TypeError::Mismatch {
+                                expected: expected.render_mono(),
+                                found: declared,
+                                reason: CtReason::Annotation,
+                            },
+                            annotation.id,
+                        ));
+                        Ty::Error
+                    }
+                    None => {
+                        let found = self.lower_annotation(annotation);
+                        self.diagnostics.errors.push((
+                            TypeError::ExpectedStaticArgument {
+                                found: found.render_mono(),
+                            },
+                            annotation.id,
+                        ));
+                        Ty::Error
+                    }
+                }
+            }
+            // A fieldless enum case, spelled `Color.red`.
+            TypeAnnotationKind::NominalPath {
+                base,
+                member,
+                member_generics,
+                ..
+            } if member_generics.is_empty() => {
+                let case = match &base.kind {
+                    TypeAnnotationKind::Nominal { name, generics, .. } if generics.is_empty() => {
+                        name.symbol().ok().filter(|owner| *owner == expected_head)
+                    }
+                    _ => None,
+                }
+                .and_then(|owner| {
+                    self.catalog
+                        .enums
+                        .get(&owner)
+                        .and_then(|info| info.variants.get(&member.to_string()))
+                        .map(|variant| (owner, variant.symbol))
+                });
+                match case {
+                    Some((owner, case)) => Ty::Static(StaticValue::Case(owner, case)),
+                    None => {
+                        let found = self.lower_annotation(annotation);
+                        self.diagnostics.errors.push((
+                            TypeError::ExpectedStaticArgument {
+                                found: found.render_mono(),
+                            },
+                            annotation.id,
+                        ));
+                        Ty::Error
+                    }
+                }
+            }
+            _ => {
+                let found = self.lower_annotation(annotation);
+                self.diagnostics.errors.push((
+                    TypeError::ExpectedStaticArgument {
+                        found: found.render_mono(),
+                    },
+                    annotation.id,
+                ));
+                Ty::Error
+            }
         }
     }
 
@@ -616,8 +895,15 @@ impl<'e> Elaborator<'e> {
     }
 }
 
+/// A declaration's canonical checking context: its parameter records
+/// and given predicates, computed once by `in_declaration_context`.
+pub(super) struct DeclContext {
+    pub(super) params: Vec<SchemeParam>,
+    pub(super) predicates: Vec<Predicate>,
+}
+
 impl<'s, 'a> CatalogBuilder<'s, 'a> {
-    fn elaborator(&mut self) -> Elaborator<'_> {
+    pub(super) fn elaborator(&mut self) -> Elaborator<'_> {
         Elaborator {
             store: &mut *self.store,
             catalog: &*self.catalog,
@@ -633,8 +919,13 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
     }
 
     pub(super) fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
-        let mut elab = self.elaborator();
-        elab.lower_annotation(annotation)
+        let (ty, obligations) = {
+            let mut elab = self.elaborator();
+            let ty = elab.lower_annotation(annotation);
+            (ty, std::mem::take(&mut elab.obligations))
+        };
+        self.absorb_obligations(obligations);
+        ty
     }
 
     pub(super) fn lower_type_alias(
@@ -643,15 +934,91 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         node: NodeID,
         owner_args: Option<(Symbol, Vec<Ty>)>,
     ) -> Ty {
-        let mut elab = self.elaborator();
-        elab.lower_type_alias(symbol, node, owner_args)
+        let (ty, obligations) = {
+            let mut elab = self.elaborator();
+            let ty = elab.lower_type_alias(symbol, node, owner_args);
+            (ty, std::mem::take(&mut elab.obligations))
+        };
+        self.absorb_obligations(obligations);
+        ty
+    }
+
+    /// Static formation obligations (ADR 0035 §2) have no later
+    /// checkpoint — queue them for the first checking solve, wrapped per
+    /// declaration by `finish_declaration_obligations`. Well-formedness
+    /// `Conforms` obligations keep their long-standing use-site checking
+    /// (construction and member sites re-emit them); queueing those here
+    /// would need per-path given contexts (protocol Self bounds,
+    /// requirement scheme contexts) this seam does not carry.
+    pub(super) fn absorb_obligations(&mut self, obligations: Vec<Constraint>) {
+        self.obligations.extend(
+            obligations
+                .into_iter()
+                .filter(|obligation| matches!(obligation, Constraint::StaticCmp { .. })),
+        );
+    }
+
+    /// The declaration-context scope: the one owner of the sequence
+    /// every declaration follows — register generic bounds, compute the
+    /// declaration's given predicates, lower its annotations, and wrap
+    /// the formation obligations that lowering produced under those
+    /// givens. `self_ty` is pushed only around predicate lowering (a
+    /// where clause may mention Self); sites that need Self visible for
+    /// their whole body push it themselves. The body may extend
+    /// `context.predicates` (protocol heads add Self bindings, protocol
+    /// where clauses lower after associated types register) and the
+    /// exit wrap honors the final set. Calls nest: an inner declaration
+    /// (a requirement signature, an extension method) proves its
+    /// obligations under its OWN where clause before the enclosing
+    /// declaration's.
+    pub(super) fn in_declaration_context<R>(
+        &mut self,
+        self_ty: Option<Ty>,
+        generics: &[GenericDecl],
+        where_clause: Option<&WhereClause>,
+        body: impl FnOnce(&mut Self, &mut DeclContext) -> R,
+    ) -> R {
+        let start = self.obligations.len();
+        self.register_generic_bounds(generics);
+        self.register_where_bounds(where_clause);
+        let params = self.declared_params(generics);
+        if let Some(ty) = &self_ty {
+            self.self_types.push(ty.clone());
+        }
+        let predicates = self.declared_predicates(generics, where_clause);
+        if self_ty.is_some() {
+            self.self_types.pop();
+        }
+        let mut context = DeclContext { params, predicates };
+        let result = body(self, &mut context);
+        self.finish_declaration_obligations(start, &context.predicates);
+        result
+    }
+
+    /// Wrap the obligations a declaration's annotations produced (from
+    /// `start` on) under the declaration's own predicates, so a
+    /// conditional context (`where 0 < N`) proves them exactly as it
+    /// would for a body.
+    fn finish_declaration_obligations(&mut self, start: usize, givens: &[Predicate]) {
+        if self.obligations.len() <= start || givens.is_empty() {
+            return;
+        }
+        let wanteds = self.obligations.split_off(start);
+        self.obligations
+            .push(Constraint::Implic(Box::new(Implication {
+                level: self.level,
+                givens: givens.to_vec(),
+                wanteds,
+                local_params: vec![],
+                touchable_level: None,
+            })));
     }
 }
 
 macro_rules! impl_checking_elaboration_for {
     ($target:ident<$session:lifetime, $source:lifetime>) => {
         impl<$session, $source> $target<$session, $source> {
-            fn elaborator(&mut self) -> Elaborator<'_> {
+            pub(super) fn elaborator(&mut self) -> Elaborator<'_> {
                 Elaborator {
                     store: &mut *self.store,
                     catalog: &*self.catalog,
@@ -675,6 +1042,12 @@ macro_rules! impl_checking_elaboration_for {
                 self.wanteds.extend(obligations);
                 ty
             }
+
+            /// Formation obligations from out-of-band elaboration (e.g.
+            /// protocol static arguments) join this checker's wanteds.
+            pub(super) fn absorb_obligations(&mut self, obligations: Vec<Constraint>) {
+                self.wanteds.extend(obligations);
+            }
         }
     };
 }
@@ -683,6 +1056,31 @@ impl_checking_elaboration_for!(BodyChecker<'s, 'a>);
 impl_checking_elaboration_for!(BindingGroupChecker<'s, 'a>);
 
 impl<'s, 'a> BodyChecker<'s, 'a> {
+    /// Lower an explicit generic argument according to its declared
+    /// parameter's kind (ADR 0035): a `static` slot takes a static value
+    /// expression, any other slot a type.
+    pub(super) fn lower_generic_arg_for_param(&mut self, param: Symbol, arg: &GenericArg) -> Ty {
+        match (self.catalog.static_params.get(&param).cloned(), arg) {
+            (Some(expected), arg) => {
+                let (ty, obligations) = {
+                    let mut elab = self.elaborator();
+                    let ty = elab.lower_static_argument(arg, &expected);
+                    elab.emit_static_nonneg(&expected, &ty, arg.id());
+                    (ty, std::mem::take(&mut elab.obligations))
+                };
+                self.wanteds.extend(obligations);
+                ty
+            }
+            (None, GenericArg::Type(annotation)) => self.lower_annotation(annotation),
+            (None, GenericArg::Static(expr)) => {
+                self.diagnostics
+                    .errors
+                    .push((TypeError::StaticValueInTypePosition, expr.id));
+                Ty::Error
+            }
+        }
+    }
+
     pub(super) fn emit_nominal_well_formedness(
         &mut self,
         symbol: Symbol,

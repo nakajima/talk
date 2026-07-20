@@ -204,7 +204,13 @@ fn add_member_items_for_ty(
                 }
             }
         }
-        Ty::Borrow(..) | Ty::Func(..) | Ty::Tuple(_) | Ty::Var(_) | Ty::Eff(_) | Ty::Error => {}
+        Ty::Borrow(..)
+        | Ty::Func(..)
+        | Ty::Tuple(_)
+        | Ty::Var(_)
+        | Ty::Eff(_)
+        | Ty::Static(_)
+        | Ty::Error => {}
     }
 }
 
@@ -334,7 +340,7 @@ fn add_symbol_member_item(
     types: &TypeOutput,
     label: &str,
     symbol: Symbol,
-    owner_params: &[Symbol],
+    owner_params: &[crate::types::ty::SchemeParam],
     owner_args: &[Ty],
     drop_self: bool,
     items: &mut FxHashMap<String, CompletionItem>,
@@ -377,7 +383,12 @@ fn requirement_detail(
     let mut substitution = FxHashMap::default();
     substitution.insert(owner.protocol, lookup_ty.clone());
     if let Some(info) = types.catalog.protocols.get(&owner.protocol) {
-        for (param, arg) in info.params.iter().copied().zip(owner.args.iter().cloned()) {
+        for (param, arg) in info
+            .params
+            .iter()
+            .map(|param| param.symbol)
+            .zip(owner.args.iter().cloned())
+        {
             substitution.insert(param, arg);
         }
     }
@@ -400,8 +411,12 @@ fn associated_binding(receiver_ty: &Ty, assoc_symbol: Symbol) -> Option<Ty> {
         .find_map(|(symbol, ty)| (*symbol == assoc_symbol).then(|| ty.clone()))
 }
 
-fn param_subst(params: &[Symbol], args: &[Ty]) -> FxHashMap<Symbol, Ty> {
-    params.iter().copied().zip(args.iter().cloned()).collect()
+fn param_subst(params: &[crate::types::ty::SchemeParam], args: &[Ty]) -> FxHashMap<Symbol, Ty> {
+    params
+        .iter()
+        .map(|param| param.symbol)
+        .zip(args.iter().cloned())
+        .collect()
 }
 
 fn substitute_ty(ty: &Ty, tys: &FxHashMap<Symbol, Ty>) -> Ty {

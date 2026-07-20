@@ -15,7 +15,10 @@ pub struct GenericDecl {
     pub name_span: Span,
     pub generics: Vec<GenericDecl>,
     pub conformances: Vec<TypeAnnotation>,
-    pub default: Option<TypeAnnotation>,
+    pub default: Option<crate::node_kinds::generic_arg::GenericArg>,
+    /// `Some` marks an ADR 0035 static value parameter (`static N: Int`);
+    /// the annotation is the declared value type.
+    pub static_ty: Option<TypeAnnotation>,
     #[drive(skip)]
     pub span: Span,
 }

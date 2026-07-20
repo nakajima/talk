@@ -48,14 +48,14 @@ pub enum TypeAnnotationKind {
         member: Label,
         #[drive(skip)]
         member_span: Span,
-        member_generics: Vec<TypeAnnotation>,
+        member_generics: Vec<crate::node_kinds::generic_arg::GenericArg>,
     },
     Nominal {
         #[drive(skip)]
         name: Name,
         #[drive(skip)]
         name_span: Span,
-        generics: Vec<TypeAnnotation>,
+        generics: Vec<crate::node_kinds::generic_arg::GenericArg>,
     },
     Tuple(Vec<TypeAnnotation>),
     Record {

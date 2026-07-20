@@ -3386,6 +3386,11 @@ pub mod tests {
                             .any(|entry| entry.args.iter().any(ty_has_vars))
                 }
                 Ty::Proj(base, ..) => ty_has_vars(base),
+                Ty::Static(crate::types::ty::StaticValue::Int(int)) => int
+                    .terms
+                    .iter()
+                    .any(|(atom, _)| matches!(atom, crate::types::ty::StaticAtom::Var(_))),
+                Ty::Static(_) => false,
                 Ty::Param(_) | Ty::Error => false,
             }
         }
@@ -5203,5 +5208,1090 @@ struct Counter {
 }",
         );
         super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_generic_argument_forms_a_type() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f(consume g: Grid<4>) -> Grid<4> { g }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn parenthesized_static_arguments_type_check() {
+        // ADR 0035 grammar: parentheses are part of the index language,
+        // including in leading position.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static N: Int> {}
+func f(consume g: Grid<(2 + 2)>) -> Grid<4> { g }
+func h<static K: Int>(consume g: Grid<(K + 1)>) -> Grid<K + 1> { g }
+func i<static K: Int>(consume g: Grid<(K)>) -> Grid<K> { g }
+func j<static K: Int>(consume g: Grid<(K + 1) * 2>) -> Grid<2 * K + 2> { g }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_closed_arithmetic_reduces_before_identity() {
+        // ADR 0035 §4: Grid<2 + 2> and Grid<4> are the same type.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f(consume g: Grid<2 + 2>) -> Grid<4> { g }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_affine_forms_are_definitionally_equal() {
+        // ADR 0035 §4: N + 1 and 1 + N are one type; 2 * N and N + N too.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f<static N: Int>(consume g: Grid<N + 1>) -> Grid<1 + N> { g }
+func h<static N: Int>(consume g: Grid<2 * N>) -> Grid<N + N> { g }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_argument_mismatch_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f(consume g: Grid<4>) -> Grid<5> { g }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("mismatch")
+                || error.contains("Mismatch")
+                || error.contains("requires")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn static_param_value_type_domain_is_validated() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: String> {}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("value type must be Int, Bool, or a fieldless enum")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn type_argument_in_static_slot_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f(g: Grid<Int>) { }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("must be a static value expression")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn static_param_in_type_position_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f<static N: Int>(consume g: Grid<N>) -> N { g }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("static value expression is not a type")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn self_referential_static_equation_reports_unsatisfiable() {
+        // `α ~ α + 1` cancels to `1 = 0`: plain unsatisfiable arithmetic,
+        // not an infinite type.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func grow<static N: Int>(consume g: Grid<N>) -> Grid<N + 1> { Grid() }
+func same<static M: Int>(a: Grid<M>, b: Grid<M>) -> Int { 1 }
+func use() -> Int {
+    let g = Grid()
+    same(grow(g), g)
+}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(!errors.is_empty(), "expected an error, got clean");
+        assert!(
+            errors.iter().all(|error| !error.contains("nfinite")),
+            "should not report an infinite type: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn unresolved_static_argument_gets_targeted_diagnostic() {
+        // Nothing pins N: not a generic inference failure but an
+        // underdetermined static argument (ADR 0035 §5).
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func make<static N: Int>() -> Grid<N> { Grid() }
+func use() -> Int {
+    let g = make()
+    1
+}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Cannot infer this static argument")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn protocol_static_arguments_prove_bounds() {
+        let t = super::tests::check(
+            "// no-core
+protocol Sized<static N: Int> {}
+struct Cell {}
+extend Cell: Sized<1> {}
+func need<T>(x: T) -> Int where T: Sized<1> { 1 }
+func use(c: Cell) -> Int { need(c) }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_static_argument_mismatch_rejects_conformance() {
+        let t = super::tests::check(
+            "// no-core
+protocol Sized<static N: Int> {}
+struct Cell {}
+extend Cell: Sized<1> {}
+func need<T>(x: T) -> Int where T: Sized<2> { 1 }
+func use(c: Cell) -> Int { need(c) }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("conform")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn protocol_static_param_default_applies() {
+        let t = super::tests::check(
+            "// no-core
+protocol Sized<static N: Int = 1> {}
+struct Cell {}
+extend Cell: Sized {}
+func need<T>(x: T) -> Int where T: Sized<1> { 1 }
+func use(c: Cell) -> Int { need(c) }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn distinct_static_conformances_coexist_and_overlap_rejects() {
+        let coexist = super::tests::check(
+            "// no-core
+protocol Sized<static N: Int> {}
+struct Cell {}
+extend Cell: Sized<1> {}
+extend Cell: Sized<2> {}",
+        );
+        super::tests::assert_clean(&coexist);
+
+        // ADR 0035 §8: no ordered specialization — a generic row and a
+        // concrete row for the same protocol overlap and reject; the
+        // concrete one gains no C++-style priority.
+        let overlap = super::tests::check(
+            "// no-core
+protocol Sized<static N: Int> {}
+struct Cell {}
+extend<static N: Int> Cell: Sized<N> {}
+extend Cell: Sized<1> {}",
+        );
+        let errors = super::tests::type_errors(&overlap);
+        assert!(
+            errors.iter().any(|error| error.contains("verlap")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn static_equality_where_clause_proves_and_rejects() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f<static N: Int, static M: Int>(consume g: Grid<N>, h: Grid<M>) -> Grid<M> where N == M { g }",
+        );
+        super::tests::assert_clean(&t);
+
+        let bare = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f<static N: Int, static M: Int>(consume g: Grid<N>, h: Grid<M>) -> Grid<M> { g }",
+        );
+        let errors = super::tests::type_errors(&bare);
+        assert!(!errors.is_empty(), "expected a mismatch, got clean");
+    }
+
+    #[test]
+    fn static_equality_given_feeds_entailment() {
+        // N == M proves 0 <= M - N.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f<static N: Int, static M: Int>(g: Grid<N>, h: Grid<M>) -> Grid<M - N> where N == M { Grid() }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_equality_against_literal_pins_the_param() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f<static N: Int>(consume g: Grid<N>) -> Grid<3> where N == 3 { g }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_param_value_use_types_as_declared_value_type() {
+        // The frontend owns the value typing of a static parameter; the
+        // backend must never be the first phase to give `N` a meaning.
+        let t = super::tests::check(
+            "// no-core
+func wrong<static N: Int>() -> Bool { N }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("Bool")),
+            "{errors:?}"
+        );
+
+        let ok = super::tests::check(
+            "// no-core
+func width<static N: Int>() -> Int { N }",
+        );
+        super::tests::assert_clean(&ok);
+    }
+
+    #[test]
+    fn static_generics_cross_module_boundary() {
+        use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
+
+        let driver_a = Driver::new(
+            vec![Source::from(
+                "public struct Grid<static Rows: Int> {}\npublic func grow<static N: Int>(consume g: Grid<N>) -> Grid<N + 1> { Grid() }",
+            )],
+            DriverConfig::new("A"),
+        );
+        let module_a = driver_a
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check()
+            .module("A");
+
+        let mut modules = ModuleEnvironment::default();
+        modules.import(module_a);
+        let config = crate::compiling::driver::DriverConfig {
+            module_id: ModuleId::Current,
+            modules: Rc::new(modules),
+            mode: crate::compiling::driver::CompilationMode::Library,
+            module_name: "B".to_string(),
+            parse_mode: crate::compiling::driver::ParseMode::Strict,
+            preserve_comments: false,
+            workspace_root: None,
+            source_root: None,
+            libraries: Vec::new(),
+        };
+        let driver_b = Driver::new(
+            vec![Source::from(
+                "use A::{ Grid, grow }\nfunc f(consume g: Grid<4>) -> Grid<5> { grow(g) }",
+            )],
+            config,
+        );
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn enum_case_generics_carry_static_params() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+enum Holder {
+	case sized<static K: Int>(Grid<K>)
+	case empty
+}
+func pack(consume g: Grid<3>) -> Holder {
+	Holder.sized(g)
+}
+func unpack(consume h: Holder) -> Int {
+	match h {
+		.sized(g) -> 1,
+		.empty -> 0
+	}
+}",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_param_defaults_apply_on_nominals() {
+        // ADR 0035 §1: defaults are valid static expressions mentioning
+        // only earlier parameters.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int = 4> {}
+func f(consume g: Grid) -> Grid<4> { g }
+struct Pair<static A: Int, static B: Int = A + 1> {}
+func h(consume p: Pair<2>) -> Pair<2, 3> { p }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn func_static_default_applies_when_uninferred() {
+        let t = super::tests::check(
+            "// no-core
+func number<static N: Int = 4>() -> Int { N }
+func use() -> Int { number() }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn func_static_default_yields_to_inference() {
+        // An inferable argument beats the default (PreferEq semantics).
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func rows<static N: Int = 4>(g: Grid<N>) -> Grid<N> { Grid() }
+func use(g: Grid<7>) -> Grid<7> { rows(g) }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn constructor_static_default_is_hard() {
+        // `Grid()` IS `Grid<4>()`; a use demanding Grid<5> must reject.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static N: Int = 4> {}
+func five(g: Grid<5>) -> Int { 5 }
+func use() -> Int {
+    let g = Grid()
+    five(g)
+}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(!errors.is_empty(), "expected a mismatch, got clean");
+
+        let ok = super::tests::check(
+            "// no-core
+struct Grid<static N: Int = 4> {}
+func four(g: Grid<4>) -> Int { 4 }
+func use() -> Int {
+    let g = Grid()
+    four(g)
+}",
+        );
+        super::tests::assert_clean(&ok);
+    }
+
+    #[test]
+    fn negative_static_default_rejects_at_declaration() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static N: Int = 0 - 1> {}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("nonnegative")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn forward_referencing_default_rejects_at_declaration() {
+        let t = super::tests::check(
+            "// no-core
+struct Pair<static A: Int = B, static B: Int = 2> {}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("earlier parameters")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn symbolic_default_materialization_requires_proof() {
+        // `Pair<0>` materializes B = 0 - 1: the default is a formed
+        // static argument and owes nonnegativity like an explicit one.
+        let t = super::tests::check(
+            "// no-core
+struct Pair<static A: Int, static B: Int = A - 1> {}
+func f(consume p: Pair<0>) -> Int { 1 }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("static predicate")),
+            "{errors:?}"
+        );
+
+        // With a positive argument the same default proves.
+        let ok = super::tests::check(
+            "// no-core
+struct Pair<static A: Int, static B: Int = A - 1> {}
+func f(consume p: Pair<3>) -> Int { 1 }",
+        );
+        super::tests::assert_clean(&ok);
+
+        // A generic use demands the proof from the declaration context.
+        let generic = super::tests::check(
+            "// no-core
+struct Pair<static A: Int, static B: Int = A - 1> {}
+func f<static K: Int>(consume p: Pair<K>) -> Int { 1 }",
+        );
+        let errors = super::tests::type_errors(&generic);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("static predicate")),
+            "{errors:?}"
+        );
+
+        let guarded = super::tests::check(
+            "// no-core
+struct Pair<static A: Int, static B: Int = A - 1> {}
+func f<static K: Int>(consume p: Pair<K>) -> Int where 0 < K { 1 }",
+        );
+        super::tests::assert_clean(&guarded);
+    }
+
+    #[test]
+    fn static_param_default_mismatch_still_rejects() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int = 4> {}
+func f(consume g: Grid) -> Grid<5> { g }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(!errors.is_empty(), "expected a mismatch, got clean");
+    }
+
+    #[test]
+    fn conformance_head_static_arguments_require_proof() {
+        let t = super::tests::check(
+            "// no-core
+protocol Sized<static N: Int> {}
+struct Cell {}
+extend Cell: Sized<0 - 1> {}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("static predicate")),
+            "{errors:?}"
+        );
+
+        // A conditional row's context proves its head's obligations.
+        let guarded = super::tests::check(
+            "// no-core
+protocol Sized<static N: Int> {}
+struct Grid<static Rows: Int> {}
+extend<static N: Int> Grid: Sized<N - 1> where 0 < N {}",
+        );
+        super::tests::assert_clean(&guarded);
+    }
+
+    #[test]
+    fn superprotocol_static_arguments_require_proof() {
+        let t = super::tests::check(
+            "// no-core
+protocol Sized<static N: Int> {}
+protocol Bad: Sized<0 - 1> {}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("static predicate")),
+            "{errors:?}"
+        );
+
+        // The subprotocol's own params satisfy its super's obligations
+        // through the ambient axiom.
+        let ok = super::tests::check(
+            "// no-core
+protocol Sized<static N: Int> {}
+protocol Ok<static N: Int>: Sized<N> {}",
+        );
+        super::tests::assert_clean(&ok);
+    }
+
+    #[test]
+    fn type_alias_static_arguments_require_proof() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+typealias Bad = Grid<0 - 1>",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("static predicate")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn field_type_formation_requires_nonnegativity_proof() {
+        // A field's formation obligations must not vanish just because
+        // collection lowered the annotation first.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+struct Shrunk<static N: Int> {
+	let g: Grid<N - 1>
+}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("static predicate")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn field_type_formation_proves_from_nominal_where_clause() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+struct Shrunk<static N: Int> where 0 < N {
+	let g: Grid<N - 1>
+}",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn effect_static_generic_arguments_type_check() {
+        let t = super::tests::check(
+            "// no-core
+effect 'tag<static N: Int>(value: Int) -> Int
+@handle 'tag { value in
+	continue value
+}
+'tag<4>(1)",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn effect_static_generic_argument_kind_mismatch_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+effect 'tag<static N: Int>(value: Int) -> Int
+@handle 'tag { value in
+	continue value
+}
+'tag<Bool>(1)",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(!errors.is_empty(), "expected a kind mismatch, got clean");
+    }
+
+    #[test]
+    fn extension_method_static_generics_check() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+struct S {}
+extend S {
+	func f<static N: Int>(consume g: Grid<N - 1>) -> Int where 0 < N { 1 }
+}",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_where_clause_sees_protocol_params() {
+        let t = super::tests::check(
+            "// no-core
+protocol Good<static N: Int> where 0 < N {}",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn requirement_signature_obligations_prove_under_its_own_predicates() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+protocol P {
+	func f<static N: Int>(consume g: Grid<N - 1>) -> Int where 0 < N
+}",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn requirement_signature_without_positivity_given_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+protocol P {
+	func f<static N: Int>(consume g: Grid<N - 1>) -> Int
+}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("static predicate")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn constrained_static_in_compound_form_only_is_undetermined() {
+        // A is constrained (0 < A) but occurs only inside `C - A`, which
+        // no call site can uniquely solve: mention is not determination.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f<static A: Int, static C: Int>(g: Grid<C - A>) -> Int where 0 < A { 1 }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("constrained but not determined")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn constrained_static_solvable_through_affine_form_is_determined() {
+        // A bare occurrence determines A; C is then the only unknown in
+        // `C - A` (unit coefficient), so both are determined.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f<static A: Int, static C: Int>(g: Grid<A>, h: Grid<C - A>) -> Int where 0 < A && A <= C { 1 }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn nonlinear_static_multiplication_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f<static N: Int, static M: Int>(g: Grid<N * M>) { }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("literal operand")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn static_bool_arguments_type_check() {
+        let t = super::tests::check(
+            "// no-core
+struct Flag<static On: Bool> {}
+func f(consume flag: Flag<true>) -> Flag<true> { flag }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_bool_argument_mismatch_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+struct Flag<static On: Bool> {}
+func f(consume flag: Flag<true>) -> Flag<false> { flag }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(!errors.is_empty(), "expected a mismatch, got clean");
+    }
+
+    #[test]
+    fn static_param_infers_from_argument_type() {
+        // ADR 0035 §5: a call with Grid<4> infers N = 4; the affine
+        // return Grid<N + 1> then solves to Grid<5>.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func grow<static N: Int>(g: Grid<N>) -> Grid<N + 1> { Grid() }
+func use(g: Grid<4>) -> Grid<5> { grow(g) }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_param_inference_mismatch_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func grow<static N: Int>(g: Grid<N>) -> Grid<N + 1> { Grid() }
+func use(g: Grid<4>) -> Grid<6> { grow(g) }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(!errors.is_empty(), "expected a mismatch, got clean");
+    }
+
+    #[test]
+    fn explicit_static_type_argument_on_call() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func make<static N: Int>() -> Grid<N> { Grid() }
+func use() -> Grid<4> { make<4>() }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_where_clause_proves_nonnegativity_of_subtraction() {
+        // ADR 0035 §2: `Count - 1` needs a context proving `0 < Count`.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func shrink<static Count: Int>(g: Grid<Count>) -> Grid<Count - 1> where 0 < Count { Grid() }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_subtraction_without_positivity_given_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func shrink<static Count: Int>(g: Grid<Count>) -> Grid<Count - 1> { Grid() }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("static predicate")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn static_where_clause_obligation_holds_at_call() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func first<static Count: Int>(g: Grid<Count>) -> Int where 0 < Count { 1 }
+func use(g: Grid<3>) -> Int { first(g) }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_where_clause_obligation_fails_at_call() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func first<static Count: Int>(g: Grid<Count>) -> Int where 0 < Count { 1 }
+func use(g: Grid<0>) -> Int { first(g) }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("static predicate")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn static_ordering_givens_chain_transitively() {
+        // 0 <= C - A follows from A <= B and B <= C only by combining
+        // both givens: (C - B) + (B - A) >= 0.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func mid<static A: Int, static B: Int, static C: Int>(g: Grid<A>, h: Grid<B>, i: Grid<C>) -> Grid<C - A> where A <= B && B <= C { Grid() }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn undetermined_static_param_is_rejected() {
+        // The determined-variable rule covers static params: B is
+        // constrained but appears nowhere in the exposed type.
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func mid<static A: Int, static B: Int, static C: Int>(g: Grid<C - A>) -> Int where A <= B && B <= C { 1 }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("constrained but not determined")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn negative_closed_static_argument_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f(g: Grid<0 - 1>) { }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("static predicate")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_negative_static_argument_reports_once() {
+        // The explicit argument owns its formation obligation; the
+        // instantiation hole must not double-report it (constructor,
+        // call, and effect forms alike).
+        let constructor = super::tests::check(
+            "// no-core
+struct Grid<static N: Int> {}
+Grid<0 - 1>()
+()",
+        );
+        let call = super::tests::check(
+            "// no-core
+func width<static N: Int>() -> Int { N }
+width<0 - 1>()
+()",
+        );
+        let effect = super::tests::check(
+            "// no-core
+effect 'tag<static N: Int>(value: Int) -> Int
+@handle 'tag { value in
+	continue value
+}
+'tag<0 - 1>(1)
+()",
+        );
+        for (name, t) in [
+            ("constructor", &constructor),
+            ("call", &call),
+            ("effect", &effect),
+        ] {
+            let errors = super::tests::type_errors(t);
+            let nonneg: Vec<&String> = errors
+                .iter()
+                .filter(|error| error.contains("static predicate"))
+                .collect();
+            assert_eq!(
+                nonneg.len(),
+                1,
+                "{name}: expected exactly one formation error, got {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn static_enum_case_arguments_type_check() {
+        let t = super::tests::check(
+            "// no-core
+enum Color { case red case green }
+struct Paint<static C: Color> {}
+func f(consume p: Paint<Color.red>) -> Paint<Color.red> { p }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_enum_case_argument_mismatch_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+enum Color { case red case green }
+struct Paint<static C: Color> {}
+func f(consume p: Paint<Color.red>) -> Paint<Color.green> { p }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(!errors.is_empty(), "expected a mismatch, got clean");
+        // Cases render source-oriented (`Color.red`), never as compiler
+        // internals (`@Variant(...)`).
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Color.red") && error.contains("Color.green")),
+            "{errors:?}"
+        );
+        assert!(
+            !errors.iter().any(|error| error.contains("@Variant")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn payload_enum_static_param_is_rejected() {
+        let t = super::tests::check(
+            "// no-core
+enum Wrap { case value(Int) }
+struct Holder<static W: Wrap> {}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("value type must be Int, Bool, or a fieldless enum")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn closed_static_arithmetic_must_fit_i64() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static Rows: Int> {}
+func f(g: Grid<4611686018427387904 * 4>) { }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("64-bit") || error.contains("out")),
+            "{errors:?}"
+        );
+    }
+
+    /// ADR 0035 §4: the affine normalizer makes these pairs definitionally
+    /// equal, and closed arithmetic reduces before identity.
+    #[test]
+    fn static_int_normalization_canonicalizes_affine_forms() {
+        use crate::compiling::module::ModuleId;
+        use crate::name_resolution::symbol::{Symbol, TypeParameterId};
+        use crate::types::ty::{StaticAtom, StaticInt, StaticValue, Ty};
+
+        let n = Ty::Param(Symbol::TypeParameter(TypeParameterId::new(
+            ModuleId::Current,
+            1,
+        )));
+        let rows = Ty::Param(Symbol::TypeParameter(TypeParameterId::new(
+            ModuleId::Current,
+            2,
+        )));
+        let aff = |ty: &Ty| StaticInt::from_ty(ty).expect("affine-readable");
+
+        // N + 1 == 1 + N
+        let n_plus_1 = aff(&n).add(&StaticInt::constant(1)).into_ty();
+        let one_plus_n = StaticInt::constant(1).add(&aff(&n)).into_ty();
+        assert_eq!(n_plus_1, one_plus_n);
+
+        // 2 * N == N + N
+        let two_n = aff(&n).scale(&2.into()).into_ty();
+        let n_plus_n = aff(&n).add(&aff(&n)).into_ty();
+        assert_eq!(two_n, n_plus_n);
+
+        // Rows * 4 + 4 == 4 * (Rows + 1)
+        let lhs = aff(&rows)
+            .scale(&4.into())
+            .add(&StaticInt::constant(4))
+            .into_ty();
+        let rhs = aff(&rows)
+            .add(&StaticInt::constant(1))
+            .scale(&4.into())
+            .into_ty();
+        assert_eq!(lhs, rhs);
+
+        // 2 + 2 reduces to the closed value 4.
+        let closed = StaticInt::constant(2)
+            .add(&StaticInt::constant(2))
+            .into_ty();
+        assert_eq!(closed, Ty::Static(StaticValue::Int(StaticInt::constant(4))));
+
+        // 0 + 1·N collapses back to the bare parameter, so arithmetic-free
+        // arguments stay ordinary generic arguments.
+        assert_eq!(aff(&n).into_ty(), n);
+        let roundabout = aff(&n)
+            .add(&StaticInt::constant(3))
+            .sub(&StaticInt::constant(3))
+            .into_ty();
+        assert_eq!(roundabout, n);
+
+        // N - N cancels to the closed value 0.
+        let cancelled = aff(&n).sub(&aff(&n)).into_ty();
+        assert_eq!(
+            cancelled,
+            Ty::Static(StaticValue::Int(StaticInt::constant(0)))
+        );
+
+        // Substitution renormalizes: substituting N := 3 into N + 1 gives
+        // the closed value 4 (the fold path used by instantiation).
+        use rustc_hash::FxHashMap;
+        let Ty::Param(n_symbol) = n else {
+            unreachable!()
+        };
+        let mut subst: FxHashMap<_, _> = FxHashMap::default();
+        subst.insert(
+            n_symbol,
+            Ty::Static(StaticValue::Int(StaticInt::constant(3))),
+        );
+        let substituted = n_plus_1.substitute(&subst, &FxHashMap::default(), &FxHashMap::default());
+        assert_eq!(
+            substituted,
+            Ty::Static(StaticValue::Int(StaticInt::constant(4)))
+        );
+
+        // Terms are kept sorted regardless of insertion order.
+        let n_atom = StaticAtom::Param(n_symbol);
+        let Ty::Param(rows_symbol) = rows else {
+            unreachable!()
+        };
+        let rows_atom = StaticAtom::Param(rows_symbol);
+        let ab = StaticInt::atom(n_atom).add(&StaticInt::atom(rows_atom));
+        let ba = StaticInt::atom(rows_atom).add(&StaticInt::atom(n_atom));
+        assert_eq!(ab, ba);
     }
 }

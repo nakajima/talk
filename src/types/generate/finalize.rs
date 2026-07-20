@@ -125,6 +125,15 @@ impl<'a> TypecheckSession<'a> {
     }
 
     pub(super) fn finalize(mut self) -> (TypeOutput, Vec<AnyDiagnostic>) {
+        // ADR 0035 §5: no unresolved static metavariable may survive
+        // finalization. A hole with no unique solution reports here, at
+        // the use that minted it, before it degrades with the other
+        // leftover variables.
+        for origin in self.store.unresolved_static_holes() {
+            self.diagnostics
+                .errors
+                .push((TypeError::UnderdeterminedStaticArgument, origin));
+        }
         let mut schemes = FxHashMap::default();
         for (symbol, mut scheme) in std::mem::take(&mut self.schemes) {
             let ty = self.final_ty(&scheme.ty);
@@ -216,7 +225,7 @@ impl<'a> TypecheckSession<'a> {
             .map(|(protocol, info)| {
                 let protocol_ref = ProtocolRef {
                     protocol: *protocol,
-                    args: info.params.iter().copied().map(Ty::Param).collect(),
+                    args: info.params.iter().map(|p| Ty::Param(p.symbol)).collect(),
                 };
                 let assocs = info
                     .assoc
@@ -338,6 +347,11 @@ fn zonk_predicate(store: &mut VarStore, catalog: &TypeCatalog, predicate: Predic
             receiver: final_ty(store, catalog, &receiver),
             label,
             member: final_ty(store, catalog, &member),
+        },
+        Predicate::StaticCmp { op, lhs, rhs } => Predicate::StaticCmp {
+            op,
+            lhs: final_ty(store, catalog, &lhs),
+            rhs: final_ty(store, catalog, &rhs),
         },
     }
 }

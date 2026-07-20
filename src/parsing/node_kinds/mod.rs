@@ -6,6 +6,7 @@ pub mod decl;
 pub mod expr;
 pub mod func;
 pub mod func_signature;
+pub mod generic_arg;
 pub mod generic_decl;
 pub mod incomplete_expr;
 pub mod inline_ir_instruction;

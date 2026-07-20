@@ -375,7 +375,7 @@ impl<'a> Higlighter<'a> {
                 result.extend(self.tokens_from_exprs(&generic_decl.conformances, ast));
                 result.extend(self.tokens_from_exprs(&generic_decl.generics, ast));
                 if let Some(default) = &generic_decl.default {
-                    result.extend(self.tokens_from_expr(default, ast));
+                    self.tokens_from_generic_arg(default, ast, &mut result);
                 }
             }
             Node::Parameter(parameter) => {
@@ -394,7 +394,9 @@ impl<'a> Higlighter<'a> {
                     ..
                 } => {
                     result.push(self.make_span(Kind::TYPE, *name_span));
-                    result.extend(self.tokens_from_exprs(generics, ast));
+                    for generic in generics {
+                        self.tokens_from_generic_arg(generic, ast, &mut result);
+                    }
                 }
                 TypeAnnotationKind::SelfType(..) => {
                     result.push(self.make_span(Kind::TYPE, node.span()));
@@ -418,7 +420,9 @@ impl<'a> Higlighter<'a> {
                 } => {
                     result.extend(self.tokens_from_expr(base, ast));
                     result.push(self.make_span(Kind::TYPE, *member_span));
-                    result.extend(self.tokens_from_exprs(member_generics, ast));
+                    for generic in member_generics {
+                        self.tokens_from_generic_arg(generic, ast, &mut result);
+                    }
                 }
                 TypeAnnotationKind::Tuple(type_annotations) => {
                     result.extend(self.tokens_from_exprs(type_annotations, ast));
@@ -536,7 +540,9 @@ impl<'a> Higlighter<'a> {
                     ..
                 } => {
                     result.extend(self.tokens_from_expr(callee, ast));
-                    result.extend(self.tokens_from_exprs(type_args, ast));
+                    for type_arg in type_args {
+                        self.tokens_from_generic_arg(type_arg, ast, &mut result);
+                    }
                     result.extend(self.tokens_from_exprs(args, ast));
                     if let Some(block) = trailing_block {
                         result.extend(self.tokens_from_exprs(&block.body, ast));
@@ -646,6 +652,41 @@ impl<'a> Higlighter<'a> {
         };
 
         result
+    }
+
+    /// Highlight one generic argument: types recurse as annotations,
+    /// static expressions highlight literals and their name operands.
+    fn tokens_from_generic_arg(
+        &self,
+        arg: &crate::node_kinds::generic_arg::GenericArg,
+        ast: &AST<Parsed>,
+        result: &mut Vec<HighlightToken>,
+    ) {
+        use crate::node_kinds::generic_arg::{GenericArg, StaticExprKind};
+        match arg {
+            GenericArg::Type(annotation) => {
+                result.extend(self.tokens_from_expr(annotation, ast));
+            }
+            GenericArg::Static(expr) => match &expr.kind {
+                StaticExprKind::Int(_) | StaticExprKind::Bool(_) => {
+                    result.push(self.make_span(Kind::NUMBER, expr.span));
+                }
+                StaticExprKind::Path(annotation) => {
+                    result.extend(self.tokens_from_expr(annotation, ast));
+                }
+                StaticExprKind::Group(inner) => {
+                    self.tokens_from_generic_arg(
+                        &GenericArg::Static((**inner).clone()),
+                        ast,
+                        result,
+                    );
+                }
+                StaticExprKind::Op { lhs, rhs, .. } => {
+                    self.tokens_from_generic_arg(&GenericArg::Static((**lhs).clone()), ast, result);
+                    self.tokens_from_generic_arg(&GenericArg::Static((**rhs).clone()), ast, result);
+                }
+            },
+        }
     }
 
     fn tokens_from_exprs<T: Into<Node> + Clone>(

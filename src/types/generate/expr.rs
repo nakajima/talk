@@ -1174,27 +1174,72 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 };
                 // A generic effect instantiates fresh at each perform
                 // (Damas-Milner instantiation, exactly like schemes);
-                // explicit type arguments equate positionally. The
-                // handler sees the rigid parameters instead — it must be
-                // generic over them.
+                // explicit type arguments equate positionally by the
+                // parameter's kind. The handler sees the rigid
+                // parameters instead — it must be generic over them.
                 let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
-                for param in &sig.generics {
-                    let var = Ty::Var(self.store.fresh_ty(self.level, expr.id));
-                    tys.insert(*param, var);
+                for (index, param) in sig.generics.iter().enumerate() {
+                    let fresh = self.store.fresh_ty(self.level, expr.id);
+                    if let crate::types::ty::ParamKind::Static(value_ty) = &param.kind {
+                        self.store.mark_static_hole(fresh);
+                        // ADR 0035 §2: performing forms an application;
+                        // every integer static argument owes
+                        // nonnegativity. An explicit argument owns the
+                        // obligation; the hole covers inferred and
+                        // defaulted slots.
+                        if index >= type_args.len()
+                            && matches!(value_ty, Ty::Nominal(symbol, _) if *symbol == Symbol::Int)
+                        {
+                            self.wanteds.push(Constraint::StaticCmp {
+                                op: crate::types::ty::StaticCmpOp::Le,
+                                lhs: Ty::Static(StaticValue::Int(StaticInt::constant(0))),
+                                rhs: Ty::Var(fresh),
+                                origin: CtOrigin::new(expr.id, CtReason::Apply),
+                            });
+                        }
+                    }
+                    tys.insert(param.symbol, Ty::Var(fresh));
                 }
                 if !tys.is_empty() {
                     self.artifacts
                         .instantiations
                         .entry(expr.id)
                         .or_default()
-                        .extend(sig.generics.iter().map(|g| (*g, tys[g].clone())));
+                        .extend(
+                            sig.generics
+                                .iter()
+                                .map(|param| (param.symbol, tys[&param.symbol].clone())),
+                        );
                 }
                 if type_args.len() > sig.generics.len() {
                     self.unsupported(expr.id, "more type arguments than the effect declares");
                 }
-                for (annotation, param) in type_args.iter().zip(&sig.generics) {
-                    let annotated = self.lower_annotation(annotation);
-                    self.emit_eq(tys[param].clone(), annotated, expr.id, CtReason::Annotation);
+                for (type_arg, param) in type_args.iter().zip(&sig.generics) {
+                    let annotated = self.lower_generic_arg_for_param(param.symbol, type_arg);
+                    self.emit_eq(
+                        tys[&param.symbol].clone(),
+                        annotated,
+                        expr.id,
+                        CtReason::Annotation,
+                    );
+                }
+                // Omitted trailing arguments fall back to their declared
+                // defaults (PreferEq — inference or an explicit argument
+                // wins), exactly like scheme instantiation.
+                for index in type_args.len()..sig.generics.len() {
+                    let Some(default) = sig.generics[index].default.clone() else {
+                        continue;
+                    };
+                    if matches!(default, Ty::Error) {
+                        continue;
+                    }
+                    let default =
+                        default.substitute(&tys, &Default::default(), &Default::default());
+                    self.wanteds.push(Constraint::PreferEq(
+                        tys[&sig.generics[index].symbol].clone(),
+                        default,
+                        CtOrigin::new(expr.id, CtReason::Annotation),
+                    ));
                 }
                 for predicate in &sig.predicates {
                     self.wanteds.push(
@@ -1221,7 +1266,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let tail = self.store.fresh_eff(self.level, expr.id);
                 let entry = EffectEntry {
                     effect: symbol,
-                    args: sig.generics.iter().map(|g| tys[g].clone()).collect(),
+                    args: sig
+                        .generics
+                        .iter()
+                        .map(|param| tys[&param.symbol].clone())
+                        .collect(),
                 };
                 let performed = EffectRow {
                     effects: vec![entry],

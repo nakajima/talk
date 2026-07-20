@@ -19,7 +19,6 @@
 # Grammar
 
 - Force type annotations in conformance extends
-- Subscriptable protocol for allowing thing[idx]
 - #[attributes]
 
 # Stdlib

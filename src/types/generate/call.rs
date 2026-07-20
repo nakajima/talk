@@ -136,7 +136,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         &mut self,
         expr: &Expr,
         callee: &Expr,
-        type_args: &[TypeAnnotation],
+        type_args: &[GenericArg],
         args: &[CallArg],
         trailing_block: &Option<Block>,
         ctx: &Ctx,
@@ -159,16 +159,53 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let theta: Vec<Ty> = info
             .params
             .iter()
-            .map(|_| Ty::Var(self.store.fresh_ty(self.level, expr.id)))
+            .enumerate()
+            .map(|(index, param)| {
+                let fresh = self.store.fresh_ty(self.level, expr.id);
+                if let crate::types::ty::ParamKind::Static(value_ty) = &param.kind {
+                    self.store.mark_static_hole(fresh);
+                    // ADR 0035 §2: this construction forms an application;
+                    // every integer static argument owes nonnegativity.
+                    // An explicit argument owns the obligation (its
+                    // lowering emits at the argument's node); the hole
+                    // covers inferred and defaulted slots.
+                    if index >= type_args.len()
+                        && matches!(value_ty, Ty::Nominal(symbol, _) if *symbol == Symbol::Int)
+                    {
+                        self.wanteds.push(Constraint::StaticCmp {
+                            op: crate::types::ty::StaticCmpOp::Le,
+                            lhs: Ty::Static(StaticValue::Int(StaticInt::constant(0))),
+                            rhs: Ty::Var(fresh),
+                            origin: CtOrigin::new(expr.id, CtReason::Annotation),
+                        });
+                    }
+                }
+                Ty::Var(fresh)
+            })
             .collect();
         if !info.params.is_empty() {
             self.record_instantiation(expr.id, &info.params, &theta);
         }
         // `ArrayIterator<Element>(array: self)`: explicit type arguments pin
         // the instantiation positionally.
-        for (annotation, target) in type_args.iter().zip(&theta) {
-            let ty = self.lower_annotation(annotation);
-            self.emit_eq(target.clone(), ty, annotation.id, CtReason::Annotation);
+        for ((type_arg, target), param) in type_args.iter().zip(&theta).zip(&info.params) {
+            let ty = self.lower_generic_arg_for_param(param.symbol, type_arg);
+            self.emit_eq(target.clone(), ty, type_arg.id(), CtReason::Annotation);
+        }
+        // Omitted trailing arguments take their declared defaults — hard,
+        // like the annotation form: explicit arguments are the way to
+        // choose another value (`Grid()` IS `Grid<4>()`).
+        for index in type_args.len()..info.params.len() {
+            let Some(default) = info.params[index].default.clone() else {
+                break;
+            };
+            if matches!(default, Ty::Error) {
+                continue;
+            }
+            let substitution: FxHashMap<Symbol, Ty> = param_subst(&info.params, &theta);
+            let default =
+                default.substitute(&substitution, &Default::default(), &Default::default());
+            self.emit_eq(theta[index].clone(), default, expr.id, CtReason::Annotation);
         }
         // Closure-field effect rows instantiate per construction (one
         // fresh open row per implicit effect param) and ride the head as

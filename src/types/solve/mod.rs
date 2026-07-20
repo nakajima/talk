@@ -50,7 +50,8 @@ use crate::types::error::TypeError;
 use crate::types::output::MemberResolution;
 use crate::types::ty::{
     EffTail, EffVar, EffectEntry, EffectRow, Perm, PermVar, Predicate, ProtocolRef, Row, RowTail,
-    RowVar, Scheme, SchemeParam, Ty, TyFold, TyVar, match_pattern,
+    RowVar, Scheme, SchemeParam, StaticAtom, StaticCmpOp, StaticInt, StaticValue, Ty, TyFold,
+    TyVar, match_pattern,
 };
 
 const SOLVER_STEP_LIMIT: usize = 100_000;
@@ -257,6 +258,25 @@ impl<'s> Solver<'s> {
                             origin,
                         ),
                     },
+                    // Static equality IS unification over the affine
+                    // forms (it can solve metavariables); orderings go
+                    // through evaluation/entailment.
+                    Constraint::StaticCmp {
+                        op: StaticCmpOp::Eq,
+                        lhs,
+                        rhs,
+                        origin,
+                    } => queue.push(Constraint::Eq(lhs, rhs, origin)),
+                    Constraint::StaticCmp {
+                        op,
+                        lhs,
+                        rhs,
+                        origin,
+                    } => {
+                        if let Some(unsolved) = self.try_static_cmp(op, lhs, rhs, origin) {
+                            stuck.push(unsolved);
+                        }
+                    }
                     Constraint::Implic(implication) => {
                         let residual = self.solve_implication(*implication);
                         queue.extend(residual);
@@ -803,6 +823,11 @@ impl<'s> Solver<'s> {
                 let outer = self.store.render_eff(outer);
                 format!("handler boundary removes [{effects}] from {inner} into {outer}")
             }
+            Constraint::StaticCmp { op, lhs, rhs, .. } => {
+                let lhs = self.store.render(lhs);
+                let rhs = self.store.render(rhs);
+                format!("{lhs} {} {rhs}", op.as_str())
+            }
             Constraint::Implic(implication) => format!(
                 "implication with {} given(s) and {} wanted(s)",
                 implication.givens.len(),
@@ -833,6 +858,7 @@ mod improve;
 mod member;
 mod normalize;
 mod pattern;
+mod static_cmp;
 #[cfg(test)]
 mod tests;
 mod unify;

@@ -403,7 +403,7 @@ impl<'s> Solver<'s> {
             let substitution: FxHashMap<Symbol, Ty> = info
                 .params
                 .iter()
-                .copied()
+                .map(|param| param.symbol)
                 .zip(args.iter().cloned())
                 .collect();
             for (_, (_, field_ty)) in &info.fields {
@@ -427,7 +427,7 @@ impl<'s> Solver<'s> {
             let substitution: FxHashMap<Symbol, Ty> = info
                 .params
                 .iter()
-                .copied()
+                .map(|param| param.symbol)
                 .zip(args.iter().cloned())
                 .collect();
             for variant in info.variants.values() {

@@ -85,6 +85,13 @@ pub enum ParserError {
     },
     IncompleteFuncSignature(String),
     ConversionError(String),
+    /// Static generic parameters follow the generic-parameter naming
+    /// convention (ADR 0035): `static N: Int` is valid, `static n: Int`
+    /// is not.
+    LowercaseStaticParameter {
+        name: String,
+        span: Span,
+    },
 }
 
 impl ParserError {
@@ -123,6 +130,7 @@ impl ParserError {
             Self::ConformanceListNotAllowed { .. } => "parser.conformance-list-not-allowed",
             Self::IncompleteFuncSignature(_) => "parser.incomplete-function-signature",
             Self::ConversionError(_) => "parser.conversion",
+            Self::LowercaseStaticParameter { .. } => "parser.lowercase-static-parameter",
         }
     }
 }
@@ -190,6 +198,10 @@ impl Display for ParserError {
             ),
             Self::IncompleteFuncSignature(msg) => write!(f, "{}", msg),
             Self::ConversionError(msg) => write!(f, "{}", msg),
+            Self::LowercaseStaticParameter { name, .. } => write!(
+                f,
+                "Static generic parameter `{name}` must begin with an uppercase letter"
+            ),
         }
     }
 }

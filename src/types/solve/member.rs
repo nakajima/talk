@@ -445,7 +445,7 @@ impl<'s> Solver<'s> {
                     let substitution: FxHashMap<Symbol, Ty> = info
                         .params
                         .iter()
-                        .copied()
+                        .map(|param| param.symbol)
                         .zip(args.iter().cloned())
                         .collect();
                     if let Some((property, field_ty)) = info.fields.get(&label_str) {
@@ -501,7 +501,7 @@ impl<'s> Solver<'s> {
                     let substitution: FxHashMap<Symbol, Ty> = info
                         .params
                         .iter()
-                        .copied()
+                        .map(|param| param.symbol)
                         .zip(args.iter().cloned())
                         .collect();
                     return self.dispatch_nominal_method(
@@ -816,7 +816,7 @@ impl<'s> Solver<'s> {
         let mut tys: FxHashMap<Symbol, Ty> = info
             .params
             .iter()
-            .copied()
+            .map(|param| param.symbol)
             .zip(args.iter().cloned())
             .collect();
         for param in &variant.constructor_scheme.params {

@@ -337,6 +337,7 @@ fn goto_definition_symbol_from_type_annotation(
             generics,
         } => generics
             .iter()
+            .flat_map(|generic| generic.annotations())
             .find_map(|generic| goto_definition_symbol_from_type_annotation(generic, byte_offset))
             .or_else(|| {
                 nominal_name_span_contains(name, *name_span, byte_offset)

@@ -138,6 +138,17 @@ impl PatternRefinement {
                 ty: ty.substitute(&tys, &effs, &rows),
                 origin,
             },
+            Constraint::StaticCmp {
+                op,
+                lhs,
+                rhs,
+                origin,
+            } => Constraint::StaticCmp {
+                op,
+                lhs: lhs.substitute(&tys, &effs, &rows),
+                rhs: rhs.substitute(&tys, &effs, &rows),
+                origin,
+            },
             Constraint::Implic(implication) => Constraint::Implic(implication),
         }
     }

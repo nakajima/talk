@@ -181,6 +181,16 @@ pub enum Constraint {
         outer: EffectRow,
         origin: CtOrigin,
     },
+    /// A static integer relation wanted (ADR 0035). Equality delegates
+    /// to unification over the affine forms; orderings solve by
+    /// evaluation when closed, entailment from givens when rigid, and
+    /// defer while metavariables remain.
+    StaticCmp {
+        op: crate::types::ty::StaticCmpOp,
+        lhs: Ty,
+        rhs: Ty,
+        origin: CtOrigin,
+    },
     Implic(Box<Implication>),
 }
 
@@ -203,6 +213,12 @@ impl Predicate {
                 receiver,
                 label,
                 member,
+                origin,
+            },
+            Predicate::StaticCmp { op, lhs, rhs } => Constraint::StaticCmp {
+                op,
+                lhs,
+                rhs,
                 origin,
             },
         }

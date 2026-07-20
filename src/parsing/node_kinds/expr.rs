@@ -28,7 +28,7 @@ pub enum ExprKind {
         effect_name: Name,
         #[drive(skip)]
         effect_name_span: Span,
-        type_args: Vec<TypeAnnotation>,
+        type_args: Vec<crate::node_kinds::generic_arg::GenericArg>,
         args: Vec<CallArg>,
     },
 
@@ -55,7 +55,7 @@ pub enum ExprKind {
     Unsafe(Block),
     Call {
         callee: Box<Expr>,
-        type_args: Vec<TypeAnnotation>,
+        type_args: Vec<crate::node_kinds::generic_arg::GenericArg>,
         args: Vec<CallArg>,
         trailing_block: Option<Block>,
         /// The surface operator lowered into this call, if any. Keeping this

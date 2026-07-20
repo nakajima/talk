@@ -31,7 +31,7 @@ use crate::typed_ast::{
     RecordFieldPattern, RecordFieldPatternKind, Stmt, StmtKind,
 };
 use crate::types::output::CheckedIntegerLiteral;
-use crate::types::ty::{Perm, Ty};
+use crate::types::ty::{ParamKind, Perm, StaticValue, Ty};
 
 use super::BackendError;
 
@@ -1286,6 +1286,16 @@ struct PlaceLink {
 /// per entry, appended by every caller in this order — the sub-dictionary
 /// rule of Go's generics dictionaries (Griesemer et al., OOPSLA 2022) and
 /// the value-witness-table model of Swift's unspecialized-generics ABI.
+/// The symbols of a parameter list's TYPE-kind entries — the generics
+/// that carry runtime values and therefore witness blocks.
+fn type_param_symbols(params: &[crate::types::ty::SchemeParam]) -> Vec<Symbol> {
+    params
+        .iter()
+        .filter(|param| matches!(param.kind, crate::types::ty::ParamKind::Type))
+        .map(|param| param.symbol)
+        .collect()
+}
+
 fn witness_params(subst: &[(Symbol, Ty)]) -> Vec<Symbol> {
     fn walk(ty: &Ty, out: &mut Vec<Symbol>) {
         match ty {
@@ -1567,12 +1577,27 @@ pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Progr
             .iter()
             .filter(|(_, callable)| callable.program == 0)
             .map(|(symbol, callable)| {
-                let subst: Vec<(Symbol, Ty)> = callable
+                let mut subst: Vec<(Symbol, Ty)> = callable
                     .body
                     .scheme_params()
                     .iter()
                     .map(|param| (param.symbol, Ty::Param(param.symbol)))
                     .collect();
+                // Owner parameters range over member bodies too (a
+                // static one is a value, ADR 0035 §6); bind them rigidly
+                // the way a concrete receiver's instantiation (or a
+                // conformance's selected application) binds them. The
+                // protocol Self entry is the evidence marker
+                // `demand_specialized` keys on.
+                if let Some(params) = builder.method_owner_params(*symbol) {
+                    subst.extend(params.into_iter().map(|param| (param, Ty::Param(param))));
+                }
+                if let Some(owner) = builder.default_owner_protocol(*symbol) {
+                    subst.push((owner, Ty::Param(owner)));
+                    if let Some(params) = builder.protocol_params(owner) {
+                        subst.extend(params.into_iter().map(|param| (param, Ty::Param(param))));
+                    }
+                }
                 (*symbol, subst)
             })
             .collect();
@@ -2087,6 +2112,17 @@ impl<'a> ProgramBuilder<'a> {
             ));
         };
         let callee_module = self.programs[callable.program].module;
+        // Protocol parameters are conformance evidence exactly like
+        // associated types: a default body reads the owner's `static N`
+        // as a value (ADR 0035 §6) though it never shows in the method's
+        // own scheme. The call site binds the selected application's
+        // arguments under a `Symbol::Protocol` Self entry; keep that
+        // protocol's parameters through the pruning.
+        let evidence_params: rustc_hash::FxHashSet<Symbol> = subst
+            .iter()
+            .filter(|(param, _)| matches!(param, Symbol::Protocol(_)))
+            .flat_map(|(protocol, _)| self.protocol_params(*protocol).unwrap_or_default())
+            .collect();
         let mut subst: Vec<(Symbol, Ty)> = subst
             .into_iter()
             .filter(|(param, _)| match callable.body {
@@ -2098,6 +2134,7 @@ impl<'a> ProgramBuilder<'a> {
                     // they appear in default bodies without showing in the
                     // scheme, so pruning keeps them unconditionally.
                     matches!(param, Symbol::AssociatedType(_))
+                        || evidence_params.contains(param)
                         || callable.body.scheme_params().iter().any(|scheme_param| {
                             canonical(scheme_param.symbol, callee_module) == *param
                                 || scheme_param.symbol == *param
@@ -2276,7 +2313,7 @@ impl<'a> ProgramBuilder<'a> {
         let substitution: FxHashMap<Symbol, Ty> = def
             .params
             .iter()
-            .copied()
+            .map(|param| param.symbol)
             .zip(args.iter().cloned())
             .collect();
         Some(
@@ -2327,7 +2364,7 @@ impl<'a> ProgramBuilder<'a> {
         let substitution: FxHashMap<Symbol, Ty> = def
             .params
             .iter()
-            .copied()
+            .map(|param| param.symbol)
             .zip(args.iter().cloned())
             .collect();
         Some(
@@ -2443,7 +2480,7 @@ impl<'a> ProgramBuilder<'a> {
     fn rigid_constraints(&self, param: Symbol) -> Vec<crate::types::ty::ProtocolRef> {
         for input in self.programs {
             for sig in input.program.types().catalog.effects.values() {
-                if sig.generics.contains(&param) {
+                if sig.generics.iter().any(|generic| generic.symbol == param) {
                     return sig
                         .predicates
                         .iter()
@@ -2626,6 +2663,75 @@ impl<'a> ProgramBuilder<'a> {
 
     /// The protocol's input parameter symbols, from whichever program's
     /// catalog declares it.
+    /// The declared value type of a static parameter (ADR 0035), from
+    /// whichever program's catalog registered it. `param` may be raw or
+    /// canonical.
+    fn static_param_domain(&self, param: Symbol) -> Option<Ty> {
+        for input in self.programs {
+            let catalog = &input.program.types().catalog;
+            for (declared, ty) in &catalog.static_params {
+                if *declared == param || canonical(*declared, input.module) == param {
+                    return Some(canonical_ty(ty, input.module));
+                }
+            }
+        }
+        None
+    }
+
+    /// The declared parameters of the nominal whose member table owns
+    /// this method or initializer, if any — rigid check-mode compilation
+    /// binds them the way a concrete receiver's instantiation would.
+    fn method_owner_params(&self, symbol: Symbol) -> Option<Vec<Symbol>> {
+        for input in self.programs {
+            let catalog = &input.program.types().catalog;
+            let matches =
+                |member: Symbol| member == symbol || canonical(member, input.module) == symbol;
+            let owner_params = |params: &[crate::types::ty::SchemeParam]| {
+                params
+                    .iter()
+                    .map(|param| canonical(param.symbol, input.module))
+                    .collect()
+            };
+            for info in catalog.structs.values() {
+                if info
+                    .methods
+                    .values()
+                    .chain(info.statics.values())
+                    .copied()
+                    .chain(info.inits.iter().copied())
+                    .any(matches)
+                {
+                    return Some(owner_params(&info.params));
+                }
+            }
+            for info in catalog.enums.values() {
+                if info.methods.values().copied().any(matches) {
+                    return Some(owner_params(&info.params));
+                }
+            }
+        }
+        None
+    }
+
+    /// The protocol whose requirement table owns this default body, if
+    /// any — rigid check-mode compilation binds the owner's parameters
+    /// the way a conformance's selected application would.
+    fn default_owner_protocol(&self, symbol: Symbol) -> Option<Symbol> {
+        for input in self.programs {
+            let catalog = &input.program.types().catalog;
+            for (declared, info) in &catalog.protocols {
+                if info
+                    .requirements
+                    .values()
+                    .any(|requirement| canonical(requirement.symbol, input.module) == symbol)
+                {
+                    return Some(canonical(*declared, input.module));
+                }
+            }
+        }
+        None
+    }
+
     fn protocol_params(&self, protocol: Symbol) -> Option<Vec<Symbol>> {
         for input in self.programs {
             let catalog = &input.program.types().catalog;
@@ -2634,7 +2740,7 @@ impl<'a> ProgramBuilder<'a> {
                     return Some(
                         info.params
                             .iter()
-                            .map(|param| canonical(*param, input.module))
+                            .map(|param| canonical(param.symbol, input.module))
                             .collect(),
                     );
                 }
@@ -4904,6 +5010,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             Ty::Param(_) => Ok(()),
             // Existential values carry their own drop/retain witnesses.
             Ty::Any { .. } => Ok(()),
+            // Static arguments are phase-only (ADR 0035): evidence erases,
+            // nothing exists at runtime.
+            Ty::Static(_) => Ok(()),
             Ty::Borrow(_, inner) => self.check_copy(inner, span),
             Ty::Tuple(items) => {
                 for item in items {
@@ -4925,7 +5034,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 if let Some((def, _)) = self.program_builder.enum_def(*symbol) {
                     let _ = def;
                     for arg in args {
-                        if !matches!(arg, Ty::Eff(_)) {
+                        if !matches!(arg, Ty::Eff(_) | Ty::Static(_)) {
                             self.check_copy(arg, span)?;
                         }
                     }
@@ -4934,7 +5043,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 if let Some((def, _)) = self.program_builder.struct_def(*symbol) {
                     let _ = def;
                     for arg in args {
-                        if !matches!(arg, Ty::Eff(_)) {
+                        if !matches!(arg, Ty::Eff(_) | Ty::Static(_)) {
                             self.check_copy(arg, span)?;
                         }
                     }
@@ -6195,15 +6304,129 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     self.push(Inst::GlobalLoad { dest, global: slot });
                     self.global_loads.insert(dest, slot);
                     Ok(Operand::Local(dest))
+                } else if let Some(value) = self.subst.get(symbol).or_else(|| {
+                    self.subst.get(&canonical(
+                        *symbol,
+                        self.program_builder.programs[self.program].module,
+                    ))
+                }) {
+                    // ADR 0035 §6: a static parameter used as an ordinary
+                    // value; this instance's substitution carries the
+                    // concrete value, so specialization substitutes it.
+                    match value {
+                        Ty::Static(StaticValue::Int(int)) => match int
+                            .as_constant()
+                            .and_then(|constant| i64::try_from(constant).ok())
+                        {
+                            Some(constant) => Ok(Operand::Const(Constant::Int(constant))),
+                            None => Err(BackendError::new(
+                                format!("static parameter `{name}` has no concrete 64-bit value"),
+                                expr.span,
+                            )),
+                        },
+                        Ty::Static(StaticValue::Bool(value)) => {
+                            Ok(Operand::Const(Constant::Bool(*value)))
+                        }
+                        Ty::Static(StaticValue::Case(_, variant)) => {
+                            let module = self.program_builder.programs[self.program].module;
+                            let Some((enum_symbol, tag)) = self
+                                .program_builder
+                                .variant_tag(canonical(*variant, module))
+                            else {
+                                return Err(BackendError::new(
+                                    format!(
+                                        "static parameter `{name}` names a variant without a known enum"
+                                    ),
+                                    expr.span,
+                                ));
+                            };
+                            let dest = self.fresh_local();
+                            self.push(Inst::Variant {
+                                dest,
+                                enum_symbol,
+                                tag,
+                                args: Vec::new(),
+                            });
+                            Ok(Operand::Local(dest))
+                        }
+                        // A rigid instance (TALK_CHECK_ALL compiles every
+                        // callable generically; rigid demands stay rigid
+                        // through nested calls and are never reached from
+                        // the monomorphic entry). The static value is
+                        // abstract here; every static domain is a Copy
+                        // scalar, so a domain-shaped placeholder exercises
+                        // the ownership pass exactly as a concrete value
+                        // would.
+                        Ty::Param(rigid) => {
+                            match self.program_builder.static_param_domain(*rigid) {
+                                Some(Ty::Nominal(symbol, _)) if symbol == Symbol::Int => {
+                                    Ok(Operand::Const(Constant::Int(0)))
+                                }
+                                Some(Ty::Nominal(symbol, _)) if symbol == Symbol::Bool => {
+                                    Ok(Operand::Const(Constant::Bool(false)))
+                                }
+                                Some(Ty::Nominal(enum_symbol, _)) => {
+                                    let dest = self.fresh_local();
+                                    self.push(Inst::Variant {
+                                        dest,
+                                        enum_symbol,
+                                        tag: 0,
+                                        args: Vec::new(),
+                                    });
+                                    Ok(Operand::Local(dest))
+                                }
+                                _ => Err(BackendError::new(
+                                    format!(
+                                        "static parameter `{name}` has no concrete value at this use"
+                                    ),
+                                    expr.span,
+                                )),
+                            }
+                        }
+                        _ => Err(BackendError::new(
+                            format!("static parameter `{name}` has no concrete value at this use"),
+                            expr.span,
+                        )),
+                    }
                 } else if self.program_builder.callables.contains_key(&canonical(
                     *symbol,
                     self.program_builder.programs[self.program].module,
                 )) {
                     // A named function used as a value: a captureless
-                    // function value.
+                    // function value, specialized against the use site's
+                    // recorded instantiation (the value's type pinned any
+                    // generic and static arguments the frontend solved).
                     let target =
                         canonical(*symbol, self.program_builder.programs[self.program].module);
-                    let func = self.demand_specialized(target, Vec::new(), expr.span)?;
+                    let mut subst: Vec<(Symbol, Ty)> = Vec::new();
+                    if let Some(instantiation) = &expr.instantiation {
+                        for (param, ty) in instantiation {
+                            subst.push((*param, self.resolved(ty)));
+                        }
+                    }
+                    // ADR 0035: a static parameter the use site leaves
+                    // unpinned has no value for the body to read — there
+                    // is no generic clause to fall back on.
+                    if let Some(callable) = self.program_builder.callables.get(&target) {
+                        for param in callable.body.scheme_params() {
+                            let is_static = matches!(param.kind, ParamKind::Static(_));
+                            // A leftover inference hole degrades to
+                            // `Ty::Error` at finalization; neither form
+                            // pins a value the body could read.
+                            let pinned = subst.iter().any(|(symbol, ty)| {
+                                *symbol == param.symbol && !matches!(ty, Ty::Var(_) | Ty::Error)
+                            });
+                            if is_static && !pinned {
+                                return Err(BackendError::new(
+                                    format!(
+                                        "`{name}` has static parameters this use does not fix; call it directly, or use it where its type pins every static argument"
+                                    ),
+                                    expr.span,
+                                ));
+                            }
+                        }
+                    }
+                    let func = self.demand_specialized(target, subst, expr.span)?;
                     let dest = self.fresh_local();
                     self.push(Inst::MakeClosure {
                         dest,
@@ -6401,7 +6624,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 .iter()
                                 .map(|param| canonical_ty(param, sig_module))
                                 .collect::<Vec<_>>(),
-                            sig.generics.clone(),
+                            // Witness blocks travel per TYPE generic;
+                            // static value generics have no payload
+                            // values to drop or retain.
+                            type_param_symbols(&sig.generics),
                             sig_module,
                         ),
                         None => (
@@ -8360,7 +8586,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .iter()
                     .map(|param| canonical_ty(param, sig_module))
                     .collect::<Vec<_>>(),
-                sig.generics.clone(),
+                // Same TYPE-generic filter as the perform site: the
+                // appended witness blocks and these bindings must agree.
+                type_param_symbols(&sig.generics),
             ),
             None => (Vec::new(), Vec::new()),
         };
@@ -8708,7 +8936,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let mut subst = subst;
         if let Ty::Nominal(_, type_args) = &ty {
             for (param, arg) in def.params.iter().zip(type_args) {
-                subst.push((*param, arg.clone()));
+                subst.push((param.symbol, arg.clone()));
             }
         }
 

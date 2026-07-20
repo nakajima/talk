@@ -151,6 +151,31 @@ impl<'s> Solver<'s> {
                 }
             }
 
+            // Static integer arguments (ADR 0035): a linear equation over
+            // canonical affine forms. Runs BEFORE generic var binding so a
+            // self-referential equation (`α ~ α + 1`) cancels to plain
+            // unsatisfiable arithmetic instead of an infinite type, and so
+            // var solutions get the affine treatment (cancellation, exact
+            // division). Zonk first so already-solved atoms fold in.
+            (
+                Ty::Static(StaticValue::Int(_)),
+                Ty::Static(StaticValue::Int(_)) | Ty::Param(_) | Ty::Var(_),
+            )
+            | (Ty::Param(_) | Ty::Var(_), Ty::Static(StaticValue::Int(_))) => {
+                let lhs = self.store.zonk_ty(&a);
+                let rhs = self.store.zonk_ty(&b);
+                let (Some(lhs), Some(rhs)) = (StaticInt::from_ty(&lhs), StaticInt::from_ty(&rhs))
+                else {
+                    // An atom resolved to a non-index value; the kind error
+                    // was reported where it was formed (or it is poison).
+                    if !matches!(lhs, Ty::Error) && !matches!(rhs, Ty::Error) {
+                        self.report_mismatch(&a, &b, origin);
+                    }
+                    return true;
+                };
+                return self.unify_static_int(&lhs, &rhs, &a, &b, origin);
+            }
+
             (Ty::Var(x), Ty::Var(y)) if self.store.find(x.0) == self.store.find(y.0) => {}
             (Ty::Var(x), Ty::Var(y)) => {
                 let x_root = self.store.find(x.0);
@@ -184,6 +209,18 @@ impl<'s> Solver<'s> {
             }
 
             (Ty::Param(p), Ty::Param(q)) if p == q => {}
+
+            // Distinct rigid params can still be equal in the static
+            // theory (`where N == M`). Ordinary type-param pairs have no
+            // static facts and fail entailment into the same mismatch.
+            (Ty::Param(_), Ty::Param(_)) => {
+                let (Some(lhs), Some(rhs)) = (StaticInt::from_ty(&a), StaticInt::from_ty(&b))
+                else {
+                    self.report_mismatch(&a, &b, origin);
+                    return true;
+                };
+                return self.unify_static_int(&lhs, &rhs, &a, &b, origin);
+            }
 
             // Projections are NOT injective (OutsideIn(X) treats type
             // functions as free symbols): `T.A ~ U.A` holds only when the
@@ -244,6 +281,14 @@ impl<'s> Solver<'s> {
             // rows they are.
             (Ty::Eff(e1), Ty::Eff(e2)) => {
                 self.unify_eff(e1, e2, origin);
+            }
+
+            // The other static domains (Bool, enum cases) compare
+            // structurally; mixed static kinds are mismatches.
+            (Ty::Static(x), Ty::Static(y)) => {
+                if x != y {
+                    self.report_mismatch(&a, &b, origin);
+                }
             }
 
             (
@@ -526,6 +571,78 @@ impl<'s> Solver<'s> {
         false
     }
 
+    /// Solve an affine static equality (ADR 0035 §4-5): move everything to
+    /// one side and isolate a touchable metavariable whose coefficient
+    /// divides the remainder exactly — the unique-solution rule; inference
+    /// never guesses. Underdetermined equations (leftover variables, no
+    /// exact isolation) defer; variable-free nonzero differences mismatch.
+    fn unify_static_int(
+        &mut self,
+        lhs: &StaticInt,
+        rhs: &StaticInt,
+        a: &Ty,
+        b: &Ty,
+        origin: CtOrigin,
+    ) -> bool {
+        let difference = lhs.sub(rhs);
+        if difference.is_zero() {
+            return true;
+        }
+        for (atom, coeff) in &difference.terms {
+            let StaticAtom::Var(var) = atom else {
+                continue;
+            };
+            let root = self.store.find(var.0);
+            if !self.is_touchable(root) {
+                continue;
+            }
+            // var := -(difference - coeff·var) / coeff, when exact.
+            let rest = difference
+                .sub(&StaticInt::atom(*atom).scale(coeff))
+                .scale(&(-1).into());
+            let Some(value) = rest.div_exact(coeff) else {
+                continue;
+            };
+            // Cancellation removed `var` from the solution, so this walk
+            // is purely the Rémy level adjustment for the atoms the
+            // solution carries.
+            let value = value.into_ty();
+            let level = self.store.level(root);
+            if self.occurs_and_adjust_ty(root, level, &value) {
+                self.report_mismatch(a, b, origin);
+                return true;
+            }
+            self.store.bind(root, VarValue::Ty(value));
+            return true;
+        }
+        if difference
+            .terms
+            .iter()
+            .any(|(atom, _)| matches!(atom, StaticAtom::Var(_)))
+        {
+            return false;
+        }
+        // Rigid inequality is still equality modulo the declared static
+        // theory: `Grid<N> ~ Grid<M>` holds under a given `N == M`. Both
+        // directions must be entailed.
+        let facts = self.static_facts(&difference);
+        if crate::types::solve::static_cmp::entails_static(&facts, &difference)
+            && crate::types::solve::static_cmp::entails_static(
+                &facts,
+                &difference.scale(&(-1).into()),
+            )
+        {
+            return true;
+        }
+        // Bare rigid params defer like every other param equation: the
+        // residual feeds skolem-escape analysis and final-solve blame.
+        if self.is_bare_param(a) || self.is_bare_param(b) {
+            return false;
+        }
+        self.report_mismatch(a, b, origin);
+        true
+    }
+
     /// Occurs check + level adjustment. Returns true when `root` occurs in
     /// `ty` (the infinite type). Adjusts every free variable in `ty` outward to
     /// at most `level` (Rémy 1992) — this is what keeps a variable shared with
@@ -576,6 +693,11 @@ impl<'s> Solver<'s> {
                     .iter()
                     .any(|(_, t)| self.occurs_and_adjust_ty(root, level, t))
             }
+            Ty::Static(StaticValue::Int(int)) => int
+                .terms
+                .iter()
+                .any(|(atom, _)| self.occurs_and_adjust_ty(root, level, &atom.as_ty())),
+            Ty::Static(StaticValue::Bool(_) | StaticValue::Case(..)) => false,
         }
     }
 

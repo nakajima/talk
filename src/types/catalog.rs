@@ -12,7 +12,9 @@ use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::name_resolution::symbol::Symbol;
-use crate::types::ty::{Predicate, ProtocolRef, Scheme, Ty, match_key_pattern, match_pattern};
+use crate::types::ty::{
+    Predicate, ProtocolRef, Scheme, SchemeParam, Ty, match_key_pattern, match_pattern,
+};
 
 /// The usage grade of a declaration over the substructural lattice:
 /// `Copy` values duplicate freely, `Affine` values (the default) move and may
@@ -42,8 +44,9 @@ pub struct StructInfo {
     /// Declared `'heap`: reference semantics, region-allocated.
     #[serde(default)]
     pub heap: bool,
-    /// Declared generic parameters, as rigid `Ty::Param` symbols.
-    pub params: Vec<Symbol>,
+    /// Declared generic parameters — the canonical records: symbol, kind
+    /// (type or ADR 0035 static value), and declared default.
+    pub params: Vec<SchemeParam>,
     /// Implicit effect-row parameters, one per free row tail in the
     /// closure-typed fields — quantified per construction and carried as
     /// `Ty::Eff` arguments after the type args on this nominal's head.
@@ -80,7 +83,8 @@ pub struct Enum {
     /// Declared with the `linear` modifier: must be consumed exactly once.
     #[serde(default)]
     pub linear: bool,
-    pub params: Vec<Symbol>,
+    /// Declared generic parameters (see `StructInfo::params`).
+    pub params: Vec<SchemeParam>,
     pub variants: IndexMap<String, Variant>,
     /// Instance method name → method symbol (methods on enums dispatch
     /// exactly like struct methods).
@@ -106,10 +110,9 @@ pub struct Requirement {
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ProtocolInfo {
-    /// Protocol input parameters, in source order.
-    pub params: Vec<Symbol>,
-    /// Default arguments for `params`, in the same order.
-    pub param_defaults: Vec<Option<Ty>>,
+    /// Protocol input parameters, in source order — canonical records
+    /// carrying kind and declared default.
+    pub params: Vec<SchemeParam>,
     /// Associated types by source name (name-keyed so a sub-protocol's
     /// same-named `associated` refines its super's, Swift-style).
     pub assoc: IndexMap<String, Symbol>,
@@ -148,13 +151,8 @@ impl ProtocolApplication {
             return tys;
         };
 
-        for (param, arg) in info
-            .params
-            .iter()
-            .copied()
-            .zip(self.protocol.args.iter().cloned())
-        {
-            tys.insert(param, arg);
+        for (param, arg) in info.params.iter().zip(self.protocol.args.iter().cloned()) {
+            tys.insert(param.symbol, arg);
         }
 
         for (name, assoc) in &info.assoc {
@@ -218,7 +216,9 @@ pub struct InherentMember {
 pub struct EffectSig {
     /// Declared generic parameters (`effect 'state<T>(value: T) -> T`),
     /// instantiated fresh at each perform site; rigid in the handler.
-    pub generics: Vec<Symbol>,
+    /// The same canonical records as schemes and nominals carry — kind
+    /// (type or static value) and default included.
+    pub generics: Vec<SchemeParam>,
     pub predicates: Vec<Predicate>,
     pub params: Vec<Ty>,
     pub ret: Ty,
@@ -254,6 +254,15 @@ pub struct TypeCatalog {
     pub member_owners: FxHashMap<String, Vec<MemberOwner>>,
     /// Rigid type parameter → declared protocol bounds.
     pub param_bounds: FxHashMap<Symbol, Vec<ProtocolRef>>,
+    /// Static value parameter → its declared value type (ADR 0035). A
+    /// DERIVED index over the canonical parameter records (single writer:
+    /// `register_static_param`), kept for the symbol-keyed queries that
+    /// have no parameter list in hand — a static param used as a value in
+    /// a body (`lookup_symbol_ty`), and annotation-slot interpretation by
+    /// position (`lower_generic_args`). Scheme-carried parameters answer
+    /// kind questions from `SchemeParam::kind` directly.
+    #[serde(default)]
+    pub static_params: FxHashMap<Symbol, Ty>,
     /// Inherent extend members by type head.
     pub extend_members: FxHashMap<Symbol, IndexMap<String, InherentMember>>,
     /// Effect operation signatures.
@@ -293,6 +302,11 @@ impl TypeCatalog {
             for (_, field_ty) in info.fields.values_mut() {
                 f(*symbol, EmbeddedTypes::Ty(field_ty));
             }
+            for param in info.params.iter_mut() {
+                if let Some(default) = param.default.as_mut() {
+                    f(*symbol, EmbeddedTypes::Ty(default));
+                }
+            }
             for predicate in info.predicates.iter_mut() {
                 f(*symbol, EmbeddedTypes::Predicate(predicate));
             }
@@ -303,6 +317,11 @@ impl TypeCatalog {
                     *symbol,
                     EmbeddedTypes::Scheme(&mut variant.constructor_scheme),
                 );
+            }
+            for param in info.params.iter_mut() {
+                if let Some(default) = param.default.as_mut() {
+                    f(*symbol, EmbeddedTypes::Ty(default));
+                }
             }
             for predicate in info.predicates.iter_mut() {
                 f(*symbol, EmbeddedTypes::Predicate(predicate));
@@ -350,6 +369,9 @@ impl TypeCatalog {
         }
         for (symbol, alias) in self.type_aliases.iter_mut() {
             f(*symbol, EmbeddedTypes::Ty(&mut alias.ty));
+        }
+        for (symbol, ty) in self.static_params.iter_mut() {
+            f(*symbol, EmbeddedTypes::Ty(ty));
         }
     }
 
@@ -550,8 +572,9 @@ impl TypeCatalog {
                         .all(|(_, field)| self.ty_satisfies_marker(field, marker, ambient))
             }
             // An effect argument is runtime-inert: it never blocks a
-            // marker (Copy/CheapClone judge values, not rows).
-            Ty::Eff(_) => true,
+            // marker (Copy/CheapClone judge values, not rows). A static
+            // argument is likewise phase-only (ADR 0035: evidence erases).
+            Ty::Eff(_) | Ty::Static(_) => true,
             Ty::Borrow(..) | Ty::Func(..) | Ty::Any { .. } | Ty::Proj(..) => false,
         }
     }
@@ -649,10 +672,10 @@ impl TypeCatalog {
         let mut substitution = FxHashMap::default();
         substitution.insert(protocol, self_ty.clone());
         let mut args = Vec::with_capacity(info.params.len());
-        for (param, default) in info.params.iter().zip(&info.param_defaults) {
-            let default = default.as_ref()?;
+        for param in &info.params {
+            let default = param.default.as_ref()?;
             let arg = default.substitute(&substitution, &Default::default(), &Default::default());
-            substitution.insert(*param, arg.clone());
+            substitution.insert(param.symbol, arg.clone());
             args.push(arg);
         }
         Some(self.canonical_protocol_ref(ProtocolRef { protocol, args }))
@@ -663,6 +686,16 @@ impl TypeCatalog {
     pub fn import_as(self, target: crate::compiling::module::ModuleId) -> TypeCatalog {
         use crate::types::ty::import_symbol as imp;
         let imp_ty = |t: &Ty| t.import_symbols(target);
+        let imp_param = |param: &SchemeParam| SchemeParam {
+            symbol: imp(param.symbol, target),
+            kind: match &param.kind {
+                crate::types::ty::ParamKind::Type => crate::types::ty::ParamKind::Type,
+                crate::types::ty::ParamKind::Static(value_ty) => {
+                    crate::types::ty::ParamKind::Static(imp_ty(value_ty))
+                }
+            },
+            default: param.default.as_ref().map(&imp_ty),
+        };
         TypeCatalog {
             structs: self
                 .structs
@@ -673,7 +706,7 @@ impl TypeCatalog {
                         StructInfo {
                             linear: v.linear,
                             heap: v.heap,
-                            params: v.params.iter().map(|s| imp(*s, target)).collect(),
+                            params: v.params.iter().map(imp_param).collect(),
                             eff_params: v.eff_params.iter().map(|s| imp(*s, target)).collect(),
                             fields: v
                                 .fields
@@ -708,7 +741,7 @@ impl TypeCatalog {
                         imp(k, target),
                         Enum {
                             linear: v.linear,
-                            params: v.params.iter().map(|s| imp(*s, target)).collect(),
+                            params: v.params.iter().map(imp_param).collect(),
                             variants: v
                                 .variants
                                 .into_iter()
@@ -746,12 +779,7 @@ impl TypeCatalog {
                     (
                         imp(k, target),
                         ProtocolInfo {
-                            params: v.params.iter().map(|s| imp(*s, target)).collect(),
-                            param_defaults: v
-                                .param_defaults
-                                .iter()
-                                .map(|default| default.as_ref().map(&imp_ty))
-                                .collect(),
+                            params: v.params.iter().map(imp_param).collect(),
                             assoc: v
                                 .assoc
                                 .into_iter()
@@ -845,6 +873,11 @@ impl TypeCatalog {
                     )
                 })
                 .collect(),
+            static_params: self
+                .static_params
+                .into_iter()
+                .map(|(s, ty)| (imp(s, target), imp_ty(&ty)))
+                .collect(),
             extend_members: self
                 .extend_members
                 .into_iter()
@@ -874,7 +907,7 @@ impl TypeCatalog {
                     (
                         imp(s, target),
                         EffectSig {
-                            generics: sig.generics.iter().map(|g| imp(*g, target)).collect(),
+                            generics: sig.generics.iter().map(imp_param).collect(),
                             predicates: sig
                                 .predicates
                                 .into_iter()
@@ -924,6 +957,7 @@ impl TypeCatalog {
             }
         }
         self.param_bounds.extend(other.param_bounds);
+        self.static_params.extend(other.static_params);
         for (head, members) in other.extend_members {
             self.extend_members.entry(head).or_default().extend(members);
         }
@@ -958,7 +992,7 @@ impl TypeCatalog {
                 let tys: FxHashMap<Symbol, Ty> = info
                     .params
                     .iter()
-                    .copied()
+                    .map(|param| param.symbol)
                     .zip(current.args.iter().cloned())
                     .collect();
                 queue.extend(

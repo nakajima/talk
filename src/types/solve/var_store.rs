@@ -26,6 +26,10 @@ pub struct VarStore {
     pub(super) vars: Vec<VarInfo>,
     /// Bumped on every bind/union; the solver's progress detector.
     generation: u64,
+    /// Variables minted to stand for a static value argument (ADR 0035).
+    /// One left unresolved at finalization is an underdetermined static
+    /// argument — a targeted diagnostic, not a generic inference failure.
+    static_holes: rustc_hash::FxHashSet<u32>,
 }
 
 impl VarStore {
@@ -89,6 +93,30 @@ impl VarStore {
     pub(crate) fn origin(&mut self, var: u32) -> NodeID {
         let root = self.find(var);
         self.vars[root as usize].origin
+    }
+
+    /// Mark a variable as standing for a static value argument.
+    pub fn mark_static_hole(&mut self, var: TyVar) {
+        self.static_holes.insert(var.0);
+    }
+
+    /// The still-unresolved static holes, with their origins — the
+    /// finalization sweep behind the underdetermined-static diagnostic.
+    /// Generalized holes are bound (to minted params) and don't report.
+    pub fn unresolved_static_holes(&mut self) -> Vec<NodeID> {
+        let holes: Vec<u32> = self.static_holes.iter().copied().collect();
+        let mut unresolved: Vec<(u32, NodeID)> = vec![];
+        for var in holes {
+            let root = self.find(var);
+            if self.vars[root as usize].value.is_none()
+                && !unresolved.iter().any(|(seen, _)| *seen == root)
+            {
+                let origin = self.vars[root as usize].origin;
+                unresolved.push((root, origin));
+            }
+        }
+        unresolved.sort_by_key(|(root, _)| *root);
+        unresolved.into_iter().map(|(_, origin)| origin).collect()
     }
 
     pub(super) fn bind(&mut self, var: u32, value: VarValue) {
@@ -305,6 +333,12 @@ impl VarStore {
                     f(self, TyNode::EffTail(tail))?;
                 }
             }
+            Ty::Static(StaticValue::Int(int)) => {
+                for (atom, _) in &int.terms {
+                    self.query_resolved(&atom.as_ty(), f)?;
+                }
+            }
+            Ty::Static(StaticValue::Bool(_) | StaticValue::Case(..)) => {}
             Ty::Var(_) | Ty::Param(_) | Ty::Error => {}
         }
         ControlFlow::Continue(())
