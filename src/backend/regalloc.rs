@@ -51,6 +51,11 @@ pub(crate) fn visit_inst(inst: &mut Inst, visit: &mut impl FnMut(Slot, &mut Loca
             operand(src, visit);
             visit(Slot::Def, dest);
         }
+        Inst::GetElement { dest, src, index } => {
+            operand(src, visit);
+            operand(index, visit);
+            visit(Slot::Def, dest);
+        }
         Inst::Scalar { dest, a, b, .. } => {
             operand(a, visit);
             if let Some(b) = b {

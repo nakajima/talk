@@ -108,6 +108,65 @@ fn run_executes_core_operators() {
 }
 
 #[test]
+fn inline_array_literal_and_checked_get_reach_runtime() {
+    assert_runs(
+        b"let values: [Int; 3] = [10, 20, 30]\n\
+          let present = if let .some(value) = values.get(1) { value } else { 0 }\n\
+          let missing = if let .some(value) = values.get(3) { value } else { 99 }\n\
+          present + missing\n",
+        &[],
+        b"119\n",
+    );
+}
+
+#[test]
+fn inline_array_drops_owned_elements() {
+    assert_runs(
+        b"func lengths() -> Int {\n\
+          \tlet values: [String; 2] = [\"a\" + \"b\", \"c\" + \"d\"]\n\
+          \tif let .some(value) = values.get(1) { value.byte_count } else { 0 }\n\
+          }\n\
+          lengths()\n",
+        &[],
+        b"2\n",
+    );
+}
+
+#[test]
+fn generic_inline_array_body_specializes_for_multiple_counts() {
+    assert_runs(
+        b"func sum<static N: Int>(values: [Int; N]) -> Int {\n\
+          \tlet total = 0\n\
+          \tlet index = 0\n\
+          \tloop index < N {\n\
+          \t\tif let .some(value) = values.get(index) {\n\
+          \t\t\ttotal = total + value\n\
+          \t\t}\n\
+          \t\tindex = index + 1\n\
+          \t}\n\
+          \ttotal\n\
+          }\n\
+          let pair: [Int; 2] = [1, 2]\n\
+          let triple: [Int; 3] = [3, 4, 5]\n\
+          sum(pair) + sum(triple)\n",
+        &[],
+        b"15\n",
+    );
+}
+
+#[test]
+fn nested_inline_arrays_preserve_exact_shape() {
+    assert_runs(
+        b"let matrix: [[Int; 2]; 2] = [[1, 2], [3, 4]]\n\
+          if let .some(row) = matrix.get(1) {\n\
+          \tif let .some(value) = row.get(0) { value } else { 0 }\n\
+          } else { 0 }\n",
+        &[],
+        b"3\n",
+    );
+}
+
+#[test]
 fn static_value_generics_reach_runtime() {
     // ADR 0035 §6: a static parameter is usable as an ordinary value in
     // its declaration body; the backend substitutes the concrete value

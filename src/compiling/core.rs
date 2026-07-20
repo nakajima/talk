@@ -49,6 +49,7 @@ pub const CORE_SOURCE_NAMES: &[&str] = &[
     "UnicodeData.tlk",
     "Unicode.tlk",
     "Array.tlk",
+    "InlineArray.tlk",
     "Dict.tlk",
     "Iterable.tlk",
     "Async.tlk",
@@ -76,6 +77,10 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
         ),
         ("Unicode.tlk", include_str!("../../core/Unicode.tlk")),
         ("Array.tlk", include_str!("../../core/Array.tlk")),
+        (
+            "InlineArray.tlk",
+            include_str!("../../core/InlineArray.tlk"),
+        ),
         ("Dict.tlk", include_str!("../../core/Dict.tlk")),
         ("Iterable.tlk", include_str!("../../core/Iterable.tlk")),
         ("Async.tlk", include_str!("../../core/Async.tlk")),
@@ -158,6 +163,10 @@ mod tests {
         assert_eq!(module.exports.get("String").copied(), Some(Symbol::String));
         assert_eq!(module.exports.get("Array").copied(), Some(Symbol::Array));
         assert_eq!(
+            module.exports.get("InlineArray").copied(),
+            Some(Symbol::InlineArray)
+        );
+        assert_eq!(
             module.exports.get("Storage").copied(),
             Some(Symbol::Storage)
         );
@@ -174,6 +183,7 @@ mod tests {
         let catalog = &module.types.catalog;
         assert!(catalog.structs.contains_key(&Symbol::String));
         assert!(catalog.structs.contains_key(&Symbol::Array));
+        assert!(catalog.structs.contains_key(&Symbol::InlineArray));
         assert!(catalog.structs.contains_key(&Symbol::Storage));
         assert!(catalog.structs.contains_key(&Symbol::Character));
         assert!(catalog.protocols.contains_key(&Symbol::Borrowed));

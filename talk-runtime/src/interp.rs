@@ -1349,6 +1349,20 @@ fn exec_local(
                 .ok_or("vm: field index out of range")?;
             frame.regs[dest as usize] = value;
         }
+        Insn::GetElement { dest, rec, index } => {
+            let Value::Record(_, fields) = &frame.regs[rec as usize] else {
+                return Err("vm: inline_get on a non-record".into());
+            };
+            let Value::I64(index) = frame.regs[index as usize] else {
+                return Err("vm: inline_get index is not an Int".into());
+            };
+            let index = usize::try_from(index).map_err(|_| "vm: inline_get index is negative")?;
+            let value = fields
+                .get(index)
+                .cloned()
+                .ok_or("vm: inline_get index out of range")?;
+            frame.regs[dest as usize] = value;
+        }
         Insn::VariantNew {
             dest,
             symbol,

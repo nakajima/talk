@@ -131,15 +131,34 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.check_inferred_against_expected(expr.id, expected, ty, reason);
             }
             ExprKind::LiteralArray(items) => {
-                if let Ty::Nominal(symbol, args) = self.store.shallow(expected)
-                    && symbol == Symbol::Array
-                    && let [element] = args.as_slice()
-                {
-                    for item in items {
-                        self.check_expr(item, element, CtReason::ArrayElement, ctx);
+                if let Ty::Nominal(symbol, args) = self.store.shallow(expected) {
+                    if symbol == Symbol::Array
+                        && let [element] = args.as_slice()
+                    {
+                        for item in items {
+                            self.check_expr(item, element, CtReason::ArrayElement, ctx);
+                        }
+                        self.artifacts.node_types.insert(expr.id, expected.clone());
+                        return;
                     }
-                    self.artifacts.node_types.insert(expr.id, expected.clone());
-                    return;
+                    if symbol == Symbol::InlineArray
+                        && let [element, count] = args.as_slice()
+                    {
+                        for item in items {
+                            self.check_expr(item, element, CtReason::ArrayElement, ctx);
+                        }
+                        let literal_count = Ty::Static(StaticValue::Int(StaticInt::constant(
+                            i64::try_from(items.len()).unwrap_or(i64::MAX),
+                        )));
+                        self.emit_eq(
+                            count.clone(),
+                            literal_count,
+                            expr.id,
+                            CtReason::InlineArrayLength,
+                        );
+                        self.artifacts.node_types.insert(expr.id, expected.clone());
+                        return;
+                    }
                 }
                 let ty = self.infer_expr(expr, ctx);
                 self.check_inferred_against_expected(expr.id, expected, ty, reason);

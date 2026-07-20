@@ -1182,7 +1182,7 @@ pub mod tests {
 
     #[test]
     fn parses_static_generic_param() {
-        let parsed = parse("struct InlineArray<static Count: Int, Element> {}");
+        let parsed = parse("struct Grid<static Count: Int, Element> {}");
         let DeclKind::Struct { generics, .. } = &parsed.roots[0].as_decl().kind else {
             panic!("expected struct")
         };
@@ -1199,6 +1199,30 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_inline_array_type_sugar() {
+        let parsed = parse("func f(values: [Int; 3]) { values }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        let Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Nominal { name, generics, .. },
+            ..
+        }) = &params[0].type_annotation
+        else {
+            panic!("expected nominal annotation");
+        };
+        assert_eq!(name.name_str(), "InlineArray");
+        assert!(matches!(&generics[0], GenericArg::Type(_)));
+        assert!(matches!(
+            &generics[1],
+            GenericArg::Static(StaticExpr {
+                kind: StaticExprKind::Int(literal),
+                ..
+            }) if literal == "3"
+        ));
+    }
+
+    #[test]
     fn parses_static_param_on_func() {
         let parsed = parse("func width<static N: Int>() -> Int { N }");
         let DeclKind::Func(func) = &parsed.roots[0].as_decl().kind else {
@@ -1211,7 +1235,7 @@ pub mod tests {
 
     #[test]
     fn parses_static_int_generic_argument() {
-        let parsed = parse("func c(a: InlineArray<4, Int>) { a }");
+        let parsed = parse("func c(a: Grid<4, Int>) { a }");
         let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
             panic!("expected func")
         };
@@ -1242,7 +1266,7 @@ pub mod tests {
     fn static_generic_arguments_record_node_meta() {
         // Diagnostics resolve a node's range through `ast.meta`; a static
         // argument must locate at its own tokens, not fall back to 1:1.
-        let code = "func c(a: InlineArray<4 + 1, Int>) { a }";
+        let code = "func c(a: Grid<4 + 1, Int>) { a }";
         let parsed = parse(code);
         let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
             panic!("expected func")
@@ -1274,7 +1298,7 @@ pub mod tests {
 
     #[test]
     fn parses_static_arithmetic_generic_argument() {
-        let parsed = parse("func c<static N: Int, T>(a: InlineArray<N + 1, T>) { a }");
+        let parsed = parse("func c<static N: Int, T>(a: Grid<N + 1, T>) { a }");
         let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
             panic!("expected func")
         };
@@ -1308,7 +1332,7 @@ pub mod tests {
 
     #[test]
     fn parses_static_mul_binds_tighter_than_add() {
-        let parsed = parse("func c<static N: Int, T>(a: InlineArray<2 * N + 1, T>) { a }");
+        let parsed = parse("func c<static N: Int, T>(a: Grid<2 * N + 1, T>) { a }");
         let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
             panic!("expected func")
         };
@@ -1343,7 +1367,7 @@ pub mod tests {
     #[test]
     fn parses_parenthesized_static_group() {
         // Committed static context: `(` after an operator is grouping.
-        let parsed = parse("func c<static N: Int, T>(a: InlineArray<2 * (N + 1), T>) { a }");
+        let parsed = parse("func c<static N: Int, T>(a: Grid<2 * (N + 1), T>) { a }");
         let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
             panic!("expected func")
         };
@@ -1368,7 +1392,7 @@ pub mod tests {
     #[test]
     fn parses_where_static_less_than() {
         let parsed = parse(
-            "func first<static Count: Int, Element>(values: InlineArray<Count, Element>) -> Element where 0 < Count { values }",
+            "func first<static Count: Int, Element>(values: Grid<Count, Element>) -> Element where 0 < Count { values }",
         );
         let DeclKind::Func(func) = &parsed.roots[0].as_decl().kind else {
             panic!("expected func")

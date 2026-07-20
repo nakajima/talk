@@ -41,6 +41,9 @@ pub enum CtReason {
     Return,
     Recursion,
     ArrayElement,
+    /// Equality between an InlineArray literal's element count and the
+    /// exact count required by its contextual type.
+    InlineArrayLength,
     Condition,
     Pattern,
     Body,

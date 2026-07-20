@@ -239,6 +239,7 @@ impl Symbol {
     const WELL_KNOWN_CORE_DEINIT_ID: u32 = u32::MAX - 25;
     const WELL_KNOWN_CORE_CHARACTER_ID: u32 = u32::MAX - 24;
     const WELL_KNOWN_CORE_SUBSTRING_ID: u32 = u32::MAX - 23;
+    const WELL_KNOWN_CORE_INLINE_ARRAY_ID: u32 = u32::MAX - 22;
 
     pub const Int: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
@@ -303,6 +304,10 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: Self::WELL_KNOWN_CORE_SUBSTRING_ID,
     });
+    pub const InlineArray: Symbol = Symbol::Struct(StructId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_INLINE_ARRAY_ID,
+    });
     pub const Borrowed: Symbol = Symbol::Protocol(ProtocolId {
         module_id: ModuleId::Core,
         local_id: Self::WELL_KNOWN_CORE_BORROWED_ID,
@@ -331,6 +336,7 @@ impl Symbol {
             "Storage" => Some(Symbol::Storage),
             "Character" => Some(Symbol::Character),
             "Substring" => Some(Symbol::Substring),
+            "InlineArray" => Some(Symbol::InlineArray),
             _ => None,
         }
     }
@@ -936,6 +942,9 @@ mod tests {
             Symbol::RawPtr,
             Symbol::Byte,
             Symbol::String,
+            Symbol::Array,
+            Symbol::InlineArray,
+            Symbol::Storage,
             Symbol::Character,
             Symbol::Substring,
         ] {

@@ -157,6 +157,11 @@ pub enum Insn {
         rec: u16,
         index: u16,
     },
+    GetElement {
+        dest: u16,
+        rec: u16,
+        index: u16,
+    },
     VariantNew {
         dest: u16,
         symbol: symbol::Symbol,
@@ -511,6 +516,9 @@ impl Module {
                 self.render_args(*args_start, *args_len)
             ),
             Insn::GetField { dest, rec, index } => format!("get_field r{dest} <- r{rec}.{index}"),
+            Insn::GetElement { dest, rec, index } => {
+                format!("get_element r{dest} <- r{rec}[r{index}]")
+            }
             Insn::VariantNew {
                 dest,
                 symbol,

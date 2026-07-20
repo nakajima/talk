@@ -208,6 +208,12 @@ impl Encoder {
                 self.u16(rec);
                 self.u16(index);
             }
+            Insn::GetElement { dest, rec, index } => {
+                self.u8(61);
+                self.u16(dest);
+                self.u16(rec);
+                self.u16(index);
+            }
             Insn::VariantNew {
                 dest,
                 symbol,
@@ -914,6 +920,11 @@ impl<'a> Decoder<'a> {
                 dest: self.u16()?,
                 src: self.u16()?,
             }),
+            61 => Ok(Insn::GetElement {
+                dest: self.u16()?,
+                rec: self.u16()?,
+                index: self.u16()?,
+            }),
             _ => Err(DecodeError::InvalidTag("instruction", tag)),
         }
     }
@@ -1288,6 +1299,9 @@ impl Insn {
                 rec,
                 index: _,
             } => Register::new(n_regs).check_many(&[dest, rec])?,
+            Insn::GetElement { dest, rec, index } => {
+                Register::new(n_regs).check_many(&[dest, rec, index])?
+            }
             Insn::GetTag { dest, src } => Register::new(n_regs).check_many(&[dest, src])?,
             Insn::SetField { dest, rec, src, .. } => {
                 Register::new(n_regs).check_many(&[dest, rec, src])?

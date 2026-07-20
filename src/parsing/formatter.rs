@@ -1744,6 +1744,19 @@ impl<'a> Formatter<'a> {
                     text("]"),
                 )
             }
+            TypeAnnotationKind::Nominal { name, generics, .. }
+                if name.name_str() == "InlineArray"
+                    && generics.len() == 2
+                    && generics[0].as_type().is_some() =>
+            {
+                let element =
+                    self.format_type_annotation(generics[0].as_type().expect("guarded above"));
+                wrap(
+                    text("["),
+                    element + text("; ") + self.format_generic_arg(&generics[1]),
+                    text("]"),
+                )
+            }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 self.format_nominal_type_annotation(name.name_str(), generics)
             }
@@ -2828,11 +2841,15 @@ mod formatter_tests {
     #[test]
     fn formats_static_generics() {
         // ADR 0035 spellings round-trip.
-        let decl = "struct InlineArray<static Count: Int, Element> {}";
+        assert_eq!(
+            format_code("let values: [Int; 3] = [1, 2, 3]", 100),
+            "let values: [Int; 3] = [1, 2, 3]"
+        );
+        let decl = "struct Grid<static Count: Int, Element> {}";
         assert_eq!(format_code(decl, 100), decl);
-        let func = "func first<static Count: Int, Element>(values: InlineArray<Count, Element>) -> Element where 0 < Count {\n}";
+        let func = "func first<static Count: Int, Element>(values: [Element; Count]) -> Element where 0 < Count {\n}";
         assert_eq!(format_code(func, 120), func);
-        let args = "func c<static N: Int, T>(a: InlineArray<2 * N + 1, T>) {\n}";
+        let args = "func c<static N: Int, T>(a: [T; 2 * N + 1]) {\n}";
         assert_eq!(format_code(args, 100), args);
         let le = "func f<static N: Int, static M: Int>() where N <= M {\n}";
         assert_eq!(format_code(le, 100), le);

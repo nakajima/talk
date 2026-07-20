@@ -147,6 +147,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let Ok(symbol) = name.symbol() else {
             return Ty::Error;
         };
+        if symbol == Symbol::InlineArray {
+            self.unsupported(
+                expr.id,
+                "constructing an InlineArray directly; use an array literal with an [Element; Count] annotation",
+            );
+            return Ty::Error;
+        }
         let Some(info) = self.catalog.structs.get(&symbol).cloned() else {
             if self.catalog.enums.contains_key(&symbol) {
                 self.unsupported(expr.id, "constructing an enum directly (use a case)");

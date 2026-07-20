@@ -186,6 +186,13 @@ pub enum InlineIRInstructionKind {
         addr: Value,
         offset_index: Value,
     },
+    #[doc = "$dest = inline_get $ty $array $index"]
+    InlineGet {
+        dest: Register,
+        ty: TypeAnnotation,
+        array: Value,
+        index: Value,
+    },
     #[doc = "$dest = io_write $fd $buf $count"]
     IoWrite {
         dest: Register,
@@ -483,6 +490,18 @@ impl Display for InlineIRInstruction {
                     offset_index
                 )
             }
+            InlineIRInstructionKind::InlineGet {
+                dest,
+                ty,
+                array,
+                index,
+            } => write!(
+                f,
+                "{dest} = inline_get {} {} {}",
+                ty.simple_display(),
+                array,
+                index
+            ),
             InlineIRInstructionKind::IoWrite {
                 dest,
                 fd,

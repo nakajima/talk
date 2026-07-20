@@ -1444,7 +1444,8 @@ impl NameResolver {
                 | InlineIRInstructionKind::Copy { ty, .. }
                 | InlineIRInstructionKind::Swap { ty, .. }
                 | InlineIRInstructionKind::Retain { ty, .. }
-                | InlineIRInstructionKind::Gep { ty, .. } => self.enter_type_annotation(ty),
+                | InlineIRInstructionKind::Gep { ty, .. }
+                | InlineIRInstructionKind::InlineGet { ty, .. } => self.enter_type_annotation(ty),
                 InlineIRInstructionKind::IoWrite { .. }
                 | InlineIRInstructionKind::Trunc { .. }
                 | InlineIRInstructionKind::IsUnique { .. }

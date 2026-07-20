@@ -74,14 +74,14 @@ parameters. A static parameter is introduced with `static` and has a declared
 value type:
 
 ```talk
-struct InlineArray<static Count: Int, Element> {
-    // representation supplied by a later fixed-storage decision
+struct InlineArray<Element, static Count: Int> {
+    // compiler-known inline representation
 }
 
 func append<static Left: Int, static Right: Int, Element>(
-    lhs: InlineArray<Left, Element>,
-    rhs: InlineArray<Right, Element>,
-) -> InlineArray<Left + Right, Element> {
+    lhs: [Element; Left],
+    rhs: [Element; Right],
+) -> [Element; Left + Right] {
     // ...
 }
 ```
@@ -100,8 +100,8 @@ associated static values; an `associated value` facility requires a separate
 decision.
 
 A generic argument position is interpreted according to its declared
-parameter. For example, `InlineArray<4, Int>` supplies the static value `4` and
-the type `Int`. Defaults are permitted when the default is a valid static
+parameter. For example, `[Int; 4]` supplies the type `Int` and static value
+`4`. Defaults are permitted when the default is a valid static
 expression and mentions only earlier parameters.
 
 ### 2. Initial static value domain
@@ -175,8 +175,7 @@ Rows * 4 + 4        4 * (Rows + 1)
 ```
 
 Type identity includes the canonical static arguments. Closed expressions are
-reduced before identity, so `InlineArray<2 + 2, Int>` and
-`InlineArray<4, Int>` are the same type.
+reduced before identity, so `[Int; 2 + 2]` and `[Int; 4]` are the same type.
 
 Qualified contexts gain origin-free static predicates alongside the existing
 type, row, effect, conformance, and member predicates:
@@ -189,7 +188,7 @@ Source `where` clauses use the existing `&&` conjunction:
 
 ```talk
 func first<static Count: Int, Element>(
-    values: InlineArray<Count, Element>,
+    values: [Element; Count],
 ) -> Element where 0 < Count {
     // ...
 }
@@ -220,13 +219,13 @@ Inference may obtain a static argument from an expected or actual type:
 
 ```talk
 func count<static N: Int, Element>(
-    values: InlineArray<N, Element>,
+    values: [Element; N],
 ) -> Int {
     N
 }
 ```
 
-A call with `InlineArray<4, Byte>` infers `N = 4`. Inference solves only static
+A call with `[Byte; 4]` infers `N = 4`. Inference solves only static
 equalities with a unique solution in the supported affine theory. Ambiguous
 or underdetermined arguments require an explicit generic argument. The
 checker does not inspect an ordinary runtime argument's value to infer a
@@ -260,7 +259,7 @@ constant during one execution.
 
 This ADR does not add dependent pairs or an existential over static values.
 Code that reads a runtime size uses a dynamic collection. Converting a runtime
-size into "some `N` and an `InlineArray<N, T>`" requires an explicit
+size into "some `N` and an `[T; N]`" requires an explicit
 existential/reification design in a later ADR; the compiler will not generate
 an unbounded runtime dispatch over static instantiations.
 
@@ -284,8 +283,8 @@ semantic distinction.
 
 Static values do not introduce ordered specialization. Existing coherence
 rules continue to reject overlapping conformances or extensions; a general
-implementation for `InlineArray<N, T>` and a competing implementation for
-`InlineArray<0, T>` do not acquire C++-style priority merely because one is
+implementation for `[T; N]` and a competing implementation for
+`[T; 0]` do not acquire C++-style priority merely because one is
 more specific. Any future specialization system needs its own coherence
 decision.
 

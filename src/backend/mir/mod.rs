@@ -156,6 +156,12 @@ pub(crate) enum Inst {
         src: Operand,
         index: u16,
     },
+    /// Read an InlineArray element at a runtime-validated index.
+    GetElement {
+        dest: LocalId,
+        src: Operand,
+        index: Operand,
+    },
     /// Replace one stored field of a struct value in place.
     SetField {
         rec: LocalId,
@@ -823,6 +829,9 @@ fn borrow_classified(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
 /// exactly once on every finite path, and never implicitly dropped.
 fn is_linear(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
     match ty {
+        Ty::Nominal(symbol, args) if *symbol == Symbol::InlineArray => args
+            .first()
+            .is_some_and(|element| is_linear(builder, element)),
         Ty::Nominal(symbol, _) => {
             builder
                 .struct_def(*symbol)
@@ -2308,6 +2317,22 @@ impl<'a> ProgramBuilder<'a> {
     /// A struct's stored field types, canonicalized and instantiated
     /// against the application's type arguments.
     fn field_types(&self, symbol: Symbol, args: &[Ty]) -> Option<Vec<Ty>> {
+        if symbol == Symbol::InlineArray
+            && let [element, count] = args
+        {
+            let count = match count {
+                Ty::Static(StaticValue::Int(value)) if value.as_i64().is_some() => value
+                    .as_i64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value <= usize::from(u16::MAX)),
+                // Check-all compilation keeps static parameters rigid. One
+                // representative element is enough for structural ownership;
+                // reachable instances always carry a concrete count.
+                Ty::Param(_) | Ty::Static(StaticValue::Int(_)) => Some(1),
+                _ => None,
+            }?;
+            return Some(vec![element.clone(); count]);
+        }
         let (def, module) = self.struct_def(symbol)?;
         // Raw keys for the same reason as `variant_payloads`.
         let substitution: FxHashMap<Symbol, Ty> = def
@@ -6505,6 +6530,50 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         expr.span,
                     ));
                 };
+                if *array_symbol == Symbol::InlineArray {
+                    let [element_ty, count_ty] = type_args.as_slice() else {
+                        return Err(BackendError::new(
+                            "InlineArray literal has malformed type arguments".into(),
+                            expr.span,
+                        ));
+                    };
+                    let count = match count_ty {
+                        Ty::Static(StaticValue::Int(count)) => count.as_i64(),
+                        _ => None,
+                    };
+                    if count != i64::try_from(items.len()).ok() {
+                        return Err(BackendError::new(
+                            "InlineArray literal length does not match its type".into(),
+                            expr.span,
+                        ));
+                    }
+                    if items.len() > usize::from(u16::MAX) {
+                        return Err(BackendError::new(
+                            "InlineArray exceeds the backend element limit".into(),
+                            expr.span,
+                        ));
+                    }
+                    let mut values = Vec::with_capacity(items.len());
+                    for item in items {
+                        let value = self.compile_expr(item)?;
+                        self.consume_binding(value, element_ty, item.span)?;
+                        values.push(value);
+                    }
+                    let dest = self.fresh_local();
+                    self.push(Inst::Record {
+                        dest,
+                        struct_symbol: Symbol::InlineArray,
+                        args: values,
+                    });
+                    self.produce_temp(dest, &ty);
+                    return Ok(Operand::Local(dest));
+                }
+                if *array_symbol != Symbol::Array {
+                    return Err(BackendError::new(
+                        "array literal without an Array or InlineArray type".into(),
+                        expr.span,
+                    ));
+                }
                 // Raw storage buffers hold values the region walk never
                 // scans: `'heap` handles cannot live in them.
                 if type_args
@@ -9284,6 +9353,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let len = self.ir_value(instruction, length, expr.span)?;
                 self.push(Inst::MemCopy { from, to, len });
                 return Ok(Operand::Const(Constant::Unit));
+            }
+            K::InlineGet { array, index, .. } => {
+                let array = self.ir_value(instruction, array, expr.span)?;
+                let index = self.ir_value(instruction, index, expr.span)?;
+                self.push(Inst::GetElement {
+                    dest,
+                    src: array,
+                    index,
+                });
+                return Ok(Operand::Local(dest));
             }
             K::Gep {
                 ty,

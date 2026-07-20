@@ -79,7 +79,7 @@ impl StaticExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum StaticExprKind {
-    /// An integer literal, e.g. the `4` in `InlineArray<4, Int>`.
+    /// An integer literal, e.g. the `4` in `[Int; 4]`.
     Int(#[drive(skip)] String),
     Bool(#[drive(skip)] bool),
     /// A name-like operand — a static parameter reference or a fieldless

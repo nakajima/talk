@@ -723,6 +723,15 @@ impl Lowering<'_> {
                     index: *index,
                 });
             }
+            Inst::GetElement { dest, src, index } => {
+                let rec = self.reg(*src);
+                let index = self.reg(*index);
+                self.code.push(Insn::GetElement {
+                    dest: *dest,
+                    rec,
+                    index,
+                });
+            }
             Inst::SetField { rec, src, index } => {
                 let src = self.reg(*src);
                 self.code.push(Insn::SetField {

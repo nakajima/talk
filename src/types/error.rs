@@ -339,6 +339,10 @@ impl Display for TypeError {
                     f,
                     "Type mismatch in array element: the array requires elements of type {expected}, but this element has type {found}"
                 ),
+                CtReason::InlineArrayLength => write!(
+                    f,
+                    "InlineArray literal has {found} elements, but its type requires {expected}"
+                ),
                 CtReason::Condition => write!(
                     f,
                     "Type mismatch in condition: a condition must have type {expected}, but this expression has type {found}"

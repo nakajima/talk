@@ -1,0 +1,15 @@
+// no-core
+use package::Optional::{ Optional }
+use package::Operators::{ Comparable }
+
+// An exact-size aggregate. Its elements are stored directly in the value;
+// Count is part of the type and is not stored at runtime.
+public struct InlineArray<Element, static Count: Int> {
+	func count() -> Int { Count }
+
+	func get(index: Int) -> Optional<&Element> {
+		if index < 0 { return .none }
+		if Count <= index { return .none }
+		.some(@_ir(index) { %? = inline_get Element %0 $0 })
+	}
+}

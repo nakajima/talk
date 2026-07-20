@@ -1708,6 +1708,15 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
             .cloned()
             .unwrap_or_else(|| format!("{sym}")),
         Ty::Nominal(sym, args) => {
+            if *sym == Symbol::InlineArray
+                && let [element, count] = args.as_slice()
+            {
+                return format!(
+                    "[{}; {}]",
+                    render_ty(element, param_names),
+                    render_ty(count, param_names)
+                );
+            }
             let head = render_nominal_head(sym);
             if args.is_empty() {
                 head
@@ -1941,6 +1950,8 @@ fn render_nominal_head(sym: &Symbol) -> String {
         "Character".into()
     } else if *sym == Symbol::Array {
         "Array".into()
+    } else if *sym == Symbol::InlineArray {
+        "InlineArray".into()
     } else if *sym == Symbol::RawPtr {
         "RawPtr".into()
     } else if *sym == Symbol::Byte {

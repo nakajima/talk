@@ -1602,6 +1602,23 @@ impl<'a> Parser<'a> {
                         },
                     })
                 }
+                "inline_get" => {
+                    let ty = self.type_annotation()?;
+                    let array = self.ir_value()?;
+                    let index = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::InlineGet {
+                            dest,
+                            ty,
+                            array,
+                            index,
+                        },
+                    })
+                }
                 "io_write" => {
                     let fd = self.ir_value()?;
                     let buf = self.ir_value()?;
@@ -3086,15 +3103,21 @@ impl<'a> Parser<'a> {
 
         if self.did_match(TokenKind::LeftBracket)? {
             let element = self.type_annotation()?;
+            let (name, generics) = if self.did_match(TokenKind::Semicolon)? {
+                let count = self.generic_argument()?;
+                ("InlineArray", vec![GenericArg::Type(element), count])
+            } else {
+                ("Array", vec![GenericArg::Type(element)])
+            };
             self.consume(TokenKind::RightBracket)?;
             let base = self.save_meta(tok, |id, span| TypeAnnotation {
                 id,
                 span,
                 kind: TypeAnnotationKind::Nominal {
-                    name: "Array".into(),
-                    // Array is implied by the brackets, so it has no source name.
+                    name: name.into(),
+                    // The nominal head is implied by the brackets.
                     name_span: Span::SYNTHESIZED,
-                    generics: vec![GenericArg::Type(element)],
+                    generics,
                 },
             })?;
             return self.nominal_type_path(base);
