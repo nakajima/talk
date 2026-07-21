@@ -321,6 +321,7 @@ pub(super) fn row_tail_mentions_param(row: &Row, param: Symbol) -> bool {
 pub(super) fn decl_kind_name(kind: &DeclKind) -> &'static str {
     match kind {
         DeclKind::Import(_) => "imports",
+        DeclKind::Macro { .. } => "macro declarations",
         DeclKind::Effect { .. } => "effect declarations",
         DeclKind::Struct { .. } => "struct declarations",
         DeclKind::Let { .. } => "destructuring let bindings",

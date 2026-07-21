@@ -10,6 +10,7 @@ pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::INTERFACE,
     SemanticTokenType::KEYWORD,
     SemanticTokenType::METHOD,
+    SemanticTokenType::MACRO,
     SemanticTokenType::MODIFIER,
     SemanticTokenType::NUMBER,
     SemanticTokenType::OPERATOR,
@@ -165,6 +166,18 @@ mod tests {
 
     fn pos(token_type: SemanticTokenType) -> u32 {
         TOKEN_TYPES.iter().position(|t| *t == token_type).unwrap() as u32
+    }
+
+    #[test]
+    fn macro_names_use_the_macro_token_type() {
+        let tokens = tokens_for("macro identity($value) = $value\n#identity(1)");
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|token| token.token_type == pos(SemanticTokenType::MACRO))
+                .count(),
+            2
+        );
     }
 
     #[test]

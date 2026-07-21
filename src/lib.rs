@@ -25,6 +25,7 @@ pub mod common;
 pub mod compiling;
 pub use common::*;
 pub mod desugar;
+pub mod macro_expansion;
 pub mod name_resolution;
 pub mod repl;
 pub mod testing;

@@ -132,6 +132,7 @@ impl<'a> Lexer<'a> {
             '%' => self.percent(),
             '@' => self.at(),
             '$' => self.dollar(),
+            '#' => self.make(Hash),
             '"' => self.string(),
             '\'' => self.single_quote(),
             '\n' => self.newline(),
@@ -982,8 +983,17 @@ mod tests {
 
     #[test]
     fn keywords() {
-        let mut lexer = Lexer::new("func");
+        let mut lexer = Lexer::new("func macro");
         assert_eq!(lexer.next().unwrap().kind, Func);
+        assert_eq!(lexer.next().unwrap().kind, Macro);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn macro_sigil() {
+        let mut lexer = Lexer::new("#choose");
+        assert_eq!(lexer.next().unwrap().kind, Hash);
+        assert_eq!(lexer.next().unwrap().kind, Identifier);
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 

@@ -92,6 +92,30 @@ pub enum ParserError {
         name: String,
         span: Span,
     },
+    DuplicateMacroRule {
+        name: String,
+        arity: usize,
+        span: Span,
+    },
+    UndefinedMacro {
+        name: String,
+        span: Span,
+    },
+    MacroArityMismatch {
+        name: String,
+        actual: usize,
+        expected: Vec<usize>,
+        span: Span,
+    },
+    InvalidMacroTemplate {
+        name: String,
+        reason: String,
+        span: Span,
+    },
+    MacroExpansionLimit {
+        name: String,
+        span: Span,
+    },
 }
 
 impl ParserError {
@@ -131,6 +155,11 @@ impl ParserError {
             Self::IncompleteFuncSignature(_) => "parser.incomplete-function-signature",
             Self::ConversionError(_) => "parser.conversion",
             Self::LowercaseStaticParameter { .. } => "parser.lowercase-static-parameter",
+            Self::DuplicateMacroRule { .. } => "macro.duplicate-rule",
+            Self::UndefinedMacro { .. } => "macro.undefined",
+            Self::MacroArityMismatch { .. } => "macro.arity-mismatch",
+            Self::InvalidMacroTemplate { .. } => "macro.invalid-template",
+            Self::MacroExpansionLimit { .. } => "macro.expansion-limit",
         }
     }
 }
@@ -201,6 +230,31 @@ impl Display for ParserError {
             Self::LowercaseStaticParameter { name, .. } => write!(
                 f,
                 "Static generic parameter `{name}` must begin with an uppercase letter"
+            ),
+            Self::DuplicateMacroRule { name, arity, .. } => {
+                write!(f, "Duplicate macro rule `#{name}` with {arity} argument(s)")
+            }
+            Self::UndefinedMacro { name, .. } => write!(f, "Undefined macro `#{name}`"),
+            Self::MacroArityMismatch {
+                name,
+                actual,
+                expected,
+                ..
+            } => write!(
+                f,
+                "Macro `#{name}` received {actual} argument(s); available arities: {}",
+                expected
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Self::InvalidMacroTemplate { name, reason, .. } => {
+                write!(f, "Invalid template for macro `{name}`: {reason}")
+            }
+            Self::MacroExpansionLimit { name, .. } => write!(
+                f,
+                "Macro expansion exceeded its work limit while expanding `#{name}`"
             ),
         }
     }
