@@ -214,6 +214,9 @@ impl TypedTreeBuilder<'_> {
 
     fn expr_kind(&self, e: &expr::Expr) -> typed_ast::ExprKind {
         match &e.kind {
+            expr::ExprKind::MacroCall { .. } => {
+                unreachable!("macro calls are expanded before typed-program build")
+            }
             expr::ExprKind::InlineIR(ir) => {
                 typed_ast::ExprKind::InlineIR(typed_ast::InlineIRInstruction {
                     id: ir.id,
@@ -922,6 +925,9 @@ impl TypedTreeBuilder<'_> {
 
     fn decl_kind(&self, k: &decl::DeclKind) -> typed_ast::DeclKind {
         match k {
+            decl::DeclKind::Macro { .. } => {
+                unreachable!("macro declarations are removed before typed-program build")
+            }
             decl::DeclKind::Import(import) => typed_ast::DeclKind::Import(import.clone()),
             decl::DeclKind::Effect {
                 name,

@@ -111,7 +111,7 @@ impl<'a> Higlighter<'a> {
                 }
                 TokenKind::Handling => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Effect => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::Dollar => self.make(tok, Kind::OPERATOR, &mut tokens),
+                TokenKind::Dollar | TokenKind::Hash => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::BoundVar => self.make(tok, Kind::VARIABLE, &mut tokens),
                 TokenKind::Percent => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::IRRegister => self.make(tok, Kind::PARAMETER, &mut tokens),
@@ -133,7 +133,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Match => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Import | TokenKind::Use => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Public => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::Linear => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Linear | TokenKind::Macro => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::StringLiteral | TokenKind::CharacterLiteral => {
                     self.make_string(tok, Kind::STRING, &mut tokens)
                 }
@@ -246,6 +246,18 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_expr(ret, ast));
                 }
                 DeclKind::Import(_) => (),
+                DeclKind::Macro {
+                    name_span,
+                    params,
+                    template,
+                    ..
+                } => {
+                    result.push(self.make_span(Kind::MACRO, *name_span));
+                    for param in params {
+                        result.push(self.make_span(Kind::PARAMETER, param.span));
+                    }
+                    result.extend(self.tokens_from_expr(template, ast));
+                }
                 DeclKind::Struct {
                     generics,
                     body,
@@ -503,6 +515,12 @@ impl<'a> Higlighter<'a> {
             },
             Node::Expr(expr) => match &expr.kind {
                 ExprKind::Incomplete(..) => (),
+                ExprKind::MacroCall {
+                    name_span, args, ..
+                } => {
+                    result.push(self.make_span(Kind::MACRO, *name_span));
+                    result.extend(self.tokens_from_exprs(args, ast));
+                }
                 ExprKind::CallEffect {
                     effect_name_span,
                     args,

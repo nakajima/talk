@@ -23,6 +23,14 @@ pub enum ExprKind {
 
     As(Box<Expr>, TypeAnnotation),
 
+    MacroCall {
+        #[drive(skip)]
+        name: String,
+        #[drive(skip)]
+        name_span: Span,
+        args: Vec<Expr>,
+    },
+
     CallEffect {
         #[drive(skip)]
         effect_name: Name,
@@ -106,6 +114,7 @@ impl ExprKind {
             // These perform computations, they're not just like, values. Which
             // matters when it comes to generalization.
             ExprKind::If(..)
+            | ExprKind::MacroCall { .. }
             | ExprKind::Block(..)
             | ExprKind::Unsafe(..)
             | ExprKind::Match(..)

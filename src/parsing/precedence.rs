@@ -96,6 +96,12 @@ impl Precedence {
                 precedence: Precedence::Primary,
             },
 
+            TokenKind::Hash => ParseHandler {
+                prefix: Some(Parser::macro_call),
+                infix: None,
+                precedence: Precedence::Primary,
+            },
+
             TokenKind::At => ParseHandler {
                 prefix: None,
                 infix: None,

@@ -70,6 +70,17 @@ pub struct Import {
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum DeclKind {
     Import(Import),
+    /// A module-local declarative expression macro rule (ADR 0026's first
+    /// implementation slice). Expansion removes these before name resolution.
+    Macro {
+        #[drive(skip)]
+        name: String,
+        #[drive(skip)]
+        name_span: Span,
+        #[drive(skip)]
+        params: Vec<MacroParameter>,
+        template: Expr,
+    },
     Effect {
         #[drive(skip)]
         name: Name,
@@ -202,6 +213,12 @@ pub enum DeclKind {
     },
 
     TypeAlias(#[drive(skip)] Name, #[drive(skip)] Span, TypeAnnotation),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacroParameter {
+    pub name: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]

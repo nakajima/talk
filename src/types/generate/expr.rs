@@ -954,6 +954,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         static_member_reason: CtReason,
     ) -> Ty {
         match &expr.kind {
+            ExprKind::MacroCall { .. } => Ty::Error,
             ExprKind::LiteralInt(source) => {
                 self.check_integer_literal(expr.id, source);
                 Ty::Nominal(Symbol::Int, vec![])

@@ -536,6 +536,11 @@ fn parser_error_range(text: &str, err: &ParserError) -> TextRange {
         ParserError::ExplicitSelfParameterNotAllowed { parameter } => {
             TextRange::new(parameter.start, parameter.end)
         }
+        ParserError::DuplicateMacroRule { span, .. }
+        | ParserError::UndefinedMacro { span, .. }
+        | ParserError::MacroArityMismatch { span, .. }
+        | ParserError::InvalidMacroTemplate { span, .. }
+        | ParserError::MacroExpansionLimit { span, .. } => TextRange::new(span.start, span.end),
         ParserError::UnexpectedEndOfInput(..) => TextRange::new(eof, eof),
         _ => TextRange::new(0, 0),
     }

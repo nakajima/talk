@@ -8,6 +8,7 @@ pub enum TokenKind {
     Use,
     Public,
     Linear,
+    Macro,
 
     // Effects
     Effect,
@@ -106,6 +107,7 @@ pub enum TokenKind {
     IRRegister,
     BoundVar,
     Dollar,
+    Hash,
 }
 
 impl Display for TokenKind {
@@ -120,6 +122,7 @@ impl TokenKind {
             TokenKind::Continue => "continue",
             TokenKind::EffectName => "'<effect>",
             TokenKind::Dollar => "$",
+            TokenKind::Hash => "#",
             TokenKind::BoundVar => "$<var>",
             TokenKind::Percent => "%",
             TokenKind::IRRegister => "%<reg>",
@@ -201,6 +204,7 @@ impl TokenKind {
             TokenKind::Use => "use",
             TokenKind::Public => "public",
             TokenKind::Linear => "linear",
+            TokenKind::Macro => "macro",
             TokenKind::Static => "static",
             TokenKind::At => "@",
             TokenKind::DotDot => "..",

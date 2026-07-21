@@ -11,7 +11,8 @@ use crate::node_kinds::block::Block;
 use crate::node_kinds::body::Body;
 use crate::node_kinds::call_arg::{ArgMode, CallArg};
 use crate::node_kinds::decl::{
-    Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, ReceiverMode, Visibility,
+    Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, MacroParameter,
+    ReceiverMode, Visibility,
 };
 use crate::node_kinds::expr::{Expr, ExprKind};
 use crate::node_kinds::func::{CaptureMode, CaptureSpec, EffectSet, Func};
@@ -28,9 +29,9 @@ use crate::node_kinds::pattern::{
     Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
 };
 use crate::node_kinds::record_field::{RecordField, RecordFieldTypeAnnotation};
-use crate::node_kinds::type_application::TypeApplication;
 use crate::node_kinds::stmt::{Stmt, StmtKind};
 use crate::node_kinds::type_annotation::{AnyAssocBinding, TypeAnnotation, TypeAnnotationKind};
+use crate::node_kinds::type_application::TypeApplication;
 use crate::node_kinds::where_clause::{WhereClause, WherePredicate, WherePredicateKind};
 use crate::node_meta::NodeMeta;
 use crate::parser_error::ParserError;
@@ -239,6 +240,7 @@ impl<'a> Parser<'a> {
                 | Use
                 | Public
                 | Linear
+                | Macro
         ) {
             self.decl(BlockContext::None, false)
         } else {
@@ -291,6 +293,14 @@ impl<'a> Parser<'a> {
                     .into()
             }
             Use => self.import_decl()?.into(),
+            Macro if context == BlockContext::None => self.macro_decl()?.into(),
+            Macro => {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "a top-level macro declaration".into(),
+                    actual: "nested macro declaration".into(),
+                    token: Some(current),
+                });
+            }
             Effect => self.effect()?.into(),
             Typealias => self.typealias()?.into(),
             Protocol => self
@@ -331,6 +341,70 @@ impl<'a> Parser<'a> {
         };
 
         Ok(node)
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn macro_decl(&mut self) -> Result<Decl, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Macro)?;
+        let (name, name_span) = self.identifier()?;
+        self.consume(TokenKind::LeftParen)?;
+
+        let mut params = Vec::new();
+        while !self.did_match(TokenKind::RightParen)? {
+            let Some(param) = self.current.clone() else {
+                return Err(ParserError::UnexpectedEndOfInput(Some(
+                    "macro parameter".into(),
+                )));
+            };
+            if param.kind != TokenKind::BoundVar {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "macro parameter such as `$value`".into(),
+                    actual: self.lexeme(&param).into(),
+                    token: Some(param),
+                });
+            }
+            let param_name = self.lexeme(&param);
+            if !param_name
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_alphabetic() || ch == '_')
+            {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "identifier-shaped macro parameter".into(),
+                    actual: format!("${param_name}"),
+                    token: Some(param),
+                });
+            }
+            self.advance();
+            params.push(MacroParameter {
+                name: param_name.into(),
+                span: Span {
+                    file_id: self.file_id,
+                    start: param.start.saturating_sub(1),
+                    end: param.end,
+                },
+            });
+
+            if self.did_match(TokenKind::RightParen)? {
+                break;
+            }
+            self.consume(TokenKind::Comma)?;
+        }
+
+        self.consume(TokenKind::Equals)?;
+        let template = self.expr()?.into_expr()?;
+        self.save_meta(tok, |id, span| Decl {
+            id,
+            span,
+            visibility: Visibility::Private,
+            kind: DeclKind::Macro {
+                name,
+                name_span,
+                params,
+                template,
+            },
+        })
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -2663,6 +2737,39 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub(crate) fn macro_call(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Hash)?;
+        let (name, name_span) = self.identifier()?;
+        self.consume(TokenKind::LeftParen)?;
+
+        let mut args = Vec::new();
+        while !self.did_match(TokenKind::RightParen)? {
+            args.push(
+                self.expr_with_precedence(Precedence::Assignment)?
+                    .into_expr()?,
+            );
+            if self.did_match(TokenKind::RightParen)? {
+                break;
+            }
+            self.consume(TokenKind::Comma)?;
+        }
+
+        self.save_meta(tok, |id, span| {
+            Expr {
+                id,
+                span,
+                kind: ExprKind::MacroCall {
+                    name,
+                    name_span,
+                    args,
+                },
+            }
+            .into()
+        })
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn effect_callee(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         let (effect_name, effect_name_span) = self.effect_name()?;
@@ -3817,7 +3924,9 @@ impl<'a> Parser<'a> {
                 name.strip_prefix('$')
                     .and_then(|index| index.parse::<usize>().ok())
             }
-            ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => items
+            ExprKind::LiteralArray(items)
+            | ExprKind::Tuple(items)
+            | ExprKind::MacroCall { args: items, .. } => items
                 .iter()
                 .filter_map(Self::max_positional_block_arg_in_expr)
                 .max(),

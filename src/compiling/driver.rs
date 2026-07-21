@@ -516,6 +516,9 @@ impl Driver<Parsed> {
         );
 
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
+        self.phase
+            .diagnostics
+            .extend(crate::macro_expansion::expand_macros(&mut asts));
         crate::desugar::desugar(&mut asts);
         let (asts, resolved) = resolver.resolve(asts);
         let asts = paths.into_iter().zip(asts).collect();

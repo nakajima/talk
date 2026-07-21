@@ -15,8 +15,11 @@ Driver<Initial>
   .type_check()    -> Driver<Typed>
 ```
 
-`Parsed` holds source ASTs and parser diagnostics. `NameResolved` holds the
-desugared, symbol-bearing ASTs and `ResolvedNames`. `Typed` holds one
+`Parsed` holds source ASTs and parser diagnostics. During
+`resolve_names()`, the first ADR 0026 expression-template macros expand before
+desugaring; macro declarations and invocation placeholders do not cross the
+name-resolution seam. `NameResolved` holds the desugared, symbol-bearing ASTs
+and `ResolvedNames`. `Typed` holds one
 `TypedProgram` and all parser, name-resolution, and type diagnostics accumulated
 so far. There is no ownership-flow phase, lowering phase, IR, or execution phase.
 
@@ -24,8 +27,9 @@ so far. There is no ownership-flow phase, lowering phase, IR, or execution phase
 qualified local references, queues their files, and continues until the complete
 reachable source set has been parsed.
 
-`resolve_names()` runs `src/desugar` before binding names. The resolver declares
-and resolves symbols; it does not perform type or ownership analysis.
+`resolve_names()` runs `src/macro_expansion.rs` and then `src/desugar` before
+binding names. The resolver declares and resolves symbols; it does not perform
+type or ownership analysis.
 
 `type_check()` runs the constraint generator and solver in `src/types`, then
 builds a `TypedProgram` for source files without error diagnostics. The

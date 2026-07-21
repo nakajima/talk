@@ -418,7 +418,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
     fn expr_breaks_current_loop(expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => {
+            ExprKind::LiteralArray(items)
+            | ExprKind::Tuple(items)
+            | ExprKind::MacroCall { args: items, .. } => {
                 items.iter().any(Self::expr_breaks_current_loop)
             }
             ExprKind::Unary(_, inner) | ExprKind::Propagate(inner) | ExprKind::As(inner, _) => {
@@ -544,7 +546,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
     fn expr_exits_mut_iteration(expr: &Expr, loop_depth: usize) -> bool {
         match &expr.kind {
-            ExprKind::LiteralArray(items) | ExprKind::Tuple(items) => items
+            ExprKind::LiteralArray(items)
+            | ExprKind::Tuple(items)
+            | ExprKind::MacroCall { args: items, .. } => items
                 .iter()
                 .any(|item| Self::expr_exits_mut_iteration(item, loop_depth)),
             ExprKind::Propagate(_) => true,

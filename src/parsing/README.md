@@ -70,10 +70,12 @@ statement, declaration, pattern, type annotation, ...), each defined in
 They derive visitors so passes can walk the tree without hand-written
 traversals.
 
-The AST is a surface tree. The desugaring pass in `src/desugar` mutates it
-between parsing and name resolution while preserving node identity where a
-source node still represents the same source construct and minting fresh
-ids for synthesized nodes. After type checking, the compile pipeline builds a
+The AST is a surface tree. It includes first-cut macro declarations and
+`#name(...)` expression placeholders; `src/macro_expansion.rs` removes or
+expands them before desugaring. The desugaring pass in `src/desugar` then
+mutates the tree before name resolution while preserving node identity where a
+source node still represents the same source construct and minting fresh ids
+for synthesized nodes. After type checking, the compile pipeline builds a
 `TypedProgram`; editor analysis keeps a clone of the source-faithful AST
 because the typed compiler tree deliberately strips syntax-only detail.
 

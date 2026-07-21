@@ -460,6 +460,19 @@ impl<'a> Formatter<'a> {
     fn format_expr(&self, expr: &Expr) -> Doc {
         let doc = match &expr.kind {
             ExprKind::Incomplete(_) => Doc::Empty,
+            ExprKind::MacroCall { name, args, .. } => group(
+                text(format!("#{name}("))
+                    + nest(
+                        1,
+                        softline()
+                            + join(
+                                args.iter().map(|arg| self.format_expr(arg)).collect(),
+                                text(",") + line(),
+                            ),
+                    )
+                    + softline()
+                    + text(")"),
+            ),
             ExprKind::CallEffect {
                 effect_name, args, ..
             } => {
@@ -601,6 +614,25 @@ impl<'a> Formatter<'a> {
                 }
             }
             DeclKind::Import(import) => self.format_import(import),
+            DeclKind::Macro {
+                name,
+                params,
+                template,
+                ..
+            } => {
+                text("macro ")
+                    + text(name)
+                    + text("(")
+                    + join(
+                        params
+                            .iter()
+                            .map(|param| text(format!("${}", param.name)))
+                            .collect(),
+                        text(", "),
+                    )
+                    + text(") = ")
+                    + self.format_expr(template)
+            }
             DeclKind::Struct {
                 name,
                 generics,
@@ -2486,7 +2518,10 @@ impl<'a> Formatter<'a> {
     fn expr_contains_control_flow(expr: &Expr) -> bool {
         matches!(
             &expr.kind,
-            ExprKind::Func { .. } | ExprKind::If(..) | ExprKind::Match(..)
+            ExprKind::Func { .. }
+                | ExprKind::If(..)
+                | ExprKind::Match(..)
+                | ExprKind::MacroCall { .. }
         )
     }
 
@@ -3028,6 +3063,14 @@ mod formatter_tests {
                 80
             ),
             "let maybe = Maybe.definitely(123)\n\nmatch maybe {\n\t.definitely(x) -> x\n}"
+        );
+    }
+
+    #[test]
+    fn formats_macro_rules_and_invocations() {
+        assert_eq!(
+            format_code("macro choose($yes,$no)=$yes\n#choose(1,2)", 80),
+            "macro choose($yes, $no) = $yes\n#choose(1, 2)"
         );
     }
 

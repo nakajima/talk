@@ -277,12 +277,12 @@ pub mod tests {
     #[test]
     fn lexer_error_inside_function_is_reported_without_panicking() {
         use crate::{lexer::LexerError, parser_error::ParserError};
-        let lexer = Lexer::new("func fizz(name) {\n#");
+        let lexer = Lexer::new("func fizz(name) {\n`");
         let parser = Parser::new("-", FileID(0), lexer);
         assert!(matches!(
             parser.parse(),
             Err(ParserError::Lexer {
-                error: LexerError::UnexpectedInput('#'),
+                error: LexerError::UnexpectedInput('`'),
                 ..
             })
         ));
