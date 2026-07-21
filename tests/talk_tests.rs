@@ -100,6 +100,56 @@ fn run_renders_a_scalar_script_result_in_talk_syntax() {
 }
 
 #[test]
+fn conditional_deinit_row_requires_its_context() {
+    // ADR 0036: a conditional Deinit row is evidence only where its context
+    // holds. Box<S> (S: Marker false) must NOT run the destructor; Box<M>
+    // (M: Marker) must.
+    assert_runs(
+        b"protocol Marker {}\nstruct Box<T> { let value: T }\nextend<T> Box<T>: Deinit where T: Marker {\n\tconsuming func deinit() -> Void {\n\t\tprint(\"dropped\")\n\t}\n}\nstruct S {}\nstruct M {}\nextend M: Marker {}\nfunc makeS() {\n\tlet quiet = Box(value: S())\n}\nfunc makeM() {\n\tlet loud = Box(value: M())\n}\nmakeS()\nmakeM()\nprint(\"done\")\n",
+        &[],
+        b"dropped\ndone\n",
+    );
+}
+
+#[test]
+fn disjoint_inherent_extensions_dispatch_per_application() {
+    assert_runs(
+        b"struct Box<T> { let value: T }\nextend Box<Int> { func tag() -> Int { 1 } }\nextend Box<Bool> { func tag() -> Int { 2 } }\nprint(Box(value: 0).tag())\nprint(Box(value: true).tag())\n",
+        &[],
+        b"1\n2\n",
+    );
+}
+
+#[test]
+fn trailing_block_closures_mutate_captured_locals() {
+    // Assignment conversion (celled captures) must see a trailing block as
+    // a nested frame, exactly like an explicit `func` expression.
+    assert_runs(
+        b"func run(consume fn: () -> Void) -> Void { fn() }\nfunc outer() -> Int {\n\tlet i = 0\n\trun { i = i + 1 }\n\trun { i = i + 1 }\n\ti\n}\nprint(outer())\n",
+        &[],
+        b"2\n",
+    );
+    // The motivating shape: a counting closure passed to `Int.times`.
+    assert_runs(
+        b"func outer() -> Int {\n\tlet i = 0\n\t5.times { x in i = i + 1 }\n\ti\n}\nprint(outer())\n",
+        &[],
+        b"5\n",
+    );
+}
+
+#[test]
+fn closures_with_ambient_core_effects_run_without_handlers() {
+    // A closure whose effect row mentions core's ambient effects ('alloc
+    // here, via Array operations) must not capture a capability for them:
+    // the runtime is their implicit handler and no explicit one can exist.
+    assert_runs(
+        b"func run(consume fn: () -> Int) -> Int { fn() }\nprint(run { [2, 3, 1].sort_by { $0 > $1 }[0] })\n",
+        &[],
+        b"3\n",
+    );
+}
+
+#[test]
 fn run_executes_core_operators() {
     assert_runs(b"let answer = 40 + 2\nanswer\n", &[], b"42\n");
     assert_runs(b"(1 + 2) <= 3\n", &[], b"true\n");

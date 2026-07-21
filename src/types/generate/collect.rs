@@ -266,7 +266,6 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     if let Some((protocol, _)) =
                         self.lower_protocol_ref_with_self(conformance, Some(&self_ty))
                     {
-                        self.record_marker_claim(head, protocol.protocol, decl.id);
                         self.explicit_conformances.insert((head, protocol));
                     }
                 }
@@ -290,7 +289,6 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                         if let Some((protocol, _)) =
                             self.lower_protocol_ref_with_self(conformance, Some(&self_ty))
                         {
-                            self.record_marker_claim(*head, protocol.protocol, member.id);
                             self.explicit_conformances.insert((*head, protocol));
                         }
                     }
@@ -300,9 +298,15 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         self.obligations.truncate(obligation_start);
     }
 
-    fn record_marker_claim(&mut self, head: Symbol, protocol: Symbol, node: NodeID) {
+    fn record_marker_claim(
+        &mut self,
+        head: Symbol,
+        protocol: Symbol,
+        row: crate::types::catalog::ConformanceId,
+        node: NodeID,
+    ) {
         if matches!(protocol, Symbol::Copy | Symbol::CheapClone | Symbol::Deinit) {
-            self.marker_claims.push((head, protocol, node));
+            self.marker_claims.push((head, protocol, row, node));
         }
     }
 
@@ -312,7 +316,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
     /// it), and `Copy`/`CheapClone` require every field to satisfy the
     /// marker.
     fn validate_marker_conformances(&mut self) {
-        for (head, protocol, node) in std::mem::take(&mut self.marker_claims) {
+        for (head, protocol, row_id, node) in std::mem::take(&mut self.marker_claims) {
             let declared_linear = self
                 .catalog
                 .structs
@@ -346,15 +350,14 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             if protocol == Symbol::Deinit {
                 continue;
             }
-            // The claim's own conformance row is the authority for its
+            // The claim's OWN conformance row is the authority for its
             // arguments: its where-clause context legalizes `T`-typed
             // fields, and its self-args rebind the declaration's params
             // (fields are stored under the DECLARATION's param symbols,
-            // the row's context speaks about the EXTEND's).
-            let row = self
-                .catalog
-                .conformances_for_head(head)
-                .find_map(|(_, row)| (row.protocol == ProtocolRef::bare(protocol)).then_some(row));
+            // the row's context speaks about the EXTEND's). Looked up by
+            // the claimed row's id — disjoint rows (`Box<Int>: Copy` and
+            // `Box<S>: Copy`) each validate against their own arguments.
+            let row = self.catalog.conformance(row_id);
             let context = row.map(|row| row.context.clone()).unwrap_or_default();
             let self_args = row.map(|row| row.self_args.clone()).unwrap_or_default();
             let decl_params = self
@@ -1238,6 +1241,26 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .collect::<Vec<_>>();
             Ty::Nominal(head, args)
         } else {
+            // A partially supplied argument list uses ordinary
+            // arity/default rules, so the check is explicit here: the
+            // OMITTED SUFFIX must consist entirely of defaulted parameters
+            // (a defaulted parameter before a required one buys nothing —
+            // arguments are positional).
+            let declared = nominal_params(self.catalog, head);
+            let provided = head_application.args.len();
+            let omitted_suffix_defaulted = declared
+                .get(provided..)
+                .is_some_and(|rest| rest.iter().all(|param| param.default.is_some()));
+            if !omitted_suffix_defaulted {
+                self.diagnostics.errors.push((
+                    TypeError::ArityMismatch {
+                        expected: declared.len(),
+                        found: provided,
+                    },
+                    head_application.id,
+                ));
+                return None;
+            }
             self.lower_type_application(head_application)
         };
         let Ty::Nominal(actual_head, args) = ty else {
@@ -1316,8 +1339,12 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             binders,
             where_clause.as_ref(),
             |this, decl_context| {
-                let (params, self_ty) =
-                    this.refine_extension_head(params, self_ty, &mut decl_context.predicates);
+                let (params, self_ty) = this.refine_extension_head(
+                    params,
+                    self_ty,
+                    &mut decl_context.predicates,
+                    decl.id,
+                );
                 let self_args = match &self_ty {
                     Ty::Nominal(_, args) => args.clone(),
                     _ => vec![],
@@ -1342,6 +1369,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         mut params: Vec<Symbol>,
         mut self_ty: Ty,
         predicates: &mut Vec<Predicate>,
+        node: NodeID,
     ) -> (Vec<Symbol>, Ty) {
         let mut head_params = FxHashSet::default();
         collect_ty_params(&self_ty, None, &mut head_params);
@@ -1362,6 +1390,15 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 retained.push(predicate);
                 continue;
             };
+            // Solve under the substitution so far: chains like
+            // `A == B && A == Int` compose (the second equality arrives as
+            // `B == Int`), and a genuine conflict surfaces as a ground
+            // mismatch — never a predicate-order-dependent rejection.
+            let lhs = lhs.substitute(&substitution, &Default::default(), &Default::default());
+            let rhs = rhs.substitute(&substitution, &Default::default(), &Default::default());
+            if lhs == rhs {
+                continue;
+            }
             let binding = match (&lhs, &rhs) {
                 (Ty::Param(param), other)
                     if head_params.contains(param) && !ty_mentions_param(other, *param) =>
@@ -1376,9 +1413,32 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 _ => None,
             };
             if let Some((param, ty)) = binding {
-                let ty = ty.substitute(&substitution, &Default::default(), &Default::default());
+                // Compose: earlier solutions mentioning this parameter pick
+                // up its value (pre-substitution above guarantees the
+                // parameter itself is not yet bound).
+                let update: FxHashMap<Symbol, Ty> = std::iter::once((param, ty.clone())).collect();
+                for value in substitution.values_mut() {
+                    *value = value.substitute(&update, &Default::default(), &Default::default());
+                }
                 substitution.insert(param, ty);
+                continue;
+            }
+            let mut mentioned = FxHashSet::default();
+            collect_ty_params(&lhs, None, &mut mentioned);
+            collect_ty_params(&rhs, None, &mut mentioned);
+            if mentioned.is_empty() {
+                // Both sides are ground and unequal: the equalities have no
+                // common solution.
+                self.diagnostics.errors.push((
+                    TypeError::ContradictoryHeadRefinement {
+                        first: lhs.render_mono(),
+                        second: rhs.render_mono(),
+                    },
+                    node,
+                ));
             } else {
+                // Not a solvable equation over instance-head parameters:
+                // stays an ordinary axiom premise (ADR 0036).
                 retained.push(predicate);
             }
         }
@@ -1598,6 +1658,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 continue;
             }
             let id = self.catalog.insert_conformance(conformance);
+            self.record_marker_claim(head, protocol.protocol, id, decl.id);
             registered_rows.push((protocol, id));
         }
 
@@ -1678,11 +1739,30 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 params: params.clone(),
                 self_args: self_args.clone(),
             };
-            self.catalog
+            // Disjoint instance rows may define the same label; overlapping
+            // rows are rejected — there is no priority relation (ADR 0036).
+            let rows = self
+                .catalog
                 .extend_members
                 .entry(head)
                 .or_default()
-                .insert(label.clone(), member);
+                .entry(label.clone())
+                .or_default();
+            let overlaps = rows.iter().any(|existing| {
+                crate::types::catalog::inherent_rows_overlap(&existing.self_args, &member.self_args)
+            });
+            if overlaps {
+                self.diagnostics.errors.push((
+                    TypeError::OverlappingConformance {
+                        ty: self_ty.render_mono(),
+                        protocol: format!("inherent member '{label}'"),
+                        existing: "an earlier extension's definition".into(),
+                    },
+                    decl.id,
+                ));
+            } else {
+                rows.push(member);
+            }
             self.catalog.add_owner(label, MemberOwner::Nominal(head));
         }
         self.self_types.pop();

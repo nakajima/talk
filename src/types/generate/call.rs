@@ -11,10 +11,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         node: NodeID,
         callee_ty: Ty,
         args: &[CallArg],
-        trailing_block: &Option<Block>,
         ctx: &Ctx,
     ) -> Ty {
-        self.finish_call_with_result_origin(node, node, callee_ty, args, trailing_block, ctx)
+        self.finish_call_with_result_origin(node, node, callee_ty, args, ctx)
     }
 
     fn finish_call_with_result_origin(
@@ -23,10 +22,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         result_origin: NodeID,
         callee_ty: Ty,
         args: &[CallArg],
-        trailing_block: &Option<Block>,
         ctx: &Ctx,
     ) -> Ty {
-        let arg_count = args.len() + usize::from(trailing_block.is_some());
+        let arg_count = args.len();
 
         // Calling a function value is a read: a borrowed callee (the
         // borrow-by-default type of a function-typed parameter) peels to
@@ -50,15 +48,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 for (arg, param) in args.iter().zip(&params) {
                     self.check_expr(&arg.value, param, CtReason::Apply, ctx);
                 }
-                if let Some(block) = trailing_block {
-                    let block_ty = self.infer_closure_block(block, ctx);
-                    self.emit_eq(
-                        params[args.len()].clone(),
-                        block_ty,
-                        block.id,
-                        CtReason::Apply,
-                    );
-                }
                 self.wanteds.push(Constraint::EffectSubset {
                     inferred: eff,
                     allowed: ctx.eff.clone(),
@@ -67,13 +56,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 *ret
             }
             Ty::Var(_) => {
-                let mut arg_tys: Vec<Ty> = args
+                let arg_tys: Vec<Ty> = args
                     .iter()
                     .map(|arg| self.infer_expr(&arg.value, ctx))
                     .collect();
-                if let Some(block) = trailing_block {
-                    arg_tys.push(self.infer_closure_block(block, ctx));
-                }
                 let ret = Ty::Var(self.store.fresh_ty(self.level, result_origin));
                 let callee_effects = EffectRow::open(self.store.fresh_eff(self.level, node));
                 let expected = Ty::Func(arg_tys, Box::new(ret.clone()), callee_effects.clone());
@@ -104,7 +90,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         expr: &Expr,
         callee: &Expr,
         args: &[CallArg],
-        trailing_block: &Option<Block>,
         ctx: &Ctx,
     ) -> Ty {
         let ExprKind::Member(Some(receiver), label, _) = &callee.kind else {
@@ -113,14 +98,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let receiver_ty = self.infer_expr(receiver, ctx);
         let member = Ty::Var(self.store.fresh_ty(self.level, callee.id));
         self.artifacts.node_types.insert(callee.id, member.clone());
-        let result = self.finish_call_with_result_origin(
-            expr.id,
-            callee.id,
-            member.clone(),
-            args,
-            trailing_block,
-            ctx,
-        );
+        let result =
+            self.finish_call_with_result_origin(expr.id, callee.id, member.clone(), args, ctx);
         self.wanteds.push(Constraint::HasMember {
             receiver: receiver_ty,
             label: label.clone(),
@@ -138,7 +117,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         callee: &Expr,
         type_args: &[GenericArg],
         args: &[CallArg],
-        trailing_block: &Option<Block>,
         ctx: &Ctx,
     ) -> Ty {
         let ExprKind::Constructor(name) = &callee.kind else {
@@ -155,15 +133,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             return Ty::Error;
         }
         if self.catalog.protocols.contains_key(&symbol) {
-            return self.infer_protocol_construction(
-                expr,
-                callee,
-                symbol,
-                type_args,
-                args,
-                trailing_block,
-                ctx,
-            );
+            return self.infer_protocol_construction(expr, callee, symbol, type_args, args, ctx);
         }
         let Some(info) = self.catalog.structs.get(&symbol).cloned() else {
             if self.catalog.enums.contains_key(&symbol) {
@@ -249,7 +219,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let self_ty = Ty::Nominal(symbol, head_args);
         self.emit_nominal_well_formedness(symbol, &theta, expr.id);
 
-        let arg_count = args.len() + usize::from(trailing_block.is_some());
+        let arg_count = args.len();
         let init = info
             .inits
             .iter()
@@ -303,15 +273,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 for (arg, param) in args.iter().zip(&params[1..]) {
                     self.check_expr(&arg.value, param, CtReason::Apply, ctx);
                 }
-                if let Some(block) = trailing_block {
-                    let block_ty = self.infer_closure_block(block, ctx);
-                    self.emit_eq(
-                        params[args.len() + 1].clone(),
-                        block_ty,
-                        block.id,
-                        CtReason::Apply,
-                    );
-                }
                 self.emit_eff_eq(eff, ctx.eff.clone(), expr.id);
                 self.artifacts.node_types.insert(
                     callee.id,
@@ -335,9 +296,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }
                 let mut arg_tys: Vec<Ty> = vec![self_ty.clone()];
                 arg_tys.extend(args.iter().map(|arg| self.infer_expr(&arg.value, ctx)));
-                if let Some(block) = trailing_block {
-                    arg_tys.push(self.infer_closure_block(block, ctx));
-                }
                 // Record the constructor node's function type, as the `Ty::Func` arm
                 // does, so every expression has a type.
                 self.artifacts.node_types.insert(
@@ -382,7 +340,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         symbol: Symbol,
         type_args: &[GenericArg],
         args: &[CallArg],
-        trailing_block: &Option<Block>,
         ctx: &Ctx,
     ) -> Ty {
         let Some(owner_ref) = self.fresh_protocol_ref(symbol, expr.id) else {
@@ -444,7 +401,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let Ty::Func(params, ret, eff) = self.store.shallow(&signature) else {
             return Ty::Error;
         };
-        let arg_count = args.len() + usize::from(trailing_block.is_some());
+        let arg_count = args.len();
         if params.len() != arg_count {
             self.diagnostics.errors.push((
                 TypeError::ArityMismatch {
@@ -457,15 +414,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
         for (arg, param) in args.iter().zip(&params) {
             self.check_expr(&arg.value, param, CtReason::Apply, ctx);
-        }
-        if let Some(block) = trailing_block {
-            let block_ty = self.infer_closure_block(block, ctx);
-            self.emit_eq(
-                params[args.len()].clone(),
-                block_ty,
-                block.id,
-                CtReason::Apply,
-            );
         }
         self.emit_eff_eq(eff, ctx.eff.clone(), expr.id);
         self.artifacts

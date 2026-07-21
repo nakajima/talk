@@ -279,7 +279,21 @@ fn add_nominal_member_items(
     }
 
     if let Some(members) = types.catalog.extend_members.get(&symbol) {
-        for (label, inherent) in members {
+        for (label, rows) in members {
+            // Only rows whose instance head matches the receiver's complete
+            // application are completable (ADR 0036): a member on Box<Int>
+            // is absent from Box<String>.
+            let Some(inherent) = rows.iter().find(|row| {
+                let mut probe = FxHashMap::default();
+                row.self_args
+                    .iter()
+                    .zip(args)
+                    .all(|(pattern, actual)| {
+                        crate::types::ty::match_pattern(pattern, actual, &mut probe)
+                    })
+            }) else {
+                continue;
+            };
             let mut substitution = FxHashMap::default();
             for (pattern, actual) in inherent.self_args.iter().zip(args) {
                 crate::types::solve::bind_param_pattern(pattern, actual, &mut substitution);

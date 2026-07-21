@@ -92,11 +92,16 @@ impl<'s> Solver<'s> {
             // grade (a scalar borrow is a value copy at runtime, nothing to
             // emit) or CheapClone (an O(1) buffer retain, emitted by
             // lowering at the recorded node).
-            (Ty::Nominal(symbol, _), Ty::Borrow(_, found_inner))
+            (Ty::Nominal(symbol, args), Ty::Borrow(_, found_inner))
                 if origin.reason == CtReason::Apply
-                    && self.catalog.copies_out_of_borrow(*symbol) =>
+                    && self
+                        .catalog
+                        .coerce_kind_application(*symbol, args)
+                        .is_some() =>
             {
-                if self.catalog.coerce_kind(*symbol) == Some(CoerceKind::CheapClone) {
+                if self.catalog.coerce_kind_application(*symbol, args)
+                    == Some(CoerceKind::CheapClone)
+                {
                     self.coerce_clones.insert(origin.node);
                 }
                 worklist.push(Constraint::Eq(
@@ -115,7 +120,8 @@ impl<'s> Solver<'s> {
             (Ty::Borrow(_, inner), other) | (other, Ty::Borrow(_, inner))
                 if matches!(
                     self.store.shallow(inner),
-                    Ty::Nominal(symbol, _) if self.catalog.grade_of(symbol) == Grade::Copy
+                    Ty::Nominal(symbol, args)
+                        if self.catalog.grade_of_application(symbol, &args) == Grade::Copy
                 ) =>
             {
                 worklist.push(Constraint::Eq((**inner).clone(), other.clone(), origin));
@@ -134,8 +140,8 @@ impl<'s> Solver<'s> {
                 if matches!(self.store.shallow(inner), Ty::Var(_))
                     && matches!(other, Ty::Nominal(..)) =>
             {
-                let copy = matches!(other, Ty::Nominal(symbol, _)
-                    if self.catalog.grade_of(*symbol) == Grade::Copy);
+                let copy = matches!(other, Ty::Nominal(symbol, args)
+                    if self.catalog.grade_of_application(*symbol, args) == Grade::Copy);
                 if copy {
                     worklist.push(Constraint::Eq((**inner).clone(), other.clone(), origin));
                 } else {

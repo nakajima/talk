@@ -13,7 +13,7 @@ public protocol Subtract<RHS> {
 public protocol Multiply<RHS> {
 	associated Ret
 
-	func times(rhs: RHS) -> Ret
+	func multiply(rhs: RHS) -> Ret
 }
 
 public protocol Divide<RHS> {
@@ -123,13 +123,13 @@ extend Float: Subtract<Float> {
 }
 
 extend Int: Multiply<Int> {
-	func times(rhs: Int) -> Int {
+	func multiply(rhs: Int) -> Int {
 		@_ir { %? = mul Int %0 %1 }
 	}
 }
 
 extend Float: Multiply<Float> {
-	func times(rhs: Float) -> Float {
+	func multiply(rhs: Float) -> Float {
 		@_ir { %? = mul Float %0 %1 }
 	}
 }

@@ -14,6 +14,7 @@
     "onLanguage:talktalk",
     "workspaceContains:**/*.tlk",
     "onCommand:talktalk.restartLsp",
+    "onCommand:talktalk.reinstallExtension",
     "onCommand:talktalk.setCorePath",
     "onCommand:talktalk.clearCorePath",
     "onCommand:talktalk.setStdlibPath",
@@ -25,6 +26,10 @@
       {
         "command": "talktalk.restartLsp",
         "title": "TalkTalk: Restart Language Server"
+      },
+      {
+        "command": "talktalk.reinstallExtension",
+        "title": "TalkTalk: Reinstall Extension"
       },
       {
         "command": "talktalk.setCorePath",

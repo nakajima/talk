@@ -70,6 +70,12 @@ pub enum TypeError {
         protocol: String,
         existing: String,
     },
+    /// The `where` equalities over instance-head parameters have no common
+    /// solution (ADR 0036 head refinement).
+    ContradictoryHeadRefinement {
+        first: String,
+        second: String,
+    },
     AmbiguousTypeParameter {
         param: String,
     },
@@ -254,6 +260,7 @@ impl TypeError {
             Self::AmbiguousMember { .. } => "type.ambiguous-member",
             Self::MissingWitness { .. } => "type.missing-witness",
             Self::OverlappingConformance { .. } => "type.overlapping-conformance",
+            Self::ContradictoryHeadRefinement { .. } => "type.contradictory-head-refinement",
             Self::AmbiguousTypeParameter { .. } => "type.ambiguous-type-parameter",
             Self::DuplicatePredicate { .. } => "type.duplicate-predicate",
             Self::InvalidWherePredicate => "type.invalid-where-predicate",
@@ -433,6 +440,12 @@ impl Display for TypeError {
                 write!(
                     f,
                     "Overlapping conformance for {ty}: {protocol} overlaps existing {existing}"
+                )
+            }
+            TypeError::ContradictoryHeadRefinement { first, second } => {
+                write!(
+                    f,
+                    "Contradictory head refinement: {first} and {second} cannot be equal"
                 )
             }
             TypeError::AmbiguousTypeParameter { param } => {

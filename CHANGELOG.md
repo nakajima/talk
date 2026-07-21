@@ -163,6 +163,12 @@ outside `tests/`, while pathless package test discovery still defaults there.
 `talk setup nvim` installs the adapter alongside the existing filetype, syntax,
 indent, and ftplugin files.
 
+The VS Code extension now discovers `*.test.tlk` files in the native Test
+Explorer. Files and individual tests run through `talk test --json`, with
+captured output and assertion failures attached to their test results. A new
+`TalkTalk: Reinstall Extension` command runs the repository's existing reinstall
+script against the extension in `dev/editors/vscode`.
+
 ## Unreleased (2026-07-09) — Packages and `talk new`
 
 Talk now supports directory-based source packages declared by `package.tlk`.

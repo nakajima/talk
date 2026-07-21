@@ -8,6 +8,9 @@ resolver itself only declares and binds names.
 
 The transforms run in this order:
 
+- `lower_trailing_blocks` — a call's trailing block becomes an ordinary
+  anonymous-function argument (`foo { x in .. }` becomes
+  `foo(func(x) { .. })`), so every later phase sees one closure form.
 - `lower_funcs_to_lets` — a top-level `func f(...) { ... }` becomes
   `let f = func f(...) { ... }`, so later stages have one kind of
   top-level value binding.

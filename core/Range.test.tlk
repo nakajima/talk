@@ -47,3 +47,24 @@ test "can iterate over int range" {
 	}
 	assert(i == 5)
 }
+
+test "int.times" {
+	let results = 5.times { x in x * 2 }
+	assert(results.count == 5)
+	assert(results[4] == 8)
+}
+
+test "int.times closures mutate captured values" {
+	let i = 0
+	5.times { x in i = i + 1 }
+	assert(i == 5)
+}
+
+test "closed range ending at Int max terminates" {
+	let max = 9223372036854775807
+	let i = 0
+	for _ in (max - 2)..max {
+		i = i + 1
+	}
+	assert(i == 3)
+}

@@ -8,8 +8,10 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const fs_1 = require("fs");
 const os_1 = require("os");
+const path_1 = require("path");
 const vscode_1 = require("vscode");
 const node_1 = require("vscode-languageclient/node");
+const testing_1 = require("./testing");
 let client;
 let restartPromise;
 function expandHome(path) {
@@ -58,20 +60,70 @@ function configuredStdlibPath() {
     }
     return undefined;
 }
-function serverOptions() {
+function repositoryRootFrom(startPath) {
+    let current = startPath;
+    while (true) {
+        if ((0, fs_1.existsSync)((0, path_1.join)(current, "scripts/reinstall-vscode-extension.sh")) &&
+            (0, fs_1.existsSync)((0, path_1.join)(current, "dev/editors/vscode/package.json"))) {
+            return current;
+        }
+        const parent = (0, path_1.dirname)(current);
+        if (parent === current) {
+            return undefined;
+        }
+        current = parent;
+    }
+}
+function configuredRepositoryRoot() {
+    const candidates = [
+        ...(vscode_1.workspace.workspaceFolders ?? [])
+            .filter((folder) => folder.uri.scheme === "file")
+            .map((folder) => folder.uri.fsPath),
+        configuredBinaryPath(),
+        process.cwd(),
+        (0, path_1.join)((0, os_1.homedir)(), "apps/talk"),
+    ];
+    for (const candidate of candidates) {
+        const root = repositoryRootFrom(candidate);
+        if (root) {
+            return root;
+        }
+    }
+    return undefined;
+}
+function reinstallExtension() {
+    const repositoryRoot = configuredRepositoryRoot();
+    if (!repositoryRoot) {
+        vscode_1.window.showErrorMessage("Could not locate the Talk repository. Open the repository or set talktalk.binaryPath to its target/debug/talk binary.");
+        return;
+    }
+    const terminal = vscode_1.window.createTerminal({
+        name: "TalkTalk Reinstall",
+        cwd: repositoryRoot,
+        shellPath: (0, path_1.join)(repositoryRoot, "scripts/reinstall-vscode-extension.sh"),
+    });
+    terminal.show();
+}
+function configuredEnvironment() {
     const corePath = configuredCorePath();
     const stdlibPath = configuredStdlibPath();
-    const env = {
+    return {
         ...process.env,
-        RUST_LOG: process.env.RUST_LOG ?? "debug",
         ...(corePath ? { TALK_CORE_PATH: corePath } : {}),
         ...(stdlibPath ? { TALK_STDLIB_PATH: stdlibPath } : {}),
     };
+}
+function serverOptions() {
     return {
         command: configuredBinaryPath(),
         transport: node_1.TransportKind.stdio,
         args: ["lsp"],
-        options: { env },
+        options: {
+            env: {
+                ...configuredEnvironment(),
+                RUST_LOG: process.env.RUST_LOG ?? "debug",
+            },
+        },
     };
 }
 async function restartLanguageServer() {
@@ -163,6 +215,10 @@ function activate(context) {
         },
     };
     createClient = () => new node_1.LanguageClient("TalkTalk", "TalkTalk Language Server", serverOptions(), clientOptions);
+    (0, testing_1.registerTalkTestController)(context, {
+        binaryPath: configuredBinaryPath,
+        environment: configuredEnvironment,
+    });
     context.subscriptions.push(vscode_1.commands.registerCommand("talktalk.restartLsp", async () => {
         restartPromise ??= restartLanguageServer()
             .then(() => {
@@ -172,7 +228,7 @@ function activate(context) {
             restartPromise = undefined;
         });
         return restartPromise;
-    }), vscode_1.commands.registerCommand("talktalk.setCorePath", setCorePath), vscode_1.commands.registerCommand("talktalk.clearCorePath", clearCorePath), vscode_1.commands.registerCommand("talktalk.setStdlibPath", setStdlibPath), vscode_1.commands.registerCommand("talktalk.clearStdlibPath", clearStdlibPath));
+    }), vscode_1.commands.registerCommand("talktalk.reinstallExtension", reinstallExtension), vscode_1.commands.registerCommand("talktalk.setCorePath", setCorePath), vscode_1.commands.registerCommand("talktalk.clearCorePath", clearCorePath), vscode_1.commands.registerCommand("talktalk.setStdlibPath", setStdlibPath), vscode_1.commands.registerCommand("talktalk.clearStdlibPath", clearStdlibPath));
     // Create the language client and start the client.
     client = createClient();
     // Start the client. This will also launch the server

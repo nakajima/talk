@@ -10,6 +10,7 @@ pub mod lower_funcs_to_lets;
 pub mod lower_if_to_match;
 pub mod lower_operators;
 pub mod lower_subscripts;
+pub mod lower_trailing_blocks;
 pub mod prepend_self_to_methods;
 pub mod resolve_param_modes;
 
@@ -18,13 +19,17 @@ use lower_funcs_to_lets::LowerFuncsToLets;
 use lower_if_to_match::LowerIfToMatch;
 use lower_operators::LowerOperators;
 use lower_subscripts::LowerSubscripts;
+use lower_trailing_blocks::LowerTrailingBlocks;
 use prepend_self_to_methods::PrependSelfToMethods;
 use resolve_param_modes::ResolveParamModes;
 
 /// Run every syntactic transform over each parsed file, in place.
 pub fn desugar(asts: &mut [AST<Parsed>]) {
     for ast in asts.iter_mut() {
-        // First, so user-written parameters get their default modes before
+        // First: a trailing block becomes an ordinary anonymous-function
+        // argument, so every later pass (and phase) sees one closure form.
+        LowerTrailingBlocks::run(ast);
+        // Next, so user-written parameters get their default modes before
         // any pass synthesizes parameters of its own (synthesized params
         // keep `mode: None` = lowered as written).
         ResolveParamModes::run(ast);

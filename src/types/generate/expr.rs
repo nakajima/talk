@@ -1016,22 +1016,18 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.infer_match_expr(expr.id, scrutinee, arms, ctx)
             }
 
+            // Trailing blocks desugared to ordinary anonymous-function
+            // arguments before name resolution; the surface field is
+            // always empty here.
             ExprKind::Call {
                 callee,
                 type_args,
                 args,
-                trailing_block,
                 desugared_operator,
+                ..
             } => {
                 if let ExprKind::Constructor(_) = &callee.kind {
-                    return self.infer_construction(
-                        expr,
-                        callee,
-                        type_args,
-                        args,
-                        trailing_block,
-                        ctx,
-                    );
+                    return self.infer_construction(expr, callee, type_args, args, ctx);
                 }
                 if let ExprKind::Member(Some(receiver), label, _) = &callee.kind
                     && let ExprKind::Constructor(name) = &receiver.kind
@@ -1056,7 +1052,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     if !type_args.is_empty() {
                         self.unsupported(expr.id, "type arguments on method calls");
                     }
-                    return self.infer_member_call(expr, callee, args, trailing_block, ctx);
+                    return self.infer_member_call(expr, callee, args, ctx);
                 }
                 // A leading-dot construction whose enum is not yet known:
                 // infer the payload, hand the resolution to the solver. The
@@ -1064,7 +1060,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 // function type on discharge.
                 if let ExprKind::Member(None, label, _) = &callee.kind
                     && type_args.is_empty()
-                    && trailing_block.is_none()
                 {
                     let payload: Vec<(Label, Ty)> = args
                         .iter()
@@ -1093,7 +1088,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 if !type_args.is_empty() {
                     self.apply_type_args(callee.id, type_args);
                 }
-                self.finish_call(expr.id, callee_ty, args, trailing_block, ctx)
+                self.finish_call(expr.id, callee_ty, args, ctx)
             }
 
             ExprKind::Func(func) => self.infer_func(func, ctx),

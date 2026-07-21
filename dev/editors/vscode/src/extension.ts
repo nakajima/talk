@@ -5,6 +5,7 @@
 
 import { existsSync } from "fs";
 import { homedir } from "os";
+import { dirname, join } from "path";
 import {
   commands,
   ConfigurationTarget,
@@ -20,6 +21,8 @@ import {
   ServerOptions,
   TransportKind,
 } from "vscode-languageclient/node";
+
+import { registerTalkTestController } from "./testing";
 
 let client: LanguageClient;
 let restartPromise: Promise<void> | undefined;
@@ -83,21 +86,83 @@ function configuredStdlibPath(): string | undefined {
   return undefined;
 }
 
-function serverOptions(): ServerOptions {
+function repositoryRootFrom(startPath: string): string | undefined {
+  let current = startPath;
+  while (true) {
+    if (
+      existsSync(join(current, "scripts/reinstall-vscode-extension.sh")) &&
+      existsSync(join(current, "dev/editors/vscode/package.json"))
+    ) {
+      return current;
+    }
+
+    const parent = dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    current = parent;
+  }
+}
+
+function configuredRepositoryRoot(): string | undefined {
+  const candidates = [
+    ...(workspace.workspaceFolders ?? [])
+      .filter((folder) => folder.uri.scheme === "file")
+      .map((folder) => folder.uri.fsPath),
+    configuredBinaryPath(),
+    process.cwd(),
+    join(homedir(), "apps/talk"),
+  ];
+
+  for (const candidate of candidates) {
+    const root = repositoryRootFrom(candidate);
+    if (root) {
+      return root;
+    }
+  }
+
+  return undefined;
+}
+
+function reinstallExtension() {
+  const repositoryRoot = configuredRepositoryRoot();
+  if (!repositoryRoot) {
+    window.showErrorMessage(
+      "Could not locate the Talk repository. Open the repository or set talktalk.binaryPath to its target/debug/talk binary."
+    );
+    return;
+  }
+
+  const terminal = window.createTerminal({
+    name: "TalkTalk Reinstall",
+    cwd: repositoryRoot,
+    shellPath: join(repositoryRoot, "scripts/reinstall-vscode-extension.sh"),
+  });
+  terminal.show();
+}
+
+function configuredEnvironment(): NodeJS.ProcessEnv {
   const corePath = configuredCorePath();
   const stdlibPath = configuredStdlibPath();
-  const env = {
+
+  return {
     ...process.env,
-    RUST_LOG: process.env.RUST_LOG ?? "debug",
     ...(corePath ? { TALK_CORE_PATH: corePath } : {}),
     ...(stdlibPath ? { TALK_STDLIB_PATH: stdlibPath } : {}),
   };
+}
 
+function serverOptions(): ServerOptions {
   return {
     command: configuredBinaryPath(),
     transport: TransportKind.stdio,
     args: ["lsp"],
-    options: { env },
+    options: {
+      env: {
+        ...configuredEnvironment(),
+        RUST_LOG: process.env.RUST_LOG ?? "debug",
+      },
+    },
   };
 }
 
@@ -224,6 +289,11 @@ export function activate(context: ExtensionContext) {
       clientOptions
     );
 
+  registerTalkTestController(context, {
+    binaryPath: configuredBinaryPath,
+    environment: configuredEnvironment,
+  });
+
   context.subscriptions.push(
     commands.registerCommand("talktalk.restartLsp", async () => {
       restartPromise ??= restartLanguageServer()
@@ -236,6 +306,7 @@ export function activate(context: ExtensionContext) {
 
       return restartPromise;
     }),
+    commands.registerCommand("talktalk.reinstallExtension", reinstallExtension),
     commands.registerCommand("talktalk.setCorePath", setCorePath),
     commands.registerCommand("talktalk.clearCorePath", clearCorePath),
     commands.registerCommand("talktalk.setStdlibPath", setStdlibPath),

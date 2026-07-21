@@ -311,8 +311,10 @@ pub struct TypeCatalog {
     /// kind questions from `SchemeParam::kind` directly.
     #[serde(default)]
     pub static_params: FxHashMap<Symbol, Ty>,
-    /// Inherent extend members by type head.
-    pub extend_members: FxHashMap<Symbol, IndexMap<String, InherentMember>>,
+    /// Inherent extend members by type head. Each label holds every
+    /// registered instance row (ADR 0036): disjoint heads may define the
+    /// same label; overlapping heads are rejected at collection.
+    pub extend_members: FxHashMap<Symbol, IndexMap<String, Vec<InherentMember>>>,
     /// Effect operation signatures.
     pub effects: FxHashMap<Symbol, EffectSig>,
     /// Transparent type aliases exported through the catalog for imports.
@@ -424,7 +426,7 @@ impl TypeCatalog {
         // Inherent members carry no signature (it's a scheme); only
         // the instance-head pattern is catalog-embedded.
         for members in self.extend_members.values_mut() {
-            for member in members.values_mut() {
+            for member in members.values_mut().flatten() {
                 let owner = member.symbol;
                 for ty in member.self_args.iter_mut() {
                     f(owner, EmbeddedTypes::Ty(ty));
@@ -489,7 +491,26 @@ impl TypeCatalog {
         if self.payload_free_enum(symbol) {
             return Grade::Copy;
         }
-        if self.has_bare_conformance(symbol, Symbol::Copy) {
+        // Head-only grading is a family fact: a specialized or conditional
+        // Copy row (ADR 0036) is evidence only for matching applications and
+        // must not grade the whole nominal. Callers holding a complete
+        // application use `grade_of_application`.
+        if self.family_unconditionally_conforms(symbol, Symbol::Copy) {
+            return Grade::Copy;
+        }
+        Grade::Affine
+    }
+
+    /// [`Self::grade_of`] for a complete application: specialized and
+    /// conditional Copy rows apply exactly where they match and their
+    /// context holds.
+    pub fn grade_of_application(&self, symbol: Symbol, args: &[Ty]) -> Grade {
+        let head_grade = self.grade_of(symbol);
+        if head_grade != Grade::Affine {
+            return head_grade;
+        }
+        let ty = Ty::Nominal(symbol, args.to_vec());
+        if self.ty_satisfies_marker(&ty, Symbol::Copy, &[]) {
             return Grade::Copy;
         }
         Grade::Affine
@@ -529,13 +550,17 @@ impl TypeCatalog {
         self.is_scalar(symbol) || (!self.is_linear_decl(symbol) && self.payload_free_enum(symbol))
     }
 
-    /// The copy-out-of-borrow judgment: an owned slot accepts a borrowed
-    /// value of this head because extraction is free — Copy grade (a
-    /// scalar borrow is a value copy at runtime) or CheapClone (an O(1)
-    /// buffer retain, emitted by lowering at the coercion node). The one
-    /// rule unify's coercion and generation's Apply-preservation share.
+    /// The copy-out-of-borrow POSSIBILITY judgment: whether any application
+    /// of this head could accept a borrowed value in an owned slot (Copy
+    /// grade, or any declared Copy/CheapClone row — conditional and
+    /// specialized rows included). Deliberately an over-approximation: it
+    /// only preserves the `Apply` reason while types are still resolving;
+    /// the actual coercion is proven per application
+    /// ([`Self::coerce_kind_application`]) in the solver.
     pub fn copies_out_of_borrow(&self, symbol: Symbol) -> bool {
-        self.coerce_kind(symbol).is_some()
+        self.grade_of(symbol) == Grade::Copy
+            || self.has_bare_conformance(symbol, Symbol::Copy)
+            || self.has_bare_conformance(symbol, Symbol::CheapClone)
     }
 
     /// The tier-2 classification behind [`Self::copies_out_of_borrow`]:
@@ -547,7 +572,20 @@ impl TypeCatalog {
         if self.grade_of(symbol) == Grade::Copy {
             return Some(CoerceKind::Copy);
         }
-        if self.has_bare_conformance(symbol, Symbol::CheapClone) {
+        // Same family rule as `grade_of`: specialized/conditional CheapClone
+        // rows never speak for the whole nominal at head level.
+        if self.family_unconditionally_conforms(symbol, Symbol::CheapClone) {
+            return Some(CoerceKind::CheapClone);
+        }
+        None
+    }
+
+    /// [`Self::coerce_kind`] for a complete application.
+    pub fn coerce_kind_application(&self, symbol: Symbol, args: &[Ty]) -> Option<CoerceKind> {
+        if self.grade_of_application(symbol, args) == Grade::Copy {
+            return Some(CoerceKind::Copy);
+        }
+        if self.cheap_clone_rows(symbol, args) {
             return Some(CoerceKind::CheapClone);
         }
         None
@@ -685,7 +723,11 @@ impl TypeCatalog {
             Ty::Borrow(perm, inner) => {
                 let inner = self.canonical_conformance_arg(*inner);
                 match &inner {
-                    Ty::Nominal(symbol, _) if self.grade_of(*symbol) == Grade::Copy => inner,
+                    Ty::Nominal(symbol, args)
+                        if self.grade_of_application(*symbol, args) == Grade::Copy =>
+                    {
+                        inner
+                    }
                     _ => Ty::Borrow(perm, Box::new(inner)),
                 }
             }
@@ -965,14 +1007,20 @@ impl TypeCatalog {
                         imp(head, target),
                         members
                             .into_iter()
-                            .map(|(l, m)| {
+                            .map(|(l, rows)| {
                                 (
                                     l,
-                                    InherentMember {
-                                        symbol: imp(m.symbol, target),
-                                        params: m.params.iter().map(|s| imp(*s, target)).collect(),
-                                        self_args: m.self_args.iter().map(&imp_ty).collect(),
-                                    },
+                                    rows.into_iter()
+                                        .map(|m| InherentMember {
+                                            symbol: imp(m.symbol, target),
+                                            params: m
+                                                .params
+                                                .iter()
+                                                .map(|s| imp(*s, target))
+                                                .collect(),
+                                            self_args: m.self_args.iter().map(&imp_ty).collect(),
+                                        })
+                                        .collect(),
                                 )
                             })
                             .collect(),
@@ -1042,7 +1090,20 @@ impl TypeCatalog {
         self.param_bounds.extend(other.param_bounds);
         self.static_params.extend(other.static_params);
         for (head, members) in other.extend_members {
-            self.extend_members.entry(head).or_default().extend(members);
+            let ours = self.extend_members.entry(head).or_default();
+            for (label, rows) in members {
+                let target = ours.entry(label).or_default();
+                for row in rows {
+                    // The same declaration reaches a consumer through
+                    // several import paths (core re-exported by every
+                    // module); one row per member symbol. DISTINCT
+                    // declarations from sibling modules stay separate and
+                    // surface as use-site ambiguity when they overlap.
+                    if !target.iter().any(|existing| existing.symbol == row.symbol) {
+                        target.push(row);
+                    }
+                }
+            }
         }
         self.effects.extend(other.effects);
         self.type_aliases.extend(other.type_aliases);
@@ -1242,6 +1303,78 @@ impl TypeCatalog {
         forward_matches && reverse_matches
     }
 
+    /// [`Self::matching_conformances`] restricted to rows whose substituted
+    /// context is PROVEN for this application. This is the query for callers
+    /// with no typing-time proof in hand (backend marker, ownership, and
+    /// `Deinit` selection): a conditional row is evidence only where its
+    /// context holds.
+    pub fn satisfied_conformances<'a>(
+        &'a self,
+        head: Symbol,
+        self_args: &[Ty],
+        target: &ProtocolRef,
+    ) -> Vec<ConformanceMatch<'a>> {
+        self.matching_conformances(head, self_args, target)
+            .into_iter()
+            .filter(|matched| self.row_context_holds(matched, 0))
+            .collect()
+    }
+
+    fn row_context_holds(&self, matched: &ConformanceMatch, depth: usize) -> bool {
+        matched.conformance.context.iter().all(|predicate| {
+            let predicate = predicate.substitute(
+                &matched.substitution,
+                &FxHashMap::default(),
+                &FxHashMap::default(),
+            );
+            self.predicate_holds(&predicate, depth)
+        })
+    }
+
+    /// Whether a fully substituted predicate provably holds. Conservative:
+    /// unprovable forms are false, so a conditional row is simply not
+    /// selected. The depth guard breaks pathological row cycles.
+    fn predicate_holds(&self, predicate: &Predicate, depth: usize) -> bool {
+        if depth > 64 {
+            return false;
+        }
+        match predicate {
+            Predicate::Conforms { ty, protocol } => self.ty_conforms_at(ty, protocol, depth + 1),
+            Predicate::TypeEq(left, right) => left == right,
+            _ => false,
+        }
+    }
+
+    /// Whether a concrete (or bounds-carrying rigid) type provably conforms.
+    pub fn ty_conforms(&self, ty: &Ty, target: &ProtocolRef) -> bool {
+        self.ty_conforms_at(ty, target, 0)
+    }
+
+    fn ty_conforms_at(&self, ty: &Ty, target: &ProtocolRef, depth: usize) -> bool {
+        if depth > 64 {
+            return false;
+        }
+        match ty {
+            Ty::Borrow(_, inner) => self.ty_conforms_at(inner, target, depth),
+            Ty::Nominal(head, args) => {
+                if target.args.is_empty()
+                    && target.protocol == Symbol::Copy
+                    && self.intrinsic_copy(*head)
+                {
+                    return true;
+                }
+                self.matching_conformances(*head, args, target)
+                    .into_iter()
+                    .any(|matched| self.row_context_holds(&matched, depth))
+            }
+            Ty::Param(param) => self
+                .param_bounds
+                .get(param)
+                .is_some_and(|bounds| self.bounds_satisfy(bounds, target)),
+            _ => false,
+        }
+    }
+
     pub fn matching_conformances<'a>(
         &'a self,
         head: Symbol,
@@ -1437,6 +1570,26 @@ impl TypeCatalog {
 /// Every self arg of a conformance row is a distinct rigid pattern
 /// variable (`extend Array<Element>`): the row matches ANY application of
 /// its head, so a match needs no per-application pattern binding.
+/// Two inherent instance rows overlap when some fully instantiated
+/// application matches both self patterns — the same bidirectional rule
+/// conformance rows use.
+pub fn inherent_rows_overlap(left: &[Ty], right: &[Ty]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut forward = FxHashMap::default();
+    let forward_matches = left
+        .iter()
+        .zip(right)
+        .all(|(left, right)| match_pattern(left, right, &mut forward));
+    let mut reverse = FxHashMap::default();
+    let reverse_matches = left
+        .iter()
+        .zip(right)
+        .all(|(left, right)| match_pattern(right, left, &mut reverse));
+    forward_matches && reverse_matches
+}
+
 fn unconditional_self_pattern(row: &Conformance) -> bool {
     let mut seen = FxHashSet::default();
     row.self_args.iter().all(

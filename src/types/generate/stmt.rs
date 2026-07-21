@@ -138,7 +138,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     .node_types
                     .insert(iter_callee_id, iter_member.clone());
                 let iterator_ty =
-                    self.finish_call(iter_call_id, iter_member.clone(), &[], &None, ctx);
+                    self.finish_call(iter_call_id, iter_member.clone(), &[], ctx);
                 self.artifacts
                     .node_types
                     .insert(iter_call_id, iterator_ty.clone());
@@ -157,7 +157,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     .node_types
                     .insert(next_callee_id, next_member.clone());
                 let next_result_ty =
-                    self.finish_call(next_call_id, next_member.clone(), &[], &None, ctx);
+                    self.finish_call(next_call_id, next_member.clone(), &[], ctx);
                 self.artifacts
                     .node_types
                     .insert(next_call_id, next_result_ty.clone());
@@ -218,7 +218,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                             mut_store_call_id,
                             store_member.clone(),
                             std::slice::from_ref(&arg),
-                            &None,
                             ctx,
                         );
                         self.artifacts

@@ -34,15 +34,42 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const assert = __importStar(require("assert"));
-// You can import and use all API from the 'vscode' module
-// as well as import your extension to test it
-const vscode = __importStar(require("vscode"));
-// import * as myExtension from '../../extension';
-suite('Extension Test Suite', () => {
-    vscode.window.showInformationMessage('Start all tests.');
-    test('Sample test', () => {
-        assert.strictEqual(-1, [1, 2, 3].indexOf(5));
-        assert.strictEqual(-1, [1, 2, 3].indexOf(0));
+const testing_1 = require("../testing");
+suite("TalkTalk test discovery", () => {
+    test("discovers both test declaration forms", () => {
+        const discovered = (0, testing_1.discoverTalkTests)(`
+ test "first" {
+  assert(true)
+ }
+
+test( "second" ) {
+  assert(true)
+}
+`);
+        assert.deepStrictEqual(discovered.map((item) => item.name), ["first", "second"]);
+        assert.strictEqual(discovered[0].range.start.line, 1);
+        assert.strictEqual(discovered[0].range.end.line, 3);
+        assert.strictEqual(discovered[1].range.start.line, 5);
+        assert.strictEqual(discovered[1].range.end.line, 7);
+    });
+    test("ignores comments and identifiers beginning with test", () => {
+        const discovered = (0, testing_1.discoverTalkTests)(`
+// test "commented out" {}
+testing "not a test" {}
+contest "also not a test" {}
+`);
+        assert.deepStrictEqual(discovered, []);
+    });
+    test("unescapes test names and tracks nested braces", () => {
+        const discovered = (0, testing_1.discoverTalkTests)(`test "quotes: \\" and unicode: \\u{1f642}" {
+  let value = "}"
+  if true {
+    assert(value == "}") // }
+  }
+}`);
+        assert.strictEqual(discovered.length, 1);
+        assert.strictEqual(discovered[0].name, 'quotes: " and unicode: 🙂');
+        assert.strictEqual(discovered[0].range.end.line, 5);
     });
 });
 //# sourceMappingURL=extension.test.js.map

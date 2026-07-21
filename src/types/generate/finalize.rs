@@ -79,7 +79,7 @@ impl<'a> TypecheckSession<'a> {
             return payload;
         };
         let coerces = match &*inner {
-            Ty::Nominal(symbol, _) => match self.catalog.coerce_kind(*symbol) {
+            Ty::Nominal(symbol, args) => match self.catalog.coerce_kind_application(*symbol, args) {
                 Some(kind) => {
                     if kind == crate::types::catalog::CoerceKind::CheapClone {
                         self.artifacts.coerce_clones.insert(node);
@@ -452,8 +452,8 @@ impl TyFold for Normalizer<'_> {
             // unification (`&Int` vs `&mut Int`) is untouched.
             Ty::Borrow(perm, inner)
                 if matches!(self.store.shallow_perm(*perm), Perm::Shared)
-                    && matches!(&**inner, Ty::Nominal(symbol, _)
-                        if self.catalog.grade_of(*symbol)
+                    && matches!(&**inner, Ty::Nominal(symbol, args)
+                        if self.catalog.grade_of_application(*symbol, args)
                             == crate::types::catalog::Grade::Copy) =>
             {
                 (**inner).clone()

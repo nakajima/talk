@@ -283,7 +283,6 @@ impl TypedTreeBuilder<'_> {
                         callee: self.boxed(callee),
                         type_args: type_args.clone(),
                         args: args.iter().map(|a| self.call_arg(a)).collect(),
-                        trailing_block: trailing_block.as_ref().map(|b| self.block(b)),
                     }
                 }
             }
@@ -816,7 +815,6 @@ impl TypedTreeBuilder<'_> {
                 callee: Box::new(callee),
                 type_args: vec![],
                 args,
-                trailing_block: None,
             },
             span,
             ownership: Default::default(),

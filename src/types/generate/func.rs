@@ -194,50 +194,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         Ty::Func(params, Box::new(ret), expected_eff.clone())
     }
 
-    /// A trailing block treated as a closure: its labeled args are its
-    /// parameters, its own return type and effect row.
-    pub(super) fn infer_closure_block(&mut self, block: &Block, ctx: &Ctx) -> Ty {
-        let params: Vec<Ty> = block
-            .args
-            .iter()
-            .map(|param| {
-                let ty = match &param.type_annotation {
-                    Some(annotation) => {
-                        let ty = self.lower_annotation(annotation);
-                        elaborate::apply_param_mode(self.catalog, param, ty, self.diagnostics)
-                    }
-                    // Deliberately NOT wrapped per the stamped Borrow mode
-                    // (unlike `infer_callable`): an inference-position
-                    // trailing block's binder types flow in from the
-                    // callee's function type when it resolves — and a call
-                    // THROUGH a still-unresolved function value constructs
-                    // its param types from the argument types, where a
-                    // pre-wrapped binder would demand a borrow at a
-                    // nested (invariant) boundary and reject owned
-                    // arguments the annotated twin accepts. Trailing-block
-                    // binders stay delayed-inference territory (plan
-                    // 3.3(b) staged scope).
-                    None => Ty::Var(self.store.fresh_ty(self.level, param.id)),
-                };
-                self.bind_param(param, &ty);
-                ty
-            })
-            .collect();
-
-        let ret = Ty::Var(self.store.fresh_ty(self.level, block.id));
-        let eff = EffectRow::open(self.store.fresh_eff(self.level, block.id));
-
-        // A trailing block can resume an enclosing handler, so (unlike a
-        // function literal) it keeps the handler context.
-        let inner = ctx.with_ret_eff(ret.clone(), eff.clone());
-        let body_ty = self.infer_block_value(block, &inner);
-
-        if !body_ty.is_never() {
-            self.emit_eq(ret.clone(), body_ty, block.id, CtReason::Body);
-        }
-
-        Ty::Func(params, Box::new(ret), eff)
-    }
 
     // ----- Blocks, statements, declarations -----------------------------
 

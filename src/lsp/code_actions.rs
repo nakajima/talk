@@ -505,17 +505,16 @@ fn arity_mismatch_quick_fixes(
     };
 
     match &expression.kind {
-        ExprKind::Call {
-            callee,
-            args,
-            trailing_block,
-            ..
-        } if found == args.len() + usize::from(trailing_block.is_some()) => {
+        ExprKind::Call { callee, args, .. } if found == args.len() => {
+            // The desugar folded any trailing block into the argument list
+            // as an anonymous func; source edits split it back out by its
+            // synthesized name so paren-relative positions stay right.
+            let (args, trailing_span) = split_desugared_trailing(args);
             let content_start = args
                 .first()
                 .map(argument_source_start)
                 .into_iter()
-                .chain(trailing_block.iter().map(|block| block.span.start as usize))
+                .chain(trailing_span.iter().map(|span| span.start as usize))
                 .min()
                 .unwrap_or(expression.span.end as usize);
             let parentheses = call_parentheses(
@@ -529,7 +528,7 @@ fn arity_mismatch_quick_fixes(
                     site,
                     callee,
                     args,
-                    trailing_block.as_ref(),
+                    trailing_span,
                     expected,
                     found,
                 );
@@ -540,19 +539,12 @@ fn arity_mismatch_quick_fixes(
                     &expression,
                     callee,
                     args,
-                    trailing_block.as_ref(),
+                    trailing_span,
                     close,
                     expected - found,
                 )
             } else {
-                remove_excess_arguments(
-                    site,
-                    args,
-                    trailing_block.as_ref(),
-                    close,
-                    expected,
-                    found - expected,
-                )
+                remove_excess_arguments(site, args, trailing_span, close, expected, found - expected)
             }
         }
         ExprKind::CallEffect {
@@ -587,7 +579,7 @@ fn omitted_call_arity_quick_fixes(
     site: &DiagnosticActionSite<'_>,
     callee: &crate::node_kinds::expr::Expr,
     arguments: &[crate::node_kinds::call_arg::CallArg],
-    trailing_block: Option<&crate::node_kinds::block::Block>,
+    trailing_span: Option<crate::span::Span>,
     expected: usize,
     found: usize,
 ) -> Vec<CodeActionOrCommand> {
@@ -636,9 +628,9 @@ fn omitted_call_arity_quick_fixes(
             return vec![];
         };
         let mut edits = vec![TextEdit::new(call_range, "()".to_string())];
-        if let Some(block) = trailing_block {
+        if let Some(span) = trailing_span {
             let Some((block_start, block_end)) =
-                block_source_range(site.text, block, site.text.len())
+                block_source_range(site.text, span, site.text.len())
             else {
                 return vec![];
             };
@@ -670,7 +662,7 @@ fn omitted_call_arity_quick_fixes(
         )];
     }
 
-    remove_excess_arguments(site, arguments, trailing_block, 0, expected, excess)
+    remove_excess_arguments(site, arguments, trailing_span, 0, expected, excess)
 }
 
 fn call_parentheses(
@@ -699,6 +691,24 @@ fn call_parentheses(
     }
 }
 
+/// Split a desugared trailing closure (an anonymous `#fn_trailing_*`
+/// argument the desugar appended) back off the argument list, returning the
+/// parenthesized arguments and the closure's source span.
+fn split_desugared_trailing(
+    args: &[crate::node_kinds::call_arg::CallArg],
+) -> (
+    &[crate::node_kinds::call_arg::CallArg],
+    Option<crate::span::Span>,
+) {
+    if let Some((last, rest)) = args.split_last()
+        && let crate::node_kinds::expr::ExprKind::Func(func) = &last.value.kind
+        && func.name.name_str().starts_with("#fn_trailing_")
+    {
+        return (rest, Some(last.value.span));
+    }
+    (args, None)
+}
+
 fn argument_source_start(argument: &crate::node_kinds::call_arg::CallArg) -> usize {
     match &argument.label {
         crate::label::Label::Named(_) => argument.label_span.start as usize,
@@ -717,11 +727,11 @@ fn add_missing_arguments(
     expression: &crate::node_kinds::expr::Expr,
     callee: &crate::node_kinds::expr::Expr,
     arguments: &[crate::node_kinds::call_arg::CallArg],
-    trailing_block: Option<&crate::node_kinds::block::Block>,
+    trailing_span: Option<crate::span::Span>,
     close: usize,
     missing: usize,
 ) -> Vec<CodeActionOrCommand> {
-    let parenthesized_block = trailing_block.filter(|block| block.span.end as usize <= close);
+    let parenthesized_block = trailing_span.filter(|span| span.end as usize <= close);
     let labels = call_argument_labels(site.workspace, expression, callee);
     let first_missing = arguments.len();
     let placeholders: Vec<String> = (first_missing..first_missing + missing)
@@ -734,9 +744,9 @@ fn add_missing_arguments(
                 .unwrap_or_else(|| "{}".to_string())
         })
         .collect();
-    if let Some(block) = parenthesized_block {
+    if let Some(span) = parenthesized_block {
         let count = placeholders.len();
-        let Some((block_start, _)) = block_source_range(site.text, block, close) else {
+        let Some((block_start, _)) = block_source_range(site.text, span, close) else {
             return vec![];
         };
         let Some(range) =
@@ -837,7 +847,7 @@ fn missing_argument_action(
 fn remove_excess_arguments(
     site: &DiagnosticActionSite<'_>,
     arguments: &[crate::node_kinds::call_arg::CallArg],
-    trailing_block: Option<&crate::node_kinds::block::Block>,
+    trailing_span: Option<crate::span::Span>,
     close: usize,
     expected: usize,
     excess: usize,
@@ -868,9 +878,9 @@ fn remove_excess_arguments(
     }
 
     if expected <= arguments.len()
-        && let Some(block) = trailing_block
+        && let Some(span) = trailing_span
     {
-        let Some((block_start, block_end)) = block_source_range(site.text, block, site.text.len())
+        let Some((block_start, block_end)) = block_source_range(site.text, span, site.text.len())
         else {
             return vec![];
         };
@@ -914,10 +924,10 @@ fn remove_excess_arguments(
 
 fn block_source_range(
     text: &str,
-    block: &crate::node_kinds::block::Block,
+    span: crate::span::Span,
     limit: usize,
 ) -> Option<(usize, usize)> {
-    let anchor = (block.span.start as usize).min(text.len());
+    let anchor = (span.start as usize).min(text.len());
     let start = if text.as_bytes().get(anchor) == Some(&b'{') {
         anchor
     } else {

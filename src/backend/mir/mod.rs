@@ -736,24 +736,10 @@ const OBJECT_WALK: ContainsWalk = ContainsWalk {
 
 /// Whether this complete type application conforms to a marker protocol.
 /// A specialized row is evidence only for matching arguments, never for its
-/// whole nominal family.
+/// whole nominal family, and a conditional row only where its context is
+/// proven (ADR 0036).
 fn conforms_to(builder: &ProgramBuilder<'_>, ty: &Ty, protocol: Symbol) -> bool {
-    match ty {
-        Ty::Nominal(head, args) => !builder
-            .catalog
-            .matching_conformances(*head, args, &ProtocolRef::bare(protocol))
-            .is_empty(),
-        Ty::Param(param) => builder
-            .catalog
-            .param_bounds
-            .get(param)
-            .is_some_and(|bounds| {
-                builder
-                    .catalog
-                    .bounds_satisfy(bounds, &ProtocolRef::bare(protocol))
-            }),
-        _ => false,
-    }
+    builder.catalog.ty_conforms(ty, &ProtocolRef::bare(protocol))
 }
 
 /// Whether dropping a value of this type does work: it owns refcounted
@@ -1949,18 +1935,10 @@ impl<'a> ProgramBuilder<'a> {
                     self.index_nested_expr(item, program);
                 }
             }
-            ExprKind::Call {
-                callee,
-                args,
-                trailing_block,
-                ..
-            } => {
+            ExprKind::Call { callee, args, .. } => {
                 self.index_nested_expr(callee, program);
                 for arg in args {
                     self.index_nested_expr(&arg.value, program);
-                }
-                if let Some(block) = trailing_block {
-                    self.index_nested_funcs(block, program);
                 }
             }
             ExprKind::CallEffect { args, .. } => {
@@ -2159,7 +2137,7 @@ impl<'a> ProgramBuilder<'a> {
 
         let matches = self
             .catalog
-            .matching_conformances(*self_head, self_args, protocol);
+            .satisfied_conformances(*self_head, self_args, protocol);
         let [selected] = matches.as_slice() else {
             return None;
         };
@@ -2202,7 +2180,7 @@ impl<'a> ProgramBuilder<'a> {
         };
         let matches = self
             .catalog
-            .matching_conformances(*self_head, self_args, protocol);
+            .satisfied_conformances(*self_head, self_args, protocol);
         let [matched] = matches.as_slice() else {
             return Vec::new();
         };
@@ -2349,7 +2327,7 @@ impl<'a> ProgramBuilder<'a> {
     fn deinit_witness(&self, head: Symbol, args: &[Ty]) -> Option<(Symbol, Vec<(Symbol, Ty)>)> {
         let matches =
             self.catalog
-                .matching_conformances(head, args, &ProtocolRef::bare(Symbol::Deinit));
+                .satisfied_conformances(head, args, &ProtocolRef::bare(Symbol::Deinit));
         let [matched] = matches.as_slice() else {
             return None;
         };
@@ -2401,7 +2379,7 @@ impl<'a> ProgramBuilder<'a> {
                 };
                 !self
                     .catalog
-                    .matching_conformances(*symbol, args, &ProtocolRef::bare(Symbol::Deinit))
+                    .satisfied_conformances(*symbol, args, &ProtocolRef::bare(Symbol::Deinit))
                     .is_empty()
                     || dropping(&mut fields.iter()) >= 2
             }
@@ -5263,10 +5241,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         Ok(value)
     }
 
-    fn compile_block_nodes(&mut self, block: &Block) -> Result<Operand, BackendError> {
-        self.compile_block(block)
-    }
-
     /// CHG-06: v1 closure captures are Copy values only. Handler clauses
     /// (extent-bounded shared borrows) do not pass through here. A closure
     /// capturing an owned buffer or region handle could outlive it.
@@ -6458,12 +6432,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
                 Ok(result)
             }
-            ExprKind::Call {
-                callee,
-                args,
-                trailing_block,
-                ..
-            } => self.compile_call(expr, callee, args, trailing_block.as_ref()),
+            ExprKind::Call { callee, args, .. } => self.compile_call(expr, callee, args),
             ExprKind::InlineIR(instruction) => self.compile_inline_ir(expr, instruction),
             ExprKind::LiteralArray(items) => {
                 // `[a, b, c]`: allocate the buffer, store each element,
@@ -7759,15 +7728,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         expr: &Expr,
         callee: &Expr,
         args: &[crate::typed_ast::CallArg],
-        trailing_block: Option<&Block>,
     ) -> Result<Operand, BackendError> {
         let mut operands = Vec::new();
         let mut mut_arg_places: Vec<(usize, PlaceChain)> = Vec::new();
         self.compile_call_args(args, &mut operands, &mut mut_arg_places)?;
-        if let Some(block) = trailing_block {
-            let closure = self.compile_block_closure(block)?;
-            operands.push(closure);
-        }
         let callee_ty = self.resolved(&callee.ty);
         if let Ty::Func(params, _, _) = &callee_ty {
             for (operand, param) in operands.iter().zip(params) {
@@ -7794,7 +7758,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         expr: &Expr,
         callee: &Expr,
         args: &[crate::typed_ast::CallArg],
-        trailing_block: Option<&Block>,
     ) -> Result<Operand, BackendError> {
         // A generic callee monomorphizes against the frontend's recorded
         // instantiation, resolved through this instance's own substitution.
@@ -7830,13 +7793,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 } else {
                     Operand::Local(local)
                 };
-                return self.compile_indirect_call(
-                    callee_value,
-                    expr,
-                    callee,
-                    args,
-                    trailing_block,
-                );
+                return self.compile_indirect_call(callee_value, expr, callee, args);
             }
             ExprKind::Variable(Name::Resolved(symbol, _))
                 if !self.program_builder.callables.contains_key(&canonical(
@@ -7852,13 +7809,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     dest: loaded,
                     global: slot,
                 });
-                return self.compile_indirect_call(
-                    Operand::Local(loaded),
-                    expr,
-                    callee,
-                    args,
-                    trailing_block,
-                );
+                return self.compile_indirect_call(Operand::Local(loaded), expr, callee, args);
             }
             ExprKind::Variable(Name::Resolved(symbol, _)) => *symbol,
             ExprKind::Member(receiver, label) => {
@@ -8229,24 +8180,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // Any other callee is a function VALUE (a field read, a
                 // block value): compile it and call indirectly.
                 let callee_value = self.compile_expr(callee)?;
-                return self.compile_indirect_call(
-                    callee_value,
-                    expr,
-                    callee,
-                    args,
-                    trailing_block,
-                );
+                return self.compile_indirect_call(callee_value, expr, callee, args);
             }
         };
 
         let mut mut_arg_places: Vec<(usize, PlaceChain)> = Vec::new();
         self.compile_call_args(args, &mut operands, &mut mut_arg_places)?;
-        if let Some(block) = trailing_block {
-            // A trailing block is the final argument: a closure over its
-            // free locals.
-            let closure = self.compile_block_closure(block)?;
-            operands.push(closure);
-        }
 
         let target = canonical(target, self.program_builder.programs[self.program].module);
         // Non-borrow parameters take ownership: the callee drops them.
@@ -8754,7 +8693,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         row.effects
             .iter()
             .map(|entry| canonical(entry.effect, module))
-            .filter(|effect| !self.program_builder.is_io_effect(*effect))
+            // The runtime implicitly handles ALL of core's ambient effects
+            // ('io, 'alloc, 'async), and `install_handler` rejects user
+            // handlers over them — so a closure never carries capabilities
+            // for them (a FindHandler for one would trap). Only user
+            // effects lexically capture their creation-site handler.
+            .filter(|effect| effect.module_id() != Some(crate::compiling::module::ModuleId::Core))
             .collect()
     }
 
@@ -8796,64 +8740,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             env.push(Operand::Local(index));
         }
         Ok((env, inherited))
-    }
-
-    fn compile_block_closure(&mut self, block: &Block) -> Result<Operand, BackendError> {
-        let body_nodes: Vec<&Node> = block.body.iter().collect();
-        let captured = free_locals(&body_nodes, &self.locals);
-        self.check_captures(&captured, block.span)?;
-        // Trailing blocks run within their call's extent, where dynamic
-        // search and lexical capture agree; they carry no capabilities
-        // until a reference pin demands otherwise.
-        let (env, inherited) = self.capture_env(&captured, &[])?;
-
-        let id = self.program_builder.reserve("block");
-        let mut fx = FunctionBuilder::new(self.program_builder, 0, self.program);
-        fx.subst = self.subst.clone();
-        // Last-use liveness needs this body's use counts: without them,
-        // a consume with later uses reads as a last use and moves, and
-        // the later use is rejected. (Cell conversion stays the
-        // enclosing frame's concern.)
-        let (_, _, use_counts) = cell_scan(&body_nodes);
-        fx.use_counts = use_counts;
-        let arity = u16::try_from(block.args.len())
-            .map_err(|_| BackendError::new("too many parameters".into(), block.span))?;
-        fx.next_local = arity;
-        for (ix, param) in block.args.iter().enumerate() {
-            let local = u16::try_from(ix).unwrap_or_default();
-            if let Some(ty) = &param.ty {
-                let ty = fx.resolved(ty);
-                fx.check_copy(&ty, block.span)?;
-                fx.own_local(local, &ty);
-            }
-            if let Name::Resolved(symbol, _) = &param.name {
-                fx.locals.insert(*symbol, local);
-            }
-        }
-        bind_env(
-            &self.locals,
-            &self.cell_handles,
-            &mut fx,
-            &captured,
-            &inherited,
-            &[],
-        );
-        let value = fx.compile_block_nodes(block)?;
-        let (n_locals, blocks) = fx.finish(value)?;
-        self.program_builder.functions[id] = Function {
-            name: "block".into(),
-            arity,
-            n_locals,
-            blocks,
-        };
-
-        let dest = self.fresh_local();
-        self.push(Inst::MakeClosure {
-            dest,
-            func: id,
-            env,
-        });
-        Ok(Operand::Local(dest))
     }
 
     /// An anonymous or local function value: its body compiles as its own

@@ -131,7 +131,8 @@ impl<'s> Solver<'s> {
                 }
                 if protocol.args.is_empty()
                     && protocol.protocol == Symbol::Copy
-                    && self.catalog.grade_of(symbol) == crate::types::catalog::Grade::Copy
+                    && self.catalog.grade_of_application(symbol, &args)
+                        == crate::types::catalog::Grade::Copy
                 {
                     return None;
                 }

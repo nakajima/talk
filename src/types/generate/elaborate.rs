@@ -45,10 +45,10 @@ pub(super) fn apply_param_mode(
     }
 }
 
-/// A nominal whose grade is `Copy` (borrows of it erase).
+/// A nominal application whose grade is `Copy` (borrows of it erase).
 pub(super) fn copy_grade_head(catalog: &TypeCatalog, ty: &Ty) -> bool {
-    matches!(ty, Ty::Nominal(symbol, _)
-        if catalog.grade_of(*symbol) == crate::types::catalog::Grade::Copy)
+    matches!(ty, Ty::Nominal(symbol, args)
+        if catalog.grade_of_application(*symbol, args) == crate::types::catalog::Grade::Copy)
 }
 
 pub(super) struct Elaborator<'e> {

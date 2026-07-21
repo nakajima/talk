@@ -134,7 +134,6 @@ pub enum ExprKind {
         #[drive(skip)]
         type_args: Vec<crate::node_kinds::generic_arg::GenericArg>,
         args: Vec<CallArg>,
-        trailing_block: Option<Block>,
     },
     /// Lowered form of the real Copy/CheapClone `clone()` method.
     Clone(Box<Expr>),

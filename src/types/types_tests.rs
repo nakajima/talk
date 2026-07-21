@@ -2243,6 +2243,95 @@ pub mod tests {
     }
 
     #[test]
+    fn disjoint_inherent_extensions_coexist() {
+        let t = check(
+            "// no-core\nstruct Box<Element> { let value: Element }\nextend Box<Int> { func get() -> Int { 1 } }\nextend Box<Bool> { func get() -> Int { 2 } }\nlet a = Box(value: 1).get()\nlet b = Box(value: true).get()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "a"), "Int");
+        assert_eq!(ty_of(&t, "b"), "Int");
+    }
+
+    #[test]
+    fn overlapping_inherent_members_are_rejected() {
+        let t = check(
+            "// no-core\nstruct Box<Element> { let value: Element }\nextend<T> Box<T> { func get() -> Int { 1 } }\nextend Box<Int> { func get() -> Int { 2 } }\nlet a = Box(value: 1).get()",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            !errors.is_empty(),
+            "overlapping inherent definitions of one label must be rejected"
+        );
+    }
+
+    #[test]
+    fn contradictory_head_refinement_is_rejected() {
+        let t = check(
+            "// no-core\nprotocol P {}\nstruct Box<Element> { let value: Element }\nextend Box: P where Self.Element == Int && Self.Element == Bool {}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            !errors.is_empty(),
+            "contradictory head refinement must be rejected"
+        );
+    }
+
+    #[test]
+    fn chained_head_equalities_unify_transitively() {
+        // `Self.A == Self.B && Self.A == Int` solves to A = B = Int; the
+        // shared solution is not a contradiction, in either predicate order.
+        let t = check(
+            "// no-core\nprotocol P { func get() -> Int }\nstruct Pair<A, B> { let a: A\n\tlet b: B }\nextend Pair: P where Self.A == Self.B && Self.A == Int { func get() -> Int { self.a } }\nlet value = Pair(a: 1, b: 2).get()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "value"), "Int");
+
+        let flipped = check(
+            "// no-core\nprotocol P { func get() -> Int }\nstruct Pair<A, B> { let a: A\n\tlet b: B }\nextend Pair: P where Self.A == Int && Self.A == Self.B { func get() -> Int { self.a } }\nlet value = Pair(a: 1, b: 2).get()",
+        );
+        assert_clean(&flipped);
+        assert_eq!(ty_of(&flipped, "value"), "Int");
+    }
+
+    #[test]
+    fn omitted_head_arguments_must_be_a_defaulted_suffix() {
+        // `Weird<A = Int, B>`: omitting the SUFFIX means omitting required
+        // B, which no default fills — an arity error, not an unusable row.
+        let t = check(
+            "// no-core\nprotocol P {}\nstruct Weird<A = Int, B> { let a: A\n\tlet b: B }\nextend Weird<Bool>: P {}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("arity") || e.contains("argument")),
+            "omitting a non-defaulted suffix parameter must be an arity error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn underapplied_extension_head_is_an_arity_error() {
+        let t = check(
+            "// no-core\nprotocol P {}\nstruct Pair<A, B> { let a: A\n\tlet b: B }\nextend<T> Pair<T>: P {}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("arity") || e.contains("argument")),
+            "underapplied head must be an arity error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn overapplied_extension_head_is_an_arity_error() {
+        let t = check(
+            "// no-core\nprotocol P {}\nstruct Pair<A, B> { let a: A\n\tlet b: B }\nextend Pair<Int, Bool, Int>: P {}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("arity") || e.contains("argument")),
+            "overapplied head must be an arity error, got {errors:?}"
+        );
+    }
+
+    #[test]
     fn declaration_where_conformance_and_same_type_are_scheme_predicates() {
         let t = check(
             "// no-core\nprotocol Boxy {\n\tassociated Item\n\tfunc item() -> Item\n}\nstruct S {}\nextend S: Boxy {\n\tfunc item() -> Int { 1 }\n}\nfunc intItem<T>(x: T) -> Int where T: Boxy && T.Item == Int {\n\tx.item()\n}\nlet y = intItem(S())",
@@ -4496,6 +4585,93 @@ mod with_core {
     }
 
     #[test]
+    fn overlapping_imported_inherent_rows_are_ambiguous_at_use() {
+        // Sibling modules A and B each extend S's Box<Int> with `tag`
+        // without importing each other; a consumer importing both must get
+        // an ambiguity diagnostic at the use site, never import-order
+        // dispatch.
+        use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
+
+        let module_s = Driver::new(
+            vec![Source::from(
+                "public struct Box<T> {\n\tlet value: T\n}",
+            )],
+            DriverConfig::new("S"),
+        )
+        .parse()
+        .unwrap()
+        .resolve_names()
+        .unwrap()
+        .type_check()
+        .module("S");
+
+        let sibling = |name: &str, body: &'static str| {
+            let mut modules = ModuleEnvironment::default();
+            modules.import(module_s.clone());
+            let config = crate::compiling::driver::DriverConfig {
+                module_id: ModuleId::Current,
+                modules: Rc::new(modules),
+                mode: crate::compiling::driver::CompilationMode::Library,
+                module_name: name.to_string(),
+                parse_mode: crate::compiling::driver::ParseMode::Strict,
+                preserve_comments: false,
+                workspace_root: None,
+                source_root: None,
+                libraries: Vec::new(),
+            };
+            let typed = Driver::new(vec![Source::from(body)], config)
+                .parse()
+                .unwrap()
+                .resolve_names()
+                .unwrap()
+                .type_check();
+            assert_eq!(type_errors(&typed), Vec::<String>::new());
+            typed.module(name)
+        };
+        let module_a = sibling(
+            "A",
+            "use S::{ Box }\nextend Box<Int> {\n\tpublic func tag() -> Int { 1 }\n}",
+        );
+        let module_b = sibling(
+            "B",
+            "use S::{ Box }\nextend Box<Int> {\n\tpublic func tag() -> Int { 2 }\n}",
+        );
+
+        let mut modules = ModuleEnvironment::default();
+        modules.import(module_s);
+        modules.import(module_a);
+        modules.import(module_b);
+        let config = crate::compiling::driver::DriverConfig {
+            module_id: ModuleId::Current,
+            modules: Rc::new(modules),
+            mode: crate::compiling::driver::CompilationMode::Library,
+            module_name: "C".to_string(),
+            parse_mode: crate::compiling::driver::ParseMode::Strict,
+            preserve_comments: false,
+            workspace_root: None,
+            source_root: None,
+            libraries: Vec::new(),
+        };
+        let typed = Driver::new(
+            vec![Source::from(
+                "use S::{ Box }\nuse A\nuse B\nlet t = Box(value: 1).tag()",
+            )],
+            config,
+        )
+        .parse()
+        .unwrap()
+        .resolve_names()
+        .unwrap()
+        .type_check();
+        let errors = type_errors(&typed);
+        assert!(
+            errors.iter().any(|e| e.contains("Ambiguous")),
+            "overlapping imported rows must be ambiguous at use, got {errors:?}"
+        );
+    }
+
+    #[test]
     fn external_module_types_cross_the_boundary() {
         // Compile module A, import it into module B as an external module:
         // A's schemes and catalog must arrive with symbols remapped to B's
@@ -4892,6 +5068,34 @@ mod with_core {
     fn assert_no_errors(driver: &Driver<Typed>) {
         let errors = type_errors(driver);
         assert!(errors.is_empty(), "expected no type errors: {errors:?}");
+    }
+
+    #[test]
+    fn specialized_copy_row_does_not_grade_the_family() {
+        // `extend Box<Int>: Copy` is evidence about Box<Int> only: a
+        // borrowed Box<S> must still refuse to fill an owned parameter.
+        let t = check_with_core(Source::from(
+            "struct Box<T> {\n\tlet value: T\n}\nextend Box<Int>: Copy {}\nstruct S {\n\tlet name: String\n}\nfunc takes(consume b: Box<S>) {}\nfunc caller(b: &Box<S>) {\n\ttakes(b)\n}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            !errors.is_empty(),
+            "a borrowed non-Copy Box<S> must not fill an owned parameter"
+        );
+    }
+
+    #[test]
+    fn each_marker_claim_validates_its_own_row() {
+        // Two disjoint Copy rows must each validate against their own
+        // arguments: Box<S> is not Copy even though Box<Int> is.
+        let t = check_with_core(Source::from(
+            "struct Box<T> {\n\tlet value: T\n}\nstruct S {\n\tlet name: String\n}\nextend Box<Int>: Copy {}\nextend Box<S>: Copy {}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Copy")),
+            "Box<S>: Copy must be rejected (S stores a String), got {errors:?}"
+        );
     }
 
     #[test]

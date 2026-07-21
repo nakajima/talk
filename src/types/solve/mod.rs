@@ -585,8 +585,8 @@ impl<'s> Solver<'s> {
                         }
                         return;
                     }
-                    Ty::Nominal(symbol, _) => {
-                        if let Some(kind) = self.catalog.coerce_kind(symbol) {
+                    Ty::Nominal(symbol, args) => {
+                        if let Some(kind) = self.catalog.coerce_kind_application(symbol, &args) {
                             if kind == crate::types::catalog::CoerceKind::CheapClone {
                                 self.coerce_clones.insert(origin.node);
                             }

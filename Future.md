@@ -20,6 +20,7 @@
 
 - Force type annotations in conformance extends
 - #[attributes]
+- `x += 1, x -= 1, x *= 1, x /= 1` source transformations
 
 # Stdlib
 

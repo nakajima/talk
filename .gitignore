@@ -1,6 +1,7 @@
 /target
 /.build
 dev/editors/vscode/node_modules
+dev/editors/vscode/.vscode-test
 examples/cove-talk
 wasm/pkg
 log.txt

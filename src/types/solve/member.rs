@@ -534,7 +534,9 @@ impl<'s> Solver<'s> {
                 // arbitrary Self is not expressible in user code.
                 let clone_protocol = if self.catalog.cheap_clone_rows(symbol, &args) {
                     Some(Symbol::CheapClone)
-                } else if self.catalog.grade_of(symbol) == crate::types::catalog::Grade::Copy {
+                } else if self.catalog.grade_of_application(symbol, &args)
+                    == crate::types::catalog::Grade::Copy
+                {
                     Some(Symbol::Copy)
                 } else {
                     None
@@ -636,16 +638,49 @@ impl<'s> Solver<'s> {
                         origin,
                     });
                 }
-                if let Some(members) = self.catalog.extend_members.get(&symbol)
-                    && let Some(inherent) = members.get(&label_str)
-                    && {
-                        let mut probe = FxHashMap::default();
-                        inherent
-                            .self_args
-                            .iter()
-                            .zip(&args)
-                            .all(|(pattern, actual)| match_pattern(pattern, actual, &mut probe))
-                    }
+                // Candidate instance rows for this label: the receiver's
+                // complete application selects among them. Locally declared
+                // rows are disjoint (overlap is rejected at collection),
+                // but sibling modules can export overlapping rows without
+                // seeing each other — matching more than one is an
+                // ambiguity at the use site, never import-order dispatch.
+                let matching_inherent = self.catalog.extend_members.get(&symbol).and_then(|members| {
+                    let rows = members.get(&label_str)?;
+                    let matching: Vec<_> = rows
+                        .iter()
+                        .filter(|row| {
+                            let mut probe = FxHashMap::default();
+                            row.self_args
+                                .iter()
+                                .zip(&args)
+                                .all(|(pattern, actual)| match_pattern(pattern, actual, &mut probe))
+                        })
+                        .collect();
+                    Some(matching)
+                });
+                if let Some(matching) = &matching_inherent
+                    && matching.len() > 1
+                {
+                    let rendered = self.store.render(&diagnostic_receiver);
+                    let candidates = matching
+                        .iter()
+                        .map(|row| {
+                            self.store
+                                .render(&Ty::Nominal(symbol, row.self_args.clone()))
+                        })
+                        .collect();
+                    self.errors.push((
+                        TypeError::AmbiguousMember {
+                            receiver: rendered,
+                            label: label_str,
+                            candidates,
+                        },
+                        origin.node,
+                    ));
+                    return None;
+                }
+                if let Some(inherent) =
+                    matching_inherent.and_then(|matching| matching.into_iter().next())
                 {
                     let inherent = inherent.clone();
                     let scheme = self.schemes.get(&inherent.symbol).cloned()?;

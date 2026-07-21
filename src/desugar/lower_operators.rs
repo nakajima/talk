@@ -151,7 +151,7 @@ impl LowerOperators {
                         // Arithmetic
                         TokenKind::Plus => ("Add", Label::Named("add".into())),
                         TokenKind::Minus => ("Subtract", Label::Named("minus".into())),
-                        TokenKind::Star => ("Multiply", Label::Named("times".into())),
+                        TokenKind::Star => ("Multiply", Label::Named("multiply".into())),
                         TokenKind::Slash => ("Divide", Label::Named("divide".into())),
 
                         // Comparisons
@@ -330,7 +330,7 @@ pub mod tests {
             *parsed.roots[0].as_stmt(),
             any_stmt!(StmtKind::Expr(invocation!(
                 ExprKind::Variable("Multiply".into()),
-                "times",
+                "multiply",
                 vec![
                     CallArg {
                         mode: None,

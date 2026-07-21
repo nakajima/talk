@@ -3,6 +3,7 @@
 use package::Optional::{ Optional }
 use package::Operators::{ Add, Comparable, Equatable }
 use package::Iterable::{ Iterable, Iterator }
+use package::Array::{ Array }
 
 /// A half-open interval: `lower` is included, `upper` is not.
 /// `a..<b` desugars to `Range(lower: a, upper: b)`.
@@ -43,22 +44,35 @@ struct RangeIterator {
 	let upper: Int
 	let closed: Bool
 	let current: Int
+	// Explicit exhaustion: a closed range ending at Int's maximum has no
+	// out-of-range sentinel to advance to (incrementing would wrap).
+	let done: Bool
 
 	init(lower: Int, upper: Int, closed: Bool) {
 		self.lower = lower
 		self.upper = upper
 		self.closed = closed
 		self.current = lower
+		self.done = false
 	}
 }
 
 extend RangeIterator: Iterator<Int> {
 	mut func next() -> Int? {
-		if self.current < self.upper || (self.closed && self.current == self.upper) {
-			let value = self.current
-			self.current = self.current + 1
+		if self.done { return .none }
+		let value = self.current
+		if value < self.upper {
+			self.current = value + 1
 			return .some(value)
 		}
+		self.done = true
+		if self.closed && value == self.upper { return .some(value) }
 		.none
+	}
+}
+
+extend Int {
+	func times<T>(fn: (Int) -> T) -> [T] {
+		(0..<self).iter().map { fn($0) }.to_array()
 	}
 }

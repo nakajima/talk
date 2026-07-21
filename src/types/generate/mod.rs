@@ -220,7 +220,10 @@ struct CatalogBuilder<'s, 'a> {
     /// Explicit claims on the substructural marker protocols (Copy,
     /// CheapClone, Deinit) with their blame nodes, validated once the whole
     /// catalog is collected.
-    marker_claims: Vec<(Symbol, Symbol, NodeID)>,
+    /// Marker-protocol conformance claims awaiting validation: the head,
+    /// marker, EXACT row claimed (ADR 0036: disjoint rows validate
+    /// independently), and the claiming declaration's node.
+    marker_claims: Vec<(Symbol, Symbol, crate::types::catalog::ConformanceId, NodeID)>,
     self_types: Vec<Ty>,
     level: Level,
     /// Static formation obligations from declaration annotations

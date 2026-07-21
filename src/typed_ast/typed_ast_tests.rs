@@ -58,17 +58,9 @@ fn collect_expr(e: &typed_ast::Expr, ids: &mut Vec<NodeID>) {
             xs.iter().for_each(|x| collect_expr(x, ids))
         }
         K::Block(b) | K::Unsafe(b) => collect_block(b, ids),
-        K::Call {
-            callee,
-            args,
-            trailing_block,
-            ..
-        } => {
+        K::Call { callee, args, .. } => {
             collect_expr(callee, ids);
             args.iter().for_each(|a| collect_expr(&a.value, ids));
-            if let Some(b) = trailing_block {
-                collect_block(b, ids);
-            }
         }
         K::Member(recv, _) => {
             if let Some(r) = recv {
