@@ -177,7 +177,7 @@ pub fn expand_macros_with_sources(
 }
 
 #[derive(Visitor)]
-#[visitor(Node(enter), Expr(enter), Stmt(enter))]
+#[visitor(Node(enter), Expr(enter), Stmt(enter), TypeAnnotation(enter))]
 struct TemplateValidator<'a> {
     params: HashSet<&'a str>,
     uses: HashMap<String, usize>,
@@ -235,6 +235,10 @@ impl<'a> TemplateValidator<'a> {
             }
             _ => {}
         }
+    }
+
+    fn enter_type_annotation(&mut self, _annotation: &TypeAnnotation) {
+        self.reject("type names in templates require definition-site hygiene");
     }
 
     fn enter_expr(&mut self, expr: &Expr) {
@@ -360,6 +364,7 @@ impl MacroExpander<'_> {
         };
         let condition_id = self.next_id();
         let message_id = self.next_id();
+        expr.id = self.next_id();
         expr.kind = ExprKind::Call {
             callee: Box::new(callee),
             type_args: Vec::new(),
@@ -588,6 +593,7 @@ mod tests {
     fn assert_expands_with_the_asserted_source_text() {
         let source = "#assert(left == \"right\")";
         let mut ast = parse(source);
+        let invocation_id = ast.roots[0].as_stmt().clone().as_expr().id;
         let sources = HashMap::from([(ast.file_id, source.to_string())]);
         let diagnostics =
             expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
@@ -599,6 +605,7 @@ mod tests {
         let ExprKind::Call { callee, args, .. } = &expr.kind else {
             panic!("expected assertion function call");
         };
+        assert_ne!(expr.id, invocation_id);
         assert!(matches!(
             &callee.kind,
             ExprKind::Variable(crate::name::Name::Raw(name))
@@ -646,6 +653,19 @@ mod tests {
             panic!("expected expression statement");
         };
         assert!(matches!(&expr.kind, ExprKind::LiteralInt(value) if value == "7"));
+    }
+
+    #[test]
+    fn rejects_type_annotations_nested_in_templates() {
+        let mut ast = parse("macro invoke($value) = $value.map<Int>()\n#invoke([1])");
+        let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
+        assert!(diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic,
+            crate::diagnostic::AnyDiagnostic::Parsing(crate::diagnostic::Diagnostic {
+                kind: crate::parser_error::ParserError::InvalidMacroTemplate { reason, .. },
+                ..
+            }) if reason == "type names in templates require definition-site hygiene"
+        )));
     }
 
     #[test]
