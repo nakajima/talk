@@ -1788,7 +1788,7 @@ impl PackageProject {
             let test_source = tests_directory.join(format!("{name}.test.tlk"));
             fs::write(
                 &test_source,
-                "test(\"example\") {\n    assert(1 + 1 == 2)\n}\n",
+                "test(\"example\") {\n    #assert(1 + 1 == 2)\n}\n",
             )
             .map_err(|source| PackageError::Io {
                 context: format!("failed to write {}", test_source.display()),

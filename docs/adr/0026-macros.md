@@ -174,6 +174,21 @@ macro choose($condition, $yes, $no) = if $condition { $yes } else { $no }
 let value = #choose(flag, 1, 2)
 ```
 
+The first slice also reserves one compiler-provided source-reflecting macro for
+the test system:
+
+```tlk
+#assert(user.is_active())
+```
+
+It expands to one call of `testing::assert_message`, passing the condition once
+and a message containing the condition's exact source bytes, for example
+`"assertion failed: user.is_active()"`. The parsed driver retains its source
+snapshot through expansion, so an edited file cannot make the message disagree
+with the syntax that was compiled. This built-in is transitional evidence for
+a future syntax-source operation and exported macro artifacts; it does not give
+ordinary templates unrestricted source or compiler access.
+
 Rejecting template identifiers and binders keeps this slice genuinely
 capture-free until syntax contexts land; it is not permission to ship an
 unhygienic general transformer. Cross-file exports, pattern/type/declaration

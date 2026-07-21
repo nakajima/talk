@@ -6,6 +6,7 @@ use crate::{
     ast::{AST, Parsed},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     id_generator::IDGenerator,
+    label::Label,
     name::Name,
     node::Node,
     node_id::{FileID, NodeID},
@@ -42,6 +43,15 @@ struct MacroDefinition {
 /// Expand ADR 0026's first, deliberately restricted expression-template
 /// macros. Definitions are file-local in this slice.
 pub fn expand_macros(asts: &mut [AST<Parsed>]) -> Vec<AnyDiagnostic> {
+    expand_macros_with_sources(asts, &HashMap::new())
+}
+
+/// Expand macros with the original source text available to source-reflecting
+/// built-ins such as `#assert`.
+pub fn expand_macros_with_sources(
+    asts: &mut [AST<Parsed>],
+    sources: &HashMap<FileID, String>,
+) -> Vec<AnyDiagnostic> {
     let mut definitions = HashMap::new();
     let mut diagnostics = Vec::new();
 
@@ -62,6 +72,22 @@ pub fn expand_macros(asts: &mut [AST<Parsed>]) -> Vec<AnyDiagnostic> {
                 retained.push(root);
                 continue;
             };
+
+            if name == "assert" {
+                diagnostics.push(
+                    Diagnostic {
+                        id: decl.id,
+                        severity: Severity::Error,
+                        kind: ParserError::InvalidMacroTemplate {
+                            name: name.clone(),
+                            reason: "`assert` is a compiler-provided macro".into(),
+                            span: decl.span,
+                        },
+                    }
+                    .into(),
+                );
+                continue;
+            }
 
             if decl.visibility == crate::node_kinds::decl::Visibility::Public {
                 diagnostics.push(
@@ -132,6 +158,7 @@ pub fn expand_macros(asts: &mut [AST<Parsed>]) -> Vec<AnyDiagnostic> {
             node_ids,
             expansions: 0,
             changed: false,
+            source: sources.get(&ast.file_id).map(String::as_str),
         };
         loop {
             expander.changed = false;
@@ -251,6 +278,7 @@ struct MacroExpander<'a> {
     node_ids: IDGenerator,
     expansions: usize,
     changed: bool,
+    source: Option<&'a str>,
 }
 
 impl MacroExpander<'_> {
@@ -267,6 +295,98 @@ impl MacroExpander<'_> {
 
     fn replace_with_unit(&mut self, expr: &mut Expr) {
         expr.kind = ExprKind::Tuple(Vec::new());
+        self.changed = true;
+    }
+
+    fn next_id(&mut self) -> NodeID {
+        NodeID(self.file_id, self.node_ids.next_id())
+    }
+
+    fn assertion_source(&self, condition: &Expr) -> String {
+        let Some(source) = self.source else {
+            return "<expression>".into();
+        };
+        source
+            .get(condition.span.start as usize..condition.span.end as usize)
+            .unwrap_or("<expression>")
+            .to_string()
+    }
+
+    fn string_literal_contents(value: &str) -> String {
+        let mut escaped = String::new();
+        for ch in value.chars() {
+            match ch {
+                '"' => escaped.push_str("\\\""),
+                '\\' => escaped.push_str("\\\\"),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                ch if ch <= '\u{1f}' => escaped.push_str(&format!("\\u{{{:x}}}", ch as u32)),
+                ch => escaped.push(ch),
+            }
+        }
+        escaped
+    }
+
+    fn expand_assert(&mut self, expr: &mut Expr, name: String, args: Vec<Expr>) {
+        if args.len() != 1 {
+            self.error(
+                expr.id,
+                ParserError::MacroArityMismatch {
+                    name,
+                    actual: args.len(),
+                    expected: vec![1],
+                    span: expr.span,
+                },
+            );
+            self.replace_with_unit(expr);
+            return;
+        }
+
+        let Some(condition) = args.into_iter().next() else {
+            self.replace_with_unit(expr);
+            return;
+        };
+        let message = format!("assertion failed: {}", self.assertion_source(&condition));
+        let message = Expr {
+            id: self.next_id(),
+            span: condition.span,
+            kind: ExprKind::LiteralString(Self::string_literal_contents(&message)),
+        };
+        let callee = Expr {
+            id: self.next_id(),
+            span: expr.span,
+            kind: ExprKind::Variable(Name::Raw("testing::assert_message".into())),
+        };
+        let condition_id = self.next_id();
+        let message_id = self.next_id();
+        expr.kind = ExprKind::Call {
+            callee: Box::new(callee),
+            type_args: Vec::new(),
+            args: vec![
+                CallArg {
+                    id: condition_id,
+                    label: Label::Positional(0),
+                    label_span: condition.span,
+                    value: condition,
+                    span: expr.span,
+                    mode: None,
+                    mode_span: None,
+                },
+                CallArg {
+                    id: message_id,
+                    label: Label::Positional(1),
+                    label_span: message.span,
+                    value: message,
+                    span: expr.span,
+                    mode: None,
+                    mode_span: None,
+                },
+            ],
+            trailing_block: None,
+            desugared_operator: None,
+        };
+        self.expansions += 1;
         self.changed = true;
     }
 
@@ -289,6 +409,11 @@ impl MacroExpander<'_> {
                 },
             );
             self.replace_with_unit(expr);
+            return;
+        }
+
+        if name == "assert" {
+            self.expand_assert(expr, name, args);
             return;
         }
 
@@ -451,11 +576,40 @@ impl NodeIdRemapper<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use crate::{
-        macro_expansion::expand_macros,
+        macro_expansion::{expand_macros, expand_macros_with_sources},
         node_kinds::{decl::DeclKind, expr::ExprKind, stmt::StmtKind},
         parser_tests::tests::parse,
     };
+
+    #[test]
+    fn assert_expands_with_the_asserted_source_text() {
+        let source = "#assert(left == \"right\")";
+        let mut ast = parse(source);
+        let sources = HashMap::from([(ast.file_id, source.to_string())]);
+        let diagnostics =
+            expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
+            panic!("expected expression statement");
+        };
+        let ExprKind::Call { callee, args, .. } = &expr.kind else {
+            panic!("expected assertion function call");
+        };
+        assert!(matches!(
+            &callee.kind,
+            ExprKind::Variable(crate::name::Name::Raw(name))
+                if name == "testing::assert_message"
+        ));
+        assert!(matches!(
+            &args[1].value.kind,
+            ExprKind::LiteralString(message)
+                if message == "assertion failed: left == \\\"right\\\""
+        ));
+    }
 
     #[test]
     fn expands_expression_template_and_removes_definition() {

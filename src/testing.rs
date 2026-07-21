@@ -838,6 +838,27 @@ test(\"ok\") {\n\tassert(1 + 1 == 2)\n}\n",
     }
 
     #[test]
+    fn assertion_macro_reports_the_failed_expression() {
+        let project = temp_project("assertion-source-test-runner");
+        std::fs::write(
+            project.join("math.test.tlk"),
+            "test(\"bad\") {\n\t#assert(1 + 1 == 3)\n}\n",
+        )
+        .expect("test file");
+
+        let outcome = Runner::new([project]).run().expect("runner");
+        let Outcome::Finished(summary) = outcome else {
+            panic!("expected tests to run");
+        };
+        assert_eq!(summary.failures, 1);
+        assert!(
+            summary.output.contains("assertion failed: 1 + 1 == 3"),
+            "{}",
+            summary.output
+        );
+    }
+
+    #[test]
     fn runner_filter_runs_only_the_named_test() {
         let project = temp_project("filtered-test-runner");
         std::fs::write(

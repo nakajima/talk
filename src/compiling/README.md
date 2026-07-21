@@ -15,7 +15,9 @@ Driver<Initial>
   .type_check()    -> Driver<Typed>
 ```
 
-`Parsed` holds source ASTs and parser diagnostics. During
+`Parsed` holds source ASTs, the exact source snapshot keyed by file id, and
+parser diagnostics. The snapshot lets source-reflecting macros use the same
+bytes that were parsed rather than re-reading a changing file. During
 `resolve_names()`, the first ADR 0026 expression-template macros expand before
 desugaring; macro declarations and invocation placeholders do not cross the
 name-resolution seam. `NameResolved` holds the desugared, symbol-bearing ASTs

@@ -44,6 +44,7 @@ impl DriverPhase for Initial {}
 impl DriverPhase for Parsed {}
 pub struct Parsed {
     pub asts: IndexMap<Source, AST<ast::Parsed>>,
+    pub source_texts: std::collections::HashMap<FileID, String>,
     pub diagnostics: Vec<AnyDiagnostic>,
 }
 
@@ -406,6 +407,7 @@ impl Driver {
         let local_modules =
             LocalModulePaths::new(self.config.source_root.clone().unwrap_or_default());
         let mut asts: IndexMap<Source, AST<_>> = IndexMap::default();
+        let mut source_texts = std::collections::HashMap::new();
         let mut diagnostics = vec![];
 
         // Track which files we've already processed (by canonical path) to detect cycles
@@ -446,6 +448,7 @@ impl Driver {
             tracing::info!("parsing {file:?}");
             let file_id = FileID(file_index);
             file_index += 1;
+            source_texts.insert(file_id, input.clone());
             let parser = Parser::new(file.path(), file_id, lexer);
             match parser.parse() {
                 Ok((mut parsed, ast_diagnostics)) => {
@@ -502,7 +505,11 @@ impl Driver {
         Ok(Driver {
             files: self.files,
             config: self.config,
-            phase: Parsed { asts, diagnostics },
+            phase: Parsed {
+                asts,
+                source_texts,
+                diagnostics,
+            },
         })
     }
 }
@@ -516,9 +523,12 @@ impl Driver<Parsed> {
         );
 
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
-        self.phase
-            .diagnostics
-            .extend(crate::macro_expansion::expand_macros(&mut asts));
+        self.phase.diagnostics.extend(
+            crate::macro_expansion::expand_macros_with_sources(
+                &mut asts,
+                &self.phase.source_texts,
+            ),
+        );
         crate::desugar::desugar(&mut asts);
         let (asts, resolved) = resolver.resolve(asts);
         let asts = paths.into_iter().zip(asts).collect();
