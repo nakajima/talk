@@ -154,6 +154,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             );
             return Ty::Error;
         }
+        if self.catalog.protocols.contains_key(&symbol) {
+            return self.infer_protocol_construction(
+                expr,
+                callee,
+                symbol,
+                type_args,
+                args,
+                trailing_block,
+                ctx,
+            );
+        }
         let Some(info) = self.catalog.structs.get(&symbol).cloned() else {
             if self.catalog.enums.contains_key(&symbol) {
                 self.unsupported(expr.id, "constructing an enum directly (use a case)");
@@ -242,9 +253,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let init = info
             .inits
             .iter()
-            .copied()
-            .find(|init| self.callable_arity(*init) == Some(arg_count + 1))
-            .or_else(|| info.inits.first().copied());
+            .find(|(_, arity)| *arity == arg_count + 1)
+            .or_else(|| info.inits.first())
+            .map(|(init, _)| *init);
         let Some(init) = init else {
             self.unsupported(expr.id, "constructing a type with no initializer");
             return Ty::Error;
@@ -357,6 +368,110 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 Ty::Error
             }
         }
+    }
+
+    /// `P(args)`: construction through a protocol's init requirement.
+    /// `Self` is a fresh variable constrained to conform, pinned by the
+    /// expected type rather than by any argument (the ExpressibleBy-literal
+    /// pattern); the conformance's witness initializer runs at lowering.
+    #[allow(clippy::too_many_arguments)]
+    fn infer_protocol_construction(
+        &mut self,
+        expr: &Expr,
+        callee: &Expr,
+        symbol: Symbol,
+        type_args: &[GenericArg],
+        args: &[CallArg],
+        trailing_block: &Option<Block>,
+        ctx: &Ctx,
+    ) -> Ty {
+        let Some(owner_ref) = self.fresh_protocol_ref(symbol, expr.id) else {
+            return Ty::Error;
+        };
+        let Some((owner, requirement)) = self.catalog.requirement_in_ref(&owner_ref, "init") else {
+            self.unsupported(
+                expr.id,
+                "constructing a protocol without an init requirement",
+            );
+            return Ty::Error;
+        };
+        let requirement = requirement.clone();
+        let Some(scheme) = self.schemes.get(&requirement.symbol).cloned() else {
+            return Ty::Error;
+        };
+        // Explicit type arguments pin the protocol's own parameters
+        // positionally.
+        let protocol_params = self
+            .catalog
+            .protocols
+            .get(&symbol)
+            .map(|info| info.params.clone())
+            .unwrap_or_default();
+        for ((type_arg, target), param) in
+            type_args.iter().zip(&owner_ref.args).zip(&protocol_params)
+        {
+            let ty = self.lower_generic_arg_for_param(param.symbol, type_arg);
+            self.emit_eq(target.clone(), ty, type_arg.id(), CtReason::Annotation);
+        }
+
+        let self_var = Ty::Var(self.store.fresh_ty(self.level, expr.id));
+        let app = ProtocolApplication::new(self_var.clone(), owner.clone());
+        let mut tys = app.substitution(self.catalog);
+        self.freshen_scheme_type_params(expr.id, &scheme, &mut tys);
+        let effs = self.freshen_scheme_effect_params(expr.id, &scheme);
+        for predicate in &scheme.predicates {
+            self.wanteds.push(
+                predicate
+                    .substitute(&tys, &effs, &Default::default())
+                    .into_constraint(CtOrigin::new(expr.id, CtReason::Apply)),
+            );
+        }
+        let signature = scheme.ty.substitute(&tys, &effs, &Default::default());
+        self.wanteds.push(Constraint::Conforms {
+            ty: self_var.clone(),
+            protocol: owner.clone(),
+            origin: CtOrigin::new(expr.id, CtReason::Apply),
+        });
+        self.artifacts.member_resolutions.insert(
+            callee.id,
+            MemberResolution::ViaRequirement {
+                protocol: owner,
+                requirement: requirement.symbol,
+                self_ty: self_var,
+            },
+        );
+
+        let Ty::Func(params, ret, eff) = self.store.shallow(&signature) else {
+            return Ty::Error;
+        };
+        let arg_count = args.len() + usize::from(trailing_block.is_some());
+        if params.len() != arg_count {
+            self.diagnostics.errors.push((
+                TypeError::ArityMismatch {
+                    expected: params.len(),
+                    found: arg_count,
+                },
+                expr.id,
+            ));
+            return Ty::Error;
+        }
+        for (arg, param) in args.iter().zip(&params) {
+            self.check_expr(&arg.value, param, CtReason::Apply, ctx);
+        }
+        if let Some(block) = trailing_block {
+            let block_ty = self.infer_closure_block(block, ctx);
+            self.emit_eq(
+                params[args.len()].clone(),
+                block_ty,
+                block.id,
+                CtReason::Apply,
+            );
+        }
+        self.emit_eff_eq(eff, ctx.eff.clone(), expr.id);
+        self.artifacts
+            .node_types
+            .insert(callee.id, Ty::Func(params, ret.clone(), EffectRow::pure()));
+        *ret
     }
 
     // ----- Member resolution ----------------------------------------------
@@ -477,16 +592,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 && let [rhs] = owner.args.as_slice()
             {
                 self.wanteds.push(Constraint::PreferEq(
-                    self_var,
+                    self_var.clone(),
                     rhs.clone(),
                     CtOrigin::new(node, reason),
                 ));
             }
             self.artifacts.member_resolutions.insert(
                 node,
-                MemberResolution::ViaConformance {
+                MemberResolution::ViaRequirement {
                     protocol: owner,
-                    witness: requirement.symbol,
+                    requirement: requirement.symbol,
+                    self_ty: self_var,
                 },
             );
             return Some(signature);

@@ -655,21 +655,12 @@ impl<'a> Formatter<'a> {
             } => self.format_associated(generic, where_clause.as_ref()),
             DeclKind::Func(func) => self.format_func(func),
             DeclKind::Extend {
-                name,
-                row_generics,
+                binders,
+                head,
                 conformances,
-                generics,
                 where_clause,
                 body,
-                ..
-            } => self.format_extend(
-                name,
-                row_generics,
-                generics,
-                conformances,
-                where_clause.as_ref(),
-                body,
-            ),
+            } => self.format_extend(binders, head, conformances, where_clause.as_ref(), body),
             DeclKind::Enum {
                 name,
                 generics,
@@ -696,6 +687,7 @@ impl<'a> Formatter<'a> {
                 signature,
                 receiver_mode,
             } => self.format_method_signature(signature, *receiver_mode),
+            DeclKind::InitRequirement { signature } => self.format_init_requirement(signature),
             DeclKind::TypeAlias(lhs, .., rhs) => self.format_type_alias(lhs, rhs),
         };
 
@@ -864,6 +856,19 @@ impl<'a> Formatter<'a> {
             TokenKind::GreaterGreater => ">>",
             TokenKind::PipePipe => "||",
             TokenKind::AmpAmp => "&&",
+            // Range operators bind their bounds tightly: `1..5`, `1..<5`.
+            TokenKind::DotDot => {
+                return group(concat(
+                    self.format_expr(lhs),
+                    concat(text(".."), self.format_expr(rhs)),
+                ));
+            }
+            TokenKind::DotDotLess => {
+                return group(concat(
+                    self.format_expr(lhs),
+                    concat(text("..<"), self.format_expr(rhs)),
+                ));
+            }
             _ => &format!("{op}"),
         };
 
@@ -1517,24 +1522,19 @@ impl<'a> Formatter<'a> {
 
     fn format_extend(
         &self,
-        name: &Name,
-        row_generics: &[GenericDecl],
-        generics: &[GenericDecl],
+        binders: &[GenericDecl],
+        head: &TypeAnnotation,
         conformances: &[TypeAnnotation],
         where_clause: Option<&WhereClause>,
         body: &Body,
     ) -> Doc {
         let mut result = text("extend");
 
-        if !row_generics.is_empty() {
-            result = concat(result, self.format_generic_decl_list(row_generics));
+        if !binders.is_empty() {
+            result = concat(result, self.format_generic_decl_list(binders));
         }
 
-        result = concat_space(result, self.format_name(name));
-
-        if !generics.is_empty() {
-            result = concat(result, self.format_generic_decl_list(generics));
-        }
+        result = concat_space(result, self.format_type_annotation(head));
 
         if !conformances.is_empty() {
             let conformances_docs = conformances
@@ -2363,6 +2363,22 @@ impl<'a> Formatter<'a> {
 
     fn format_method_signature(&self, sig: &FuncSignature, receiver_mode: ReceiverMode) -> Doc {
         self.receiver_mode_prefix(receiver_mode, self.format_func_signature(sig))
+    }
+
+    /// `init(params)`: the implicit `-> Self` return never prints.
+    fn format_init_requirement(&self, sig: &FuncSignature) -> Doc {
+        let param_docs: Vec<_> = sig
+            .params
+            .iter()
+            .map(|p| self.format_parameter(p))
+            .collect();
+        concat(
+            text("init"),
+            concat(
+                text("("),
+                concat(join(param_docs, concat(text(","), text(" "))), text(")")),
+            ),
+        )
     }
 
     fn format_where_clause(&self, where_clause: &WhereClause) -> Doc {

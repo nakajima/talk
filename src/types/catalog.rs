@@ -11,10 +11,10 @@
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::name_resolution::symbol::Symbol;
 use crate::types::ty::{
     Predicate, ProtocolRef, Scheme, SchemeParam, Ty, match_key_pattern, match_pattern,
 };
+use crate::{compiling::module::ModuleId, name_resolution::symbol::Symbol};
 
 /// The usage grade of a declaration over the substructural lattice:
 /// `Copy` values duplicate freely, `Affine` values (the default) move and may
@@ -58,8 +58,9 @@ pub struct StructInfo {
     pub methods: IndexMap<String, Symbol>,
     /// Static method name → method symbol.
     pub statics: IndexMap<String, Symbol>,
-    /// Initializer symbols (explicit or resolver-synthesized memberwise).
-    pub inits: Vec<Symbol>,
+    /// Initializers (explicit or resolver-synthesized memberwise) with
+    /// their declared arity, `self` included.
+    pub inits: Vec<(Symbol, usize)>,
     /// Well-formedness predicates over `params` for every application of
     /// this nominal.
     pub predicates: Vec<Predicate>,
@@ -186,14 +187,57 @@ impl ProtocolApplication {
 /// Hammond, Peyton Jones & Wadler, TOPLAS 1996): `params` are the row's own
 /// rigid variables, `self_args` the head application they appear in, and
 /// `context` the predicates discharged as new wanteds at use.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct ConformanceId {
+    pub module_id: ModuleId,
+    pub local_id: u32,
+}
+
+impl ConformanceId {
+    pub fn new(module_id: ModuleId, local_id: u32) -> Self {
+        Self {
+            module_id,
+            local_id,
+        }
+    }
+
+    pub fn import(self, module_id: ModuleId) -> Self {
+        if self.module_id == ModuleId::Current {
+            Self { module_id, ..self }
+        } else {
+            self
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Conformance {
+    /// Nominal or protocol family at the self-pattern head.
+    pub head: Symbol,
+    /// Complete target protocol pattern. Its arguments participate in row
+    /// identity and match with the self pattern through one substitution.
+    pub protocol: ProtocolRef,
     pub params: Vec<Symbol>,
     pub self_args: Vec<Ty>,
-    pub protocol_args: Vec<Ty>,
     pub context: Vec<Predicate>,
     pub witnesses: FxHashMap<String, Symbol>,
     pub assoc: FxHashMap<Symbol, Ty>,
+}
+
+impl Conformance {
+    pub fn new(head: Symbol, protocol: ProtocolRef) -> Self {
+        Self {
+            head,
+            protocol,
+            params: vec![],
+            self_args: vec![],
+            context: vec![],
+            witnesses: FxHashMap::default(),
+            assoc: FxHashMap::default(),
+        }
+    }
 }
 
 /// An inherent (protocol-less) extend member: `extend Float { func _trunc()
@@ -247,9 +291,13 @@ pub struct TypeCatalog {
     pub structs: FxHashMap<Symbol, StructInfo>,
     pub enums: FxHashMap<Symbol, Enum>,
     pub protocols: FxHashMap<Symbol, ProtocolInfo>,
-    pub conformances: FxHashMap<(Symbol, ProtocolRef), Conformance>,
-    /// Type head -> protocol applications it conforms to (for member search by head).
-    pub conformances_by_head: FxHashMap<Symbol, Vec<ProtocolRef>>,
+    /// Stable conformance rows. The row owns its complete semantic head;
+    /// indexes contain IDs only and are never a second source of truth.
+    pub conformances: IndexMap<ConformanceId, Conformance>,
+    /// Type head -> candidate row IDs.
+    pub conformances_by_head: FxHashMap<Symbol, Vec<ConformanceId>>,
+    #[serde(default)]
+    next_conformance_id: u32,
     /// Member label → candidate owners, for improvement.
     pub member_owners: FxHashMap<String, Vec<MemberOwner>>,
     /// Rigid type parameter → declared protocol bounds.
@@ -280,9 +328,33 @@ pub struct TypeCatalog {
 /// schemes sanitize as schemes (their minted eff/row params register);
 /// predicates sanitize through their own folder.
 pub struct ConformanceMatch<'a> {
+    pub id: ConformanceId,
     pub protocol: &'a ProtocolRef,
     pub conformance: &'a Conformance,
     pub substitution: FxHashMap<Symbol, Ty>,
+}
+
+impl ConformanceMatch<'_> {
+    /// The complete type substitution lowering needs for this selected row:
+    /// rigid head parameters plus associated-type witnesses.
+    pub fn evidence_substitution(&self) -> Vec<(Symbol, Ty)> {
+        let mut substitution = self
+            .substitution
+            .iter()
+            .map(|(symbol, ty)| (*symbol, ty.clone()))
+            .collect::<Vec<_>>();
+        substitution.extend(self.conformance.assoc.iter().map(|(assoc, bound)| {
+            (
+                *assoc,
+                bound.substitute(
+                    &self.substitution,
+                    &FxHashMap::default(),
+                    &FxHashMap::default(),
+                ),
+            )
+        }));
+        substitution
+    }
 }
 
 pub(crate) enum EmbeddedTypes<'a> {
@@ -334,18 +406,19 @@ impl TypeCatalog {
                 f(*symbol, EmbeddedTypes::Predicate(predicate));
             }
         }
-        for ((head, _), conformance) in self.conformances.iter_mut() {
+        for conformance in self.conformances.values_mut() {
+            let head = conformance.head;
             for ty in conformance.self_args.iter_mut() {
-                f(*head, EmbeddedTypes::Ty(ty));
+                f(head, EmbeddedTypes::Ty(ty));
             }
-            for ty in conformance.protocol_args.iter_mut() {
-                f(*head, EmbeddedTypes::Ty(ty));
+            for ty in conformance.protocol.args.iter_mut() {
+                f(head, EmbeddedTypes::Ty(ty));
             }
             for ty in conformance.assoc.values_mut() {
-                f(*head, EmbeddedTypes::Ty(ty));
+                f(head, EmbeddedTypes::Ty(ty));
             }
             for predicate in conformance.context.iter_mut() {
-                f(*head, EmbeddedTypes::Predicate(predicate));
+                f(head, EmbeddedTypes::Predicate(predicate));
             }
         }
         // Inherent members carry no signature (it's a scheme); only
@@ -502,11 +575,11 @@ impl TypeCatalog {
         // matches every application of the head, with no row scan or context
         // check. The O(rows) scan below handles conditional and protocol-head
         // rows.
-        if self
-            .conformances
-            .get(&(symbol, ProtocolRef::bare(Symbol::CheapClone)))
-            .is_some_and(|row| row.context.is_empty() && unconditional_self_pattern(row))
-        {
+        if self.conformances_for_head(symbol).any(|(_, row)| {
+            row.protocol == ProtocolRef::bare(Symbol::CheapClone)
+                && row.context.is_empty()
+                && unconditional_self_pattern(row)
+        }) {
             return true;
         }
         self.matching_conformances(symbol, args, &ProtocolRef::bare(Symbol::CheapClone))
@@ -723,7 +796,11 @@ impl TypeCatalog {
                                 .into_iter()
                                 .map(|(l, s)| (l, imp(s, target)))
                                 .collect(),
-                            inits: v.inits.iter().map(|s| imp(*s, target)).collect(),
+                            inits: v
+                                .inits
+                                .iter()
+                                .map(|(s, arity)| (imp(*s, target), *arity))
+                                .collect(),
                             predicates: v
                                 .predicates
                                 .into_iter()
@@ -811,13 +888,14 @@ impl TypeCatalog {
             conformances: self
                 .conformances
                 .into_iter()
-                .map(|((head, protocol), c)| {
+                .map(|(id, c)| {
                     (
-                        (imp(head, target), protocol.import_symbols(target)),
+                        id.import(target),
                         Conformance {
+                            head: imp(c.head, target),
+                            protocol: c.protocol.import_symbols(target),
                             params: c.params.iter().map(|s| imp(*s, target)).collect(),
                             self_args: c.self_args.iter().map(&imp_ty).collect(),
-                            protocol_args: c.protocol_args.iter().map(&imp_ty).collect(),
                             context: c
                                 .context
                                 .into_iter()
@@ -840,13 +918,14 @@ impl TypeCatalog {
             conformances_by_head: self
                 .conformances_by_head
                 .into_iter()
-                .map(|(head, protocols)| {
+                .map(|(head, ids)| {
                     (
                         imp(head, target),
-                        protocols.iter().map(|p| p.import_symbols(target)).collect(),
+                        ids.into_iter().map(|id| id.import(target)).collect(),
                     )
                 })
                 .collect(),
+            next_conformance_id: self.next_conformance_id,
             member_owners: self
                 .member_owners
                 .into_iter()
@@ -942,14 +1021,18 @@ impl TypeCatalog {
         self.structs.extend(other.structs);
         self.enums.extend(other.enums);
         self.protocols.extend(other.protocols);
-        self.conformances.extend(other.conformances);
-        for (head, protocols) in other.conformances_by_head {
-            let entry = self.conformances_by_head.entry(head).or_default();
-            for protocol in protocols {
-                if !entry.contains(&protocol) {
-                    entry.push(protocol);
-                }
+        self.next_conformance_id = self.next_conformance_id.max(other.next_conformance_id);
+        for (id, conformance) in other.conformances {
+            if self
+                .conformances
+                .values()
+                .any(|existing| existing == &conformance)
+            {
+                continue;
             }
+            let head = conformance.head;
+            self.conformances.insert(id, conformance);
+            self.conformances_by_head.entry(head).or_default().push(id);
         }
         for (label, owners) in other.member_owners {
             for owner in owners {
@@ -1041,9 +1124,82 @@ impl TypeCatalog {
         })
     }
 
+    pub fn insert_conformance(&mut self, conformance: Conformance) -> ConformanceId {
+        let id = ConformanceId::new(ModuleId::Current, self.next_conformance_id);
+        self.next_conformance_id += 1;
+        let head = conformance.head;
+        self.conformances.insert(id, conformance);
+        self.conformances_by_head.entry(head).or_default().push(id);
+        id
+    }
+
+    pub fn conformance(&self, id: ConformanceId) -> Option<&Conformance> {
+        self.conformances.get(&id)
+    }
+
+    pub fn conformance_mut(&mut self, id: ConformanceId) -> Option<&mut Conformance> {
+        self.conformances.get_mut(&id)
+    }
+
+    pub fn conformances_for_head(
+        &self,
+        head: Symbol,
+    ) -> impl Iterator<Item = (ConformanceId, &Conformance)> {
+        self.conformances_by_head
+            .get(&head)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.conformances.get(id).map(|row| (*id, row)))
+    }
+
     pub fn has_bare_conformance(&self, head: Symbol, protocol: Symbol) -> bool {
-        self.conformances
-            .contains_key(&(head, ProtocolRef::bare(protocol)))
+        self.conformances_for_head(head)
+            .any(|(_, row)| row.protocol.protocol == protocol && row.protocol.args.is_empty())
+    }
+
+    pub fn family_unconditionally_conforms(&self, head: Symbol, protocol: Symbol) -> bool {
+        let family_args: Vec<Ty> = self
+            .structs
+            .get(&head)
+            .map(|info| {
+                info.params
+                    .iter()
+                    .map(|param| Ty::Param(param.symbol))
+                    .collect()
+            })
+            .or_else(|| {
+                self.enums.get(&head).map(|info| {
+                    info.params
+                        .iter()
+                        .map(|param| Ty::Param(param.symbol))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+        self.matching_conformances(head, &family_args, &ProtocolRef::bare(protocol))
+            .into_iter()
+            .filter(|matched| matched.conformance.head == head)
+            .any(|matched| {
+                unconditional_self_pattern(matched.conformance)
+                    && matched.conformance.context.iter().all(|predicate| {
+                        let predicate = predicate.substitute(
+                            &matched.substitution,
+                            &FxHashMap::default(),
+                            &FxHashMap::default(),
+                        );
+                        match predicate {
+                            Predicate::Conforms {
+                                ty: Ty::Param(param),
+                                protocol,
+                            } => self
+                                .param_bounds
+                                .get(&param)
+                                .is_some_and(|bounds| self.bounds_satisfy(bounds, &protocol)),
+                            Predicate::TypeEq(left, right) => left == right,
+                            _ => false,
+                        }
+                    })
+            })
     }
 
     pub fn conformance_rows_overlap(
@@ -1055,7 +1211,7 @@ impl TypeCatalog {
     ) -> bool {
         if left_protocol.protocol != right_protocol.protocol
             || left.self_args.len() != right.self_args.len()
-            || left.protocol_args.len() != right.protocol_args.len()
+            || left_protocol.args.len() != right_protocol.args.len()
         {
             return false;
         }
@@ -1065,10 +1221,10 @@ impl TypeCatalog {
             .iter()
             .zip(&right.self_args)
             .all(|(left, right)| match_pattern(left, right, &mut forward))
-            && left
-                .protocol_args
+            && left_protocol
+                .args
                 .iter()
-                .zip(&right.protocol_args)
+                .zip(&right_protocol.args)
                 .all(|(left, right)| match_key_pattern(left, right, &mut forward));
 
         let mut reverse = FxHashMap::default();
@@ -1077,10 +1233,10 @@ impl TypeCatalog {
             .iter()
             .zip(&right.self_args)
             .all(|(left, right)| match_pattern(right, left, &mut reverse))
-            && left
-                .protocol_args
+            && left_protocol
+                .args
                 .iter()
-                .zip(&right.protocol_args)
+                .zip(&right_protocol.args)
                 .all(|(left, right)| match_key_pattern(right, left, &mut reverse));
 
         forward_matches && reverse_matches
@@ -1093,19 +1249,43 @@ impl TypeCatalog {
         target: &ProtocolRef,
     ) -> Vec<ConformanceMatch<'a>> {
         let self_ty = Ty::Nominal(head, self_args.to_vec());
-        self.conformances
-            .iter()
-            .filter_map(|((candidate_head, candidate_protocol), conformance)| {
+        let mut matches = self
+            .conformances_for_head(head)
+            .filter_map(|(id, conformance)| {
                 self.match_conformance_row(
-                    *candidate_head,
-                    candidate_protocol,
+                    id,
                     conformance,
                     Some((head, self_args)),
                     &self_ty,
                     target,
                 )
             })
-            .collect()
+            .collect::<Vec<_>>();
+        // A direct declaration is the canonical evidence for P when another
+        // row reaches P only through a subprotocol. This is inheritance
+        // projection, not ordered instance specialization.
+        if matches
+            .iter()
+            .any(|matched| matched.conformance.protocol.protocol == target.protocol)
+        {
+            matches.retain(|matched| matched.conformance.protocol.protocol == target.protocol);
+        }
+        matches.extend(self.matching_protocol_head_conformances(&self_ty, target));
+        matches
+    }
+
+    pub fn match_conformance<'a>(
+        &'a self,
+        id: ConformanceId,
+        self_ty: &Ty,
+        target: &ProtocolRef,
+    ) -> Option<ConformanceMatch<'a>> {
+        let conformance = self.conformance(id)?;
+        let nominal_head = match self_ty {
+            Ty::Nominal(head, args) => Some((*head, args.as_slice())),
+            _ => None,
+        };
+        self.match_conformance_row(id, conformance, nominal_head, self_ty, target)
     }
 
     pub fn matching_protocol_head_conformances<'a>(
@@ -1115,33 +1295,22 @@ impl TypeCatalog {
     ) -> Vec<ConformanceMatch<'a>> {
         self.conformances
             .iter()
-            .filter_map(|((candidate_head, candidate_protocol), conformance)| {
-                self.match_conformance_row(
-                    *candidate_head,
-                    candidate_protocol,
-                    conformance,
-                    None,
-                    self_ty,
-                    target,
-                )
+            .filter_map(|(id, conformance)| {
+                self.match_conformance_row(*id, conformance, None, self_ty, target)
             })
             .collect()
     }
 
     fn match_conformance_row<'a>(
         &'a self,
-        candidate_head: Symbol,
-        candidate_protocol: &'a ProtocolRef,
+        id: ConformanceId,
         conformance: &'a Conformance,
         nominal_head: Option<(Symbol, &[Ty])>,
         self_ty: &Ty,
         target: &ProtocolRef,
     ) -> Option<ConformanceMatch<'a>> {
-        if candidate_protocol.protocol != target.protocol
-            || conformance.protocol_args.len() != target.args.len()
-        {
-            return None;
-        }
+        let candidate_head = conformance.head;
+        let candidate_protocol = &conformance.protocol;
         let mut substitution = FxHashMap::default();
         let self_matches = if matches!(candidate_head, Symbol::Protocol(_)) {
             conformance.self_args.is_empty()
@@ -1156,12 +1325,26 @@ impl TypeCatalog {
         } else {
             false
         };
-        let protocol_matches = conformance
-            .protocol_args
-            .iter()
-            .zip(&target.args)
-            .all(|(pattern, actual)| match_key_pattern(pattern, actual, &mut substitution));
+        let protocol_matches = self
+            .protocol_and_supers(candidate_protocol)
+            .into_iter()
+            .filter(|candidate| {
+                candidate.protocol == target.protocol && candidate.args.len() == target.args.len()
+            })
+            .any(|candidate| {
+                let mut probe = substitution.clone();
+                let matches = candidate
+                    .args
+                    .iter()
+                    .zip(&target.args)
+                    .all(|(pattern, actual)| match_key_pattern(pattern, actual, &mut probe));
+                if matches {
+                    substitution = probe;
+                }
+                matches
+            });
         (self_matches && protocol_matches).then_some(ConformanceMatch {
+            id,
             protocol: candidate_protocol,
             conformance,
             substitution,
@@ -1266,11 +1449,11 @@ mod tests {
     use super::*;
     use crate::name_resolution::symbol::{DeclaredLocalId, StructId};
 
-    fn catalog_with_row(head: Symbol, row: Conformance) -> TypeCatalog {
+    fn catalog_with_row(head: Symbol, mut row: Conformance) -> TypeCatalog {
         let mut catalog = TypeCatalog::default();
-        catalog
-            .conformances
-            .insert((head, ProtocolRef::bare(Symbol::CheapClone)), row);
+        row.head = head;
+        row.protocol = ProtocolRef::bare(Symbol::CheapClone);
+        catalog.insert_conformance(row);
         catalog
     }
 
@@ -1286,7 +1469,7 @@ mod tests {
             Conformance {
                 params: vec![param],
                 self_args: vec![Ty::Param(param)],
-                ..Default::default()
+                ..Conformance::new(head, ProtocolRef::bare(Symbol::CheapClone))
             },
         );
         assert!(catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));
@@ -1309,7 +1492,7 @@ mod tests {
                     ty: Ty::Param(param),
                     protocol: ProtocolRef::bare(Symbol::CheapClone),
                 }],
-                ..Default::default()
+                ..Conformance::new(head, ProtocolRef::bare(Symbol::CheapClone))
             },
         );
         // String is intrinsically CheapClone-satisfying only via declared
@@ -1336,7 +1519,7 @@ mod tests {
             head,
             Conformance {
                 self_args: vec![Ty::Nominal(Symbol::Int, vec![])],
-                ..Default::default()
+                ..Conformance::new(head, ProtocolRef::bare(Symbol::CheapClone))
             },
         );
         assert!(catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));

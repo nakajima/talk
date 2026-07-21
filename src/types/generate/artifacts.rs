@@ -5,6 +5,7 @@ pub(super) struct TypeArtifacts {
     pub(super) node_types: FxHashMap<NodeID, Ty>,
     pub(super) instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub(super) member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    pub(super) conformance_evidence: FxHashMap<NodeID, Vec<ConformanceEvidence>>,
     pub(super) integer_literals: FxHashMap<NodeID, CheckedIntegerLiteral>,
     pub(super) for_plans: FxHashMap<NodeID, ForPlan>,
     pub(super) propagation_plans: FxHashMap<NodeID, PropagationPlan>,

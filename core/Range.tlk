@@ -1,0 +1,64 @@
+// no-core
+
+use package::Optional::{ Optional }
+use package::Operators::{ Add, Comparable, Equatable }
+use package::Iterable::{ Iterable, Iterator }
+
+/// A half-open interval: `lower` is included, `upper` is not.
+/// `a..<b` desugars to `Range(lower: a, upper: b)`.
+public struct Range<T: Comparable<T>> {
+	let lower: T
+	let upper: T
+
+	public func contains(element: T) -> Bool {
+		element >= self.lower && element < self.upper
+	}
+}
+
+/// An inclusive interval: both bounds are included.
+/// `a..b` desugars to `ClosedRange(lower: a, upper: b)`.
+public struct ClosedRange<T: Comparable<T>> {
+	let lower: T
+	let upper: T
+
+	public func contains(element: T) -> Bool {
+		element >= self.lower && element <= self.upper
+	}
+}
+
+extend Range<Int>: Iterable {
+	func iter() -> RangeIterator {
+		RangeIterator(lower: self.lower, upper: self.upper, closed: false)
+	}
+}
+
+extend ClosedRange<Int>: Iterable {
+	func iter() -> RangeIterator {
+		RangeIterator(lower: self.lower, upper: self.upper, closed: true)
+	}
+}
+
+struct RangeIterator {
+	let lower: Int
+	let upper: Int
+	let closed: Bool
+	let current: Int
+
+	init(lower: Int, upper: Int, closed: Bool) {
+		self.lower = lower
+		self.upper = upper
+		self.closed = closed
+		self.current = lower
+	}
+}
+
+extend RangeIterator: Iterator<Int> {
+	mut func next() -> Int? {
+		if self.current < self.upper || (self.closed && self.current == self.upper) {
+			let value = self.current
+			self.current = self.current + 1
+			return .some(value)
+		}
+		.none
+	}
+}

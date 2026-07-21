@@ -67,13 +67,14 @@ use crate::node_kinds::{
 };
 use crate::types::Level;
 use crate::types::catalog::{
-    Conformance, Enum, MemberOwner, ProtocolApplication, ProtocolInfo, Requirement, StructInfo,
-    TypeAliasInfo, TypeCatalog, Variant,
+    Conformance, ConformanceId, Enum, MemberOwner, ProtocolApplication, ProtocolInfo, Requirement,
+    StructInfo, TypeAliasInfo, TypeCatalog, Variant,
 };
 use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
 use crate::types::output::{
-    CheckedIntegerLiteral, ExistentialPack, ForPlan, MemberResolution, PropagationPlan, TypeOutput,
+    CheckedIntegerLiteral, ConformanceEvidence, ExistentialPack, ForPlan, MemberResolution,
+    PropagationPlan, TypeOutput,
 };
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{
@@ -131,6 +132,7 @@ struct ExtendWork<'a> {
     context: Vec<Predicate>,
     decl: &'a Decl,
     protocols: Vec<ProtocolRef>,
+    rows: Vec<(ProtocolRef, ConformanceId)>,
 }
 
 #[derive(Clone)]

@@ -2594,6 +2594,62 @@ fn examples_corpus_matches_frozen_stdout() {
 }
 
 #[test]
+fn protocol_init_requirement_constructs_concrete_self() {
+    // Construction through a protocol's init requirement: `Self` pins
+    // from the expected type, and the conformance's witness initializer
+    // (here the synthesized memberwise init) builds the value.
+    assert_runs(
+        b"protocol FromPair<T> {\n\
+          \tinit(lower: T, upper: T)\n\
+          }\n\
+          struct Pair<T> {\n\
+          \tlet lower: T\n\
+          \tlet upper: T\n\
+          }\n\
+          extend<T> Pair<T>: FromPair<T> {}\n\
+          let p: Pair<Int> = FromPair(lower: 1, upper: 5)\n\
+          p.lower + p.upper\n",
+        &[],
+        b"6\n",
+    );
+}
+
+#[test]
+fn protocol_init_requirement_runs_explicit_witness_init() {
+    // An explicit initializer witnesses the requirement and its body
+    // runs at protocol construction.
+    assert_runs(
+        b"protocol FromCount {\n\
+          \tinit(count: Int)\n\
+          }\n\
+          struct Doubled {\n\
+          \tlet value: Int\n\
+          \tinit(count: Int) {\n\
+          \t\tself.value = count * 2\n\
+          \t}\n\
+          }\n\
+          extend Doubled: FromCount {}\n\
+          let d: Doubled = FromCount(count: 21)\n\
+          d.value\n",
+        &[],
+        b"42\n",
+    );
+}
+
+#[test]
+fn range_literals_reach_runtime() {
+    // `1..5` is inclusive (ClosedRange), `1..<5` half-open (Range);
+    // both desugar to direct core-type constructions.
+    assert_runs(
+        b"let c = 1..5\n\
+          let r = 1..<5\n\
+          if c.contains(5) && !r.contains(5) && r.contains(4) { 1 } else { 0 }\n",
+        &[],
+        b"1\n",
+    );
+}
+
+#[test]
 fn run_rejects_owned_captures_in_closures() {
     // CHG-06: v1 captures are Copy values and handler-extent shared
     // borrows; a closure capturing an owned buffer would outlive it.

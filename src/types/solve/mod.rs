@@ -47,7 +47,7 @@ use crate::types::Level;
 use crate::types::catalog::{MemberOwner, ProtocolApplication, Requirement, TypeCatalog};
 use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
-use crate::types::output::MemberResolution;
+use crate::types::output::{ConformanceEvidence, MemberResolution};
 use crate::types::ty::{
     EffTail, EffVar, EffectEntry, EffectRow, Perm, PermVar, Predicate, ProtocolRef, Row, RowTail,
     RowVar, Scheme, SchemeParam, StaticAtom, StaticCmpOp, StaticInt, StaticValue, Ty, TyFold,
@@ -72,6 +72,7 @@ pub struct Solver<'s> {
     pub mono: &'s FxHashMap<Symbol, Ty>,
     pub instantiations: &'s mut FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub member_resolutions: &'s mut FxHashMap<NodeID, MemberResolution>,
+    pub conformance_evidence: &'s mut FxHashMap<NodeID, Vec<ConformanceEvidence>>,
     /// Argument nodes where a borrowed value satisfied an owned CheapClone
     /// parameter by cloning (an O(1) buffer retain, emitted by lowering).
     pub coerce_clones: &'s mut FxHashSet<NodeID>,

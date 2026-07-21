@@ -15,6 +15,7 @@ pub enum Precedence {
     And,
     Equality,
     Comparison,
+    Range,  // .. ..<
     BitOr,  // |
     BitXor, // ^
     BitAnd, // &
@@ -334,7 +335,11 @@ impl Precedence {
             TokenKind::Colon => ParseHandler::NONE,
             TokenKind::DoubleColon => ParseHandler::NONE,
             TokenKind::Arrow => ParseHandler::NONE,
-            TokenKind::DotDot => ParseHandler::NONE,
+            TokenKind::DotDot | TokenKind::DotDotLess => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Range,
+            },
             TokenKind::DotDotDot => ParseHandler::NONE,
             _ => ParseHandler::NONE,
         })

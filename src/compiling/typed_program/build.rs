@@ -181,6 +181,12 @@ impl TypedTreeBuilder<'_> {
                 .unwrap_or(crate::types::ty::Ty::Error),
             member_resolution: self.types.member_resolutions.get(&e.id).cloned(),
             instantiation: self.types.instantiations.get(&e.id).cloned(),
+            conformance_evidence: self
+                .types
+                .conformance_evidence
+                .get(&e.id)
+                .cloned()
+                .unwrap_or_default(),
             existential_pack: self.types.existential_packs.get(&e.id).cloned(),
         }
     }
@@ -714,6 +720,7 @@ impl TypedTreeBuilder<'_> {
             ty: plan.body_ty.erase_eff_args(),
             member_resolution: None,
             instantiation: None,
+            conformance_evidence: Vec::new(),
             existential_pack: None,
         };
         nodes.push(typed_ast::Node::Stmt(typed_ast::Stmt {
@@ -747,6 +754,7 @@ impl TypedTreeBuilder<'_> {
             ty: crate::types::ty::Ty::unit(),
             member_resolution: None,
             instantiation: None,
+            conformance_evidence: Vec::new(),
             existential_pack: None,
         })
     }
@@ -774,6 +782,7 @@ impl TypedTreeBuilder<'_> {
             ty,
             member_resolution: None,
             instantiation: None,
+            conformance_evidence: Vec::new(),
             existential_pack: None,
         }
     }
@@ -808,6 +817,12 @@ impl TypedTreeBuilder<'_> {
             ty: baked_ty(&callee_id),
             member_resolution: self.types.member_resolutions.get(&callee_id).cloned(),
             instantiation: self.types.instantiations.get(&callee_id).cloned(),
+            conformance_evidence: self
+                .types
+                .conformance_evidence
+                .get(&callee_id)
+                .cloned()
+                .unwrap_or_default(),
             existential_pack: None,
         };
         typed_ast::Expr {
@@ -823,6 +838,12 @@ impl TypedTreeBuilder<'_> {
             ty: baked_ty(&call_id),
             member_resolution: self.types.member_resolutions.get(&call_id).cloned(),
             instantiation: self.types.instantiations.get(&call_id).cloned(),
+            conformance_evidence: self
+                .types
+                .conformance_evidence
+                .get(&call_id)
+                .cloned()
+                .unwrap_or_default(),
             existential_pack: None,
         }
     }
@@ -1008,18 +1029,15 @@ impl TypedTreeBuilder<'_> {
             },
             decl::DeclKind::Func(func) => typed_ast::DeclKind::Func(self.func(func)),
             decl::DeclKind::Extend {
-                name,
-                row_generics,
+                binders,
+                head,
                 conformances,
-                generics,
                 where_clause,
                 body,
-                ..
             } => typed_ast::DeclKind::Extend {
-                name: name.clone(),
-                row_generics: row_generics.clone(),
+                binders: binders.clone(),
+                head: head.clone(),
                 conformances: conformances.clone(),
-                generics: generics.clone(),
                 where_clause: where_clause.clone(),
                 body: self.body(body),
             },
@@ -1056,6 +1074,9 @@ impl TypedTreeBuilder<'_> {
             } => typed_ast::DeclKind::MethodRequirement {
                 signature: signature.clone(),
                 receiver_mode: *receiver_mode,
+            },
+            decl::DeclKind::InitRequirement { signature } => typed_ast::DeclKind::InitRequirement {
+                signature: signature.clone(),
             },
             decl::DeclKind::TypeAlias(name, _span, ty) => {
                 typed_ast::DeclKind::TypeAlias(name.clone(), ty.clone())

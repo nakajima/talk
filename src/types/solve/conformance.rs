@@ -139,11 +139,32 @@ impl<'s> Solver<'s> {
                 match matches.as_slice() {
                     [matched] => {
                         let goal = ConformanceGoal {
-                            ty: normalized,
+                            ty: normalized.clone(),
                             protocol: protocol.clone(),
                         };
                         let context = matched.conformance.context.clone();
                         let substitution = matched.substitution.clone();
+                        let mut evidence_substitution = matched.evidence_substitution();
+                        evidence_substitution.push((protocol.protocol, normalized.clone()));
+                        if let Some(info) = self.catalog.protocols.get(&protocol.protocol) {
+                            evidence_substitution.extend(
+                                info.params
+                                    .iter()
+                                    .zip(&protocol.args)
+                                    .map(|(param, arg)| (param.symbol, arg.clone())),
+                            );
+                        }
+                        let evidence = ConformanceEvidence {
+                            row: matched.id,
+                            self_ty: normalized.clone(),
+                            protocol: protocol.clone(),
+                            witnesses: matched.conformance.witnesses.clone(),
+                            substitution: evidence_substitution,
+                        };
+                        let site = self.conformance_evidence.entry(origin.node).or_default();
+                        if !site.contains(&evidence) {
+                            site.push(evidence);
+                        }
                         self.apply_conformance_context(
                             &goal,
                             &context,
@@ -158,6 +179,13 @@ impl<'s> Solver<'s> {
                             return None;
                         }
                         self.not_conforming(&ty, protocol, origin)
+                    }
+                    many if args.iter().any(Ty::has_unification_vars) => {
+                        return Some(Constraint::Conforms {
+                            ty,
+                            protocol,
+                            origin,
+                        });
                     }
                     many => {
                         self.report_overlapping_conformance(
@@ -200,6 +228,27 @@ impl<'s> Solver<'s> {
         };
         let context = matched.conformance.context.clone();
         let substitution = matched.substitution.clone();
+        let mut evidence_substitution = matched.evidence_substitution();
+        evidence_substitution.push((goal.protocol.protocol, goal.ty.clone()));
+        if let Some(info) = self.catalog.protocols.get(&goal.protocol.protocol) {
+            evidence_substitution.extend(
+                info.params
+                    .iter()
+                    .zip(&goal.protocol.args)
+                    .map(|(param, arg)| (param.symbol, arg.clone())),
+            );
+        }
+        let evidence = ConformanceEvidence {
+            row: matched.id,
+            self_ty: goal.ty.clone(),
+            protocol: goal.protocol.clone(),
+            witnesses: matched.conformance.witnesses.clone(),
+            substitution: evidence_substitution,
+        };
+        let site = self.conformance_evidence.entry(origin.node).or_default();
+        if !site.contains(&evidence) {
+            site.push(evidence);
+        }
         self.apply_conformance_context(goal, &context, &substitution, origin, queue);
         true
     }

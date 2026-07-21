@@ -42,7 +42,7 @@ public struct Dict<Value> 'heap {
 	}
 }
 
-extend Dict<Value> {
+extend<Value> Dict<Value> {
 	func get(key: String) -> Optional<&Value> {
 		dict_find(self.head, key)
 	}

@@ -160,14 +160,89 @@ impl<'a> TypecheckSession<'a> {
         for (node, resolution) in std::mem::take(&mut self.artifacts.member_resolutions) {
             let resolution = match resolution {
                 MemberResolution::Direct(symbol) => MemberResolution::Direct(symbol),
-                MemberResolution::ViaConformance { protocol, witness } => {
+                MemberResolution::ViaConformance {
+                    row,
+                    protocol,
+                    witness,
+                    substitution,
+                } => {
                     let protocol = ProtocolRef {
                         protocol: protocol.protocol,
                         args: protocol.args.iter().map(|arg| self.final_ty(arg)).collect(),
                     };
+                    let substitution = substitution
+                        .iter()
+                        .map(|(symbol, ty)| (*symbol, self.final_ty(ty)))
+                        .collect();
                     MemberResolution::ViaConformance {
+                        row,
                         protocol: self.catalog.canonical_protocol_ref(protocol),
                         witness,
+                        substitution,
+                    }
+                }
+                MemberResolution::ViaRequirement {
+                    protocol,
+                    requirement,
+                    self_ty,
+                } => {
+                    let protocol = ProtocolRef {
+                        protocol: protocol.protocol,
+                        args: protocol.args.iter().map(|arg| self.final_ty(arg)).collect(),
+                    };
+                    let protocol = self.catalog.canonical_protocol_ref(protocol);
+                    let self_ty = self.final_ty(&self_ty);
+                    let mut matches = match &self_ty {
+                        Ty::Nominal(head, args) => {
+                            self.catalog.matching_conformances(*head, args, &protocol)
+                        }
+                        _ => Vec::new(),
+                    };
+                    if matches.is_empty() && matches!(self_ty, Ty::Nominal(..)) {
+                        matches = self
+                            .catalog
+                            .matching_protocol_head_conformances(&self_ty, &protocol);
+                    }
+                    let selected = match matches.as_slice() {
+                        [selected] => Some(selected),
+                        _ => None,
+                    };
+                    if let Some(selected) = selected {
+                        let label =
+                            self.catalog
+                                .protocols
+                                .get(&protocol.protocol)
+                                .and_then(|info| {
+                                    info.requirements.iter().find_map(|(label, candidate)| {
+                                        (candidate.symbol == requirement).then_some(label)
+                                    })
+                                });
+                        let witness = label
+                            .and_then(|label| selected.conformance.witnesses.get(label))
+                            .copied()
+                            .unwrap_or(requirement);
+                        let mut substitution = selected.evidence_substitution();
+                        substitution.push((protocol.protocol, self_ty.clone()));
+                        if let Some(info) = self.catalog.protocols.get(&protocol.protocol) {
+                            substitution.extend(
+                                info.params
+                                    .iter()
+                                    .zip(&protocol.args)
+                                    .map(|(param, arg)| (param.symbol, arg.clone())),
+                            );
+                        }
+                        MemberResolution::ViaConformance {
+                            row: selected.id,
+                            protocol,
+                            witness,
+                            substitution,
+                        }
+                    } else {
+                        MemberResolution::ViaRequirement {
+                            protocol,
+                            requirement,
+                            self_ty,
+                        }
                     }
                 }
             };
@@ -236,13 +311,14 @@ impl<'a> TypecheckSession<'a> {
                 (*protocol, assocs)
             })
             .collect();
-        for ((head, _), conformance) in catalog.conformances.iter_mut() {
-            let Some(assocs) = protocol_head_assoc.get(head) else {
+        for conformance in catalog.conformances.values_mut() {
+            let head = conformance.head;
+            let Some(assocs) = protocol_head_assoc.get(&head) else {
                 continue;
             };
             for (owner, assoc) in assocs {
                 let lhs = Ty::Param(*assoc);
-                let rhs = Ty::Proj(Box::new(Ty::Param(*head)), owner.clone(), *assoc);
+                let rhs = Ty::Proj(Box::new(Ty::Param(head)), owner.clone(), *assoc);
                 if let Some(predicate) = conformance.context.iter_mut().find(|predicate| {
                     matches!(predicate, Predicate::TypeEq(a, b) if *a == lhs && *b == lhs)
                 }) {
@@ -274,6 +350,36 @@ impl<'a> TypecheckSession<'a> {
             );
         }
 
+        let mut conformance_evidence = FxHashMap::default();
+        for (node, evidences) in std::mem::take(&mut self.artifacts.conformance_evidence) {
+            let evidences = evidences
+                .into_iter()
+                .map(|evidence| {
+                    let protocol = ProtocolRef {
+                        protocol: evidence.protocol.protocol,
+                        args: evidence
+                            .protocol
+                            .args
+                            .iter()
+                            .map(|arg| self.final_ty(arg))
+                            .collect(),
+                    };
+                    ConformanceEvidence {
+                        row: evidence.row,
+                        self_ty: self.final_ty(&evidence.self_ty),
+                        protocol: self.catalog.canonical_protocol_ref(protocol),
+                        witnesses: evidence.witnesses,
+                        substitution: evidence
+                            .substitution
+                            .iter()
+                            .map(|(symbol, ty)| (*symbol, self.final_ty(ty)))
+                            .collect(),
+                    }
+                })
+                .collect();
+            conformance_evidence.insert(node, evidences);
+        }
+
         let mut local_tys = FxHashMap::default();
         for (symbol, ty) in std::mem::take(&mut self.mono) {
             local_tys.insert(symbol, self.final_ty(&ty));
@@ -288,6 +394,7 @@ impl<'a> TypecheckSession<'a> {
                 schemes,
                 instantiations,
                 member_resolutions,
+                conformance_evidence,
                 integer_literals: self.artifacts.integer_literals,
                 for_plans,
                 propagation_plans: self.artifacts.propagation_plans,

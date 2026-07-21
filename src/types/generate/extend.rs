@@ -27,7 +27,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         // the member bodies: remember the fresh variables so the solved
         // bindings can be written back into the conformance row (the
         // lowerer specializes default bodies from it).
-        let mut inferred_assoc: Vec<((Symbol, ProtocolRef), Symbol, Ty)> = vec![];
+        let mut inferred_assoc: Vec<(ConformanceId, Symbol, Ty)> = vec![];
         for member in &body.decls {
             let DeclKind::Method { func, .. } = &member.kind else {
                 continue;
@@ -60,11 +60,17 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     .get(&owner.protocol)
                     .map(|i| i.assoc.values().copied().collect())
                     .unwrap_or_default();
+                let Some(row_id) = work
+                    .rows
+                    .iter()
+                    .find_map(|(row_protocol, id)| (row_protocol == &owner).then_some(*id))
+                else {
+                    continue;
+                };
                 let bindings = self
                     .catalog
-                    .conformances
-                    .get(&(head_symbol(&work.self_ty), owner.clone()))
-                    .map(|c| c.assoc.clone())
+                    .conformance(row_id)
+                    .map(|row| row.assoc.clone())
                     .unwrap_or_default();
 
                 let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
@@ -87,11 +93,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         Some(bound) => bound.clone(),
                         None => {
                             let var = Ty::Var(self.store.fresh_ty(self.level, member.id));
-                            inferred_assoc.push((
-                                (head_symbol(&work.self_ty), owner.clone()),
-                                assoc,
-                                var.clone(),
-                            ));
+                            inferred_assoc.push((row_id, assoc, var.clone()));
                             var
                         }
                     };
@@ -199,12 +201,12 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             self.schemes.insert(symbol, scheme);
         }
         // Write the solved associated-type bindings back into the row.
-        for (key, assoc, var) in inferred_assoc {
+        for (row_id, assoc, var) in inferred_assoc {
             let solved = self.store.zonk_ty(&var);
             if matches!(solved, Ty::Var(_)) {
                 continue;
             }
-            if let Some(conformance) = self.catalog.conformances.get_mut(&key) {
+            if let Some(conformance) = self.catalog.conformance_mut(row_id) {
                 conformance.assoc.entry(assoc).or_insert(solved);
             }
         }

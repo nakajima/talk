@@ -147,15 +147,12 @@ pub enum DeclKind {
     Func(Func),
 
     Extend {
-        #[drive(skip)]
-        name: Name, // TypeRepr name: Option
-        #[drive(skip)]
-        name_span: Span,
-        /// Row-level params from `extend<T> Head ...`.
-        row_generics: Vec<GenericDecl>,
+        /// Explicit instance binders from `extend<T> Head<T> ...`.
+        binders: Vec<GenericDecl>,
+        /// The extended nominal or protocol application. This is ordinary
+        /// type syntax; arguments never declare parameters.
+        head: TypeAnnotation,
         conformances: Vec<TypeAnnotation>,
-        /// Head application params from `extend Head<T> ...`.
-        generics: Vec<GenericDecl>,
         where_clause: Option<WhereClause>,
         body: Body,
     },
@@ -194,6 +191,12 @@ pub enum DeclKind {
         signature: FuncSignature,
         #[drive(skip)]
         receiver_mode: ReceiverMode,
+    },
+    /// A protocol initializer requirement: `init(params)`, bodyless.
+    /// Desugar stamps the implicit `-> Self` return; no `self` receiver
+    /// is prepended.
+    InitRequirement {
+        signature: FuncSignature,
     },
 
     TypeAlias(#[drive(skip)] Name, #[drive(skip)] Span, TypeAnnotation),

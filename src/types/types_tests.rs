@@ -727,13 +727,13 @@ pub mod tests {
             ),
             (
                 "types::generic_constructor_in_extension_block",
-                "\n          struct Wrapper<T> {\n              let value: T\n\n              init(value: T) {\n                  self.value = value\n              }\n          }\n\n          struct Box<T> {\n              let inner: T\n          }\n\n          extend Box<T> {\n              consuming func wrap() -> Wrapper<T> {\n                  Wrapper<T>(value: self.inner)\n              }\n          }\n          ",
+                "\n          struct Wrapper<T> {\n              let value: T\n\n              init(value: T) {\n                  self.value = value\n              }\n          }\n\n          struct Box<T> {\n              let inner: T\n          }\n\n          extend<T> Box<T> {\n              consuming func wrap() -> Wrapper<T> {\n                  Wrapper<T>(value: self.inner)\n              }\n          }\n          ",
                 true,
                 false,
             ),
             (
                 "types::generic_constructor_with_explicit_type_arg",
-                "\n          struct Container<Element> {\n              let item: Element\n\n              init(item: Element) {\n                  self.item = item\n              }\n          }\n\n          struct MyList<Element> {\n              let first: Element\n          }\n\n          extend MyList<Element> {\n              consuming func boxFirst() -> Container<Element> {\n                  Container<Element>(item: self.first)\n              }\n          }\n          ",
+                "\n          struct Container<Element> {\n              let item: Element\n\n              init(item: Element) {\n                  self.item = item\n              }\n          }\n\n          struct MyList<Element> {\n              let first: Element\n          }\n\n          extend<Element> MyList<Element> {\n              consuming func boxFirst() -> Container<Element> {\n                  Container<Element>(item: self.first)\n              }\n          }\n          ",
                 true,
                 false,
             ),
@@ -1890,6 +1890,59 @@ pub mod tests {
     }
 
     #[test]
+    fn init_requirement_satisfied_by_explicit_init() {
+        let t = check(
+            "// no-core\nprotocol FromPair {\n\tinit(lower: Int, upper: Int)\n}\nstruct Pair {\n\tlet lower: Int\n\tlet upper: Int\n\tinit(lower: Int, upper: Int) {\n\t\tself.lower = lower\n\t\tself.upper = upper\n\t}\n}\nextend Pair: FromPair {}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn init_requirement_satisfied_by_memberwise_init() {
+        let t = check(
+            "// no-core\nprotocol FromPair {\n\tinit(lower: Int, upper: Int)\n}\nstruct Pair {\n\tlet lower: Int\n\tlet upper: Int\n}\nextend Pair: FromPair {}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn init_requirement_arity_mismatch_errors() {
+        let t = check(
+            "// no-core\nprotocol FromPair {\n\tinit(lower: Int, upper: Int)\n}\nstruct Solo {\n\tlet x: Int\n}\nextend Solo: FromPair {}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("init"), "{errors:?}");
+    }
+
+    #[test]
+    fn protocol_init_constructs_concrete_self() {
+        let t = check(
+            "// no-core\nprotocol FromPair {\n\tinit(lower: Int, upper: Int)\n}\nstruct Pair {\n\tlet lower: Int\n\tlet upper: Int\n}\nextend Pair: FromPair {}\nlet p: Pair = FromPair(lower: 1, upper: 2)\nlet l = p.lower",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "p"), "Pair");
+        assert_eq!(ty_of(&t, "l"), "Int");
+    }
+
+    #[test]
+    fn generic_protocol_init_constructs_concrete_self() {
+        let t = check(
+            "// no-core\nprotocol FromPair<T> {\n\tinit(lower: T, upper: T)\n}\nstruct Pair<T> {\n\tlet lower: T\n\tlet upper: T\n}\nextend Pair<T>: FromPair<T> {}\nlet p: Pair<Int> = FromPair(lower: 1, upper: 2)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "p"), "Pair<Int>");
+    }
+
+    #[test]
+    fn protocol_construction_without_init_requirement_errors() {
+        let t = check("// no-core\nprotocol Foo {\n\tfunc foo() -> Int\n}\nlet x = Foo()");
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("init requirement"), "{errors:?}");
+    }
+
+    #[test]
     fn missing_witness_errors() {
         let t = check(
             "// no-core\nprotocol Foo {\n\tfunc foo() -> Int\n\tfunc bar() -> Int\n}\nstruct Thing {}\nextend Thing: Foo {\n\tfunc foo() { 123 }\n}",
@@ -2106,7 +2159,7 @@ pub mod tests {
     #[test]
     fn extend_where_clause_is_conditional_conformance_context() {
         let t = check(
-            "// no-core\nprotocol Showy {\n\tfunc show() -> Int\n}\nprotocol BoxShow {\n\tfunc boxShow() -> Int\n}\nextend Int: Showy {\n\tfunc show() -> Int { 1 }\n}\nstruct Box<T> {\n\tlet item: T\n}\nextend Box<T>: BoxShow where T: Showy {\n\tfunc boxShow() -> Int {\n\t\tself.item.show()\n\t}\n}\nlet good = Box(item: 1).boxShow()",
+            "// no-core\nprotocol Showy {\n\tfunc show() -> Int\n}\nprotocol BoxShow {\n\tfunc boxShow() -> Int\n}\nextend Int: Showy {\n\tfunc show() -> Int { 1 }\n}\nstruct Box<T> {\n\tlet item: T\n}\nextend<T> Box<T>: BoxShow where T: Showy {\n\tfunc boxShow() -> Int {\n\t\tself.item.show()\n\t}\n}\nlet good = Box(item: 1).boxShow()",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "good"), "Int");
@@ -2115,10 +2168,78 @@ pub mod tests {
     #[test]
     fn extend_where_same_type_is_available_in_witness_body() {
         let t = check(
-            "// no-core\nprotocol IntBox {\n\tfunc intItem() -> Int\n}\nstruct Box<T> {\n\tlet item: T\n}\nextend Box<T>: IntBox where T == Int {\n\tfunc intItem() -> Int {\n\t\tself.item\n\t}\n}\nlet good = Box(item: 1).intItem()",
+            "// no-core\nprotocol IntBox {\n\tfunc intItem() -> Int\n}\nstruct Box<T> {\n\tlet item: T\n}\nextend<T> Box<T>: IntBox where T == Int {\n\tfunc intItem() -> Int {\n\t\tself.item\n\t}\n}\nlet good = Box(item: 1).intItem()",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "good"), "Int");
+    }
+
+    #[test]
+    fn concrete_extension_head_uses_a_concrete_nominal_argument() {
+        let t = check(
+            "// no-core\nprotocol P { func get() -> Int }\nstruct Box<Element> { let value: Element }\nextend Box<Int>: P { func get() -> Int { self.value } }\nlet value = Box(value: 1).get()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "value"), "Int");
+    }
+
+    #[test]
+    fn disjoint_conformance_calls_publish_distinct_row_evidence() {
+        let t = check(
+            "// no-core\nprotocol P { func get() -> Int }\nstruct Box<Element> { let value: Element }\nextend Box<Int>: P { func get() -> Int { 1 } }\nextend Box<Bool>: P { func get() -> Int { 2 } }\nlet intValue = Box(value: 1).get()\nlet boolValue = Box(value: true).get()",
+        );
+        assert_clean(&t);
+        let evidence = t
+            .phase
+            .program
+            .types()
+            .member_resolutions
+            .values()
+            .filter_map(|resolution| match resolution {
+                crate::types::output::MemberResolution::ViaConformance { row, witness, .. } => {
+                    Some((*row, *witness))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(evidence.len(), 2, "expected two concrete evidence records");
+        assert_ne!(evidence[0].0, evidence[1].0, "rows must remain distinct");
+        assert_ne!(
+            evidence[0].1, evidence[1].1,
+            "each row must publish its own witness"
+        );
+        assert!(
+            t.phase
+                .program
+                .types()
+                .member_resolutions
+                .values()
+                .all(|resolution| !matches!(
+                    resolution,
+                    crate::types::output::MemberResolution::ViaRequirement { .. }
+                ))
+        );
+    }
+
+    #[test]
+    fn self_parameter_equality_refines_the_instance_head() {
+        let t = check(
+            "// no-core\nprotocol P { func get() -> Int }\nstruct Box<Element> { let value: Element }\nextend Box: P where Self.Element == Int { func get() -> Int { self.value } }\nlet value = Box(value: 1).get()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "value"), "Int");
+    }
+
+    #[test]
+    fn concrete_inherent_extension_is_not_visible_on_other_arguments() {
+        let t = check(
+            "// no-core\nstruct Box<Element> { let value: Element }\nextend Box<Int> { func intValue() -> Int { self.value } }\nlet value = Box(value: true).intValue()",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("Unknown member")),
+            "expected an unavailable-member error, got {errors:?}"
+        );
     }
 
     #[test]
@@ -3431,11 +3552,13 @@ pub mod tests {
                 );
             }
         }
-        for ((head, protocol), conformance) in &catalog.conformances {
+        for conformance in catalog.conformances.values() {
             for (assoc, ty) in &conformance.assoc {
                 assert!(
                     !ty_has_vars(ty),
-                    "conformance ({head}, {protocol}) assoc {assoc} leaks vars: {ty:?}"
+                    "conformance ({}, {}) assoc {assoc} leaks vars: {ty:?}",
+                    conformance.head,
+                    conformance.protocol
                 );
             }
         }
@@ -4284,6 +4407,22 @@ mod with_core {
     ];
 
     #[test]
+    fn range_literals_construct_core_range_types() {
+        // `1..3` and `1..<3` desugar to direct ClosedRange/Range
+        // constructions (imported core symbols render by id here, so
+        // assert shape: distinct nominal heads applied at Int, no
+        // leftover variables). The inclusive/half-open semantics mapping
+        // is pinned by core/Range.test.tlk and the runtime tests.
+        let t = check_with_core(Source::from("let c = 1..3\nlet r = 1..<3"));
+        assert!(type_errors(&t).is_empty(), "{:?}", type_errors(&t));
+        let c = super::tests::ty_of(&t, "c");
+        let r = super::tests::ty_of(&t, "r");
+        assert!(c.ends_with("<Int>"), "{c}");
+        assert!(r.ends_with("<Int>"), "{r}");
+        assert_ne!(c, r);
+    }
+
+    #[test]
     fn every_example_type_checks_clean() {
         let mut failures = vec![];
         for name in CLEAN_EXAMPLES {
@@ -4790,7 +4929,7 @@ mod with_core {
     #[test]
     fn marker_field_check_sees_generic_copy_row() {
         let t = check_with_core(Source::from(
-            "enum ExprTag {}\nenum Ref<T> {\n\tcase expr(Int) -> Ref<ExprTag>\n}\nextend Ref<T>: Copy {}\nstruct Slot {\n\tlet target: Ref<ExprTag>\n}\nextend Slot: Copy {}",
+            "enum ExprTag {}\nenum Ref<T> {\n\tcase expr(Int) -> Ref<ExprTag>\n}\nextend<T> Ref<T>: Copy {}\nstruct Slot {\n\tlet target: Ref<ExprTag>\n}\nextend Slot: Copy {}",
         ));
         assert_no_errors(&t);
     }
@@ -4800,7 +4939,7 @@ mod with_core {
         // The where-clause is the authority for a conditional row's own
         // field check: `T` satisfies CheapClone because the context says so.
         let t = check_with_core(Source::from(
-            "struct Box<T> {\n\tlet value: T\n}\nextend Box<T>: CheapClone where T: CheapClone {}\nstruct Holder {\n\tlet inner: Box<String>\n}\nextend Holder: CheapClone {}",
+            "struct Box<T> {\n\tlet value: T\n}\nextend<T> Box<T>: CheapClone where T: CheapClone {}\nstruct Holder {\n\tlet inner: Box<String>\n}\nextend Holder: CheapClone {}",
         ));
         assert_no_errors(&t);
     }
@@ -4833,7 +4972,7 @@ mod with_core {
     fn conditional_cheap_clone_satisfied_context_extracts_from_borrow() {
         // The satisfied twin still extracts by silent clone.
         let t = check_with_core(Source::from(
-            "struct Box<T> {\n\tlet value: T\n}\nextend Box<T>: CheapClone where T: CheapClone {}\nfunc peek(b: &Box<String>?) -> Box<String>? {\n\tmatch b {\n\t\t.some(found) -> Optional.some(found),\n\t\t.none -> Optional.none\n\t}\n}",
+            "struct Box<T> {\n\tlet value: T\n}\nextend<T> Box<T>: CheapClone where T: CheapClone {}\nfunc peek(b: &Box<String>?) -> Box<String>? {\n\tmatch b {\n\t\t.some(found) -> Optional.some(found),\n\t\t.none -> Optional.none\n\t}\n}",
         ));
         assert!(
             !t.has_errors(),
@@ -4846,7 +4985,7 @@ mod with_core {
         // The same row must NOT satisfy a field whose argument fails the
         // where-clause: Box<NotCheap> is not CheapClone.
         let t = check_with_core(Source::from(
-            "struct Box<T> {\n\tlet value: T\n}\nextend Box<T>: CheapClone where T: CheapClone {}\nstruct NotCheap {\n\tlet value: String\n}\nstruct Holder {\n\tlet inner: Box<NotCheap>\n}\nextend Holder: CheapClone {}",
+            "struct Box<T> {\n\tlet value: T\n}\nextend<T> Box<T>: CheapClone where T: CheapClone {}\nstruct NotCheap {\n\tlet value: String\n}\nstruct Holder {\n\tlet inner: Box<NotCheap>\n}\nextend Holder: CheapClone {}",
         ));
         let errors = type_errors(&t);
         assert!(

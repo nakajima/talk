@@ -185,6 +185,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             mono: &*self.mono,
             instantiations: &mut self.artifacts.instantiations,
             member_resolutions: &mut self.artifacts.member_resolutions,
+            conformance_evidence: &mut self.artifacts.conformance_evidence,
             coerce_clones: &mut self.artifacts.coerce_clones,
             level: self.level,
             defaulting,

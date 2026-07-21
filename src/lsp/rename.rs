@@ -296,6 +296,9 @@ fn symbol_for_member_resolution(
     match resolution? {
         crate::types::output::MemberResolution::Direct(symbol) => Some(*symbol),
         crate::types::output::MemberResolution::ViaConformance { witness, .. } => Some(*witness),
+        crate::types::output::MemberResolution::ViaRequirement { requirement, .. } => {
+            Some(*requirement)
+        }
     }
 }
 
@@ -417,9 +420,6 @@ fn goto_definition_symbol_from_decl(
             name, name_span, ..
         }
         | DeclKind::Protocol {
-            name, name_span, ..
-        }
-        | DeclKind::Extend {
             name, name_span, ..
         }
         | DeclKind::Enum {
@@ -710,9 +710,6 @@ impl RenameCollector<'_> {
                 name, name_span, ..
             }
             | DeclKind::Protocol {
-                name, name_span, ..
-            }
-            | DeclKind::Extend {
                 name, name_span, ..
             }
             | DeclKind::Enum {

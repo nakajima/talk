@@ -2468,9 +2468,9 @@ fn catalog_requirement_signature(
         .copied()
         .map(crate::types::ty::ProtocolRef::bare)
         .collect();
-    for (_, protocol_ref) in workspace.types.catalog.conformances.keys() {
-        if !refs.contains(protocol_ref) {
-            refs.push(protocol_ref.clone());
+    for row in workspace.types.catalog.conformances.values() {
+        if !refs.contains(&row.protocol) {
+            refs.push(row.protocol.clone());
         }
     }
 

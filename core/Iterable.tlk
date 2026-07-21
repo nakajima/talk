@@ -96,7 +96,7 @@ public struct Map<I, U> where I: Iterator {
 	let map: (I.Element) -> U
 }
 
-extend Map<I, U>: Iterator where I: Iterator {
+extend<I, U> Map<I, U>: Iterator where I: Iterator {
 	mut func next() -> U? {
 		if let .some(elem) = self.inner.next() {
 			return .some(self.map(elem))
@@ -125,9 +125,9 @@ public struct IndexIterator<T: IndexIterable> {
 	let position: Int
 }
 
-extend IndexIterator<T: IndexIterable>: Borrowed {}
+extend<T: IndexIterable> IndexIterator<T>: Borrowed {}
 
-extend IndexIterator<T: IndexIterable>: Iterator {
+extend<T: IndexIterable> IndexIterator<T>: Iterator {
 	mut func next() -> T.Element? {
 		if self.position > self.inner._index_iterable_count() - 1 { return Optional.none }
 
@@ -163,7 +163,7 @@ public struct Peek<T: Iterator> {
 	}
 }
 
-extend Peek<T: Iterator>: Iterator {
+extend<T: Iterator> Peek<T>: Iterator {
 	mut func next() -> T.Element? {
 		if self.has_peeked {
 			let next = self.inner.next()

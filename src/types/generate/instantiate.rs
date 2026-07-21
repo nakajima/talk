@@ -285,18 +285,4 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             } if lhs == &zero && rhs == target)
         });
     }
-
-    pub(super) fn callable_arity(&mut self, symbol: Symbol) -> Option<usize> {
-        if let Some(scheme) = self.schemes.get(&symbol)
-            && let Ty::Func(params, ..) = &scheme.ty
-        {
-            return Some(params.len());
-        }
-        if let Some(ty) = self.mono.get(&symbol).cloned()
-            && let Ty::Func(params, ..) = self.store.shallow(&ty)
-        {
-            return Some(params.len());
-        }
-        None
-    }
 }

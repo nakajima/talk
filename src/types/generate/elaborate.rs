@@ -208,6 +208,22 @@ impl<'e> Elaborator<'e> {
                 }
                 Ty::Param(child)
             }
+            Symbol::TypeParameter(_) => {
+                if !member_generics.is_empty() {
+                    self.diagnostics.errors.push((
+                        TypeError::ArityMismatch {
+                            expected: 0,
+                            found: member_generics.len(),
+                        },
+                        node,
+                    ));
+                }
+                nominal_params(self.catalog, owner)
+                    .iter()
+                    .position(|param| param.symbol == child)
+                    .and_then(|index| args.get(index).cloned())
+                    .unwrap_or(Ty::Error)
+            }
             Symbol::Struct(_) | Symbol::Enum(_) | Symbol::Protocol(_) | Symbol::Builtin(_) => {
                 let lowered_args = self.lower_generic_args(child, member_generics);
                 Ty::Nominal(child, lowered_args)

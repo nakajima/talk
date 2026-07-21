@@ -3232,10 +3232,16 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Extend {
-                name: Name::Raw("Person".into()),
-                name_span: Span::ANY,
-                row_generics: vec![],
-                generics: vec![],
+                binders: vec![],
+                head: TypeAnnotation {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    kind: TypeAnnotationKind::Nominal {
+                        name: Name::Raw("Person".into()),
+                        name_span: Span::ANY,
+                        generics: vec![],
+                    },
+                },
                 conformances: vec![TypeAnnotation {
                     id: NodeID::ANY,
                     span: Span::ANY,
@@ -3279,26 +3285,27 @@ pub mod tests {
     fn parses_extend_prefix_generics() {
         let parsed = parse("extend<T: Into<String>> String: Add<T> {}");
         let DeclKind::Extend {
-            row_generics,
-            name,
+            binders,
+            head,
             conformances,
-            generics,
             ..
         } = &parsed.roots[0].as_decl().kind
         else {
             panic!("expected extend")
         };
-        assert_eq!(name.name_str(), "String");
-        assert_eq!(row_generics.len(), 1);
-        assert_eq!(row_generics[0].name.name_str(), "T");
-        assert_eq!(row_generics[0].conformances.len(), 1);
+        assert!(matches!(
+            &head.kind,
+            TypeAnnotationKind::Nominal { name, .. } if name.name_str() == "String"
+        ));
+        assert_eq!(binders.len(), 1);
+        assert_eq!(binders[0].name.name_str(), "T");
+        assert_eq!(binders[0].conformances.len(), 1);
         assert_eq!(conformances.len(), 1);
-        assert!(generics.is_empty());
     }
 
     #[test]
     fn parses_extend_where_clause() {
-        let parsed = parse("extend Box<T>: P where T: Showable {}");
+        let parsed = parse("extend<T> Box<T>: P where T: Showable {}");
         let DeclKind::Extend { where_clause, .. } = &parsed.roots[0].as_decl().kind else {
             panic!("expected extend")
         };
@@ -3620,6 +3627,41 @@ pub mod tests {
                 })])
             })
         );
+    }
+
+    #[test]
+    fn parses_protocol_init_requirement() {
+        let parsed = parse(
+            "
+        protocol FromPair {
+            init(lower: Int, upper: Int)
+        }
+        ",
+        );
+
+        let DeclKind::Protocol { body, .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected protocol");
+        };
+        let DeclKind::InitRequirement { signature } = &body.decls[0].kind else {
+            panic!("expected init requirement, got {:?}", body.decls[0].kind);
+        };
+        assert_eq!(signature.name, Name::Raw("init".into()));
+        assert_eq!(signature.params.len(), 2);
+        assert_eq!(signature.params[0].name, Name::Raw("lower".into()));
+        assert!(signature.ret.is_none());
+    }
+
+    #[test]
+    fn rejects_protocol_init_requirement_body() {
+        let lexer = Lexer::new(
+            "
+        protocol FromPair {
+            init(lower: Int) {}
+        }
+        ",
+        );
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(parser.parse().is_err());
     }
 
     #[test]

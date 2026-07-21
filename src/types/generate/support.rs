@@ -140,13 +140,6 @@ pub(super) fn binding_groups(decls: &IndexMap<Symbol, TopEntry<'_>>) -> Vec<Vec<
         .collect()
 }
 
-pub(super) fn head_symbol(ty: &Ty) -> Symbol {
-    match ty {
-        Ty::Nominal(symbol, _) => *symbol,
-        _ => Symbol::Main,
-    }
-}
-
 /// One-way structural match: wherever `pattern` mentions an associated-type
 /// parameter and `witness` is concrete, record the binding (Chakravarty,
 /// Keller & Peyton Jones, ICFP 2005 — instances determine their synonyms).
@@ -342,6 +335,7 @@ pub(super) fn decl_kind_name(kind: &DeclKind) -> &'static str {
         DeclKind::Func(_) => "function declarations",
         DeclKind::FuncSignature(_) => "function signatures",
         DeclKind::MethodRequirement { .. } => "method requirements",
+        DeclKind::InitRequirement { .. } => "init requirements",
         DeclKind::TypeAlias(..) => "type aliases",
     }
 }

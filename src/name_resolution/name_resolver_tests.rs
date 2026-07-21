@@ -1458,11 +1458,13 @@ pub mod tests {
         assert_eq!(
             *resolved.0.roots[1].as_decl(),
             any_decl!(DeclKind::Extend {
-                name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
-                name_span: Span::ANY,
-                row_generics: vec![],
+                binders: vec![],
+                head: annotation!(TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
+                    name_span: Span::ANY,
+                    generics: vec![],
+                }),
                 conformances: vec![],
-                generics: vec![],
                 where_clause: None,
                 body: any_body!(vec![])
             }),
@@ -1482,11 +1484,13 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.0.roots[0].as_decl(),
             any_decl!(DeclKind::Extend {
-                name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
-                name_span: Span::ANY,
-                row_generics: vec![],
+                binders: vec![],
+                head: annotation!(TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
+                    name_span: Span::ANY,
+                    generics: vec![],
+                }),
                 conformances: vec![],
-                generics: vec![],
                 where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     func: Box::new(Func {

@@ -105,6 +105,47 @@ impl LowerOperators {
                             body: vec![Node::Expr(rhs)],
                         },
                     )
+                } else if matches!(op, TokenKind::DotDot | TokenKind::DotDotLess) {
+                    // Range operators construct the core range types
+                    // directly, like Swift: `a..b` is an inclusive
+                    // ClosedRange, `a..<b` a half-open Range.
+                    let range_type = if op == TokenKind::DotDot {
+                        "ClosedRange"
+                    } else {
+                        "Range"
+                    };
+                    let span = lhs.span;
+                    let constructor = Expr {
+                        id: NodeID(expr.id.0, self.node_ids.next_id()),
+                        span,
+                        kind: ExprKind::Variable(range_type.into()),
+                    };
+                    ExprKind::Call {
+                        callee: constructor.into(),
+                        type_args: vec![],
+                        args: vec![
+                            CallArg {
+                                mode: None,
+                                mode_span: None,
+                                id: expr.id,
+                                label: Label::Named("lower".into()),
+                                label_span: expr.span,
+                                value: *lhs,
+                                span: expr.span,
+                            },
+                            CallArg {
+                                mode: None,
+                                mode_span: None,
+                                id: rhs.id,
+                                label: Label::Named("upper".into()),
+                                label_span: rhs.span,
+                                value: rhs,
+                                span: expr.span,
+                            },
+                        ],
+                        trailing_block: None,
+                        desugared_operator: None,
+                    }
                 } else {
                     let (protocol_name, label) = match op {
                         // Arithmetic
@@ -346,6 +387,67 @@ pub mod tests {
                 ]
             )))
         )
+    }
+
+    fn assert_lowers_range_literal(source: &'static str, expected_type: &str) {
+        let mut parsed = parse(source);
+        LowerOperators::run(&mut parsed);
+
+        let StmtKind::Expr(expr) = &parsed.roots[0].as_stmt().kind else {
+            panic!("expected expression statement");
+        };
+        let ExprKind::Call { callee, args, .. } = &expr.kind else {
+            panic!("expected call, got {:?}", expr.kind);
+        };
+        let ExprKind::Variable(range_type) = &callee.kind else {
+            panic!("expected range constructor callee, got {:?}", callee.kind);
+        };
+
+        assert_eq!(range_type.name_str(), expected_type);
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0].label, Label::Named("lower".into()));
+        assert_eq!(args[1].label, Label::Named("upper".into()));
+    }
+
+    #[test]
+    fn lowers_inclusive_range_literal() {
+        assert_lowers_range_literal("1..3", "ClosedRange");
+    }
+
+    #[test]
+    fn lowers_half_open_range_literal() {
+        assert_lowers_range_literal("1..<3", "Range");
+    }
+
+    #[test]
+    fn range_binds_tighter_than_equality_looser_than_addition() {
+        let mut parsed = parse("0..n - 1 == r");
+        LowerOperators::run(&mut parsed);
+
+        // `(0..(n - 1)) == r`: the equality callee receives the range
+        // construction as its first argument.
+        let StmtKind::Expr(expr) = &parsed.roots[0].as_stmt().kind else {
+            panic!("expected expression statement");
+        };
+        let ExprKind::Call { callee, args, .. } = &expr.kind else {
+            panic!("expected call, got {:?}", expr.kind);
+        };
+        let ExprKind::Member(Some(receiver), Label::Named(method), _) = &callee.kind else {
+            panic!("expected equality callee, got {:?}", callee.kind);
+        };
+        assert!(
+            matches!(&receiver.kind, ExprKind::Variable(name) if name.name_str() == "Equatable")
+        );
+        assert_eq!(method, "equals");
+        let ExprKind::Call { callee, .. } = &args[0].value.kind else {
+            panic!(
+                "expected range construction lhs, got {:?}",
+                args[0].value.kind
+            );
+        };
+        assert!(
+            matches!(&callee.kind, ExprKind::Variable(name) if name.name_str() == "ClosedRange")
+        );
     }
 
     fn assert_lowers_binary(source: &'static str, expected_protocol: &str, expected_method: &str) {

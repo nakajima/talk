@@ -69,7 +69,6 @@ impl<'s> Solver<'s> {
                         self.catalog.requirement_in_ref(&protocol, &label_str)
                     {
                         let requirement = requirement.clone();
-                        let witness = requirement.symbol;
                         self.bind_requirement(
                             owner,
                             &requirement,
@@ -78,7 +77,7 @@ impl<'s> Solver<'s> {
                             &member,
                             origin,
                             queue,
-                            witness,
+                            None,
                         );
                         improved = true;
                     } else {

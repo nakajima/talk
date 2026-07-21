@@ -1,0 +1,49 @@
+test "can be created for int" {
+	let range = Range(lower: 1, upper: 5)
+	assert(range.lower == 1)
+	assert(range.upper == 5)
+}
+
+test "can be created for float" {
+	let range = Range(lower: 1.0, upper: 5.0)
+	assert(range.lower == 1.0)
+	assert(range.upper == 5.0)
+}
+
+test "can check contains for int" {
+	let range = Range(lower: 1, upper: 5)
+	assert(range.contains(1))
+	assert(range.contains(2))
+	assert(!range.contains(5))
+	assert(!range.contains(6))
+}
+
+test "range literal is half-open" {
+	let range = 1..<5
+	assert(range.contains(1))
+	assert(range.contains(4))
+	assert(!range.contains(5))
+}
+
+test "closed range literal is inclusive" {
+	let range = 1..5
+	assert(range.contains(1))
+	assert(range.contains(5))
+	assert(!range.contains(6))
+}
+
+test "can check contains for float" {
+	let range = 1.0..<5.0
+	assert(range.contains(1.0))
+	assert(range.contains(2.0))
+	assert(!range.contains(5.0))
+	assert(!range.contains(6.0))
+}
+
+test "can iterate over int range" {
+	let i = 0
+	for _ in 0..4 {
+		i = i + 1
+	}
+	assert(i == 5)
+}

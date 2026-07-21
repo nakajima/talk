@@ -87,6 +87,9 @@ pub struct Expr {
     /// the call site.
     #[drive(skip)]
     pub instantiation: Option<Vec<(Symbol, crate::types::ty::Ty)>>,
+    /// Conformance rows selected for obligations originating at this node.
+    #[drive(skip)]
+    pub conformance_evidence: Vec<crate::types::output::ConformanceEvidence>,
     /// The existential pack the checker recorded at this node (the checker's
     /// `existential_packs`), baked on by the typed-program builder; raw
     /// (un-substituted).
@@ -525,12 +528,11 @@ pub enum DeclKind {
     },
     Func(Func),
     Extend {
+        binders: Vec<GenericDecl>,
         #[drive(skip)]
-        name: Name,
-        row_generics: Vec<GenericDecl>,
+        head: TypeAnnotation,
         #[drive(skip)]
         conformances: Vec<TypeAnnotation>,
-        generics: Vec<GenericDecl>,
         #[drive(skip)]
         where_clause: Option<WhereClause>,
         body: Body,
@@ -560,6 +562,10 @@ pub enum DeclKind {
         signature: FuncSignature,
         #[drive(skip)]
         receiver_mode: ReceiverMode,
+    },
+    InitRequirement {
+        #[drive(skip)]
+        signature: FuncSignature,
     },
     TypeAlias(#[drive(skip)] Name, #[drive(skip)] TypeAnnotation),
     /// Imports are resolved away during name resolution; kept as an inert marker

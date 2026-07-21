@@ -363,7 +363,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let label = crate::label::Label::Named(name.to_string());
         let (implementation, mut subst) = match self
             .program_builder
-            .conformance_witness(payload_ty, protocol, &label)
+            .generated_conformance_witness(payload_ty, protocol, &label)
         {
             Some(found) => found,
             None if (name == "equals" || name == "show")

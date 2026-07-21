@@ -192,7 +192,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Mut => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Consuming => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Protocol => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::DotDot | TokenKind::DotDotDot => {
+                TokenKind::DotDot | TokenKind::DotDotDot | TokenKind::DotDotLess => {
                     self.make(tok, Kind::OPERATOR, &mut tokens)
                 }
                 TokenKind::Associated => self.make(tok, Kind::KEYWORD, &mut tokens),
@@ -310,14 +310,14 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_expr(func, ast));
                 }
                 DeclKind::Extend {
+                    binders,
+                    head,
                     conformances,
-                    generics,
                     body,
-                    name_span,
                     ..
                 } => {
-                    result.push(self.make_span(Kind::TYPE, *name_span));
-                    result.extend(self.tokens_from_exprs(generics, ast));
+                    result.extend(self.tokens_from_exprs(binders, ast));
+                    result.extend(self.tokens_from_expr(head, ast));
                     result.extend(self.tokens_from_exprs(conformances, ast));
                     result.extend(self.tokens_from_expr(body, ast));
                 }
@@ -349,6 +349,9 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_expr(func_signature, ast));
                 }
                 DeclKind::MethodRequirement { signature, .. } => {
+                    result.extend(self.tokens_from_expr(signature, ast));
+                }
+                DeclKind::InitRequirement { signature } => {
                     result.extend(self.tokens_from_expr(signature, ast));
                 }
                 DeclKind::TypeAlias(.., lhs_span, rhs) => {

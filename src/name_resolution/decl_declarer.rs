@@ -428,7 +428,71 @@ impl<'a> DeclDeclarer<'a> {
             self.declare_generics(row_generics, true);
         }
         self.declare_generics(generics, is_extend);
+        if !is_extend {
+            let children = self.resolver.phase.child_types.entry(sym).or_default();
+            for generic in generics {
+                if let Ok(param) = generic.name.symbol() {
+                    children.insert(generic.name.name_str().into(), param);
+                }
+            }
+        }
 
+        self.predeclare_nominals(decls.iter().collect_vec().as_slice());
+    }
+
+    fn enter_extend(
+        &mut self,
+        id: NodeID,
+        head: &mut TypeAnnotation,
+        binders: &mut [GenericDecl],
+        decls: &[Decl],
+    ) {
+        let name = match &mut head.kind {
+            TypeAnnotationKind::Nominal { name, .. } | TypeAnnotationKind::SelfType(name) => name,
+            _ => {
+                self.resolver.diagnostic(
+                    id,
+                    NameResolverError::Unresolved(Name::Raw("extension head".into())),
+                );
+                return;
+            }
+        };
+        *name = self.resolver.lookup(name).unwrap_or(name.clone());
+        let sym = match name.symbol() {
+            Ok(sym) => sym,
+            Err(_) => {
+                self.resolver
+                    .diagnostic(id, NameResolverError::Unresolved(name.clone()));
+                Symbol::Synthesized(
+                    self.resolver
+                        .symbols
+                        .next_synthesized(self.resolver.current_module_id),
+                )
+            }
+        };
+
+        self.resolver.nominal_stack.push((sym, id));
+        self.type_members.insert(id, TypeMembers::default());
+        self.start_scope(id);
+        self.resolver
+            .current_scope_mut()
+            .expect("didn't get current scope")
+            .types
+            .insert("Self".into(), sym);
+
+        if matches!(sym, Symbol::Protocol(_))
+            && let Some(children) = self.resolver.phase.child_types.get(&sym).cloned()
+        {
+            let scope = self
+                .resolver
+                .current_scope_mut()
+                .expect("didn't get current scope");
+            for (label, child) in children {
+                scope.types.insert(label.to_string(), child);
+            }
+        }
+
+        self.declare_generics(binders, false);
         self.predeclare_nominals(decls.iter().collect_vec().as_slice());
     }
 
@@ -531,21 +595,13 @@ impl<'a> DeclDeclarer<'a> {
         on!(
             &mut decl.kind,
             DeclKind::Extend {
-                name,
-                row_generics,
-                generics,
+                binders,
+                head,
                 body,
                 ..
             },
             {
-                self.enter_nominal(
-                    decl.id,
-                    name,
-                    Some(row_generics),
-                    generics,
-                    &body.decls,
-                    true,
-                );
+                self.enter_extend(decl.id, head, binders, &body.decls);
             }
         );
 
@@ -854,9 +910,9 @@ impl<'a> DeclDeclarer<'a> {
 
         // For Extend blocks, mark methods as public if the extended type is public
         // This happens regardless of the extend's own visibility
-        if let DeclKind::Extend { name, body, .. } = &decl.kind {
-            // Check if the extended type is public
-            let extended_type_is_public = name
+        if let DeclKind::Extend { head, body, .. } = &decl.kind {
+            // Check if the extended type is public.
+            let extended_type_is_public = head
                 .symbol()
                 .map(|sym| self.resolver.phase.public_symbols.contains(&sym))
                 .unwrap_or(false);

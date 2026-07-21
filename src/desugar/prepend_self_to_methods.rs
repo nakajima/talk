@@ -61,6 +61,17 @@ impl PrependSelfToMethods {
                 self.implicit_self_param(decl.span, decl.span, ReceiverMode::Consuming),
             );
         }
+
+        // An init requirement takes no receiver; its implicit return is
+        // `Self`, made explicit here so requirement lowering treats it
+        // like any annotated signature.
+        if let DeclKind::InitRequirement { signature } = &mut decl.kind {
+            signature.ret = Some(Box::new(TypeAnnotation {
+                id: NodeID(self.file_id, self.node_ids.next_id()),
+                span: signature.span,
+                kind: TypeAnnotationKind::SelfType("Self".into()),
+            }));
+        }
     }
 
     fn implicit_self_param(
@@ -209,6 +220,31 @@ pub mod tests {
                 mutable: true,
                 inner: Box::new(annotation!(TypeAnnotationKind::SelfType("Self".into())))
             }
+        );
+    }
+
+    #[test]
+    fn init_requirements_get_self_return_and_no_receiver() {
+        let mut parsed = parse(
+            "
+        protocol FromPair {
+            init(lower: Int, upper: Int)
+        }
+        ",
+        );
+
+        PrependSelfToMethods::run(&mut parsed);
+
+        let DeclKind::Protocol { body, .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected protocol");
+        };
+        let DeclKind::InitRequirement { signature } = &body.decls[0].kind else {
+            panic!("expected init requirement");
+        };
+        assert_eq!(signature.params.len(), 2, "no self receiver is prepended");
+        assert_eq!(
+            signature.ret.as_ref().unwrap().kind,
+            TypeAnnotationKind::SelfType("Self".into())
         );
     }
 

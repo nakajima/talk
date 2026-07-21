@@ -536,6 +536,10 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 return self.make(DotDotDot);
             }
+            if self.peek() == Some('<') {
+                self.advance();
+                return self.make(DotDotLess);
+            }
             return self.make(DotDot);
         }
         self.make(Dot)
@@ -693,6 +697,26 @@ mod tests {
         assert_eq!(lexer.next().unwrap().kind, DotDot);
         let tok = lexer.next().unwrap();
         assert_token(source, &tok, Identifier, "R");
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn dot_dot_less() {
+        let source = "1..<3";
+        let mut lexer = Lexer::new(source);
+        assert_eq!(lexer.next().unwrap().kind, Int);
+        assert_eq!(lexer.next().unwrap().kind, DotDotLess);
+        assert_eq!(lexer.next().unwrap().kind, Int);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn dot_dot_between_ints_stays_int() {
+        let source = "1..3";
+        let mut lexer = Lexer::new(source);
+        assert_eq!(lexer.next().unwrap().kind, Int);
+        assert_eq!(lexer.next().unwrap().kind, DotDot);
+        assert_eq!(lexer.next().unwrap().kind, Int);
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 

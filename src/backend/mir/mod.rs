@@ -31,7 +31,7 @@ use crate::typed_ast::{
     RecordFieldPattern, RecordFieldPatternKind, Stmt, StmtKind,
 };
 use crate::types::output::CheckedIntegerLiteral;
-use crate::types::ty::{ParamKind, Perm, StaticValue, Ty};
+use crate::types::ty::{ParamKind, Perm, ProtocolRef, StaticValue, Ty};
 
 use super::BackendError;
 
@@ -734,10 +734,26 @@ const OBJECT_WALK: ContainsWalk = ContainsWalk {
     skip_borrowed_payloads: false,
 };
 
-/// Whether a nominal head conforms to a marker protocol (Borrowed, Copy,
-/// CheapClone, Deinit — the well-known core symbols).
-fn conforms_to(builder: &ProgramBuilder<'_>, head: Symbol, protocol: Symbol) -> bool {
-    builder.conformance_pairs.contains(&(head, protocol))
+/// Whether this complete type application conforms to a marker protocol.
+/// A specialized row is evidence only for matching arguments, never for its
+/// whole nominal family.
+fn conforms_to(builder: &ProgramBuilder<'_>, ty: &Ty, protocol: Symbol) -> bool {
+    match ty {
+        Ty::Nominal(head, args) => !builder
+            .catalog
+            .matching_conformances(*head, args, &ProtocolRef::bare(protocol))
+            .is_empty(),
+        Ty::Param(param) => builder
+            .catalog
+            .param_bounds
+            .get(param)
+            .is_some_and(|bounds| {
+                builder
+                    .catalog
+                    .bounds_satisfy(bounds, &ProtocolRef::bare(protocol))
+            }),
+        _ => false,
+    }
 }
 
 /// Whether dropping a value of this type does work: it owns refcounted
@@ -765,7 +781,7 @@ fn needs_drop_inner(builder: &ProgramBuilder<'_>, ty: &Ty, borrowed: bool) -> bo
         Ty::Nominal(symbol, _) if *symbol == Symbol::RawPtr => false,
         // A `Deinit` conformance is a destructor hook: the value needs
         // its drop scheduled even when no field owns a buffer.
-        Ty::Nominal(symbol, _) if conforms_to(builder, *symbol, Symbol::Deinit) => true,
+        Ty::Nominal(..) if conforms_to(builder, ty, Symbol::Deinit) => true,
         Ty::Nominal(_, _) => contains_buffer(builder, ty),
         // Aggregate components own even when borrow-typed (owning
         // stored views); only a top-level borrow is a frame view.
@@ -820,7 +836,7 @@ fn contains_borrow_classified(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
 fn borrow_classified(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
     match ty {
         Ty::Borrow(_, _) => true,
-        Ty::Nominal(symbol, _) => conforms_to(builder, *symbol, Symbol::Borrowed),
+        Ty::Nominal(..) => conforms_to(builder, ty, Symbol::Borrowed),
         _ => false,
     }
 }
@@ -1521,7 +1537,10 @@ pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Progr
     let user = &programs[0];
     for (declared, def) in &user.program.types().catalog.structs {
         let symbol = canonical(*declared, user.module);
-        if conforms_to(&builder, symbol, Symbol::Borrowed) {
+        if builder
+            .catalog
+            .family_unconditionally_conforms(symbol, Symbol::Borrowed)
+        {
             continue;
         }
         for (name, (_, field_ty)) in &def.fields {
@@ -1535,7 +1554,10 @@ pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Progr
     }
     for (declared, def) in &user.program.types().catalog.enums {
         let symbol = canonical(*declared, user.module);
-        if conforms_to(&builder, symbol, Symbol::Borrowed) {
+        if builder
+            .catalog
+            .family_unconditionally_conforms(symbol, Symbol::Borrowed)
+        {
             continue;
         }
         for variant in def.variants.values() {
@@ -1657,6 +1679,10 @@ struct ProgramBuilder<'a> {
     /// Hidden witness parameters per instance, in append order: rigid
     /// effect-generics the instance's substitution mentions.
     instance_witnesses: FxHashMap<FuncId, Vec<Symbol>>,
+    /// Call-site rows carried into this specialization for abstract
+    /// requirements in its generic body.
+    instance_conformance_evidence:
+        FxHashMap<FuncId, Vec<crate::types::output::ConformanceEvidence>>,
     /// Writeback tuple widths per compiled instance, checked against
     /// every caller's expectation after the worklist drains: a
     /// convention mismatch is a compile error, never silent skew.
@@ -1693,13 +1719,6 @@ struct ProgramBuilder<'a> {
         ),
     >,
     variant_index: FxHashMap<Symbol, (Symbol, u16)>,
-    /// Declared `(head, protocol)` conformance pairs, canonical, with
-    /// rigid-parameter bounds folded in.
-    conformance_pairs: rustc_hash::FxHashSet<(Symbol, Symbol)>,
-    /// Canonical head → its `Deinit` conformance row (witness and rigid
-    /// self-argument patterns), built once: the per-drop alternative
-    /// scanned every program's whole conformance map.
-    deinit_index: FxHashMap<Symbol, DeinitRow>,
     /// Every canonical `deinit` witness symbol (a hook's own `self`
     /// binding must not re-dispatch the hook on scope exit).
     deinit_witnesses: rustc_hash::FxHashSet<Symbol>,
@@ -1709,13 +1728,6 @@ struct ProgramBuilder<'a> {
     needs_drop_cache: std::cell::RefCell<FxHashMap<Ty, bool>>,
     contains_buffer_cache: std::cell::RefCell<FxHashMap<Ty, bool>>,
     contains_object_cache: std::cell::RefCell<FxHashMap<Ty, bool>>,
-}
-
-/// One type's `Deinit` conformance, as the drop path needs it.
-struct DeinitRow {
-    witness: Option<Symbol>,
-    self_args: Vec<Ty>,
-    module: crate::compiling::module::ModuleId,
 }
 
 impl<'a> ProgramBuilder<'a> {
@@ -1728,20 +1740,7 @@ impl<'a> ProgramBuilder<'a> {
                 .catalog
                 .clone()
                 .import_as(input.module);
-            catalog.structs.extend(canonicalized.structs);
-            catalog.enums.extend(canonicalized.enums);
-            catalog.protocols.extend(canonicalized.protocols);
-            catalog.conformances.extend(canonicalized.conformances);
-            for (head, rows) in canonicalized.conformances_by_head {
-                catalog
-                    .conformances_by_head
-                    .entry(head)
-                    .or_default()
-                    .extend(rows);
-            }
-            catalog.extend_members.extend(canonicalized.extend_members);
-            catalog.effects.extend(canonicalized.effects);
-            catalog.type_aliases.extend(canonicalized.type_aliases);
+            catalog.merge(canonicalized);
         }
         let mut struct_index: FxHashMap<
             Symbol,
@@ -1758,10 +1757,12 @@ impl<'a> ProgramBuilder<'a> {
             ),
         > = FxHashMap::default();
         let mut variant_index: FxHashMap<Symbol, (Symbol, u16)> = FxHashMap::default();
-        let mut conformance_pairs: rustc_hash::FxHashSet<(Symbol, Symbol)> =
-            rustc_hash::FxHashSet::default();
-        let mut deinit_index: FxHashMap<Symbol, DeinitRow> = FxHashMap::default();
-        let mut deinit_witnesses: rustc_hash::FxHashSet<Symbol> = rustc_hash::FxHashSet::default();
+        let deinit_witnesses: rustc_hash::FxHashSet<Symbol> = catalog
+            .conformances
+            .values()
+            .filter(|row| row.protocol.protocol == Symbol::Deinit)
+            .filter_map(|row| row.witnesses.get("deinit").copied())
+            .collect();
         for input in programs {
             let source = &input.program.types().catalog;
             for (declared, def) in &source.structs {
@@ -1778,39 +1779,6 @@ impl<'a> ProgramBuilder<'a> {
                         .or_insert((enum_symbol, u16::try_from(tag).unwrap_or_default()));
                 }
             }
-            for (declared, rows) in &source.conformances_by_head {
-                let head = canonical(*declared, input.module);
-                for row in rows {
-                    conformance_pairs.insert((head, canonical(row.protocol, input.module)));
-                }
-            }
-            // Rigid type parameters conform through their declared bounds
-            // (`func f<Value: CheapClone>`).
-            for (param, bounds) in &source.param_bounds {
-                let head = canonical(*param, input.module);
-                for bound in bounds {
-                    conformance_pairs.insert((head, canonical(bound.protocol, input.module)));
-                }
-            }
-            for ((declared, row_protocol), conformance) in &source.conformances {
-                if canonical(row_protocol.protocol, input.module) != Symbol::Deinit {
-                    continue;
-                }
-                let witness = conformance
-                    .witnesses
-                    .get("deinit")
-                    .map(|witness| canonical(*witness, input.module));
-                if let Some(witness) = witness {
-                    deinit_witnesses.insert(witness);
-                }
-                deinit_index
-                    .entry(canonical(*declared, input.module))
-                    .or_insert_with(|| DeinitRow {
-                        witness,
-                        self_args: conformance.self_args.clone(),
-                        module: input.module,
-                    });
-            }
         }
         Self {
             programs,
@@ -1818,8 +1786,6 @@ impl<'a> ProgramBuilder<'a> {
             struct_index,
             enum_index,
             variant_index,
-            conformance_pairs,
-            deinit_index,
             deinit_witnesses,
             needs_drop_cache: std::cell::RefCell::new(FxHashMap::default()),
             contains_buffer_cache: std::cell::RefCell::new(FxHashMap::default()),
@@ -1831,6 +1797,7 @@ impl<'a> ProgramBuilder<'a> {
             functions: Vec::new(),
             func_ids: FxHashMap::default(),
             instance_witnesses: FxHashMap::default(),
+            instance_conformance_evidence: FxHashMap::default(),
             writeback_widths: FxHashMap::default(),
             writeback_expectations: Vec::new(),
             last_writeback_width: 0,
@@ -2103,6 +2070,16 @@ impl<'a> ProgramBuilder<'a> {
         subst: Vec<(Symbol, Ty)>,
         span: Span,
     ) -> Result<FuncId, BackendError> {
+        self.demand_with_evidence(symbol, subst, Vec::new(), span)
+    }
+
+    fn demand_with_evidence(
+        &mut self,
+        symbol: Symbol,
+        subst: Vec<(Symbol, Ty)>,
+        evidence: Vec<crate::types::output::ConformanceEvidence>,
+        span: Span,
+    ) -> Result<FuncId, BackendError> {
         let Some(callable) = self.callables.get(&symbol).copied() else {
             let name = self
                 .programs
@@ -2157,8 +2134,14 @@ impl<'a> ProgramBuilder<'a> {
             .collect();
         subst.sort_by_key(|(param, _)| *param);
         let instance = (symbol, subst);
-        if let Some(id) = self.func_ids.get(&instance) {
-            return Ok(*id);
+        if let Some(id) = self.func_ids.get(&instance).copied() {
+            let stored = self.instance_conformance_evidence.entry(id).or_default();
+            for item in evidence {
+                if !stored.contains(&item) {
+                    stored.push(item);
+                }
+            }
+            return Ok(id);
         }
         let id = self.reserve(&callable.body.name());
         self.func_ids.insert(instance.clone(), id);
@@ -2166,16 +2149,14 @@ impl<'a> ProgramBuilder<'a> {
         // before the instance body compiles off the worklist.
         self.instance_witnesses
             .insert(id, witness_params(&instance.1));
+        self.instance_conformance_evidence.insert(id, evidence);
         self.worklist.push((instance, id));
         Ok(id)
     }
 
-    /// Dereference a typing-selected conformance to its implementation
-    /// symbol: `(self head, protocol, requirement label)` keys the
-    /// conformance rows the frontend already committed to. `None` means the
-    /// requirement's default body applies (or the row is ambiguous, which
-    /// later waves resolve by matching protocol arguments).
-    fn conformance_witness(
+    /// Select a witness used only while synthesizing compiler-owned glue.
+    /// Source calls consume `MemberResolution` evidence and never enter here.
+    fn generated_conformance_witness(
         &self,
         self_ty: &Ty,
         protocol: &crate::types::ty::ProtocolRef,
@@ -2192,52 +2173,29 @@ impl<'a> ProgramBuilder<'a> {
             return None;
         };
 
-        let mut found: Option<(Symbol, Vec<(Symbol, Ty)>)> = None;
-        for input in self.programs {
-            let catalog = &input.program.types().catalog;
-            for ((head, row_protocol), conformance) in &catalog.conformances {
-                if canonical(*head, input.module) != *self_head
-                    || canonical(row_protocol.protocol, input.module) != protocol.protocol
-                {
-                    continue;
-                }
-                let Some(witness) = conformance.witnesses.get(label) else {
-                    continue;
-                };
-                let witness = canonical(*witness, input.module);
-                // The row's rigid parameters bind against this
-                // application's arguments (instance-head matching).
-                let mut subst = Vec::new();
-                let mut row_subst: FxHashMap<Symbol, Ty> = FxHashMap::default();
-                for (pattern, concrete) in conformance.self_args.iter().zip(self_args) {
-                    if let Ty::Param(param) = canonical_ty(pattern, input.module) {
-                        subst.push((param, concrete.clone()));
-                        row_subst.insert(param, concrete.clone());
-                    }
-                }
-                // The row's associated-type bindings are conformance
-                // evidence the implementation (or a protocol default
-                // routed through it) resolves projections with.
-                for (assoc, bound) in &conformance.assoc {
-                    subst.push((
-                        canonical(*assoc, input.module),
-                        canonical_ty(bound, input.module).substitute(
-                            &row_subst,
-                            &FxHashMap::default(),
-                            &FxHashMap::default(),
-                        ),
-                    ));
-                }
-                match &found {
-                    None => found = Some((witness, subst)),
-                    // Overlapping rows need protocol-argument matching;
-                    // refuse to guess.
-                    Some((existing, _)) if *existing != witness => return None,
-                    Some(_) => {}
-                }
-            }
+        let matches = self
+            .catalog
+            .matching_conformances(*self_head, self_args, protocol);
+        let [selected] = matches.as_slice() else {
+            return None;
+        };
+        let witness = selected.conformance.witnesses.get(label).copied()?;
+        let mut subst = selected
+            .substitution
+            .clone()
+            .into_iter()
+            .collect::<Vec<_>>();
+        for (assoc, bound) in &selected.conformance.assoc {
+            subst.push((
+                *assoc,
+                bound.substitute(
+                    &selected.substitution,
+                    &FxHashMap::default(),
+                    &FxHashMap::default(),
+                ),
+            ));
         }
-        found
+        Some((witness, subst))
     }
 
     /// The associated-type bindings a conformance row supplies for this
@@ -2258,37 +2216,27 @@ impl<'a> ProgramBuilder<'a> {
         let Ty::Nominal(self_head, self_args) = self_ty else {
             return Vec::new();
         };
-        for input in self.programs {
-            let catalog = &input.program.types().catalog;
-            for ((head, row_protocol), conformance) in &catalog.conformances {
-                if canonical(*head, input.module) != *self_head
-                    || canonical(row_protocol.protocol, input.module) != protocol.protocol
-                {
-                    continue;
-                }
-                let mut row_subst: FxHashMap<Symbol, Ty> = FxHashMap::default();
-                for (pattern, concrete) in conformance.self_args.iter().zip(self_args) {
-                    if let Ty::Param(param) = canonical_ty(pattern, input.module) {
-                        row_subst.insert(param, concrete.clone());
-                    }
-                }
-                return conformance
-                    .assoc
-                    .iter()
-                    .map(|(assoc, bound)| {
-                        (
-                            canonical(*assoc, input.module),
-                            canonical_ty(bound, input.module).substitute(
-                                &row_subst,
-                                &FxHashMap::default(),
-                                &FxHashMap::default(),
-                            ),
-                        )
-                    })
-                    .collect();
-            }
-        }
-        Vec::new()
+        let matches = self
+            .catalog
+            .matching_conformances(*self_head, self_args, protocol);
+        let [matched] = matches.as_slice() else {
+            return Vec::new();
+        };
+        matched
+            .conformance
+            .assoc
+            .iter()
+            .map(|(assoc, bound)| {
+                (
+                    *assoc,
+                    bound.substitute(
+                        &matched.substitution,
+                        &FxHashMap::default(),
+                        &FxHashMap::default(),
+                    ),
+                )
+            })
+            .collect()
     }
 
     /// The enum declaration behind a canonical symbol, from whichever
@@ -2415,15 +2363,14 @@ impl<'a> ProgramBuilder<'a> {
     /// The `Deinit` hook for a nominal application, with the substitution
     /// binding the conformance row's rigid parameters against it.
     fn deinit_witness(&self, head: Symbol, args: &[Ty]) -> Option<(Symbol, Vec<(Symbol, Ty)>)> {
-        let row = self.deinit_index.get(&head)?;
-        let witness = row.witness?;
-        let mut subst = Vec::new();
-        for (pattern, concrete) in row.self_args.iter().zip(args) {
-            if let Ty::Param(param) = canonical_ty(pattern, row.module) {
-                subst.push((param, concrete.clone()));
-            }
-        }
-        Some((witness, subst))
+        let matches =
+            self.catalog
+                .matching_conformances(head, args, &ProtocolRef::bare(Symbol::Deinit));
+        let [matched] = matches.as_slice() else {
+            return None;
+        };
+        let witness = matched.conformance.witnesses.get("deinit").copied()?;
+        Some((witness, matched.substitution.clone().into_iter().collect()))
     }
 
     /// Whether this callable IS some type's `deinit` hook: its own `self`
@@ -2468,7 +2415,11 @@ impl<'a> ProgramBuilder<'a> {
                 let Some(fields) = self.field_types(*symbol, args) else {
                     return false;
                 };
-                self.deinit_index.contains_key(symbol) || dropping(&mut fields.iter()) >= 2
+                !self
+                    .catalog
+                    .matching_conformances(*symbol, args, &ProtocolRef::bare(Symbol::Deinit))
+                    .is_empty()
+                    || dropping(&mut fields.iter()) >= 2
             }
             Ty::Tuple(items) => dropping(&mut items.iter()) >= 2,
             Ty::Record(row) => dropping(&mut row.fields.iter().map(|(_, item)| item)) >= 2,
@@ -2723,7 +2674,7 @@ impl<'a> ProgramBuilder<'a> {
                     .values()
                     .chain(info.statics.values())
                     .copied()
-                    .chain(info.inits.iter().copied())
+                    .chain(info.inits.iter().map(|(init, _)| *init))
                     .any(matches)
                 {
                     return Some(owner_params(&info.params));
@@ -2778,7 +2729,12 @@ impl<'a> ProgramBuilder<'a> {
         while let Some(((symbol, subst), id)) = self.worklist.pop() {
             let callable = self.callables[&symbol];
             let suppress_self_drop = self.is_deinit_witness(symbol);
-            let func = self.compile_func(callable, &subst, suppress_self_drop)?;
+            let evidence = self
+                .instance_conformance_evidence
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
+            let func = self.compile_func(callable, &subst, &evidence, suppress_self_drop)?;
             self.writeback_widths.insert(id, self.last_writeback_width);
             self.functions[id] = func;
         }
@@ -2807,6 +2763,7 @@ impl<'a> ProgramBuilder<'a> {
         &mut self,
         callable: Callable<'a>,
         subst: &[(Symbol, Ty)],
+        evidence: &[crate::types::output::ConformanceEvidence],
         suppress_self_drop: bool,
     ) -> Result<Function, BackendError> {
         let (name, params, body) = match callable.body {
@@ -2837,6 +2794,7 @@ impl<'a> ProgramBuilder<'a> {
         let arity = fx.bind_witness_params(&hidden, declared_arity);
         fx.next_local = arity;
         fx.subst = subst.iter().cloned().collect();
+        fx.conformance_evidence = evidence.to_vec();
         fx.in_init = matches!(callable.body, CallableBody::Init { .. });
         if let CallableBody::Func(func) = callable.body
             && let Ty::Func(_, ret, _) = &func.scheme.ty
@@ -2969,6 +2927,7 @@ struct FunctionBuilder<'p, 'a> {
     /// This instance's scheme-parameter substitution: baked node types in
     /// the body resolve through it before any scalar decision.
     subst: FxHashMap<Symbol, Ty>,
+    conformance_evidence: Vec<crate::types::output::ConformanceEvidence>,
     locals: FxHashMap<Symbol, LocalId>,
     next_local: u16,
     blocks: Vec<BlockData>,
@@ -3107,6 +3066,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             program_builder,
             program,
             subst: FxHashMap::default(),
+            conformance_evidence: Vec::new(),
             locals: FxHashMap::default(),
             next_local: arity,
             blocks: vec![BlockData::default()],
@@ -4493,14 +4453,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let label = crate::label::Label::Named("add".into());
         let (implementation, subst) = self
             .program_builder
-            .conformance_witness(&string_ty, &add_ref, &label)
+            .generated_conformance_witness(&string_ty, &add_ref, &label)
             .or_else(|| {
                 let bare = crate::types::ty::ProtocolRef {
                     protocol: add,
                     args: Vec::new(),
                 };
                 self.program_builder
-                    .conformance_witness(&string_ty, &bare, &label)
+                    .generated_conformance_witness(&string_ty, &bare, &label)
             })
             .ok_or_else(|| {
                 BackendError::new(
@@ -4540,7 +4500,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let label = crate::label::Label::Named("show".into());
         let func = match self
             .program_builder
-            .conformance_witness(&ty, protocol, &label)
+            .generated_conformance_witness(&ty, protocol, &label)
         {
             Some((implementation, subst)) => {
                 self.program_builder.demand(implementation, subst, span)?
@@ -4581,7 +4541,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let label = crate::label::Label::Named("equals".into());
                 if let Some((implementation, subst)) = self
                     .program_builder
-                    .conformance_witness(&ty, protocol, &label)
+                    .generated_conformance_witness(&ty, protocol, &label)
                 {
                     let func = self.program_builder.demand(implementation, subst, span)?;
                     self.program_builder
@@ -4732,9 +4692,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 while let Ty::Borrow(_, inner) = ty {
                     ty = *inner;
                 }
+                let canonical_ty =
+                    canonical_ty(&ty, self.program_builder.programs[self.program].module);
                 if self.needs_release(&ty)
-                    && !matches!(&ty, Ty::Nominal(symbol, _)
-                        if conforms_to(self.program_builder, canonical(*symbol, self.program_builder.programs[self.program].module), Symbol::CheapClone))
+                    && !conforms_to(self.program_builder, &canonical_ty, Symbol::CheapClone)
                 {
                     return Err(BackendError::new(
                         "the `copy` marker requires a Copy or CheapClone value".into(),
@@ -6451,7 +6412,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             }
                         }
                     }
-                    let func = self.demand_specialized(target, subst, expr.span)?;
+                    let func = self.demand_specialized(
+                        target,
+                        subst,
+                        &expr.conformance_evidence,
+                        expr.span,
+                    )?;
                     let dest = self.fresh_local();
                     self.push(Inst::MakeClosure {
                         dest,
@@ -7297,6 +7263,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         &mut self,
         target: Symbol,
         mut subst: Vec<(Symbol, Ty)>,
+        site_evidence: &[crate::types::output::ConformanceEvidence],
         span: Span,
     ) -> Result<FuncId, BackendError> {
         if let Some(callable) = self.program_builder.callables.get(&target) {
@@ -7309,7 +7276,38 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
             }
         }
-        self.program_builder.demand(target, subst, span)
+        let module = self.program_builder.programs[self.program].module;
+        let mut evidence = self.conformance_evidence.clone();
+        for item in site_evidence {
+            let canonical = crate::types::output::ConformanceEvidence {
+                row: item.row.import(module),
+                self_ty: canonical_ty(&item.self_ty, module),
+                protocol: crate::types::ty::ProtocolRef {
+                    protocol: canonical(item.protocol.protocol, module),
+                    args: item
+                        .protocol
+                        .args
+                        .iter()
+                        .map(|arg| canonical_ty(arg, module))
+                        .collect(),
+                },
+                witnesses: item
+                    .witnesses
+                    .iter()
+                    .map(|(label, witness)| (label.clone(), canonical(*witness, module)))
+                    .collect(),
+                substitution: item
+                    .substitution
+                    .iter()
+                    .map(|(symbol, ty)| (canonical(*symbol, module), canonical_ty(ty, module)))
+                    .collect(),
+            };
+            if !evidence.contains(&canonical) {
+                evidence.push(canonical);
+            }
+        }
+        self.program_builder
+            .demand_with_evidence(target, subst, evidence, span)
     }
 
     /// Resolve a variant pattern to its enum head, tag, and payload
@@ -8056,13 +8054,26 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
                 let symbol = match resolution {
                     crate::types::output::MemberResolution::Direct(symbol) => *symbol,
-                    crate::types::output::MemberResolution::ViaConformance {
-                        protocol,
-                        witness,
-                    } => {
-                        // Typing selected the conformance; dereference its
-                        // witness table for the implementation. A missing
-                        // entry means the requirement's default body.
+                    resolution @ (crate::types::output::MemberResolution::ViaConformance {
+                        ..
+                    }
+                    | crate::types::output::MemberResolution::ViaRequirement {
+                        ..
+                    }) => {
+                        let (protocol, witness, evidence_substitution) = match resolution {
+                            crate::types::output::MemberResolution::ViaConformance {
+                                protocol,
+                                witness,
+                                substitution,
+                                ..
+                            } => (protocol, witness, Some(substitution)),
+                            crate::types::output::MemberResolution::ViaRequirement {
+                                protocol,
+                                requirement,
+                                ..
+                            } => (protocol, requirement, None),
+                            crate::types::output::MemberResolution::Direct(_) => unreachable!(),
+                        };
                         let self_ty = match (value_receiver, args.first()) {
                             (Some(receiver), _) => self.resolved(&receiver.ty),
                             (None, Some(arg)) => self.resolved(&arg.value.ty),
@@ -8185,62 +8196,60 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 expr.span,
                             );
                         }
-                        match self
-                            .program_builder
-                            .conformance_witness(&self_ty, protocol, label)
+                        if let Some(evidence_substitution) = evidence_substitution {
+                            subst.extend(evidence_substitution.iter().map(|(symbol, ty)| {
+                                (canonical(*symbol, module), canonical_ty(ty, module))
+                            }));
+                            canonical(*witness, module)
+                        } else if let Some(evidence) = self
+                            .conformance_evidence
+                            .iter()
+                            .find(|evidence| {
+                                evidence.self_ty == self_ty && evidence.protocol == *protocol
+                            })
+                            && let Some(implementation) = evidence.witnesses.get(label)
                         {
-                            Some((implementation, row_subst)) => {
-                                subst.extend(row_subst);
-                                implementation
+                            subst.extend(evidence.substitution.iter().cloned());
+                            *implementation
+                        } else if !self
+                            .program_builder
+                            .callables
+                            .contains_key(&canonical(*witness, module))
+                            && matches!(label, crate::label::Label::Named(name) if name == "equals" || name == "show")
+                        {
+                            // Typing published structural derivation rather
+                            // than a conformance row; synthesize that chosen
+                            // implementation without searching the catalog.
+                            let derived_show =
+                                matches!(label, crate::label::Label::Named(name) if name == "show");
+                            let glue = if derived_show {
+                                self.program_builder
+                                    .derived_show(&self_ty, protocol, expr.span)?
+                            } else {
+                                self.program_builder
+                                    .derived_equality(&self_ty, protocol, expr.span)?
+                            };
+                            let mut operands = Vec::new();
+                            if let Some(receiver) = value_receiver {
+                                operands.push(self.compile_expr(receiver)?);
                             }
-                            None if !self
-                                .program_builder
-                                .callables
-                                .contains_key(&canonical(*witness, module))
-                                && matches!(label, crate::label::Label::Named(name) if name == "equals" || name == "show") =>
+                            for arg in args {
+                                operands.push(self.compile_expr(&arg.value)?);
+                            }
+                            let dest = self.fresh_local();
+                            self.push_call(dest, glue, operands);
+                            self.produce_temp(dest, &self.resolved(&expr.ty));
+                            return Ok(Operand::Local(dest));
+                        } else {
+                            subst.push((protocol.protocol, self_ty.clone()));
+                            if let Some(params) =
+                                self.program_builder.protocol_params(protocol.protocol)
                             {
-                                // No conformance row and no default body:
-                                // the checker derived this conformance
-                                // structurally; synthesize its chunk.
-                                let derived_show = matches!(label, crate::label::Label::Named(name) if name == "show");
-                                let glue = if derived_show {
-                                    self.program_builder
-                                        .derived_show(&self_ty, protocol, expr.span)?
-                                } else {
-                                    self.program_builder
-                                        .derived_equality(&self_ty, protocol, expr.span)?
-                                };
-                                let mut operands = Vec::new();
-                                if let Some(receiver) = value_receiver {
-                                    operands.push(self.compile_expr(receiver)?);
+                                for (param, arg) in params.iter().zip(&protocol.args) {
+                                    subst.push((*param, self.resolved(arg)));
                                 }
-                                for arg in args {
-                                    operands.push(self.compile_expr(&arg.value)?);
-                                }
-                                let dest = self.fresh_local();
-                                self.push_call(dest, glue, operands);
-                                self.produce_temp(dest, &self.resolved(&expr.ty));
-                                return Ok(Operand::Local(dest));
                             }
-                            None => {
-                                // The requirement's default body executes
-                                // with `Self` (the protocol symbol), the
-                                // protocol's input parameters, and the
-                                // conformance's associated types
-                                // substituted.
-                                subst.push((protocol.protocol, self_ty.clone()));
-                                if let Some(params) =
-                                    self.program_builder.protocol_params(protocol.protocol)
-                                {
-                                    for (param, arg) in params.iter().zip(&protocol.args) {
-                                        subst.push((*param, self.resolved(arg)));
-                                    }
-                                }
-                                subst.extend(
-                                    self.program_builder.conformance_assoc(&self_ty, protocol),
-                                );
-                                *witness
-                            }
+                            canonical(*witness, module)
                         }
                     }
                 };
@@ -8409,7 +8418,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             self.loans.retain(|loan| loan.root != base);
         }
-        let func = self.demand_specialized(target, subst, expr.span)?;
+        let mut call_evidence = callee.conformance_evidence.clone();
+        for evidence in &expr.conformance_evidence {
+            if !call_evidence.contains(evidence) {
+                call_evidence.push(evidence.clone());
+            }
+        }
+        let func = self.demand_specialized(target, subst, &call_evidence, expr.span)?;
         self.program_builder
             .writeback_expectations
             .push((func, targets.len(), expr.span));
@@ -9009,6 +9024,33 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
         }
 
+        // The frontend picked the initializer directly, or — constructing
+        // through a protocol's init requirement — via the conformance;
+        // dereference its witness table for the implementation.
+        let init =
+            match &callee.member_resolution {
+                Some(crate::types::output::MemberResolution::Direct(init)) => {
+                    Some(canonical(*init, module))
+                }
+                Some(crate::types::output::MemberResolution::ViaConformance {
+                    witness,
+                    substitution,
+                    ..
+                }) => {
+                    subst.extend(substitution.iter().map(|(symbol, ty)| {
+                        (canonical(*symbol, module), canonical_ty(ty, module))
+                    }));
+                    Some(canonical(*witness, module))
+                }
+                Some(crate::types::output::MemberResolution::ViaRequirement { .. }) => {
+                    return Err(BackendError::new(
+                        "protocol construction without published conformance evidence".into(),
+                        callee.span,
+                    ));
+                }
+                None => None,
+            };
+
         let mut operands = Vec::new();
         let mut operand_tys = Vec::new();
         for arg in args {
@@ -9023,15 +9065,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             // the stored claim retires (containment replaces it).
             // An explicit initializer runs over the fresh object as
             // `self`, mirroring the value path's fresh-record call.
-            if let Some(crate::types::output::MemberResolution::Direct(init)) =
-                &callee.member_resolution
-                && let Some(callable) = self
-                    .program_builder
-                    .callables
-                    .get(&canonical(*init, module))
-                    .copied()
+            if let Some(init) = init
+                && let Some(callable) = self.program_builder.callables.get(&init).copied()
             {
-                let init = canonical(*init, module);
                 if let CallableBody::Init { params, .. } = callable.body {
                     for ((operand, operand_ty), param) in operands
                         .iter()
@@ -9125,14 +9161,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             return Ok(Operand::Local(dest));
         }
 
-        let Some(crate::types::output::MemberResolution::Direct(init)) = &callee.member_resolution
-        else {
+        let Some(init) = init else {
             return Err(BackendError::new(
                 "construction without a frontend-selected initializer".into(),
                 callee.span,
             ));
         };
-        let init = canonical(*init, module);
 
         let callable = self.program_builder.callables.get(&init).copied();
         // The resolver-synthesized memberwise init assigns each argument

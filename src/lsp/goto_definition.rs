@@ -283,6 +283,9 @@ fn symbol_for_member_resolution(
     match resolution? {
         crate::types::output::MemberResolution::Direct(symbol) => Some(*symbol),
         crate::types::output::MemberResolution::ViaConformance { witness, .. } => Some(*witness),
+        crate::types::output::MemberResolution::ViaRequirement { requirement, .. } => {
+            Some(*requirement)
+        }
     }
 }
 
@@ -387,9 +390,6 @@ fn goto_definition_symbol_from_decl(
         | DeclKind::Protocol {
             name, name_span, ..
         }
-        | DeclKind::Extend {
-            name, name_span, ..
-        }
         | DeclKind::Enum {
             name, name_span, ..
         }
@@ -403,6 +403,9 @@ fn goto_definition_symbol_from_decl(
                 return None;
             }
             name.symbol().ok()
+        }
+        DeclKind::Extend { head, .. } => {
+            goto_definition_symbol_from_type_annotation(head, byte_offset)
         }
         DeclKind::TypeAlias(name, name_span, ..) => {
             if !span_contains(*name_span, byte_offset) {
@@ -573,7 +576,6 @@ fn definition_decl_name_span(decl: &crate::node_kinds::decl::Decl) -> Option<(u3
     match &decl.kind {
         DeclKind::Struct { name_span, .. }
         | DeclKind::Protocol { name_span, .. }
-        | DeclKind::Extend { name_span, .. }
         | DeclKind::Enum { name_span, .. }
         | DeclKind::Property { name_span, .. }
         | DeclKind::Effect { name_span, .. }

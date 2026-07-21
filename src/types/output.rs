@@ -7,7 +7,10 @@ use rustc_hash::FxHashMap;
 
 use crate::name_resolution::symbol::Symbol;
 use crate::node_id::NodeID;
-use crate::types::ty::{ProtocolRef, Scheme, Ty};
+use crate::types::{
+    catalog::ConformanceId,
+    ty::{ProtocolRef, Scheme, Ty},
+};
 
 /// The checker's published plan for one `for` statement: the resolved
 /// `iter()`/`next()` call nodes (their member resolutions and
@@ -44,20 +47,36 @@ pub struct PropagationPlan {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConformanceEvidence {
+    pub row: ConformanceId,
+    pub self_ty: Ty,
+    pub protocol: ProtocolRef,
+    pub witnesses: FxHashMap<String, Symbol>,
+    pub substitution: Vec<(Symbol, Ty)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExistentialPack {
     pub existential: Ty,
     pub payload: Ty,
 }
 
-/// How a member access resolved: directly on a nominal type, or through a
-/// protocol requirement witnessed by a conformance (dictionary passing's
-/// witness selection).
+/// How a member access resolved. Concrete conformance dispatch publishes the
+/// complete evidence lowering needs; generic and existential dispatch remains
+/// an explicit protocol-requirement operation backed by a runtime dictionary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemberResolution {
     Direct(Symbol),
     ViaConformance {
+        row: ConformanceId,
         protocol: ProtocolRef,
         witness: Symbol,
+        substitution: Vec<(Symbol, Ty)>,
+    },
+    ViaRequirement {
+        protocol: ProtocolRef,
+        requirement: Symbol,
+        self_ty: Ty,
     },
 }
 
@@ -104,6 +123,9 @@ pub struct TypeOutput {
     /// checked semantic fact on TypedProgram.
     pub instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    /// Exact rows selected while discharging call-site conformance
+    /// obligations. Specialization carries these into generic bodies.
+    pub conformance_evidence: FxHashMap<NodeID, Vec<ConformanceEvidence>>,
     /// Signed 64-bit values or explicit recovery for every integer literal
     /// expression and pattern (ledger row LIT-01).
     pub integer_literals: FxHashMap<NodeID, CheckedIntegerLiteral>,

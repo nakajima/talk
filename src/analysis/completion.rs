@@ -253,13 +253,15 @@ fn add_nominal_member_items(
     }
 
     if types.catalog.conformances_by_head.contains_key(&symbol) {
-        for protocol in types
-            .catalog
-            .conformances
-            .keys()
-            .filter_map(|(head, protocol)| (*head == symbol).then_some(protocol))
-        {
-            add_protocol_requirement_items(types, protocol, receiver_ty, items);
+        for (id, row) in types.catalog.conformances_for_head(symbol) {
+            let applies = types
+                .catalog
+                .matching_conformances(symbol, args, &row.protocol)
+                .iter()
+                .any(|matched| matched.id == id);
+            if applies {
+                add_protocol_requirement_items(types, &row.protocol, receiver_ty, items);
+            }
         }
     }
 
@@ -575,12 +577,12 @@ fn implemented_conformance_members(extend: &Decl) -> ImplementedConformanceMembe
 
 fn conformance_protocol_refs(types: &TypeOutput, extend: &Decl) -> Vec<ProtocolRef> {
     let DeclKind::Extend {
-        name, conformances, ..
+        head, conformances, ..
     } = &extend.kind
     else {
         return vec![];
     };
-    let Some(head) = name.symbol().ok() else {
+    let Some(head) = head.symbol().ok() else {
         return vec![];
     };
 
@@ -590,10 +592,10 @@ fn conformance_protocol_refs(types: &TypeOutput, extend: &Decl) -> Vec<ProtocolR
             continue;
         };
         let mut matched = false;
-        for (candidate_head, candidate_protocol) in types.catalog.conformances.keys() {
-            if *candidate_head == head && candidate_protocol.protocol == protocol {
-                if !refs.contains(candidate_protocol) {
-                    refs.push(candidate_protocol.clone());
+        for (_, row) in types.catalog.conformances_for_head(head) {
+            if row.protocol.protocol == protocol {
+                if !refs.contains(&row.protocol) {
+                    refs.push(row.protocol.clone());
                 }
                 matched = true;
             }

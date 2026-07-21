@@ -1572,8 +1572,7 @@ impl NameResolver {
             &decl.kind,
             DeclKind::Enum { name, .. }
                 | DeclKind::Struct { name, .. }
-                | DeclKind::Protocol { name, .. }
-                | DeclKind::Extend { name, .. },
+                | DeclKind::Protocol { name, .. },
             {
                 if name.symbol().is_err() {
                     self.diagnostic(decl.id, NameResolverError::Unresolved(name.clone()));
@@ -1583,6 +1582,13 @@ impl NameResolver {
                 self.enter_scope(decl.id);
             }
         );
+
+        on!(&decl.kind, DeclKind::Extend { head, .. }, {
+            if head.symbol().is_err() {
+                return;
+            }
+            self.enter_scope(decl.id);
+        });
 
         on!(&mut decl.kind, DeclKind::Init { params, .. }, {
             self.enter_scope(decl.id);

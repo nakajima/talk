@@ -66,9 +66,8 @@ impl<'s> Solver<'s> {
         match candidates.as_slice() {
             [] => MemberDispatch::NoCandidate,
             [(protocol, owner, requirement)] => {
-                let witness = self
-                    .witness_for_requirement(head, lookup_receiver, protocol, label)
-                    .unwrap_or(requirement.symbol);
+                let evidence =
+                    self.evidence_for_requirement(head, lookup_receiver, protocol, label);
                 self.bind_requirement(
                     owner.clone(),
                     requirement,
@@ -77,7 +76,7 @@ impl<'s> Solver<'s> {
                     member,
                     origin,
                     queue,
-                    witness,
+                    evidence,
                 );
                 MemberDispatch::Handled
             }
@@ -105,28 +104,44 @@ impl<'s> Solver<'s> {
         }
     }
 
-    fn witness_for_requirement(
+    fn evidence_for_requirement(
         &mut self,
         head: Option<Symbol>,
         lookup_receiver: &Ty,
         protocol: &ProtocolRef,
         label: &str,
-    ) -> Option<Symbol> {
+    ) -> Option<(
+        crate::types::catalog::ConformanceId,
+        Option<Symbol>,
+        Vec<(Symbol, Ty)>,
+    )> {
         let receiver = self.store.shallow(lookup_receiver);
-        if let Some(h) = head
-            && let Ty::Nominal(_, args) = &receiver
-            && let Some(witness) = self
-                .catalog
-                .matching_conformances(h, args, protocol)
-                .into_iter()
-                .find_map(|matched| matched.conformance.witnesses.get(label).copied())
-        {
-            return Some(witness);
+        if receiver.has_unification_vars() || matches!(receiver, Ty::Param(_)) {
+            return None;
         }
-        self.catalog
-            .matching_protocol_head_conformances(&receiver, protocol)
-            .into_iter()
-            .find_map(|matched| matched.conformance.witnesses.get(label).copied())
+        let matches = if let Some(head) = head
+            && let Ty::Nominal(_, args) = &receiver
+        {
+            self.catalog.matching_conformances(head, args, protocol)
+        } else {
+            self.catalog
+                .matching_protocol_head_conformances(&receiver, protocol)
+        };
+        let [matched] = matches.as_slice() else {
+            return None;
+        };
+        let witness = matched.conformance.witnesses.get(label).copied();
+        let mut substitution = matched.evidence_substitution();
+        substitution.push((protocol.protocol, receiver));
+        if let Some(info) = self.catalog.protocols.get(&protocol.protocol) {
+            substitution.extend(
+                info.params
+                    .iter()
+                    .zip(&protocol.args)
+                    .map(|(param, arg)| (param.symbol, arg.clone())),
+            );
+        }
+        Some((matched.id, witness, substitution))
     }
 
     fn protocol_owner_refs(&mut self, label: &str, node: NodeID) -> Vec<ProtocolRef> {
@@ -402,7 +417,7 @@ impl<'s> Solver<'s> {
                         &member,
                         origin,
                         queue,
-                        requirement.symbol,
+                        None,
                     );
                     return None;
                 }
@@ -546,7 +561,13 @@ impl<'s> Solver<'s> {
                 // type via the protocol requirement, which is always valid if
                 // the conformance is (the witness is checked against the
                 // requirement when the extend body is checked).
-                if let Some(protocols) = self.catalog.conformances_by_head.get(&symbol).cloned() {
+                if self.catalog.conformances_by_head.contains_key(&symbol) {
+                    let mut protocols = self
+                        .catalog
+                        .conformances_for_head(symbol)
+                        .map(|(_, row)| row.protocol.clone())
+                        .collect::<Vec<_>>();
+                    protocols.dedup();
                     match self.dispatch_member_through(
                         &protocols,
                         Some(symbol),
@@ -586,7 +607,6 @@ impl<'s> Solver<'s> {
                             self.catalog.requirement_in_ref(&protocol, &label_str)
                         {
                             let requirement = requirement.clone();
-                            let witness = requirement.symbol;
                             self.bind_requirement(
                                 owner,
                                 &requirement,
@@ -595,7 +615,7 @@ impl<'s> Solver<'s> {
                                 &member,
                                 origin,
                                 queue,
-                                witness,
+                                None,
                             );
                             return None;
                         }
@@ -606,7 +626,26 @@ impl<'s> Solver<'s> {
                 // everything quantified (method generics, effect rows)
                 // freshens through the member's scheme like any callable.
                 if let Some(members) = self.catalog.extend_members.get(&symbol)
+                    && members.contains_key(&label_str)
+                    && args.iter().any(Ty::has_unification_vars)
+                {
+                    return Some(Constraint::HasMember {
+                        receiver,
+                        label,
+                        member,
+                        origin,
+                    });
+                }
+                if let Some(members) = self.catalog.extend_members.get(&symbol)
                     && let Some(inherent) = members.get(&label_str)
+                    && {
+                        let mut probe = FxHashMap::default();
+                        inherent
+                            .self_args
+                            .iter()
+                            .zip(&args)
+                            .all(|(pattern, actual)| match_pattern(pattern, actual, &mut probe))
+                    }
                 {
                     let inherent = inherent.clone();
                     let scheme = self.schemes.get(&inherent.symbol).cloned()?;
@@ -982,7 +1021,11 @@ impl<'s> Solver<'s> {
         member: &Ty,
         origin: CtOrigin,
         queue: &mut Vec<Constraint>,
-        witness: Symbol,
+        evidence: Option<(
+            crate::types::catalog::ConformanceId,
+            Option<Symbol>,
+            Vec<(Symbol, Ty)>,
+        )>,
     ) {
         let receiver_head = self.store.shallow(lookup_receiver);
         let app = ProtocolApplication::new(receiver_head.clone(), protocol.clone());
@@ -1020,36 +1063,26 @@ impl<'s> Solver<'s> {
         // also knows its selected witness. Equating their outer effect rows
         // carries the witness's inferred effects into the member expression
         // that will be baked into the typed AST.
-        let witness_substitution = if witness != requirement.symbol {
-            match &receiver_head {
-                Ty::Nominal(head, head_args) => self
-                    .catalog
-                    .matching_conformances(*head, head_args, &protocol)
-                    .into_iter()
-                    .next()
-                    .map(|matched| matched.substitution),
-                other => self
-                    .catalog
-                    .matching_protocol_head_conformances(other, &protocol)
-                    .into_iter()
-                    .next()
-                    .map(|matched| matched.substitution),
-            }
-        } else {
-            None
-        };
+        let witness = evidence
+            .as_ref()
+            .and_then(|(_, witness, _)| *witness)
+            .unwrap_or(requirement.symbol);
+        let witness_substitution = evidence
+            .as_ref()
+            .map(|(_, _, substitution)| substitution.clone());
         let witness_signature = witness_substitution.as_ref().and_then(|substitution| {
+            let substitution = substitution.iter().cloned().collect::<FxHashMap<_, _>>();
             let scheme = self.schemes.get(&witness)?.clone();
             let mut specialized = scheme.clone();
             specialized.ty =
                 specialized
                     .ty
-                    .substitute(substitution, &Default::default(), &Default::default());
+                    .substitute(&substitution, &Default::default(), &Default::default());
             specialized.predicates = specialized
                 .predicates
                 .iter()
                 .map(|predicate| {
-                    predicate.substitute(substitution, &Default::default(), &Default::default())
+                    predicate.substitute(&substitution, &Default::default(), &Default::default())
                 })
                 .collect();
             Some(self.instantiate_scheme(&specialized, origin.node, queue))
@@ -1108,26 +1141,32 @@ impl<'s> Solver<'s> {
         // conformance row's rigid params bound against the receiver head;
         // a default body needs Self and the assoc bindings. Entries may
         // hold vars/projections — finalize zonks and normalizes them.
-        if witness != requirement.symbol {
-            if let Some(bound) = witness_substitution {
-                self.instantiations
-                    .entry(origin.node)
-                    .or_default()
-                    .extend(bound);
-            }
+        if let Some(bound) = witness_substitution {
+            self.instantiations
+                .entry(origin.node)
+                .or_default()
+                .extend(bound);
         } else {
             self.instantiations
                 .entry(origin.node)
                 .or_default()
                 .extend(receiver_entries);
         }
-        self.member_resolutions.insert(
-            origin.node,
+        let resolution = if let Some((row, _, substitution)) = evidence {
             MemberResolution::ViaConformance {
+                row,
                 protocol: protocol.clone(),
                 witness,
-            },
-        );
+                substitution,
+            }
+        } else {
+            MemberResolution::ViaRequirement {
+                protocol: protocol.clone(),
+                requirement: requirement.symbol,
+                self_ty: receiver_head,
+            }
+        };
+        self.member_resolutions.insert(origin.node, resolution);
     }
 
     fn push_immediate_argument_eq(

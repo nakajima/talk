@@ -388,6 +388,9 @@ macro_rules! impl_bounds_for {
                         .filter_map(|generic| generic.name.symbol().ok())
                         .chain(self_ty.as_ref().and_then(self_context_param))
                         .collect();
+                    if let Some(self_ty) = &self_ty {
+                        collect_ty_params(self_ty, None, &mut context_params);
+                    }
                     if let Some(Ty::Param(protocol)) = &self_ty
                         && let Some(info) = self.catalog.protocols.get(protocol)
                     {

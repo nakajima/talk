@@ -21,6 +21,7 @@ struct Harness {
     mono: FxHashMap<Symbol, Ty>,
     instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    conformance_evidence: FxHashMap<NodeID, Vec<ConformanceEvidence>>,
     coerce_clones: rustc_hash::FxHashSet<NodeID>,
 }
 
@@ -34,6 +35,7 @@ impl Harness {
             mono: FxHashMap::default(),
             instantiations: FxHashMap::default(),
             member_resolutions: FxHashMap::default(),
+            conformance_evidence: FxHashMap::default(),
             coerce_clones: rustc_hash::FxHashSet::default(),
         }
     }
@@ -47,6 +49,7 @@ impl Harness {
             mono: &self.mono,
             instantiations: &mut self.instantiations,
             member_resolutions: &mut self.member_resolutions,
+            conformance_evidence: &mut self.conformance_evidence,
             coerce_clones: &mut self.coerce_clones,
             level: Level(1),
             defaulting: false,
@@ -77,16 +80,12 @@ fn recursive_conformance_reports_cycle_diagnostic() {
     let protocol = Symbol::Protocol(ProtocolId::new(ModuleId::Current, 1));
     let protocol_ref = ProtocolRef::bare(protocol);
 
-    h.catalog.conformances.insert(
-        (ty, protocol_ref.clone()),
-        Conformance {
-            context: vec![Predicate::Conforms {
-                ty: Ty::Nominal(ty, vec![]),
-                protocol: protocol_ref.clone(),
-            }],
-            ..Default::default()
-        },
-    );
+    let mut row = Conformance::new(ty, protocol_ref.clone());
+    row.context = vec![Predicate::Conforms {
+        ty: Ty::Nominal(ty, vec![]),
+        protocol: protocol_ref.clone(),
+    }];
+    h.catalog.insert_conformance(row);
 
     h.solve(vec![Constraint::Conforms {
         ty: Ty::Nominal(ty, vec![]),
@@ -128,10 +127,10 @@ fn level_adjustment_propagates_outward() {
 fn apply_reason_clones_borrowed_cheap_clone_argument() {
     let mut h = Harness::new();
     let cheap = Symbol::Struct(StructId::new(ModuleId::Current, 7));
-    h.catalog.conformances.insert(
-        (cheap, ProtocolRef::bare(Symbol::CheapClone)),
-        Default::default(),
-    );
+    h.catalog.insert_conformance(Conformance::new(
+        cheap,
+        ProtocolRef::bare(Symbol::CheapClone),
+    ));
     let owned = Ty::Nominal(cheap, vec![]);
     let borrowed = Ty::Borrow(Perm::Shared, Box::new(owned.clone()));
     let residual = h.solve(vec![Constraint::Eq(owned, borrowed, origin())]);
@@ -657,6 +656,7 @@ fn instantiation_substitutes_perms_into_predicates() {
         mono: &h.mono,
         instantiations: &mut h.instantiations,
         member_resolutions: &mut h.member_resolutions,
+        conformance_evidence: &mut h.conformance_evidence,
         coerce_clones: &mut h.coerce_clones,
         level: Level(1),
         defaulting: false,

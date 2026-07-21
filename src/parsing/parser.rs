@@ -298,14 +298,13 @@ impl<'a> Parser<'a> {
             Enum => self
                 .nominal_decl(TokenKind::Enum, BlockContext::Enum)?
                 .into(),
-            Extend => self
-                .nominal_decl(TokenKind::Extend, BlockContext::Extend)?
-                .into(),
+            Extend => self.extend_decl()?.into(),
             Struct => self
                 .nominal_decl(TokenKind::Struct, BlockContext::Struct)?
                 .into(),
             Init => match context {
                 BlockContext::Extend | BlockContext::Struct => self.init_decl()?.into(),
+                BlockContext::Protocol => self.init_requirement_decl()?.into(),
                 _ => return Err(ParserError::InitNotAllowed(context)),
             },
 
@@ -488,6 +487,39 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// A protocol initializer requirement: `init(params)` with no body.
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn init_requirement_decl(&mut self) -> Result<Decl, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Init)?;
+        self.consume(TokenKind::LeftParen)?;
+        let params = self.parameters()?;
+        self.consume(TokenKind::RightParen)?;
+        if self.peek_is(TokenKind::LeftBrace) {
+            return Err(ParserError::UnexpectedToken {
+                expected: "an init requirement without a body".into(),
+                actual: "{".into(),
+                token: self.current.clone(),
+            });
+        }
+        let signature = self.save_meta(tok, |id, span| FuncSignature {
+            id,
+            span,
+            name: Name::Raw("init".into()),
+            generics: vec![],
+            where_clause: None,
+            params,
+            effects: EffectSet::default(),
+            ret: None,
+        })?;
+        Ok(Decl {
+            id: signature.id,
+            span: signature.span,
+            visibility: Visibility::default(),
+            kind: DeclKind::InitRequirement { signature },
+        })
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn method_decl_with_mode(
         &mut self,
@@ -654,6 +686,34 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn extend_decl(&mut self) -> Result<Decl, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Extend)?;
+        let binders = self.generics()?;
+        let head = self.type_annotation()?;
+        let conformances = if self.did_match(TokenKind::Colon)? {
+            self.conformances()?
+        } else {
+            vec![]
+        };
+        let where_clause = self.where_clause()?;
+        let body = self.body_block(BlockContext::Extend)?;
+
+        self.save_meta(tok, |id, span| Decl {
+            id,
+            span,
+            visibility: Visibility::default(),
+            kind: DeclKind::Extend {
+                binders,
+                head,
+                conformances,
+                where_clause,
+                body,
+            },
+        })
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn nominal_decl(
         &mut self,
         entry: TokenKind,
@@ -661,11 +721,6 @@ impl<'a> Parser<'a> {
     ) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
         self.consume(entry)?;
-        let row_generics = if context == BlockContext::Extend && self.peek_is(TokenKind::Less) {
-            self.generics()?
-        } else {
-            vec![]
-        };
         let (name, name_span) = self.identifier()?;
         let generics = self.generics()?;
 
@@ -738,15 +793,6 @@ impl<'a> Parser<'a> {
                 body,
                 linear,
                 heap,
-            },
-            BlockContext::Extend => DeclKind::Extend {
-                name: name.into(),
-                name_span,
-                row_generics,
-                conformances,
-                generics,
-                where_clause,
-                body,
             },
             BlockContext::Protocol => DeclKind::Protocol {
                 name: name.into(),
@@ -2358,6 +2404,8 @@ impl<'a> Parser<'a> {
             TokenKind::AmpAmp,
             TokenKind::LessLess,
             TokenKind::GreaterGreater,
+            TokenKind::DotDot,
+            TokenKind::DotDotLess,
         ])?;
 
         let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
