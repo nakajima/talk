@@ -1679,10 +1679,6 @@ struct ProgramBuilder<'a> {
     /// Hidden witness parameters per instance, in append order: rigid
     /// effect-generics the instance's substitution mentions.
     instance_witnesses: FxHashMap<FuncId, Vec<Symbol>>,
-    /// Call-site rows carried into this specialization for abstract
-    /// requirements in its generic body.
-    instance_conformance_evidence:
-        FxHashMap<FuncId, Vec<crate::types::output::ConformanceEvidence>>,
     /// Writeback tuple widths per compiled instance, checked against
     /// every caller's expectation after the worklist drains: a
     /// convention mismatch is a compile error, never silent skew.
@@ -1797,7 +1793,6 @@ impl<'a> ProgramBuilder<'a> {
             functions: Vec::new(),
             func_ids: FxHashMap::default(),
             instance_witnesses: FxHashMap::default(),
-            instance_conformance_evidence: FxHashMap::default(),
             writeback_widths: FxHashMap::default(),
             writeback_expectations: Vec::new(),
             last_writeback_width: 0,
@@ -2070,16 +2065,6 @@ impl<'a> ProgramBuilder<'a> {
         subst: Vec<(Symbol, Ty)>,
         span: Span,
     ) -> Result<FuncId, BackendError> {
-        self.demand_with_evidence(symbol, subst, Vec::new(), span)
-    }
-
-    fn demand_with_evidence(
-        &mut self,
-        symbol: Symbol,
-        subst: Vec<(Symbol, Ty)>,
-        evidence: Vec<crate::types::output::ConformanceEvidence>,
-        span: Span,
-    ) -> Result<FuncId, BackendError> {
         let Some(callable) = self.callables.get(&symbol).copied() else {
             let name = self
                 .programs
@@ -2135,12 +2120,6 @@ impl<'a> ProgramBuilder<'a> {
         subst.sort_by_key(|(param, _)| *param);
         let instance = (symbol, subst);
         if let Some(id) = self.func_ids.get(&instance).copied() {
-            let stored = self.instance_conformance_evidence.entry(id).or_default();
-            for item in evidence {
-                if !stored.contains(&item) {
-                    stored.push(item);
-                }
-            }
             return Ok(id);
         }
         let id = self.reserve(&callable.body.name());
@@ -2149,14 +2128,19 @@ impl<'a> ProgramBuilder<'a> {
         // before the instance body compiles off the worklist.
         self.instance_witnesses
             .insert(id, witness_params(&instance.1));
-        self.instance_conformance_evidence.insert(id, evidence);
         self.worklist.push((instance, id));
         Ok(id)
     }
 
-    /// Select a witness used only while synthesizing compiler-owned glue.
-    /// Source calls consume `MemberResolution` evidence and never enter here.
-    fn generated_conformance_witness(
+    /// The one deferred-selection point (ADR 0036): dereference a concrete
+    /// self type's conformance to its implementation symbol through the
+    /// catalog's shared instance matcher. Typing commits everything
+    /// decidable at typing time (`MemberResolution::ViaConformance`); this
+    /// serves the remainder — requirement operations whose receiver became
+    /// concrete only under an instance substitution, and compiler-owned
+    /// glue. Coherence makes the lookup forced, so it cannot disagree with
+    /// the frontend.
+    fn conformance_witness(
         &self,
         self_ty: &Ty,
         protocol: &crate::types::ty::ProtocolRef,
@@ -2729,12 +2713,7 @@ impl<'a> ProgramBuilder<'a> {
         while let Some(((symbol, subst), id)) = self.worklist.pop() {
             let callable = self.callables[&symbol];
             let suppress_self_drop = self.is_deinit_witness(symbol);
-            let evidence = self
-                .instance_conformance_evidence
-                .get(&id)
-                .cloned()
-                .unwrap_or_default();
-            let func = self.compile_func(callable, &subst, &evidence, suppress_self_drop)?;
+            let func = self.compile_func(callable, &subst, suppress_self_drop)?;
             self.writeback_widths.insert(id, self.last_writeback_width);
             self.functions[id] = func;
         }
@@ -2763,7 +2742,6 @@ impl<'a> ProgramBuilder<'a> {
         &mut self,
         callable: Callable<'a>,
         subst: &[(Symbol, Ty)],
-        evidence: &[crate::types::output::ConformanceEvidence],
         suppress_self_drop: bool,
     ) -> Result<Function, BackendError> {
         let (name, params, body) = match callable.body {
@@ -2794,7 +2772,6 @@ impl<'a> ProgramBuilder<'a> {
         let arity = fx.bind_witness_params(&hidden, declared_arity);
         fx.next_local = arity;
         fx.subst = subst.iter().cloned().collect();
-        fx.conformance_evidence = evidence.to_vec();
         fx.in_init = matches!(callable.body, CallableBody::Init { .. });
         if let CallableBody::Func(func) = callable.body
             && let Ty::Func(_, ret, _) = &func.scheme.ty
@@ -2927,7 +2904,6 @@ struct FunctionBuilder<'p, 'a> {
     /// This instance's scheme-parameter substitution: baked node types in
     /// the body resolve through it before any scalar decision.
     subst: FxHashMap<Symbol, Ty>,
-    conformance_evidence: Vec<crate::types::output::ConformanceEvidence>,
     locals: FxHashMap<Symbol, LocalId>,
     next_local: u16,
     blocks: Vec<BlockData>,
@@ -3066,7 +3042,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             program_builder,
             program,
             subst: FxHashMap::default(),
-            conformance_evidence: Vec::new(),
             locals: FxHashMap::default(),
             next_local: arity,
             blocks: vec![BlockData::default()],
@@ -4453,14 +4428,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let label = crate::label::Label::Named("add".into());
         let (implementation, subst) = self
             .program_builder
-            .generated_conformance_witness(&string_ty, &add_ref, &label)
+            .conformance_witness(&string_ty, &add_ref, &label)
             .or_else(|| {
                 let bare = crate::types::ty::ProtocolRef {
                     protocol: add,
                     args: Vec::new(),
                 };
                 self.program_builder
-                    .generated_conformance_witness(&string_ty, &bare, &label)
+                    .conformance_witness(&string_ty, &bare, &label)
             })
             .ok_or_else(|| {
                 BackendError::new(
@@ -4500,7 +4475,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let label = crate::label::Label::Named("show".into());
         let func = match self
             .program_builder
-            .generated_conformance_witness(&ty, protocol, &label)
+            .conformance_witness(&ty, protocol, &label)
         {
             Some((implementation, subst)) => {
                 self.program_builder.demand(implementation, subst, span)?
@@ -4536,12 +4511,21 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         while let Ty::Borrow(_, inner) = ty {
             ty = *inner;
         }
+        // Each recursion level compares values of a NEW type, so the
+        // protocol application is rebuilt for it (`Equatable<RHS = Self>`);
+        // the caller's application describes the outer type only.
+        let target = self
+            .program_builder
+            .catalog
+            .derived_protocol_ref(protocol.protocol, &ty)
+            .unwrap_or_else(|| crate::types::ty::ProtocolRef::bare(protocol.protocol));
+        let protocol = &target;
         match &ty {
             Ty::Nominal(symbol, args) => {
                 let label = crate::label::Label::Named("equals".into());
                 if let Some((implementation, subst)) = self
                     .program_builder
-                    .generated_conformance_witness(&ty, protocol, &label)
+                    .conformance_witness(&ty, protocol, &label)
                 {
                     let func = self.program_builder.demand(implementation, subst, span)?;
                     self.program_builder
@@ -6412,12 +6396,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             }
                         }
                     }
-                    let func = self.demand_specialized(
-                        target,
-                        subst,
-                        &expr.conformance_evidence,
-                        expr.span,
-                    )?;
+                    let func = self.demand_specialized(target, subst, expr.span)?;
                     let dest = self.fresh_local();
                     self.push(Inst::MakeClosure {
                         dest,
@@ -7263,7 +7242,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         &mut self,
         target: Symbol,
         mut subst: Vec<(Symbol, Ty)>,
-        site_evidence: &[crate::types::output::ConformanceEvidence],
         span: Span,
     ) -> Result<FuncId, BackendError> {
         if let Some(callable) = self.program_builder.callables.get(&target) {
@@ -7276,38 +7254,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
             }
         }
-        let module = self.program_builder.programs[self.program].module;
-        let mut evidence = self.conformance_evidence.clone();
-        for item in site_evidence {
-            let canonical = crate::types::output::ConformanceEvidence {
-                row: item.row.import(module),
-                self_ty: canonical_ty(&item.self_ty, module),
-                protocol: crate::types::ty::ProtocolRef {
-                    protocol: canonical(item.protocol.protocol, module),
-                    args: item
-                        .protocol
-                        .args
-                        .iter()
-                        .map(|arg| canonical_ty(arg, module))
-                        .collect(),
-                },
-                witnesses: item
-                    .witnesses
-                    .iter()
-                    .map(|(label, witness)| (label.clone(), canonical(*witness, module)))
-                    .collect(),
-                substitution: item
-                    .substitution
-                    .iter()
-                    .map(|(symbol, ty)| (canonical(*symbol, module), canonical_ty(ty, module)))
-                    .collect(),
-            };
-            if !evidence.contains(&canonical) {
-                evidence.push(canonical);
-            }
-        }
-        self.program_builder
-            .demand_with_evidence(target, subst, evidence, span)
+        self.program_builder.demand(target, subst, span)
     }
 
     /// Resolve a variant pattern to its enum head, tag, and payload
@@ -8197,20 +8144,29 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             );
                         }
                         if let Some(evidence_substitution) = evidence_substitution {
+                            // Typing published this substitution in the
+                            // generic body's own terms; the instance
+                            // substitution makes it concrete here.
                             subst.extend(evidence_substitution.iter().map(|(symbol, ty)| {
-                                (canonical(*symbol, module), canonical_ty(ty, module))
+                                (
+                                    canonical(*symbol, module),
+                                    self.resolved(&canonical_ty(ty, module)),
+                                )
                             }));
                             canonical(*witness, module)
-                        } else if let Some(evidence) = self
-                            .conformance_evidence
-                            .iter()
-                            .find(|evidence| {
-                                evidence.self_ty == self_ty && evidence.protocol == *protocol
-                            })
-                            && let Some(implementation) = evidence.witnesses.get(label)
+                        } else if let Some((implementation, row_subst)) = self
+                            .program_builder
+                            .conformance_witness(&self_ty, protocol, label)
                         {
-                            subst.extend(evidence.substitution.iter().cloned());
-                            *implementation
+                            // Deferred selection (ADR 0036): the receiver
+                            // was rigid at typing, so no per-node commitment
+                            // could name the witness. The instance
+                            // substitution has made it concrete here, and
+                            // coherence makes the shared selector's answer
+                            // forced — this dereferences typing's decision,
+                            // it does not make a new one.
+                            subst.extend(row_subst);
+                            implementation
                         } else if !self
                             .program_builder
                             .callables
@@ -8241,6 +8197,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             self.produce_temp(dest, &self.resolved(&expr.ty));
                             return Ok(Operand::Local(dest));
                         } else {
+                            // The requirement's default body executes with
+                            // `Self`, the protocol's input parameters, and
+                            // the conformance's associated types
+                            // substituted.
                             subst.push((protocol.protocol, self_ty.clone()));
                             if let Some(params) =
                                 self.program_builder.protocol_params(protocol.protocol)
@@ -8249,6 +8209,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                     subst.push((*param, self.resolved(arg)));
                                 }
                             }
+                            subst.extend(self.program_builder.conformance_assoc(&self_ty, protocol));
                             canonical(*witness, module)
                         }
                     }
@@ -8418,13 +8379,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             self.loans.retain(|loan| loan.root != base);
         }
-        let mut call_evidence = callee.conformance_evidence.clone();
-        for evidence in &expr.conformance_evidence {
-            if !call_evidence.contains(evidence) {
-                call_evidence.push(evidence.clone());
-            }
-        }
-        let func = self.demand_specialized(target, subst, &call_evidence, expr.span)?;
+        let func = self.demand_specialized(target, subst, expr.span)?;
         self.program_builder
             .writeback_expectations
             .push((func, targets.len(), expr.span));
@@ -9038,15 +8993,39 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     ..
                 }) => {
                     subst.extend(substitution.iter().map(|(symbol, ty)| {
-                        (canonical(*symbol, module), canonical_ty(ty, module))
+                        (
+                            canonical(*symbol, module),
+                            self.resolved(&canonical_ty(ty, module)),
+                        )
                     }));
                     Some(canonical(*witness, module))
                 }
-                Some(crate::types::output::MemberResolution::ViaRequirement { .. }) => {
-                    return Err(BackendError::new(
-                        "protocol construction without published conformance evidence".into(),
-                        callee.span,
-                    ));
+                Some(crate::types::output::MemberResolution::ViaRequirement {
+                    protocol, ..
+                }) => {
+                    // Deferred selection: the constructed type was rigid at
+                    // typing; the instance substitution has made it
+                    // concrete, so the shared selector's answer is forced.
+                    let protocol = crate::types::ty::ProtocolRef {
+                        protocol: canonical(protocol.protocol, module),
+                        args: protocol
+                            .args
+                            .iter()
+                            .map(|arg| self.resolved(arg))
+                            .collect(),
+                    };
+                    let label = crate::label::Label::Named("init".into());
+                    let Some((implementation, row_subst)) = self
+                        .program_builder
+                        .conformance_witness(&ty, &protocol, &label)
+                    else {
+                        return Err(BackendError::new(
+                            "protocol construction without a selectable conformance".into(),
+                            callee.span,
+                        ));
+                    };
+                    subst.extend(row_subst);
+                    Some(implementation)
                 }
                 None => None,
             };

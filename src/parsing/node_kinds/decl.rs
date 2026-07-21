@@ -7,7 +7,8 @@ use crate::{
     node_kinds::{
         block::Block, body::Body, expr::Expr, func::Func, func_signature::FuncSignature,
         generic_decl::GenericDecl, parameter::Parameter, pattern::Pattern,
-        type_annotation::TypeAnnotation, where_clause::WhereClause,
+        type_annotation::TypeAnnotation, type_application::TypeApplication,
+        where_clause::WhereClause,
     },
     parsing::span::Span,
 };
@@ -149,9 +150,10 @@ pub enum DeclKind {
     Extend {
         /// Explicit instance binders from `extend<T> Head<T> ...`.
         binders: Vec<GenericDecl>,
-        /// The extended nominal or protocol application. This is ordinary
-        /// type syntax; arguments never declare parameters.
-        head: TypeAnnotation,
+        /// The extended nominal or protocol application. The head grammar
+        /// admits only a name plus arguments; arguments never declare
+        /// parameters.
+        head: TypeApplication,
         conformances: Vec<TypeAnnotation>,
         where_clause: Option<WhereClause>,
         body: Body,

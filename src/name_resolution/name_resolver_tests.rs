@@ -8,6 +8,7 @@ pub mod tests {
         annotation, any, any_block, any_body, any_decl, any_expr, any_expr_stmt, any_stmt,
         assert_eq_diff,
         ast::{AST, NameResolved},
+        node_kinds::type_application::TypeApplication,
         compiling::module::{ModuleEnvironment, ModuleId},
         diagnostic::{AnyDiagnostic, Diagnostic, Severity},
         label::Label,
@@ -1459,11 +1460,13 @@ pub mod tests {
             *resolved.0.roots[1].as_decl(),
             any_decl!(DeclKind::Extend {
                 binders: vec![],
-                head: annotation!(TypeAnnotationKind::Nominal {
+                head: TypeApplication {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
                     name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
                     name_span: Span::ANY,
-                    generics: vec![],
-                }),
+                    args: vec![],
+                },
                 conformances: vec![],
                 where_clause: None,
                 body: any_body!(vec![])
@@ -1485,11 +1488,13 @@ pub mod tests {
             *resolved.0.roots[0].as_decl(),
             any_decl!(DeclKind::Extend {
                 binders: vec![],
-                head: annotation!(TypeAnnotationKind::Nominal {
+                head: TypeApplication {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
                     name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
                     name_span: Span::ANY,
-                    generics: vec![],
-                }),
+                    args: vec![],
+                },
                 conformances: vec![],
                 where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {

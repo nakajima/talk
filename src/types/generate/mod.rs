@@ -73,8 +73,7 @@ use crate::types::catalog::{
 use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
 use crate::types::output::{
-    CheckedIntegerLiteral, ConformanceEvidence, ExistentialPack, ForPlan, MemberResolution,
-    PropagationPlan, TypeOutput,
+    CheckedIntegerLiteral, ExistentialPack, ForPlan, MemberResolution, PropagationPlan, TypeOutput,
 };
 use crate::types::solve::{Generalizer, Solver, TyNode, VarStore, normalize_ty};
 use crate::types::ty::{

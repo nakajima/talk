@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::node_kinds::type_application::TypeApplication;
+
 /// Apply a parameter's ownership mode to its lowered annotation type
 /// (ADR 0018). Explicit `borrow`/`mut` wrap the type in a borrow;
 /// `consume` (and unadorned, until the borrow-by-default flip) lowers as
@@ -297,6 +299,74 @@ impl<'e> Elaborator<'e> {
         EffectRow::new(entries, tail)
     }
 
+    /// Lower a name applied to generic arguments. Shared by ordinary
+    /// nominal annotations and extension heads (`TypeApplication`), so
+    /// concrete head arguments get argument kinds, static values, defaults,
+    /// aliases, and well-formedness exactly like every other application.
+    fn lower_nominal_application(
+        &mut self,
+        name: &Name,
+        generics: &[GenericArg],
+        node: NodeID,
+    ) -> Ty {
+        if name.name_str() == "Self"
+            && generics.is_empty()
+            && let Some(self_ty) = self.self_types.last()
+        {
+            return self_ty.clone();
+        }
+        let Ok(symbol) = name.symbol() else {
+            return Ty::Error;
+        };
+        if matches!(symbol, Symbol::TypeAlias(_)) {
+            if !generics.is_empty() {
+                self.diagnostics.errors.push((
+                    TypeError::ArityMismatch {
+                        expected: 0,
+                        found: generics.len(),
+                    },
+                    node,
+                ));
+            }
+            return self.lower_type_alias(symbol, node, None);
+        }
+        let mut args: Vec<Ty> = self.lower_generic_args(symbol, generics);
+        self.pad_default_args(symbol, &mut args, node);
+        match symbol {
+            Symbol::TypeParameter(_) | Symbol::AssociatedType(_) => {
+                // A static parameter is a value, not a type; only
+                // generic-argument slots (ADR 0035) may name it.
+                if self.catalog.static_params.contains_key(&symbol) {
+                    self.diagnostics
+                        .errors
+                        .push((TypeError::StaticValueInTypePosition, node));
+                    return Ty::Error;
+                }
+                Ty::Param(symbol)
+            }
+            _ => {
+                self.require_nominal_well_formed(symbol, &args, node);
+                // Implicit effect args: annotations never spell
+                // them, so `Wrapper` means "Wrapper with SOME
+                // rows" — fresh here, pinned by whatever this
+                // annotation meets (a declared return type's rows
+                // are solved by the body and generalize with the
+                // scheme). Collection-time leftovers sanitize to
+                // owner-keyed params at the module boundary.
+                if let Some(info) = self.catalog.structs.get(&symbol) {
+                    args.extend(info.eff_params.iter().map(|_| {
+                        Ty::Eff(EffectRow::open(self.store.fresh_eff(self.level, node)))
+                    }));
+                }
+                Ty::Nominal(symbol, args)
+            }
+        }
+    }
+
+    fn lower_type_application(&mut self, head: &TypeApplication) -> Ty {
+        self.lower_nominal_application(&head.name, &head.args, head.id)
+    }
+
     fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
         match &annotation.kind {
             TypeAnnotationKind::Borrow { mutable, inner } => {
@@ -317,60 +387,7 @@ impl<'e> Elaborator<'e> {
                 Ty::Unique(Box::new(self.lower_annotation(inner)))
             }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
-                if name.name_str() == "Self"
-                    && generics.is_empty()
-                    && let Some(self_ty) = self.self_types.last()
-                {
-                    return self_ty.clone();
-                }
-                let Ok(symbol) = name.symbol() else {
-                    return Ty::Error;
-                };
-                if matches!(symbol, Symbol::TypeAlias(_)) {
-                    if !generics.is_empty() {
-                        self.diagnostics.errors.push((
-                            TypeError::ArityMismatch {
-                                expected: 0,
-                                found: generics.len(),
-                            },
-                            annotation.id,
-                        ));
-                    }
-                    return self.lower_type_alias(symbol, annotation.id, None);
-                }
-                let mut args: Vec<Ty> = self.lower_generic_args(symbol, generics);
-                self.pad_default_args(symbol, &mut args, annotation.id);
-                match symbol {
-                    Symbol::TypeParameter(_) | Symbol::AssociatedType(_) => {
-                        // A static parameter is a value, not a type; only
-                        // generic-argument slots (ADR 0035) may name it.
-                        if self.catalog.static_params.contains_key(&symbol) {
-                            self.diagnostics
-                                .errors
-                                .push((TypeError::StaticValueInTypePosition, annotation.id));
-                            return Ty::Error;
-                        }
-                        Ty::Param(symbol)
-                    }
-                    _ => {
-                        self.require_nominal_well_formed(symbol, &args, annotation.id);
-                        // Implicit effect args: annotations never spell
-                        // them, so `Wrapper` means "Wrapper with SOME
-                        // rows" — fresh here, pinned by whatever this
-                        // annotation meets (a declared return type's rows
-                        // are solved by the body and generalize with the
-                        // scheme). Collection-time leftovers sanitize to
-                        // owner-keyed params at the module boundary.
-                        if let Some(info) = self.catalog.structs.get(&symbol) {
-                            args.extend(info.eff_params.iter().map(|_| {
-                                Ty::Eff(EffectRow::open(
-                                    self.store.fresh_eff(self.level, annotation.id),
-                                ))
-                            }));
-                        }
-                        Ty::Nominal(symbol, args)
-                    }
-                }
+                self.lower_nominal_application(name, generics, annotation.id)
             }
             TypeAnnotationKind::Func {
                 params,
@@ -938,6 +955,16 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         let (ty, obligations) = {
             let mut elab = self.elaborator();
             let ty = elab.lower_annotation(annotation);
+            (ty, std::mem::take(&mut elab.obligations))
+        };
+        self.absorb_obligations(obligations);
+        ty
+    }
+
+    pub(super) fn lower_type_application(&mut self, head: &TypeApplication) -> Ty {
+        let (ty, obligations) = {
+            let mut elab = self.elaborator();
+            let ty = elab.lower_type_application(head);
             (ty, std::mem::take(&mut elab.obligations))
         };
         self.absorb_obligations(obligations);

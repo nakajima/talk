@@ -24,6 +24,7 @@ use crate::{
         record_field::{RecordField, RecordFieldTypeAnnotation},
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
+        type_application::TypeApplication,
         where_clause::{WhereClause, WherePredicateKind},
     },
     node_meta::NodeMeta,
@@ -1523,7 +1524,7 @@ impl<'a> Formatter<'a> {
     fn format_extend(
         &self,
         binders: &[GenericDecl],
-        head: &TypeAnnotation,
+        head: &TypeApplication,
         conformances: &[TypeAnnotation],
         where_clause: Option<&WhereClause>,
         body: &Body,
@@ -1534,7 +1535,12 @@ impl<'a> Formatter<'a> {
             result = concat(result, self.format_generic_decl_list(binders));
         }
 
-        result = concat_space(result, self.format_type_annotation(head));
+        // The head prints from its name and args directly: annotation sugar
+        // normalization (`Array<T>` as `[T]`) can never apply to a head.
+        result = concat_space(
+            result,
+            self.format_nominal_type_annotation(head.name.name_str(), &head.args),
+        );
 
         if !conformances.is_empty() {
             let conformances_docs = conformances
@@ -2852,6 +2858,18 @@ mod formatter_tests {
             format_code("func f(fn: (&Foo, &mut Bar) -> Void) {}", 100),
             "func f(fn: (Foo, mut Bar) -> Void) {}"
         );
+    }
+
+    #[test]
+    fn formats_extend_heads_without_sugar() {
+        // ADR 0036: an extension head is a nominal application and never
+        // prints via annotation sugar; `[T]` stays legal inside the args.
+        let head = "extend<Element> Array<Element>: Iterable {}";
+        assert_eq!(format_code(head, 100), head);
+        let bounded = "extend<Element: Showable> Array<Element>: Showable {}";
+        assert_eq!(format_code(bounded, 100), bounded);
+        let arg_sugar = "extend<T> Dict<[T]> {}";
+        assert_eq!(format_code(arg_sugar, 100), arg_sugar);
     }
 
     #[test]

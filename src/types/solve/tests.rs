@@ -21,7 +21,6 @@ struct Harness {
     mono: FxHashMap<Symbol, Ty>,
     instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     member_resolutions: FxHashMap<NodeID, MemberResolution>,
-    conformance_evidence: FxHashMap<NodeID, Vec<ConformanceEvidence>>,
     coerce_clones: rustc_hash::FxHashSet<NodeID>,
 }
 
@@ -35,7 +34,6 @@ impl Harness {
             mono: FxHashMap::default(),
             instantiations: FxHashMap::default(),
             member_resolutions: FxHashMap::default(),
-            conformance_evidence: FxHashMap::default(),
             coerce_clones: rustc_hash::FxHashSet::default(),
         }
     }
@@ -49,7 +47,6 @@ impl Harness {
             mono: &self.mono,
             instantiations: &mut self.instantiations,
             member_resolutions: &mut self.member_resolutions,
-            conformance_evidence: &mut self.conformance_evidence,
             coerce_clones: &mut self.coerce_clones,
             level: Level(1),
             defaulting: false,
@@ -656,7 +653,6 @@ fn instantiation_substitutes_perms_into_predicates() {
         mono: &h.mono,
         instantiations: &mut h.instantiations,
         member_resolutions: &mut h.member_resolutions,
-        conformance_evidence: &mut h.conformance_evidence,
         coerce_clones: &mut h.coerce_clones,
         level: Level(1),
         defaulting: false,

@@ -24,6 +24,7 @@ use crate::{
         pattern::PatternKind,
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
+        type_application::TypeApplication,
     },
     on,
     span::Span,
@@ -443,20 +444,11 @@ impl<'a> DeclDeclarer<'a> {
     fn enter_extend(
         &mut self,
         id: NodeID,
-        head: &mut TypeAnnotation,
+        head: &mut TypeApplication,
         binders: &mut [GenericDecl],
         decls: &[Decl],
     ) {
-        let name = match &mut head.kind {
-            TypeAnnotationKind::Nominal { name, .. } | TypeAnnotationKind::SelfType(name) => name,
-            _ => {
-                self.resolver.diagnostic(
-                    id,
-                    NameResolverError::Unresolved(Name::Raw("extension head".into())),
-                );
-                return;
-            }
-        };
+        let name = &mut head.name;
         *name = self.resolver.lookup(name).unwrap_or(name.clone());
         let sym = match name.symbol() {
             Ok(sym) => sym,

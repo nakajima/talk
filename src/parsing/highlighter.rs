@@ -317,7 +317,10 @@ impl<'a> Higlighter<'a> {
                     ..
                 } => {
                     result.extend(self.tokens_from_exprs(binders, ast));
-                    result.extend(self.tokens_from_expr(head, ast));
+                    result.push(self.make_span(Kind::TYPE, head.name_span));
+                    for arg in &head.args {
+                        self.tokens_from_generic_arg(arg, ast, &mut result);
+                    }
                     result.extend(self.tokens_from_exprs(conformances, ast));
                     result.extend(self.tokens_from_expr(body, ast));
                 }

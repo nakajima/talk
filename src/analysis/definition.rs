@@ -295,6 +295,21 @@ fn symbol_from_stmt(
     }
 }
 
+fn symbol_from_type_application(
+    head: &crate::node_kinds::type_application::TypeApplication,
+    byte_offset: u32,
+) -> Option<Symbol> {
+    head.args
+        .iter()
+        .flat_map(|arg| arg.annotations())
+        .find_map(|annotation| symbol_from_type_annotation(annotation, byte_offset))
+        .or_else(|| {
+            nominal_name_span_contains(&head.name, head.name_span, byte_offset)
+                .then(|| head.name.symbol().ok())
+                .flatten()
+        })
+}
+
 fn symbol_from_type_annotation(
     ty: &crate::node_kinds::type_annotation::TypeAnnotation,
     byte_offset: u32,
@@ -372,7 +387,7 @@ fn symbol_from_decl(decl: &crate::node_kinds::decl::Decl, byte_offset: u32) -> O
             }
             name.symbol().ok()
         }
-        DeclKind::Extend { head, .. } => symbol_from_type_annotation(head, byte_offset),
+        DeclKind::Extend { head, .. } => symbol_from_type_application(head, byte_offset),
         DeclKind::TypeAlias(name, name_span, ..) => {
             if !span_contains(*name_span, byte_offset) {
                 return None;

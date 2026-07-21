@@ -28,6 +28,7 @@ use crate::node_kinds::pattern::{
     Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
 };
 use crate::node_kinds::record_field::{RecordField, RecordFieldTypeAnnotation};
+use crate::node_kinds::type_application::TypeApplication;
 use crate::node_kinds::stmt::{Stmt, StmtKind};
 use crate::node_kinds::type_annotation::{AnyAssocBinding, TypeAnnotation, TypeAnnotationKind};
 use crate::node_kinds::where_clause::{WhereClause, WherePredicate, WherePredicateKind};
@@ -690,7 +691,7 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Extend)?;
         let binders = self.generics()?;
-        let head = self.type_annotation()?;
+        let head = self.type_application()?;
         let conformances = if self.did_match(TokenKind::Colon)? {
             self.conformances()?
         } else {
@@ -710,6 +711,33 @@ impl<'a> Parser<'a> {
                 where_clause,
                 body,
             },
+        })
+    }
+
+    /// A nominal application: `Name` or `Name<Args>`. This is the extension
+    /// head grammar — sugar (`[T]`, `T?`) and non-nominal forms fail at the
+    /// offending token; they are ordinary annotations only inside the args.
+    fn type_application(&mut self) -> Result<TypeApplication, ParserError> {
+        let tok = self.push_source_location();
+        let (mut name, name_span) = self.identifier()?;
+        while self.did_match_double_colon()? {
+            let (segment, _) = self.identifier()?;
+            name.push_str("::");
+            name.push_str(&segment);
+        }
+        let mut args = vec![];
+        if self.did_match(TokenKind::Less)? {
+            while !self.did_match_generic_close()? {
+                args.push(self.generic_argument()?);
+                self.consume(TokenKind::Comma).ok();
+            }
+        }
+        self.save_meta(tok, |id, span| TypeApplication {
+            id,
+            span,
+            name: name.into(),
+            name_span,
+            args,
         })
     }
 

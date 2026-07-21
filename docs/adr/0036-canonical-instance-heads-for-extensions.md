@@ -124,8 +124,8 @@ order never supplies priority.
 
 ### Explicit binders precede the extended type
 
-Extension binders use the existing prefix position. The extended type is an
-ordinary type annotation:
+Extension binders use the existing prefix position. The extended type is a
+nominal application — a name plus ordinary generic arguments:
 
 ```talk
 extend<T> Array<T>: Iterable {}
@@ -135,12 +135,21 @@ extend<T> Pair<T, Void>: P {}
 extend<static N: Int> InlineArray<Int, N>: P {}
 ```
 
-The parsed declaration becomes conceptually:
+The parsed declaration carries the head as a dedicated nominal-application
+node, not a general type annotation:
 
 ```rust
+pub struct TypeApplication {
+    pub id: NodeID,
+    pub span: Span,
+    pub name: Name,
+    pub name_span: Span,
+    pub args: Vec<GenericArg>,
+}
+
 DeclKind::Extend {
     binders: Vec<GenericDecl>,
-    head: TypeAnnotation,
+    head: TypeApplication,
     conformances: Vec<TypeAnnotation>,
     where_clause: Option<WhereClause>,
     body: Body,
@@ -150,6 +159,18 @@ DeclKind::Extend {
 A binder always declares a parameter. A head argument is always a normal
 `GenericArg`. The extension-only name-resolution exception that stores concrete
 symbols in `GenericDecl` is removed.
+
+The AST shape is the admission rule: an extension head is a name applied to
+arguments, never an arbitrary type. Sugar spellings — `[T]`, `[T; N]`, `T?` —
+and non-nominal forms — borrows, tuples, function types, `any P` — fail at the
+offending token because the head grammar never admits them. There is no
+post-parse validation and no reconstruction of what the user typed. Sugar
+remains ordinary inside head arguments: `extend<T> Dict<[T]>` is legal because
+arguments are ordinary annotations.
+
+The formatter prints the head from `TypeApplication` directly, so annotation
+sugar normalization (such as printing `Array<T>` as `[T]`) can never apply to a
+head. Core spells Array extensions `extend<Element> Array<Element>`.
 
 The old implicit-binder spelling is migrated:
 
@@ -476,17 +497,36 @@ The solver consumes canonical rows through the catalog selection interface. It
 does not special-case concrete extension arguments; concrete, generic, nested,
 repeated, and static patterns are ordinary instance heads.
 
-When typing commits to a conformance witness, typed output records enough
-selection evidence to identify:
+Selection commits at exactly two points, and nowhere else.
 
-- the conformance row;
-- the requirement and witness;
-- the finalized substitution for the row parameters.
+**Typing commits at finalization.** While solving, member dispatch through a
+protocol requirement records only the requirement operation: the protocol
+application, the requirement symbol, and the receiver type. The solver never
+commits a witness mid-solve — receivers may still contain unification
+variables, and an early commitment is either wrong or must be re-derived.
+After zonking, finalization resolves every requirement operation whose
+receiver is concrete through the catalog selector and publishes the committed
+row, witness, and row substitution on the node
+(`MemberResolution::ViaConformance`). Receivers that remain rigid parameters
+stay published as requirement operations
+(`MemberResolution::ViaRequirement`).
 
-This follows ADR 0015 and advances ADR 0020's evidence model. Lowering consumes
-the committed selection. Where one AST node serves multiple monomorphizations
-and selection must remain deferred, the monomorphizer calls the same full-row
-catalog selector used by typing.
+**Lowering commits at specialization.** A requirement operation inside a
+generic body has one witness per instantiation, so no per-node publication can
+carry it; the instantiation set only exists as the backend's specialization
+worklist drains. When the backend specializes the body, it applies the
+instance substitution to the receiver and calls the same catalog selector
+typing used. Coherence makes this lookup forced: exactly one row can match, so
+the backend dereferences a decision rather than making one. Marker, ownership,
+and `Deinit` queries on substituted types are the same deferred lookup.
+
+Lowering owns no selection state and no selection logic. There is no evidence
+side-channel: no per-node evidence lists in typed output, no evidence threaded
+through specializations, and no backend-owned canonicalization, merging, or
+deduplication of selection results. The catalog plus the instance substitution
+are the entire evidence channel. This follows ADR 0015: typing publishes every
+choice decidable at typing time, and the monomorphization carve-out is a
+forced lookup through the shared interface, not a parallel selector.
 
 Application-insensitive backend facts are removed or restricted to rows proven
 unconditional for every application. In particular:
@@ -528,6 +568,8 @@ Tests use the compiler's real interfaces at each seam.
 
 - Prefix binders and ordinary head arguments parse distinctly.
 - A concrete name in a head is never declared as a parameter.
+- Sugar spellings (`[T]`, `[T; N]`, `T?`) and non-nominal forms are parse
+  errors in head position; sugar inside head arguments parses normally.
 - Static and nested generic arguments use ordinary argument syntax.
 - Nominal parameter projections resolve to their declaration and support
   navigation.
@@ -570,9 +612,9 @@ concrete, nested, and static instance heads.
 
 ## Implementation sequence
 
-1. Change the extension AST to explicit prefix binders plus a normal head
-   annotation; update parsing, formatting, highlighting, name resolution, and
-   source fixtures.
+1. Change the extension AST to explicit prefix binders plus a dedicated
+   `TypeApplication` head; update parsing, formatting, highlighting, name
+   resolution, and source fixtures.
 2. Expose nominal parameters as named nominal type members and implement direct
    positional reduction, including static parameters.
 3. Introduce `InstanceHead`, its validation, matching, overlap, substitution,
@@ -587,8 +629,10 @@ concrete, nested, and static instance heads.
    identity.
 8. Route solver, member lookup, completion, code actions, import/export, and
    catalog finalization through the new interfaces.
-9. Publish committed row selection in typed output and replace backend
-   head-only/manual selection, including `Deinit` and ownership queries.
+9. Move typing's witness commitment to finalization, publish committed row
+   selection per node, and replace backend head-only/manual selection —
+   including `Deinit` and ownership queries — with substitute-then-select
+   through the shared interface. The backend keeps no selection state.
 10. Migrate core/stdlib extension syntax and add source-to-catalog,
     module-boundary, diagnostic, and two-engine tests.
 
@@ -634,7 +678,33 @@ missing contexts, coarse backend facts, and duplicate selection logic.
 
 Rejected. Whether a token declares a binder would continue to depend on name
 lookup, and static/nested argument syntax would remain a parallel type grammar.
-Declaration syntax belongs in the prefix; the head is an ordinary type.
+Declaration syntax belongs in the prefix; the head is a nominal application.
+
+### Parse the head as a general `TypeAnnotation`
+
+Rejected after implementation experience. A general annotation admits sugar
+(`[T]`, `T?`) and non-nominal shapes in head position, which then need either
+post-parse rejection or provenance reconstruction (bracket sugar marks its
+synthesized name span; optional sugar does not, so "what the user typed" is
+not uniformly recoverable). It also routes heads through the formatter's
+annotation sugar normalization, which rewrote core's `extend Array<Element>`
+heads to `extend<Element> [Element]`. A dedicated `TypeApplication` node makes
+the admission rule structural and keeps the formatter, elaborator, and tooling
+preconditions in the type.
+
+### Thread per-node conformance evidence through specializations
+
+Rejected after implementation experience. Recording selected rows as evidence
+lists on typed nodes and threading them through backend specializations —
+merging call-site evidence with enclosing-instance evidence, canonicalizing
+per module, deduplicating, and scanning by receiver and protocol — simulates
+dictionary passing without the dictionaries being values in the program. Under
+full-head coherence the deferred lookup is forced, so the threaded evidence
+can never disagree with substitute-then-select and adds only machinery. If
+evidence should ever become explicit, the right form is witness passing (the
+checker elaborates dictionary parameters into the program); the shared catalog
+selector and row identity built here are exactly what that elaboration would
+consume, so this decision does not foreclose it.
 
 ### Treat `Self.Element == Int` only as a premise
 

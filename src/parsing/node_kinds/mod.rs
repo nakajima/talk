@@ -16,6 +16,7 @@ pub mod pattern;
 pub mod record_field;
 pub mod stmt;
 pub mod type_annotation;
+pub mod type_application;
 pub mod where_clause;
 
 #[macro_export]

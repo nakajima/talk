@@ -1,4 +1,5 @@
 use super::*;
+use crate::node_kinds::type_application::TypeApplication;
 use crate::types::ty::StaticCmpOp;
 
 impl<'s, 'a> CatalogBuilder<'s, 'a> {
@@ -1222,28 +1223,26 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
     /// source-level instance identity.
     fn lower_extension_head(
         &mut self,
-        annotation: &TypeAnnotation,
+        head_application: &TypeApplication,
     ) -> Option<(Symbol, Ty, Vec<Ty>)> {
-        let head = annotation.symbol().ok()?;
+        let head = head_application.symbol().ok()?;
         if self.catalog.protocols.contains_key(&head) {
             return Some((head, Ty::Param(head), vec![]));
         }
-        let omitted = matches!(
-            &annotation.kind,
-            TypeAnnotationKind::Nominal { generics, .. } if generics.is_empty()
-        );
-        let ty = if omitted {
+        // A bare generic nominal is the implicit full pattern (ADR 0036):
+        // fresh rigid arguments over every declared parameter.
+        let ty = if head_application.args.is_empty() {
             let args = nominal_params(self.catalog, head)
                 .iter()
                 .map(|param| Ty::Param(param.symbol))
                 .collect::<Vec<_>>();
             Ty::Nominal(head, args)
         } else {
-            self.lower_annotation(annotation)
+            self.lower_type_application(head_application)
         };
         let Ty::Nominal(actual_head, args) = ty else {
             self.unsupported(
-                annotation.id,
+                head_application.id,
                 "extension head must be a nominal type or protocol",
             );
             return None;

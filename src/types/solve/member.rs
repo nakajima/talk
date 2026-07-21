@@ -1067,9 +1067,13 @@ impl<'s> Solver<'s> {
             .as_ref()
             .and_then(|(_, witness, _)| *witness)
             .unwrap_or(requirement.symbol);
-        let witness_substitution = evidence
-            .as_ref()
-            .map(|(_, _, substitution)| substitution.clone());
+        // Only a REAL witness (a row implementation, not the requirement's
+        // default body) contributes its inferred effects and predicates: a
+        // defaulted requirement's scheme predicates are its body's givens,
+        // not extra call-site wanteds beyond the Conforms demanded below.
+        let witness_substitution = (witness != requirement.symbol)
+            .then(|| evidence.as_ref().map(|(_, _, substitution)| substitution.clone()))
+            .flatten();
         let witness_signature = witness_substitution.as_ref().and_then(|substitution| {
             let substitution = substitution.iter().cloned().collect::<FxHashMap<_, _>>();
             let scheme = self.schemes.get(&witness)?.clone();

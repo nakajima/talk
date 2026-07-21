@@ -120,7 +120,7 @@ public struct Array<Element> {
 	}
 }
 
-extend<Element> [Element] where Element: Comparable<Element> {
+extend<Element> Array<Element> where Element: Comparable<Element> {
 	consuming func sort_by(fn: (Element, Element) -> Bool) -> Self {
 		let i = 0
 
@@ -144,26 +144,26 @@ extend<Element> [Element] where Element: Comparable<Element> {
 	}
 }
 
-extend<Element> [Element]: SubscriptRead<Int> {
+extend<Element> Array<Element>: SubscriptRead<Int> {
 	func subscript_read(at: Int) -> &Element {
 		self.get(at)
 	}
 }
 
-extend<Element> [Element]: SubscriptWrite<Int, Element> {
+extend<Element> Array<Element>: SubscriptWrite<Int, Element> {
 	mut func subscript_write(at: Int, consume value: Element) -> Void {
 		self.set(at, value)
 	}
 }
 
-extend<Element> [Element]: CheapClone {}
+extend<Element> Array<Element>: CheapClone {}
 
 // Elements die with the buffer: only the LAST reference tears them
 // down (CoW sharers hold identical elements, so the `_is_unique` gate
 // makes teardown run exactly once). Loading each element re-owns it;
 // its drop runs at scope exit, recursing structurally (nested arrays
 // dispatch their own deinit).
-extend<Element> [Element]: Deinit {
+extend<Element> Array<Element>: Deinit {
 	consuming func deinit() -> Void {
 		if _is_unique(self.storage.base) {
 			let i = 0
@@ -175,7 +175,7 @@ extend<Element> [Element]: Deinit {
 		}
 	}
 }
-extend<Element: Showable> [Element]: Showable {
+extend<Element: Showable> Array<Element>: Showable {
 	func show() -> String {
 		let result = "["
 		let i = 0
@@ -189,7 +189,7 @@ extend<Element: Showable> [Element]: Showable {
 	}
 }
 
-extend<Element: Equatable<Element>> [Element]: Equatable {
+extend<Element: Equatable<Element>> Array<Element>: Equatable {
 	func equals(rhs: Self) -> Bool {
 		if self.count != rhs.count { return false }
 		let i = 0
@@ -202,13 +202,13 @@ extend<Element: Equatable<Element>> [Element]: Equatable {
 	}
 }
 
-extend<Element> [Element]: Iterable {
+extend<Element> Array<Element>: Iterable {
 	func iter() -> IndexIterator<[Element]> {
 		IndexIterator(inner: self, position: 0)
 	}
 }
 
-extend<Element> [Element]: IndexIterable {
+extend<Element> Array<Element>: IndexIterable {
 	func _index_iterable_count() -> Int {
 		self.count
 	}
@@ -226,7 +226,7 @@ public struct ArrayIntoIterator<T> {
 	let position: Int
 }
 
-extend<Element> [Element]: IntoIterator<Element, ArrayIntoIterator<Element>> {
+extend<Element> Array<Element>: IntoIterator<Element, ArrayIntoIterator<Element>> {
 	consuming func into_iter() -> ArrayIntoIterator<Element> {
 		self.uniqued_storage()
 		let storage = self.storage
@@ -270,7 +270,7 @@ public struct ArrayMutIterator<T> {
 
 extend<T> ArrayMutIterator<T>: Borrowed {}
 
-extend<Element> [Element] {
+extend<Element> Array<Element> {
 	mut func iter_mut() -> ArrayMutIterator<Element> {
 		let storage = self.uniqued_storage()
 		ArrayMutIterator(storage: storage, count: self.count, position: 0)

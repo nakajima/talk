@@ -27,6 +27,7 @@ pub mod tests {
             record_field::{RecordField, RecordFieldTypeAnnotation},
             stmt::{Stmt, StmtKind},
             type_annotation::{AnyAssocBinding, TypeAnnotation, TypeAnnotationKind},
+            type_application::TypeApplication,
             where_clause::WherePredicateKind,
         },
         parser::{BlockContext, Parser},
@@ -3233,14 +3234,12 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Extend {
                 binders: vec![],
-                head: TypeAnnotation {
+                head: TypeApplication {
                     id: NodeID::ANY,
                     span: Span::ANY,
-                    kind: TypeAnnotationKind::Nominal {
-                        name: Name::Raw("Person".into()),
-                        name_span: Span::ANY,
-                        generics: vec![],
-                    },
+                    name: Name::Raw("Person".into()),
+                    name_span: Span::ANY,
+                    args: vec![],
                 },
                 conformances: vec![TypeAnnotation {
                     id: NodeID::ANY,
@@ -3293,14 +3292,62 @@ pub mod tests {
         else {
             panic!("expected extend")
         };
-        assert!(matches!(
-            &head.kind,
-            TypeAnnotationKind::Nominal { name, .. } if name.name_str() == "String"
-        ));
+        assert_eq!(head.name.name_str(), "String");
+        assert!(head.args.is_empty());
         assert_eq!(binders.len(), 1);
         assert_eq!(binders[0].name.name_str(), "T");
         assert_eq!(binders[0].conformances.len(), 1);
         assert_eq!(conformances.len(), 1);
+    }
+
+    #[test]
+    fn parses_extend_head_with_args() {
+        let parsed = parse("extend<Element> Array<Element>: Iterable {}");
+        let DeclKind::Extend { binders, head, .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected extend")
+        };
+        assert_eq!(binders.len(), 1);
+        assert_eq!(head.name.name_str(), "Array");
+        assert_eq!(head.args.len(), 1);
+    }
+
+    #[test]
+    fn extend_head_args_admit_ordinary_annotations() {
+        // Sugar is banned as the head itself, not inside its arguments.
+        let parsed = parse("extend<T> Dict<[T]> {}");
+        let DeclKind::Extend { head, .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected extend")
+        };
+        assert_eq!(head.name.name_str(), "Dict");
+        assert_eq!(head.args.len(), 1);
+    }
+
+    #[test]
+    fn rejects_array_sugar_extend_head() {
+        let lexer = Lexer::new("extend<Element> [Element]: Iterable {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(parser.parse().is_err());
+    }
+
+    #[test]
+    fn rejects_inline_array_sugar_extend_head() {
+        let lexer = Lexer::new("extend<static N: Int> [Int; N]: P {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(parser.parse().is_err());
+    }
+
+    #[test]
+    fn rejects_optional_sugar_extend_head() {
+        let lexer = Lexer::new("extend<T> T? {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(parser.parse().is_err());
+    }
+
+    #[test]
+    fn rejects_borrow_extend_head() {
+        let lexer = Lexer::new("extend &Int {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(parser.parse().is_err());
     }
 
     #[test]

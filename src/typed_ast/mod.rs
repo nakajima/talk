@@ -29,6 +29,7 @@ use crate::{
         generic_decl::GenericDecl,
         inline_ir_instruction::InlineIRInstructionKind,
         type_annotation::TypeAnnotation,
+        type_application::TypeApplication,
         where_clause::WhereClause,
     },
     parsing::span::Span,
@@ -87,9 +88,6 @@ pub struct Expr {
     /// the call site.
     #[drive(skip)]
     pub instantiation: Option<Vec<(Symbol, crate::types::ty::Ty)>>,
-    /// Conformance rows selected for obligations originating at this node.
-    #[drive(skip)]
-    pub conformance_evidence: Vec<crate::types::output::ConformanceEvidence>,
     /// The existential pack the checker recorded at this node (the checker's
     /// `existential_packs`), baked on by the typed-program builder; raw
     /// (un-substituted).
@@ -530,7 +528,7 @@ pub enum DeclKind {
     Extend {
         binders: Vec<GenericDecl>,
         #[drive(skip)]
-        head: TypeAnnotation,
+        head: TypeApplication,
         #[drive(skip)]
         conformances: Vec<TypeAnnotation>,
         #[drive(skip)]

@@ -47,23 +47,17 @@ pub struct PropagationPlan {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConformanceEvidence {
-    pub row: ConformanceId,
-    pub self_ty: Ty,
-    pub protocol: ProtocolRef,
-    pub witnesses: FxHashMap<String, Symbol>,
-    pub substitution: Vec<(Symbol, Ty)>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExistentialPack {
     pub existential: Ty,
     pub payload: Ty,
 }
 
 /// How a member access resolved. Concrete conformance dispatch publishes the
-/// complete evidence lowering needs; generic and existential dispatch remains
-/// an explicit protocol-requirement operation backed by a runtime dictionary.
+/// committed row, witness, and row substitution (ADR 0036's two-point rule:
+/// typing commits everything decidable at typing time). A receiver still
+/// rigid at finalization stays a requirement operation; the backend resolves
+/// it per specialization through the same catalog selector, which coherence
+/// makes a forced lookup.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemberResolution {
     Direct(Symbol),
@@ -123,9 +117,6 @@ pub struct TypeOutput {
     /// checked semantic fact on TypedProgram.
     pub instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub member_resolutions: FxHashMap<NodeID, MemberResolution>,
-    /// Exact rows selected while discharging call-site conformance
-    /// obligations. Specialization carries these into generic bodies.
-    pub conformance_evidence: FxHashMap<NodeID, Vec<ConformanceEvidence>>,
     /// Signed 64-bit values or explicit recovery for every integer literal
     /// expression and pattern (ledger row LIT-01).
     pub integer_literals: FxHashMap<NodeID, CheckedIntegerLiteral>,

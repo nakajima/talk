@@ -350,36 +350,6 @@ impl<'a> TypecheckSession<'a> {
             );
         }
 
-        let mut conformance_evidence = FxHashMap::default();
-        for (node, evidences) in std::mem::take(&mut self.artifacts.conformance_evidence) {
-            let evidences = evidences
-                .into_iter()
-                .map(|evidence| {
-                    let protocol = ProtocolRef {
-                        protocol: evidence.protocol.protocol,
-                        args: evidence
-                            .protocol
-                            .args
-                            .iter()
-                            .map(|arg| self.final_ty(arg))
-                            .collect(),
-                    };
-                    ConformanceEvidence {
-                        row: evidence.row,
-                        self_ty: self.final_ty(&evidence.self_ty),
-                        protocol: self.catalog.canonical_protocol_ref(protocol),
-                        witnesses: evidence.witnesses,
-                        substitution: evidence
-                            .substitution
-                            .iter()
-                            .map(|(symbol, ty)| (*symbol, self.final_ty(ty)))
-                            .collect(),
-                    }
-                })
-                .collect();
-            conformance_evidence.insert(node, evidences);
-        }
-
         let mut local_tys = FxHashMap::default();
         for (symbol, ty) in std::mem::take(&mut self.mono) {
             local_tys.insert(symbol, self.final_ty(&ty));
@@ -394,7 +364,6 @@ impl<'a> TypecheckSession<'a> {
                 schemes,
                 instantiations,
                 member_resolutions,
-                conformance_evidence,
                 integer_literals: self.artifacts.integer_literals,
                 for_plans,
                 propagation_plans: self.artifacts.propagation_plans,
