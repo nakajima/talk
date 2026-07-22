@@ -1921,7 +1921,7 @@ dependencies = [
 
 [[package]]
 name = "talk"
-version = "0.1.72"
+version = "0.1.73"
 dependencies = [
  "anyhow",
  "async-lsp",

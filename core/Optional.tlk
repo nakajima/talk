@@ -4,4 +4,10 @@ use package::Operators::{ Equatable }
 public enum Optional<Wrapped> {
 	case some(Wrapped)
 	case none
+	func map<T>(transform: (Wrapped) -> T) -> T? {
+		match self {
+			.some(t) -> .some(transform(t)),
+			.none -> none
+		}
+	}
 }

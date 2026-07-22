@@ -2281,26 +2281,7 @@ impl<'a> Formatter<'a> {
             result = concat_space(result, self.format_where_clause(where_clause));
         }
 
-        concat_space(result, self.format_enum_body(body))
-    }
-
-    fn format_enum_body(&self, body: &Body) -> Doc {
-        if body.decls.is_empty() {
-            return concat(text("{"), text("}"));
-        }
-
-        let mut docs = Vec::new();
-        for item in &body.decls {
-            docs.push(self.format_decl(item));
-        }
-
-        concat(
-            text("{"),
-            concat(
-                nest(1, concat(line(), join(docs, line()))),
-                concat(line(), text("}")),
-            ),
-        )
+        concat_space(result, self.format_body(body))
     }
 
     fn format_enum_variant(
@@ -3332,6 +3313,13 @@ mod formatter_tests {
         assert_eq!(
             format_code("enum Foo { case bar(fizz: Int,buzz: String) }", 80),
             "enum Foo {\n\tcase bar(fizz: Int, buzz: String)\n}"
+        );
+        assert_eq!(
+            format_code(
+                "public enum Optional<Wrapped> {\ncase some(Wrapped)\ncase none\n\nfunc map<T>(transform: (Wrapped) -> T) -> T? {\nmatch self {\n.some(t) -> .some(transform(t)),\n.none -> none\n}\n}\n}",
+                80
+            ),
+            "public enum Optional<Wrapped> {\n\tcase some(Wrapped)\n\tcase none\n\n\tfunc map<T>(transform: (Wrapped) -> T) -> T? {\n\t\tmatch self {\n\t\t\t.some(t) -> .some(transform(t)),\n\t\t\t.none -> none\n\t\t}\n\t}\n}"
         );
     }
 
