@@ -2127,6 +2127,9 @@ impl<'a> Formatter<'a> {
         then_block: &Block,
         else_block: Option<&Block>,
     ) -> Doc {
+        let has_pattern = conditions
+            .iter()
+            .any(|condition| matches!(condition, IfConditionRef::Let(..)));
         let conditions = conditions
             .into_iter()
             .map(|condition| match condition {
@@ -2141,7 +2144,7 @@ impl<'a> Formatter<'a> {
         let has_else = else_block.is_some_and(|block| {
             !block.body.is_empty() || block.span != crate::span::Span::SYNTHESIZED
         });
-        let then_doc = if has_else {
+        let then_doc = if has_else || has_pattern {
             self.format_block_multiline(then_block)
         } else {
             self.format_block(then_block)
@@ -3279,6 +3282,13 @@ mod formatter_tests {
         assert_eq!(
             format_code("if first, second { print(1) } else { print(0) }", 80),
             "if first, second {\n\tprint(1)\n} else {\n\tprint(0)\n}"
+        );
+        assert_eq!(
+            format_code(
+                "if let .some(ch) = self.peek(), ch.is_ident() { return self.make(\nself.identifier()\n) }",
+                80
+            ),
+            "if let .some(ch) = self.peek(), ch.is_ident() {\n\treturn self.make(self.identifier())\n}"
         );
 
         // Nested
