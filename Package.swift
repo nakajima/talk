@@ -12,8 +12,8 @@ let hasLocalArchive = FileManager.default.fileExists(atPath: localDebugArchivePa
     || FileManager.default.fileExists(atPath: localReleaseArchivePath)
 
 // The release workflow rewrites these constants in the tagged release commit.
-let talkCReleaseURL = "https://github.com/nakajima/talk/releases/download/0.0.0/TalkC.xcframework.zip"
-let talkCReleaseChecksum = "0000000000000000000000000000000000000000000000000000000000000000"
+let talkCReleaseURL = "https://github.com/nakajima/talk/releases/download/v0.1.71/TalkC.xcframework.zip"
+let talkCReleaseChecksum = "2d2881339068b0ae6d2dd8a183efdb7ec0f48185206485e9370c149b6a42e8c9"
 
 let cTarget: Target
 if hasLocalXCFramework {
