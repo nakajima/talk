@@ -2842,6 +2842,35 @@ pub mod tests {
     }
 
     #[test]
+    fn bare_variant_name_is_rejected_before_lowering() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n\n\tfunc fallback() -> Self {\n\t\tmatch self {\n\t\t\t.some(_) -> .none,\n\t\t\t.none -> none\n\t\t}\n\t}\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("Enum case `none` cannot be used as a bare name")
+                    && error.contains("`.none`")
+            }),
+            "expected an actionable bare-variant diagnostic, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bare_payload_variant_call_is_rejected_before_lowering() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\n\tfunc wrap(value: T) -> Self { some(value) }\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Enum case `some` cannot be used as a bare name")),
+            "expected an actionable bare-variant diagnostic, got {errors:?}"
+        );
+    }
+
+    #[test]
     fn nested_leading_dots_resolve_in_inference_position() {
         let t = check(
             "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Opt<Int>> = id(.some(.some(1)))",

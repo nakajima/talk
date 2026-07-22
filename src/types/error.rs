@@ -203,6 +203,12 @@ pub enum TypeError {
     MethodReference {
         label: String,
     },
+    /// An enum case resolved through lexical scope but spelled as an ordinary
+    /// variable. Variant construction must stay syntactically explicit so the
+    /// typed tree can distinguish it from function and global values.
+    BareVariantReference {
+        variant: String,
+    },
     /// A `linear` declaration claiming a conformance that would defeat
     /// linearity (`Copy` duplicates it, `Deinit` silently discards it).
     LinearConformance {
@@ -294,6 +300,7 @@ impl TypeError {
             Self::CannotInfer => "type.cannot-infer",
             Self::NonConformingField { .. } => "type.non-conforming-field",
             Self::MethodReference { .. } => "type.method-reference",
+            Self::BareVariantReference { .. } => "type.bare-variant-reference",
             Self::LinearConformance { .. } => "type.linear-conformance",
             Self::HeapConformance { .. } => "type.heap-conformance",
             Self::DeinitEffectRow { .. } => "type.deinit-effect-row",
@@ -635,6 +642,12 @@ impl Display for TypeError {
                 write!(
                     f,
                     "Cannot use method '{label}' as a value yet: call it, or wrap it in a closure"
+                )
+            }
+            TypeError::BareVariantReference { variant } => {
+                write!(
+                    f,
+                    "Enum case `{variant}` cannot be used as a bare name; write `.{variant}` or qualify it with the enum type"
                 )
             }
             TypeError::LinearConformance { ty, protocol } => {

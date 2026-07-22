@@ -1001,7 +1001,18 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 Ty::Record(Row::closed(fields))
             }
 
-            ExprKind::Variable(name) => self.lookup(name, expr.id),
+            ExprKind::Variable(name) => {
+                let ty = self.lookup(name, expr.id);
+                if matches!(name.symbol(), Ok(Symbol::Variant(_))) {
+                    self.diagnostics.errors.push((
+                        TypeError::BareVariantReference {
+                            variant: name.name_str(),
+                        },
+                        expr.id,
+                    ));
+                }
+                ty
+            }
 
             ExprKind::Block(block) => self.infer_block_value(block, ctx),
             ExprKind::Unsafe(block) => {

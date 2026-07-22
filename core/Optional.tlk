@@ -7,7 +7,7 @@ public enum Optional<Wrapped> {
 	func map<T>(transform: (Wrapped) -> T) -> T? {
 		match self {
 			.some(t) -> .some(transform(t)),
-			.none -> none
+			.none -> .none
 		}
 	}
 }
