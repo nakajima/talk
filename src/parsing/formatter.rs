@@ -240,6 +240,11 @@ impl FormatterDecorator for DefaultDecorator {
     }
 }
 
+enum IfConditionRef<'a> {
+    Boolean(&'a Expr),
+    Let(&'a Pattern, &'a Expr),
+}
+
 pub struct Formatter<'a> {
     // Track expression metadata for source location info
     meta_storage: &'a NodeMetaStorage,
@@ -526,12 +531,12 @@ impl<'a> Formatter<'a> {
             ExprKind::Member(receiver, property, ..) => self.format_member(receiver, property),
             ExprKind::Func(func) => self.format_func(func),
             ExprKind::Variable(name) | ExprKind::Constructor(name) => self.format_name(name),
-            ExprKind::If(cond, then_block, else_block) => {
-                self.format_if(cond, then_block, else_block)
-            }
-            ExprKind::Match(target, arms) if Self::is_if_let_match(arms) => {
-                self.format_if_let_match(target, arms)
-            }
+            ExprKind::If(cond, then_block, else_block) => self
+                .format_compound_expr_if(expr)
+                .unwrap_or_else(|| self.format_if(cond, then_block, else_block)),
+            ExprKind::Match(target, arms) if Self::is_if_let_match(arms) => self
+                .format_compound_expr_if(expr)
+                .unwrap_or_else(|| self.format_if_let_match(target, arms)),
             ExprKind::Match(target, arms) => self.format_match(target, arms),
             ExprKind::RecordLiteral { fields, spread } => {
                 self.format_record_literal(fields, spread)
@@ -760,23 +765,25 @@ impl<'a> Formatter<'a> {
                 }
             }
             StmtKind::If(cond, then_block, else_block) => {
-                let has_else = else_block.is_some();
-                let then_doc = if has_else {
-                    self.format_block_multiline(then_block)
-                } else {
-                    self.format_block(then_block)
-                };
-                let mut result =
-                    concat_space(text("if"), concat_space(self.format_expr(cond), then_doc));
+                self.format_compound_stmt_if(stmt).unwrap_or_else(|| {
+                    let has_else = else_block.is_some();
+                    let then_doc = if has_else {
+                        self.format_block_multiline(then_block)
+                    } else {
+                        self.format_block(then_block)
+                    };
+                    let mut result =
+                        concat_space(text("if"), concat_space(self.format_expr(cond), then_doc));
 
-                if let Some(else_block) = else_block {
-                    result = concat_space(
-                        result,
-                        concat_space(text("else"), self.format_block_inner(else_block, false)),
-                    )
-                }
+                    if let Some(else_block) = else_block {
+                        result = concat_space(
+                            result,
+                            concat_space(text("else"), self.format_block_inner(else_block, false)),
+                        )
+                    }
 
-                result
+                    result
+                })
             }
             StmtKind::Return(value) => match value {
                 Some(expr) => concat_space(text("return"), self.format_expr(expr)),
@@ -2067,6 +2074,129 @@ impl<'a> Formatter<'a> {
         result
     }
 
+    fn synthesized_expr_continuation(block: &Block) -> Option<&Expr> {
+        if block.span != crate::span::Span::SYNTHESIZED || block.body.len() != 1 {
+            return None;
+        }
+        let Node::Expr(expr) = &block.body[0] else {
+            return None;
+        };
+        (expr.span == crate::span::Span::SYNTHESIZED).then_some(expr)
+    }
+
+    fn compound_expr_if_parts<'b>(
+        expr: &'b Expr,
+    ) -> Option<(Vec<IfConditionRef<'b>>, &'b Block, &'b Block)> {
+        let mut conditions = vec![];
+        let mut current = expr;
+        let mut outer_alt = None;
+
+        loop {
+            let (condition, success, failure) = match &current.kind {
+                ExprKind::If(condition, success, failure) => {
+                    (IfConditionRef::Boolean(condition), success, failure)
+                }
+                ExprKind::Match(target, arms) if Self::is_if_let_match(arms) => (
+                    IfConditionRef::Let(&arms[0].pattern, target),
+                    &arms[0].body,
+                    &arms[1].body,
+                ),
+                _ => return None,
+            };
+            conditions.push(condition);
+            outer_alt.get_or_insert(failure);
+
+            if let Some(next) = Self::synthesized_expr_continuation(success) {
+                current = next;
+                continue;
+            }
+
+            return (conditions.len() > 1).then(|| {
+                (
+                    conditions,
+                    success,
+                    outer_alt.unwrap_or_else(|| unreachable!("compound if alternative")),
+                )
+            });
+        }
+    }
+
+    fn format_if_conditions(
+        &self,
+        conditions: Vec<IfConditionRef<'_>>,
+        then_block: &Block,
+        else_block: Option<&Block>,
+    ) -> Doc {
+        let conditions = conditions
+            .into_iter()
+            .map(|condition| match condition {
+                IfConditionRef::Boolean(expr) => self.format_expr(expr),
+                IfConditionRef::Let(pattern, value) => concat_space(
+                    concat_space(text("let"), self.format_pattern(pattern)),
+                    concat_space(text("="), self.format_expr(value)),
+                ),
+            })
+            .collect();
+        let condition = join(conditions, text(", "));
+        let has_else = else_block.is_some_and(|block| {
+            !block.body.is_empty() || block.span != crate::span::Span::SYNTHESIZED
+        });
+        let then_doc = if has_else {
+            self.format_block_multiline(then_block)
+        } else {
+            self.format_block(then_block)
+        };
+        let mut result = concat_space(text("if"), concat_space(condition, then_doc));
+
+        if has_else {
+            let else_block = else_block.unwrap_or_else(|| unreachable!("checked above"));
+            result = concat_space(
+                result,
+                concat_space(text("else"), self.format_block_inner(else_block, false)),
+            );
+        }
+        result
+    }
+
+    fn format_compound_expr_if(&self, expr: &Expr) -> Option<Doc> {
+        let (conditions, success, failure) = Self::compound_expr_if_parts(expr)?;
+        Some(self.format_if_conditions(conditions, success, Some(failure)))
+    }
+
+    fn synthesized_stmt_continuation(block: &Block) -> Option<&Stmt> {
+        if block.span != crate::span::Span::SYNTHESIZED || block.body.len() != 1 {
+            return None;
+        }
+        let Node::Stmt(stmt) = &block.body[0] else {
+            return None;
+        };
+        (stmt.span == crate::span::Span::SYNTHESIZED).then_some(stmt)
+    }
+
+    fn format_compound_stmt_if(&self, stmt: &Stmt) -> Option<Doc> {
+        let mut conditions = vec![];
+        let mut current = stmt;
+        let mut outer_alt = None;
+
+        loop {
+            let StmtKind::If(condition, success, failure) = &current.kind else {
+                return None;
+            };
+            conditions.push(IfConditionRef::Boolean(condition));
+            if outer_alt.is_none() {
+                outer_alt = failure.as_ref();
+            }
+
+            if let Some(next) = Self::synthesized_stmt_continuation(success) {
+                current = next;
+                continue;
+            }
+
+            return (conditions.len() > 1)
+                .then(|| self.format_if_conditions(conditions, success, outer_alt));
+        }
+    }
+
     fn format_if(&self, cond: &Expr, then_block: &Block, else_block: &Block) -> Doc {
         let has_else =
             !else_block.body.is_empty() || else_block.span != crate::span::Span::SYNTHESIZED;
@@ -3138,6 +3268,17 @@ mod formatter_tests {
         assert_eq!(
             format_code("if let .pattern(x) = foo { } else { }", 80),
             "if let .pattern(x) = foo {\n} else {\n}"
+        );
+        assert_eq!(
+            format_code(
+                "if let .some(x) = value, allowed(x) { print(x) } else { print(0) }",
+                80
+            ),
+            "if let .some(x) = value, allowed(x) {\n\tprint(x)\n} else {\n\tprint(0)\n}"
+        );
+        assert_eq!(
+            format_code("if first, second { print(1) } else { print(0) }", 80),
+            "if first, second {\n\tprint(1)\n} else {\n\tprint(0)\n}"
         );
 
         // Nested

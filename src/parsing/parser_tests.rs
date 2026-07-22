@@ -5387,6 +5387,81 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_if_let_with_a_later_boolean_condition() {
+        let parsed = parse("if let .some(x) = val, x.is_foo() { x }");
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Match(_, arms),
+            ..
+        }) = &parsed.roots[0].as_stmt().kind
+        else {
+            panic!("expected the binding clause to lower to a match");
+        };
+        let Node::Expr(Expr {
+            kind: ExprKind::If(condition, _, _),
+            ..
+        }) = &arms[0].body.body[0]
+        else {
+            panic!("expected the later Boolean clause inside the success arm");
+        };
+        assert!(matches!(condition.kind, ExprKind::Call { .. }));
+    }
+
+    #[test]
+    fn parses_boolean_then_multiple_pattern_conditions() {
+        let parsed =
+            parse("if ready, let .some(x) = first, let .some(y) = second(x) { y } else { 0 }");
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::If(_, first_success, _),
+            ..
+        }) = &parsed.roots[0].as_stmt().kind
+        else {
+            panic!("expected the first Boolean clause");
+        };
+        let Node::Expr(Expr {
+            kind: ExprKind::Match(_, first_arms),
+            ..
+        }) = &first_success.body[0]
+        else {
+            panic!("expected the first pattern clause");
+        };
+        let Node::Expr(Expr {
+            kind: ExprKind::Match(_, second_arms),
+            ..
+        }) = &first_arms[0].body.body[0]
+        else {
+            panic!("expected the second pattern clause");
+        };
+        assert_eq!(second_arms.len(), 2);
+    }
+
+    #[test]
+    fn parses_multiline_comma_separated_conditions() {
+        let parsed = parse("if let .some(x) = val,\n   x.is_foo() { x }");
+        assert!(matches!(
+            &parsed.roots[0].as_stmt().kind,
+            StmtKind::Expr(Expr {
+                kind: ExprKind::Match(..),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn boolean_only_compound_statement_keeps_statement_if_semantics() {
+        let parsed = parse("if first, second { 1 } else { true }");
+        let StmtKind::If(_, success, Some(_)) = &parsed.roots[0].as_stmt().kind else {
+            panic!("expected an outer statement if");
+        };
+        assert!(matches!(
+            &success.body[0],
+            Node::Stmt(Stmt {
+                kind: StmtKind::If(..),
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn parses_parameter_modes() {
         let parsed =
             parse("func f(a: A, mut b: B, consume c: C, borrow d: D, consume mut e: E) {}");

@@ -722,6 +722,35 @@ fn run_specializes_recursive_inferred_generics() {
 }
 
 #[test]
+fn run_executes_compound_if_conditions_left_to_right() {
+    assert_runs(
+        b"enum MaybeInt {\n\
+          \tcase some(Int)\n\
+          \tcase none\n\
+          }\n\
+          func source(consume value: MaybeInt) -> MaybeInt {\n\
+          \tprint(1)\n\
+          \tvalue\n\
+          }\n\
+          func allowed(value: Int) -> Bool {\n\
+          \tprint(2)\n\
+          \ttrue\n\
+          }\n\
+          func inspect(consume value: MaybeInt) {\n\
+          \tif let .some(x) = source(value), allowed(x) {\n\
+          \t\tprint(x)\n\
+          \t} else {\n\
+          \t\tprint(0)\n\
+          \t}\n\
+          }\n\
+          inspect(MaybeInt.some(7))\n\
+          inspect(MaybeInt.none)\n",
+        &[],
+        b"1\n2\n7\n1\n0\n",
+    );
+}
+
+#[test]
 fn run_matches_enum_variants_with_payloads() {
     let source = b"enum Op {\n\
         \tcase add(Int, Int)\n\

@@ -7,6 +7,7 @@ use crate::lexer::{Lexer, LexerError};
 use crate::name::Name;
 use crate::node::Node;
 use crate::node_id::{FileID, NodeID};
+use crate::node_kinds::attribute::Attribute;
 use crate::node_kinds::block::Block;
 use crate::node_kinds::body::Body;
 use crate::node_kinds::call_arg::{ArgMode, CallArg};
@@ -40,6 +41,7 @@ use crate::span::Span;
 use crate::token::Token;
 use crate::token_kind::TokenKind;
 use anyhow::Result;
+use derive_visitor::{DriveMut, VisitorMut};
 use tracing::instrument;
 
 // for making sure we've pushed to the location stack
@@ -51,6 +53,140 @@ pub struct LocToken;
 enum FuncOrFuncSignature {
     Func(Func),
     FuncSignature(FuncSignature),
+}
+
+enum ConditionalClause {
+    Boolean(Expr),
+    Let(Pattern, Expr),
+}
+
+#[derive(VisitorMut)]
+#[visitor(
+    Attribute(enter),
+    Block(enter),
+    Body(enter),
+    CallArg(enter),
+    Decl(enter),
+    Expr(enter),
+    Func(enter),
+    FuncSignature(enter),
+    GenericDecl(enter),
+    InlineIRInstruction(enter),
+    MatchArm(enter),
+    Parameter(enter),
+    Pattern(enter),
+    RecordField(enter),
+    RecordFieldPattern(enter),
+    RecordFieldTypeAnnotation(enter),
+    StaticExpr(enter),
+    Stmt(enter),
+    TypeAnnotation(enter),
+    TypeApplication(enter),
+    WhereClause(enter),
+    WherePredicate(enter),
+    AnyAssocBinding(enter)
+)]
+struct FreshenNodeIds<'a> {
+    file_id: FileID,
+    node_ids: &'a mut crate::id_generator::IDGenerator,
+}
+
+impl FreshenNodeIds<'_> {
+    fn next_id(&mut self) -> NodeID {
+        NodeID(self.file_id, self.node_ids.next_id())
+    }
+
+    fn enter_attribute(&mut self, node: &mut Attribute) {
+        node.id = self.next_id();
+    }
+
+    fn enter_block(&mut self, node: &mut Block) {
+        node.id = self.next_id();
+    }
+
+    fn enter_body(&mut self, node: &mut Body) {
+        node.id = self.next_id();
+    }
+
+    fn enter_call_arg(&mut self, node: &mut CallArg) {
+        node.id = self.next_id();
+    }
+
+    fn enter_decl(&mut self, node: &mut Decl) {
+        node.id = self.next_id();
+    }
+
+    fn enter_expr(&mut self, node: &mut Expr) {
+        node.id = self.next_id();
+    }
+
+    fn enter_func(&mut self, node: &mut Func) {
+        node.id = self.next_id();
+    }
+
+    fn enter_func_signature(&mut self, node: &mut FuncSignature) {
+        node.id = self.next_id();
+    }
+
+    fn enter_generic_decl(&mut self, node: &mut GenericDecl) {
+        node.id = self.next_id();
+    }
+
+    fn enter_inline_ir_instruction(&mut self, node: &mut InlineIRInstruction) {
+        node.id = self.next_id();
+    }
+
+    fn enter_match_arm(&mut self, node: &mut MatchArm) {
+        node.id = self.next_id();
+    }
+
+    fn enter_parameter(&mut self, node: &mut Parameter) {
+        node.id = self.next_id();
+    }
+
+    fn enter_pattern(&mut self, node: &mut Pattern) {
+        node.id = self.next_id();
+    }
+
+    fn enter_record_field(&mut self, node: &mut RecordField) {
+        node.id = self.next_id();
+    }
+
+    fn enter_record_field_pattern(&mut self, node: &mut RecordFieldPattern) {
+        node.id = self.next_id();
+    }
+
+    fn enter_record_field_type_annotation(&mut self, node: &mut RecordFieldTypeAnnotation) {
+        node.id = self.next_id();
+    }
+
+    fn enter_static_expr(&mut self, node: &mut StaticExpr) {
+        node.id = self.next_id();
+    }
+
+    fn enter_stmt(&mut self, node: &mut Stmt) {
+        node.id = self.next_id();
+    }
+
+    fn enter_type_annotation(&mut self, node: &mut TypeAnnotation) {
+        node.id = self.next_id();
+    }
+
+    fn enter_type_application(&mut self, node: &mut TypeApplication) {
+        node.id = self.next_id();
+    }
+
+    fn enter_where_clause(&mut self, node: &mut WhereClause) {
+        node.id = self.next_id();
+    }
+
+    fn enter_where_predicate(&mut self, node: &mut WherePredicate) {
+        node.id = self.next_id();
+    }
+
+    fn enter_any_assoc_binding(&mut self, node: &mut AnyAssocBinding) {
+        node.id = self.next_id();
+    }
 }
 
 #[derive(PartialEq, Clone, Copy, Debug, Eq, PartialOrd, Ord, Hash)]
@@ -1226,12 +1362,7 @@ impl<'a> Parser<'a> {
     pub(super) fn if_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
-
-        if self.peek_is(TokenKind::Let) {
-            return self.if_let_match(tok, true);
-        }
-
-        let cond = self.condition(ParseContext::If)?.into_expr()?;
+        let clauses = self.conditional_clauses()?;
         let body = self.block(BlockContext::If, true)?;
         let alt = if self.did_match(TokenKind::Else)? {
             self.else_block(true)?
@@ -1240,13 +1371,11 @@ impl<'a> Parser<'a> {
             self.empty_recovered_block()
         };
 
+        let mut expr = self.build_conditional_expr(clauses, body, alt);
         self.save_meta(tok, |id, span| {
-            Expr {
-                id,
-                span,
-                kind: ExprKind::If(Box::new(cond), body, alt),
-            }
-            .into()
+            expr.id = id;
+            expr.span = span;
+            expr.into()
         })
     }
 
@@ -1273,34 +1402,44 @@ impl<'a> Parser<'a> {
     fn if_stmt(&mut self) -> Result<Stmt, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
+        let clauses = self.conditional_clauses()?;
+        let body = self.block(BlockContext::If, true)?;
+        let alt = if self.did_match(TokenKind::Else)? {
+            Some(self.else_block(false)?)
+        } else {
+            None
+        };
 
-        if self.peek_is(TokenKind::Let) {
-            let match_node = self.if_let_match(tok, false)?;
-            let expr = match_node.into_expr()?;
-            return Ok(Stmt {
-                id: expr.id,
-                span: expr.span,
-                kind: StmtKind::Expr(expr),
+        if clauses
+            .iter()
+            .all(|clause| matches!(clause, ConditionalClause::Boolean(_)))
+        {
+            let conditions = clauses
+                .into_iter()
+                .map(|clause| match clause {
+                    ConditionalClause::Boolean(condition) => condition,
+                    ConditionalClause::Let(..) => unreachable!("checked as Boolean above"),
+                })
+                .collect();
+            let mut stmt = self.build_boolean_statement(conditions, body, alt);
+            return self.save_meta(tok, |id, span| {
+                stmt.id = id;
+                stmt.span = span;
+                stmt
             });
         }
 
-        let cond = self.condition(ParseContext::If)?.into_expr()?;
-        let body = self.block(BlockContext::If, true)?;
-
-        if self.did_match(TokenKind::Else)? {
-            let alt = self.else_block(false)?;
-            self.save_meta(tok, |id, span| Stmt {
+        let alt = alt.unwrap_or_else(|| self.empty_recovered_block());
+        let mut expr = self.build_conditional_expr(clauses, body, alt);
+        self.save_meta(tok, |id, span| {
+            expr.id = id;
+            expr.span = span;
+            Stmt {
                 id,
                 span,
-                kind: StmtKind::If(cond, body, Some(alt)),
-            })
-        } else {
-            self.save_meta(tok, |id, span| Stmt {
-                id,
-                span,
-                kind: StmtKind::If(cond, body, None),
-            })
-        }
+                kind: StmtKind::Expr(expr),
+            }
+        })
     }
 
     /// Parses the alternative after an already-consumed `else`. Supports
@@ -1326,58 +1465,152 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Shared helper for `if let` in both expression and statement position.
-    /// Desugars `if let PAT = EXPR { BODY } [else { ALT }]` into a `match` with two arms.
-    /// When `require_else` is true (expression position), the else block is required.
-    fn if_let_match(&mut self, tok: LocToken, require_else: bool) -> Result<Node, ParserError> {
-        self.consume(TokenKind::Let)?;
-        let pattern = self.parse_pattern()?;
-        self.consume(TokenKind::Equals)?;
-        self.push_context(ParseContext::If);
-        let scrutinee = self.expr()?.into_expr()?;
-        self.pop_context();
-        let body = self.block(BlockContext::If, true)?;
+    /// Parse the one comma-separated condition grammar shared by statement
+    /// and expression `if`. Clauses run left-to-right; a pattern binder is
+    /// scoped by the match arm that contains every later clause.
+    fn conditional_clauses(&mut self) -> Result<Vec<ConditionalClause>, ParserError> {
+        let mut clauses = vec![];
+        loop {
+            let clause = if self.did_match(TokenKind::Let)? {
+                let pattern = self.parse_pattern()?;
+                self.consume(TokenKind::Equals)?;
+                let scrutinee = self.condition(ParseContext::If)?.into_expr()?;
+                ConditionalClause::Let(pattern, scrutinee)
+            } else {
+                let condition = self.condition(ParseContext::If)?.into_expr()?;
+                ConditionalClause::Boolean(condition)
+            };
+            clauses.push(clause);
 
-        let alt = if require_else {
-            self.consume(TokenKind::Else)?;
-            self.else_block(true)?
-        } else if self.did_match(TokenKind::Else)? {
-            self.else_block(false)?
-        } else {
-            Block {
-                id: self.next_id(),
-                args: vec![],
-                body: vec![],
-                span: Span::SYNTHESIZED,
+            if !self.did_match(TokenKind::Comma)? {
+                break;
             }
-        };
+        }
+        Ok(clauses)
+    }
 
-        let pattern_arm = MatchArm {
-            id: self.next_id(),
-            pattern,
-            body,
-            span: Span::SYNTHESIZED,
-        };
+    fn build_conditional_expr(
+        &mut self,
+        clauses: Vec<ConditionalClause>,
+        body: Block,
+        alt: Block,
+    ) -> Expr {
+        let mut success = Some(body);
+        let mut original_alt = Some(alt);
+        let mut result = None;
 
-        let wildcard_arm = MatchArm {
-            id: self.next_id(),
-            pattern: Pattern {
-                id: self.next_id(),
-                kind: PatternKind::Wildcard,
-                span: Span::SYNTHESIZED,
-            },
-            body: alt,
-            span: Span::SYNTHESIZED,
-        };
+        for (index, clause) in clauses.into_iter().enumerate().rev() {
+            let failure = if index == 0 {
+                original_alt
+                    .take()
+                    .unwrap_or_else(|| unreachable!("outer alternative"))
+            } else {
+                self.freshened_block(
+                    original_alt
+                        .as_ref()
+                        .unwrap_or_else(|| unreachable!("inner alternative")),
+                )
+            };
 
-        self.save_meta(tok, |id, span| {
-            Expr {
-                id,
-                span,
-                kind: ExprKind::Match(Box::new(scrutinee), vec![pattern_arm, wildcard_arm]),
+            let current_success = success
+                .take()
+                .unwrap_or_else(|| unreachable!("condition success continuation"));
+            let expr = match clause {
+                ConditionalClause::Boolean(condition) => Expr {
+                    id: self.next_id(),
+                    span: Span::SYNTHESIZED,
+                    kind: ExprKind::If(Box::new(condition), current_success, failure),
+                },
+                ConditionalClause::Let(pattern, scrutinee) => {
+                    let pattern_arm = MatchArm {
+                        id: self.next_id(),
+                        pattern,
+                        body: current_success,
+                        span: Span::SYNTHESIZED,
+                    };
+                    let wildcard_arm = MatchArm {
+                        id: self.next_id(),
+                        pattern: Pattern {
+                            id: self.next_id(),
+                            kind: PatternKind::Wildcard,
+                            span: Span::SYNTHESIZED,
+                        },
+                        body: failure,
+                        span: Span::SYNTHESIZED,
+                    };
+                    Expr {
+                        id: self.next_id(),
+                        span: Span::SYNTHESIZED,
+                        kind: ExprKind::Match(Box::new(scrutinee), vec![pattern_arm, wildcard_arm]),
+                    }
+                }
+            };
+
+            if index == 0 {
+                result = Some(expr);
+            } else {
+                success = Some(Block {
+                    id: self.next_id(),
+                    args: vec![],
+                    body: vec![Node::Expr(expr)],
+                    span: Span::SYNTHESIZED,
+                });
             }
-            .into()
-        })
+        }
+
+        result.unwrap_or_else(|| unreachable!("an if has at least one condition clause"))
+    }
+
+    fn build_boolean_statement(
+        &mut self,
+        conditions: Vec<Expr>,
+        body: Block,
+        alt: Option<Block>,
+    ) -> Stmt {
+        let mut success = Some(body);
+        let mut original_alt = alt;
+        let mut result = None;
+        let condition_count = conditions.len();
+
+        for (index, condition) in conditions.into_iter().enumerate().rev() {
+            let failure = match original_alt.as_ref() {
+                Some(_) if index == 0 => original_alt.take(),
+                Some(block) => Some(self.freshened_block(block)),
+                None => None,
+            };
+            let current_success = success
+                .take()
+                .unwrap_or_else(|| unreachable!("condition success continuation"));
+            let stmt = Stmt {
+                id: self.next_id(),
+                span: Span::SYNTHESIZED,
+                kind: StmtKind::If(condition, current_success, failure),
+            };
+
+            if index == 0 {
+                result = Some(stmt);
+            } else {
+                success = Some(Block {
+                    id: self.next_id(),
+                    args: vec![],
+                    body: vec![Node::Stmt(stmt)],
+                    span: Span::SYNTHESIZED,
+                });
+            }
+        }
+
+        debug_assert!(condition_count > 0);
+        result.unwrap_or_else(|| unreachable!("an if has at least one condition clause"))
+    }
+
+    fn freshened_block(&mut self, block: &Block) -> Block {
+        let mut clone = block.clone();
+        let mut freshener = FreshenNodeIds {
+            file_id: self.file_id,
+            node_ids: &mut self.ast.node_ids,
+        };
+        clone.drive_mut(&mut freshener);
+        clone
     }
 
     /// Desugars `let PAT = EXPR else { BODY }` into:

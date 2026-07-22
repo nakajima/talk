@@ -18,6 +18,9 @@ while fixing several type-checker and lexer correctness bugs.
   be omitted from CI.
 - **`else if` chains.** Conditional statements and expressions now accept
   `else if`, including chains following `if let`.
+- **Compound conditions.** Commas separate left-to-right, short-circuiting
+  Boolean and `let` pattern clauses, with earlier bindings visible to later
+  clauses and the success block.
 - **String-literal patterns.** Match arms can use string patterns against both
   `String` and `Substring` values, including escapes, Unicode text, empty
   strings, and or-patterns. Matching compares the UTF-8 byte content and

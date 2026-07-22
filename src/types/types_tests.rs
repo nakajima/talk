@@ -3147,6 +3147,30 @@ pub mod tests {
     }
 
     #[test]
+    fn compound_if_conditions_scope_pattern_binders_left_to_right() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc next(x: Int) -> Opt<Int> { .some(x) }\nfunc allowed(x: Int) -> Bool { true }\nfunc f(first: Opt<Int>) -> Int {\n\tif let .some(x) = first, let .some(y) = next(x), allowed(y) {\n\t\treturn y\n\t}\n\t0\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn compound_if_expression_checks_all_branches() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc allowed(x: Int) -> Bool { true }\nfunc f(value: Opt<Int>) -> Int {\n\tif let .some(x) = value, allowed(x) { x } else { 0 }\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn compound_if_requires_boolean_expression_clauses() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc f(value: Opt<Int>) {\n\tif let .some(x) = value, x { () }\n}",
+        );
+        assert!(!type_errors(&t).is_empty());
+    }
+
+    #[test]
     fn or_patterns_check_in_match_arms() {
         let t = check(
             "// no-core\nenum E {\n\tcase a(Int)\n\tcase b(Int)\n\tcase c\n}\nfunc f(e: E) -> Int {\n\tmatch e {\n\t\t.a(v) | .b(v) -> v,\n\t\t.c -> 0\n\t}\n}",

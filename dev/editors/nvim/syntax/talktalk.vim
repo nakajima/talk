@@ -39,7 +39,8 @@ syntax match talktalkOperator "\V..."
 syntax match talktalkOperator "\V.."
 syntax match talktalkOperator "[-+*/%=!<>~^|&?:.]"
 
-syntax match talktalkEscape "\\\(n\|t\|r\|\"\|\\\|u{[0-9A-Fa-f]\{1,6}}\)" contained
+syntax match talktalkEscape "\\\(n\|t\|r\|\"\|'\|\\\|u{[0-9A-Fa-f]\{1,6}}\)" contained
+syntax match talktalkCharacter #\'\%([^\'\\\r\n]\|\\\%([ntr"\'\\]\|u{[0-9A-Fa-f]\{1,6}}\)\)\+\'# contains=talktalkEscape
 syntax region talktalkString start=+"+ skip=+\\\\\|\\"+ end=+"+ contains=talktalkEscape
 
 syntax match talktalkComment "//.*$" contains=@Spell
@@ -58,6 +59,7 @@ highlight default link talktalkEnumMember Constant
 highlight default link talktalkNumber Number
 highlight default link talktalkOperator Operator
 highlight default link talktalkEscape SpecialChar
+highlight default link talktalkCharacter Character
 highlight default link talktalkString String
 highlight default link talktalkComment Comment
 

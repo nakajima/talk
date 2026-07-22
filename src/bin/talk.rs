@@ -763,7 +763,7 @@ Literals: integers, floats, strings, `true`, `false`, arrays `[a, b]`, records `
 
 Bindings and mutation: `let x = expr`; assignment is `x = expr` or `self.field = expr`. `let` variables are mutable by assignment in current Talk. Type ascription is `let x: Type = expr`.
 
-Blocks are expressions. `if cond { a } else { b }` is an expression; branches must agree. `if let .some(x) = expr { ... }` matches a single pattern. `loop { ... }` loops forever until `break`; `loop condition { ... }` is while-like. `break`, `continue`, and `return expr` are supported. `for x in iterable { ... }` uses the iterable/iterator protocols.
+Blocks are expressions. `if cond { a } else { b }` is an expression; branches must agree. `if let .some(x) = expr { ... }` matches a pattern. Commas form left-to-right, short-circuiting condition lists and later clauses can use earlier pattern bindings: `if let .some(x) = expr, x.is_valid() { ... }`. `let .some(x) = expr else { ... }` binds `x` after the statement and evaluates the `else` block when the pattern misses. `loop { ... }` loops forever until `break`; `loop condition { ... }` is while-like. `break`, `continue`, and `return expr` are supported. `for x in iterable { ... }` uses the iterable/iterator protocols.
 
 Pattern matching:
 
@@ -804,16 +804,27 @@ Pipeline: parse -> name resolution/imports -> OutsideIn-style type checking with
 "#;
 
 #[cfg(feature = "cli")]
-const NVIM_RUNTIME_RAW_BASE: &str =
-    "https://raw.githubusercontent.com/nakajima/talk/main/dev/editors/nvim";
-
-#[cfg(feature = "cli")]
-const NVIM_RUNTIME_FILES: &[&str] = &[
-    "ftdetect/talktalk.lua",
-    "ftplugin/talktalk.lua",
-    "indent/talktalk.vim",
-    "lua/neotest-talk/init.lua",
-    "syntax/talktalk.vim",
+const NVIM_RUNTIME_FILES: &[(&str, &[u8])] = &[
+    (
+        "ftdetect/talktalk.lua",
+        include_bytes!("../../dev/editors/nvim/ftdetect/talktalk.lua"),
+    ),
+    (
+        "ftplugin/talktalk.lua",
+        include_bytes!("../../dev/editors/nvim/ftplugin/talktalk.lua"),
+    ),
+    (
+        "indent/talktalk.vim",
+        include_bytes!("../../dev/editors/nvim/indent/talktalk.vim"),
+    ),
+    (
+        "lua/neotest-talk/init.lua",
+        include_bytes!("../../dev/editors/nvim/lua/neotest-talk/init.lua"),
+    ),
+    (
+        "syntax/talktalk.vim",
+        include_bytes!("../../dev/editors/nvim/syntax/talktalk.vim"),
+    ),
 ];
 
 #[cfg(feature = "cli")]
@@ -836,21 +847,15 @@ impl NvimRuntimeInstaller {
     fn install(&self) -> anyhow::Result<()> {
         use anyhow::Context as _;
 
-        println!("Installing TalkTalk Neovim runtime files from github.com/nakajima/talk");
+        println!("Installing TalkTalk Neovim runtime files bundled with talk");
         println!("Target runtime root: {}", self.target_root.display());
 
-        let mut downloads = Vec::with_capacity(NVIM_RUNTIME_FILES.len());
-        for relative_path in NVIM_RUNTIME_FILES {
-            let contents = Self::download_file(relative_path)?;
-            downloads.push((*relative_path, contents));
-        }
-
-        for (relative_path, contents) in &downloads {
-            let target = self.target_root.join(*relative_path);
+        for &(relative_path, contents) in NVIM_RUNTIME_FILES {
+            let target = self.target_root.join(relative_path);
             if target.exists() && !self.force {
                 let existing = std::fs::read(&target)
                     .with_context(|| format!("failed to read {}", target.display()))?;
-                if existing.as_slice() != contents.as_slice() {
+                if existing.as_slice() != contents {
                     anyhow::bail!(
                         "{} already exists and differs; rerun with --force to overwrite",
                         target.display()
@@ -859,7 +864,7 @@ impl NvimRuntimeInstaller {
             }
         }
 
-        for (relative_path, contents) in downloads {
+        for &(relative_path, contents) in NVIM_RUNTIME_FILES {
             let target = self.target_root.join(relative_path);
             if target.exists() && !self.force {
                 println!("up to date: {}", target.display());
@@ -932,51 +937,6 @@ impl NvimRuntimeInstaller {
         };
 
         Ok(data_home.join(appname).join("site"))
-    }
-
-    fn download_file(relative_path: &str) -> anyhow::Result<Vec<u8>> {
-        let url = format!("{NVIM_RUNTIME_RAW_BASE}/{relative_path}");
-        Downloader::download_url(&url)
-    }
-}
-
-#[cfg(feature = "cli")]
-struct Downloader;
-
-#[cfg(feature = "cli")]
-impl Downloader {
-    fn download_url(url: &str) -> anyhow::Result<Vec<u8>> {
-        let attempts = [
-            ("curl", vec!["-fsSL", url]),
-            ("wget", vec!["-qO-", url]),
-            ("fetch", vec!["-qo", "-", url]),
-        ];
-        let mut failures = Vec::new();
-
-        for (program, args) in attempts {
-            match std::process::Command::new(program).args(args).output() {
-                Ok(output) if output.status.success() => return Ok(output.stdout),
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                    if stderr.is_empty() {
-                        failures.push(format!("{program} exited with {}", output.status));
-                    } else {
-                        failures.push(format!("{program} exited with {}: {stderr}", output.status));
-                    }
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => failures.push(format!("{program}: {err}")),
-            }
-        }
-
-        if failures.is_empty() {
-            anyhow::bail!("could not download {url}; install curl, wget, or fetch");
-        }
-
-        anyhow::bail!(
-            "could not download {url}; install curl, wget, or fetch; attempts failed: {}",
-            failures.join("; ")
-        );
     }
 }
 
