@@ -214,16 +214,6 @@ impl ProtocolRef {
         }
     }
 
-    pub fn import_symbols(&self, target: crate::compiling::module::ModuleId) -> Self {
-        Self {
-            protocol: import_symbol(self.protocol, target),
-            args: self
-                .args
-                .iter()
-                .map(|arg| arg.import_symbols(target))
-                .collect(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -950,30 +940,6 @@ impl TyFold for Substituter<'_> {
     }
 }
 
-/// Remap every symbol minted by the exporting module to the importer's id.
-struct SymbolImporter {
-    target: crate::compiling::module::ModuleId,
-}
-
-impl TyFold for SymbolImporter {
-    fn fold_symbol(&mut self, symbol: Symbol) -> Symbol {
-        import_symbol(symbol, self.target)
-    }
-
-    fn fold_eff_tail(&mut self, tail: &Option<EffTail>) -> Option<EffTail> {
-        tail.as_ref().map(|tail| match tail {
-            EffTail::Var(v) => EffTail::Var(*v),
-            EffTail::Param(sym) => EffTail::Param(import_symbol(*sym, self.target)),
-        })
-    }
-
-    fn fold_row_tail(&mut self, tail: &Option<RowTail>) -> Option<RowTail> {
-        tail.as_ref().map(|tail| match tail {
-            RowTail::Var(v) => RowTail::Var(*v),
-            RowTail::Param(sym) => RowTail::Param(import_symbol(*sym, self.target)),
-        })
-    }
-}
 
 /// Prepare a type for export: a leftover unification variable degrades to
 /// `Error` (the store does not travel), and a leftover row/effect var tail
@@ -1198,84 +1164,6 @@ impl Predicate {
     }
 }
 
-/// Remap a symbol minted by the exporting module (ModuleId::Current from its
-/// own point of view) to the importer's id for it; symbols referencing other
-/// modules (core, transitive imports) keep theirs.
-pub(crate) fn import_symbol(symbol: Symbol, target: crate::compiling::module::ModuleId) -> Symbol {
-    if symbol.module_id() == Some(crate::compiling::module::ModuleId::Current) {
-        symbol.import(target)
-    } else {
-        symbol
-    }
-}
-
-impl Ty {
-    /// Remap every embedded symbol for an importer (`Module::import_as`
-    /// recursing through types).
-    pub fn import_symbols(&self, target: crate::compiling::module::ModuleId) -> Ty {
-        SymbolImporter { target }.fold_ty(self)
-    }
-}
-
-impl EffectRow {
-    pub fn import_symbols(&self, target: crate::compiling::module::ModuleId) -> EffectRow {
-        SymbolImporter { target }.fold_eff(self)
-    }
-}
-
-impl Row {
-    pub fn import_symbols(&self, target: crate::compiling::module::ModuleId) -> Row {
-        SymbolImporter { target }.fold_row(self)
-    }
-}
-
-impl Predicate {
-    pub fn import_symbols(&self, target: crate::compiling::module::ModuleId) -> Predicate {
-        self.fold_with(&mut SymbolImporter { target })
-    }
-}
-
-impl Scheme {
-    pub fn import_symbols(&self, target: crate::compiling::module::ModuleId) -> Scheme {
-        Scheme {
-            params: self
-                .params
-                .iter()
-                .map(|p| SchemeParam {
-                    symbol: import_symbol(p.symbol, target),
-                    kind: match &p.kind {
-                        ParamKind::Type => ParamKind::Type,
-                        ParamKind::Static(value_ty) => {
-                            ParamKind::Static(value_ty.import_symbols(target))
-                        }
-                    },
-                    default: p.default.as_ref().map(|d| d.import_symbols(target)),
-                })
-                .collect(),
-            eff_params: self
-                .eff_params
-                .iter()
-                .map(|s| import_symbol(*s, target))
-                .collect(),
-            row_params: self
-                .row_params
-                .iter()
-                .map(|s| import_symbol(*s, target))
-                .collect(),
-            perm_params: self
-                .perm_params
-                .iter()
-                .map(|s| import_symbol(*s, target))
-                .collect(),
-            predicates: self
-                .predicates
-                .iter()
-                .map(|predicate| predicate.import_symbols(target))
-                .collect(),
-            ty: self.ty.import_symbols(target),
-        }
-    }
-}
 
 impl Ty {
     /// Prepare a type for export across a module boundary: unification

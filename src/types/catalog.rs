@@ -258,13 +258,6 @@ impl ConformanceId {
         }
     }
 
-    pub fn import(self, module_id: ModuleId) -> Self {
-        if self.module_id == ModuleId::Current {
-            Self { module_id, ..self }
-        } else {
-            self
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -869,300 +862,14 @@ impl TypeCatalog {
         Some(self.canonical_protocol_ref(ProtocolRef { protocol, args }))
     }
 
-    /// Remap every symbol for an importer (the catalog half of
-    /// `Module::import_as`).
-    pub fn import_as(self, target: crate::compiling::module::ModuleId) -> TypeCatalog {
-        use crate::types::ty::import_symbol as imp;
-        let imp_ty = |t: &Ty| t.import_symbols(target);
-        let imp_param = |param: &SchemeParam| SchemeParam {
-            symbol: imp(param.symbol, target),
-            kind: match &param.kind {
-                crate::types::ty::ParamKind::Type => crate::types::ty::ParamKind::Type,
-                crate::types::ty::ParamKind::Static(value_ty) => {
-                    crate::types::ty::ParamKind::Static(imp_ty(value_ty))
-                }
-            },
-            default: param.default.as_ref().map(&imp_ty),
-        };
-        TypeCatalog {
-            structs: self
-                .structs
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        imp(k, target),
-                        StructInfo {
-                            linear: v.linear,
-                            heap: v.heap,
-                            params: v.params.iter().map(imp_param).collect(),
-                            eff_params: v.eff_params.iter().map(|s| imp(*s, target)).collect(),
-                            fields: v
-                                .fields
-                                .into_iter()
-                                .map(|(l, (s, t))| (l, (imp(s, target), imp_ty(&t))))
-                                .collect(),
-                            methods: v
-                                .methods
-                                .into_iter()
-                                .map(|(l, s)| (l, imp(s, target)))
-                                .collect(),
-                            statics: v
-                                .statics
-                                .into_iter()
-                                .map(|(l, s)| (l, imp(s, target)))
-                                .collect(),
-                            inits: v
-                                .inits
-                                .iter()
-                                .map(|(s, arity)| (imp(*s, target), *arity))
-                                .collect(),
-                            predicates: v
-                                .predicates
-                                .into_iter()
-                                .map(|predicate| predicate.import_symbols(target))
-                                .collect(),
-                        },
-                    )
-                })
-                .collect(),
-            enums: self
-                .enums
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        imp(k, target),
-                        Enum {
-                            linear: v.linear,
-                            params: v.params.iter().map(imp_param).collect(),
-                            variants: v
-                                .variants
-                                .into_iter()
-                                .map(|(l, variant)| {
-                                    (
-                                        l,
-                                        Variant {
-                                            symbol: imp(variant.symbol, target),
-                                            payload_labels: variant.payload_labels,
-                                            constructor_scheme: variant
-                                                .constructor_scheme
-                                                .import_symbols(target),
-                                        },
-                                    )
-                                })
-                                .collect(),
-                            methods: v
-                                .methods
-                                .into_iter()
-                                .map(|(l, s)| (l, imp(s, target)))
-                                .collect(),
-                            predicates: v
-                                .predicates
-                                .into_iter()
-                                .map(|predicate| predicate.import_symbols(target))
-                                .collect(),
-                        },
-                    )
-                })
-                .collect(),
-            protocols: self
-                .protocols
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        imp(k, target),
-                        ProtocolInfo {
-                            params: v.params.iter().map(imp_param).collect(),
-                            assoc: v
-                                .assoc
-                                .into_iter()
-                                .map(|(name, s)| (name, imp(s, target)))
-                                .collect(),
-                            supers: v.supers.iter().map(|s| s.import_symbols(target)).collect(),
-                            predicates: v
-                                .predicates
-                                .into_iter()
-                                .map(|predicate| predicate.import_symbols(target))
-                                .collect(),
-                            requirements: v
-                                .requirements
-                                .into_iter()
-                                .map(|(l, r)| {
-                                    (
-                                        l,
-                                        Requirement {
-                                            symbol: imp(r.symbol, target),
-                                            has_default: r.has_default,
-                                            writeback_width: r.writeback_width,
-                                            mut_receiver: r.mut_receiver,
-                                        },
-                                    )
-                                })
-                                .collect(),
-                        },
-                    )
-                })
-                .collect(),
-            conformances: self
-                .conformances
-                .into_iter()
-                .map(|(id, c)| {
-                    (
-                        id.import(target),
-                        Conformance {
-                            head: imp(c.head, target),
-                            protocol: c.protocol.import_symbols(target),
-                            params: c.params.iter().map(|s| imp(*s, target)).collect(),
-                            self_args: c.self_args.iter().map(&imp_ty).collect(),
-                            context: c
-                                .context
-                                .into_iter()
-                                .map(|predicate| predicate.import_symbols(target))
-                                .collect(),
-                            witnesses: c
-                                .witnesses
-                                .into_iter()
-                                .map(|(l, s)| (l, imp(s, target)))
-                                .collect(),
-                            assoc: c
-                                .assoc
-                                .into_iter()
-                                .map(|(s, t)| (imp(s, target), imp_ty(&t)))
-                                .collect(),
-                            dictionary: c
-                                .dictionary
-                                .into_iter()
-                                .map(|entry| match entry {
-                                    DictionaryEntry::Implementation {
-                                        symbol,
-                                        writeback_width,
-                                    } => DictionaryEntry::Implementation {
-                                        symbol: imp(symbol, target),
-                                        writeback_width,
-                                    },
-                                    derived => derived,
-                                })
-                                .collect(),
-                        },
-                    )
-                })
-                .collect(),
-            conformances_by_head: self
-                .conformances_by_head
-                .into_iter()
-                .map(|(head, ids)| {
-                    (
-                        imp(head, target),
-                        ids.into_iter().map(|id| id.import(target)).collect(),
-                    )
-                })
-                .collect(),
-            next_conformance_id: self.next_conformance_id,
-            member_owners: self
-                .member_owners
-                .into_iter()
-                .map(|(l, owners)| {
-                    (
-                        l,
-                        owners
-                            .into_iter()
-                            .map(|owner| match owner {
-                                MemberOwner::Protocol(s) => MemberOwner::Protocol(imp(s, target)),
-                                MemberOwner::Nominal(s) => MemberOwner::Nominal(imp(s, target)),
-                            })
-                            .collect(),
-                    )
-                })
-                .collect(),
-            param_bounds: self
-                .param_bounds
-                .into_iter()
-                .map(|(s, bounds)| {
-                    (
-                        imp(s, target),
-                        bounds.iter().map(|b| b.import_symbols(target)).collect(),
-                    )
-                })
-                .collect(),
-            static_params: self
-                .static_params
-                .into_iter()
-                .map(|(s, ty)| (imp(s, target), imp_ty(&ty)))
-                .collect(),
-            // Derived indexes: row ids shift across merge dedup and
-            // owners span merged member tables, so the merge rebuilds
-            // both from the merged catalogs.
-            deinit_rows: FxHashMap::default(),
-            callable_owners: FxHashMap::default(),
-            extend_members: self
-                .extend_members
-                .into_iter()
-                .map(|(head, members)| {
-                    (
-                        imp(head, target),
-                        members
-                            .into_iter()
-                            .map(|(l, rows)| {
-                                (
-                                    l,
-                                    rows.into_iter()
-                                        .map(|m| InherentMember {
-                                            symbol: imp(m.symbol, target),
-                                            params: m
-                                                .params
-                                                .iter()
-                                                .map(|s| imp(*s, target))
-                                                .collect(),
-                                            self_args: m.self_args.iter().map(&imp_ty).collect(),
-                                        })
-                                        .collect(),
-                                )
-                            })
-                            .collect(),
-                    )
-                })
-                .collect(),
-            effects: self
-                .effects
-                .into_iter()
-                .map(|(s, sig)| {
-                    (
-                        imp(s, target),
-                        EffectSig {
-                            generics: sig.generics.iter().map(imp_param).collect(),
-                            predicates: sig
-                                .predicates
-                                .into_iter()
-                                .map(|predicate| predicate.import_symbols(target))
-                                .collect(),
-                            params: sig.params.iter().map(&imp_ty).collect(),
-                            ret: imp_ty(&sig.ret),
-                        },
-                    )
-                })
-                .collect(),
-            type_aliases: self
-                .type_aliases
-                .into_iter()
-                .map(|(s, alias)| {
-                    (
-                        imp(s, target),
-                        TypeAliasInfo {
-                            params: alias.params.iter().map(|p| imp(*p, target)).collect(),
-                            ty: imp_ty(&alias.ty),
-                        },
-                    )
-                })
-                .collect(),
-        }
-    }
-
     /// Merge an imported module's catalog (Phase 0 of checking: the
     /// environment a group solves against).
     pub fn merge(&mut self, other: TypeCatalog) {
         self.structs.extend(other.structs);
         self.enums.extend(other.enums);
         self.protocols.extend(other.protocols);
-        self.next_conformance_id = self.next_conformance_id.max(other.next_conformance_id);
+        // Rows are numbered per declaring module, so counters never
+        // interact across catalogs.
         for (id, conformance) in other.conformances {
             if self
                 .conformances
@@ -1280,8 +987,15 @@ impl TypeCatalog {
         })
     }
 
-    pub fn insert_conformance(&mut self, conformance: Conformance) -> ConformanceId {
-        let id = ConformanceId::new(ModuleId::Current, self.next_conformance_id);
+    pub fn insert_conformance(
+        &mut self,
+        module: ModuleId,
+        conformance: Conformance,
+    ) -> ConformanceId {
+        // Absolute identity at mint (ADR 0038): rows are numbered under
+        // their declaring module, so merged catalogs never collide and
+        // no import seam respells ids.
+        let id = ConformanceId::new(module, self.next_conformance_id);
         self.next_conformance_id += 1;
         let head = conformance.head;
         self.conformances.insert(id, conformance);
@@ -1872,7 +1586,7 @@ mod tests {
         let mut catalog = TypeCatalog::default();
         row.head = head;
         row.protocol = ProtocolRef::bare(Symbol::CheapClone);
-        catalog.insert_conformance(row);
+        catalog.insert_conformance(ModuleId::Current, row);
         catalog
     }
 

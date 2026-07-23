@@ -24,7 +24,7 @@ use crate::{
     name_resolution::{
         builtins,
         decl_declarer::DeclDeclarer,
-        symbol::{Symbol, Symbols},
+        symbol::{Symbol, SymbolKind, Symbols},
     },
     node::Node,
     node_id::{FileID, NodeID},
@@ -40,7 +40,7 @@ use crate::{
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
-    on, some,
+    on,
     span::Span,
 };
 
@@ -817,7 +817,7 @@ impl NameResolver {
     pub(super) fn declare(
         &mut self,
         name: &Name,
-        kind: Symbol,
+        kind: SymbolKind,
         node_id: NodeID,
         span: Span,
     ) -> Name {
@@ -833,7 +833,7 @@ impl NameResolver {
         if !at_module_scope
             && matches!(
                 kind,
-                Symbol::DeclaredLocal(..) | Symbol::PatternBindLocal(..)
+                SymbolKind::DeclaredLocal | SymbolKind::PatternBindLocal
             )
             && self
                 .scopes
@@ -856,16 +856,16 @@ impl NameResolver {
         // If so, return the existing symbol to avoid duplicate creation
         if matches!(
             kind,
-            Symbol::Struct(..)
-                | Symbol::Enum(..)
-                | Symbol::Protocol(..)
-                | Symbol::Effect(..)
-                | Symbol::TypeAlias(..)
+            SymbolKind::Struct
+                | SymbolKind::Enum
+                | SymbolKind::Protocol
+                | SymbolKind::Effect
+                | SymbolKind::TypeAlias
         ) && let Some(&existing) = self
             .scopes
             .get(&scope_id)
             .and_then(|s| s.types.get(&name_str))
-            && std::mem::discriminant(&existing) == std::mem::discriminant(&kind)
+            && SymbolKind::of(&existing) == Some(kind)
         {
             return Name::Resolved(existing, name_str);
         }
@@ -876,7 +876,7 @@ impl NameResolver {
         // Non-public Globals should allow shadowing (create new symbol)
         // Note: Don't record span here - it was already recorded during predeclaration
         if at_module_scope
-            && matches!(kind, Symbol::Global(..))
+            && matches!(kind, SymbolKind::Global)
             && let Some(&existing) = self
                 .scopes
                 .get(&scope_id)
@@ -912,14 +912,14 @@ impl NameResolver {
     /// binders go through this at their declaration point and only insert
     /// into scope once their initializer has resolved (rule 1 of
     /// docs/sequential-scoping-plan.md).
-    pub(super) fn mint(&mut self, name: &Name, kind: Symbol, node_id: NodeID, span: Span) -> Name {
+    pub(super) fn mint(&mut self, name: &Name, kind: SymbolKind, node_id: NodeID, span: Span) -> Name {
         let name_str = name.name_str();
         let module_id = self.current_module_id;
         let well_known_core_symbol = if self.at_module_scope() && module_id == ModuleId::Core {
             match kind {
-                Symbol::Struct(..) => Symbol::well_known_core_struct(&name_str),
-                Symbol::Protocol(..) => Symbol::well_known_core_protocol(&name_str),
-                Symbol::Effect(..) => Symbol::well_known_core_effect(&name_str),
+                SymbolKind::Struct => Symbol::well_known_core_struct(&name_str),
+                SymbolKind::Protocol => Symbol::well_known_core_protocol(&name_str),
+                SymbolKind::Effect => Symbol::well_known_core_effect(&name_str),
                 _ => None,
             }
         } else {
@@ -929,43 +929,38 @@ impl NameResolver {
             symbol
         } else {
             match kind {
-                Symbol::Main => Symbol::Main,
-                Symbol::Library => Symbol::Library,
-                Symbol::Effect(..) => Symbol::Effect(self.symbols.next_effect(module_id)),
-                Symbol::Struct(..) => Symbol::Struct(self.symbols.next_struct(module_id)),
-                Symbol::Enum(..) => Symbol::Enum(self.symbols.next_enum(module_id)),
-                Symbol::TypeAlias(..) => Symbol::TypeAlias(self.symbols.next_type_alias(module_id)),
-                Symbol::TypeParameter(..) => {
+                SymbolKind::Effect => Symbol::Effect(self.symbols.next_effect(module_id)),
+                SymbolKind::Struct => Symbol::Struct(self.symbols.next_struct(module_id)),
+                SymbolKind::Enum => Symbol::Enum(self.symbols.next_enum(module_id)),
+                SymbolKind::TypeAlias => Symbol::TypeAlias(self.symbols.next_type_alias(module_id)),
+                SymbolKind::TypeParameter => {
                     Symbol::TypeParameter(self.symbols.next_type_parameter(module_id))
                 }
-                Symbol::Global(..) => Symbol::Global(self.symbols.next_global(module_id)),
-                Symbol::DeclaredLocal(..) => Symbol::DeclaredLocal(self.symbols.next_local()),
-                Symbol::PatternBindLocal(..) => {
+                SymbolKind::Global => Symbol::Global(self.symbols.next_global(module_id)),
+                SymbolKind::DeclaredLocal => Symbol::DeclaredLocal(self.symbols.next_local()),
+                SymbolKind::PatternBindLocal => {
                     Symbol::PatternBindLocal(self.symbols.next_pattern_bind())
                 }
-                Symbol::ParamLocal(..) => Symbol::ParamLocal(self.symbols.next_param()),
-                Symbol::Builtin(..) => {
-                    unreachable!("should not be generating symbols for builtins")
-                }
-                Symbol::Property(..) => Symbol::Property(self.symbols.next_property(module_id)),
-                Symbol::Synthesized(..) => {
+                SymbolKind::ParamLocal => Symbol::ParamLocal(self.symbols.next_param()),
+                SymbolKind::Property => Symbol::Property(self.symbols.next_property(module_id)),
+                SymbolKind::Synthesized => {
                     Symbol::Synthesized(self.symbols.next_synthesized(module_id))
                 }
-                Symbol::InstanceMethod(..) => {
+                SymbolKind::InstanceMethod => {
                     Symbol::InstanceMethod(self.symbols.next_instance_method(module_id))
                 }
-                Symbol::Initializer(..) => {
+                SymbolKind::Initializer => {
                     Symbol::Initializer(self.symbols.next_initializer(module_id))
                 }
-                Symbol::MethodRequirement(..) => {
+                SymbolKind::MethodRequirement => {
                     Symbol::MethodRequirement(self.symbols.next_method_requirement(module_id))
                 }
-                Symbol::StaticMethod(..) => {
+                SymbolKind::StaticMethod => {
                     Symbol::StaticMethod(self.symbols.next_static_method(module_id))
                 }
-                Symbol::Variant(..) => Symbol::Variant(self.symbols.next_variant(module_id)),
-                Symbol::Protocol(..) => Symbol::Protocol(self.symbols.next_protocol(module_id)),
-                Symbol::AssociatedType(..) => {
+                SymbolKind::Variant => Symbol::Variant(self.symbols.next_variant(module_id)),
+                SymbolKind::Protocol => Symbol::Protocol(self.symbols.next_protocol(module_id)),
+                SymbolKind::AssociatedType => {
                     Symbol::AssociatedType(self.symbols.next_associated_type(module_id))
                 }
             }
@@ -988,14 +983,14 @@ impl NameResolver {
     /// scope, simple binds become Globals; everywhere else they take
     /// `bind_type`.
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub(super) fn declare_pattern(&mut self, pattern: &mut Pattern, bind_type: Symbol) {
+    pub(super) fn declare_pattern(&mut self, pattern: &mut Pattern, bind_type: SymbolKind) {
         let Pattern { kind, span, .. } = pattern;
         let span = *span;
 
         match kind {
             PatternKind::Bind(name @ Name::Raw(_)) => {
                 *name = if self.at_module_scope() {
-                    self.declare(name, some!(Global), pattern.id, span)
+                    self.declare(name, SymbolKind::Global, pattern.id, span)
                 } else {
                     self.declare(name, bind_type, pattern.id, span)
                 }
@@ -1007,7 +1002,7 @@ impl NameResolver {
             PatternKind::Bind(..) => {}
             PatternKind::Variant { fields, .. } => {
                 for field in fields.iter_mut() {
-                    self.declare_pattern(field, some!(PatternBindLocal));
+                    self.declare_pattern(field, SymbolKind::PatternBindLocal);
                 }
             }
             PatternKind::Record { fields } => {
@@ -1015,7 +1010,7 @@ impl NameResolver {
                     match &mut field.kind {
                         RecordFieldPatternKind::Bind(name) => {
                             *name =
-                                self.declare(name, some!(PatternBindLocal), pattern.id, field.span);
+                                self.declare(name, SymbolKind::PatternBindLocal, pattern.id, field.span);
                         }
                         RecordFieldPatternKind::Equals {
                             name,
@@ -1023,8 +1018,8 @@ impl NameResolver {
                             value,
                         } => {
                             *name =
-                                self.declare(name, some!(PatternBindLocal), pattern.id, *name_span);
-                            self.declare_pattern(value, some!(PatternBindLocal));
+                                self.declare(name, SymbolKind::PatternBindLocal, pattern.id, *name_span);
+                            self.declare_pattern(value, SymbolKind::PatternBindLocal);
                         }
                         RecordFieldPatternKind::Rest => (),
                     }
@@ -1033,7 +1028,7 @@ impl NameResolver {
             PatternKind::Struct { fields, .. } => {
                 for field in fields {
                     if let Node::Pattern(pattern) = field {
-                        self.declare_pattern(pattern, some!(PatternBindLocal));
+                        self.declare_pattern(pattern, SymbolKind::PatternBindLocal);
                     }
                 }
             }
@@ -1061,7 +1056,7 @@ impl NameResolver {
     fn mint_pattern(
         &mut self,
         pattern: &mut Pattern,
-        bind_type: Symbol,
+        bind_type: SymbolKind,
         out: &mut Vec<(String, Symbol)>,
     ) {
         let Pattern { kind, span, .. } = pattern;
@@ -1083,7 +1078,7 @@ impl NameResolver {
             }
             PatternKind::Variant { fields, .. } => {
                 for field in fields.iter_mut() {
-                    self.mint_pattern(field, some!(PatternBindLocal), out);
+                    self.mint_pattern(field, SymbolKind::PatternBindLocal, out);
                 }
             }
             PatternKind::Record { fields } => {
@@ -1093,7 +1088,7 @@ impl NameResolver {
                             if matches!(name, Name::Raw(_)) {
                                 *name = self.mint(
                                     name,
-                                    some!(PatternBindLocal),
+                                    SymbolKind::PatternBindLocal,
                                     pattern.id,
                                     field.span,
                                 );
@@ -1110,7 +1105,7 @@ impl NameResolver {
                             if matches!(name, Name::Raw(_)) {
                                 *name = self.mint(
                                     name,
-                                    some!(PatternBindLocal),
+                                    SymbolKind::PatternBindLocal,
                                     pattern.id,
                                     *name_span,
                                 );
@@ -1118,7 +1113,7 @@ impl NameResolver {
                             if let Ok(symbol) = name.symbol() {
                                 out.push((name.name_str(), symbol));
                             }
-                            self.mint_pattern(value, some!(PatternBindLocal), out);
+                            self.mint_pattern(value, SymbolKind::PatternBindLocal, out);
                         }
                         RecordFieldPatternKind::Rest => (),
                     }
@@ -1132,7 +1127,7 @@ impl NameResolver {
             PatternKind::Struct { fields, .. } => {
                 for field in fields {
                     if let Node::Pattern(pattern) = field {
-                        self.mint_pattern(pattern, some!(PatternBindLocal), out);
+                        self.mint_pattern(pattern, SymbolKind::PatternBindLocal, out);
                     }
                 }
             }
@@ -1157,7 +1152,7 @@ impl NameResolver {
 
     fn enter_pattern(&mut self, pattern: &mut Pattern) {
         if self.for_pattern_roots.last().copied() == Some(pattern.id) {
-            self.declare_pattern(pattern, some!(PatternBindLocal));
+            self.declare_pattern(pattern, SymbolKind::PatternBindLocal);
         }
 
         match &mut pattern.kind {
@@ -1303,7 +1298,7 @@ impl NameResolver {
         self.push_scope(block.id);
 
         for arg in &mut block.args {
-            arg.name = self.declare(&arg.name, some!(ParamLocal), arg.id, arg.name_span);
+            arg.name = self.declare(&arg.name, SymbolKind::ParamLocal, arg.id, arg.name_span);
         }
 
         // Func-valued let binders are items (Rust's fn-in-block): hoisted
@@ -1325,7 +1320,7 @@ impl NameResolver {
             }) = node
                 && let PatternKind::Bind(name @ Name::Raw(_)) = &mut lhs.kind
             {
-                *name = self.declare(name, some!(DeclaredLocal), lhs.id, lhs.span);
+                *name = self.declare(name, SymbolKind::DeclaredLocal, lhs.id, lhs.span);
             }
         }
     }
@@ -1348,8 +1343,8 @@ impl NameResolver {
             // and the loop binder live in it and die with it.
             self.push_scope(stmt.id);
             self.for_pattern_roots.push(pattern.id);
-            *hidden_source = self.mint(hidden_source, some!(DeclaredLocal), stmt.id, stmt.span);
-            *hidden_iter = self.mint(hidden_iter, some!(DeclaredLocal), stmt.id, stmt.span);
+            *hidden_source = self.mint(hidden_source, SymbolKind::DeclaredLocal, stmt.id, stmt.span);
+            *hidden_iter = self.mint(hidden_iter, SymbolKind::DeclaredLocal, stmt.id, stmt.span);
             // `for x in mut xs` restores its source at loop end — the
             // source is mutated exactly as an assignment target is.
             if matches!(source_mode, Some(crate::node_kinds::call_arg::ArgMode::Mut)) {
@@ -1438,7 +1433,7 @@ impl NameResolver {
     // alternatives, guard, body) — declared on entry, unlike a `let`'s.
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
         self.push_scope(arm.id);
-        self.declare_pattern(&mut arm.pattern, some!(PatternBindLocal));
+        self.declare_pattern(&mut arm.pattern, SymbolKind::PatternBindLocal);
     }
 
     fn exit_match_arm(&mut self, arm: &mut MatchArm) {
@@ -1534,9 +1529,9 @@ impl NameResolver {
                 resolved.unwrap_or_else(|| {
                     let is_synth = func.name.name_str().starts_with("#fn_");
                     let fallback = if is_synth {
-                        some!(Synthesized)
+                        SymbolKind::Synthesized
                     } else {
-                        some!(Global)
+                        SymbolKind::Global
                     };
                     self.declare(&func.name, fallback, func.id, func.name_span)
                         .symbol()
@@ -1559,14 +1554,14 @@ impl NameResolver {
         for generic in &mut func.generics {
             generic.name = self.declare(
                 &generic.name,
-                some!(TypeParameter),
+                SymbolKind::TypeParameter,
                 generic.id,
                 generic.name_span,
             );
         }
 
         for param in &mut func.params {
-            param.name = self.declare(&param.name, some!(ParamLocal), param.id, param.name_span);
+            param.name = self.declare(&param.name, SymbolKind::ParamLocal, param.id, param.name_span);
         }
 
         for name in func.effects.names.iter_mut() {
@@ -1621,7 +1616,7 @@ impl NameResolver {
 
             for param in params {
                 param.name =
-                    self.declare(&param.name, some!(ParamLocal), param.id, param.name_span);
+                    self.declare(&param.name, SymbolKind::ParamLocal, param.id, param.name_span);
             }
         });
 
@@ -1642,7 +1637,7 @@ impl NameResolver {
             // Module-scope lets were declared in pass 1.
             if !self.at_module_scope() {
                 let mut staged = vec![];
-                self.mint_pattern(lhs, some!(DeclaredLocal), &mut staged);
+                self.mint_pattern(lhs, SymbolKind::DeclaredLocal, &mut staged);
                 self.pending_locals.push(staged);
             }
         });

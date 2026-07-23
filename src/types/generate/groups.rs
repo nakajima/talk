@@ -29,8 +29,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             .effects
             .keys()
             .filter(|symbol| {
-                symbol.external_module_id() == Some(ModuleId::Core)
-                    || (self.module_id == ModuleId::Core && symbol.external_module_id().is_none())
+                symbol.module_id() == Some(ModuleId::Core)
             })
             .copied()
             .collect();

@@ -82,7 +82,7 @@ fn recursive_conformance_reports_cycle_diagnostic() {
         ty: Ty::Nominal(ty, vec![]),
         protocol: protocol_ref.clone(),
     }];
-    h.catalog.insert_conformance(row);
+    h.catalog.insert_conformance(ModuleId::Current, row);
 
     h.solve(vec![Constraint::Conforms {
         ty: Ty::Nominal(ty, vec![]),
@@ -124,7 +124,7 @@ fn level_adjustment_propagates_outward() {
 fn apply_reason_clones_borrowed_cheap_clone_argument() {
     let mut h = Harness::new();
     let cheap = Symbol::Struct(StructId::new(ModuleId::Current, 7));
-    h.catalog.insert_conformance(Conformance::new(
+    h.catalog.insert_conformance(ModuleId::Current, Conformance::new(
         cheap,
         ProtocolRef::bare(Symbol::CheapClone),
     ));

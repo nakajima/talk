@@ -2071,6 +2071,10 @@ struct CompiledLibrary {
 
 struct CompiledGraph {
     dependencies: IndexMap<String, CompiledLibrary>,
+    /// The session's base environment (core + stdlib): every library
+    /// environment and the final binary/test environment clone it, so
+    /// the whole build shares one module numbering.
+    base: ModuleEnvironment,
 }
 
 impl PackageProject {
@@ -2098,7 +2102,7 @@ impl PackageProject {
             ));
         };
         let environment =
-            self.environment_for(&self.lock.root_dependencies, &graph.dependencies)?;
+            self.environment_for(&graph.base, &self.lock.root_dependencies, &graph.dependencies)?;
         let libraries: Vec<(
             ModuleId,
             std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
@@ -2228,7 +2232,7 @@ impl PackageProject {
         };
         let graph = self.compile_graph()?;
         let environment =
-            self.environment_for(&self.lock.root_dependencies, &graph.dependencies)?;
+            self.environment_for(&graph.base, &self.lock.root_dependencies, &graph.dependencies)?;
         let libraries: Vec<(
             ModuleId,
             std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
@@ -2256,13 +2260,12 @@ impl PackageProject {
 
     fn compile_graph(&self) -> Result<CompiledGraph, PackageError> {
         let base = Self::base_environment();
-        let mut next_id = base.next_module_id().0;
+        // One session id per package, reserved in the shared registry
+        // before its module compiles; `import_compiled` binds the
+        // identity afterwards.
         let mut ids = FxHashMap::default();
         for package in &self.lock.packages {
-            ids.insert(package.id.clone(), ModuleId(next_id));
-            next_id = next_id.checked_add(1).ok_or_else(|| {
-                PackageError::Compile("too many packages to assign module ids".into())
-            })?;
+            ids.insert(package.id.clone(), base.reserve_module_id());
         }
         let mut dependencies = IndexMap::new();
         for package in &self.lock.packages {
@@ -2279,7 +2282,8 @@ impl PackageProject {
                     manifest.name
                 ))
             })?;
-            let environment = self.environment_for(&package.dependencies, &dependencies)?;
+            let environment =
+                self.environment_for(&base, &package.dependencies, &dependencies)?;
             let module_id = *ids.get(&package.id).ok_or_else(|| {
                 PackageError::Compile(format!("missing module id for package {}", package.name))
             })?;
@@ -2290,7 +2294,7 @@ impl PackageProject {
         // The root package's own sources always re-parse into the binary
         // or test compile (see the call sites), so the root library is
         // never compiled here — storing it would be dead work.
-        Ok(CompiledGraph { dependencies })
+        Ok(CompiledGraph { dependencies, base })
     }
 
     fn compile_library(
@@ -2348,18 +2352,23 @@ impl PackageProject {
     fn base_environment() -> ModuleEnvironment {
         let mut environment = ModuleEnvironment::default();
         environment.import_core(super::core::compile());
-        for module in super::stdlib::modules() {
-            environment.import((*module).clone());
+        for (id, module) in super::stdlib::modules_with_ids() {
+            environment
+                .import_compiled((*module).clone(), id)
+                .expect("stdlib modules register once per session");
         }
         environment
     }
 
     fn environment_for(
         &self,
+        base: &ModuleEnvironment,
         dependency_ids: &[String],
         compiled: &IndexMap<String, CompiledLibrary>,
     ) -> Result<ModuleEnvironment, PackageError> {
-        let mut environment = Self::base_environment();
+        // A clone shares the session registry; the maps are this
+        // environment's own view.
+        let mut environment = base.clone();
         for dependency_id in dependency_ids {
             let dependency = compiled.get(dependency_id).ok_or_else(|| {
                 PackageError::Compile(format!("dependency {dependency_id} was not compiled first"))

@@ -95,7 +95,7 @@ impl<'a> ProgramBuilder<'a> {
                 dest: retain_local,
                 index: u16::try_from(2 * index + 1).unwrap_or_default(),
             });
-            let param = fx.canon_rigid(*param_symbol);
+            let param = *param_symbol;
             fx.param_witnesses.insert(param, (drop_local, retain_local));
         }
         match glue {
@@ -416,7 +416,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         for param in glue_witness_params(ty) {
             let Some((drop_witness, retain_witness)) = self
                 .param_witnesses
-                .get(&self.canon_rigid(param))
+                .get(&param)
                 .copied()
             else {
                 return Err(BackendError::unsupported(

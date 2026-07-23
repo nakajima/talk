@@ -1667,7 +1667,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 );
                 continue;
             }
-            let id = self.catalog.insert_conformance(conformance);
+            let id = self.catalog.insert_conformance(self.module_id, conformance);
             self.record_marker_claim(head, protocol.protocol, id, decl.id);
             registered_rows.push((protocol, id));
         }

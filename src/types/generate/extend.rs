@@ -162,7 +162,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 continue;
             };
             for entry in &eff.effects {
-                if entry.effect.external_module_id()
+                if entry.effect.module_id()
                     == Some(crate::compiling::module::ModuleId::Core)
                 {
                     continue;

@@ -8,7 +8,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::{NameResolver, NameResolverError, Scope},
-        symbol::{StructId, Symbol},
+        symbol::{StructId, Symbol, SymbolKind},
     },
     node::Node,
     node_id::{FileID, NodeID},
@@ -30,152 +30,6 @@ use crate::{
     span::Span,
 };
 
-// Dummy values for symbol type discrimination - actual values created by declare()
-#[macro_export]
-macro_rules! some {
-    (Struct) => {
-        $crate::name_resolution::symbol::Symbol::Struct(
-            $crate::name_resolution::symbol::StructId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (Effect) => {
-        $crate::name_resolution::symbol::Symbol::Effect(
-            $crate::name_resolution::symbol::EffectId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (Enum) => {
-        $crate::name_resolution::symbol::Symbol::Enum($crate::name_resolution::symbol::EnumId::new(
-            $crate::compiling::module::ModuleId::Current,
-            0,
-        ))
-    };
-    (TypeAlias) => {
-        $crate::name_resolution::symbol::Symbol::TypeAlias(
-            $crate::name_resolution::symbol::TypeAliasId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (Global) => {
-        $crate::name_resolution::symbol::Symbol::Global(
-            $crate::name_resolution::symbol::GlobalId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (Protocol) => {
-        $crate::name_resolution::symbol::Symbol::Protocol(
-            $crate::name_resolution::symbol::ProtocolId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (Variant) => {
-        $crate::name_resolution::symbol::Symbol::Variant(
-            $crate::name_resolution::symbol::VariantId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (Property) => {
-        $crate::name_resolution::symbol::Symbol::Property(
-            $crate::name_resolution::symbol::PropertyId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (InstanceMethod) => {
-        $crate::name_resolution::symbol::Symbol::InstanceMethod(
-            $crate::name_resolution::symbol::InstanceMethodId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (Initializer) => {
-        $crate::name_resolution::symbol::Symbol::Initializer(
-            $crate::name_resolution::symbol::InitializerId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (MethodRequirement) => {
-        $crate::name_resolution::symbol::Symbol::MethodRequirement(
-            $crate::name_resolution::symbol::MethodRequirementId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (StaticMethod) => {
-        $crate::name_resolution::symbol::Symbol::StaticMethod(
-            $crate::name_resolution::symbol::StaticMethodId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (AssociatedType) => {
-        $crate::name_resolution::symbol::Symbol::AssociatedType(
-            $crate::name_resolution::symbol::AssociatedTypeId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (Builtin) => {
-        $crate::name_resolution::symbol::Symbol::Builtin(
-            $crate::name_resolution::symbol::BuiltinId::new(
-                $crate::compiling::module::ModuleId::Builtin,
-                0,
-            ),
-        )
-    };
-    // Module-scoped type parameters
-    (TypeParameter) => {
-        $crate::name_resolution::symbol::Symbol::TypeParameter(
-            $crate::name_resolution::symbol::TypeParameterId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-    (DeclaredLocal) => {
-        $crate::name_resolution::symbol::Symbol::DeclaredLocal(
-            $crate::name_resolution::symbol::DeclaredLocalId(0),
-        )
-    };
-    (ParamLocal) => {
-        $crate::name_resolution::symbol::Symbol::ParamLocal(
-            $crate::name_resolution::symbol::ParamLocalId(0),
-        )
-    };
-    (PatternBindLocal) => {
-        $crate::name_resolution::symbol::Symbol::PatternBindLocal(
-            $crate::name_resolution::symbol::PatternBindLocalId(0),
-        )
-    };
-    (Synthesized) => {
-        $crate::name_resolution::symbol::Symbol::Synthesized(
-            $crate::name_resolution::symbol::SynthesizedId::new(
-                $crate::compiling::module::ModuleId::Current,
-                0,
-            ),
-        )
-    };
-}
 
 #[derive(VisitorMut)]
 #[visitor(FuncSignature, Decl(enter, exit), Block(enter, exit))]
@@ -248,7 +102,7 @@ impl<'a> DeclDeclarer<'a> {
             }
             generic.name = self.resolver.declare(
                 &generic.name,
-                some!(TypeParameter),
+                SymbolKind::TypeParameter,
                 generic.id,
                 generic.name_span,
             );
@@ -268,9 +122,9 @@ impl<'a> DeclDeclarer<'a> {
                     name, name_span, ..
                 } => {
                     let kind = match &decl.kind {
-                        DeclKind::Struct { .. } => some!(Struct),
-                        DeclKind::Enum { .. } => some!(Enum),
-                        DeclKind::Protocol { .. } => some!(Protocol),
+                        DeclKind::Struct { .. } => SymbolKind::Struct,
+                        DeclKind::Enum { .. } => SymbolKind::Enum,
+                        DeclKind::Protocol { .. } => SymbolKind::Protocol,
                         _ => unreachable!(),
                     };
 
@@ -300,7 +154,7 @@ impl<'a> DeclDeclarer<'a> {
             {
                 let resolved = self
                     .resolver
-                    .declare(name, some!(Effect), decl.id, *name_span);
+                    .declare(name, SymbolKind::Effect, decl.id, *name_span);
 
                 if decl.visibility == Visibility::Public
                     && let Ok(sym) = resolved.symbol()
@@ -318,7 +172,7 @@ impl<'a> DeclDeclarer<'a> {
             if let DeclKind::TypeAlias(name, name_span, ..) = &decl.kind {
                 let resolved = self
                     .resolver
-                    .declare(name, some!(TypeAlias), decl.id, *name_span);
+                    .declare(name, SymbolKind::TypeAlias, decl.id, *name_span);
                 if decl.visibility == Visibility::Public
                     && let Ok(sym) = resolved.symbol()
                 {
@@ -352,7 +206,7 @@ impl<'a> DeclDeclarer<'a> {
                     exported_names.insert(name_str, lhs.id);
 
                     // Pattern span is used for the binding since Bind pattern doesn't have name_span
-                    let resolved = self.resolver.declare(name, some!(Global), lhs.id, lhs.span);
+                    let resolved = self.resolver.declare(name, SymbolKind::Global, lhs.id, lhs.span);
                     if let Ok(sym) = resolved.symbol() {
                         self.resolver.mark_public(sym);
                     }
@@ -518,7 +372,7 @@ impl<'a> DeclDeclarer<'a> {
                 // FuncSignature doesn't have a name_span, use its span
                 *name = self
                     .resolver
-                    .declare(name, some!(MethodRequirement), func.id, func_span);
+                    .declare(name, SymbolKind::MethodRequirement, func.id, func_span);
 
                 self.start_scope(func.id);
 
@@ -527,7 +381,7 @@ impl<'a> DeclDeclarer<'a> {
                 for param in params {
                     param.name = self.resolver.declare(
                         &param.name,
-                        some!(ParamLocal),
+                        SymbolKind::ParamLocal,
                         param.id,
                         param.name_span,
                     );
@@ -603,7 +457,7 @@ impl<'a> DeclDeclarer<'a> {
             {
                 *lhs_name = self
                     .resolver
-                    .declare(lhs_name, some!(TypeAlias), decl.id, *name_span);
+                    .declare(lhs_name, SymbolKind::TypeAlias, decl.id, *name_span);
 
                 if let Some(parent) = self.resolver.nominal_stack.last() {
                     self.resolver
@@ -630,7 +484,7 @@ impl<'a> DeclDeclarer<'a> {
             {
                 *name = self
                     .resolver
-                    .declare(name, some!(Variant), decl.id, *name_span);
+                    .declare(name, SymbolKind::Variant, decl.id, *name_span);
                 self.start_scope(decl.id);
                 self.declare_generics(generics, false);
             }
@@ -645,9 +499,9 @@ impl<'a> DeclDeclarer<'a> {
             },
             {
                 *name = if *is_static {
-                    self.resolver.declare(name, some!(StaticMethod), decl.id, *name_span)
+                    self.resolver.declare(name, SymbolKind::StaticMethod, decl.id, *name_span)
                 } else {
-                    self.resolver.declare(name, some!(InstanceMethod), decl.id, *name_span)
+                    self.resolver.declare(name, SymbolKind::InstanceMethod, decl.id, *name_span)
                 };
 
                 // self.start_scope(name.symbol().ok(), *id, true);
@@ -658,7 +512,7 @@ impl<'a> DeclDeclarer<'a> {
         on!(&mut decl.kind, DeclKind::Associated { generic, .. }, {
             generic.name = self.resolver.declare(
                 &generic.name,
-                some!(AssociatedType),
+                SymbolKind::AssociatedType,
                 decl.id,
                 generic.name_span,
             );
@@ -688,7 +542,7 @@ impl<'a> DeclDeclarer<'a> {
             }),
             {
                 // FuncSignature doesn't have name_span, use its span
-                *name = self.resolver.declare(name, some!(Global), decl.id, *span);
+                *name = self.resolver.declare(name, SymbolKind::Global, decl.id, *span);
 
                 self.declare_generics(generics, false);
             }
@@ -706,7 +560,7 @@ impl<'a> DeclDeclarer<'a> {
             {
                 *name = self
                     .resolver
-                    .declare(name, some!(Property), decl.id, *name_span);
+                    .declare(name, SymbolKind::Property, decl.id, *name_span);
                 let id = self
                     .resolver
                     .current_scope_id
@@ -733,7 +587,7 @@ impl<'a> DeclDeclarer<'a> {
             // Init declarations use decl.span since there's no dedicated name_span
             *name = self
                 .resolver
-                .declare(name, some!(Initializer), decl.id, decl.span);
+                .declare(name, SymbolKind::Initializer, decl.id, decl.span);
 
             self.start_scope(decl.id);
         });
@@ -742,7 +596,7 @@ impl<'a> DeclDeclarer<'a> {
             // Module-scope lets only: they predeclare (order-independent,
             // rule 4). Locals declare at their point in the resolver pass.
             if self.block_depth == 0 {
-                self.resolver.declare_pattern(lhs, some!(Global));
+                self.resolver.declare_pattern(lhs, SymbolKind::Global);
             }
         });
 
@@ -758,7 +612,7 @@ impl<'a> DeclDeclarer<'a> {
             {
                 *name = self
                     .resolver
-                    .declare(name, some!(Effect), decl.id, *name_span);
+                    .declare(name, SymbolKind::Effect, decl.id, *name_span);
 
                 // Start a scope for the effect's generics and params
                 self.start_scope(decl.id);
@@ -768,7 +622,7 @@ impl<'a> DeclDeclarer<'a> {
                 for param in params {
                     param.name = self.resolver.declare(
                         &param.name,
-                        some!(ParamLocal),
+                        SymbolKind::ParamLocal,
                         param.id,
                         param.name_span,
                     );
@@ -949,7 +803,7 @@ impl<'a> DeclDeclarer<'a> {
 
         let init_name = self.resolver.declare(
             &"init".into(),
-            some!(Synthesized),
+            SymbolKind::Synthesized,
             init_id,
             Span::SYNTHESIZED,
         );
@@ -959,7 +813,7 @@ impl<'a> DeclDeclarer<'a> {
         // Need to synthesize an init
         let self_param_name = self.resolver.declare(
             &Name::Raw("self".into()),
-            some!(ParamLocal),
+            SymbolKind::ParamLocal,
             NodeID(file_id, self.node_ids.next_id()),
             Span::SYNTHESIZED,
         );
@@ -995,7 +849,7 @@ impl<'a> DeclDeclarer<'a> {
 
             let name = self.resolver.declare(
                 &Name::Raw(name.name_str()),
-                some!(ParamLocal),
+                SymbolKind::ParamLocal,
                 NodeID(file_id, self.node_ids.next_id()),
                 Span::SYNTHESIZED,
             );

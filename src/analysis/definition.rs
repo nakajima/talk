@@ -455,17 +455,18 @@ pub(crate) fn definition_location_for_symbol(
     core: Option<&Workspace>,
     symbol: Symbol,
 ) -> Option<Location> {
-    if let Some(module_id) = symbol.external_module_id() {
-        if module_id == ModuleId::Core {
-            let core = core?;
-            return definition_location_in_module(core, symbol);
-        }
-        if let Some(stdlib) = module.stdlib_workspace_for_module_id(module_id) {
-            return definition_location_in_module(&stdlib, symbol);
-        }
-        return definition_location_in_module(module, symbol.current());
+    if symbol.module_id() == Some(ModuleId::Core) {
+        let core = core?;
+        return definition_location_in_module(core, symbol);
     }
-
+    if let Some(module_id) = symbol.module_id()
+        && let Some(stdlib) = module.stdlib_workspace_for_module_id(module_id)
+    {
+        return definition_location_in_module(&stdlib, symbol);
+    }
+    // Everything else — the workspace's own symbols included — carries
+    // its module stamp (absolute identity, ADR 0038); look it up as
+    // minted.
     definition_location_in_module(module, symbol)
 }
 

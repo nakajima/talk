@@ -16,6 +16,29 @@ pub mod tests {
             .type_check()
     }
 
+    /// Compile a library module under an explicit module id (absolute
+    /// identity, ADR 0038) against `deps`, returning its exported module.
+    /// Register the result with `import_compiled(module, id)`.
+    pub fn compile_library(
+        name: &str,
+        id: crate::compiling::module::ModuleId,
+        source: &'static str,
+        deps: crate::compiling::module::ModuleEnvironment,
+    ) -> crate::compiling::module::Module {
+        let mut config = DriverConfig::new(name);
+        config.module_id = id;
+        config.mode = crate::compiling::driver::CompilationMode::Library;
+        config.modules = std::rc::Rc::new(deps);
+        let typed = Driver::new(vec![Source::from(source)], config)
+            .parse()
+            .expect("parse failed")
+            .resolve_names()
+            .expect("name resolution failed")
+            .type_check();
+        assert_eq!(type_errors(&typed), Vec::<String>::new());
+        typed.module(name)
+    }
+
     /// Render the scheme of a named top-level binding. Nominal heads display
     /// with their source names via the symbol-name context.
     pub fn ty_of(driver: &Driver<Typed>, name: &str) -> String {
@@ -5003,6 +5026,7 @@ pub mod tests {
 
 #[cfg(test)]
 mod with_core {
+    use super::tests::compile_library;
     use crate::compiling::driver::{Driver, DriverConfig, Source, Typed};
     use crate::diagnostic::AnyDiagnostic;
 
@@ -5113,24 +5137,18 @@ mod with_core {
         use crate::compiling::module::{ModuleEnvironment, ModuleId};
         use std::rc::Rc;
 
-        let driver_a = Driver::new(
-            vec![Source::from(
-                "public struct Wrapper {\n\tlet f: () -> Int\n}",
-            )],
-            DriverConfig::new("A"),
+        let id_a = ModuleId::External(0);
+        let module_a = compile_library(
+            "A",
+            id_a,
+            "public struct Wrapper {\n\tlet f: () -> Int\n}",
+            ModuleEnvironment::default(),
         );
-        let module_a = driver_a
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .type_check()
-            .module("A");
 
         let mut modules = ModuleEnvironment::default();
-        modules.import(module_a);
+        modules.import_compiled(module_a, id_a).unwrap();
         let config = crate::compiling::driver::DriverConfig {
-            module_id: ModuleId::Current,
+            module_id: ModuleId::Main,
             modules: Rc::new(modules),
             mode: crate::compiling::driver::CompilationMode::Library,
             module_name: "B".to_string(),
@@ -5168,57 +5186,40 @@ mod with_core {
         use crate::compiling::module::{ModuleEnvironment, ModuleId};
         use std::rc::Rc;
 
-        let module_s = Driver::new(
-            vec![Source::from(
-                "public struct Box<T> {\n\tlet value: T\n}",
-            )],
-            DriverConfig::new("S"),
-        )
-        .parse()
-        .unwrap()
-        .resolve_names()
-        .unwrap()
-        .type_check()
-        .module("S");
+        let (id_s, id_a, id_b) = (
+            ModuleId::External(0),
+            ModuleId::External(1),
+            ModuleId::External(2),
+        );
+        let module_s = compile_library(
+            "S",
+            id_s,
+            "public struct Box<T> {\n\tlet value: T\n}",
+            ModuleEnvironment::default(),
+        );
 
-        let sibling = |name: &str, body: &'static str| {
+        let sibling = |name: &str, id: ModuleId, body: &'static str| {
             let mut modules = ModuleEnvironment::default();
-            modules.import(module_s.clone());
-            let config = crate::compiling::driver::DriverConfig {
-                module_id: ModuleId::Current,
-                modules: Rc::new(modules),
-                mode: crate::compiling::driver::CompilationMode::Library,
-                module_name: name.to_string(),
-                parse_mode: crate::compiling::driver::ParseMode::Strict,
-                preserve_comments: false,
-                workspace_root: None,
-                source_root: None,
-                libraries: Vec::new(),
-            };
-            let typed = Driver::new(vec![Source::from(body)], config)
-                .parse()
-                .unwrap()
-                .resolve_names()
-                .unwrap()
-                .type_check();
-            assert_eq!(type_errors(&typed), Vec::<String>::new());
-            typed.module(name)
+            modules.import_compiled(module_s.clone(), id_s).unwrap();
+            compile_library(name, id, body, modules)
         };
         let module_a = sibling(
             "A",
+            id_a,
             "use S::{ Box }\nextend Box<Int> {\n\tpublic func tag() -> Int { 1 }\n}",
         );
         let module_b = sibling(
             "B",
+            id_b,
             "use S::{ Box }\nextend Box<Int> {\n\tpublic func tag() -> Int { 2 }\n}",
         );
 
         let mut modules = ModuleEnvironment::default();
-        modules.import(module_s);
-        modules.import(module_a);
-        modules.import(module_b);
+        modules.import_compiled(module_s, id_s).unwrap();
+        modules.import_compiled(module_a, id_a).unwrap();
+        modules.import_compiled(module_b, id_b).unwrap();
         let config = crate::compiling::driver::DriverConfig {
-            module_id: ModuleId::Current,
+            module_id: ModuleId::Main,
             modules: Rc::new(modules),
             mode: crate::compiling::driver::CompilationMode::Library,
             module_name: "C".to_string(),
@@ -5254,24 +5255,18 @@ mod with_core {
         use crate::compiling::module::{ModuleEnvironment, ModuleId};
         use std::rc::Rc;
 
-        let driver_a = Driver::new(
-            vec![Source::from(
-                "public struct Hello {\n\tlet x: Int\n}\npublic func make(v: Int) -> Hello { Hello(x: v) }",
-            )],
-            DriverConfig::new("A"),
+        let id_a = ModuleId::External(0);
+        let module_a = compile_library(
+            "A",
+            id_a,
+            "public struct Hello {\n\tlet x: Int\n}\npublic func make(v: Int) -> Hello { Hello(x: v) }",
+            ModuleEnvironment::default(),
         );
-        let module_a = driver_a
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .type_check()
-            .module("A");
 
         let mut modules = ModuleEnvironment::default();
-        modules.import(module_a);
+        modules.import_compiled(module_a, id_a).unwrap();
         let config = crate::compiling::driver::DriverConfig {
-            module_id: ModuleId::Current,
+            module_id: ModuleId::Main,
             modules: Rc::new(modules),
             mode: crate::compiling::driver::CompilationMode::Library,
             module_name: "B".to_string(),
@@ -5317,24 +5312,18 @@ mod with_core {
         use crate::compiling::module::{ModuleEnvironment, ModuleId};
         use std::rc::Rc;
 
-        let driver_a = Driver::new(
-            vec![Source::from(
-                "public typealias UserId = Int\npublic func make() -> UserId { 1 }",
-            )],
-            DriverConfig::new("A"),
+        let id_a = ModuleId::External(0);
+        let module_a = compile_library(
+            "A",
+            id_a,
+            "public typealias UserId = Int\npublic func make() -> UserId { 1 }",
+            ModuleEnvironment::default(),
         );
-        let module_a = driver_a
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .type_check()
-            .module("A");
 
         let mut modules = ModuleEnvironment::default();
-        modules.import(module_a);
+        modules.import_compiled(module_a, id_a).unwrap();
         let config = crate::compiling::driver::DriverConfig {
-            module_id: ModuleId::Current,
+            module_id: ModuleId::Main,
             modules: Rc::new(modules),
             mode: crate::compiling::driver::CompilationMode::Library,
             module_name: "B".to_string(),
@@ -6419,24 +6408,18 @@ func width<static N: Int>() -> Int { N }",
         use crate::compiling::module::{ModuleEnvironment, ModuleId};
         use std::rc::Rc;
 
-        let driver_a = Driver::new(
-            vec![Source::from(
-                "public struct Grid<static Rows: Int> {}\npublic func grow<static N: Int>(consume g: Grid<N>) -> Grid<N + 1> { Grid() }",
-            )],
-            DriverConfig::new("A"),
+        let id_a = ModuleId::External(0);
+        let module_a = super::tests::compile_library(
+            "A",
+            id_a,
+            "public struct Grid<static Rows: Int> {}\npublic func grow<static N: Int>(consume g: Grid<N>) -> Grid<N + 1> { Grid() }",
+            ModuleEnvironment::default(),
         );
-        let module_a = driver_a
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .type_check()
-            .module("A");
 
         let mut modules = ModuleEnvironment::default();
-        modules.import(module_a);
+        modules.import_compiled(module_a, id_a).unwrap();
         let config = crate::compiling::driver::DriverConfig {
-            module_id: ModuleId::Current,
+            module_id: ModuleId::Main,
             modules: Rc::new(modules),
             mode: crate::compiling::driver::CompilationMode::Library,
             module_name: "B".to_string(),

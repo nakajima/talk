@@ -73,13 +73,6 @@ macro_rules! impl_module_symbol_id {
                     local_id,
                 }
             }
-
-            pub fn import(self, module_id: ModuleId) -> Self {
-                Self {
-                    module_id,
-                    local_id: self.local_id,
-                }
-            }
         }
 
         // For tests and backwards compatibility
@@ -225,6 +218,58 @@ impl std::fmt::Debug for Symbol {
             Symbol::AssociatedType(id) => write!(f, "@AssociatedType({id}{name})"),
             Symbol::MethodRequirement(id) => write!(f, "@MethodRequirement({id}{name})"),
         }
+    }
+}
+
+/// The kind of symbol to mint — a proper discriminator for
+/// `declare`/`mint` instead of dummy `Symbol` values (ADR 0038 residue
+/// cleanup; real ids only ever come from the minting counters).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SymbolKind {
+    Effect,
+    Struct,
+    Enum,
+    TypeAlias,
+    TypeParameter,
+    Global,
+    DeclaredLocal,
+    PatternBindLocal,
+    ParamLocal,
+    Property,
+    Synthesized,
+    InstanceMethod,
+    Initializer,
+    StaticMethod,
+    Variant,
+    Protocol,
+    AssociatedType,
+    MethodRequirement,
+}
+
+impl SymbolKind {
+    /// The mint kind of an existing symbol, for kind-vs-symbol checks.
+    pub fn of(symbol: &Symbol) -> Option<SymbolKind> {
+        Some(match symbol {
+            Symbol::Effect(_) => SymbolKind::Effect,
+            Symbol::Struct(_) => SymbolKind::Struct,
+            Symbol::Enum(_) => SymbolKind::Enum,
+            Symbol::TypeAlias(_) => SymbolKind::TypeAlias,
+            Symbol::TypeParameter(_) => SymbolKind::TypeParameter,
+            Symbol::Global(_) => SymbolKind::Global,
+            Symbol::DeclaredLocal(_) => SymbolKind::DeclaredLocal,
+            Symbol::PatternBindLocal(_) => SymbolKind::PatternBindLocal,
+            Symbol::ParamLocal(_) => SymbolKind::ParamLocal,
+            Symbol::Property(_) => SymbolKind::Property,
+            Symbol::Synthesized(_) => SymbolKind::Synthesized,
+            Symbol::InstanceMethod(_) => SymbolKind::InstanceMethod,
+            Symbol::Initializer(_) => SymbolKind::Initializer,
+            Symbol::StaticMethod(_) => SymbolKind::StaticMethod,
+            Symbol::Variant(_) => SymbolKind::Variant,
+            Symbol::Protocol(_) => SymbolKind::Protocol,
+            Symbol::AssociatedType(_) => SymbolKind::AssociatedType,
+            Symbol::MethodRequirement(_) => SymbolKind::MethodRequirement,
+            Symbol::Builtin(_) | Symbol::Main | Symbol::Library => return None,
+        })
     }
 }
 
@@ -554,107 +599,6 @@ impl Symbol {
         Some(*module_id)
     }
 
-    pub fn external_module_id(&self) -> Option<ModuleId> {
-        let module_id = match self {
-            Symbol::Struct(StructId { module_id, .. })
-            | Symbol::Global(GlobalId { module_id, .. })
-            | Symbol::Builtin(BuiltinId { module_id, .. })
-            | Symbol::Property(PropertyId { module_id, .. })
-            | Symbol::Synthesized(SynthesizedId { module_id, .. })
-            | Symbol::InstanceMethod(InstanceMethodId { module_id, .. })
-            | Symbol::MethodRequirement(MethodRequirementId { module_id, .. })
-            | Symbol::Initializer(InitializerId { module_id, .. })
-            | Symbol::StaticMethod(StaticMethodId { module_id, .. })
-            | Symbol::Variant(VariantId { module_id, .. })
-            | Symbol::Protocol(ProtocolId { module_id, .. })
-            | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
-            | Symbol::Enum(EnumId { module_id, .. })
-            | Symbol::TypeAlias(TypeAliasId { module_id, .. })
-            | Symbol::TypeParameter(TypeParameterId { module_id, .. })
-            | Symbol::Effect(EffectId { module_id, .. }) => module_id,
-            _ => {
-                tracing::warn!("looking up module id for non-module symbol: {self:?}");
-                return None;
-            }
-        };
-
-        match *module_id {
-            ModuleId::Current => None,
-            _ => Some(*module_id),
-        }
-    }
-
-    pub fn import(self, module_id: ModuleId) -> Symbol {
-        match self {
-            Symbol::Struct(type_id) => Symbol::Struct(type_id.import(module_id)),
-            Symbol::Enum(type_id) => Symbol::Enum(type_id.import(module_id)),
-            Symbol::TypeAlias(type_id) => Symbol::TypeAlias(type_id.import(module_id)),
-            Symbol::TypeParameter(type_param_id) => {
-                Symbol::TypeParameter(type_param_id.import(module_id))
-            }
-            Symbol::Global(global_id) => Symbol::Global(global_id.import(module_id)),
-            Symbol::Builtin(builtin_id) => Symbol::Builtin(builtin_id.import(module_id)),
-            Symbol::Property(property_id) => Symbol::Property(property_id.import(module_id)),
-            Symbol::Synthesized(synthesized_id) => {
-                Symbol::Synthesized(synthesized_id.import(module_id))
-            }
-            Symbol::InstanceMethod(instance_method_id) => {
-                Symbol::InstanceMethod(instance_method_id.import(module_id))
-            }
-            Symbol::Initializer(instance_method_id) => {
-                Symbol::Initializer(instance_method_id.import(module_id))
-            }
-            Symbol::StaticMethod(static_method_id) => {
-                Symbol::StaticMethod(static_method_id.import(module_id))
-            }
-            Symbol::Variant(variant_id) => Symbol::Variant(variant_id.import(module_id)),
-            Symbol::Protocol(protocol_id) => Symbol::Protocol(protocol_id.import(module_id)),
-            Symbol::AssociatedType(associated_type_id) => {
-                Symbol::AssociatedType(associated_type_id.import(module_id))
-            }
-            Symbol::MethodRequirement(method_requirement_id) => {
-                Symbol::MethodRequirement(method_requirement_id.import(module_id))
-            }
-            Symbol::Effect(effect_id) => Symbol::Effect(effect_id.import(module_id)),
-            _ => self,
-        }
-    }
-
-    pub fn current(self) -> Symbol {
-        match self {
-            Symbol::Struct(type_id) => Symbol::Struct(type_id.import(ModuleId::Current)),
-            Symbol::Enum(type_id) => Symbol::Enum(type_id.import(ModuleId::Current)),
-            Symbol::Global(global_id) => Symbol::Global(global_id.import(ModuleId::Current)),
-            Symbol::Builtin(builtin_id) => Symbol::Builtin(builtin_id.import(ModuleId::Current)),
-            Symbol::Property(property_id) => {
-                Symbol::Property(property_id.import(ModuleId::Current))
-            }
-            Symbol::Synthesized(synthesized_id) => {
-                Symbol::Synthesized(synthesized_id.import(ModuleId::Current))
-            }
-            Symbol::InstanceMethod(instance_method_id) => {
-                Symbol::InstanceMethod(instance_method_id.import(ModuleId::Current))
-            }
-            Symbol::Initializer(instance_method_id) => {
-                Symbol::Initializer(instance_method_id.import(ModuleId::Current))
-            }
-            Symbol::StaticMethod(static_method_id) => {
-                Symbol::StaticMethod(static_method_id.import(ModuleId::Current))
-            }
-            Symbol::Variant(variant_id) => Symbol::Variant(variant_id.import(ModuleId::Current)),
-            Symbol::Protocol(protocol_id) => {
-                Symbol::Protocol(protocol_id.import(ModuleId::Current))
-            }
-            Symbol::AssociatedType(associated_type_id) => {
-                Symbol::AssociatedType(associated_type_id.import(ModuleId::Current))
-            }
-            Symbol::MethodRequirement(method_requirement_id) => {
-                Symbol::MethodRequirement(method_requirement_id.import(ModuleId::Current))
-            }
-            Symbol::Effect(effect_id) => Symbol::Effect(effect_id.import(ModuleId::Current)),
-            _ => unreachable!("{self:?} not exportable"),
-        }
-    }
 }
 
 // Cross-module IDs (include ModuleId)
@@ -1045,10 +989,10 @@ mod tests {
     fn effect_external_module_id() {
         // Effects from external modules should return their module id
         let effect = Symbol::Effect(EffectId::new(ModuleId::Core, 42));
-        assert_eq!(effect.external_module_id(), Some(ModuleId::Core));
+        assert_eq!(effect.module_id(), Some(ModuleId::Core));
 
         // Effects from current module should return None
         let local_effect = Symbol::Effect(EffectId::new(ModuleId::Current, 42));
-        assert_eq!(local_effect.external_module_id(), None);
+        assert_eq!(local_effect.module_id(), Some(ModuleId::Current));
     }
 }

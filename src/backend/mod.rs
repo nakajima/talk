@@ -66,10 +66,8 @@ impl BackendError {
 /// user's program; the rest supply dependency bodies (core, stdlib).
 pub(crate) fn compile(
     programs: &[ProgramInput<'_>],
-    aliases: rustc_hash::FxHashMap<u16, u16>,
     entry: Entry,
 ) -> Result<Executable, BackendError> {
-    let _alias_scope = mir::module_alias_scope(aliases);
     let mut program = mir::build(programs, entry)?;
     inline::inline_small(&mut program);
     for function in &mut program.functions {
@@ -88,20 +86,16 @@ pub(crate) fn compile(
 /// exclusivity, the unsafe gate — reports here.
 pub(crate) fn check(
     programs: &[ProgramInput<'_>],
-    aliases: rustc_hash::FxHashMap<u16, u16>,
     entry: Entry,
 ) -> Result<(), BackendError> {
-    let _alias_scope = mir::module_alias_scope(aliases);
     mir::build(programs, entry).map(|_| ())
 }
 
 /// Render the middle representation for inspection (TOOL-10).
 pub(crate) fn render_mir(
     programs: &[ProgramInput<'_>],
-    aliases: rustc_hash::FxHashMap<u16, u16>,
     entry: Entry,
 ) -> Result<String, BackendError> {
-    let _alias_scope = mir::module_alias_scope(aliases);
     let program = mir::build(programs, entry)?;
     Ok(program.render())
 }
@@ -114,7 +108,7 @@ fn display_names(programs: &[ProgramInput<'_>]) -> ValueNames {
         let types = input.program.types();
         let resolved = input.program.resolved_names();
         for (symbol, def) in &types.catalog.enums {
-            let runtime = lower::runtime_symbol(mir::canonical(*symbol, input.module));
+            let runtime = lower::runtime_symbol(*symbol);
             if let Some(name) = resolved.symbol_names.get(symbol) {
                 names.types.insert(runtime, name.clone());
             }
@@ -123,7 +117,7 @@ fn display_names(programs: &[ProgramInput<'_>]) -> ValueNames {
                 .insert(runtime, def.variants.keys().cloned().collect());
         }
         for (symbol, def) in &types.catalog.structs {
-            let runtime = lower::runtime_symbol(mir::canonical(*symbol, input.module));
+            let runtime = lower::runtime_symbol(*symbol);
             if let Some(name) = resolved.symbol_names.get(symbol) {
                 names.types.insert(runtime, name.clone());
             }

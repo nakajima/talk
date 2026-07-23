@@ -128,7 +128,10 @@ impl std::fmt::Debug for DriverConfig {
 impl DriverConfig {
     pub fn new(module_name: impl Into<String>) -> Self {
         Self {
-            module_id: Default::default(),
+            // Absolute identity at mint (ADR 0038): the program under
+            // compilation stamps its symbols `Main` unless the config
+            // assigns a real module id (libraries, stdlib, core).
+            module_id: crate::compiling::module::ModuleId::Main,
             modules: Default::default(),
             mode: CompilationMode::default(),
             module_name: module_name.into(),
@@ -368,8 +371,10 @@ impl Driver {
             let modules = Rc::make_mut(&mut config.modules);
             modules.import_core(super::core::compile());
             if !compiling_stdlib_source {
-                for module in super::stdlib::modules() {
-                    modules.import((*module).clone());
+                for (id, module) in super::stdlib::modules_with_ids() {
+                    modules
+                        .import_compiled((*module).clone(), id)
+                        .expect("stdlib modules register once per session");
                 }
             }
         }
@@ -681,8 +686,8 @@ impl Driver<Typed> {
     /// script's top-level statements run and the final top-level expression
     /// is the program result.
     pub fn compile_executable(&self, entry: Option<&str>) -> Result<Executable, String> {
-        self.with_backend_inputs(entry, |programs, aliases, entry| {
-            crate::backend::compile(programs, aliases, entry)
+        self.with_backend_inputs(entry, |programs, entry| {
+            crate::backend::compile(programs, entry)
         })
         .map_err(|error| self.locate_backend_error(&error))
     }
@@ -691,8 +696,8 @@ impl Driver<Typed> {
     /// rejection comes back with its message and, when the span maps to
     /// a source document, that document's path and byte range.
     pub fn check_ownership(&self) -> Result<(), OwnershipRejection> {
-        self.with_backend_inputs(None, |programs, aliases, entry| {
-            crate::backend::check(programs, aliases, entry)
+        self.with_backend_inputs(None, |programs, entry| {
+            crate::backend::check(programs, entry)
         })
         .map_err(|error| {
             let span = error.span;
@@ -714,8 +719,8 @@ impl Driver<Typed> {
     /// Render the backend's middle representation for inspection
     /// (TOOL-10). Same inputs as `compile_executable`.
     pub fn render_mir(&self, entry: Option<&str>) -> Result<String, String> {
-        self.with_backend_inputs(entry, |programs, aliases, entry| {
-            crate::backend::render_mir(programs, aliases, entry)
+        self.with_backend_inputs(entry, |programs, entry| {
+            crate::backend::render_mir(programs, entry)
         })
         .map_err(|error| self.locate_backend_error(&error))
     }
@@ -726,11 +731,7 @@ impl Driver<Typed> {
     fn with_backend_inputs<R>(
         &self,
         entry: Option<&str>,
-        run: impl FnOnce(
-            &[crate::backend::ProgramInput<'_>],
-            rustc_hash::FxHashMap<u16, u16>,
-            crate::backend::Entry<'_>,
-        ) -> R,
+        run: impl FnOnce(&[crate::backend::ProgramInput<'_>], crate::backend::Entry<'_>) -> R,
     ) -> R {
         let core = crate::compiling::core::typed_program();
         let entry = match entry {
@@ -738,15 +739,9 @@ impl Driver<Typed> {
             None => crate::backend::Entry::Script,
         };
         let stdlib = crate::compiling::stdlib::typed_programs();
-        // The user program needs a real module stamp: `Current`-tagged
-        // symbols re-stamp under whichever program re-canonicalizes them
-        // (a core generic instance would file a user type into core's
-        // symbol space).
-        let user_module = if self.config.module_id == crate::compiling::module::ModuleId::Current {
-            crate::compiling::module::ModuleId::Main
-        } else {
-            self.config.module_id
-        };
+        // Absolute identity at mint (ADR 0038): every program's symbols
+        // already carry their real module stamp.
+        let user_module = self.config.module_id;
         let mut programs = vec![
             crate::backend::ProgramInput {
                 program: &self.phase.program,
@@ -768,21 +763,7 @@ impl Driver<Typed> {
                 module: *module,
             });
         }
-        // One module can carry several local ids in this environment (a
-        // direct import plus a re-export); unify them by stable identity.
-        let mut canonical_by_stable: rustc_hash::FxHashMap<StableModuleId, ModuleId> =
-            rustc_hash::FxHashMap::default();
-        let mut aliases: rustc_hash::FxHashMap<u16, u16> = rustc_hash::FxHashMap::default();
-        let mut locals: Vec<(ModuleId, StableModuleId)> =
-            self.config.modules.locals_with_stable_ids().collect();
-        locals.sort_unstable_by_key(|(local, _)| *local);
-        for (local, stable) in locals {
-            let unified = *canonical_by_stable.entry(stable).or_insert(local);
-            if unified != local {
-                aliases.insert(local.0, unified.0);
-            }
-        }
-        run(&programs, aliases, entry)
+        run(&programs, entry)
     }
 
     /// Render a backend rejection with its source location when the span
@@ -887,11 +868,15 @@ pub mod tests {
         .type_check();
         assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
         let module = typed.module("Tiny");
+        // Own symbols carry the compile's module stamp (Main here);
+        // anything else in the export is a foreign leak.
         let foreign: Vec<_> = module
             .types
             .schemes
             .keys()
-            .filter(|symbol| symbol.external_module_id().is_some())
+            .filter(|symbol| {
+                symbol.module_id() != Some(crate::compiling::module::ModuleId::Main)
+            })
             .collect();
         assert!(
             foreign.is_empty(),
@@ -990,18 +975,21 @@ pub mod tests {
     fn compiles_module() {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+        let id_a = ModuleId::External(0);
+        let mut config_a = DriverConfig::new("TestDriver");
+        config_a.module_id = id_a;
         let driver_a = Driver::new(
             vec![Source::from(current_dir.join("dev/fixtures/a.tlk"))],
-            DriverConfig::new("TestDriver"),
+            config_a,
         );
         let resolved_a = driver_a.parse().unwrap().resolve_names().unwrap();
         assert!(!resolved_a.has_errors());
 
         let module_a = resolved_a.module("A");
         let mut module_environment = ModuleEnvironment::default();
-        module_environment.import(module_a);
+        module_environment.import_compiled(module_a, id_a).unwrap();
         let config = DriverConfig {
-            module_id: ModuleId::Current,
+            module_id: ModuleId::Main,
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,
             module_name: "Test".to_string(),
@@ -1027,6 +1015,9 @@ pub mod tests {
 
     #[test]
     fn compiles_from_string() {
+        let id_a = ModuleId::External(0);
+        let mut config_a = DriverConfig::new("TestDriver");
+        config_a.module_id = id_a;
         let driver_a = Driver::new(
             vec![Source::from(
                 "
@@ -1035,7 +1026,7 @@ pub mod tests {
             }
             ",
             )],
-            DriverConfig::new("TestDriver"),
+            config_a,
         );
 
         let module_a = driver_a
@@ -1048,9 +1039,9 @@ pub mod tests {
         assert!(module_a.exports.contains_key("Hello"));
 
         let mut module_environment = ModuleEnvironment::default();
-        module_environment.import(module_a);
+        module_environment.import_compiled(module_a, id_a).unwrap();
         let config = DriverConfig {
-            module_id: ModuleId::Current,
+            module_id: ModuleId::Main,
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,
             module_name: "Test".to_string(),

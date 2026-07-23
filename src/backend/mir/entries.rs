@@ -50,7 +50,7 @@ impl<'a> ProgramBuilder<'a> {
                             func.body.span,
                         ));
                     }
-                    return Ok(canonical(*symbol, self.programs[0].module));
+                    return Ok(*symbol);
                 }
             }
         }
@@ -133,7 +133,7 @@ impl<'a> ProgramBuilder<'a> {
                 {
                     continue;
                 }
-                let ty = canonical_ty(&rhs.ty, self.programs[0].module);
+                let ty = rhs.ty.clone();
                 let slot = u32::try_from(self.global_slots.len()).unwrap_or_default();
                 self.global_slots.insert(*symbol, slot);
                 self.global_tys.insert(slot, ty);
@@ -326,7 +326,7 @@ impl<'a> ProgramBuilder<'a> {
                     let slot = u32::try_from(self.global_slots.len()).unwrap_or_default();
                     self.global_slots.insert(symbol, slot);
                     self.global_tys
-                        .insert(slot, canonical_ty(&ty, self.programs[0].module));
+                        .insert(slot, ty);
                 }
             }
         }

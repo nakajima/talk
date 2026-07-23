@@ -665,7 +665,7 @@ const OBJECT_WALK: ContainsWalk = ContainsWalk {
     leaf: |builder, symbol| {
         builder
             .struct_def(symbol)
-            .is_some_and(|(def, _)| def.heap)
+            .is_some_and(|def| def.heap)
             .then_some(true)
     },
     param_counts: false,
@@ -775,8 +775,8 @@ fn is_linear(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
         Ty::Nominal(symbol, _) => {
             builder
                 .struct_def(*symbol)
-                .is_some_and(|(def, _)| def.linear)
-                || builder.enum_def(*symbol).is_some_and(|(def, _)| def.linear)
+                .is_some_and(|def| def.linear)
+                || builder.enum_def(*symbol).is_some_and(|def| def.linear)
         }
         Ty::Tuple(items) => items.iter().any(|item| is_linear(builder, item)),
         Ty::Record(row) => row.fields.iter().any(|(_, item)| is_linear(builder, item)),
@@ -1203,37 +1203,16 @@ fn glue_witness_params(ty: &Ty) -> Vec<Symbol> {
     witness_params(std::slice::from_ref(&(Symbol::RawPtr, ty.clone())))
 }
 
-/// Solve one effect generic from a declared parameter shape matched
-/// against the perform's concrete argument type (first-order structural
-/// matching; the checker already proved the shapes agree).
-/// Whether a type contains a solver variable anywhere.
-fn ty_has_var(ty: &Ty) -> bool {
-    struct Search {
-        found: bool,
-    }
-    impl crate::types::ty::TyFold for Search {
-        fn fold_var(&mut self, var: crate::types::ty::TyVar) -> Ty {
-            self.found = true;
-            Ty::Var(var)
-        }
-    }
-    let mut search = Search { found: false };
-    crate::types::ty::TyFold::fold_ty(&mut search, ty);
-    search.found
-}
-
 /// Whether a type mentions a rigid parameter symbol (`Self` is
-/// `Ty::Param(protocol symbol)`), comparing canonically against the
-/// owning module.
-fn ty_mentions_param(ty: &Ty, symbol: Symbol, module: crate::compiling::module::ModuleId) -> bool {
+/// `Ty::Param(protocol symbol)`).
+fn ty_mentions_param(ty: &Ty, symbol: Symbol) -> bool {
     struct Search {
         symbol: Symbol,
-        module: crate::compiling::module::ModuleId,
         found: bool,
     }
     impl crate::types::ty::TyFold for Search {
         fn fold_param(&mut self, param: Symbol) -> Ty {
-            if param == self.symbol || canonical(param, self.module) == self.symbol {
+            if param == self.symbol {
                 self.found = true;
             }
             Ty::Param(param)
@@ -1241,99 +1220,12 @@ fn ty_mentions_param(ty: &Ty, symbol: Symbol, module: crate::compiling::module::
     }
     let mut search = Search {
         symbol,
-        module,
         found: false,
     };
     crate::types::ty::TyFold::fold_ty(&mut search, ty);
     search.found
 }
 
-/// Symbols are minted module-local (`Current`) and retagged on import.
-/// Canonicalizing against the owning program's module identity makes one
-/// symbol mean one callable across the whole graph.
-/// Canonicalize every symbol inside a type against its owning program's
-/// module identity (the type-level counterpart of [`canonical`]).
-fn canonical_ty(ty: &Ty, module: crate::compiling::module::ModuleId) -> Ty {
-    struct Retag {
-        module: crate::compiling::module::ModuleId,
-    }
-    impl crate::types::ty::TyFold for Retag {
-        fn fold_symbol(&mut self, symbol: Symbol) -> Symbol {
-            canonical(symbol, self.module)
-        }
-        fn fold_param(&mut self, param: Symbol) -> Ty {
-            // Scheme type parameters keep their identity across the
-            // import seam (instantiation maps address them directly);
-            // protocol `Self` params are module symbols and retag.
-            if matches!(param, Symbol::TypeParameter(_)) {
-                Ty::Param(param)
-            } else {
-                Ty::Param(canonical(param, self.module))
-            }
-        }
-    }
-    if module == crate::compiling::module::ModuleId::Current {
-        return ty.clone();
-    }
-    crate::types::ty::TyFold::fold_ty(&mut Retag { module }, ty)
-}
-
-thread_local! {
-    /// Local-module-id aliases for the compile in progress: one module can
-    /// carry several local ids in an environment (a direct import and a
-    /// re-export); the frontend unifies them by stable id, and this table
-    /// collapses every alias onto one canonical local id for the backend.
-    /// A flat table indexed by module id — `canonical` runs on every
-    /// tagged symbol the backend touches, and hashing here was measurable
-    /// against the whole compile.
-    static MODULE_ALIASES: std::cell::RefCell<Vec<u16>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// Install the alias map for the duration of a compile (the returned guard
-/// clears it).
-pub(crate) fn module_alias_scope(aliases: FxHashMap<u16, u16>) -> ModuleAliasGuard {
-    let size = aliases
-        .keys()
-        .copied()
-        .max()
-        .map(|module| usize::from(module) + 1)
-        .unwrap_or(0);
-    let mut table: Vec<u16> = (0..u16::try_from(size).unwrap_or(u16::MAX)).collect();
-    for (from, to) in aliases {
-        table[usize::from(from)] = to;
-    }
-    MODULE_ALIASES.with(|slot| *slot.borrow_mut() = table);
-    ModuleAliasGuard
-}
-
-pub(crate) struct ModuleAliasGuard;
-
-impl Drop for ModuleAliasGuard {
-    fn drop(&mut self) {
-        MODULE_ALIASES.with(|slot| slot.borrow_mut().clear());
-    }
-}
-
-pub(crate) fn canonical(symbol: Symbol, module: crate::compiling::module::ModuleId) -> Symbol {
-    use crate::compiling::module::ModuleId;
-    let symbol = if module != ModuleId::Current && symbol.module_id() == Some(ModuleId::Current) {
-        symbol.import(module)
-    } else {
-        symbol
-    };
-    match symbol.module_id() {
-        Some(tagged) if tagged != ModuleId::Current => {
-            MODULE_ALIASES.with(|slot| match slot.borrow().get(usize::from(tagged.0)) {
-                Some(&unified) if unified != tagged.0 => {
-                    symbol.import(crate::compiling::module::ModuleId(unified))
-                }
-                _ => symbol,
-            })
-        }
-        _ => symbol,
-    }
-}
 
 pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Program, BackendError> {
     let mut builder = ProgramBuilder::new(programs);
@@ -1345,7 +1237,7 @@ pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Progr
     // view IS the loan.
     let user = &programs[0];
     for (declared, def) in &user.program.types().catalog.structs {
-        let symbol = canonical(*declared, user.module);
+        let symbol = *declared;
         if builder
             .catalog
             .family_unconditionally_conforms(symbol, Symbol::Borrowed)
@@ -1362,7 +1254,7 @@ pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Progr
         }
     }
     for (declared, def) in &user.program.types().catalog.enums {
-        let symbol = canonical(*declared, user.module);
+        let symbol = *declared;
         if builder
             .catalog
             .family_unconditionally_conforms(symbol, Symbol::Borrowed)
@@ -1478,7 +1370,7 @@ enum Glue {
 
 struct ProgramBuilder<'a> {
     programs: &'a [ProgramInput<'a>],
-    /// Every program's catalog, canonicalized and merged: the one table
+    /// Every program's catalog merged: the one table
     /// associated-type projections normalize through.
     catalog: crate::types::catalog::TypeCatalog,
     callables: FxHashMap<Symbol, Callable<'a>>,
@@ -1513,25 +1405,13 @@ struct ProgramBuilder<'a> {
     /// conformances: enums render `Name.variant(payloads…)`, structs
     /// `Name(field: value…)` — the archived synthesis format.
     show_glue: FxHashMap<Ty, FuncId>,
-    /// Canonical-symbol indexes over every program's catalog, built once:
-    /// the per-query alternative (scan all programs, canonicalizing every
-    /// key) is quadratic in catalog size and dominated large compiles.
-    struct_index: FxHashMap<
-        Symbol,
-        (
-            &'a crate::types::catalog::StructInfo,
-            crate::compiling::module::ModuleId,
-        ),
-    >,
-    enum_index: FxHashMap<
-        Symbol,
-        (
-            &'a crate::types::catalog::Enum,
-            crate::compiling::module::ModuleId,
-        ),
-    >,
+    /// Symbol indexes over every program's catalog, built once: the
+    /// per-query alternative (scan all programs per lookup) is quadratic
+    /// in catalog size and dominated large compiles.
+    struct_index: FxHashMap<Symbol, &'a crate::types::catalog::StructInfo>,
+    enum_index: FxHashMap<Symbol, &'a crate::types::catalog::Enum>,
     variant_index: FxHashMap<Symbol, (Symbol, u16)>,
-    /// Every canonical `deinit` witness symbol (a hook's own `self`
+    /// Every `deinit` witness symbol (a hook's own `self`
     /// binding must not re-dispatch the hook on scope exit).
     deinit_witnesses: rustc_hash::FxHashSet<Symbol>,
     /// Memoized structural type queries: drop emission asks these per
@@ -1544,30 +1424,17 @@ struct ProgramBuilder<'a> {
 
 impl<'a> ProgramBuilder<'a> {
     fn new(programs: &'a [ProgramInput<'a>]) -> Self {
+        // Catalog symbols are absolute (ADR 0038): every program's
+        // artifacts already carry their real module stamps, so the
+        // merge is a plain union with value-dedup.
         let mut catalog = crate::types::catalog::TypeCatalog::default();
         for input in programs {
-            let canonicalized = input
-                .program
-                .types()
-                .catalog
-                .clone()
-                .import_as(input.module);
-            catalog.merge(canonicalized);
+            catalog.merge(input.program.types().catalog.clone());
         }
-        let mut struct_index: FxHashMap<
-            Symbol,
-            (
-                &'a crate::types::catalog::StructInfo,
-                crate::compiling::module::ModuleId,
-            ),
-        > = FxHashMap::default();
-        let mut enum_index: FxHashMap<
-            Symbol,
-            (
-                &'a crate::types::catalog::Enum,
-                crate::compiling::module::ModuleId,
-            ),
-        > = FxHashMap::default();
+        let mut struct_index: FxHashMap<Symbol, &'a crate::types::catalog::StructInfo> =
+            FxHashMap::default();
+        let mut enum_index: FxHashMap<Symbol, &'a crate::types::catalog::Enum> =
+            FxHashMap::default();
         let mut variant_index: FxHashMap<Symbol, (Symbol, u16)> = FxHashMap::default();
         // Derived from the committed Deinit index (ADR 0038): the hooks
         // whose own `self` must not re-dispatch teardown.
@@ -1582,15 +1449,15 @@ impl<'a> ProgramBuilder<'a> {
             let source = &input.program.types().catalog;
             for (declared, def) in &source.structs {
                 struct_index
-                    .entry(canonical(*declared, input.module))
-                    .or_insert((def, input.module));
+                    .entry(*declared)
+                    .or_insert(def);
             }
             for (declared, def) in &source.enums {
-                let enum_symbol = canonical(*declared, input.module);
-                enum_index.entry(enum_symbol).or_insert((def, input.module));
+                let enum_symbol = *declared;
+                enum_index.entry(enum_symbol).or_insert(def);
                 for (tag, (_, case)) in def.variants.iter().enumerate() {
                     variant_index
-                        .entry(canonical(case.symbol, input.module))
+                        .entry(case.symbol)
                         .or_insert((enum_symbol, u16::try_from(tag).unwrap_or_default()));
                 }
             }
@@ -1623,7 +1490,7 @@ impl<'a> ProgramBuilder<'a> {
     }
 
     /// Walk every program's typed roots and record each function or method
-    /// body by its canonical symbol. Named `func` declarations in a script
+    /// body by its symbol. Named `func` declarations in a script
     /// surface as expression nodes; they are declarations here too.
     fn index_callables(&mut self) {
         for (program_ix, input) in self.programs.iter().enumerate() {
@@ -1650,7 +1517,7 @@ impl<'a> ProgramBuilder<'a> {
                                     self.index_func(func, program_ix);
                                 } else {
                                     let symbol =
-                                        canonical(*symbol, self.programs[program_ix].module);
+                                        *symbol;
                                     self.globals.insert(symbol, (rhs, program_ix));
                                     self.index_decl(decl, program_ix);
                                 }
@@ -1688,7 +1555,7 @@ impl<'a> ProgramBuilder<'a> {
                 params,
                 body,
             } => {
-                let symbol = canonical(*symbol, self.programs[program_ix].module);
+                let symbol = *symbol;
                 self.callables.insert(
                     symbol,
                     Callable {
@@ -1715,17 +1582,16 @@ impl<'a> ProgramBuilder<'a> {
     /// top-level bound func. The contract facts (receiver mode, binding
     /// identity) come baked on the node (ADR 0038).
     fn index_func(&mut self, func: &'a Func, program: usize) {
-        let module = self.programs[program].module;
         let callable = Callable {
             body: CallableBody::Func(func),
             program,
             receiver: func.receiver,
         };
         if let Name::Resolved(symbol, _) = &func.name {
-            self.callables.insert(canonical(*symbol, module), callable);
+            self.callables.insert(*symbol, callable);
         }
         if let Some(bound) = func.bound_as {
-            self.callables.insert(canonical(bound, module), callable);
+            self.callables.insert(bound, callable);
         }
         self.index_nested_funcs(&func.body, program);
     }
@@ -1868,7 +1734,7 @@ impl<'a> ProgramBuilder<'a> {
                 .find_map(|input| {
                     input.program.resolved_names().symbol_names.iter().find_map(
                         |(candidate, name)| {
-                            (canonical(*candidate, input.module) == symbol).then(|| name.clone())
+                            (*candidate == symbol).then(|| name.clone())
                         },
                     )
                 })
@@ -1878,7 +1744,6 @@ impl<'a> ProgramBuilder<'a> {
                 span,
             ));
         };
-        let callee_module = self.programs[callable.program].module;
         // Protocol parameters are conformance evidence exactly like
         // associated types: a default body reads the owner's `static N`
         // as a value (ADR 0035 §6) though it never shows in the method's
@@ -1902,14 +1767,15 @@ impl<'a> ProgramBuilder<'a> {
                     // scheme, so pruning keeps them unconditionally.
                     matches!(param, Symbol::AssociatedType(_))
                         || evidence_params.contains(param)
-                        || callable.body.scheme_params().iter().any(|scheme_param| {
-                            canonical(scheme_param.symbol, callee_module) == *param
-                                || scheme_param.symbol == *param
-                        })
+                        || callable
+                            .body
+                            .scheme_params()
+                            .iter()
+                            .any(|scheme_param| scheme_param.symbol == *param)
                         || callable
                             .body
                             .scheme_ty()
-                            .is_some_and(|ty| ty_mentions_param(ty, *param, callee_module))
+                            .is_some_and(|ty| ty_mentions_param(ty, *param))
                 }
             })
             .collect();
@@ -2007,30 +1873,18 @@ impl<'a> ProgramBuilder<'a> {
         Some((entries.get(index)?.clone(), subst))
     }
 
-    /// The enum declaration behind a canonical symbol, from whichever
-    /// program's catalog declares it.
-    fn enum_def(
-        &self,
-        symbol: Symbol,
-    ) -> Option<(
-        &'a crate::types::catalog::Enum,
-        crate::compiling::module::ModuleId,
-    )> {
+    /// The enum declaration behind a symbol, from whichever program's
+    /// catalog declares it.
+    fn enum_def(&self, symbol: Symbol) -> Option<&'a crate::types::catalog::Enum> {
         self.enum_index.get(&symbol).copied()
     }
 
-    /// The struct declaration behind a canonical symbol.
-    fn struct_def(
-        &self,
-        symbol: Symbol,
-    ) -> Option<(
-        &'a crate::types::catalog::StructInfo,
-        crate::compiling::module::ModuleId,
-    )> {
+    /// The struct declaration behind a symbol.
+    fn struct_def(&self, symbol: Symbol) -> Option<&'a crate::types::catalog::StructInfo> {
         self.struct_index.get(&symbol).copied()
     }
 
-    /// A struct's stored field types, canonicalized and instantiated
+    /// A struct's stored field types, instantiated
     /// against the application's type arguments.
     fn field_types(&self, symbol: Symbol, args: &[Ty]) -> Option<Vec<Ty>> {
         if symbol == Symbol::InlineArray
@@ -2049,7 +1903,7 @@ impl<'a> ProgramBuilder<'a> {
             }?;
             return Some(vec![element.clone(); count]);
         }
-        let (def, module) = self.struct_def(symbol)?;
+        let def = self.struct_def(symbol)?;
         // Raw keys for the same reason as `variant_payloads`.
         let substitution: FxHashMap<Symbol, Ty> = def
             .params
@@ -2061,7 +1915,7 @@ impl<'a> ProgramBuilder<'a> {
             def.fields
                 .values()
                 .map(|(_, ty)| {
-                    canonical_ty(ty, module).substitute(
+                    ty.substitute(
                         &substitution,
                         &FxHashMap::default(),
                         &FxHashMap::default(),
@@ -2073,7 +1927,7 @@ impl<'a> ProgramBuilder<'a> {
 
     /// The declaration-order index of a stored field, by its source name.
     fn field_index_by_name(&self, struct_symbol: Symbol, name: &str) -> Option<u16> {
-        let (def, _) = self.struct_def(struct_symbol)?;
+        let def = self.struct_def(struct_symbol)?;
         def.fields
             .keys()
             .position(|field| field == name)
@@ -2083,10 +1937,10 @@ impl<'a> ProgramBuilder<'a> {
     /// The declaration-order index of a stored field, by its property
     /// symbol.
     fn field_index(&self, struct_symbol: Symbol, field: Symbol) -> Option<u16> {
-        let (def, module) = self.struct_def(struct_symbol)?;
+        let def = self.struct_def(struct_symbol)?;
         def.fields
             .values()
-            .position(|(property, _)| canonical(*property, module) == field)
+            .position(|(property, _)| *property == field)
             .and_then(|index| u16::try_from(index).ok())
     }
 
@@ -2098,8 +1952,8 @@ impl<'a> ProgramBuilder<'a> {
 
     /// Each variant's payload types for an enum application, in tag order.
     fn variant_payloads(&self, symbol: Symbol, args: &[Ty]) -> Option<Vec<Vec<Ty>>> {
-        let (def, module) = self.enum_def(symbol)?;
-        // Substitution keys stay raw: `canonical_ty` keeps `Ty::Param`
+        let def = self.enum_def(symbol)?;
+        // Substitution keys stay raw: scheme parameters keep `Ty::Param`
         // symbols as authored (core params are owner-stamped at creation),
         // so a re-stamped key would never match its occurrences.
         let substitution: FxHashMap<Symbol, Ty> = def
@@ -2115,7 +1969,7 @@ impl<'a> ProgramBuilder<'a> {
                     Ty::Func(params, _, _) => params
                         .iter()
                         .map(|param| {
-                            canonical_ty(param, module).substitute(
+                            param.substitute(
                                 &substitution,
                                 &FxHashMap::default(),
                                 &FxHashMap::default(),
@@ -2175,7 +2029,7 @@ impl<'a> ProgramBuilder<'a> {
                 if self.enum_index.contains_key(symbol) {
                     return true;
                 }
-                let Some((def, _)) = self.struct_def(*symbol) else {
+                let Some(def) = self.struct_def(*symbol) else {
                     return false;
                 };
                 if def.heap {
@@ -2193,12 +2047,7 @@ impl<'a> ProgramBuilder<'a> {
         }
     }
 
-    /// An effect's signature from the input catalogs, with the owning
-    /// module. Signatures here keep their authored symbols: rigid params
-    /// stay raw (matching `Ty::Param` occurrences in resolved types, which
-    /// never re-stamp), while nominal types canonicalize against the
-    /// returned module at use sites.
-    /// Conformance constraints on one rigid generic (raw symbol, as it
+    /// Conformance constraints on one rigid generic (the symbol as it
     /// appears in `Ty::Param` occurrences): the frontend-published
     /// declared bounds (`TypeCatalog::param_bounds` — typing publishes,
     /// lowering reads), expanded through transitive protocol supers.
@@ -2206,16 +2055,7 @@ impl<'a> ProgramBuilder<'a> {
     /// witness block, so every bind/forward/inherit site derives from
     /// this one answer (Wadler & Blott, POPL 1989).
     fn rigid_constraints(&self, param: Symbol) -> Vec<crate::types::ty::ProtocolRef> {
-        // The merged catalog keys by imported symbol; a raw module-local
-        // param resolves through its program's canonical form (the same
-        // two spellings `demand`'s subst filter accepts).
-        let bounds = self.catalog.param_bounds.get(&param).or_else(|| {
-            self.programs.iter().find_map(|input| {
-                self.catalog
-                    .param_bounds
-                    .get(&canonical(param, input.module))
-            })
-        });
+        let bounds = self.catalog.param_bounds.get(&param);
         let mut expanded: Vec<crate::types::ty::ProtocolRef> = Vec::new();
         for bound in bounds.into_iter().flatten() {
             for protocol in self.catalog.protocol_and_supers(bound) {
@@ -2238,7 +2078,7 @@ impl<'a> ProgramBuilder<'a> {
                     .symbol_names
                     .iter()
                     .find_map(|(candidate, name)| {
-                        (canonical(*candidate, input.module) == symbol).then(|| name.clone())
+                        (*candidate == symbol).then(|| name.clone())
                     })
             })
             .unwrap_or_else(|| format!("{symbol:?}"))
@@ -2249,7 +2089,7 @@ impl<'a> ProgramBuilder<'a> {
         for input in self.programs {
             let catalog = &input.program.types().catalog;
             for (declared, info) in &catalog.enums {
-                if canonical(*declared, input.module) == symbol {
+                if *declared == symbol {
                     return Some(info.variants.keys().cloned().collect());
                 }
             }
@@ -2262,7 +2102,7 @@ impl<'a> ProgramBuilder<'a> {
         for input in self.programs {
             let catalog = &input.program.types().catalog;
             for (declared, info) in &catalog.structs {
-                if canonical(*declared, input.module) == symbol {
+                if *declared == symbol {
                     return Some(info.fields.keys().cloned().collect());
                 }
             }
@@ -2329,38 +2169,17 @@ impl<'a> ProgramBuilder<'a> {
             .map(|info| info.requirements.keys().cloned().collect())
     }
 
-    /// The protocol's input parameter symbols, from whichever program's
-    /// catalog declares it.
-    /// The declared value type of a static parameter (ADR 0035), from
-    /// whichever program's catalog registered it. `param` may be raw or
-    /// canonical.
+    /// The declared value type of a static parameter (ADR 0035).
     fn static_param_domain(&self, param: Symbol) -> Option<Ty> {
-        for input in self.programs {
-            let catalog = &input.program.types().catalog;
-            for (declared, ty) in &catalog.static_params {
-                if *declared == param || canonical(*declared, input.module) == param {
-                    return Some(canonical_ty(ty, input.module));
-                }
-            }
-        }
-        None
+        self.catalog.static_params.get(&param).cloned()
     }
 
+    /// The protocol's input parameter symbols.
     fn protocol_params(&self, protocol: Symbol) -> Option<Vec<Symbol>> {
-        for input in self.programs {
-            let catalog = &input.program.types().catalog;
-            for (declared, info) in &catalog.protocols {
-                if canonical(*declared, input.module) == protocol {
-                    return Some(
-                        info.params
-                            .iter()
-                            .map(|param| canonical(param.symbol, input.module))
-                            .collect(),
-                    );
-                }
-            }
-        }
-        None
+        self.catalog
+            .protocols
+            .get(&protocol)
+            .map(|info| info.params.iter().map(|param| param.symbol).collect())
     }
 
     fn drain_worklist(&mut self) -> Result<(), BackendError> {
@@ -3111,7 +2930,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 && self
                     .program_builder
                     .struct_def(*symbol)
-                    .is_some_and(|(def, _)| def.heap)
+                    .is_some_and(|def| def.heap)
             {
                 return;
             }
@@ -3151,7 +2970,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // teardown dispatches through the frame's drop witness
                 // (value-witness-table passing).
                 if let Some((drop_witness, _)) =
-                    self.param_witnesses.get(&self.canon_rigid(*symbol)).copied()
+                    self.param_witnesses.get(&*symbol).copied()
                 {
                     let dest = self.fresh_local();
                     self.push(Inst::CallIndirect {
@@ -3630,7 +3449,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn can_release(&self, ty: &Ty) -> bool {
         witness_params(std::slice::from_ref(&(Symbol::RawPtr, ty.clone())))
             .iter()
-            .all(|symbol| self.param_witnesses.contains_key(&self.canon_rigid(*symbol)))
+            .all(|symbol| self.param_witnesses.contains_key(&*symbol))
     }
 
     /// Owned parts to drop OR region claims to release OR linear values to
@@ -3864,7 +3683,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let Some(mut chain) = self.resolve_place(base)? else {
                     return Ok(None);
                 };
-                let module = self.program_builder.programs[self.program].module;
                 let base_ty = self.resolved(&base.ty);
                 let mut head = &base_ty;
                 while let Ty::Borrow(_, inner) = head {
@@ -3873,15 +3691,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let Ty::Nominal(struct_symbol, _) = head else {
                     return Ok(None);
                 };
-                let struct_symbol = canonical(*struct_symbol, module);
-                let field = canonical(*field, module);
+                let struct_symbol = *struct_symbol;
+                let field = *field;
                 let Some(index) = self.program_builder.field_index(struct_symbol, field) else {
                     return Ok(None);
                 };
                 let heap = self
                     .program_builder
                     .struct_def(struct_symbol)
-                    .is_some_and(|(def, _)| def.heap);
+                    .is_some_and(|def| def.heap);
                 let field_ty = self
                     .program_builder
                     .field_types(struct_symbol, head_args(head))
@@ -4515,13 +4333,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// module-local symbol and a substitution's imported one — so every
     /// insert and lookup normalizes through here (the map-key analog of
     /// `demand`'s dual-spelling subst filter).
-    fn canon_rigid(&self, symbol: Symbol) -> Symbol {
-        canonical(
-            symbol,
-            self.program_builder.programs[self.program].module,
-        )
-    }
-
     /// Bind the hidden argument block for each rigid generic at
     /// consecutive locals starting at `base`: `[drop, retain]`, then each
     /// constraint protocol's requirement closures in declaration order.
@@ -4529,7 +4340,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// exactly this layout.
     fn bind_witness_params(&mut self, params: &[Symbol], mut base: LocalId) -> LocalId {
         for param in params {
-            let param = self.canon_rigid(*param);
+            let param = *param;
             self.param_witnesses.insert(param, (base, base + 1));
             base += 2;
             for protocol in self.program_builder.rigid_constraints(param) {
@@ -4558,7 +4369,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         operands: &mut Vec<Operand>,
         span: Span,
     ) -> Result<(), BackendError> {
-        let param = self.canon_rigid(param);
         let Some((drop_witness, retain_witness)) = self.param_witnesses.get(&param).copied() else {
             return Err(BackendError::unsupported(
                 "a generic value cannot cross this boundary without its ownership witnesses (not supported yet)"
@@ -4656,7 +4466,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 if scalar_ty(ty, span).is_ok() {
                     return Ok(());
                 }
-                if let Some((def, _)) = self.program_builder.enum_def(*symbol) {
+                if let Some(def) = self.program_builder.enum_def(*symbol) {
                     let _ = def;
                     for arg in args {
                         if !matches!(arg, Ty::Eff(_) | Ty::Static(_)) {
@@ -4665,7 +4475,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     }
                     return Ok(());
                 }
-                if let Some((def, _)) = self.program_builder.struct_def(*symbol) {
+                if let Some(def) = self.program_builder.struct_def(*symbol) {
                     let _ = def;
                     for arg in args {
                         if !matches!(arg, Ty::Eff(_) | Ty::Static(_)) {
@@ -4686,12 +4496,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
     }
 
-    /// A body node's baked type: canonicalized against the body's module,
-    /// instantiated through this instance's substitution, and with
-    /// associated-type projections reduced through the merged conformance
-    /// table.
+    /// A body node's baked type: instantiated through this instance's
+    /// substitution, with associated-type projections reduced through
+    /// the merged conformance table.
     fn resolved(&self, ty: &Ty) -> Ty {
-        let module = self.program_builder.programs[self.program].module;
         // Uniqueness (`*T`) is a checking-time qualifier: the checker
         // enforced sole ownership; the representation is the inner type.
         struct StripUnique;
@@ -4704,16 +4512,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
         }
         let ty = crate::types::ty::TyFold::fold_ty(&mut StripUnique, ty);
-        let ty = canonical_ty(&ty, module);
         let ty = if self.subst.is_empty() {
             ty
         } else {
             ty.substitute(&self.subst, &FxHashMap::default(), &FxHashMap::default())
         };
-        // Projections reduce only over var-free types: a foreign solver
-        // variable has no slot in a scratch store. `normalize_ty` reduces
-        // heads; the fold applies it at every depth.
-        if ty_has_projection(&ty) && !ty_has_var(&ty) {
+        // Finalized baked types are var-free by construction (the
+        // exported-scheme leak walk pins it), so projections always
+        // reduce here. `normalize_ty` reduces heads; the fold applies
+        // it at every depth.
+        if ty_has_projection(&ty) {
             struct DeepNormalize<'c> {
                 catalog: &'c crate::types::catalog::TypeCatalog,
             }
@@ -4773,7 +4581,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // Native value; duplicate through the frame's retain
                 // witness (value-witness-table passing).
                 let Some((_, retain_witness)) =
-                    self.param_witnesses.get(&self.canon_rigid(*symbol)).copied()
+                    self.param_witnesses.get(&*symbol).copied()
                 else {
                     return Err(BackendError::unsupported(
                         "a generic value cannot be retained here without its ownership witnesses (not supported yet)"
@@ -4801,7 +4609,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 if self
                     .program_builder
                     .struct_def(*symbol)
-                    .is_some_and(|(def, _)| def.heap)
+                    .is_some_and(|def| def.heap)
                 {
                     self.push(Inst::RegionAcquire { src: value });
                     return Ok(());
@@ -5699,7 +5507,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         stmt.span,
                     ));
                 };
-                let effect = canonical(*effect, self.program_builder.programs[self.program].module);
+                let effect = *effect;
                 self.install_handler(effect, body, contract)?;
                 Ok(Operand::Const(Constant::Unit))
             }
@@ -5778,10 +5586,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 args,
                 ..
             } => {
-                let enum_symbol = canonical(
-                    *enum_symbol,
-                    self.program_builder.programs[self.program].module,
-                );
+                let enum_symbol = *enum_symbol;
                 let compiled = args
                     .iter()
                     .map(|arg| self.compile_expr(arg))
@@ -5827,11 +5632,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         expr.span,
                     ));
                 };
-                let struct_symbol = canonical(
-                    *struct_symbol,
-                    self.program_builder.programs[self.program].module,
-                );
-                let field = canonical(*field, self.program_builder.programs[self.program].module);
+                let struct_symbol = *struct_symbol;
+                let field = *field;
                 let Some(index) = self.program_builder.field_index(struct_symbol, field) else {
                     return Err(BackendError::new(
                         "stored field without a declaration index".into(),
@@ -5841,7 +5643,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let heap = self
                     .program_builder
                     .struct_def(struct_symbol)
-                    .is_some_and(|(def, _)| def.heap);
+                    .is_some_and(|def| def.heap);
                 let src = self.compile_expr(base)?;
                 let dest = self.fresh_local();
                 if heap {
@@ -5944,10 +5746,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     self.global_loads.insert(dest, slot);
                     Ok(Operand::Local(dest))
                 } else if let Some(value) = self.subst.get(symbol).or_else(|| {
-                    self.subst.get(&canonical(
-                        *symbol,
-                        self.program_builder.programs[self.program].module,
-                    ))
+                    self.subst.get(&*symbol)
                 }) {
                     // ADR 0035 §6: a static parameter used as an ordinary
                     // value; this instance's substitution carries the
@@ -5967,10 +5766,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             Ok(Operand::Const(Constant::Bool(*value)))
                         }
                         Ty::Static(StaticValue::Case(_, variant)) => {
-                            let module = self.program_builder.programs[self.program].module;
                             let Some((enum_symbol, tag)) = self
                                 .program_builder
-                                .variant_tag(canonical(*variant, module))
+                                .variant_tag(*variant)
                             else {
                                 return Err(BackendError::new(
                                     format!(
@@ -6027,16 +5825,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             expr.span,
                         )),
                     }
-                } else if self.program_builder.callables.contains_key(&canonical(
-                    *symbol,
-                    self.program_builder.programs[self.program].module,
-                )) {
+                } else if self.program_builder.callables.contains_key(&*symbol) {
                     // A named function used as a value: a captureless
                     // function value, specialized against the use site's
                     // recorded instantiation (the value's type pinned any
                     // generic and static arguments the frontend solved).
                     let target =
-                        canonical(*symbol, self.program_builder.programs[self.program].module);
+                        *symbol;
                     let mut subst: Vec<(Symbol, Ty)> = Vec::new();
                     if let Some(instantiation) = &expr.instantiation {
                         for (param, ty) in instantiation {
@@ -6076,20 +5871,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 } else if let Some((initializer, _)) = self
                     .program_builder
                     .globals
-                    .get(&canonical(
-                        *symbol,
-                        self.program_builder.programs[self.program].module,
-                    ))
+                    .get(&*symbol)
                     .copied()
                 {
                     // Only literal global initializers inline; anything
                     // needing real once-only storage stays rejected.
                     match &initializer.kind {
                         ExprKind::Lit(Literal::Int(_) | Literal::Float(_) | Literal::Bool(_)) => {
-                            let owner = self.program_builder.globals[&canonical(
-                                *symbol,
-                                self.program_builder.programs[self.program].module,
-                            )]
+                            let owner = self.program_builder.globals[&*symbol]
                                 .1;
                             let previous = self.program;
                             self.program = owner;
@@ -6195,10 +5984,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         expr.span,
                     ));
                 }
-                let array_symbol = canonical(
-                    *array_symbol,
-                    self.program_builder.programs[self.program].module,
-                );
+                let array_symbol = *array_symbol;
                 let element_ty = type_args.first().cloned().unwrap_or(Ty::Error);
                 let element = mem_ty_of(&element_ty);
                 let count = i64::try_from(items.len()).unwrap_or_default();
@@ -6283,7 +6069,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         expr.span,
                     ));
                 };
-                let effect = canonical(*effect, self.program_builder.programs[self.program].module);
+                let effect = *effect;
                 // The runtime is the implicit handler for the core `'io`
                 // effect: a perform dispatches on the request's tag
                 // straight to the host operation (IO-02). User handlers
@@ -6371,7 +6157,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         // target generic's constraints are a subset of the
                         // rigid one's (typing proved the perform), so its
                         // dictionaries forward from the same frame.
-                        let rigid = self.canon_rigid(*rigid);
+                        let rigid = *rigid;
                         let Some((drop_witness, retain_witness)) =
                             self.param_witnesses.get(&rigid).copied()
                         else {
@@ -6908,7 +6694,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
     /// One cell per stored field of the struct, in declaration order —
     /// the struct analog of `record_cells`. Fields the pattern leaves to
-    /// `..` become wildcards. Returns the (canonical symbol, heap flag)
+    /// `..` become wildcards. Returns the (symbol, heap flag)
     /// alongside the cells; heap structs project fields as views of the
     /// object rather than owned slots.
     fn struct_cells(
@@ -6928,11 +6714,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 pattern.span,
             ));
         };
-        let symbol = canonical(symbol, self.program_builder.programs[self.program].module);
         let heap = self
             .program_builder
             .struct_def(symbol)
-            .is_some_and(|(def, _)| def.heap);
+            .is_some_and(|def| def.heap);
         let cells = slots
             .iter()
             .map(|(field_ty, sub)| RecordCell {
@@ -7017,19 +6802,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         scrutinee_ty: &Ty,
         fields: &[Pattern],
     ) -> Option<(Symbol, u16, Vec<Ty>)> {
-        let module = self.program_builder.programs[self.program].module;
         let head_from_ty = match strip_borrows(self.resolved(scrutinee_ty)) {
-            Ty::Nominal(head, _) => Some(canonical(head, module)),
+            Ty::Nominal(head, _) => Some(head),
             _ => None,
         };
         let resolved = match variant {
             Some(variant) => self
                 .program_builder
-                .variant_tag(canonical(variant, module)),
+                .variant_tag(variant),
             None => head_from_ty.and_then(|head| {
                 self.program_builder
                     .enum_def(head)
-                    .and_then(|(def, _)| def.variants.get_index_of(variant_name))
+                    .and_then(|def| def.variants.get_index_of(variant_name))
                     .and_then(|tag| u16::try_from(tag).ok())
                     .map(|tag| (head, tag))
             }),
@@ -7270,7 +7054,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 span,
             ));
         };
-        let head = canonical(*head, self.program_builder.programs[self.program].module);
+        let head = *head;
         let count_index = self
             .program_builder
             .field_index_by_name(head, "byte_count")
@@ -7573,10 +7357,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 return self.compile_indirect_call(callee_value, expr, callee, args);
             }
             ExprKind::Variable(Name::Resolved(symbol, _))
-                if !self.program_builder.callables.contains_key(&canonical(
-                    *symbol,
-                    self.program_builder.programs[self.program].module,
-                )) && self.program_builder.global_slots.contains_key(symbol) =>
+                if !self.program_builder.callables.contains_key(&*symbol) && self.program_builder.global_slots.contains_key(symbol) =>
             {
                 // A function value in a global slot: load and call
                 // indirectly.
@@ -7614,8 +7395,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         ..
                     } = &receiver_ty
                     {
-                        let module = self.program_builder.programs[self.program].module;
-                        let protocol = canonical(any_protocol.protocol, module);
+                        let protocol = any_protocol.protocol;
                         let crate::label::Label::Named(name) = label else {
                             return Err(BackendError::unsupported(
                                 "positional members on existentials are not supported yet".into(),
@@ -7762,13 +7542,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         // view; canonicalize (and make the application's
                         // arguments concrete under this instance) before
                         // matching rows.
-                        let module = self.program_builder.programs[self.program].module;
                         let protocol = crate::types::ty::ProtocolRef {
-                            protocol: canonical(protocol.protocol, module),
+                            protocol: protocol.protocol,
                             args: protocol
                                 .args
                                 .iter()
-                                .map(|arg| self.resolved(&canonical_ty(arg, module)))
+                                .map(|arg| self.resolved(arg))
                                 .collect(),
                         };
                         let protocol = &protocol;
@@ -7776,7 +7555,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         // conformance dictionary, like `any P` dispatches
                         // through its witness table.
                         if let Ty::Param(rigid) = &self_ty {
-                            let rigid = &self.canon_rigid(*rigid);
+                            let rigid = &*rigid;
                             let crate::label::Label::Named(name) = label else {
                                 return Err(BackendError::unsupported(
                                     "positional members on generic values are not supported yet"
@@ -7880,11 +7659,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             // substitution makes it concrete here.
                             subst.extend(evidence_substitution.iter().map(|(symbol, ty)| {
                                 (
-                                    canonical(*symbol, module),
-                                    self.resolved(&canonical_ty(ty, module)),
+                                    *symbol,
+                                    self.resolved(ty),
                                 )
                             }));
-                            canonical(*witness, module)
+                            *witness
                         } else {
                             // Deferred selection (ADR 0036): the receiver
                             // was rigid at typing, so no per-node commitment
@@ -7967,7 +7746,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let mut mut_arg_places: Vec<(usize, PlaceChain)> = Vec::new();
         self.compile_call_args(args, &mut operands, &mut mut_arg_places)?;
 
-        let target = canonical(target, self.program_builder.programs[self.program].module);
         // Non-borrow parameters take ownership: the callee drops them.
         // Typing selected the modes; the callee's function type records
         // them (borrow-by-default, ADR 0018). A member callee's type may
@@ -8121,13 +7899,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 expr.span,
             ));
         };
-        let module = self.program_builder.programs[self.program].module;
         let protocol = crate::types::ty::ProtocolRef {
-            protocol: canonical(protocol.protocol, module),
+            protocol: protocol.protocol,
             args: protocol
                 .args
                 .iter()
-                .map(|arg| canonical_ty(arg, module))
+                .map(|arg| arg.clone())
                 .collect(),
         };
 
@@ -8143,7 +7920,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // `[drop, retain]` pair plus the constraint protocol's requirement
         // closures, already selected at the perform site.
         if let Ty::Param(rigid) = &payload_ty {
-            let rigid = self.canon_rigid(*rigid);
+            let rigid = *rigid;
             let Some((drop_witness, retain_witness)) = self.param_witnesses.get(&rigid).copied()
             else {
                 return Err(BackendError::unsupported(
@@ -8495,13 +8272,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// at creation. Ambient core effects dispatch to the host and carry
     /// no capability.
     fn closure_effects(&mut self, ty: &Ty) -> Vec<Symbol> {
-        let module = self.program_builder.programs[self.program].module;
         let Ty::Func(_, _, row) = self.resolved(ty) else {
             return Vec::new();
         };
         row.effects
             .iter()
-            .map(|entry| canonical(entry.effect, module))
+            .map(|entry| entry.effect)
             // The runtime implicitly handles ALL of core's ambient effects
             // ('io, 'alloc, 'async), and `install_handler` rejects user
             // handlers over them — so a closure never carries capabilities
@@ -8665,7 +8441,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         args: &[crate::typed_ast::CallArg],
         subst: Vec<(Symbol, Ty)>,
     ) -> Result<Operand, BackendError> {
-        let module = self.program_builder.programs[self.program].module;
         // Under an existential coercion the node's type is the coercion
         // target; the construction builds the concrete payload.
         let ty = match &expr.existential_pack {
@@ -8678,8 +8453,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 expr.span,
             ));
         };
-        let struct_symbol = canonical(*struct_symbol, module);
-        let Some((def, _)) = self.program_builder.struct_def(struct_symbol) else {
+        let struct_symbol = *struct_symbol;
+        let Some(def) = self.program_builder.struct_def(struct_symbol) else {
             return Err(BackendError::unsupported(
                 "constructing this type is not supported yet".into(),
                 expr.span,
@@ -8701,7 +8476,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let init =
             match &callee.member_resolution {
                 Some(crate::types::output::MemberResolution::Direct(init)) => {
-                    Some(canonical(*init, module))
+                    Some(*init)
                 }
                 Some(crate::types::output::MemberResolution::ViaConformance {
                     witness,
@@ -8710,11 +8485,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }) => {
                     subst.extend(substitution.iter().map(|(symbol, ty)| {
                         (
-                            canonical(*symbol, module),
-                            self.resolved(&canonical_ty(ty, module)),
+                            *symbol,
+                            self.resolved(ty),
                         )
                     }));
-                    Some(canonical(*witness, module))
+                    Some(*witness)
                 }
                 Some(crate::types::output::MemberResolution::ViaRequirement {
                     protocol, ..
@@ -8723,7 +8498,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     // typing; the instance substitution has made it
                     // concrete, so the shared selector's answer is forced.
                     let protocol = crate::types::ty::ProtocolRef {
-                        protocol: canonical(protocol.protocol, module),
+                        protocol: protocol.protocol,
                         args: protocol
                             .args
                             .iter()

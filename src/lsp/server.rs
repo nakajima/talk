@@ -1154,7 +1154,7 @@ mod tests {
         diagnostics_by_document.insert(document_id.clone(), analysis_diagnostics);
 
         AnalysisWorkspace {
-            local_module_id: ModuleId::Current,
+            local_module_id: ModuleId::Main,
             source_root: uri
                 .to_file_path()
                 .ok()

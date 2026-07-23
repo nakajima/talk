@@ -77,11 +77,20 @@ pub fn source_document(name: &str) -> Option<(PathBuf, String)> {
     Some((path, text))
 }
 
-pub fn modules() -> Vec<Arc<Module>> {
+/// The fixed id of a stdlib module: `WellKnown(index)` in
+/// `stdlib_sources` order. Stdlib modules mint their symbols under
+/// these ids (absolute identity, ADR 0038), so every session registers
+/// them at the same ids and no artifact is ever respelled.
+fn module_id_for_index(index: usize) -> ModuleId {
+    ModuleId::WellKnown(u16::try_from(index).expect("stdlib module count fits the reserved band"))
+}
+
+pub fn modules_with_ids() -> Vec<(ModuleId, Arc<Module>)> {
     STDLIB
         .get_or_init(compile_all)
         .iter()
-        .map(|(_, module, _)| module.clone())
+        .enumerate()
+        .map(|(index, (_, module, _))| (module_id_for_index(index), module.clone()))
         .collect()
 }
 
@@ -108,12 +117,13 @@ type CompiledStdlib = (
 fn compile_all() -> Vec<CompiledStdlib> {
     compilation_sources()
         .into_iter()
-        .map(|(name, source)| compile_module(name, source))
+        .enumerate()
+        .map(|(index, (name, source))| compile_module(name, source, module_id_for_index(index)))
         .collect()
 }
 
-fn compile_module(name: &'static str, source: Source) -> CompiledStdlib {
-    let typed = compile_driver(name, source, ModuleId::Current);
+fn compile_module(name: &'static str, source: Source, module_id: ModuleId) -> CompiledStdlib {
+    let typed = compile_driver(name, source, module_id);
     let program = typed.phase.program.clone();
     (name, Arc::new(typed.module(name)), Arc::new(program))
 }
