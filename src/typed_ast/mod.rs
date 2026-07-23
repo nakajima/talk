@@ -27,7 +27,6 @@ use crate::{
         func::{CaptureSpec, EffectSet},
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
-        inline_ir_instruction::InlineIRInstructionKind,
         type_annotation::TypeAnnotation,
         type_application::TypeApplication,
         where_clause::WhereClause,
@@ -101,12 +100,27 @@ impl std::fmt::Debug for Expr {
     }
 }
 
-/// A literal constant — one atom form instead of five expression forms.
-/// Numeric text stays as written (the checker typed it; lowering parses it).
+/// A checked float literal value. Equality is bit identity — these are
+/// canonical literal values, never arithmetic results.
+#[derive(Debug, Clone, Copy)]
+pub struct FloatValue(pub f64);
+
+impl PartialEq for FloatValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for FloatValue {}
+
+/// A literal constant — one atom form instead of five expression forms,
+/// carrying the checked canonical value (LIT-01 integers; lexer-validated
+/// escapes). Lowering never reparses source text (ADR 0038); the source
+/// spelling stays on the parse tree for diagnostics and formatting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Literal {
-    Int(String),
-    Float(String),
+    Int(i64),
+    Float(FloatValue),
     Bool(bool),
     String(String),
     Character(String),
@@ -121,6 +135,10 @@ pub enum ExprKind {
         #[drive(skip)]
         type_args: Vec<crate::node_kinds::generic_arg::GenericArg>,
         args: Vec<CallArg>,
+        /// The effect's checked contract (ADR 0038): declared parameter
+        /// types and the type-generic witness-block layout.
+        #[drive(skip)]
+        contract: crate::types::output::EffectContract,
     },
     LiteralArray(Vec<Expr>),
     Lit(#[drive(skip)] Literal),
@@ -189,8 +207,11 @@ pub struct InlineIRInstruction {
     #[drive(skip)]
     pub span: Span,
     pub binds: Vec<Expr>,
+    /// The checked, target-neutral operation (ADR 0038): typing
+    /// validated the operation, scalar types, and operands; lowering
+    /// only emits the corresponding MIR instruction.
     #[drive(skip)]
-    pub kind: InlineIRInstructionKind,
+    pub kind: crate::types::output::CheckedIrKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
@@ -232,13 +253,20 @@ pub struct Pattern {
     pub kind: PatternKind,
     #[drive(skip)]
     pub span: Span,
+    /// This occurrence's checked type (ADR 0038), pre-view — a binder's
+    /// type keeps the borrow it holds. `None` only on synthesized
+    /// patterns, whose types come from their construction site.
+    #[drive(skip)]
+    pub ty: Option<crate::types::ty::Ty>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
 pub enum PatternKind {
-    LiteralInt(#[drive(skip)] String),
-    LiteralFloat(#[drive(skip)] String),
+    LiteralInt(#[drive(skip)] i64),
+    LiteralFloat(#[drive(skip)] FloatValue),
+    /// The unescaped character value.
     LiteralCharacter(#[drive(skip)] String),
+    /// The unescaped string value.
     LiteralString(#[drive(skip)] String),
     LiteralTrue,
     LiteralFalse,
@@ -251,10 +279,21 @@ pub enum PatternKind {
         enum_name: Option<Name>,
         #[drive(skip)]
         variant_name: String,
+        /// The checked constructor identity (typing's member resolution),
+        /// baked at build time. `None` only on elaboration-synthesized
+        /// patterns, whose enum comes from the scrutinee type (ADR 0038).
+        #[drive(skip)]
+        resolved: Option<Symbol>,
         fields: Vec<Pattern>,
     },
     Record {
         fields: Vec<RecordFieldPattern>,
+        /// One slot per row field in layout order (ADR 0038): the slot
+        /// type and the index into `fields` of the written field
+        /// covering it. `None` for the whole table when the row stayed
+        /// open or unresolved — lowering rejects those as unsupported.
+        #[drive(skip)]
+        slots: Option<Vec<(crate::types::ty::Ty, Option<usize>)>>,
     },
     Struct {
         #[drive(skip)]
@@ -264,6 +303,12 @@ pub enum PatternKind {
         field_names: Vec<Name>,
         #[drive(skip)]
         rest: bool,
+        /// One slot per stored field in declaration order (ADR 0038):
+        /// the instantiated field type and the index into `fields` of
+        /// the written sub-pattern covering it (`None` = left to `..`,
+        /// matched as a wildcard).
+        #[drive(skip)]
+        slots: Vec<(crate::types::ty::Ty, Option<usize>)>,
     },
 }
 
@@ -272,6 +317,11 @@ pub struct RecordFieldPattern {
     #[drive(skip)]
     pub id: NodeID,
     pub kind: RecordFieldPatternKind,
+    /// The slot's checked type (ADR 0038) — also the type of the label
+    /// bind a pun or `label: pattern` introduces. `None` only on
+    /// synthesized fields.
+    #[drive(skip)]
+    pub ty: Option<crate::types::ty::Ty>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
@@ -323,7 +373,7 @@ impl Pattern {
                     result.extend(pattern.collect_binders());
                 }
             }
-            PatternKind::Record { fields } => {
+            PatternKind::Record { fields, .. } => {
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
@@ -381,6 +431,31 @@ pub struct Block {
     pub body: Vec<Node>,
     #[drive(skip)]
     pub span: Span,
+    /// Frame facts, published only on blocks that are frame roots — a
+    /// function or initializer body or a handler clause (ADR 0038).
+    /// Interior blocks carry `None`.
+    #[drive(skip)]
+    pub frame: Option<FrameFacts>,
+}
+
+/// Frame-level lexical facts, computed once at typed-tree build: the
+/// closure environment and assignment-conversion sets that lowering
+/// consumes without re-walking the tree (ADR 0038 checked captures,
+/// structural half — modes and Copy evidence follow with the checker's
+/// capture legality).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FrameFacts {
+    /// Free frame-local variables — used in this frame or under one of
+    /// its nested function values, bound in an enclosing frame — in
+    /// first-use order (the closure-environment layout).
+    pub captured: Vec<Symbol>,
+    /// Assignment-converted symbols: assigned somewhere in the frame and
+    /// referenced under a nested function value, so the binding becomes
+    /// a shared mutable cell (Kranz et al., ORBIT, SIGPLAN 1986).
+    pub celled: rustc_hash::FxHashSet<Symbol>,
+    /// Symbols referenced from inside a nested function value (the
+    /// letrec decision for local function binders).
+    pub nested_refs: rustc_hash::FxHashSet<Symbol>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
@@ -408,6 +483,10 @@ pub enum StmtKind {
         #[drive(skip)]
         effect_name: Name,
         body: Block,
+        /// The effect's checked contract (ADR 0038), mirroring the
+        /// perform side's witness-block layout.
+        #[drive(skip)]
+        contract: crate::types::output::EffectContract,
     },
 }
 
@@ -426,6 +505,16 @@ pub struct Func {
     /// carry their solved latent row.
     #[drive(skip)]
     pub scheme: crate::types::ty::Scheme,
+    /// The declared receiver mode (ADR 0038): `mut func` receivers write
+    /// back through the private tuple-return convention. `None` off
+    /// methods.
+    #[drive(skip)]
+    pub receiver: ReceiverMode,
+    /// The binding symbol when the top-level `let name = <func>` desugar
+    /// (a `func name` declaration) binds this function: the binding is
+    /// the callable's identity for calls and entry selection (ADR 0038).
+    #[drive(skip)]
+    pub bound_as: Option<Symbol>,
     pub generics: Vec<GenericDecl>,
     #[drive(skip)]
     pub captures: Vec<CaptureSpec>,

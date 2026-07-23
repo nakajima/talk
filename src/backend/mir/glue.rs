@@ -350,109 +350,49 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         Ok(Operand::Local(result))
     }
 
-    /// One requirement's implementation closure for a concrete payload
-    /// type — conformance row first, protocol default second (the same
-    /// selection existential packs use).
+    /// One committed dictionary entry's implementation closure for a
+    /// concrete payload type (ADR 0038): demand the committed callable,
+    /// or synthesize the derived structural glue. Selection happened at
+    /// typing — nothing here searches rows or guesses by name.
     pub(super) fn requirement_closure(
         &mut self,
         payload_ty: &Ty,
         protocol: &crate::types::ty::ProtocolRef,
-        name: &str,
+        entry: &crate::types::catalog::DictionaryEntry,
+        subst: &[(Symbol, Ty)],
         span: Span,
     ) -> Result<Operand, BackendError> {
-        let label = crate::label::Label::Named(name.to_string());
-        let (implementation, mut subst) = match self
-            .program_builder
-            .conformance_witness(payload_ty, protocol, &label)
-        {
-            Some(found) => found,
-            None if (name == "equals" || name == "show")
-                && self
-                    .program_builder
-                    .requirement_symbol(protocol.protocol, name)
-                    .is_some_and(|requirement| {
-                        !self.program_builder.callables.contains_key(&requirement)
-                    }) =>
-            {
-                // Derived structural conformance: synthesize the chunk
-                // and wrap it directly.
-                let glue = if name == "show" {
-                    self.program_builder
-                        .derived_show(payload_ty, protocol, span)?
-                } else {
-                    self.program_builder
-                        .derived_equality(payload_ty, protocol, span)?
-                };
-                let closure = self.fresh_local();
-                self.push(Inst::MakeClosure {
-                    dest: closure,
-                    func: glue,
-                    env: Vec::new(),
-                });
-                return Ok(Operand::Local(closure));
-            }
-            None => {
-                let mut subst = vec![(protocol.protocol, payload_ty.clone())];
-                if let Some(params) = self.program_builder.protocol_params(protocol.protocol) {
-                    for (param, arg) in params.iter().zip(&protocol.args) {
-                        subst.push((*param, arg.clone()));
-                    }
+        use crate::types::catalog::{DerivedRecipe, DictionaryEntry};
+        let func = match entry {
+            DictionaryEntry::Derived(DerivedRecipe::Show) => self
+                .program_builder
+                .derived_show(payload_ty, protocol, span)?,
+            DictionaryEntry::Derived(DerivedRecipe::Equality) => self
+                .program_builder
+                .derived_equality(payload_ty, protocol, span)?,
+            DictionaryEntry::Implementation {
+                symbol,
+                writeback_width,
+            } => {
+                let mut subst = subst.to_vec();
+                subst.push((protocol.protocol, payload_ty.clone()));
+                // The closure calls its chunk directly: an instance with
+                // hidden parameters of its own would break that arity
+                // contract.
+                if !witness_params(&subst).is_empty() {
+                    return Err(BackendError::unsupported(
+                        "conformance evidence for compound rigid payloads is not supported yet"
+                            .into(),
+                        span,
+                    ));
                 }
-                subst.extend(self.program_builder.conformance_assoc(payload_ty, protocol));
-                let requirement = self
-                    .program_builder
-                    .requirement_symbol(protocol.protocol, name)
-                    .ok_or_else(|| {
-                        BackendError::unsupported(
-                            "existential requirement without an implementation is not supported yet"
-                                .into(),
-                            span,
-                        )
-                    })?;
-                (requirement, subst)
+                let func = self.program_builder.demand(*symbol, subst, span)?;
+                self.program_builder
+                    .writeback_expectations
+                    .push((func, *writeback_width, span));
+                func
             }
         };
-        subst.push((protocol.protocol, payload_ty.clone()));
-        // The closure calls its chunk directly: an instance with hidden
-        // parameters of its own would break that arity contract.
-        if !witness_params(&subst).is_empty() {
-            return Err(BackendError::unsupported(
-                "conformance evidence for compound rigid payloads is not supported yet".into(),
-                span,
-            ));
-        }
-        let func = self.program_builder.demand(implementation, subst, span)?;
-        // The declared requirement fixes the writeback shape every
-        // implementation must follow.
-        let declared: usize = self
-            .program_builder
-            .programs
-            .iter()
-            .find_map(|input| {
-                input
-                    .program
-                    .types()
-                    .schemes
-                    .iter()
-                    .find_map(|(symbol, scheme)| {
-                        (canonical(*symbol, input.module)
-                            == self
-                                .program_builder
-                                .requirement_symbol(protocol.protocol, name)
-                                .unwrap_or(*symbol))
-                        .then(|| match &scheme.ty {
-                            Ty::Func(params, _, _) => params
-                                .iter()
-                                .filter(|param| matches!(param, Ty::Borrow(Perm::Exclusive, _)))
-                                .count(),
-                            _ => 0,
-                        })
-                    })
-            })
-            .unwrap_or(0);
-        self.program_builder
-            .writeback_expectations
-            .push((func, declared, span));
         let closure = self.fresh_local();
         self.push(Inst::MakeClosure {
             dest: closure,

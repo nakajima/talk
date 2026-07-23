@@ -222,6 +222,274 @@ fn or_pattern_binders_collect_once() {
     );
 }
 
+#[test]
+fn literals_carry_canonical_values() {
+    use derive_visitor::Drive;
+
+    // The typed tree publishes checked literal values — underscores
+    // stripped, escapes processed — so lowering never reparses source
+    // text (ADR 0038).
+    let source = "// no-core\nlet n = 1_000\nlet f = 2_5.5\nlet s = \"a\\nb\"\n()";
+    let mut literals = vec![];
+    for (_, hir_nodes) in lower(source) {
+        let mut collect = derive_visitor::visitor_enter_fn(|expr: &typed_ast::Expr| {
+            if let typed_ast::ExprKind::Lit(literal) = &expr.kind {
+                literals.push(literal.clone());
+            }
+        });
+        for node in &hir_nodes {
+            node.drive(&mut collect);
+        }
+    }
+    assert!(
+        literals.contains(&typed_ast::Literal::Int(1000)),
+        "expected the checked integer value: {literals:?}"
+    );
+    assert!(
+        literals.contains(&typed_ast::Literal::Float(typed_ast::FloatValue(25.5))),
+        "expected the checked float value: {literals:?}"
+    );
+    assert!(
+        literals.contains(&typed_ast::Literal::String("a\nb".into())),
+        "expected the unescaped string value: {literals:?}"
+    );
+}
+
+#[test]
+fn pattern_literals_carry_canonical_values() {
+    let source = "// no-core\nfunc f(n: Int) -> Int {\n\tmatch n {\n\t\t1_0 -> 1,\n\t\t_ -> 0,\n\t}\n}";
+    let mut ints = vec![];
+    for (_, hir_nodes) in lower(source) {
+        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
+            if let typed_ast::PatternKind::LiteralInt(value) = &pattern.kind {
+                ints.push(*value);
+            }
+        });
+    }
+    assert_eq!(ints, vec![10], "expected the checked pattern value");
+}
+
+#[test]
+fn handler_clause_binders_carry_their_checked_types() {
+    use derive_visitor::Drive;
+
+    // Clause binders take the effect's declared parameter types; the
+    // typed tree publishes them on the parameter nodes (ADR 0038) so
+    // lowering never reloads the effect signature for binder types.
+    let source =
+        "// no-core\neffect 'ask(question: Int) -> Int\n@handle 'ask { q in\n\t'continue q\n}\n'ask(1)\n()";
+    let mut clause_param_tys = vec![];
+    for (_, hir_nodes) in lower(source) {
+        let mut collect = derive_visitor::visitor_enter_fn(|stmt: &typed_ast::Stmt| {
+            if let typed_ast::StmtKind::Handling { body, .. } = &stmt.kind {
+                clause_param_tys.extend(body.args.iter().map(|param| param.ty.clone()));
+            }
+        });
+        for node in &hir_nodes {
+            node.drive(&mut collect);
+        }
+    }
+    assert_eq!(clause_param_tys.len(), 1, "one clause binder");
+    assert!(
+        clause_param_tys[0].is_some(),
+        "the binder carries the effect's checked parameter type"
+    );
+}
+
+#[test]
+fn record_patterns_carry_row_layout_slots() {
+    // A record pattern publishes one slot per row field in the row's
+    // layout order — the slot type and the covering written field
+    // (ADR 0038). Lowering builds cells from these instead of matching
+    // labels against a decomposed row.
+    let source = "// no-core\nlet rec = { b: true, a: 1 }\nlet n = match rec {\n\t{ a, .. } -> a,\n}\n()";
+    let mut slot_sets = vec![];
+    for (_, hir_nodes) in lower(source) {
+        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
+            if let typed_ast::PatternKind::Record { slots, .. } = &pattern.kind {
+                slot_sets.push(slots.clone());
+            }
+        });
+    }
+    assert_eq!(slot_sets.len(), 1, "one record pattern");
+    let slots = slot_sets[0]
+        .as_ref()
+        .expect("a closed row publishes its layout");
+    assert_eq!(slots.len(), 2, "one slot per row field: {slots:?}");
+    let covered: Vec<bool> = slots.iter().map(|(_, sub)| sub.is_some()).collect();
+    assert_eq!(
+        covered.iter().filter(|c| **c).count(),
+        1,
+        "exactly the written field is covered: {slots:?}"
+    );
+}
+
+#[test]
+fn struct_patterns_carry_declaration_order_slots() {
+    // A struct pattern publishes one slot per stored field in
+    // declaration order — the instantiated field type and which written
+    // sub-pattern covers it (ADR 0038). Lowering builds its cells from
+    // these instead of re-substituting catalog field types.
+    let source = "// no-core\nstruct P {\n\tlet x: Int\n\tlet y: Bool\n}\nfunc f(p: P) -> Bool {\n\tmatch p {\n\t\tP { y: flag, .. } -> flag,\n\t}\n}";
+    let mut slot_sets = vec![];
+    for (_, hir_nodes) in lower(source) {
+        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
+            if let typed_ast::PatternKind::Struct { slots, .. } = &pattern.kind {
+                slot_sets.push(slots.clone());
+            }
+        });
+    }
+    assert_eq!(slot_sets.len(), 1, "one struct pattern");
+    let slots = &slot_sets[0];
+    assert_eq!(slots.len(), 2, "one slot per stored field: {slots:?}");
+    assert!(
+        format!("{:?}", slots[0].0).contains("Int") && slots[0].1.is_none(),
+        "x is left to `..`: {slots:?}"
+    );
+    assert!(
+        format!("{:?}", slots[1].0).contains("Bool") && slots[1].1 == Some(0),
+        "y is covered by the written sub-pattern: {slots:?}"
+    );
+}
+
+#[test]
+fn patterns_carry_their_checked_occurrence_types() {
+    // Every checked pattern occurrence carries its type (ADR 0038):
+    // lowering reads binder and component types off the tree instead of
+    // re-decomposing scrutinee types.
+    let source = "// no-core\nlet (a, b) = (1, true)\n()";
+    let mut bind_tys = vec![];
+    for (_, hir_nodes) in lower(source) {
+        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
+            if matches!(pattern.kind, typed_ast::PatternKind::Bind(_)) {
+                bind_tys.push(pattern.ty.clone());
+            }
+        });
+    }
+    assert_eq!(bind_tys.len(), 2, "two binders");
+    assert!(
+        bind_tys.iter().all(|ty| ty.is_some()),
+        "every source binder carries its checked type: {bind_tys:?}"
+    );
+    let rendered: Vec<String> = bind_tys
+        .iter()
+        .map(|ty| format!("{:?}", ty.as_ref().unwrap()))
+        .collect();
+    assert!(
+        rendered[0].contains("Int") && rendered[1].contains("Bool"),
+        "component types come from the checked tuple: {rendered:?}"
+    );
+}
+
+#[test]
+fn effect_sites_carry_their_contracts() {
+    use derive_visitor::Drive;
+
+    // Perform sites and handlers both carry the effect's checked
+    // contract (ADR 0038): declared parameter types and the type-generic
+    // layout, so lowering never reloads effect signatures.
+    let source =
+        "// no-core\neffect 'ask(question: Int) -> Int\n@handle 'ask { q in\n\t'continue q\n}\n'ask(1)\n()";
+    let mut call_contracts = vec![];
+    let mut handler_contracts = vec![];
+    for (_, hir_nodes) in lower(source) {
+        let mut collect_calls = derive_visitor::visitor_enter_fn(|expr: &typed_ast::Expr| {
+            if let typed_ast::ExprKind::CallEffect { contract, .. } = &expr.kind {
+                call_contracts.push(contract.clone());
+            }
+        });
+        let mut collect_handlers = derive_visitor::visitor_enter_fn(|stmt: &typed_ast::Stmt| {
+            if let typed_ast::StmtKind::Handling { contract, .. } = &stmt.kind {
+                handler_contracts.push(contract.clone());
+            }
+        });
+        for node in &hir_nodes {
+            node.drive(&mut collect_calls);
+            node.drive(&mut collect_handlers);
+        }
+    }
+    assert_eq!(call_contracts.len(), 1, "one perform site");
+    assert_eq!(
+        call_contracts[0].params.len(),
+        1,
+        "the perform carries the declared parameter: {call_contracts:?}"
+    );
+    assert_eq!(handler_contracts.len(), 1, "one handler");
+    assert_eq!(
+        handler_contracts[0].params.len(),
+        1,
+        "the handler carries the declared parameter: {handler_contracts:?}"
+    );
+}
+
+#[test]
+fn variant_patterns_carry_their_resolution() {
+    // Typing resolves a variant pattern's constructor; the typed tree
+    // bakes that identity on the pattern node (ADR 0038), so lowering
+    // never resolves variants by name against the catalog.
+    let source = "enum E {\n\tcase a(Int)\n\tcase b(Int)\n}\nfunc f(e: E) -> Int {\n\tmatch e {\n\t\t.a(s) -> s,\n\t\t.b(s) -> s,\n\t}\n}";
+    let mut resolutions = vec![];
+    for (_, hir_nodes) in lower(source) {
+        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
+            if let typed_ast::PatternKind::Variant { resolved, .. } = &pattern.kind {
+                resolutions.push(*resolved);
+            }
+        });
+    }
+    assert_eq!(resolutions.len(), 2, "two variant patterns");
+    assert!(
+        resolutions.iter().all(|resolved| resolved.is_some()),
+        "every source variant pattern carries its checked constructor: {resolutions:?}"
+    );
+}
+
+#[test]
+fn frame_roots_carry_capture_and_cell_facts() {
+    use derive_visitor::Drive;
+
+    // Frame-root blocks publish free variables and assignment-conversion
+    // sets (ADR 0038): lowering builds closure environments and cells
+    // from these without re-walking the tree.
+    let source = "// no-core\nfunc outer() -> Int {\n\tlet x = 1\n\tlet bump = func() -> () {\n\t\tx = x\n\t}\n\tbump()\n\tx\n}";
+    let mut frames = vec![];
+    for (_, hir_nodes) in lower(source) {
+        let mut collect = derive_visitor::visitor_enter_fn(|func: &typed_ast::Func| {
+            frames.push((func.name.name_str(), func.body.frame.clone()));
+        });
+        for node in &hir_nodes {
+            node.drive(&mut collect);
+        }
+    }
+    let outer = frames
+        .iter()
+        .find(|(name, _)| name == "outer")
+        .and_then(|(_, frame)| frame.clone())
+        .expect("outer carries frame facts");
+    let closure = frames
+        .iter()
+        .find(|(name, _)| name != "outer")
+        .and_then(|(_, frame)| frame.clone())
+        .expect("the closure carries frame facts");
+    assert_eq!(
+        closure.captured.len(),
+        1,
+        "the closure captures exactly `x`: {closure:?}"
+    );
+    let x = closure.captured[0];
+    assert!(
+        outer.nested_refs.contains(&x),
+        "`x` is referenced under a nested function: {outer:?}"
+    );
+    assert!(
+        outer.celled.contains(&x),
+        "`x` is assigned in the frame and shared with the closure: {outer:?}"
+    );
+    assert!(
+        outer.captured.is_empty(),
+        "a top-level function has no free variables: {outer:?}"
+    );
+}
+
 fn visit_patterns(nodes: &[typed_ast::Node], f: &mut impl FnMut(&typed_ast::Pattern)) {
     use derive_visitor::{Drive, Visitor};
 

@@ -329,6 +329,7 @@ struct Ctx {
     handler_ret: Option<Ty>,
     binder: Option<Symbol>,
     has_return_boundary: bool,
+    in_loop: bool,
 }
 
 impl Ctx {
@@ -339,6 +340,7 @@ impl Ctx {
             handler_ret: None,
             binder: None,
             has_return_boundary: false,
+            in_loop: false,
         }
     }
 
@@ -357,6 +359,14 @@ impl Ctx {
             handler_ret: None,
             binder: self.binder,
             has_return_boundary: true,
+            in_loop: false,
+        }
+    }
+
+    fn enter_loop(&self) -> Self {
+        Ctx {
+            in_loop: true,
+            ..self.clone()
         }
     }
 
@@ -404,6 +414,12 @@ impl<'a> TypecheckSession<'a> {
             };
             builder.collect(asts)
         };
+        // Every conformance row exists now: commit the Deinit index and
+        // each row's dictionary (ADR 0038) so lowering dereferences
+        // committed entries instead of searching and guessing.
+        self.catalog.commit_deinit_rows();
+        self.catalog.commit_dictionaries();
+        self.catalog.commit_callable_owners();
 
         {
             let mut groups = BindingGroupChecker {
@@ -585,6 +601,6 @@ mod pattern;
 mod stmt;
 mod support;
 
-use artifacts::TypeArtifacts;
+use artifacts::{MarkedSlot, TypeArtifacts};
 use diagnostics::DiagnosticSink;
 use support::*;

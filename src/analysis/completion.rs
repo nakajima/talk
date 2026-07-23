@@ -268,13 +268,8 @@ fn add_nominal_member_items(
     let is_derivable_head =
         types.catalog.structs.contains_key(&symbol) || types.catalog.enums.contains_key(&symbol);
     if is_derivable_head {
-        for protocol in &types.catalog.derivable {
-            add_protocol_requirement_items(
-                types,
-                &ProtocolRef::bare(*protocol),
-                receiver_ty,
-                items,
-            );
+        for protocol in crate::types::catalog::TypeCatalog::derivable_protocols() {
+            add_protocol_requirement_items(types, &ProtocolRef::bare(protocol), receiver_ty, items);
         }
     }
 

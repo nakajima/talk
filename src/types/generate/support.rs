@@ -1,5 +1,24 @@
 use super::*;
 
+/// Exclusive-borrow parameter count of a declared signature — the
+/// writeback width a requirement fixes for every implementation.
+pub(super) fn writeback_width(params: &[Ty]) -> usize {
+    params
+        .iter()
+        .filter(|param| matches!(param, Ty::Borrow(crate::types::ty::Perm::Exclusive, _)))
+        .count()
+}
+
+/// Whether a declared signature's receiver is an exclusive borrow (a
+/// `mut func`): the first parameter, since member signatures are
+/// self-prepended.
+pub(super) fn mut_receiver(params: &[Ty]) -> bool {
+    matches!(
+        params.first(),
+        Some(Ty::Borrow(crate::types::ty::Perm::Exclusive, _))
+    )
+}
+
 pub(super) fn generic_symbols(
     generics: &[crate::node_kinds::generic_decl::GenericDecl],
 ) -> Vec<Symbol> {

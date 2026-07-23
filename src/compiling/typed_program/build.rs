@@ -34,7 +34,148 @@ struct TypedTreeBuilder<'a> {
     synthetic_next: std::cell::Cell<u32>,
 }
 
+/// The checked float value. The lexer only produces parseable float
+/// spellings, so this cannot fail on a checked tree.
+fn float_literal(text: &str) -> typed_ast::FloatValue {
+    typed_ast::FloatValue(
+        text.replace('_', "")
+            .parse()
+            .expect("lexed float literal parses as f64"),
+    )
+}
+
+/// The literal's value with escapes processed. The lexer already
+/// rejected invalid escapes, so this cannot fail on a checked tree.
+fn unescape(text: &str) -> String {
+    crate::parsing::lexing::unescape(text).expect("lexer-validated escape sequences")
+}
+
+/// A frame-local symbol: bindable in some function frame, so a use
+/// outside its binding frame is a capture. Globals and type-level
+/// symbols never capture.
+fn is_frame_local(symbol: &Symbol) -> bool {
+    matches!(
+        symbol,
+        Symbol::DeclaredLocal(_) | Symbol::PatternBindLocal(_) | Symbol::ParamLocal(_)
+    )
+}
+
+/// One walk computing a frame root's lexical facts (ADR 0038): free
+/// variables in first-use order, symbols referenced under nested
+/// function values, and the assigned∩nested cell set. `depth` counts
+/// nested function boundaries; binder collection is flat — symbols are
+/// unique per binder, so a symbol bound anywhere in the frame's subtree
+/// (including a hoisted func-valued `let` used before its declaration)
+/// is not free.
+fn frame_facts(
+    block: &typed_ast::Block,
+    params: &[typed_ast::Parameter],
+) -> typed_ast::FrameFacts {
+    use derive_visitor::{Drive, Visitor};
+    use typed_ast::{DeclKind, ExprKind, PatternKind};
+
+    #[derive(Visitor)]
+    #[visitor(
+        typed_ast::Expr(enter, exit),
+        typed_ast::Decl(enter, exit),
+        typed_ast::Stmt(enter),
+        typed_ast::Pattern(enter),
+        typed_ast::Parameter(enter)
+    )]
+    struct Scan {
+        depth: usize,
+        bound: rustc_hash::FxHashSet<Symbol>,
+        used: Vec<Symbol>,
+        assigned: rustc_hash::FxHashSet<Symbol>,
+        nested: rustc_hash::FxHashSet<Symbol>,
+    }
+    impl Scan {
+        fn enter_expr(&mut self, expr: &typed_ast::Expr) {
+            match &expr.kind {
+                ExprKind::Func(_) => self.depth += 1,
+                ExprKind::Variable(crate::name::Name::Resolved(symbol, _)) => {
+                    if self.depth > 0 {
+                        self.nested.insert(*symbol);
+                    }
+                    if is_frame_local(symbol) && !self.used.contains(symbol) {
+                        self.used.push(*symbol);
+                    }
+                }
+                _ => {}
+            }
+        }
+        fn exit_expr(&mut self, expr: &typed_ast::Expr) {
+            if matches!(expr.kind, ExprKind::Func(_)) {
+                self.depth -= 1;
+            }
+        }
+        fn enter_decl(&mut self, decl: &typed_ast::Decl) {
+            // A named local function is a nested frame like a func
+            // expression (its recursion reference counts as nested).
+            if matches!(decl.kind, DeclKind::Func(_)) {
+                self.depth += 1;
+            }
+        }
+        fn exit_decl(&mut self, decl: &typed_ast::Decl) {
+            if matches!(decl.kind, DeclKind::Func(_)) {
+                self.depth -= 1;
+            }
+        }
+        fn enter_stmt(&mut self, stmt: &typed_ast::Stmt) {
+            if let typed_ast::StmtKind::Assignment(lhs, _) = &stmt.kind
+                && let ExprKind::Variable(crate::name::Name::Resolved(symbol, _)) = &lhs.kind
+            {
+                self.assigned.insert(*symbol);
+            }
+        }
+        fn enter_pattern(&mut self, pattern: &typed_ast::Pattern) {
+            if let PatternKind::Bind(crate::name::Name::Resolved(symbol, _)) = &pattern.kind {
+                self.bound.insert(*symbol);
+            }
+        }
+        fn enter_parameter(&mut self, param: &typed_ast::Parameter) {
+            if let crate::name::Name::Resolved(symbol, _) = &param.name {
+                self.bound.insert(*symbol);
+            }
+        }
+    }
+
+    let mut scan = Scan {
+        depth: 0,
+        bound: rustc_hash::FxHashSet::default(),
+        used: Vec::new(),
+        assigned: rustc_hash::FxHashSet::default(),
+        nested: rustc_hash::FxHashSet::default(),
+    };
+    for param in params {
+        if let crate::name::Name::Resolved(symbol, _) = &param.name {
+            scan.bound.insert(*symbol);
+        }
+    }
+    block.drive(&mut scan);
+
+    typed_ast::FrameFacts {
+        captured: scan
+            .used
+            .into_iter()
+            .filter(|symbol| !scan.bound.contains(symbol))
+            .collect(),
+        celled: scan.assigned.intersection(&scan.nested).copied().collect(),
+        nested_refs: scan.nested,
+    }
+}
+
 impl TypedTreeBuilder<'_> {
+    /// The checked 64-bit value of an integer literal (LIT-01). A file
+    /// with an out-of-range literal is blocked before the tree builds, so
+    /// a missing or invalid entry is an invariant failure.
+    fn int_literal(&self, id: crate::node_id::NodeID) -> i64 {
+        match self.types.integer_literals.get(&id) {
+            Some(crate::types::output::CheckedIntegerLiteral::Value(value)) => *value,
+            other => unreachable!("integer literal {id:?} lacks a checked value: {other:?}"),
+        }
+    }
+
     fn file(&self, ast: &AST<NameResolved>) -> typed_ast::TypedFile {
         typed_ast::TypedFile {
             file_id: ast.file_id,
@@ -43,7 +184,25 @@ impl TypedTreeBuilder<'_> {
     }
 
     fn roots(&self, roots: &[Node]) -> Vec<typed_ast::Node> {
-        roots.iter().map(|n| self.node(n)).collect()
+        let mut built: Vec<typed_ast::Node> = roots.iter().map(|n| self.node(n)).collect();
+        // A top-level `func name` declaration desugars to `let name =
+        // <func>`; stamp the binding as the callable's identity
+        // (ADR 0038) so lowering reads the fact instead of
+        // re-recognizing the declaration shape.
+        for node in &mut built {
+            if let typed_ast::Node::Decl(decl) = node
+                && let typed_ast::DeclKind::Let {
+                    lhs,
+                    rhs: Some(rhs),
+                    ..
+                } = &mut decl.kind
+                && let typed_ast::PatternKind::Bind(name) = &lhs.kind
+                && let typed_ast::ExprKind::Func(func) = &mut rhs.kind
+            {
+                func.bound_as = name.symbol().ok();
+            }
+        }
+        built
     }
 
     fn node(&self, node: &Node) -> typed_ast::Node {
@@ -218,11 +377,19 @@ impl TypedTreeBuilder<'_> {
                 unreachable!("macro calls are expanded before typed-program build")
             }
             expr::ExprKind::InlineIR(ir) => {
+                // Typing validated the instruction and published its
+                // checked op; an invalid instruction blocked the file.
+                let kind = self
+                    .types
+                    .checked_ir
+                    .get(&e.id)
+                    .expect("typed facts invariant: inline IR carries its checked operation")
+                    .clone();
                 typed_ast::ExprKind::InlineIR(typed_ast::InlineIRInstruction {
                     id: ir.id,
                     span: ir.span,
                     binds: ir.binds.iter().map(|b| self.expr(b)).collect(),
-                    kind: ir.kind.clone(),
+                    kind,
                 })
             }
             expr::ExprKind::As(..) => {
@@ -237,25 +404,31 @@ impl TypedTreeBuilder<'_> {
                 effect_name: effect_name.clone(),
                 type_args: type_args.clone(),
                 args: args.iter().map(|a| self.call_arg(a)).collect(),
+                contract: self
+                    .types
+                    .effect_contracts
+                    .get(&e.id)
+                    .expect("typed facts invariant: a perform carries its effect contract")
+                    .clone(),
             },
             expr::ExprKind::LiteralArray(items) => {
                 typed_ast::ExprKind::LiteralArray(items.iter().map(|i| self.expr(i)).collect())
             }
-            expr::ExprKind::LiteralInt(s) => {
-                typed_ast::ExprKind::Lit(typed_ast::Literal::Int(s.clone()))
+            expr::ExprKind::LiteralInt(_) => {
+                typed_ast::ExprKind::Lit(typed_ast::Literal::Int(self.int_literal(e.id)))
             }
             expr::ExprKind::LiteralFloat(s) => {
-                typed_ast::ExprKind::Lit(typed_ast::Literal::Float(s.clone()))
+                typed_ast::ExprKind::Lit(typed_ast::Literal::Float(float_literal(s)))
             }
             expr::ExprKind::LiteralTrue => typed_ast::ExprKind::Lit(typed_ast::Literal::Bool(true)),
             expr::ExprKind::LiteralFalse => {
                 typed_ast::ExprKind::Lit(typed_ast::Literal::Bool(false))
             }
             expr::ExprKind::LiteralString(s) => {
-                typed_ast::ExprKind::Lit(typed_ast::Literal::String(s.clone()))
+                typed_ast::ExprKind::Lit(typed_ast::Literal::String(unescape(s)))
             }
             expr::ExprKind::LiteralCharacter(s) => {
-                typed_ast::ExprKind::Lit(typed_ast::Literal::Character(s.clone()))
+                typed_ast::ExprKind::Lit(typed_ast::Literal::Character(unescape(s)))
             }
             expr::ExprKind::Tuple(items) => {
                 typed_ast::ExprKind::Tuple(items.iter().map(|i| self.expr(i)).collect())
@@ -389,24 +562,41 @@ impl TypedTreeBuilder<'_> {
     // ----- Patterns --------------------------------------------------------
 
     fn pattern(&self, p: &pattern::Pattern) -> typed_ast::Pattern {
+        // The occurrence type: recorded per pattern node during checking;
+        // plain `let` binders skip `check_pattern` (they bind through the
+        // monomorphic environment or a top-level scheme), so a bare Bind
+        // falls back to its symbol's published type.
+        let ty = self.types.pattern_tys.get(&p.id).cloned().or_else(|| {
+            let pattern::PatternKind::Bind(name) = &p.kind else {
+                return None;
+            };
+            let symbol = name.symbol().ok()?;
+            self.types
+                .binder_ty(symbol)
+                .cloned()
+                .or_else(|| self.types.schemes.get(&symbol).map(|s| s.ty.clone()))
+        });
         typed_ast::Pattern {
             id: p.id,
-            kind: self.pattern_kind(&p.kind),
+            kind: self.pattern_kind(p),
             span: p.span,
+            ty,
         }
     }
 
-    fn pattern_kind(&self, k: &pattern::PatternKind) -> typed_ast::PatternKind {
-        match k {
-            pattern::PatternKind::LiteralInt(s) => typed_ast::PatternKind::LiteralInt(s.clone()),
+    fn pattern_kind(&self, p: &pattern::Pattern) -> typed_ast::PatternKind {
+        match &p.kind {
+            pattern::PatternKind::LiteralInt(_) => {
+                typed_ast::PatternKind::LiteralInt(self.int_literal(p.id))
+            }
             pattern::PatternKind::LiteralFloat(s) => {
-                typed_ast::PatternKind::LiteralFloat(s.clone())
+                typed_ast::PatternKind::LiteralFloat(float_literal(s))
             }
             pattern::PatternKind::LiteralCharacter(s) => {
-                typed_ast::PatternKind::LiteralCharacter(s.clone())
+                typed_ast::PatternKind::LiteralCharacter(unescape(s))
             }
             pattern::PatternKind::LiteralString(s) => {
-                typed_ast::PatternKind::LiteralString(s.clone())
+                typed_ast::PatternKind::LiteralString(unescape(s))
             }
             pattern::PatternKind::LiteralTrue => typed_ast::PatternKind::LiteralTrue,
             pattern::PatternKind::LiteralFalse => typed_ast::PatternKind::LiteralFalse,
@@ -426,31 +616,74 @@ impl TypedTreeBuilder<'_> {
             } => typed_ast::PatternKind::Variant {
                 enum_name: enum_name.clone(),
                 variant_name: variant_name.clone(),
+                resolved: match self.types.member_resolutions.get(&p.id) {
+                    Some(crate::types::output::MemberResolution::Direct(variant)) => {
+                        Some(*variant)
+                    }
+                    _ => None,
+                },
                 fields: fields.iter().map(|p| self.pattern(p)).collect(),
             },
-            pattern::PatternKind::Record { fields } => typed_ast::PatternKind::Record {
-                fields: fields
+            pattern::PatternKind::Record { fields } => {
+                let built: Vec<typed_ast::RecordFieldPattern> = fields
                     .iter()
                     .map(|f| self.record_field_pattern(f))
-                    .collect(),
-            },
+                    .collect();
+                // Slot field references arrive as node ids; translate to
+                // indices into `fields` for direct access.
+                let slots = self.types.record_pattern_slots.get(&p.id).map(|slots| {
+                    slots
+                        .iter()
+                        .map(|(ty, sub)| {
+                            let index =
+                                sub.and_then(|id| built.iter().position(|field| field.id == id));
+                            (ty.clone(), index)
+                        })
+                        .collect()
+                });
+                typed_ast::PatternKind::Record {
+                    fields: built,
+                    slots,
+                }
+            }
             pattern::PatternKind::Struct {
                 struct_name,
                 fields,
                 field_names,
                 rest,
-            } => typed_ast::PatternKind::Struct {
-                struct_name: struct_name.clone(),
-                fields: fields
+            } => {
+                let built: Vec<typed_ast::Pattern> = fields
                     .iter()
                     .map(|n| match n {
                         Node::Pattern(p) => self.pattern(p),
                         other => unreachable!("struct pattern field is not a pattern: {other:?}"),
                     })
-                    .collect(),
-                field_names: field_names.clone(),
-                rest: *rest,
-            },
+                    .collect();
+                // Slot sub-pattern references arrive as node ids;
+                // translate to indices into `fields` for direct access.
+                let slots = self
+                    .types
+                    .struct_pattern_slots
+                    .get(&p.id)
+                    .map(|slots| {
+                        slots
+                            .iter()
+                            .map(|(ty, sub)| {
+                                let index = sub
+                                    .and_then(|id| built.iter().position(|field| field.id == id));
+                                (ty.clone(), index)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                typed_ast::PatternKind::Struct {
+                    struct_name: struct_name.clone(),
+                    fields: built,
+                    field_names: field_names.clone(),
+                    rest: *rest,
+                    slots,
+                }
+            }
         }
     }
 
@@ -470,7 +703,11 @@ impl TypedTreeBuilder<'_> {
             }
             pattern::RecordFieldPatternKind::Rest => typed_ast::RecordFieldPatternKind::Rest,
         };
-        typed_ast::RecordFieldPattern { id: f.id, kind }
+        typed_ast::RecordFieldPattern {
+            id: f.id,
+            kind,
+            ty: self.types.pattern_tys.get(&f.id).cloned(),
+        }
     }
 
     // ----- Blocks and statements -------------------------------------------
@@ -481,7 +718,22 @@ impl TypedTreeBuilder<'_> {
             args: self.params(&b.args),
             body: self.roots(&b.body),
             span: b.span,
+            frame: None,
         }
+    }
+
+    /// A frame-root block — a function or initializer body, or a handler
+    /// clause: publish the frame's capture and cell facts (ADR 0038).
+    /// `params` are the frame's own parameters (bound, never captured);
+    /// a handler clause's live on the block itself.
+    fn frame_block(
+        &self,
+        b: &crate::node_kinds::block::Block,
+        params: &[typed_ast::Parameter],
+    ) -> typed_ast::Block {
+        let mut block = self.block(b);
+        block.frame = Some(frame_facts(&block, params));
+        block
     }
 
     fn stmt(&self, s: &stmt::Stmt) -> typed_ast::Stmt {
@@ -522,7 +774,14 @@ impl TypedTreeBuilder<'_> {
                 effect_name, body, ..
             } => typed_ast::StmtKind::Handling {
                 effect_name: effect_name.clone(),
-                body: self.block(body),
+                // A clause is a frame; its parameters are the block's args.
+                body: self.frame_block(body, &[]),
+                contract: self
+                    .types
+                    .effect_contracts
+                    .get(&stmt_id)
+                    .expect("typed facts invariant: a handler carries its effect contract")
+                    .clone(),
             },
             stmt::StmtKind::For { .. } => self.elaborate_for(stmt_id, k),
         }
@@ -679,9 +938,11 @@ impl TypedTreeBuilder<'_> {
             pattern: typed_ast::Pattern {
                 id: self.syn_id(file),
                 span: pattern.span,
+                ty: None,
                 kind: typed_ast::PatternKind::Variant {
                     enum_name: None,
                     variant_name: "some".to_string(),
+                    resolved: None,
                     fields: vec![self.pattern(pattern)],
                 },
             },
@@ -692,9 +953,11 @@ impl TypedTreeBuilder<'_> {
             pattern: typed_ast::Pattern {
                 id: self.syn_id(file),
                 span,
+                ty: None,
                 kind: typed_ast::PatternKind::Variant {
                     enum_name: None,
                     variant_name: "none".to_string(),
+                    resolved: None,
                     fields: vec![],
                 },
             },
@@ -707,6 +970,7 @@ impl TypedTreeBuilder<'_> {
                     span,
                     kind: typed_ast::StmtKind::Break,
                 })],
+                frame: None,
             },
         };
         let match_expr = typed_ast::Expr {
@@ -733,6 +997,7 @@ impl TypedTreeBuilder<'_> {
                         span,
                         kind: typed_ast::StmtKind::Expr(match_expr),
                     })],
+                    frame: None,
                 },
             ),
         }));
@@ -744,6 +1009,7 @@ impl TypedTreeBuilder<'_> {
                 args: vec![],
                 span,
                 body: nodes,
+                frame: None,
             }),
             span,
             ownership: Default::default(),
@@ -846,6 +1112,7 @@ impl TypedTreeBuilder<'_> {
                     id: self.syn_id(file),
                     span,
                     kind: typed_ast::PatternKind::Bind(name),
+                    ty: None,
                 },
                 type_annotation: None,
                 rhs: Some(rhs),
@@ -890,16 +1157,20 @@ impl TypedTreeBuilder<'_> {
                     .map(crate::types::ty::Scheme::mono)
             })
             .unwrap_or_else(|| crate::types::ty::Scheme::mono(crate::types::ty::Ty::Error));
+        let params = self.params(&f.params);
+        let body = self.frame_block(&f.body, &params);
         typed_ast::Func {
             id: f.id,
             name: f.name.clone(),
             effects: f.effects.clone(),
             scheme,
+            receiver: crate::node_kinds::decl::ReceiverMode::None,
+            bound_as: None,
             generics: f.generics.clone(),
             captures: f.captures.clone(),
             where_clause: f.where_clause.clone(),
-            params: self.params(&f.params),
-            body: self.block(&f.body),
+            params,
+            body,
             ret: f.ret.clone(),
             attributes: f.attributes.clone(),
         }
@@ -978,11 +1249,15 @@ impl TypedTreeBuilder<'_> {
                 body: self.body(body),
                 conformances: conformances.clone(),
             },
-            decl::DeclKind::Init { name, params, body } => typed_ast::DeclKind::Init {
-                name: name.clone(),
-                params: self.params(params),
-                body: self.block(body),
-            },
+            decl::DeclKind::Init { name, params, body } => {
+                let params = self.params(params);
+                let body = self.frame_block(body, &params);
+                typed_ast::DeclKind::Init {
+                    name: name.clone(),
+                    params,
+                    body,
+                }
+            }
             decl::DeclKind::Property {
                 name,
                 is_static,
@@ -999,11 +1274,15 @@ impl TypedTreeBuilder<'_> {
                 func,
                 is_static,
                 receiver_mode,
-            } => typed_ast::DeclKind::Method {
-                func: Box::new(self.func(func)),
-                is_static: *is_static,
-                receiver_mode: *receiver_mode,
-            },
+            } => {
+                let mut func = self.func(func);
+                func.receiver = *receiver_mode;
+                typed_ast::DeclKind::Method {
+                    func: Box::new(func),
+                    is_static: *is_static,
+                    receiver_mode: *receiver_mode,
+                }
+            }
             decl::DeclKind::Associated {
                 generic,
                 where_clause,

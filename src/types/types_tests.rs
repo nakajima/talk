@@ -3035,6 +3035,32 @@ pub mod tests {
     // ----- Milestone 5: effects -----------------------------------------
 
     #[test]
+    fn inline_ir_arithmetic_on_an_unsupported_scalar_is_rejected() {
+        let t = check("// no-core\nfunc bad() -> Bool {\n\t@unsafe { @_ir { %? = add Bool true false } }\n}");
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("inline IR arithmetic on")),
+            "expected the checker to reject non-numeric IR arithmetic: {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn inline_ir_comparison_on_an_unsupported_scalar_is_rejected() {
+        let t = check(
+            "// no-core\nstruct S {\n\tlet n: Int\n}\nfunc bad() -> Bool {\n\t@unsafe { @_ir { %? = cmp S 1 < 2 } }\n}",
+        );
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("inline IR comparisons on")),
+            "expected the checker to reject the comparison scalar: {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
     fn inline_ir_infers_the_intrinsic_unsafe_effect() {
         let t = check("// no-core\nfunc raw() -> Int {\n\t@_ir { %? = add Int 1 2 }\n}");
         assert_clean(&t);
@@ -3067,6 +3093,39 @@ pub mod tests {
                 .iter()
                 .any(|error| error.contains("No handler for 'unsafe")),
             "the legacy file comment must not bypass the effect: {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn raw_pointer_escaping_an_unsafe_block_needs_outer_authority() {
+        // The wrapper's own type is checked in the outer context: a RawPtr
+        // cannot escape merely by being the block's result.
+        let t = check(
+            "// no-core\nlet pointer: RawPtr = @unsafe { __IR(\"$? = alloc int 1\") }\n()",
+        );
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("No handler for 'unsafe")),
+            "a RawPtr result must not escape the unsafe block: {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn nested_func_does_not_inherit_lexical_unsafe_authority() {
+        // The mask covers calls made inside the block, not the bodies of
+        // nested function literals: their `'unsafe` stays in the scheme, so
+        // an escaped function still demands authority at its call site.
+        let t = check(
+            "// no-core\nlet f = @unsafe {\n\tfunc inner() -> Int {\n\t\t@_ir { %? = add Int 1 2 }\n\t}\n\tinner\n}\nlet n = f()\n()",
+        );
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("No handler for 'unsafe")),
+            "calling the escaped function outside the block must fail: {:?}",
             type_errors(&t)
         );
     }
@@ -3427,6 +3486,401 @@ pub mod tests {
         assert!(
             !errors.is_empty(),
             "expected an error for continue-with-value outside a handler"
+        );
+    }
+
+    #[test]
+    fn protocol_head_deinit_conformances_are_rejected() {
+        // Deinit commits per family head (ADR 0038): drop sites
+        // dereference the head's published rows, so a hook reaching a
+        // family only through a protocol has no home. Core is needed —
+        // `Deinit`'s identity is the well-known core protocol.
+        let t = Driver::new(
+            vec![Source::from(
+                "protocol Marker {}\nextend Marker: Deinit {\n\tconsuming func deinit() -> Void { () }\n}",
+            )],
+            DriverConfig::new("TypesTest"),
+        )
+        .parse()
+        .expect("parse failed")
+        .resolve_names()
+        .expect("name resolution failed")
+        .type_check();
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("`Deinit` conformances on a protocol head")),
+            "expected the protocol-head Deinit row to be rejected: {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn conformance_rows_commit_ordered_dictionaries() {
+        // Row completion (ADR 0038): every conformance row carries one
+        // committed entry per protocol requirement, in declaration
+        // order — the declared witness, or the protocol's default body.
+        // Lowering dereferences entries; it never selects by name.
+        use crate::name_resolution::symbol::Symbol;
+        use crate::types::catalog::DictionaryEntry;
+        let t = check(
+            "// no-core\nprotocol Greet {\n\tfunc hello() -> Int\n\tfunc again() -> Int {\n\t\tself.hello()\n\t}\n}\nextend Int: Greet {\n\tfunc hello() -> Int { 1 }\n}",
+        );
+        assert_clean(&t);
+        let catalog = &t.phase.program.types().catalog;
+        let row = catalog
+            .conformances
+            .values()
+            .find(|row| row.head == Symbol::Int)
+            .expect("the Int: Greet row exists");
+        let hello = *row
+            .witnesses
+            .get("hello")
+            .expect("the declared witness is recorded");
+        let info = catalog
+            .protocols
+            .values()
+            .next()
+            .expect("the protocol is collected");
+        let again = info
+            .requirements
+            .get("again")
+            .expect("the defaulted requirement is registered")
+            .symbol;
+        assert_eq!(
+            row.dictionary,
+            vec![
+                DictionaryEntry::Implementation {
+                    symbol: hello,
+                    writeback_width: 0,
+                },
+                DictionaryEntry::Implementation {
+                    symbol: again,
+                    writeback_width: 0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn committed_dictionary_entries_carry_writeback_widths() {
+        // A `mut func` requirement's receiver is an exclusive borrow, so
+        // every implementation returns `(result, final self)`; the
+        // committed entry carries that declared width so lowering never
+        // rescans schemes for it.
+        use crate::name_resolution::symbol::Symbol;
+        use crate::types::catalog::DictionaryEntry;
+        let t = check(
+            "// no-core\nprotocol Bump {\n\tmut func bump() -> Void\n}\nextend Int: Bump {\n\tmut func bump() -> Void { () }\n}",
+        );
+        assert_clean(&t);
+        let catalog = &t.phase.program.types().catalog;
+        let row = catalog
+            .conformances
+            .values()
+            .find(|row| row.head == Symbol::Int)
+            .expect("the Int: Bump row exists");
+        let bump = *row
+            .witnesses
+            .get("bump")
+            .expect("the declared witness is recorded");
+        assert_eq!(
+            row.dictionary,
+            vec![DictionaryEntry::Implementation {
+                symbol: bump,
+                writeback_width: 1,
+            }]
+        );
+        // The declared receiver mode is a committed requirement fact
+        // too — lowering reads it, never rescans schemes.
+        let info = catalog
+            .protocols
+            .values()
+            .next()
+            .expect("the protocol is collected");
+        assert!(info.requirements["bump"].mut_receiver);
+    }
+
+    #[test]
+    fn derived_dictionaries_come_from_committed_recipes() {
+        // Derived Showable/Equatable conformances have no row; their
+        // dictionaries come from the recipe registry keyed by the
+        // well-known protocol identity — requirements without a default
+        // get the structural recipe, defaulted ones their default body.
+        use crate::name_resolution::symbol::Symbol;
+        use crate::types::catalog::{DerivedRecipe, DictionaryEntry};
+        let t = Driver::new(
+            vec![Source::from("struct Point {\n\tlet x: Int\n}\n")],
+            DriverConfig::new("TypesTest"),
+        )
+        .parse()
+        .expect("parse failed")
+        .resolve_names()
+        .expect("name resolution failed")
+        .type_check();
+        assert_clean(&t);
+        let catalog = &t.phase.program.types().catalog;
+        let show = catalog
+            .derived_dictionary(Symbol::Showable)
+            .expect("core Showable is derivable");
+        assert_eq!(show, vec![DictionaryEntry::Derived(DerivedRecipe::Show)]);
+        let equatable = catalog
+            .derived_dictionary(Symbol::Equatable)
+            .expect("core Equatable is derivable");
+        assert_eq!(
+            equatable[0],
+            DictionaryEntry::Derived(DerivedRecipe::Equality)
+        );
+        assert!(
+            matches!(
+                equatable[1],
+                DictionaryEntry::Implementation {
+                    writeback_width: 0,
+                    ..
+                }
+            ),
+            "notEquals uses its default body: {equatable:?}"
+        );
+        assert_eq!(equatable.len(), 2);
+    }
+
+    #[test]
+    fn catalog_commits_callable_owner_bindings() {
+        // The owner-binding index (ADR 0038): check-mode compilation
+        // binds a member body's owner parameters from a committed
+        // symbol-keyed index, never by scanning every catalog's
+        // structs/enums/extends/protocols per query.
+        use crate::types::catalog::OwnerBinding;
+        let t = check(
+            "// no-core\nstruct Holder<T> {\n\tlet v: T\n\tfunc get() -> T { self.v }\n}\nenum Flag {\n\tcase up\n\tfunc tag() -> Int { 0 }\n}\nextend<X> Holder<X> {\n\tfunc peek() -> X { self.get() }\n}\nprotocol P {\n\tfunc p() -> Int\n\tfunc q() -> Int { self.p() }\n}",
+        );
+        assert_clean(&t);
+        let catalog = &t.phase.program.types().catalog;
+
+        let (_, holder) = catalog.structs.iter().next().expect("Holder collected");
+        let holder_params: Vec<_> = holder.params.iter().map(|param| param.symbol).collect();
+        let get = holder.methods["get"];
+        assert_eq!(
+            catalog.callable_owners.get(&get),
+            Some(&OwnerBinding::Nominal {
+                params: holder_params
+            })
+        );
+
+        let (_, flag) = catalog.enums.iter().next().expect("Flag collected");
+        let tag = flag.methods["tag"];
+        assert_eq!(
+            catalog.callable_owners.get(&tag),
+            Some(&OwnerBinding::Nominal { params: vec![] })
+        );
+
+        let row = catalog
+            .extend_members
+            .values()
+            .flat_map(|members| members.get("peek"))
+            .flatten()
+            .next()
+            .expect("inherent extend member collected");
+        assert_eq!(
+            catalog.callable_owners.get(&row.symbol),
+            Some(&OwnerBinding::Nominal {
+                params: row.params.clone()
+            })
+        );
+        assert!(!row.params.is_empty(), "the extend row binds its own X");
+
+        let (protocol, info) = catalog.protocols.iter().next().expect("P collected");
+        let q = info.requirements["q"].symbol;
+        assert_eq!(
+            catalog.callable_owners.get(&q),
+            Some(&OwnerBinding::Protocol(*protocol))
+        );
+    }
+
+    #[test]
+    fn typed_funcs_carry_receiver_and_binding_facts() {
+        // Callable contract facts are baked on the typed Func node
+        // (ADR 0038): the declared receiver mode, and the binding symbol
+        // the top-level `let f = <func>` desugar aliases — lowering
+        // reads them, it never re-recognizes declaration shapes.
+        use crate::typed_ast::{DeclKind, ExprKind, Node, PatternKind};
+        let t = check(
+            "// no-core\nstruct S {\n\tlet v: Int\n\tmut func bump() -> Void { () }\n}\nfunc top() -> Int { 1 }",
+        );
+        assert_clean(&t);
+        let (_, file) = t
+            .phase
+            .program
+            .files()
+            .iter()
+            .next()
+            .expect("one typed file");
+        let mut saw_method = false;
+        let mut saw_bound = false;
+        for root in &file.roots {
+            let Node::Decl(decl) = root else { continue };
+            match &decl.kind {
+                DeclKind::Struct { body, .. } => {
+                    for member in &body.decls {
+                        if let DeclKind::Method { func, .. } = &member.kind {
+                            assert_eq!(
+                                func.receiver,
+                                crate::node_kinds::decl::ReceiverMode::Ref
+                            );
+                            saw_method = true;
+                        }
+                    }
+                }
+                DeclKind::Let {
+                    lhs,
+                    rhs: Some(rhs),
+                    ..
+                } => {
+                    let PatternKind::Bind(name) = &lhs.kind else {
+                        continue;
+                    };
+                    let ExprKind::Func(func) = &rhs.kind else {
+                        continue;
+                    };
+                    assert_eq!(func.bound_as, name.symbol().ok());
+                    assert!(func.bound_as.is_some());
+                    saw_bound = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_method, "the struct method was built");
+        assert!(saw_bound, "the top-level func desugar was built");
+    }
+
+    #[test]
+    fn typed_program_files_come_in_initialization_order() {
+        // LINK-02: a file's local imports initialize before it. Program
+        // assembly publishes the order — `files()` iterates
+        // dependency-first — so the backend never re-derives the import
+        // graph from path stems.
+        let t = Driver::new(
+            vec![
+                Source::in_memory(
+                    "App.tlk".into(),
+                    "use package::Lib::{ helper }\nlet a = helper()\n()",
+                ),
+                Source::in_memory("Lib.tlk".into(), "public func helper() -> Int { 1 }\n"),
+            ],
+            DriverConfig::new("TypesTest"),
+        )
+        .parse()
+        .expect("parse failed")
+        .resolve_names()
+        .expect("name resolution failed")
+        .type_check();
+        assert_clean(&t);
+        let order: Vec<String> = t
+            .phase
+            .program
+            .files()
+            .keys()
+            .map(|source| source.path().to_string())
+            .collect();
+        assert_eq!(order, vec!["Lib.tlk".to_string(), "App.tlk".to_string()]);
+    }
+
+    #[test]
+    fn copy_marker_requires_copy_or_cheap_clone_evidence() {
+        // The `copy` marker is a checked clone: it demands Copy or
+        // CheapClone evidence, not merely a value that happens to need no
+        // runtime cleanup.
+        let t = check(
+            "// no-core\nstruct Sock {\n\tlet fd: Int\n}\nfunc eat(consume s: Sock) -> Int { 0 }\nlet s = Sock(fd: 1)\neat(copy s)\n()",
+        );
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("Copy or CheapClone")),
+            "expected missing copy evidence to be rejected: {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn mut_marker_requires_an_exclusive_borrow_parameter() {
+        let t = check(
+            "// no-core\nfunc eat(consume n: Int) -> Int { n }\nlet x = 1\neat(mut x)\n()",
+        );
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("`mut` marker requires a `mut` parameter")),
+            "expected a marker/parameter mismatch: {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn borrow_marker_requires_a_borrowing_parameter() {
+        let t = check(
+            "// no-core\nfunc eat(consume n: Int) -> Int { n }\nlet x = 1\neat(borrow x)\n()",
+        );
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("`borrow` marker requires a borrowing parameter")),
+            "expected a marker/parameter mismatch: {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn mut_marker_on_a_mut_parameter_is_clean() {
+        let t = check(
+            "// no-core\nfunc set(mut n: Int) -> () {\n\tn = 2\n}\nlet x = 1\nset(mut x)\n()",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn copy_marker_with_copy_evidence_is_clean() {
+        let t = check("// no-core\nfunc eat(consume n: Int) -> Int { n }\nlet n = 1\neat(copy n)\n()");
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn break_outside_a_loop_is_rejected() {
+        let t = check("// no-core\nfunc f() -> () {\n\tbreak\n}");
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("`break` outside a loop")),
+            "expected an error for break outside a loop: {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn continue_outside_a_loop_is_rejected() {
+        let t = check("// no-core\nfunc f() -> () {\n\tcontinue\n}");
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("`continue` outside a loop")),
+            "expected an error for continue outside a loop: {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn break_in_a_nested_func_does_not_see_the_outer_loop() {
+        // A function boundary resets loop context: the nested body cannot
+        // break the loop it is lexically inside.
+        let t = check(
+            "// no-core\nfunc f() -> () {\n\tloop true {\n\t\tlet g = func() -> () {\n\t\t\tbreak\n\t\t}\n\t\tg()\n\t}\n}",
+        );
+        assert!(
+            type_errors(&t)
+                .iter()
+                .any(|error| error.contains("`break` outside a loop")),
+            "expected an error for break inside a nested function: {:?}",
+            type_errors(&t)
         );
     }
 
@@ -4484,26 +4938,21 @@ pub mod tests {
 
     #[test]
     fn gadt_derived_showable_ignores_impossible_payloads() {
-        let typed = check(
-            "// no-core
-            protocol Showable {
-                func show() -> Int
-            }
-            extend Int: Showable {
-                func show() -> Int { 1 }
-            }
-            enum GBox<T> {
-                case int(Int) -> GBox<Int>
-                case hidden<A>(A) -> GBox<Bool>
-            }
-
-            func render<T: Showable>(value: T) -> Int {
-                value.show()
-            }
-
-            render(GBox.int(1))
-            ",
-        );
+        // Derivation is keyed by the well-known core protocol identity,
+        // so this pin runs against core's Showable: GBox<Int>'s derived
+        // row must ignore the `hidden` variant its result refinement
+        // rules out.
+        let typed = Driver::new(
+            vec![Source::from(
+                "enum GBox<T> {\n\tcase int(Int) -> GBox<Int>\n\tcase hidden<A>(A) -> GBox<Bool>\n}\n\nfunc render<T: Showable>(value: T) -> String {\n\tvalue.show()\n}\n\nrender(GBox.int(1))\n()\n",
+            )],
+            DriverConfig::new("TypesTest"),
+        )
+        .parse()
+        .expect("parse failed")
+        .resolve_names()
+        .expect("name resolution failed")
+        .type_check();
         assert_clean(&typed);
     }
 

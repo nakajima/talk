@@ -39,7 +39,7 @@ impl TypedProgram {
             files.insert(source, file);
         }
         Self {
-            files,
+            files: in_initialization_order(files),
             resolved_names,
             types,
         }
@@ -60,4 +60,71 @@ impl TypedProgram {
     pub(crate) fn into_semantic_parts(self) -> (ResolvedNames, TypeOutput) {
         (self.resolved_names, self.types)
     }
+}
+
+/// Order a program's files so a file's local imports initialize before
+/// it (LINK-02: deterministic, dependency-first globals) — the published
+/// order every consumer of `files()` iterates in. Import edges come from
+/// `use package::Module` markers matched to sibling file stems; files
+/// without edges keep their discovery order, and a cycle falls back to
+/// discovery order for the remainder.
+fn in_initialization_order(
+    files: IndexMap<Source, crate::typed_ast::TypedFile>,
+) -> IndexMap<Source, crate::typed_ast::TypedFile> {
+    use crate::node_kinds::decl::ImportPath;
+    use crate::typed_ast::{DeclKind, Node};
+    use rustc_hash::FxHashMap;
+
+    let position: FxHashMap<String, usize> = files
+        .keys()
+        .enumerate()
+        .filter_map(|(index, source)| {
+            source
+                .source_path()
+                .and_then(|path| path.file_stem())
+                .and_then(|stem| stem.to_str())
+                .map(|stem| (stem.to_string(), index))
+        })
+        .collect();
+    let mut deps: Vec<Vec<usize>> = vec![Vec::new(); files.len()];
+    for (index, file) in files.values().enumerate() {
+        for root in &file.roots {
+            if let Node::Decl(decl) = root
+                && let DeclKind::Import(import) = &decl.kind
+                && let ImportPath::Local(path) = &import.path
+                && let Some(stem) = path.rsplit("::").next()
+                && let Some(&target) = position.get(stem)
+                && target != index
+            {
+                deps[index].push(target);
+            }
+        }
+    }
+    // Depth-first with insertion-order roots: every file keeps its
+    // discovery position except that its imports hoist ahead of it; a
+    // cycle breaks at the back edge.
+    fn visit(index: usize, deps: &[Vec<usize>], state: &mut [u8], order: &mut Vec<usize>) {
+        if state[index] != 0 {
+            return;
+        }
+        state[index] = 1;
+        for &dep in &deps[index] {
+            if state[dep] == 0 {
+                visit(dep, deps, state, order);
+            }
+        }
+        state[index] = 2;
+        order.push(index);
+    }
+    let mut state = vec![0u8; files.len()];
+    let mut indexes = Vec::with_capacity(files.len());
+    for index in 0..files.len() {
+        visit(index, &deps, &mut state, &mut indexes);
+    }
+    let mut entries: Vec<Option<(Source, crate::typed_ast::TypedFile)>> =
+        files.into_iter().map(Some).collect();
+    indexes
+        .into_iter()
+        .filter_map(|index| entries[index].take())
+        .collect()
 }

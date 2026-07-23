@@ -27,7 +27,7 @@ impl<'a> ProgramBuilder<'a> {
                             ..
                         },
                     ) => (decl.visibility, &func.name, func),
-                    Node::Decl(decl) => match let_bound_func(decl) {
+                    Node::Decl(decl) => match bound_func(decl) {
                         Some((bound, func)) => (decl.visibility, bound, func),
                         None => continue,
                     },
@@ -69,13 +69,15 @@ impl<'a> ProgramBuilder<'a> {
         // reachable unit). Top-level bindings are program globals with
         // static slots, initialized in statement order (LINK-02), so
         // handler clauses and closures share them without captures.
+        // `files()` comes published in initialization order (LINK-02).
         let program = self.programs[0].program;
-        let script: Vec<&Node> = files_in_initialization_order(program)
-            .into_iter()
+        let script: Vec<&Node> = program
+            .files()
+            .values()
             .flat_map(|file| file.roots.iter())
             .filter(|node| match node {
                 Node::Decl(decl) => {
-                    matches!(decl.kind, DeclKind::Let { .. }) && let_bound_func(decl).is_none()
+                    matches!(decl.kind, DeclKind::Let { .. }) && bound_func(decl).is_none()
                 }
                 // Named `func` declarations surface as expression nodes in
                 // scripts; they declare callables rather than execute.
@@ -122,7 +124,7 @@ impl<'a> ProgramBuilder<'a> {
                     ..
                 } = &decl.kind
             {
-                if let Some((_, func)) = let_bound_func(decl)
+                if let Some((_, func)) = bound_func(decl)
                     && func
                         .scheme
                         .params
@@ -159,7 +161,7 @@ impl<'a> ProgramBuilder<'a> {
                     // ADR 0035: a static-value-generic function has no
                     // slot (see registration above) and no generic clause
                     // to compile — skip its initializer entirely.
-                    if let Some((_, func)) = let_bound_func(decl)
+                    if let Some((_, func)) = bound_func(decl)
                         && func
                             .scheme
                             .params
@@ -297,13 +299,14 @@ impl<'a> ProgramBuilder<'a> {
     pub(super) fn build_named_entry(&mut self, name: &str) -> Result<FuncId, BackendError> {
         let symbol = self.named_entry(name, true)?;
         let program = self.programs[0].program;
-        let lets: Vec<&Decl> = files_in_initialization_order(program)
-            .into_iter()
+        let lets: Vec<&Decl> = program
+            .files()
+            .values()
             .flat_map(|file| file.roots.iter())
             .filter_map(|node| match node {
                 Node::Decl(decl)
                     if matches!(decl.kind, DeclKind::Let { .. })
-                        && let_bound_func(decl).is_none() =>
+                        && bound_func(decl).is_none() =>
                 {
                     Some(decl)
                 }
@@ -316,12 +319,10 @@ impl<'a> ProgramBuilder<'a> {
         }
         for decl in &lets {
             if let DeclKind::Let {
-                lhs,
-                rhs: Some(rhs),
-                ..
+                lhs, rhs: Some(_), ..
             } = &decl.kind
             {
-                for (symbol, ty) in pattern_bindings_with_tys(lhs, &rhs.ty) {
+                for (symbol, ty) in pattern_bindings_with_tys(lhs) {
                     let slot = u32::try_from(self.global_slots.len()).unwrap_or_default();
                     self.global_slots.insert(symbol, slot);
                     self.global_tys
@@ -345,9 +346,7 @@ impl<'a> ProgramBuilder<'a> {
                 // Destructure into frame locals, then transfer each
                 // component into its slot.
                 let DeclKind::Let {
-                    lhs,
-                    rhs: Some(rhs),
-                    ..
+                    lhs, rhs: Some(_), ..
                 } = &decl.kind
                 else {
                     return Err(BackendError::unsupported(
@@ -356,7 +355,7 @@ impl<'a> ProgramBuilder<'a> {
                     ));
                 };
                 fx.compile_decl(decl)?;
-                for (symbol, _) in pattern_bindings_with_tys(lhs, &rhs.ty) {
+                for (symbol, _) in pattern_bindings_with_tys(lhs) {
                     let Some(local) = fx.locals.get(&symbol).copied() else {
                         continue;
                     };

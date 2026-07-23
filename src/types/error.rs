@@ -47,6 +47,12 @@ pub enum TypeError {
         ty: String,
         protocol: String,
     },
+    /// A call-site ownership marker (ADR 0018) that disagrees with the
+    /// callee's parameter mode.
+    ArgMarkerMismatch {
+        marker: String,
+        requires: String,
+    },
     EqualityNotSupported {
         lhs: String,
         rhs: String,
@@ -269,6 +275,7 @@ impl TypeError {
             Self::InvalidAssignmentTarget => "type.invalid-assignment-target",
             Self::AssignThroughSharedBorrow { .. } => "type.assign-through-shared-borrow",
             Self::NotConforming { .. } => "type.not-conforming",
+            Self::ArgMarkerMismatch { .. } => "type.arg-marker-mismatch",
             Self::EqualityNotSupported { .. } => "type.equality-not-supported",
             Self::AmbiguousMember { .. } => "type.ambiguous-member",
             Self::MissingWitness { .. } => "type.missing-witness",
@@ -438,6 +445,9 @@ impl Display for TypeError {
             }
             TypeError::NotConforming { ty, protocol } => {
                 write!(f, "{ty} does not conform to {protocol}")
+            }
+            TypeError::ArgMarkerMismatch { marker, requires } => {
+                write!(f, "the `{marker}` marker requires {requires}")
             }
             TypeError::EqualityNotSupported { lhs, rhs } => {
                 write!(f, "Cannot compare {lhs} with {rhs} for equality")

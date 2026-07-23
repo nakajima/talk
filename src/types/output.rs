@@ -52,6 +52,136 @@ pub struct ExistentialPack {
     pub payload: Ty,
 }
 
+/// The checked contract of one effect site — a perform or a handler
+/// (ADR 0038). Declared parameter types keep rigid generics as
+/// `Ty::Param`; the type-generic list fixes the hidden witness-block
+/// layout both sides must agree on. Lowering never reloads effect
+/// signatures.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EffectContract {
+    pub params: Vec<Ty>,
+    pub type_generics: Vec<Symbol>,
+}
+
+/// A checked inline-IR operation (ADR 0038): canonical operation
+/// identity, checked types, and validated operands. Types stay frontend
+/// types — a generic annotation substitutes per instance during backend
+/// specialization, and memory-kind selection from the substituted type
+/// is lowering's representation work. Lowering only emits the
+/// corresponding MIR operation; it never interprets parser instructions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckedIrKind {
+    /// A scalar computation whose (type, operation) combination the
+    /// checker validated.
+    Scalar {
+        op: IrScalarOp,
+        a: IrOperand,
+        b: Option<IrOperand>,
+    },
+    Alloc { elem: Ty, count: IrOperand },
+    Free { ptr: IrOperand },
+    Retain { ty: Ty, value: IrOperand },
+    IsUnique { ptr: IrOperand },
+    Load { ty: Ty, addr: IrOperand },
+    Store {
+        ty: Ty,
+        value: IrOperand,
+        addr: IrOperand,
+    },
+    Swap { ty: Ty, a: IrOperand, b: IrOperand },
+    Take { ty: Ty, value: IrOperand },
+    MemCopy {
+        from: IrOperand,
+        to: IrOperand,
+        length: IrOperand,
+    },
+    InlineGet { array: IrOperand, index: IrOperand },
+    Gep {
+        elem: Ty,
+        addr: IrOperand,
+        offset: IrOperand,
+    },
+    IoWrite {
+        fd: IrOperand,
+        buf: IrOperand,
+        count: IrOperand,
+    },
+}
+
+/// The scalar operations inline IR may perform, with their operand
+/// scalar committed — every combination here is checker-validated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IrScalarOp {
+    IntAdd,
+    IntSub,
+    IntMul,
+    IntDiv,
+    FloatAdd,
+    FloatSub,
+    FloatMul,
+    FloatDiv,
+    IntAnd,
+    IntOr,
+    IntXor,
+    IntShl,
+    IntShr,
+    IntNot,
+    ByteAnd,
+    ByteOr,
+    ByteXor,
+    ByteShl,
+    ByteShr,
+    ByteNot,
+    IntCmp(IrCmp),
+    FloatCmp(IrCmp),
+    ByteCmp(IrCmp),
+    /// Only equality and inequality — validated at the perform site.
+    BoolCmp(IrCmp),
+    FloatToIntTrunc,
+    IntToFloat,
+    ByteToInt,
+    /// `add RawPtr ptr offset`: byte-wise pointer arithmetic.
+    PtrAdd,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IrCmp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+/// A validated inline-IR operand: `%N` names the enclosing function's
+/// N-th parameter, `$N` the N-th bound sub-expression, immediates carry
+/// their value. Float equality is bit identity (canonical literals).
+#[derive(Clone, Copy, Debug)]
+pub enum IrOperand {
+    Reg(u16),
+    Bind(u16),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Void,
+}
+
+impl PartialEq for IrOperand {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Reg(a), Self::Reg(b)) | (Self::Bind(a), Self::Bind(b)) => a == b,
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Float(a), Self::Float(b)) => a.to_bits() == b.to_bits(),
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Void, Self::Void) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for IrOperand {}
+
 /// How a member access resolved. Concrete conformance dispatch publishes the
 /// committed row, witness, and row substitution (ADR 0036's two-point rule:
 /// typing commits everything decidable at typing time). A receiver still
@@ -137,6 +267,25 @@ pub struct TypeOutput {
     pub local_tys: FxHashMap<Symbol, Ty>,
     /// Expression nodes implicitly packed into an existential expected type.
     pub existential_packs: FxHashMap<NodeID, ExistentialPack>,
+    /// Checked inline-IR operation per `@_ir` expression (ADR 0038). The
+    /// typed-tree build bakes these onto the tree; lowering never
+    /// interprets parser instructions.
+    pub checked_ir: FxHashMap<NodeID, CheckedIrKind>,
+    /// Checked effect contract per perform expression and handler
+    /// statement (ADR 0038), baked onto the typed tree.
+    pub effect_contracts: FxHashMap<NodeID, EffectContract>,
+    /// Each checked pattern occurrence's finalized type (pre-view:
+    /// binders keep their borrows), record-field slots included, baked
+    /// onto the typed tree (ADR 0038).
+    pub pattern_tys: FxHashMap<NodeID, Ty>,
+    /// Per struct pattern: one slot per stored field in declaration
+    /// order — the instantiated field type and the covering sub-pattern
+    /// node (ADR 0038), baked onto the typed tree as indices.
+    pub struct_pattern_slots: FxHashMap<NodeID, Vec<(Ty, Option<NodeID>)>>,
+    /// Per record pattern on a closed named row: one slot per row field
+    /// in layout order — slot type and covering written field
+    /// (ADR 0038). Open or unresolved rows have no entry.
+    pub record_pattern_slots: FxHashMap<NodeID, Vec<(Ty, Option<NodeID>)>>,
     /// Imported and local symbol names merged for diagnostics and editor views.
     pub display_names: FxHashMap<Symbol, String>,
 }

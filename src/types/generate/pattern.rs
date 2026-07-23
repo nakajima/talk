@@ -304,6 +304,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     // ----- Patterns -----------------------------------------------------
 
     pub(super) fn check_pattern(&mut self, pattern: &Pattern, expected: &Ty) -> PatternRefinement {
+        // Publish this occurrence's type (ADR 0038): pre-view, so a
+        // binder's type keeps the borrow it holds.
+        self.artifacts
+            .pattern_tys
+            .insert(pattern.id, expected.clone());
         // Borrowing is not part of pattern syntax. View through a borrow at
         // every pattern occurrence, not only at the match root: aggregate
         // projections can themselves be borrowed values. A variable-headed
@@ -502,11 +507,25 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let mut row_fields: Vec<(Label, Ty)> = vec![];
                 let mut open = false;
                 let mut refinement = PatternRefinement::default();
+                self.artifacts.record_pattern_labels.insert(
+                    pattern.id,
+                    fields
+                        .iter()
+                        .filter_map(|field| match &field.kind {
+                            RecordFieldPatternKind::Bind(name)
+                            | RecordFieldPatternKind::Equals { name, .. } => {
+                                Some((name.name_str(), field.id))
+                            }
+                            RecordFieldPatternKind::Rest => None,
+                        })
+                        .collect(),
+                );
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
                             let ty = Ty::Var(self.store.fresh_ty(self.level, field.id));
                             row_fields.push((Label::Named(name.name_str()), ty.clone()));
+                            self.artifacts.pattern_tys.insert(field.id, ty.clone());
                             if let Ok(symbol) = name.symbol() {
                                 self.mono.insert(symbol, ty);
                             }
@@ -514,6 +533,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         RecordFieldPatternKind::Equals { name, value, .. } => {
                             let ty = Ty::Var(self.store.fresh_ty(self.level, field.id));
                             row_fields.push((Label::Named(name.name_str()), ty.clone()));
+                            self.artifacts.pattern_tys.insert(field.id, ty.clone());
                             if let Ok(symbol) = name.symbol() {
                                 self.mono.insert(symbol, ty.clone());
                             }
@@ -626,6 +646,23 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             })
             .collect();
 
+        // One slot per stored field in declaration order (ADR 0038): the
+        // instantiated field type — the same substitution the
+        // sub-patterns check against — and the written sub-pattern
+        // covering the slot, published for lowering's cell construction.
+        let mut slots: Vec<(Ty, Option<NodeID>)> = info
+            .fields
+            .values()
+            .map(|(_, field_ty)| {
+                (
+                    field_ty
+                        .clone()
+                        .substitute(&substitution, &Default::default(), &Default::default())
+                        .substitute_eff_rows(&eff_rows),
+                    None,
+                )
+            })
+            .collect();
         let mut refinement = PatternRefinement::default();
         let mut seen: Vec<String> = Vec::new();
         for (name, field) in field_names.iter().zip(fields) {
@@ -641,7 +678,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 continue;
             }
             seen.push(label.clone());
-            let Some((_, field_ty)) = info.fields.get(&label) else {
+            let Some(slot) = info.fields.get_index_of(&label) else {
                 self.diagnostics.errors.push((
                     TypeError::UnknownMember {
                         receiver: self.store.render(expected),
@@ -651,12 +688,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 ));
                 continue;
             };
-            let field_ty = field_ty
-                .clone()
-                .substitute(&substitution, &Default::default(), &Default::default())
-                .substitute_eff_rows(&eff_rows);
+            let field_ty = slots[slot].0.clone();
+            slots[slot].1 = Some(sub.id);
             refinement.extend(self.check_pattern(sub, &field_ty));
         }
+        self.artifacts.struct_pattern_slots.insert(pattern.id, slots);
         if !rest {
             let missing: Vec<String> = info
                 .fields

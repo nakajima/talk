@@ -124,6 +124,30 @@ impl<'a> TypecheckSession<'a> {
         }
     }
 
+    /// Whether a `copy`-marked argument of this (resolved) type has the
+    /// evidence an explicit clone requires: Copy or CheapClone, judged
+    /// through a borrow and componentwise through tuples.
+    fn copy_marker_coerces(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Borrow(_, inner) => self.copy_marker_coerces(inner),
+            Ty::Tuple(items) => items.iter().all(|item| self.copy_marker_coerces(item)),
+            Ty::Nominal(symbol, args) => {
+                self.catalog.coerce_kind_application(*symbol, args).is_some()
+            }
+            Ty::Param(param) => {
+                let bounds = self
+                    .catalog
+                    .param_bounds
+                    .get(param)
+                    .cloned()
+                    .unwrap_or_default();
+                self.catalog.bounds_coerce_kind(&bounds).is_some()
+            }
+            Ty::Error => true,
+            _ => false,
+        }
+    }
+
     pub(super) fn finalize(mut self) -> (TypeOutput, Vec<AnyDiagnostic>) {
         // ADR 0035 §5: no unresolved static metavariable may survive
         // finalization. A hole with no unique solution reports here, at
@@ -133,6 +157,87 @@ impl<'a> TypecheckSession<'a> {
             self.diagnostics
                 .errors
                 .push((TypeError::UnderdeterminedStaticArgument, origin));
+        }
+        // Call-site marker checks (ADR 0038): typing owns marker
+        // legality; lowering only realizes the already-checked use.
+        // `copy` needs Copy/CheapClone evidence; `mut` and `borrow`
+        // must agree with the callee's parameter mode.
+        for (node, slot, mode) in std::mem::take(&mut self.artifacts.marked_args) {
+            use crate::parsing::node_kinds::call_arg::ArgMode;
+            // The parameter type the marker must agree with. Through an
+            // unresolved callee, index its solved function type from the
+            // right (member types may exclude the receiver); an
+            // unresolved or non-function callee already errored.
+            let param = match &slot {
+                MarkedSlot::Param(ty) => Some(self.final_ty(ty)),
+                MarkedSlot::CalleeIndexed {
+                    callee,
+                    index,
+                    arg_count,
+                    ..
+                } => {
+                    let mut callee = self.final_ty(callee);
+                    while let Ty::Borrow(_, inner) = callee {
+                        callee = *inner;
+                    }
+                    match callee {
+                        Ty::Func(params, _, _) if params.len() >= *arg_count => {
+                            Some(params[params.len() - arg_count + index].clone())
+                        }
+                        _ => None,
+                    }
+                }
+            };
+            match mode {
+                ArgMode::Copy => {
+                    // Evidence is about the value the copy duplicates:
+                    // the argument's own type when the slot came through
+                    // an unresolved callee.
+                    let ty = match &slot {
+                        MarkedSlot::Param(_) => param.clone(),
+                        MarkedSlot::CalleeIndexed { arg_ty, .. } => Some(self.final_ty(arg_ty)),
+                    };
+                    if let Some(ty) = ty
+                        && !self.copy_marker_coerces(&ty)
+                    {
+                        let rendered = self.store.render(&ty);
+                        self.diagnostics.errors.push((
+                            TypeError::NotConforming {
+                                ty: rendered,
+                                protocol: "Copy or CheapClone".to_string(),
+                            },
+                            node,
+                        ));
+                    }
+                }
+                ArgMode::Mut => {
+                    if let Some(param) = param
+                        && !matches!(param, Ty::Error | Ty::Borrow(Perm::Exclusive, _))
+                    {
+                        self.diagnostics.errors.push((
+                            TypeError::ArgMarkerMismatch {
+                                marker: "mut".to_string(),
+                                requires: "a `mut` parameter".to_string(),
+                            },
+                            node,
+                        ));
+                    }
+                }
+                ArgMode::Borrow => {
+                    if let Some(param) = param
+                        && !matches!(param, Ty::Error | Ty::Borrow(_, _))
+                    {
+                        self.diagnostics.errors.push((
+                            TypeError::ArgMarkerMismatch {
+                                marker: "borrow".to_string(),
+                                requires: "a borrowing parameter".to_string(),
+                            },
+                            node,
+                        ));
+                    }
+                }
+                ArgMode::Consume => {}
+            }
         }
         let mut schemes = FxHashMap::default();
         for (symbol, mut scheme) in std::mem::take(&mut self.schemes) {
@@ -355,6 +460,79 @@ impl<'a> TypecheckSession<'a> {
             local_tys.insert(symbol, self.final_ty(&ty));
         }
 
+        let mut pattern_tys = FxHashMap::default();
+        for (node, ty) in std::mem::take(&mut self.artifacts.pattern_tys) {
+            pattern_tys.insert(node, self.final_ty(&ty));
+        }
+
+        let mut struct_pattern_slots = FxHashMap::default();
+        for (node, slots) in std::mem::take(&mut self.artifacts.struct_pattern_slots) {
+            let slots: Vec<(Ty, Option<crate::node_id::NodeID>)> = slots
+                .into_iter()
+                .map(|(ty, sub)| (self.final_ty(&ty), sub))
+                .collect();
+            struct_pattern_slots.insert(node, slots);
+        }
+
+        // Record-pattern slots assemble here, once the row has solved:
+        // the final row fixes the layout order; the recorded labels map
+        // each slot to its written field. Open or non-record occurrences
+        // publish nothing (lowering rejects them as unsupported).
+        let mut record_pattern_slots = FxHashMap::default();
+        for (node, labels) in std::mem::take(&mut self.artifacts.record_pattern_labels) {
+            let Some(occurrence) = pattern_tys.get(&node) else {
+                continue;
+            };
+            let mut occurrence = occurrence.clone();
+            while let Ty::Borrow(_, inner) = occurrence {
+                occurrence = *inner;
+            }
+            let Ty::Record(row) = occurrence else {
+                continue;
+            };
+            if row.tail.is_some() {
+                continue;
+            }
+            let mut slots: Vec<(Ty, Option<crate::node_id::NodeID>)> = Vec::new();
+            let mut named = true;
+            for (label, ty) in &row.fields {
+                let crate::label::Label::Named(label) = label else {
+                    named = false;
+                    break;
+                };
+                let field = labels
+                    .iter()
+                    .find(|(written, _)| written == label)
+                    .map(|(_, id)| *id);
+                slots.push((ty.clone(), field));
+            }
+            if named {
+                record_pattern_slots.insert(node, slots);
+            }
+        }
+
+        // Checked inline-IR ops carry embedded annotation types; zonk
+        // them like every other published type.
+        let mut checked_ir = std::mem::take(&mut self.artifacts.checked_ir);
+        for kind in checked_ir.values_mut() {
+            use crate::types::output::CheckedIrKind as C;
+            match kind {
+                C::Alloc { elem: ty, .. }
+                | C::Retain { ty, .. }
+                | C::Load { ty, .. }
+                | C::Store { ty, .. }
+                | C::Swap { ty, .. }
+                | C::Take { ty, .. }
+                | C::Gep { elem: ty, .. } => *ty = final_ty(&mut self.store, &self.catalog, ty),
+                C::Scalar { .. }
+                | C::Free { .. }
+                | C::IsUnique { .. }
+                | C::MemCopy { .. }
+                | C::InlineGet { .. }
+                | C::IoWrite { .. } => {}
+            }
+        }
+
         let diagnostics = self.diagnostics.into_diagnostics();
 
         (
@@ -371,6 +549,11 @@ impl<'a> TypecheckSession<'a> {
                 coerce_clones: self.artifacts.coerce_clones,
                 local_tys,
                 existential_packs,
+                checked_ir,
+                effect_contracts: self.artifacts.effect_contracts,
+                pattern_tys,
+                struct_pattern_slots,
+                record_pattern_slots,
                 display_names: self.artifacts.display_names,
             },
             diagnostics,

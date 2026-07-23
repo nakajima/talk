@@ -600,7 +600,7 @@ impl<'s> Solver<'s> {
                     || self.catalog.enums.contains_key(&symbol);
                 if is_derivable_head {
                     let self_ty = Ty::Nominal(symbol, args.clone());
-                    for protocol in self.catalog.derivable.clone() {
+                    for protocol in TypeCatalog::derivable_protocols() {
                         let Some(protocol) = self.catalog.derived_protocol_ref(protocol, &self_ty)
                         else {
                             continue;

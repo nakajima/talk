@@ -1592,7 +1592,6 @@ fn reference_flow_corpus_holds() {
     const KNOWN_STRICTER: &[&str] = &[
         "borrowed_generic_payload_requires_copy_or_cheap_clone_bound",
         "generic_heap_extraction_rejects_non_cheap_owned_instantiation",
-        "move_inside_handler_body_is_may_moved_after",
         "move_inside_trailing_block_is_may_moved_after",
         "rejects_borrowed_loop_element_passed_to_consuming_callback",
     ];
@@ -2847,6 +2846,25 @@ fn check_accepts_constrained_generic_bodies() {
     // Derived operations on rigid leaves dispatch the same way.
     assert_checks(
         b"func same<T: Equatable>(a: T, b: T) -> Bool { a == b }\nprint(same(a: 1, b: 1))\n",
+    );
+}
+
+#[test]
+fn generic_dispatch_reaches_derived_and_default_entries() {
+    // A receiver concrete only under an instance substitution
+    // dereferences the committed dictionary (ADR 0038): a derived
+    // Showable resolves to the structural recipe...
+    assert_runs(
+        b"struct Point {\n\tlet x: Int\n\tlet y: Int\n}\nfunc render<T: Showable>(value: T) -> String {\n\tvalue.show()\n}\nprint(render(Point(x: 1, y: 2)))\n",
+        &[],
+        b"Point(x: 1, y: 2)\n",
+    );
+    // ...and a requirement without a declared witness resolves to the
+    // protocol's default body.
+    assert_runs(
+        b"func differ<T: Equatable>(a: T, b: T) -> Bool {\n\ta.notEquals(rhs: b)\n}\nprint(differ(a: 1, b: 2))\nprint(differ(a: 3, b: 3))\n",
+        &[],
+        b"true\nfalse\n",
     );
 }
 

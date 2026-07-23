@@ -107,6 +107,61 @@ pub struct Enum {
 pub struct Requirement {
     pub symbol: Symbol,
     pub has_default: bool,
+    /// Exclusive-borrow parameter count of the declared signature
+    /// (receiver included). The declaration fixes the writeback shape
+    /// every implementation must follow: each such parameter comes back
+    /// appended to the result tuple.
+    #[serde(default)]
+    pub writeback_width: usize,
+    /// Declared `mut func`: the receiver parameter is an exclusive
+    /// borrow, so every implementation returns `(result, final self)`
+    /// for the caller's writeback.
+    #[serde(default)]
+    pub mut_receiver: bool,
+}
+
+/// The declaration context whose rigid parameters range over a member
+/// body (ADR 0038): check-mode compilation binds them the way a
+/// concrete receiver's instantiation (or a conformance's selected
+/// application) would.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum OwnerBinding {
+    /// A nominal's method, static, or initializer — or an inherent
+    /// extend member, whose binders are the extend row's own rigid
+    /// parameters rather than the nominal's.
+    Nominal { params: Vec<Symbol> },
+    /// A protocol requirement's default body: `Self` and the protocol's
+    /// input parameters bind rigidly.
+    Protocol(Symbol),
+}
+
+/// The structural implementation the checker derives when a conformance
+/// has no source body — keyed by well-known protocol identity, never by
+/// requirement name. Lowering synthesizes the corresponding glue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DerivedRecipe {
+    /// `Name(field: value…)` / `Name.variant(payloads…)` rendering.
+    Show,
+    /// Component-wise equality.
+    Equality,
+}
+
+/// One committed dictionary entry (ADR 0038): how a conformance
+/// implements one protocol requirement, decided at typing. Entries sit
+/// in protocol requirement declaration order — the witness-table slot
+/// order after the two fixed ownership slots.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DictionaryEntry {
+    /// A callable implements the requirement: the row's declared
+    /// witness, or the protocol's default body.
+    Implementation {
+        symbol: Symbol,
+        /// Copied from the declared requirement; see
+        /// [`Requirement::writeback_width`].
+        writeback_width: usize,
+    },
+    /// The checker derived the implementation structurally.
+    Derived(DerivedRecipe),
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -224,6 +279,11 @@ pub struct Conformance {
     pub context: Vec<Predicate>,
     pub witnesses: FxHashMap<String, Symbol>,
     pub assoc: FxHashMap<Symbol, Ty>,
+    /// The committed dictionary (ADR 0038): one entry per protocol
+    /// requirement in declaration order, completed by
+    /// [`TypeCatalog::commit_dictionaries`] once collection is done.
+    #[serde(default)]
+    pub dictionary: Vec<DictionaryEntry>,
 }
 
 impl Conformance {
@@ -236,6 +296,7 @@ impl Conformance {
             context: vec![],
             witnesses: FxHashMap::default(),
             assoc: FxHashMap::default(),
+            dictionary: vec![],
         }
     }
 }
@@ -311,6 +372,22 @@ pub struct TypeCatalog {
     /// kind questions from `SchemeParam::kind` directly.
     #[serde(default)]
     pub static_params: FxHashMap<Symbol, Ty>,
+    /// Committed Deinit dictionary (ADR 0038): family head → its Deinit
+    /// rows (disjoint by the overlap rules; usually one). A derived
+    /// index — rebuilt after merge — so drop sites dereference committed
+    /// rows instead of running a conformance search at teardown. A
+    /// conditional row is evidence only where its context holds
+    /// (ADR 0036), verified per application at dereference — the
+    /// sanctioned specialization-time selection. Typing rejects
+    /// protocol-head Deinit rows, which cannot commit per family.
+    #[serde(default)]
+    pub deinit_rows: FxHashMap<Symbol, Vec<ConformanceId>>,
+    /// Member symbol → its owner's rigid binding context (ADR 0038). A
+    /// derived index over the member tables, committed after collection
+    /// and rebuilt after merge, so consumers never scan the catalogs
+    /// per query.
+    #[serde(default)]
+    pub callable_owners: FxHashMap<Symbol, OwnerBinding>,
     /// Inherent extend members by type head. Each label holds every
     /// registered instance row (ADR 0036): disjoint heads may define the
     /// same label; overlapping heads are rejected at collection.
@@ -320,10 +397,6 @@ pub struct TypeCatalog {
     /// Transparent type aliases exported through the catalog for imports.
     #[serde(default)]
     pub type_aliases: FxHashMap<Symbol, TypeAliasInfo>,
-    /// Protocols auto-derived for structs and enums when no explicit
-    /// conformance exists. The derived instance's context is structural:
-    /// every field/payload must conform too.
-    pub derivable: Vec<Symbol>,
 }
 
 /// One type-carrier the catalog embeds. Raw types sanitize per-`Ty`;
@@ -919,6 +992,8 @@ impl TypeCatalog {
                                         Requirement {
                                             symbol: imp(r.symbol, target),
                                             has_default: r.has_default,
+                                            writeback_width: r.writeback_width,
+                                            mut_receiver: r.mut_receiver,
                                         },
                                     )
                                 })
@@ -952,6 +1027,20 @@ impl TypeCatalog {
                                 .assoc
                                 .into_iter()
                                 .map(|(s, t)| (imp(s, target), imp_ty(&t)))
+                                .collect(),
+                            dictionary: c
+                                .dictionary
+                                .into_iter()
+                                .map(|entry| match entry {
+                                    DictionaryEntry::Implementation {
+                                        symbol,
+                                        writeback_width,
+                                    } => DictionaryEntry::Implementation {
+                                        symbol: imp(symbol, target),
+                                        writeback_width,
+                                    },
+                                    derived => derived,
+                                })
                                 .collect(),
                         },
                     )
@@ -999,6 +1088,11 @@ impl TypeCatalog {
                 .into_iter()
                 .map(|(s, ty)| (imp(s, target), imp_ty(&ty)))
                 .collect(),
+            // Derived indexes: row ids shift across merge dedup and
+            // owners span merged member tables, so the merge rebuilds
+            // both from the merged catalogs.
+            deinit_rows: FxHashMap::default(),
+            callable_owners: FxHashMap::default(),
             extend_members: self
                 .extend_members
                 .into_iter()
@@ -1059,7 +1153,6 @@ impl TypeCatalog {
                     )
                 })
                 .collect(),
-            derivable: self.derivable.iter().map(|s| imp(*s, target)).collect(),
         }
     }
 
@@ -1107,11 +1200,13 @@ impl TypeCatalog {
         }
         self.effects.extend(other.effects);
         self.type_aliases.extend(other.type_aliases);
-        for protocol in other.derivable {
-            if !self.derivable.contains(&protocol) {
-                self.derivable.push(protocol);
-            }
-        }
+        // Row ids shift across the value-dedup above; the committed
+        // Deinit index is derived, so rebuild it from the merged rows.
+        self.commit_deinit_rows();
+        // Rows can arrive before their protocol's info was in reach;
+        // recommit dictionaries over the merged view (idempotent).
+        self.commit_dictionaries();
+        self.commit_callable_owners();
     }
 
     pub fn add_owner(&mut self, label: &str, owner: MemberOwner) {
@@ -1308,6 +1403,177 @@ impl TypeCatalog {
     /// with no typing-time proof in hand (backend marker, ownership, and
     /// `Deinit` selection): a conditional row is evidence only where its
     /// context holds.
+    /// Rebuild the committed Deinit index from the current rows
+    /// (ADR 0038). Called after collection and after every merge.
+    pub fn commit_deinit_rows(&mut self) {
+        let mut rows: FxHashMap<Symbol, Vec<ConformanceId>> = FxHashMap::default();
+        for (id, row) in &self.conformances {
+            if row.protocol.protocol == Symbol::Deinit {
+                rows.entry(row.head).or_default().push(*id);
+            }
+        }
+        self.deinit_rows = rows;
+    }
+
+    /// The recipe behind a checker-derived conformance, keyed by
+    /// well-known protocol identity — the one place that knows which
+    /// protocols derive structurally.
+    pub fn derived_recipe(protocol: Symbol) -> Option<DerivedRecipe> {
+        match protocol {
+            Symbol::Showable => Some(DerivedRecipe::Show),
+            Symbol::Equatable => Some(DerivedRecipe::Equality),
+            _ => None,
+        }
+    }
+
+    /// Protocols auto-derived for structs and enums when no explicit
+    /// conformance exists. The derived instance's context is structural:
+    /// every field/payload must conform too.
+    pub fn derivable_protocols() -> [Symbol; 2] {
+        [Symbol::Showable, Symbol::Equatable]
+    }
+
+    /// The committed dictionary of a checker-derived conformance
+    /// (ADR 0038): requirements without a default get the structural
+    /// recipe, defaulted ones their default body. Registration is not
+    /// applicability — whether a given type actually derives is the
+    /// solver's structural judgment at use.
+    pub fn derived_dictionary(&self, protocol: Symbol) -> Option<Vec<DictionaryEntry>> {
+        let recipe = Self::derived_recipe(protocol)?;
+        let info = self.protocols.get(&protocol)?;
+        Some(
+            info.requirements
+                .values()
+                .map(|requirement| {
+                    if requirement.has_default {
+                        DictionaryEntry::Implementation {
+                            symbol: requirement.symbol,
+                            writeback_width: requirement.writeback_width,
+                        }
+                    } else {
+                        DictionaryEntry::Derived(recipe)
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// Complete every conformance row's dictionary (ADR 0038): one entry
+    /// per protocol requirement in declaration order — the declared
+    /// witness, the structural recipe for a derivable protocol's bodyless
+    /// requirement, or the protocol's default body. Runs once collection
+    /// is done and again after merge (idempotent).
+    pub fn commit_dictionaries(&mut self) {
+        let mut dictionaries: Vec<(ConformanceId, Vec<DictionaryEntry>)> = Vec::new();
+        for (id, row) in &self.conformances {
+            let Some(info) = self.protocols.get(&row.protocol.protocol) else {
+                continue;
+            };
+            let recipe = Self::derived_recipe(row.protocol.protocol);
+            let entries = info
+                .requirements
+                .iter()
+                .map(|(label, requirement)| match row.witnesses.get(label) {
+                    Some(witness) => DictionaryEntry::Implementation {
+                        symbol: *witness,
+                        writeback_width: requirement.writeback_width,
+                    },
+                    None => match recipe {
+                        Some(recipe) if !requirement.has_default => {
+                            DictionaryEntry::Derived(recipe)
+                        }
+                        _ => DictionaryEntry::Implementation {
+                            symbol: requirement.symbol,
+                            writeback_width: requirement.writeback_width,
+                        },
+                    },
+                })
+                .collect();
+            dictionaries.push((*id, entries));
+        }
+        for (id, entries) in dictionaries {
+            if let Some(row) = self.conformances.get_mut(&id) {
+                row.dictionary = entries;
+            }
+        }
+    }
+
+    /// Commit the owner-binding index (ADR 0038): every member symbol
+    /// maps to the declaration context whose rigid parameters range
+    /// over its body. A derived index over the member tables — one
+    /// derivation, rebuilt after merge.
+    pub fn commit_callable_owners(&mut self) {
+        let mut owners = FxHashMap::default();
+        for info in self.structs.values() {
+            let params: Vec<Symbol> = info.params.iter().map(|param| param.symbol).collect();
+            for symbol in info
+                .methods
+                .values()
+                .chain(info.statics.values())
+                .copied()
+                .chain(info.inits.iter().map(|(init, _)| *init))
+            {
+                owners.insert(
+                    symbol,
+                    OwnerBinding::Nominal {
+                        params: params.clone(),
+                    },
+                );
+            }
+        }
+        for info in self.enums.values() {
+            let params: Vec<Symbol> = info.params.iter().map(|param| param.symbol).collect();
+            for symbol in info.methods.values().copied() {
+                owners.insert(
+                    symbol,
+                    OwnerBinding::Nominal {
+                        params: params.clone(),
+                    },
+                );
+            }
+        }
+        // Inherent extend members carry their own rigid params (the
+        // instance-head binders).
+        for members in self.extend_members.values() {
+            for rows in members.values() {
+                for row in rows {
+                    owners.insert(
+                        row.symbol,
+                        OwnerBinding::Nominal {
+                            params: row.params.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        for (protocol, info) in &self.protocols {
+            for requirement in info.requirements.values() {
+                owners.insert(requirement.symbol, OwnerBinding::Protocol(*protocol));
+            }
+        }
+        self.callable_owners = owners;
+    }
+
+    /// Dereference a committed conformance row for a concrete
+    /// application (ADR 0038): match that single row — no search across
+    /// rows, no overlap arbitration. A conditional row's context is
+    /// verified against this application (evidence only where it holds,
+    /// ADR 0036) — the sanctioned specialization-time check, since a
+    /// where-clause over a rigid parameter is abstract until the
+    /// instance is concrete.
+    pub fn committed_conformance(
+        &self,
+        id: ConformanceId,
+        head: Symbol,
+        self_args: &[Ty],
+    ) -> Option<ConformanceMatch<'_>> {
+        let row = self.conformances.get(&id)?;
+        let self_ty = Ty::Nominal(head, self_args.to_vec());
+        let target = row.protocol.clone();
+        self.match_conformance_row(id, row, Some((head, self_args)), &self_ty, &target)
+            .filter(|matched| self.row_context_holds(matched, 0))
+    }
+
     pub fn satisfied_conformances<'a>(
         &'a self,
         head: Symbol,
@@ -1590,7 +1856,7 @@ pub fn inherent_rows_overlap(left: &[Ty], right: &[Ty]) -> bool {
     forward_matches && reverse_matches
 }
 
-fn unconditional_self_pattern(row: &Conformance) -> bool {
+pub(crate) fn unconditional_self_pattern(row: &Conformance) -> bool {
     let mut seen = FxHashSet::default();
     row.self_args.iter().all(
         |arg| matches!(arg, Ty::Param(param) if row.params.contains(param) && seen.insert(*param)),

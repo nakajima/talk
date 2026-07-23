@@ -14,7 +14,6 @@ use crate::name::Name;
 mod entries;
 mod glue;
 mod release;
-mod unsafe_gate;
 mod verify;
 
 /// The rigid-generic witnesses a closure environment carries: for each
@@ -23,14 +22,11 @@ type WitnessPairs = Vec<(Symbol, (LocalId, LocalId))>;
 
 use crate::name_resolution::symbol::Symbol;
 use crate::node_kinds::call_arg::ArgMode;
-use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, Value as IrValue};
 use crate::parsing::span::Span;
-use crate::token_kind::TokenKind;
 use crate::typed_ast::{
     Block, Decl, DeclKind, Expr, ExprKind, Func, Literal, Node, Pattern, PatternKind,
     RecordFieldPattern, RecordFieldPatternKind, Stmt, StmtKind,
 };
-use crate::types::output::CheckedIntegerLiteral;
 use crate::types::ty::{ParamKind, Perm, ProtocolRef, StaticValue, Ty};
 
 use super::BackendError;
@@ -559,69 +555,11 @@ pub(crate) struct ProgramInput<'a> {
     pub module: crate::compiling::module::ModuleId,
 }
 
-/// A program's files ordered so a file's local imports initialize
-/// before it (LINK-02: deterministic, dependency-first globals).
-/// Import edges come from `use package::Module` markers matched to
-/// sibling file stems; files without edges keep their discovery order,
-/// and a cycle falls back to discovery order for the remainder.
-fn files_in_initialization_order(program: &TypedProgram) -> Vec<&crate::typed_ast::TypedFile> {
-    use crate::node_kinds::decl::ImportPath;
-    let files: Vec<(
-        &crate::compiling::driver::Source,
-        &crate::typed_ast::TypedFile,
-    )> = program.files().iter().collect();
-    let position: FxHashMap<String, usize> = files
-        .iter()
-        .enumerate()
-        .filter_map(|(index, (source, _))| {
-            source
-                .source_path()
-                .and_then(|path| path.file_stem())
-                .and_then(|stem| stem.to_str())
-                .map(|stem| (stem.to_string(), index))
-        })
-        .collect();
-    let mut deps: Vec<Vec<usize>> = vec![Vec::new(); files.len()];
-    for (index, (_, file)) in files.iter().enumerate() {
-        for root in &file.roots {
-            if let Node::Decl(decl) = root
-                && let DeclKind::Import(import) = &decl.kind
-                && let ImportPath::Local(path) = &import.path
-                && let Some(stem) = path.rsplit("::").next()
-                && let Some(&target) = position.get(stem)
-                && target != index
-            {
-                deps[index].push(target);
-            }
-        }
-    }
-    // Depth-first with insertion-order roots: every file keeps its
-    // discovery position except that its imports hoist ahead of it; a
-    // cycle breaks at the back edge.
-    fn visit(index: usize, deps: &[Vec<usize>], state: &mut [u8], order: &mut Vec<usize>) {
-        if state[index] != 0 {
-            return;
-        }
-        state[index] = 1;
-        for &dep in &deps[index] {
-            if state[dep] == 0 {
-                visit(dep, deps, state, order);
-            }
-        }
-        state[index] = 2;
-        order.push(index);
-    }
-    let mut state = vec![0u8; files.len()];
-    let mut indexes = Vec::with_capacity(files.len());
-    for index in 0..files.len() {
-        visit(index, &deps, &mut state, &mut indexes);
-    }
-    indexes.into_iter().map(|index| files[index].1).collect()
-}
-
-/// A top-level `func name(...)` declaration desugars to `let name = <func>`;
-/// the binding is the callable's identity for calls and entry selection.
-fn let_bound_func(decl: &Decl) -> Option<(&Name, &Func)> {
+/// A top-level binding the typed tree stamped as a callable's identity
+/// (`Func::bound_as`, ADR 0038). Reads the baked fact off a root
+/// declaration; the desugar-shape decision lives in the typed-program
+/// build.
+fn bound_func(decl: &Decl) -> Option<(&Name, &Func)> {
     let DeclKind::Let {
         lhs,
         rhs: Some(rhs),
@@ -636,7 +574,7 @@ fn let_bound_func(decl: &Decl) -> Option<(&Name, &Func)> {
     let ExprKind::Func(func) = &rhs.kind else {
         return None;
     };
-    Some((name, func))
+    func.bound_as.is_some().then_some((name, func))
 }
 
 /// Whether values of this type own refcounted buffers anywhere (RawPtr
@@ -901,94 +839,26 @@ fn mem_ty_of(ty: &Ty) -> MemTy {
     MemTy::Boxed
 }
 
-/// Locals of the enclosing function that a nested body reads: every
-/// resolved variable use minus what the body itself binds. Order is first
-/// use (deterministic environments).
-fn free_locals(nodes: &[&Node], enclosing: &FxHashMap<Symbol, LocalId>) -> Vec<Symbol> {
+/// Frame-level (depth-0) variable use counts: the liveness source for
+/// last-use borrow tracking and loop-carried move checks. This is
+/// ownership-dataflow input, MIR's own concern — the semantic capture
+/// and cell facts arrive published on frame-root blocks (ADR 0038).
+fn frame_uses(nodes: &[&Node]) -> FxHashMap<Symbol, usize> {
     use derive_visitor::{Drive, Visitor};
     #[derive(Visitor)]
-    #[visitor(
-        Expr(enter),
-        Pattern(enter),
-        Decl(enter),
-        crate::typed_ast::Parameter(enter)
-    )]
-    struct Collect<'e> {
-        enclosing: &'e FxHashMap<Symbol, LocalId>,
-        bound: Vec<Symbol>,
-        free: Vec<Symbol>,
-    }
-    impl Collect<'_> {
-        fn enter_expr(&mut self, expr: &Expr) {
-            if let ExprKind::Variable(Name::Resolved(symbol, _)) = &expr.kind
-                && self.enclosing.contains_key(symbol)
-                && !self.bound.contains(symbol)
-                && !self.free.contains(symbol)
-            {
-                self.free.push(*symbol);
-            }
-        }
-        fn enter_pattern(&mut self, pattern: &Pattern) {
-            if let PatternKind::Bind(Name::Resolved(symbol, _)) = &pattern.kind {
-                self.bound.push(*symbol);
-            }
-        }
-        fn enter_decl(&mut self, _decl: &Decl) {}
-        fn enter_parameter(&mut self, param: &crate::typed_ast::Parameter) {
-            if let Name::Resolved(symbol, _) = &param.name {
-                self.bound.push(*symbol);
-            }
-        }
-    }
-    let mut collect = Collect {
-        enclosing,
-        bound: Vec::new(),
-        free: Vec::new(),
-    };
-    for node in nodes {
-        match node {
-            Node::Expr(expr) => expr.drive(&mut collect),
-            Node::Stmt(stmt) => stmt.drive(&mut collect),
-            Node::Decl(decl) => decl.drive(&mut collect),
-        }
-    }
-    collect.free
-}
-
-/// Find a frame's assignment-converted symbols: assigned anywhere in the
-/// frame (including from inside a nested function value) and referenced
-/// under a nested function value. Their bindings become cells so the
-/// frame and its closures share one mutable slot — assignment conversion
-/// (Kranz et al., ORBIT, SIGPLAN 1986). Returns `(celled, nested_refs)`;
-/// the second set feeds the letrec decision for local function binders.
-fn cell_scan(
-    nodes: &[&Node],
-) -> (
-    rustc_hash::FxHashSet<Symbol>,
-    rustc_hash::FxHashSet<Symbol>,
-    FxHashMap<Symbol, usize>,
-) {
-    use derive_visitor::{Drive, Visitor};
-    #[derive(Visitor)]
-    #[visitor(Expr(enter, exit), Decl(enter, exit), Stmt(enter))]
+    #[visitor(Expr(enter, exit), Decl(enter, exit))]
     struct Scan {
         depth: usize,
-        assigned: rustc_hash::FxHashSet<Symbol>,
-        nested: rustc_hash::FxHashSet<Symbol>,
-        // Frame-level (depth 0) variable use counts: the liveness
-        // source for last-use borrow tracking.
         uses: FxHashMap<Symbol, usize>,
     }
     impl Scan {
         fn enter_expr(&mut self, expr: &Expr) {
             if matches!(expr.kind, ExprKind::Func(_)) {
                 self.depth += 1;
-            } else if let ExprKind::Variable(Name::Resolved(symbol, _)) = &expr.kind {
-                if self.depth > 0 {
-                    self.nested.insert(*symbol);
-                } else {
-                    *self.uses.entry(*symbol).or_insert(0) += 1;
-                }
+            } else if let ExprKind::Variable(Name::Resolved(symbol, _)) = &expr.kind
+                && self.depth == 0
+            {
+                *self.uses.entry(*symbol).or_insert(0) += 1;
             }
         }
         fn exit_expr(&mut self, expr: &Expr) {
@@ -997,8 +867,6 @@ fn cell_scan(
             }
         }
         fn enter_decl(&mut self, decl: &Decl) {
-            // A named local function is a nested frame like a func
-            // expression (its recursion reference counts as nested).
             if matches!(decl.kind, DeclKind::Func(_)) {
                 self.depth += 1;
             }
@@ -1008,18 +876,9 @@ fn cell_scan(
                 self.depth -= 1;
             }
         }
-        fn enter_stmt(&mut self, stmt: &Stmt) {
-            if let StmtKind::Assignment(lhs, _) = &stmt.kind
-                && let ExprKind::Variable(Name::Resolved(symbol, _)) = &lhs.kind
-            {
-                self.assigned.insert(*symbol);
-            }
-        }
     }
     let mut scan = Scan {
         depth: 0,
-        assigned: rustc_hash::FxHashSet::default(),
-        nested: rustc_hash::FxHashSet::default(),
         uses: FxHashMap::default(),
     };
     for node in nodes {
@@ -1029,8 +888,7 @@ fn cell_scan(
             Node::Decl(decl) => decl.drive(&mut scan),
         }
     }
-    let celled = scan.assigned.intersection(&scan.nested).copied().collect();
-    (celled, scan.nested, scan.uses)
+    scan.uses
 }
 
 /// The closure-environment contract, bind side (mirror of
@@ -1114,53 +972,43 @@ fn bind_env(
     let _ = env_index;
 }
 
-/// The binding symbols a pattern introduces paired with their component
-/// types, walking the pattern and the initializer type together (Bind,
-/// Tuple, and Record shapes; anything else yields nothing and stays
-/// frame-local).
-fn pattern_bindings_with_tys(pattern: &Pattern, ty: &Ty) -> Vec<(Symbol, Ty)> {
-    match (&pattern.kind, ty) {
-        (PatternKind::Bind(Name::Resolved(symbol, _)), _) => vec![(*symbol, ty.clone())],
-        (PatternKind::Tuple(elements), Ty::Tuple(items)) if elements.len() == items.len() => {
-            elements
-                .iter()
-                .zip(items)
-                .flat_map(|(element, item)| pattern_bindings_with_tys(element, item))
-                .collect()
+/// The binding symbols a pattern introduces paired with their checked
+/// types, read off the typed tree (ADR 0038): every binder carries its
+/// occurrence type, and a record field's label bind carries the slot's
+/// published type. Bind, Tuple, and Record shapes; anything else yields
+/// nothing and stays frame-local.
+fn pattern_bindings_with_tys(pattern: &Pattern) -> Vec<(Symbol, Ty)> {
+    match &pattern.kind {
+        PatternKind::Bind(Name::Resolved(symbol, _)) => {
+            vec![(*symbol, pattern.ty.clone().unwrap_or(Ty::Error))]
         }
-        (PatternKind::Record { fields }, Ty::Record(row)) => {
-            let field_ty = |name: &Name| {
-                row.fields.iter().find_map(|(label, ty)| match label {
-                    crate::label::Label::Named(label) if *label == name.name_str() => {
-                        Some(ty.clone())
-                    }
-                    _ => None,
-                })
-            };
-            fields
-                .iter()
-                .flat_map(|field| match &field.kind {
-                    RecordFieldPatternKind::Bind(name) => match (name.symbol(), field_ty(name)) {
-                        (Ok(symbol), Some(ty)) => vec![(symbol, ty)],
+        PatternKind::Tuple(elements) => elements
+            .iter()
+            .flat_map(pattern_bindings_with_tys)
+            .collect(),
+        PatternKind::Record { fields, .. } => fields
+            .iter()
+            .flat_map(|field| {
+                let slot_ty = field.ty.clone().unwrap_or(Ty::Error);
+                match &field.kind {
+                    RecordFieldPatternKind::Bind(name) => match name.symbol() {
+                        Ok(symbol) => vec![(symbol, slot_ty)],
                         _ => Vec::new(),
                     },
                     RecordFieldPatternKind::Equals { name, value } => {
-                        let Some(ty) = field_ty(name) else {
-                            return Vec::new();
-                        };
                         let mut binds: Vec<(Symbol, Ty)> = name
                             .symbol()
                             .ok()
-                            .map(|symbol| (symbol, ty.clone()))
+                            .map(|symbol| (symbol, slot_ty))
                             .into_iter()
                             .collect();
-                        binds.extend(pattern_bindings_with_tys(value, &ty));
+                        binds.extend(pattern_bindings_with_tys(value));
                         binds
                     }
                     RecordFieldPatternKind::Rest => Vec::new(),
-                })
-                .collect()
-        }
+                }
+            })
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -1183,7 +1031,7 @@ fn pattern_bind_symbols(pattern: &Pattern) -> Vec<Symbol> {
                     walk(field, symbols);
                 }
             }
-            PatternKind::Record { fields } => {
+            PatternKind::Record { fields, .. } => {
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(Name::Resolved(symbol, _)) => {
@@ -1304,14 +1152,6 @@ struct PlaceLink {
 /// the value-witness-table model of Swift's unspecialized-generics ABI.
 /// The symbols of a parameter list's TYPE-kind entries — the generics
 /// that carry runtime values and therefore witness blocks.
-fn type_param_symbols(params: &[crate::types::ty::SchemeParam]) -> Vec<Symbol> {
-    params
-        .iter()
-        .filter(|param| matches!(param.kind, crate::types::ty::ParamKind::Type))
-        .map(|param| param.symbol)
-        .collect()
-}
-
 fn witness_params(subst: &[(Symbol, Ty)]) -> Vec<Symbol> {
     fn walk(ty: &Ty, out: &mut Vec<Symbol>) {
         match ty {
@@ -1366,27 +1206,6 @@ fn glue_witness_params(ty: &Ty) -> Vec<Symbol> {
 /// Solve one effect generic from a declared parameter shape matched
 /// against the perform's concrete argument type (first-order structural
 /// matching; the checker already proved the shapes agree).
-fn solve_param(declared: &Ty, concrete: &Ty, generic: Symbol) -> Option<Ty> {
-    match (declared, concrete) {
-        (Ty::Param(param), _) if *param == generic => Some(concrete.clone()),
-        (Ty::Borrow(_, a), Ty::Borrow(_, b)) => solve_param(a, b, generic),
-        (Ty::Tuple(a), Ty::Tuple(b)) => a
-            .iter()
-            .zip(b)
-            .find_map(|(x, y)| solve_param(x, y, generic)),
-        (Ty::Nominal(_, a), Ty::Nominal(_, b)) => a
-            .iter()
-            .zip(b)
-            .find_map(|(x, y)| solve_param(x, y, generic)),
-        (Ty::Func(pa, ra, _), Ty::Func(pb, rb, _)) => pa
-            .iter()
-            .zip(pb)
-            .find_map(|(x, y)| solve_param(x, y, generic))
-            .or_else(|| solve_param(ra, rb, generic)),
-        _ => None,
-    }
-}
-
 /// Whether a type contains a solver variable anywhere.
 fn ty_has_var(ty: &Ty) -> bool {
     struct Search {
@@ -1517,7 +1336,6 @@ pub(crate) fn canonical(symbol: Symbol, module: crate::compiling::module::Module
 }
 
 pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Program, BackendError> {
-    unsafe_gate::check(programs)?;
     let mut builder = ProgramBuilder::new(programs);
     builder.index_callables();
 
@@ -1611,14 +1429,21 @@ pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Progr
                 // conformance's selected application) binds them. The
                 // protocol Self entry is the evidence marker
                 // `demand_specialized` keys on.
-                if let Some(params) = builder.method_owner_params(*symbol) {
-                    subst.extend(params.into_iter().map(|param| (param, Ty::Param(param))));
-                }
-                if let Some(owner) = builder.default_owner_protocol(*symbol) {
-                    subst.push((owner, Ty::Param(owner)));
-                    if let Some(params) = builder.protocol_params(owner) {
-                        subst.extend(params.into_iter().map(|param| (param, Ty::Param(param))));
+                match builder.catalog.callable_owners.get(symbol) {
+                    Some(crate::types::catalog::OwnerBinding::Nominal { params }) => {
+                        subst.extend(params.iter().map(|param| (*param, Ty::Param(*param))));
                     }
+                    Some(crate::types::catalog::OwnerBinding::Protocol(owner)) => {
+                        subst.push((*owner, Ty::Param(*owner)));
+                        if let Some(info) = builder.catalog.protocols.get(owner) {
+                            subst.extend(
+                                info.params
+                                    .iter()
+                                    .map(|param| (param.symbol, Ty::Param(param.symbol))),
+                            );
+                        }
+                    }
+                    None => {}
                 }
                 (*symbol, subst)
             })
@@ -1744,10 +1569,13 @@ impl<'a> ProgramBuilder<'a> {
             ),
         > = FxHashMap::default();
         let mut variant_index: FxHashMap<Symbol, (Symbol, u16)> = FxHashMap::default();
+        // Derived from the committed Deinit index (ADR 0038): the hooks
+        // whose own `self` must not re-dispatch teardown.
         let deinit_witnesses: rustc_hash::FxHashSet<Symbol> = catalog
-            .conformances
+            .deinit_rows
             .values()
-            .filter(|row| row.protocol.protocol == Symbol::Deinit)
+            .flatten()
+            .filter_map(|id| catalog.conformances.get(id))
             .filter_map(|row| row.witnesses.get("deinit").copied())
             .collect();
         for input in programs {
@@ -1803,23 +1631,30 @@ impl<'a> ProgramBuilder<'a> {
                 for node in &file.roots {
                     match node {
                         Node::Decl(decl) => {
-                            if let Some((bound, func)) = let_bound_func(decl) {
-                                self.index_bound_func(bound, func, program_ix);
-                            } else {
-                                if let DeclKind::Let {
-                                    lhs:
-                                        Pattern {
-                                            kind: PatternKind::Bind(Name::Resolved(symbol, _)),
-                                            ..
-                                        },
-                                    rhs: Some(rhs),
-                                    ..
-                                } = &decl.kind
+                            // The typed tree stamps a top-level bound
+                            // func's identity (`Func::bound_as`); a
+                            // binding without one is a global.
+                            if let DeclKind::Let {
+                                lhs:
+                                    Pattern {
+                                        kind: PatternKind::Bind(Name::Resolved(symbol, _)),
+                                        ..
+                                    },
+                                rhs: Some(rhs),
+                                ..
+                            } = &decl.kind
+                            {
+                                if let ExprKind::Func(func) = &rhs.kind
+                                    && func.bound_as.is_some()
                                 {
+                                    self.index_func(func, program_ix);
+                                } else {
                                     let symbol =
                                         canonical(*symbol, self.programs[program_ix].module);
                                     self.globals.insert(symbol, (rhs, program_ix));
+                                    self.index_decl(decl, program_ix);
                                 }
+                            } else {
                                 self.index_decl(decl, program_ix);
                             }
                         }
@@ -1847,11 +1682,7 @@ impl<'a> ProgramBuilder<'a> {
     fn index_decl(&mut self, decl: &'a Decl, program_ix: usize) {
         match &decl.kind {
             DeclKind::Func(func) => self.index_func(func, program_ix),
-            DeclKind::Method {
-                func,
-                receiver_mode,
-                ..
-            } => self.index_method(func, program_ix, *receiver_mode),
+            DeclKind::Method { func, .. } => self.index_func(func, program_ix),
             DeclKind::Init {
                 name: Name::Resolved(symbol, _),
                 params,
@@ -1879,8 +1710,24 @@ impl<'a> ProgramBuilder<'a> {
         }
     }
 
+    /// Bind a function body to its published identities: the function's
+    /// own symbol, plus the binding symbol the typed tree stamped for a
+    /// top-level bound func. The contract facts (receiver mode, binding
+    /// identity) come baked on the node (ADR 0038).
     fn index_func(&mut self, func: &'a Func, program: usize) {
-        self.index_method(func, program, crate::node_kinds::decl::ReceiverMode::None)
+        let module = self.programs[program].module;
+        let callable = Callable {
+            body: CallableBody::Func(func),
+            program,
+            receiver: func.receiver,
+        };
+        if let Name::Resolved(symbol, _) = &func.name {
+            self.callables.insert(canonical(*symbol, module), callable);
+        }
+        if let Some(bound) = func.bound_as {
+            self.callables.insert(canonical(bound, module), callable);
+        }
+        self.index_nested_funcs(&func.body, program);
     }
 
     /// Nested `func` declarations index like top-level ones, so calls to
@@ -1993,43 +1840,6 @@ impl<'a> ProgramBuilder<'a> {
         }
     }
 
-    fn index_method(
-        &mut self,
-        func: &'a Func,
-        program: usize,
-        receiver: crate::node_kinds::decl::ReceiverMode,
-    ) {
-        if let Name::Resolved(symbol, _) = &func.name {
-            let symbol = canonical(*symbol, self.programs[program].module);
-            self.callables.insert(
-                symbol,
-                Callable {
-                    body: CallableBody::Func(func),
-                    program,
-                    receiver,
-                },
-            );
-        }
-        self.index_nested_funcs(&func.body, program);
-    }
-
-    /// Index a `let name = <func>` declaration under both the binding
-    /// symbol (what calls resolve to) and the function's own symbol.
-    fn index_bound_func(&mut self, bound: &Name, func: &'a Func, program: usize) {
-        if let Name::Resolved(symbol, _) = bound {
-            let symbol = canonical(*symbol, self.programs[program].module);
-            self.callables.insert(
-                symbol,
-                Callable {
-                    body: CallableBody::Func(func),
-                    program,
-                    receiver: crate::node_kinds::decl::ReceiverMode::None,
-                },
-            );
-        }
-        self.index_func(func, program);
-    }
-
     fn reserve(&mut self, name: &str) -> FuncId {
         let id = self.functions.len();
         self.functions.push(Function {
@@ -2118,95 +1928,83 @@ impl<'a> ProgramBuilder<'a> {
         Ok(id)
     }
 
-    /// The one deferred-selection point (ADR 0036): dereference a concrete
-    /// self type's conformance to its implementation symbol through the
-    /// catalog's shared instance matcher. Typing commits everything
-    /// decidable at typing time (`MemberResolution::ViaConformance`); this
-    /// serves the remainder — requirement operations whose receiver became
-    /// concrete only under an instance substitution, and compiler-owned
-    /// glue. Coherence makes the lookup forced, so it cannot disagree with
-    /// the frontend.
-    fn conformance_witness(
+    /// The committed dictionary a concrete payload type presents for a
+    /// protocol (ADR 0038): the selected row's entries with its evidence
+    /// substitution, or the derived-recipe entries when the checker
+    /// granted the conformance structurally. Entry count always equals
+    /// the protocol's requirement count — the witness-table slot
+    /// contract. The substitution carries the protocol's input
+    /// parameters alongside the row evidence; `demand` prunes to what
+    /// each implementation actually quantifies.
+    fn conformance_dictionary(
+        &self,
+        payload_ty: &Ty,
+        protocol: &crate::types::ty::ProtocolRef,
+    ) -> Option<(
+        Vec<crate::types::catalog::DictionaryEntry>,
+        Vec<(Symbol, Ty)>,
+    )> {
+        let mut base = Vec::new();
+        if let Some(params) = self.protocol_params(protocol.protocol) {
+            for (param, arg) in params.iter().zip(&protocol.args) {
+                base.push((*param, arg.clone()));
+            }
+        }
+        let mut self_ty = payload_ty;
+        while let Ty::Borrow(_, inner) = self_ty {
+            self_ty = inner;
+        }
+        let expected = self
+            .catalog
+            .protocols
+            .get(&protocol.protocol)
+            .map(|info| info.requirements.len())?;
+        if let Ty::Nominal(head, args) = self_ty {
+            let matches = self.catalog.satisfied_conformances(*head, args, protocol);
+            if let [selected] = matches.as_slice() {
+                // One entry per requirement is the slot contract; a short
+                // dictionary would silently misalign every later slot, so
+                // an uncommitted row fails closed here.
+                if selected.conformance.dictionary.len() != expected {
+                    return None;
+                }
+                let mut subst = selected.evidence_substitution();
+                subst.extend(base);
+                return Some((selected.conformance.dictionary.clone(), subst));
+            }
+        }
+        let entries = self.catalog.derived_dictionary(protocol.protocol)?;
+        Some((entries, base))
+    }
+
+    /// The one deferred-selection point (ADR 0036/0038): dereference a
+    /// concrete self type's committed dictionary entry for one
+    /// requirement label. Typing commits everything decidable at typing
+    /// time (`MemberResolution::ViaConformance`); this serves the
+    /// remainder — requirement operations whose receiver became concrete
+    /// only under an instance substitution, and compiler-owned glue.
+    /// Coherence makes the lookup forced, so it cannot disagree with the
+    /// frontend.
+    fn forced_witness(
         &self,
         self_ty: &Ty,
         protocol: &crate::types::ty::ProtocolRef,
         label: &crate::label::Label,
-    ) -> Option<(Symbol, Vec<(Symbol, Ty)>)> {
-        let mut self_ty = self_ty;
-        while let Ty::Borrow(_, inner) = self_ty {
-            self_ty = inner;
-        }
-        let Ty::Nominal(self_head, self_args) = self_ty else {
-            return None;
-        };
+    ) -> Option<(
+        crate::types::catalog::DictionaryEntry,
+        Vec<(Symbol, Ty)>,
+    )> {
         let crate::label::Label::Named(label) = label else {
             return None;
         };
-
-        let matches = self
+        let index = self
             .catalog
-            .satisfied_conformances(*self_head, self_args, protocol);
-        let [selected] = matches.as_slice() else {
-            return None;
-        };
-        let witness = selected.conformance.witnesses.get(label).copied()?;
-        let mut subst = selected
-            .substitution
-            .clone()
-            .into_iter()
-            .collect::<Vec<_>>();
-        for (assoc, bound) in &selected.conformance.assoc {
-            subst.push((
-                *assoc,
-                bound.substitute(
-                    &selected.substitution,
-                    &FxHashMap::default(),
-                    &FxHashMap::default(),
-                ),
-            ));
-        }
-        Some((witness, subst))
-    }
-
-    /// The associated-type bindings a conformance row supplies for this
-    /// self type: `(assoc symbol, bound type)` with the row's rigid
-    /// parameters instantiated against the application's arguments. A
-    /// protocol default body's substitution needs these alongside `Self`
-    /// (an unresolved associated type otherwise survives as a rigid
-    /// param).
-    fn conformance_assoc(
-        &self,
-        self_ty: &Ty,
-        protocol: &crate::types::ty::ProtocolRef,
-    ) -> Vec<(Symbol, Ty)> {
-        let mut self_ty = self_ty;
-        while let Ty::Borrow(_, inner) = self_ty {
-            self_ty = inner;
-        }
-        let Ty::Nominal(self_head, self_args) = self_ty else {
-            return Vec::new();
-        };
-        let matches = self
-            .catalog
-            .satisfied_conformances(*self_head, self_args, protocol);
-        let [matched] = matches.as_slice() else {
-            return Vec::new();
-        };
-        matched
-            .conformance
-            .assoc
-            .iter()
-            .map(|(assoc, bound)| {
-                (
-                    *assoc,
-                    bound.substitute(
-                        &matched.substitution,
-                        &FxHashMap::default(),
-                        &FxHashMap::default(),
-                    ),
-                )
-            })
-            .collect()
+            .protocols
+            .get(&protocol.protocol)?
+            .requirements
+            .get_index_of(label.as_str())?;
+        let (entries, subst) = self.conformance_dictionary(self_ty, protocol)?;
+        Some((entries.get(index)?.clone(), subst))
     }
 
     /// The enum declaration behind a canonical symbol, from whichever
@@ -2330,17 +2128,18 @@ impl<'a> ProgramBuilder<'a> {
         )
     }
 
-    /// The `Deinit` hook for a nominal application, with the substitution
-    /// binding the conformance row's rigid parameters against it.
+    /// The `Deinit` hook for a nominal application: dereference the
+    /// head's committed rows (ADR 0038) — no search, no overlap
+    /// arbitration; a conditional row applies exactly where its context
+    /// holds for this instance (ADR 0036).
     fn deinit_witness(&self, head: Symbol, args: &[Ty]) -> Option<(Symbol, Vec<(Symbol, Ty)>)> {
-        let matches =
-            self.catalog
-                .satisfied_conformances(head, args, &ProtocolRef::bare(Symbol::Deinit));
-        let [matched] = matches.as_slice() else {
-            return None;
-        };
+        let rows = self.catalog.deinit_rows.get(&head)?;
+        let mut applicable = rows
+            .iter()
+            .filter_map(|id| self.catalog.committed_conformance(*id, head, args));
+        let matched = applicable.next()?;
         let witness = matched.conformance.witnesses.get("deinit").copied()?;
-        Some((witness, matched.substitution.clone().into_iter().collect()))
+        Some((witness, matched.substitution.into_iter().collect()))
     }
 
     /// Whether this callable IS some type's `deinit` hook: its own `self`
@@ -2385,10 +2184,7 @@ impl<'a> ProgramBuilder<'a> {
                 let Some(fields) = self.field_types(*symbol, args) else {
                     return false;
                 };
-                !self
-                    .catalog
-                    .satisfied_conformances(*symbol, args, &ProtocolRef::bare(Symbol::Deinit))
-                    .is_empty()
+                self.deinit_witness(*symbol, args).is_some()
                     || dropping(&mut fields.iter()) >= 2
             }
             Ty::Tuple(items) => dropping(&mut items.iter()) >= 2,
@@ -2402,23 +2198,6 @@ impl<'a> ProgramBuilder<'a> {
     /// stay raw (matching `Ty::Param` occurrences in resolved types, which
     /// never re-stamp), while nominal types canonicalize against the
     /// returned module at use sites.
-    fn effect_sig(
-        &self,
-        effect: Symbol,
-    ) -> Option<(
-        &'a crate::types::catalog::EffectSig,
-        crate::compiling::module::ModuleId,
-    )> {
-        for input in self.programs {
-            for (declared, sig) in &input.program.types().catalog.effects {
-                if canonical(*declared, input.module) == effect {
-                    return Some((sig, input.module));
-                }
-            }
-        }
-        None
-    }
-
     /// Conformance constraints on one rigid generic (raw symbol, as it
     /// appears in `Ty::Param` occurrences): the frontend-published
     /// declared bounds (`TypeCatalog::param_bounds` — typing publishes,
@@ -2463,24 +2242,6 @@ impl<'a> ProgramBuilder<'a> {
                     })
             })
             .unwrap_or_else(|| format!("{symbol:?}"))
-    }
-
-    /// A protocol from the reachable graph by display name (`Add` for the
-    /// derived-show concatenation witness).
-    fn protocol_named(&self, name: &str) -> Option<Symbol> {
-        for input in self.programs {
-            let names = input.program.resolved_names();
-            for protocol in input.program.types().catalog.protocols.keys() {
-                if names
-                    .symbol_names
-                    .get(protocol)
-                    .is_some_and(|candidate| candidate == name)
-                {
-                    return Some(canonical(*protocol, input.module));
-                }
-            }
-        }
-        None
     }
 
     /// The enum variant names for a nominal, in tag order.
@@ -2568,42 +2329,6 @@ impl<'a> ProgramBuilder<'a> {
             .map(|info| info.requirements.keys().cloned().collect())
     }
 
-    /// The requirement symbol behind a protocol's labeled requirement.
-    fn requirement_symbol(&self, protocol: Symbol, label: &str) -> Option<Symbol> {
-        for input in self.programs {
-            let catalog = &input.program.types().catalog;
-            for (declared, info) in &catalog.protocols {
-                if canonical(*declared, input.module) != protocol {
-                    continue;
-                }
-                if let Some(requirement) = info.requirements.get(label) {
-                    return Some(canonical(requirement.symbol, input.module));
-                }
-            }
-        }
-        None
-    }
-
-    /// Whether this effect symbol is core's `'io` (the runtime's
-    /// implicitly handled host-IO effect).
-    fn is_io_effect(&self, effect: Symbol) -> bool {
-        if effect.module_id() != Some(crate::compiling::module::ModuleId::Core) {
-            return false;
-        }
-        self.programs.iter().any(|input| {
-            input
-                .program
-                .resolved_names()
-                .symbol_names
-                .iter()
-                .any(|(symbol, name)| {
-                    name == "io"
-                        && matches!(symbol, Symbol::Effect(_))
-                        && canonical(*symbol, input.module) == effect
-                })
-        })
-    }
-
     /// The protocol's input parameter symbols, from whichever program's
     /// catalog declares it.
     /// The declared value type of a static parameter (ADR 0035), from
@@ -2615,76 +2340,6 @@ impl<'a> ProgramBuilder<'a> {
             for (declared, ty) in &catalog.static_params {
                 if *declared == param || canonical(*declared, input.module) == param {
                     return Some(canonical_ty(ty, input.module));
-                }
-            }
-        }
-        None
-    }
-
-    /// The declared parameters of the nominal whose member table owns
-    /// this method or initializer, if any — rigid check-mode compilation
-    /// binds them the way a concrete receiver's instantiation would.
-    fn method_owner_params(&self, symbol: Symbol) -> Option<Vec<Symbol>> {
-        for input in self.programs {
-            let catalog = &input.program.types().catalog;
-            let matches =
-                |member: Symbol| member == symbol || canonical(member, input.module) == symbol;
-            let owner_params = |params: &[crate::types::ty::SchemeParam]| {
-                params
-                    .iter()
-                    .map(|param| canonical(param.symbol, input.module))
-                    .collect()
-            };
-            for info in catalog.structs.values() {
-                if info
-                    .methods
-                    .values()
-                    .chain(info.statics.values())
-                    .copied()
-                    .chain(info.inits.iter().map(|(init, _)| *init))
-                    .any(matches)
-                {
-                    return Some(owner_params(&info.params));
-                }
-            }
-            for info in catalog.enums.values() {
-                if info.methods.values().copied().any(matches) {
-                    return Some(owner_params(&info.params));
-                }
-            }
-            // Inherent extend members carry their own rigid params (the
-            // instance-head binders).
-            for members in catalog.extend_members.values() {
-                for rows in members.values() {
-                    for row in rows {
-                        if matches(row.symbol) {
-                            return Some(
-                                row.params
-                                    .iter()
-                                    .map(|param| canonical(*param, input.module))
-                                    .collect(),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// The protocol whose requirement table owns this default body, if
-    /// any — rigid check-mode compilation binds the owner's parameters
-    /// the way a conformance's selected application would.
-    fn default_owner_protocol(&self, symbol: Symbol) -> Option<Symbol> {
-        for input in self.programs {
-            let catalog = &input.program.types().catalog;
-            for (declared, info) in &catalog.protocols {
-                if info
-                    .requirements
-                    .values()
-                    .any(|requirement| canonical(requirement.symbol, input.module) == symbol)
-                {
-                    return Some(canonical(*declared, input.module));
                 }
             }
         }
@@ -2832,12 +2487,16 @@ impl<'a> ProgramBuilder<'a> {
         }
 
         // Assignment conversion: mutable locals shared with closures
-        // become cells; celled parameters re-bind through a cell.
+        // become cells; celled parameters re-bind through a cell. The
+        // capture and cell facts come published on the frame root.
         let body_nodes: Vec<&Node> = body.body.iter().collect();
-        let (celled, nested_refs, use_counts) = cell_scan(&body_nodes);
-        fx.celled = celled;
-        fx.nested_refs = nested_refs;
-        fx.use_counts = use_counts;
+        let facts = body
+            .frame
+            .as_ref()
+            .expect("typed facts invariant: a function body carries frame facts");
+        fx.celled = facts.celled.clone();
+        fx.nested_refs = facts.nested_refs.clone();
+        fx.use_counts = frame_uses(&body_nodes);
         fx.cell_celled_params(params);
 
         let width = fx.writeback_params.len();
@@ -4419,35 +4078,38 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         span: Span,
     ) -> Result<Operand, BackendError> {
         let string_ty = Ty::Nominal(Symbol::String, Vec::new());
-        let add = self.program_builder.protocol_named("Add").ok_or_else(|| {
-            BackendError::new("derived show without the Add protocol".into(), span)
-        })?;
         let add_ref = crate::types::ty::ProtocolRef {
-            protocol: add,
+            protocol: Symbol::Add,
             args: vec![string_ty.clone()],
         };
         let label = crate::label::Label::Named("add".into());
-        let (implementation, subst) = self
+        let entry = self
             .program_builder
-            .conformance_witness(&string_ty, &add_ref, &label)
+            .forced_witness(&string_ty, &add_ref, &label)
             .or_else(|| {
                 let bare = crate::types::ty::ProtocolRef {
-                    protocol: add,
+                    protocol: Symbol::Add,
                     args: Vec::new(),
                 };
-                self.program_builder
-                    .conformance_witness(&string_ty, &bare, &label)
-            })
-            .ok_or_else(|| {
-                BackendError::new(
-                    "derived show without a String concatenation witness".into(),
-                    span,
-                )
-            })?;
-        let func = self.program_builder.demand(implementation, subst, span)?;
+                self.program_builder.forced_witness(&string_ty, &bare, &label)
+            });
+        let Some((
+            crate::types::catalog::DictionaryEntry::Implementation {
+                symbol,
+                writeback_width,
+            },
+            subst,
+        )) = entry
+        else {
+            return Err(BackendError::new(
+                "derived show without a String concatenation witness".into(),
+                span,
+            ));
+        };
+        let func = self.program_builder.demand(symbol, subst, span)?;
         self.program_builder
             .writeback_expectations
-            .push((func, 0, span));
+            .push((func, writeback_width, span));
         let dest = self.fresh_local();
         self.push(Inst::Call {
             dest,
@@ -4474,14 +4136,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             ty = *inner;
         }
         let label = crate::label::Label::Named("show".into());
-        let func = match self
-            .program_builder
-            .conformance_witness(&ty, protocol, &label)
-        {
-            Some((implementation, subst)) => {
-                self.program_builder.demand(implementation, subst, span)?
+        let func = match self.program_builder.forced_witness(&ty, protocol, &label) {
+            Some((
+                crate::types::catalog::DictionaryEntry::Implementation { symbol, .. },
+                mut subst,
+            )) => {
+                subst.push((protocol.protocol, ty.clone()));
+                self.program_builder.demand(symbol, subst, span)?
             }
-            None => self.program_builder.derived_show(&ty, protocol, span)?,
+            _ => self.program_builder.derived_show(&ty, protocol, span)?,
         };
         self.program_builder
             .writeback_expectations
@@ -4524,10 +4187,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         match &ty {
             Ty::Nominal(symbol, args) => {
                 let label = crate::label::Label::Named("equals".into());
-                if let Some((implementation, subst)) = self
-                    .program_builder
-                    .conformance_witness(&ty, protocol, &label)
+                if let Some((
+                    crate::types::catalog::DictionaryEntry::Implementation {
+                        symbol: implementation,
+                        ..
+                    },
+                    mut subst,
+                )) = self.program_builder.forced_witness(&ty, protocol, &label)
                 {
+                    subst.push((protocol.protocol, ty.clone()));
                     let func = self.program_builder.demand(implementation, subst, span)?;
                     self.program_builder
                         .writeback_expectations
@@ -4672,20 +4340,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             // An explicit `copy` marker clones at the argument site: the
             // callee consumes the fresh copy and the source stays put.
+            // Typing already checked the Copy/CheapClone evidence.
             if matches!(arg.mode, Some(ArgMode::Copy)) {
                 let mut ty = self.resolved(&arg.value.ty);
                 while let Ty::Borrow(_, inner) = ty {
                     ty = *inner;
-                }
-                let canonical_ty =
-                    canonical_ty(&ty, self.program_builder.programs[self.program].module);
-                if self.needs_release(&ty)
-                    && !conforms_to(self.program_builder, &canonical_ty, Symbol::CheapClone)
-                {
-                    return Err(BackendError::new(
-                        "the `copy` marker requires a Copy or CheapClone value".into(),
-                        arg.value.span,
-                    ));
                 }
                 let dest = self.fresh_local();
                 self.push(Inst::Copy { dest, src: operand });
@@ -4811,31 +4470,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         Ok(Operand::Local(result))
     }
 
-    /// Whether a protocol requirement is declared `mut func`: its scheme's
-    /// receiver parameter is an exclusive borrow, so every implementation
+    /// Whether a protocol requirement is declared `mut func` — a
+    /// committed requirement fact (ADR 0038): every implementation
     /// returns `(result, final self)` for the caller's writeback.
     fn requirement_is_mut(&self, protocol: Symbol, name: &str) -> bool {
-        let Some(requirement) = self.program_builder.requirement_symbol(protocol, name) else {
-            return false;
-        };
-        self.program_builder.programs.iter().any(|input| {
-            input
-                .program
-                .types()
-                .schemes
-                .iter()
-                .any(|(symbol, scheme)| {
-                    canonical(*symbol, input.module) == requirement
-                        && matches!(
-                            &scheme.ty,
-                            Ty::Func(params, _, _)
-                                if matches!(
-                                    params.first(),
-                                    Some(Ty::Borrow(Perm::Exclusive, _))
-                                )
-                        )
-                })
-        })
+        self.program_builder
+            .catalog
+            .protocols
+            .get(&protocol)
+            .and_then(|info| info.requirements.get(name))
+            .is_some_and(|requirement| requirement.mut_receiver)
     }
 
     /// Rebuild a tuple-layout value with one slot replaced (runtime
@@ -4974,10 +4618,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         Ok(())
     }
 
-    fn types(&self) -> &'a crate::types::output::TypeOutput {
-        self.program_builder.programs[self.program].program.types()
-    }
-
     /// The wave-2 Copy gate: scalars, tuples of Copy types, and non-linear
     /// enums may exist as executable values. Everything else stays
     /// explicitly rejected until its wave.
@@ -5100,42 +4740,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
     /// The concrete type behind an inline-IR type annotation: resolved
     /// annotation symbols instantiate through this instance's substitution.
-    fn annotation_value_ty(
-        &self,
-        annotation: &crate::node_kinds::type_annotation::TypeAnnotation,
-        span: Span,
-    ) -> Result<Ty, BackendError> {
-        use crate::node_kinds::type_annotation::TypeAnnotationKind;
-        match &annotation.kind {
-            TypeAnnotationKind::Nominal {
-                name: Name::Resolved(symbol, _),
-                ..
-            } => {
-                if let Some(ty) = self.subst.get(symbol) {
-                    return Ok(ty.clone());
-                }
-                Ok(Ty::Nominal(
-                    canonical(*symbol, self.program_builder.programs[self.program].module),
-                    vec![],
-                ))
-            }
-            TypeAnnotationKind::Borrow { inner, .. } => self.annotation_value_ty(inner, span),
-            _ => Err(BackendError::unsupported(
-                "this inline IR type annotation is not supported yet".into(),
-                span,
-            )),
-        }
-    }
-
-    fn annotation_mem_ty(
-        &self,
-        annotation: &crate::node_kinds::type_annotation::TypeAnnotation,
-        span: Span,
-    ) -> Result<MemTy, BackendError> {
-        let ty = self.annotation_value_ty(annotation, span)?;
-        Ok(mem_ty_of(&ty))
-    }
-
     /// Structurally add one reference per refcounted buffer the value owns
     /// (a RawPtr field IS a buffer; the mirror of structural teardown).
     fn retain_value(&mut self, value: Operand, ty: &Ty, span: Span) -> Result<(), BackendError> {
@@ -5501,10 +5105,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     && let ExprKind::Func(func) = &rhs.kind
                     && self.nested_refs.contains(symbol)
                 {
-                    let body_nodes: Vec<&Node> = func.body.body.iter().collect();
-                    if !free_locals(&body_nodes, &self.locals).is_empty()
-                        || !func.captures.is_empty()
-                    {
+                    if !self.live_captures(&func.body).is_empty() || !func.captures.is_empty() {
                         if !func.scheme.params.is_empty() {
                             // A closure compiles once against this
                             // frame; it cannot specialize per call.
@@ -5635,7 +5236,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 Ok(())
             }
             PatternKind::Tuple(elements) => {
-                let element_tys = tuple_element_tys(ty, elements.len());
+                let element_tys: Vec<Ty> = elements
+                    .iter()
+                    .map(|element| self.resolved(&element.ty.clone().unwrap_or(Ty::Error)))
+                    .collect();
                 let extracted = self.extract_tuple(value, elements.len());
                 // Deconstruction: when the source is owned, its elements
                 // inherit that ownership (binds must not also donate);
@@ -5654,8 +5258,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
                 Ok(())
             }
-            PatternKind::Record { fields } => {
-                let cells = self.record_cells(pattern, fields, ty)?;
+            PatternKind::Record { fields, slots } => {
+                let cells = self.record_cells(pattern, fields, slots)?;
                 let extracted = self.extract_tuple(value, cells.len());
                 if self.consume_operand(value) {
                     for (operand, cell) in extracted.iter().zip(&cells) {
@@ -5682,18 +5286,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         id: cell.pattern.id,
                         kind: PatternKind::Bind(name.clone()),
                         span: pattern.span,
+                        ty: None,
                     };
                     self.bind_owned_pattern(&bind, slot, &cell.field_ty)?;
                     self.bind_owned_pattern(&cell.pattern, slot, &cell.field_ty)?;
                 }
                 Ok(())
             }
-            PatternKind::Struct {
-                fields,
-                field_names,
-                ..
-            } => {
-                let (heap, cells) = self.struct_cells(pattern, fields, field_names, ty)?;
+            PatternKind::Struct { fields, slots, .. } => {
+                let (heap, cells) = self.struct_cells(pattern, fields, slots, ty)?;
                 if heap {
                     // Heap fields are views of the object: binds donate a
                     // reference on the way in, unmentioned fields stay the
@@ -5877,7 +5478,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // Loop-carried moves: a value moved on the looping path
                 // is gone on re-entry; if the body also reads it, the
                 // second iteration uses a moved value.
-                let (_, _, body_uses) = cell_scan(&{
+                let body_uses = frame_uses(&{
                     let nodes: Vec<&Node> = body.body.iter().collect();
                     nodes
                 });
@@ -5939,12 +5540,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 Ok(Operand::Const(Constant::Unit))
             }
             StmtKind::Break => {
-                let Some(_frame) = self.loop_stack.last() else {
-                    return Err(BackendError::new(
-                        "`break` outside a loop".into(),
-                        stmt.span,
-                    ));
-                };
+                // Typing rejects `break` outside a loop.
+                assert!(
+                    !self.loop_stack.is_empty(),
+                    "typed facts invariant: `break` reached lowering outside a loop"
+                );
                 // Record this path's end state for the loop-exit merge
                 // (the relay block is where the merge appends this
                 // path's divergent drops).
@@ -5967,12 +5567,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // `'continue v` resumes the enclosing handler's perform:
                 // the clause returns v to the perform site (one-shot resume
                 // as return), from any loop depth.
-                if self.clause_delimiter.is_none() {
-                    return Err(BackendError::new(
-                        "`'continue` outside an effect handler".into(),
-                        stmt.span,
-                    ));
-                }
+                // Typing rejects `'continue` outside an effect handler.
+                assert!(
+                    self.clause_delimiter.is_some(),
+                    "typed facts invariant: `'continue` reached lowering outside a handler clause"
+                );
                 let value = match value {
                     Some(value) => self.compile_expr(value)?,
                     None => Operand::Const(Constant::Unit),
@@ -5981,12 +5580,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 Ok(Operand::Const(Constant::Unit))
             }
             StmtKind::Continue => {
-                let Some(frame) = self.loop_stack.last() else {
-                    return Err(BackendError::new(
-                        "`continue` outside a loop".into(),
-                        stmt.span,
-                    ));
-                };
+                // Typing rejects `continue` outside a loop.
+                let frame = self
+                    .loop_stack
+                    .last()
+                    .expect("typed facts invariant: `continue` reached lowering outside a loop");
                 let header = frame.header;
                 let moved = self.moved.clone();
                 if let Some(frame) = self.loop_stack.last_mut() {
@@ -6090,7 +5688,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     )),
                 }
             }
-            StmtKind::Handling { effect_name, body } => {
+            StmtKind::Handling {
+                effect_name,
+                body,
+                contract,
+            } => {
                 let Name::Resolved(effect, _) = effect_name else {
                     return Err(BackendError::new(
                         "handler without a resolved effect".into(),
@@ -6098,7 +5700,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     ));
                 };
                 let effect = canonical(*effect, self.program_builder.programs[self.program].module);
-                self.install_handler(effect, body)?;
+                self.install_handler(effect, body, contract)?;
                 Ok(Operand::Const(Constant::Unit))
             }
         }
@@ -6670,7 +6272,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 Ok(Operand::Local(dest))
             }
             ExprKind::CallEffect {
-                effect_name, args, ..
+                effect_name,
+                args,
+                contract,
+                ..
             } => {
                 let Name::Resolved(effect, _) = effect_name else {
                     return Err(BackendError::new(
@@ -6683,7 +6288,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // effect: a perform dispatches on the request's tag
                 // straight to the host operation (IO-02). User handlers
                 // for ambient effects stay out of scope for v1.
-                if self.program_builder.is_io_effect(effect) {
+                if effect == Symbol::Io {
                     return self.compile_io_perform(expr, args);
                 }
                 // One clause body serves every instantiation over rigid
@@ -6693,25 +6298,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // model of Swift's unspecialized-generics ABI and Go's
                 // generics dictionaries, Griesemer et al. OOPSLA 2022;
                 // dictionary passing per Wadler & Blott, POPL 1989).
-                let (declared_params, sig_generics, sig_module) =
-                    match self.program_builder.effect_sig(effect) {
-                        Some((sig, sig_module)) => (
-                            sig.params
-                                .iter()
-                                .map(|param| canonical_ty(param, sig_module))
-                                .collect::<Vec<_>>(),
-                            // Witness blocks travel per TYPE generic;
-                            // static value generics have no payload
-                            // values to drop or retain.
-                            type_param_symbols(&sig.generics),
-                            sig_module,
-                        ),
-                        None => (
-                            Vec::new(),
-                            Vec::new(),
-                            self.program_builder.programs[self.program].module,
-                        ),
-                    };
+                // The published contract carries the declared parameter
+                // types and the type-generic layout (ADR 0038); its
+                // spellings match the recorded instantiation's, both
+                // minted by the checker.
+                let declared_params = &contract.params;
+                let sig_generics = &contract.type_generics;
                 let mut operands = Vec::new();
                 let mut payload_tys = Vec::new();
                 let mut mut_arg_places: Vec<(usize, PlaceChain)> = Vec::new();
@@ -6753,40 +6345,26 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     args,
                     0,
                 )?;
-                // Resolve each generic to this perform's concrete type:
-                // the checker's recorded instantiation first, else
-                // structurally from the argument types.
+                // Resolve each generic to this perform's concrete type
+                // from the checker's recorded instantiation — typing
+                // instantiates every generic effect perform (ADR 0038).
                 let mut instantiation: Vec<(Symbol, Ty)> = Vec::new();
                 if let Some(recorded) = &expr.instantiation {
                     for (param, arg_ty) in recorded {
                         instantiation.push((*param, self.resolved(arg_ty)));
                     }
                 }
-                for generic in &sig_generics {
-                    // Rigid params keep their authored identity; recorded
-                    // instantiation keys may carry either the raw or the
-                    // owner-stamped form.
-                    let mut solved = instantiation
+                for generic in sig_generics {
+                    // The contract's generics and the recorded
+                    // instantiation keys are both checker-minted, so the
+                    // spellings agree — no dual-spelling repair.
+                    let solved = instantiation
                         .iter()
-                        .find(|(param, _)| {
-                            param == generic || *param == canonical(*generic, sig_module)
-                        })
-                        .map(|(_, arg_ty)| arg_ty.clone());
-                    if solved.is_none() {
-                        for (declared, payload_ty) in declared_params.iter().zip(&payload_tys) {
-                            solved = solve_param(declared, payload_ty, *generic);
-                            if solved.is_some() {
-                                break;
-                            }
-                        }
-                    }
-                    let Some(solved) = solved else {
-                        return Err(BackendError::unsupported(
-                            "a generic effect instantiation the backend cannot resolve is not supported yet"
-                                .into(),
-                            expr.span,
-                        ));
-                    };
+                        .find(|(param, _)| param == generic)
+                        .map(|(_, arg_ty)| arg_ty.clone())
+                        .expect(
+                            "typed facts invariant: a generic effect perform carries its checked instantiation",
+                        );
                     if let Ty::Param(rigid) = &solved {
                         // A re-perform from inside a clause forwards its
                         // own witnesses for the still-rigid generic. The
@@ -6829,13 +6407,20 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         operands.push(drop_witness);
                         operands.push(retain_witness);
                         for protocol in self.program_builder.rigid_constraints(*generic) {
-                            let requirements = self
+                            let Some((entries, subst)) = self
                                 .program_builder
-                                .protocol_requirements(protocol.protocol)
-                                .unwrap_or_default();
-                            for name in requirements {
-                                let closure =
-                                    self.requirement_closure(&solved, &protocol, &name, expr.span)?;
+                                .conformance_dictionary(&solved, &protocol)
+                            else {
+                                return Err(BackendError::unsupported(
+                                    "a generic value cannot cross this boundary without its conformance dictionaries (not supported yet)"
+                                        .into(),
+                                    expr.span,
+                                ));
+                            };
+                            for entry in &entries {
+                                let closure = self.requirement_closure(
+                                    &solved, &protocol, entry, &subst, expr.span,
+                                )?;
                                 operands.push(closure);
                             }
                         }
@@ -6873,46 +6458,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
     }
 
-    fn compile_literal(&mut self, expr: &Expr, literal: &Literal) -> Result<Operand, BackendError> {
+    /// Canonical-value-to-MIR-constant emission: the typed tree carries
+    /// checked literal values, so nothing here parses source text.
+    fn compile_literal(&mut self, _expr: &Expr, literal: &Literal) -> Result<Operand, BackendError> {
         match literal {
-            Literal::Int(text) => match self.types().integer_literals.get(&expr.id) {
-                Some(CheckedIntegerLiteral::Value(value)) => {
-                    Ok(Operand::Const(Constant::Int(*value)))
-                }
-                Some(CheckedIntegerLiteral::Invalid) => Err(BackendError::new(
-                    "integer literal without a checked 64-bit value".into(),
-                    expr.span,
-                )),
-                // Builder-synthesized nodes (cloned receivers, elaborated
-                // loops) carry fresh ids; their text already passed LIT-01
-                // checking under the original node.
-                None => text
-                    .replace('_', "")
-                    .parse()
-                    .map(Constant::Int)
-                    .map(Operand::Const)
-                    .map_err(|_| {
-                        BackendError::new(
-                            "integer literal without a checked 64-bit value".into(),
-                            expr.span,
-                        )
-                    }),
-            },
-            Literal::Float(text) => {
-                let value: f64 = text
-                    .replace('_', "")
-                    .parse()
-                    .map_err(|_| BackendError::new("invalid float literal".into(), expr.span))?;
-                Ok(Operand::Const(Constant::Float(value)))
-            }
+            Literal::Int(value) => Ok(Operand::Const(Constant::Int(*value))),
+            Literal::Float(value) => Ok(Operand::Const(Constant::Float(value.0))),
             Literal::Bool(value) => Ok(Operand::Const(Constant::Bool(*value))),
             Literal::String(text) => {
-                let text = crate::parsing::lexing::unescape(text)
-                    .map_err(|_| BackendError::new("invalid string escape".into(), expr.span))?;
                 let dest = self.fresh_local();
                 self.push(Inst::StringLit {
                     dest,
-                    bytes: text.into_bytes(),
+                    bytes: text.clone().into_bytes(),
                 });
                 Ok(Operand::Local(dest))
             }
@@ -6920,9 +6477,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // A character literal is a borrowed grapheme view over
                 // immortal static bytes: Character { storage, start,
                 // byte_count } (layout owned by core/Unicode.tlk).
-                let text = crate::parsing::lexing::unescape(text)
-                    .map_err(|_| BackendError::new("invalid character escape".into(), expr.span))?;
-                let bytes = text.into_bytes();
+                let bytes = text.clone().into_bytes();
                 let len = i64::try_from(bytes.len()).unwrap_or_default();
                 let ptr = self.fresh_local();
                 self.push(Inst::BytesLit { dest: ptr, bytes });
@@ -7052,7 +6607,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 Ok(())
             }
             PatternKind::Tuple(elements) => {
-                let element_tys = tuple_element_tys(&ty, elements.len());
+                let element_tys: Vec<Ty> = elements
+                    .iter()
+                    .map(|element| self.resolved(&element.ty.clone().unwrap_or(Ty::Error)))
+                    .collect();
                 for (index, (element, element_ty)) in elements.iter().zip(&element_tys).enumerate()
                 {
                     if pattern_bind_symbols(element).is_empty() && !self.needs_release(element_ty) {
@@ -7075,11 +6633,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             PatternKind::Variant {
                 variant_name,
+                resolved,
                 fields,
                 ..
             } => {
                 let Some((_, _, payload_tys)) =
-                    self.variant_case(pattern, variant_name, &ty, fields.len())
+                    self.variant_case(*resolved, variant_name, &ty, fields)
                 else {
                     return Ok(());
                 };
@@ -7120,8 +6679,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
                 Ok(())
             }
-            PatternKind::Record { fields } => {
-                let cells = self.record_cells(pattern, fields, &ty)?;
+            PatternKind::Record { fields, slots } => {
+                let cells = self.record_cells(pattern, fields, slots)?;
                 for (index, cell) in cells.iter().enumerate() {
                     if let Some(name) = &cell.bind {
                         // The label binder owns the slot; interior binds
@@ -7171,12 +6730,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
                 Ok(())
             }
-            PatternKind::Struct {
-                fields,
-                field_names,
-                ..
-            } => {
-                let (heap, cells) = self.struct_cells(pattern, fields, field_names, &ty)?;
+            PatternKind::Struct { fields, slots, .. } => {
+                let (heap, cells) = self.struct_cells(pattern, fields, slots, &ty)?;
                 for (index, cell) in cells.iter().enumerate() {
                     if pattern_bind_symbols(&cell.pattern).is_empty()
                         && !self.needs_release(&cell.field_ty)
@@ -7232,7 +6787,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .any(|(element, item)| self.pattern_leaves_owned_unbound(element, item)),
                 _ => false,
             },
-            PatternKind::Record { fields } => match self.record_cells(pattern, fields, ty) {
+            PatternKind::Record { fields, slots } => match self.record_cells(pattern, fields, slots) {
                 Ok(cells) => cells.iter().any(|cell| {
                     cell.bind.is_none()
                         && self.pattern_leaves_owned_unbound(&cell.pattern, &cell.field_ty)
@@ -7241,9 +6796,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             },
             PatternKind::Variant {
                 variant_name,
+                resolved,
                 fields,
                 ..
-            } => match self.variant_case(pattern, variant_name, ty, fields.len()) {
+            } => match self.variant_case(*resolved, variant_name, ty, fields) {
                 Some((_, _, payload_tys)) => {
                     fields.iter().zip(&payload_tys).any(|(field, payload_ty)| {
                         self.pattern_leaves_owned_unbound(field, payload_ty)
@@ -7254,11 +6810,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             PatternKind::Or(alternatives) => alternatives
                 .iter()
                 .any(|alternative| self.pattern_leaves_owned_unbound(alternative, ty)),
-            PatternKind::Struct {
-                fields,
-                field_names,
-                ..
-            } => match self.struct_cells(pattern, fields, field_names, ty) {
+            PatternKind::Struct { fields, slots, .. } => match self.struct_cells(pattern, fields, slots, ty) {
                 // A heap object's unbound fields stay the object's; its
                 // own drop releases them, so nothing is left unowned.
                 Ok((true, _)) => false,
@@ -7279,72 +6831,74 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         &self,
         pattern: &Pattern,
         fields: &[RecordFieldPattern],
-        scrutinee_ty: &Ty,
+        slots: &Option<Vec<(Ty, Option<usize>)>>,
     ) -> Result<Vec<RecordCell>, BackendError> {
-        let Ty::Record(row) = strip_borrows(self.resolved(scrutinee_ty)) else {
-            return Err(BackendError::new(
-                "record pattern on a non-record scrutinee".into(),
-                pattern.span,
-            ));
-        };
-        if row.tail.is_some() {
-            // Slot positions depend on the whole row; an open row has
-            // no fixed layout to match against (the reference lowering
-            // rejected these too).
+        // Cells come from the pattern's published slot table (ADR 0038):
+        // row-layout order, slot types, and the covering written fields.
+        // Typing publishes no table for an open or unresolved row — slot
+        // positions depend on the whole row, so there is no fixed layout
+        // to match against (the reference lowering rejected these too).
+        let Some(slots) = slots else {
             return Err(BackendError::unsupported(
                 "record patterns on open rows are not supported yet".into(),
                 pattern.span,
             ));
-        }
-        row.fields
+        };
+        slots
             .iter()
-            .map(|(label, field_ty)| {
-                let crate::label::Label::Named(label) = label else {
-                    return Err(BackendError::new(
-                        "record pattern on a row with positional fields".into(),
-                        pattern.span,
-                    ));
-                };
-                let cell = fields.iter().find_map(|field| match &field.kind {
-                    RecordFieldPatternKind::Bind(name) if name.name_str() == *label => {
-                        Some(RecordCell {
+            .map(|(field_ty, sub)| {
+                let field_ty = self.resolved(field_ty);
+                let cell = sub.and_then(|index| fields.get(index)).map(|field| {
+                    match &field.kind {
+                        RecordFieldPatternKind::Bind(name) => RecordCell {
                             field_ty: field_ty.clone(),
                             pattern: Pattern {
                                 id: field.id,
                                 kind: PatternKind::Bind(name.clone()),
                                 span: pattern.span,
+                                ty: field.ty.clone(),
                             },
                             bind: None,
-                        })
-                    }
-                    RecordFieldPatternKind::Equals { name, value } if name.name_str() == *label => {
+                        },
                         // `label: _` is the label binder alone.
-                        if matches!(value.kind, PatternKind::Wildcard) {
-                            Some(RecordCell {
+                        RecordFieldPatternKind::Equals { name, value }
+                            if matches!(value.kind, PatternKind::Wildcard) =>
+                        {
+                            RecordCell {
                                 field_ty: field_ty.clone(),
                                 pattern: Pattern {
                                     id: field.id,
                                     kind: PatternKind::Bind(name.clone()),
                                     span: pattern.span,
+                                    ty: field.ty.clone(),
                                 },
                                 bind: None,
-                            })
-                        } else {
-                            Some(RecordCell {
-                                field_ty: field_ty.clone(),
-                                pattern: value.clone(),
-                                bind: Some(name.clone()),
-                            })
+                            }
                         }
+                        RecordFieldPatternKind::Equals { name, value } => RecordCell {
+                            field_ty: field_ty.clone(),
+                            pattern: value.clone(),
+                            bind: Some(name.clone()),
+                        },
+                        RecordFieldPatternKind::Rest => RecordCell {
+                            field_ty: field_ty.clone(),
+                            pattern: Pattern {
+                                id: pattern.id,
+                                kind: PatternKind::Wildcard,
+                                span: pattern.span,
+                                ty: None,
+                            },
+                            bind: None,
+                        },
                     }
-                    _ => None,
                 });
                 Ok(cell.unwrap_or_else(|| RecordCell {
-                    field_ty: field_ty.clone(),
+                    field_ty,
                     pattern: Pattern {
                         id: pattern.id,
                         kind: PatternKind::Wildcard,
                         span: pattern.span,
+                        ty: None,
                     },
                     bind: None,
                 }))
@@ -7361,48 +6915,37 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         &self,
         pattern: &Pattern,
         fields: &[Pattern],
-        field_names: &[Name],
+        slots: &[(Ty, Option<usize>)],
         scrutinee_ty: &Ty,
     ) -> Result<(bool, Vec<RecordCell>), BackendError> {
-        let Ty::Nominal(symbol, args) = strip_borrows(self.resolved(scrutinee_ty)) else {
+        // Cells come from the pattern's published slots (ADR 0038):
+        // instantiated field types in declaration order and the covering
+        // sub-patterns. Only the heap flag — object versus value
+        // representation — reads the layout catalog.
+        let Ty::Nominal(symbol, _) = strip_borrows(self.resolved(scrutinee_ty)) else {
             return Err(BackendError::new(
                 "struct pattern on a non-struct scrutinee".into(),
                 pattern.span,
             ));
         };
         let symbol = canonical(symbol, self.program_builder.programs[self.program].module);
-        let Some((def, _)) = self.program_builder.struct_def(symbol) else {
-            return Err(BackendError::new(
-                "struct pattern without a struct definition".into(),
-                pattern.span,
-            ));
-        };
-        let heap = def.heap;
-        let names: Vec<String> = def.fields.keys().cloned().collect();
-        let Some(field_tys) = self.program_builder.field_types(symbol, &args) else {
-            return Err(BackendError::new(
-                "struct pattern without field types".into(),
-                pattern.span,
-            ));
-        };
-        let cells = names
+        let heap = self
+            .program_builder
+            .struct_def(symbol)
+            .is_some_and(|(def, _)| def.heap);
+        let cells = slots
             .iter()
-            .zip(field_tys)
-            .map(|(name, field_ty)| {
-                let sub = field_names
-                    .iter()
-                    .zip(fields)
-                    .find(|(label, _)| label.name_str() == *name)
-                    .map(|(_, sub)| sub.clone());
-                RecordCell {
-                    field_ty,
-                    pattern: sub.unwrap_or(Pattern {
+            .map(|(field_ty, sub)| RecordCell {
+                field_ty: self.resolved(field_ty),
+                pattern: sub
+                    .and_then(|index| fields.get(index).cloned())
+                    .unwrap_or(Pattern {
                         id: pattern.id,
                         kind: PatternKind::Wildcard,
                         span: pattern.span,
+                        ty: None,
                     }),
-                    bind: None,
-                }
+                bind: None,
             })
             .collect();
         Ok((heap, cells))
@@ -7461,26 +7004,29 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     /// Resolve a variant pattern to its enum head, tag, and payload
-    /// types: typing's resolution when present
-    /// (`member_resolutions[pattern]`), the scrutinee's enum by name
-    /// otherwise (elaboration-synthesized patterns carry fresh ids).
+    /// types: the pattern's baked constructor identity when present, the
+    /// scrutinee's enum by name otherwise (elaboration-synthesized
+    /// patterns carry no resolution). Payload types are the fields'
+    /// checked occurrence types (ADR 0038) — the checker's actual
+    /// per-occurrence instantiation, GADT refinements included — never a
+    /// catalog re-substitution.
     fn variant_case(
         &self,
-        pattern: &Pattern,
+        variant: Option<Symbol>,
         variant_name: &str,
         scrutinee_ty: &Ty,
-        payload_len: usize,
+        fields: &[Pattern],
     ) -> Option<(Symbol, u16, Vec<Ty>)> {
         let module = self.program_builder.programs[self.program].module;
-        let (head_from_ty, args) = match strip_borrows(self.resolved(scrutinee_ty)) {
-            Ty::Nominal(head, args) => (Some(canonical(head, module)), args),
-            _ => (None, Vec::new()),
+        let head_from_ty = match strip_borrows(self.resolved(scrutinee_ty)) {
+            Ty::Nominal(head, _) => Some(canonical(head, module)),
+            _ => None,
         };
-        let resolved = match self.types().member_resolutions.get(&pattern.id) {
-            Some(crate::types::output::MemberResolution::Direct(variant)) => self
+        let resolved = match variant {
+            Some(variant) => self
                 .program_builder
-                .variant_tag(canonical(*variant, module)),
-            _ => head_from_ty.and_then(|head| {
+                .variant_tag(canonical(variant, module)),
+            None => head_from_ty.and_then(|head| {
                 self.program_builder
                     .enum_def(head)
                     .and_then(|(def, _)| def.variants.get_index_of(variant_name))
@@ -7489,11 +7035,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }),
         };
         let (head, tag) = resolved?;
-        let payload_tys = self
-            .program_builder
-            .variant_payloads(head, &args)
-            .and_then(|payloads| payloads.get(usize::from(tag)).cloned())
-            .unwrap_or_else(|| vec![Ty::Error; payload_len]);
+        let payload_tys = fields
+            .iter()
+            .map(|field| match &field.ty {
+                Some(ty) => self.resolved(ty),
+                None => Ty::Error,
+            })
+            .collect();
         Some((head, tag, payload_tys))
     }
 
@@ -7537,15 +7085,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 );
                 Ok(())
             }
-            PatternKind::LiteralInt(_) => {
-                let Some(CheckedIntegerLiteral::Value(value)) =
-                    self.types().integer_literals.get(&pattern.id)
-                else {
-                    return Err(BackendError::new(
-                        "integer pattern without a checked 64-bit value".into(),
-                        pattern.span,
-                    ));
-                };
+            PatternKind::LiteralInt(value) => {
                 self.branch_if_equal(
                     ScalarOp::IntCmp(CmpKind::Eq),
                     scrutinee,
@@ -7556,17 +7096,21 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 Ok(())
             }
             PatternKind::Tuple(elements) => {
-                let element_tys = tuple_element_tys(scrutinee_ty, elements.len());
+                let element_tys: Vec<Ty> = elements
+                    .iter()
+                    .map(|element| self.resolved(&element.ty.clone().unwrap_or(Ty::Error)))
+                    .collect();
                 let extracted = self.extract_tuple(scrutinee, elements.len());
                 self.test_all(elements, &extracted, &element_tys, matched, failed)
             }
             PatternKind::Variant {
                 variant_name,
+                resolved,
                 fields,
                 ..
             } => {
                 let Some((_, tag, payload_tys)) =
-                    self.variant_case(pattern, variant_name, scrutinee_ty, fields.len())
+                    self.variant_case(*resolved, variant_name, scrutinee_ty, fields)
                 else {
                     return Err(BackendError::new(
                         "variant pattern without a frontend resolution".into(),
@@ -7643,35 +7187,25 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // A Character shares the string views' {storage, start,
                 // byte_count} shape, so the byte-comparison test serves
                 // grapheme patterns too.
-                let bytes = crate::parsing::lexing::unescape(text)
-                    .map_err(|_| {
-                        BackendError::new("invalid character escape".into(), pattern.span)
-                    })?
-                    .into_bytes();
                 self.compile_string_pattern_test(
                     scrutinee,
                     scrutinee_ty,
-                    bytes,
+                    text.clone().into_bytes(),
                     matched,
                     failed,
                     pattern.span,
                 )
             }
-            PatternKind::LiteralString(text) => {
-                let bytes = crate::parsing::lexing::unescape(text)
-                    .map_err(|_| BackendError::new("invalid string escape".into(), pattern.span))?
-                    .into_bytes();
-                self.compile_string_pattern_test(
-                    scrutinee,
-                    scrutinee_ty,
-                    bytes,
-                    matched,
-                    failed,
-                    pattern.span,
-                )
-            }
-            PatternKind::Record { fields } => {
-                let cells = self.record_cells(pattern, fields, scrutinee_ty)?;
+            PatternKind::LiteralString(text) => self.compile_string_pattern_test(
+                scrutinee,
+                scrutinee_ty,
+                text.clone().into_bytes(),
+                matched,
+                failed,
+                pattern.span,
+            ),
+            PatternKind::Record { fields, slots } => {
+                let cells = self.record_cells(pattern, fields, slots)?;
                 let extracted = self.extract_tuple(scrutinee, cells.len());
                 // `label: pattern` also binds the label to the slot;
                 // register those binders exactly like Bind cells.
@@ -7698,13 +7232,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let tys: Vec<Ty> = cells.iter().map(|cell| cell.field_ty.clone()).collect();
                 self.test_all(&patterns, &extracted, &tys, matched, failed)
             }
-            PatternKind::Struct {
-                fields,
-                field_names,
-                ..
-            } => {
+            PatternKind::Struct { fields, slots, .. } => {
                 let (heap, cells) =
-                    self.struct_cells(pattern, fields, field_names, scrutinee_ty)?;
+                    self.struct_cells(pattern, fields, slots, scrutinee_ty)?;
                 let extracted = self.extract_struct_fields(scrutinee, heap, cells.len());
                 let patterns: Vec<Pattern> =
                     cells.iter().map(|cell| cell.pattern.clone()).collect();
@@ -8229,14 +7759,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             self_ty = *inner;
                         }
                         // The resolution is written in this program's
-                        // view; canonicalize before matching rows.
+                        // view; canonicalize (and make the application's
+                        // arguments concrete under this instance) before
+                        // matching rows.
                         let module = self.program_builder.programs[self.program].module;
                         let protocol = crate::types::ty::ProtocolRef {
                             protocol: canonical(protocol.protocol, module),
                             args: protocol
                                 .args
                                 .iter()
-                                .map(|arg| canonical_ty(arg, module))
+                                .map(|arg| self.resolved(&canonical_ty(arg, module)))
                                 .collect(),
                         };
                         let protocol = &protocol;
@@ -8353,63 +7885,63 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 )
                             }));
                             canonical(*witness, module)
-                        } else if let Some((implementation, row_subst)) = self
-                            .program_builder
-                            .conformance_witness(&self_ty, protocol, label)
-                        {
+                        } else {
                             // Deferred selection (ADR 0036): the receiver
                             // was rigid at typing, so no per-node commitment
                             // could name the witness. The instance
-                            // substitution has made it concrete here, and
-                            // coherence makes the shared selector's answer
-                            // forced — this dereferences typing's decision,
-                            // it does not make a new one.
-                            subst.extend(row_subst);
-                            implementation
-                        } else if !self
-                            .program_builder
-                            .callables
-                            .contains_key(&canonical(*witness, module))
-                            && matches!(label, crate::label::Label::Named(name) if name == "equals" || name == "show")
-                        {
-                            // Typing published structural derivation rather
-                            // than a conformance row; synthesize that chosen
-                            // implementation without searching the catalog.
-                            let derived_show =
-                                matches!(label, crate::label::Label::Named(name) if name == "show");
-                            let glue = if derived_show {
-                                self.program_builder
-                                    .derived_show(&self_ty, protocol, expr.span)?
-                            } else {
-                                self.program_builder
-                                    .derived_equality(&self_ty, protocol, expr.span)?
+                            // substitution has made it concrete here;
+                            // dereference the committed dictionary entry —
+                            // coherence makes the answer forced, so this
+                            // dereferences typing's decision, it does not
+                            // make a new one.
+                            use crate::types::catalog::{DerivedRecipe, DictionaryEntry};
+                            let Some((entry, dictionary_subst)) = self
+                                .program_builder
+                                .forced_witness(&self_ty, protocol, label)
+                            else {
+                                return Err(BackendError::unsupported(
+                                    "a requirement operation without a selectable conformance is not supported yet"
+                                        .into(),
+                                    callee.span,
+                                ));
                             };
-                            let mut operands = Vec::new();
-                            if let Some(receiver) = value_receiver {
-                                operands.push(self.compile_expr(receiver)?);
-                            }
-                            for arg in args {
-                                operands.push(self.compile_expr(&arg.value)?);
-                            }
-                            let dest = self.fresh_local();
-                            self.push_call(dest, glue, operands);
-                            self.produce_temp(dest, &self.resolved(&expr.ty));
-                            return Ok(Operand::Local(dest));
-                        } else {
-                            // The requirement's default body executes with
-                            // `Self`, the protocol's input parameters, and
-                            // the conformance's associated types
-                            // substituted.
-                            subst.push((protocol.protocol, self_ty.clone()));
-                            if let Some(params) =
-                                self.program_builder.protocol_params(protocol.protocol)
-                            {
-                                for (param, arg) in params.iter().zip(&protocol.args) {
-                                    subst.push((*param, self.resolved(arg)));
+                            match entry {
+                                DictionaryEntry::Implementation { symbol, .. } => {
+                                    // A default body executes with `Self`,
+                                    // the protocol's input parameters, and
+                                    // the row's associated types
+                                    // substituted; a declared witness
+                                    // prunes what it does not quantify.
+                                    subst.extend(dictionary_subst);
+                                    subst.push((protocol.protocol, self_ty.clone()));
+                                    symbol
+                                }
+                                DictionaryEntry::Derived(recipe) => {
+                                    // Typing committed structural
+                                    // derivation rather than a callable;
+                                    // synthesize that chosen
+                                    // implementation.
+                                    let glue = match recipe {
+                                        DerivedRecipe::Show => self
+                                            .program_builder
+                                            .derived_show(&self_ty, protocol, expr.span)?,
+                                        DerivedRecipe::Equality => self
+                                            .program_builder
+                                            .derived_equality(&self_ty, protocol, expr.span)?,
+                                    };
+                                    let mut operands = Vec::new();
+                                    if let Some(receiver) = value_receiver {
+                                        operands.push(self.compile_expr(receiver)?);
+                                    }
+                                    for arg in args {
+                                        operands.push(self.compile_expr(&arg.value)?);
+                                    }
+                                    let dest = self.fresh_local();
+                                    self.push_call(dest, glue, operands);
+                                    self.produce_temp(dest, &self.resolved(&expr.ty));
+                                    return Ok(Operand::Local(dest));
                                 }
                             }
-                            subst.extend(self.program_builder.conformance_assoc(&self_ty, protocol));
-                            canonical(*witness, module)
                         }
                     }
                 };
@@ -8447,25 +7979,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             for (operand, param) in operands[offset..].to_vec().iter().zip(&params) {
                 if !matches!(param, Ty::Borrow(_, _)) {
                     self.consume_into(*operand, param, expr.span)?;
-                }
-            }
-            // Call-site markers must match the declared modes (ADR 0018).
-            let marker_params = &params[params.len().saturating_sub(args.len())..];
-            for (arg, param) in args.iter().zip(marker_params) {
-                match arg.mode {
-                    Some(ArgMode::Mut) if !matches!(param, Ty::Borrow(Perm::Exclusive, _)) => {
-                        return Err(BackendError::new(
-                            "the `mut` marker requires a `mut` parameter".into(),
-                            arg.value.span,
-                        ));
-                    }
-                    Some(ArgMode::Borrow) if !matches!(param, Ty::Borrow(_, _)) => {
-                        return Err(BackendError::new(
-                            "the `borrow` marker requires a borrowing parameter".into(),
-                            arg.value.span,
-                        ));
-                    }
-                    _ => {}
                 }
             }
             if offset == 1
@@ -8682,17 +8195,17 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         });
         witnesses.push(Operand::Local(retain_closure));
 
-        let requirements = self
+        let (entries, subst) = self
             .program_builder
-            .protocol_requirements(protocol.protocol)
+            .conformance_dictionary(&payload_ty, &protocol)
             .ok_or_else(|| {
                 BackendError::new(
                     "existential protocol without a catalog entry".into(),
                     expr.span,
                 )
             })?;
-        for name in requirements {
-            let closure = self.requirement_closure(&payload_ty, &protocol, &name, expr.span)?;
+        for entry in &entries {
+            let closure = self.requirement_closure(&payload_ty, &protocol, entry, &subst, expr.span)?;
             witnesses.push(closure);
         }
 
@@ -8787,7 +8300,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// Install a deep handler: reify the delimiter (this frame's return),
     /// compile the clause as a closure over `[delimiter, captures…]`, and
     /// push the handler entry. Entries pop with the frame.
-    fn install_handler(&mut self, effect: Symbol, body: &Block) -> Result<(), BackendError> {
+    fn install_handler(
+        &mut self,
+        effect: Symbol,
+        body: &Block,
+        contract: &crate::types::output::EffectContract,
+    ) -> Result<(), BackendError> {
         // The runtime is the implicit handler for core's ambient effects
         // ('io, 'alloc, 'async): user handlers over them would be
         // silently bypassed, so they fail closed.
@@ -8798,27 +8316,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             ));
         }
         let body_nodes: Vec<&Node> = body.body.iter().collect();
-        let captured = free_locals(&body_nodes, &self.locals);
+        let captured = self.live_captures(body);
         let cont = self.fresh_local();
         self.push(Inst::MakeCont { dest: cont });
 
         let id = self.program_builder.reserve("handler_clause");
-        // Clause binders are usually unannotated; their ownership comes
-        // from the effect's declared parameter types (rigid generics stay
-        // `Ty::Param` — released and retained through the witnesses the
-        // perform site appends).
-        let (declared_params, sig_generics) = match self.program_builder.effect_sig(effect) {
-            Some((sig, sig_module)) => (
-                sig.params
-                    .iter()
-                    .map(|param| canonical_ty(param, sig_module))
-                    .collect::<Vec<_>>(),
-                // Same TYPE-generic filter as the perform site: the
-                // appended witness blocks and these bindings must agree.
-                type_param_symbols(&sig.generics),
-            ),
-            None => (Vec::new(), Vec::new()),
-        };
+        // The published contract carries the type-generic witness-block
+        // layout — the same list the perform site appends, so the two
+        // sides agree by construction (ADR 0038).
+        let sig_generics = contract.type_generics.clone();
         // The clause inherits the enclosing frame's rigid witnesses and
         // dictionaries through its environment, exactly like an ordinary
         // closure (`capture_env`/`bind_env`): its body can drop, retain,
@@ -8838,8 +8344,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // Clause bodies read last-use liveness like any frame: seed
         // their use counts (cell conversion stays the enclosing
         // frame's concern).
-        let (_, _, clause_use_counts) = cell_scan(&body_nodes);
-        fx.use_counts = clause_use_counts;
+        fx.use_counts = frame_uses(&body_nodes);
         let declared_arity = u16::try_from(body.args.len())
             .map_err(|_| BackendError::new("too many clause parameters".into(), body.span))?;
         // The perform site appends each generic's hidden block ([drop,
@@ -8849,20 +8354,22 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         fx.next_local = arity;
         for (ix, param) in body.args.iter().enumerate() {
             let local = u16::try_from(ix).unwrap_or_default();
-            let ty = match &param.ty {
-                Some(ty) => Some(fx.resolved(ty)),
-                None => declared_params.get(ix).cloned(),
-            };
-            if let Some(ty) = ty {
-                // `mut` (exclusive-borrow) effect parameters resume with
-                // their evolved values, the same writeback convention as
-                // direct calls.
-                if matches!(ty, Ty::Borrow(Perm::Exclusive, _)) {
-                    fx.writeback_params.push(local);
-                }
-                fx.check_copy(&ty, body.span)?;
-                fx.own_local(local, &ty);
+            // Typing published every clause binder's type on its node
+            // (a binder count that disagrees with the signature already
+            // errored).
+            let ty = param
+                .ty
+                .as_ref()
+                .expect("typed facts invariant: a clause binder carries its checked type");
+            let ty = fx.resolved(ty);
+            // `mut` (exclusive-borrow) effect parameters resume with
+            // their evolved values, the same writeback convention as
+            // direct calls.
+            if matches!(ty, Ty::Borrow(Perm::Exclusive, _)) {
+                fx.writeback_params.push(local);
             }
+            fx.check_copy(&ty, body.span)?;
+            fx.own_local(local, &ty);
             if let Name::Resolved(symbol, _) = &param.name {
                 fx.locals.insert(*symbol, local);
             }
@@ -9044,13 +8551,30 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         Ok((env, inherited))
     }
 
+    /// The frame's published free variables that name bindings live in
+    /// this (creation-site) frame — the closure-environment symbols, in
+    /// first-use order. `capture_env`/`bind_env` both consume this list,
+    /// so the two sides of the environment contract agree by
+    /// construction.
+    fn live_captures(&self, block: &Block) -> Vec<Symbol> {
+        block
+            .frame
+            .as_ref()
+            .expect("typed facts invariant: a frame-root block carries frame facts")
+            .captured
+            .iter()
+            .copied()
+            .filter(|symbol| self.locals.contains_key(symbol))
+            .collect()
+    }
+
     /// An anonymous or local function value: its body compiles as its own
     /// chunk; free locals capture by value into the environment
     /// (handler-extent shared borrows in v1). The chunk's prologue reads
     /// each capture back out of the environment.
     fn compile_closure(&mut self, func: &Func, ty: &Ty) -> Result<Operand, BackendError> {
         let body_nodes: Vec<&Node> = func.body.body.iter().collect();
-        let captured = free_locals(&body_nodes, &self.locals);
+        let captured = self.live_captures(&func.body);
         if func.captures.is_empty() {
             // Implicit captures: celled handles are copyable by
             // construction; everything else must be a Copy value.
@@ -9075,10 +8599,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let id = self.program_builder.reserve(&func.name.name_str());
         let mut fx = FunctionBuilder::new(self.program_builder, 0, self.program);
         fx.subst = self.subst.clone();
-        let (celled, nested_refs, use_counts) = cell_scan(&body_nodes);
-        fx.celled = celled;
-        fx.nested_refs = nested_refs;
-        fx.use_counts = use_counts;
+        let facts = func
+            .body
+            .frame
+            .as_ref()
+            .expect("typed facts invariant: a closure body carries frame facts");
+        fx.celled = facts.celled.clone();
+        fx.nested_refs = facts.nested_refs.clone();
+        fx.use_counts = frame_uses(&body_nodes);
         let arity = u16::try_from(func.params.len())
             .map_err(|_| BackendError::new("too many parameters".into(), func.body.span))?;
         fx.next_local = arity;
@@ -9203,9 +8731,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             .collect(),
                     };
                     let label = crate::label::Label::Named("init".into());
-                    let Some((implementation, row_subst)) = self
-                        .program_builder
-                        .conformance_witness(&ty, &protocol, &label)
+                    let Some((
+                        crate::types::catalog::DictionaryEntry::Implementation {
+                            symbol: implementation,
+                            ..
+                        },
+                        row_subst,
+                    )) = self.program_builder.forced_witness(&ty, &protocol, &label)
                     else {
                         return Err(BackendError::new(
                             "protocol construction without a selectable conformance".into(),
@@ -9341,15 +8873,17 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // frame, one SetField per field, and a defeated copy-on-write per
         // SetField (the blank record is aliased across the caller and
         // init frames, so it is never unique). Build the record directly
-        // instead; the synthesized body carries `Span::SYNTHESIZED`, and
-        // the arity guard keeps any init with default-valued fields (or
-        // a user body) on the call path. Memberwise parameters all
-        // consume (ADR 0018), matching the direct path's ownership.
+        // instead; the role is carried by the init's symbol identity
+        // (only the resolver's memberwise synthesis mints a
+        // `Synthesized` init symbol), and the arity guard keeps any init
+        // with default-valued fields on the call path. Memberwise
+        // parameters all consume (ADR 0018), matching the direct path's
+        // ownership.
         let synthesized_memberwise = !def.heap
+            && matches!(init, Symbol::Synthesized(_))
             && callable.is_some_and(|callable| {
-                matches!(callable.body, CallableBody::Init { params, body }
-                    if body.span == Span::SYNTHESIZED
-                        && params.len() == field_count + 1
+                matches!(callable.body, CallableBody::Init { params, .. }
+                    if params.len() == field_count + 1
                         && operands.len() == field_count)
             });
 
@@ -9443,18 +8977,22 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
     /// Trusted scalar inline-IR bodies from core sources (ADR 0032's
     /// target-neutral scalar intrinsics).
+    /// Emit one checked inline-IR operation (ADR 0038): typing validated
+    /// the operation, scalar combinations, and operands; this maps 1:1
+    /// onto MIR instructions. Memory-kind selection happens here, from
+    /// the instance-substituted checked types — representation work.
     fn compile_inline_ir(
         &mut self,
         expr: &Expr,
         instruction: &crate::typed_ast::InlineIRInstruction,
     ) -> Result<Operand, BackendError> {
-        use InlineIRInstructionKind as K;
+        use crate::types::output::{CheckedIrKind as K, IrScalarOp};
 
         let dest = self.fresh_local();
         match &instruction.kind {
-            K::Alloc { ty, count, .. } => {
-                let element = self.annotation_mem_ty(ty, expr.span)?;
-                let count = self.ir_value(instruction, count, expr.span)?;
+            K::Alloc { elem, count } => {
+                let element = mem_ty_of(&self.resolved(elem));
+                let count = self.ir_value(instruction, count)?;
                 let bytes = if element.size() == 1 {
                     count
                 } else {
@@ -9471,33 +9009,33 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 return Ok(Operand::Local(dest));
             }
             K::Free { ptr } => {
-                let ptr = self.ir_value(instruction, ptr, expr.span)?;
+                let ptr = self.ir_value(instruction, ptr)?;
                 self.push(Inst::Free { src: ptr });
                 return Ok(Operand::Const(Constant::Unit));
             }
             K::Retain { ty, value } => {
                 // Structural: one reference per refcounted buffer the value
                 // owns (RawPtr fields are buffers).
-                let element = self.annotation_value_ty(ty, expr.span)?;
-                let value = self.ir_value(instruction, value, expr.span)?;
+                let element = self.resolved(ty);
+                let value = self.ir_value(instruction, value)?;
                 self.retain_value(value, &element, expr.span)?;
                 return Ok(Operand::Const(Constant::Unit));
             }
-            K::IsUnique { ptr, .. } => {
-                let ptr = self.ir_value(instruction, ptr, expr.span)?;
+            K::IsUnique { ptr } => {
+                let ptr = self.ir_value(instruction, ptr)?;
                 self.push(Inst::IsUnique { dest, src: ptr });
                 return Ok(Operand::Local(dest));
             }
-            K::Load { ty, addr, .. } => {
-                let kind = self.annotation_mem_ty(ty, expr.span)?;
-                let ptr = self.ir_value(instruction, addr, expr.span)?;
+            K::Load { ty, addr } => {
+                let kind = mem_ty_of(&self.resolved(ty));
+                let ptr = self.ir_value(instruction, addr)?;
                 self.push(Inst::Load { dest, ptr, kind });
                 return Ok(Operand::Local(dest));
             }
-            K::Store { value, ty, addr } => {
-                let kind = self.annotation_mem_ty(ty, expr.span)?;
-                let src = self.ir_value(instruction, value, expr.span)?;
-                let ptr = self.ir_value(instruction, addr, expr.span)?;
+            K::Store { ty, value, addr } => {
+                let kind = mem_ty_of(&self.resolved(ty));
+                let src = self.ir_value(instruction, value)?;
+                let ptr = self.ir_value(instruction, addr)?;
                 // The write donates the value to memory: its previous
                 // owner (usually `_store`'s consumed parameter) must not
                 // also drop it.
@@ -9509,9 +9047,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // Exchange two memory slots: two loads, two crossed
                 // stores. Ownership is unchanged — each slot still owns
                 // exactly one value.
-                let kind = self.annotation_mem_ty(ty, expr.span)?;
-                let first = self.ir_value(instruction, a, expr.span)?;
-                let second = self.ir_value(instruction, b, expr.span)?;
+                let kind = mem_ty_of(&self.resolved(ty));
+                let first = self.ir_value(instruction, a)?;
+                let second = self.ir_value(instruction, b)?;
                 let from_first = self.fresh_local();
                 self.push(Inst::Load {
                     dest: from_first,
@@ -9536,28 +9074,26 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 });
                 return Ok(Operand::Const(Constant::Unit));
             }
-            K::Take { ty, value, .. } => {
+            K::Take { ty, value } => {
                 // The place invalidation is MIR bookkeeping; the value
                 // itself just moves — and the result OWNS it (a binding
                 // must consume, not retain, this temporary).
-                let value = self.ir_value(instruction, value, expr.span)?;
+                let value = self.ir_value(instruction, value)?;
                 self.push(Inst::Copy { dest, src: value });
-                let owned = self.annotation_value_ty(ty, expr.span)?;
+                let owned = self.resolved(ty);
                 self.produce_temp(dest, &owned);
                 return Ok(Operand::Local(dest));
             }
-            K::Copy {
-                from, to, length, ..
-            } => {
-                let from = self.ir_value(instruction, from, expr.span)?;
-                let to = self.ir_value(instruction, to, expr.span)?;
-                let len = self.ir_value(instruction, length, expr.span)?;
+            K::MemCopy { from, to, length } => {
+                let from = self.ir_value(instruction, from)?;
+                let to = self.ir_value(instruction, to)?;
+                let len = self.ir_value(instruction, length)?;
                 self.push(Inst::MemCopy { from, to, len });
                 return Ok(Operand::Const(Constant::Unit));
             }
-            K::InlineGet { array, index, .. } => {
-                let array = self.ir_value(instruction, array, expr.span)?;
-                let index = self.ir_value(instruction, index, expr.span)?;
+            K::InlineGet { array, index } => {
+                let array = self.ir_value(instruction, array)?;
+                let index = self.ir_value(instruction, index)?;
                 self.push(Inst::GetElement {
                     dest,
                     src: array,
@@ -9565,15 +9101,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 });
                 return Ok(Operand::Local(dest));
             }
-            K::Gep {
-                ty,
-                addr,
-                offset_index,
-                ..
-            } => {
-                let element = self.annotation_mem_ty(ty, expr.span)?;
-                let ptr = self.ir_value(instruction, addr, expr.span)?;
-                let offset = self.ir_value(instruction, offset_index, expr.span)?;
+            K::Gep { elem, addr, offset } => {
+                let element = mem_ty_of(&self.resolved(elem));
+                let ptr = self.ir_value(instruction, addr)?;
+                let offset = self.ir_value(instruction, offset)?;
                 self.push(Inst::PtrAdd {
                     dest,
                     ptr,
@@ -9582,10 +9113,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 });
                 return Ok(Operand::Local(dest));
             }
-            K::IoWrite { fd, buf, count, .. } => {
-                let a = self.ir_value(instruction, fd, expr.span)?;
-                let b = self.ir_value(instruction, buf, expr.span)?;
-                let c = self.ir_value(instruction, count, expr.span)?;
+            K::IoWrite { fd, buf, count } => {
+                let a = self.ir_value(instruction, fd)?;
+                let b = self.ir_value(instruction, buf)?;
+                let c = self.ir_value(instruction, count)?;
                 self.push(Inst::Io {
                     dest,
                     op: 1,
@@ -9595,9 +9126,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 });
                 return Ok(Operand::Local(dest));
             }
-            K::Add { ty, a, b, .. } if ty.simple_name() == "RawPtr" => {
-                let ptr = self.ir_value(instruction, a, expr.span)?;
-                let offset = self.ir_value(instruction, b, expr.span)?;
+            K::Scalar {
+                op: IrScalarOp::PtrAdd,
+                a,
+                b,
+            } => {
+                let ptr = self.ir_value(instruction, a)?;
+                let offset = b
+                    .as_ref()
+                    .expect("typed facts invariant: pointer arithmetic takes two operands");
+                let offset = self.ir_value(instruction, offset)?;
                 self.push(Inst::PtrAdd {
                     dest,
                     ptr,
@@ -9606,230 +9144,81 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 });
                 return Ok(Operand::Local(dest));
             }
-            _ => {}
+            K::Scalar { op, a, b } => {
+                let a = self.ir_value(instruction, a)?;
+                let b = match b {
+                    Some(b) => Some(self.ir_value(instruction, b)?),
+                    None => None,
+                };
+                let op = scalar_op(*op);
+                self.push(Inst::Scalar { dest, op, a, b });
+                return Ok(Operand::Local(dest));
+            }
         }
-        let (op, a, b) = match &instruction.kind {
-            K::Add { ty, a, b, .. } => (
-                self.arith_op(&ty.simple_name(), Arith::Add, expr.span)?,
-                self.ir_value(instruction, a, expr.span)?,
-                Some(self.ir_value(instruction, b, expr.span)?),
-            ),
-            K::Sub { ty, a, b, .. } => (
-                self.arith_op(&ty.simple_name(), Arith::Sub, expr.span)?,
-                self.ir_value(instruction, a, expr.span)?,
-                Some(self.ir_value(instruction, b, expr.span)?),
-            ),
-            K::Mul { ty, a, b, .. } => (
-                self.arith_op(&ty.simple_name(), Arith::Mul, expr.span)?,
-                self.ir_value(instruction, a, expr.span)?,
-                Some(self.ir_value(instruction, b, expr.span)?),
-            ),
-            K::Div { ty, a, b, .. } => (
-                self.arith_op(&ty.simple_name(), Arith::Div, expr.span)?,
-                self.ir_value(instruction, a, expr.span)?,
-                Some(self.ir_value(instruction, b, expr.span)?),
-            ),
-            K::And { ty, a, b, .. } => (
-                self.bit_op(&ty.simple_name(), Bit::And, expr.span)?,
-                self.ir_value(instruction, a, expr.span)?,
-                Some(self.ir_value(instruction, b, expr.span)?),
-            ),
-            K::Or { ty, a, b, .. } => (
-                self.bit_op(&ty.simple_name(), Bit::Or, expr.span)?,
-                self.ir_value(instruction, a, expr.span)?,
-                Some(self.ir_value(instruction, b, expr.span)?),
-            ),
-            K::Xor { ty, a, b, .. } => (
-                self.bit_op(&ty.simple_name(), Bit::Xor, expr.span)?,
-                self.ir_value(instruction, a, expr.span)?,
-                Some(self.ir_value(instruction, b, expr.span)?),
-            ),
-            K::Shl { ty, a, b, .. } => (
-                self.bit_op(&ty.simple_name(), Bit::Shl, expr.span)?,
-                self.ir_value(instruction, a, expr.span)?,
-                Some(self.ir_value(instruction, b, expr.span)?),
-            ),
-            K::Shr { ty, a, b, .. } => (
-                self.bit_op(&ty.simple_name(), Bit::Shr, expr.span)?,
-                self.ir_value(instruction, a, expr.span)?,
-                Some(self.ir_value(instruction, b, expr.span)?),
-            ),
-            K::Not { ty, a, .. } => (
-                self.bit_op(&ty.simple_name(), Bit::Not, expr.span)?,
-                self.ir_value(instruction, a, expr.span)?,
-                None,
-            ),
-            K::Cmp {
-                ty, lhs, rhs, op, ..
-            } => {
-                let kind = match op {
-                    TokenKind::EqualsEquals => CmpKind::Eq,
-                    TokenKind::BangEquals => CmpKind::Ne,
-                    TokenKind::Less => CmpKind::Lt,
-                    TokenKind::LessEquals => CmpKind::Le,
-                    TokenKind::Greater => CmpKind::Gt,
-                    TokenKind::GreaterEquals => CmpKind::Ge,
-                    _ => {
-                        return Err(BackendError::new(
-                            "unsupported comparison operator in inline IR".into(),
-                            expr.span,
-                        ));
-                    }
-                };
-                let op = match ty.simple_name().as_str() {
-                    "Int" => ScalarOp::IntCmp(kind),
-                    "Float" => ScalarOp::FloatCmp(kind),
-                    "Byte" => ScalarOp::ByteCmp(kind),
-                    "Bool" if matches!(kind, CmpKind::Eq | CmpKind::Ne) => ScalarOp::BoolCmp(kind),
-                    other => {
-                        return Err(BackendError::unsupported(
-                            format!("inline IR comparisons on `{other}` are not supported yet"),
-                            expr.span,
-                        ));
-                    }
-                };
-                (
-                    op,
-                    self.ir_value(instruction, lhs, expr.span)?,
-                    Some(self.ir_value(instruction, rhs, expr.span)?),
-                )
-            }
-            K::Trunc { val, .. } => (
-                ScalarOp::FloatToIntTrunc,
-                self.ir_value(instruction, val, expr.span)?,
-                None,
-            ),
-            K::IntToFloat { val, .. } => (
-                ScalarOp::IntToFloat,
-                self.ir_value(instruction, val, expr.span)?,
-                None,
-            ),
-            K::ByteToInt { val, .. } => (
-                ScalarOp::ByteToInt,
-                self.ir_value(instruction, val, expr.span)?,
-                None,
-            ),
-            other => {
-                return Err(BackendError::unsupported(
-                    format!("inline IR operation `{other:?}` is not supported yet"),
-                    expr.span,
-                ));
-            }
-        };
-
-        self.push(Inst::Scalar { dest, op, a, b });
-        Ok(Operand::Local(dest))
     }
 
-    fn arith_op(&self, ty: &str, arith: Arith, span: Span) -> Result<ScalarOp, BackendError> {
-        let op = match (ty, arith) {
-            ("Int", Arith::Add) => ScalarOp::IntAdd,
-            ("Int", Arith::Sub) => ScalarOp::IntSub,
-            ("Int", Arith::Mul) => ScalarOp::IntMul,
-            ("Int", Arith::Div) => ScalarOp::IntDiv,
-            ("Float", Arith::Add) => ScalarOp::FloatAdd,
-            ("Float", Arith::Sub) => ScalarOp::FloatSub,
-            ("Float", Arith::Mul) => ScalarOp::FloatMul,
-            ("Float", Arith::Div) => ScalarOp::FloatDiv,
-            _ => {
-                return Err(BackendError::unsupported(
-                    format!("inline IR arithmetic on `{ty}` is not supported yet"),
-                    span,
-                ));
-            }
-        };
-        Ok(op)
-    }
-
-    fn bit_op(&self, ty: &str, bit: Bit, span: Span) -> Result<ScalarOp, BackendError> {
-        let op = match (ty, bit) {
-            ("Int", Bit::And) => ScalarOp::IntAnd,
-            ("Int", Bit::Or) => ScalarOp::IntOr,
-            ("Int", Bit::Xor) => ScalarOp::IntXor,
-            ("Int", Bit::Shl) => ScalarOp::IntShl,
-            ("Int", Bit::Shr) => ScalarOp::IntShr,
-            ("Int", Bit::Not) => ScalarOp::IntNot,
-            ("Byte", Bit::And) => ScalarOp::ByteAnd,
-            ("Byte", Bit::Or) => ScalarOp::ByteOr,
-            ("Byte", Bit::Xor) => ScalarOp::ByteXor,
-            ("Byte", Bit::Shl) => ScalarOp::ByteShl,
-            ("Byte", Bit::Shr) => ScalarOp::ByteShr,
-            ("Byte", Bit::Not) => ScalarOp::ByteNot,
-            _ => {
-                return Err(BackendError::unsupported(
-                    format!("inline IR bitwise operation on `{ty}` is not supported yet"),
-                    span,
-                ));
-            }
-        };
-        Ok(op)
-    }
-
-    /// Inline-IR operands: `%N` is the N-th parameter (with the receiver at
-    /// `%0` in methods), `$N` is a bound sub-expression, immediates carry
-    /// their value.
+    /// Checked inline-IR operands: `%N` is the N-th parameter (with the
+    /// receiver at `%0` in methods), `$N` is a bound sub-expression
+    /// (index-checked by typing), immediates carry their value.
     fn ir_value(
         &mut self,
         instruction: &crate::typed_ast::InlineIRInstruction,
-        value: &IrValue,
-        span: Span,
+        value: &crate::types::output::IrOperand,
     ) -> Result<Operand, BackendError> {
+        use crate::types::output::IrOperand;
         match value {
-            IrValue::Reg(index) => {
-                let local = u16::try_from(*index).map_err(|_| {
-                    BackendError::new("inline IR register out of range".into(), span)
-                })?;
-                Ok(Operand::Local(local))
-            }
-            IrValue::Bind(index) => {
-                let Some(bound) = instruction.binds.get(*index) else {
-                    return Err(BackendError::new(
-                        "inline IR bind out of range".into(),
-                        span,
-                    ));
-                };
-                self.compile_expr(bound)
-            }
-            IrValue::Int(value) => Ok(Operand::Const(Constant::Int(*value))),
-            IrValue::Float(value) => Ok(Operand::Const(Constant::Float(*value))),
-            IrValue::Bool(value) => Ok(Operand::Const(Constant::Bool(*value))),
-            IrValue::Void => Ok(Operand::Const(Constant::Unit)),
-            _ => Err(BackendError::unsupported(
-                "this inline IR operand is not supported yet".into(),
-                span,
-            )),
+            IrOperand::Reg(index) => Ok(Operand::Local(*index)),
+            IrOperand::Bind(index) => self.compile_expr(&instruction.binds[usize::from(*index)]),
+            IrOperand::Int(value) => Ok(Operand::Const(Constant::Int(*value))),
+            IrOperand::Float(value) => Ok(Operand::Const(Constant::Float(*value))),
+            IrOperand::Bool(value) => Ok(Operand::Const(Constant::Bool(*value))),
+            IrOperand::Void => Ok(Operand::Const(Constant::Unit)),
         }
     }
 }
 
-#[derive(Clone, Copy)]
-enum Arith {
-    Add,
-    Sub,
-    Mul,
-    Div,
-}
-
-#[derive(Clone, Copy)]
-enum Bit {
-    And,
-    Or,
-    Xor,
-    Shl,
-    Shr,
-    Not,
-}
-
-trait SimpleName {
-    fn simple_name(&self) -> String;
-}
-
-impl SimpleName for crate::node_kinds::type_annotation::TypeAnnotation {
-    fn simple_name(&self) -> String {
-        use crate::node_kinds::type_annotation::TypeAnnotationKind;
-        match &self.kind {
-            TypeAnnotationKind::Nominal { name, .. } => name.name_str(),
-            _ => String::new(),
+/// The 1:1 map from checked inline-IR scalar operations to MIR scalar
+/// operations. Every combination was validated by typing.
+fn scalar_op(op: crate::types::output::IrScalarOp) -> ScalarOp {
+    use crate::types::output::{IrCmp, IrScalarOp as I};
+    fn cmp(kind: IrCmp) -> CmpKind {
+        match kind {
+            IrCmp::Eq => CmpKind::Eq,
+            IrCmp::Ne => CmpKind::Ne,
+            IrCmp::Lt => CmpKind::Lt,
+            IrCmp::Le => CmpKind::Le,
+            IrCmp::Gt => CmpKind::Gt,
+            IrCmp::Ge => CmpKind::Ge,
         }
+    }
+    match op {
+        I::IntAdd => ScalarOp::IntAdd,
+        I::IntSub => ScalarOp::IntSub,
+        I::IntMul => ScalarOp::IntMul,
+        I::IntDiv => ScalarOp::IntDiv,
+        I::FloatAdd => ScalarOp::FloatAdd,
+        I::FloatSub => ScalarOp::FloatSub,
+        I::FloatMul => ScalarOp::FloatMul,
+        I::FloatDiv => ScalarOp::FloatDiv,
+        I::IntAnd => ScalarOp::IntAnd,
+        I::IntOr => ScalarOp::IntOr,
+        I::IntXor => ScalarOp::IntXor,
+        I::IntShl => ScalarOp::IntShl,
+        I::IntShr => ScalarOp::IntShr,
+        I::IntNot => ScalarOp::IntNot,
+        I::ByteAnd => ScalarOp::ByteAnd,
+        I::ByteOr => ScalarOp::ByteOr,
+        I::ByteXor => ScalarOp::ByteXor,
+        I::ByteShl => ScalarOp::ByteShl,
+        I::ByteShr => ScalarOp::ByteShr,
+        I::ByteNot => ScalarOp::ByteNot,
+        I::IntCmp(kind) => ScalarOp::IntCmp(cmp(kind)),
+        I::FloatCmp(kind) => ScalarOp::FloatCmp(cmp(kind)),
+        I::ByteCmp(kind) => ScalarOp::ByteCmp(cmp(kind)),
+        I::BoolCmp(kind) => ScalarOp::BoolCmp(cmp(kind)),
+        I::FloatToIntTrunc => ScalarOp::FloatToIntTrunc,
+        I::IntToFloat => ScalarOp::IntToFloat,
+        I::ByteToInt => ScalarOp::ByteToInt,
+        I::PtrAdd => unreachable!("pointer arithmetic lowers to Inst::PtrAdd"),
     }
 }

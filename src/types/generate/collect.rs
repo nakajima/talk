@@ -886,14 +886,6 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             for label in info.requirements.keys() {
                 this.catalog.add_owner(label, MemberOwner::Protocol(symbol));
             }
-            // Showable and same-type Equatable are auto-derived for structs and
-            // enums. The lowerer synthesizes their required witnesses.
-            if let DeclKind::Protocol { name, .. } = &decl.kind
-                && matches!(name.name_str().as_str(), "Showable" | "Equatable")
-                && !this.catalog.derivable.contains(&symbol)
-            {
-                this.catalog.derivable.push(symbol);
-            }
             for predicate in &info.predicates {
                 if !context.predicates.contains(predicate) {
                     context.predicates.push(predicate.clone());
@@ -963,6 +955,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 None,
             )
         };
+        let writeback_width = writeback_width(&params);
+        let mut_receiver = mut_receiver(&params);
         self.insert_requirement_scheme(
             symbol,
             Ty::Func(params, Box::new(ret), eff),
@@ -972,6 +966,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         Some(Requirement {
             symbol,
             has_default,
+            writeback_width,
+            mut_receiver,
         })
     }
 
@@ -1053,6 +1049,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 None,
             )
         };
+        let writeback_width = writeback_width(&params);
+        let mut_receiver = mut_receiver(&params);
         self.insert_requirement_scheme(
             symbol,
             Ty::Func(params, Box::new(ret), eff),
@@ -1062,6 +1060,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         Some(Requirement {
             symbol,
             has_default: true,
+            writeback_width,
+            mut_receiver,
         })
     }
 
@@ -1655,6 +1655,16 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     },
                     decl.id,
                 ));
+                continue;
+            }
+            // Deinit commits per family head (ADR 0038): drop sites
+            // dereference the head's published rows, so a hook that
+            // reaches the head only through a protocol has no home.
+            if protocol.protocol == Symbol::Deinit && protocol_head {
+                self.unsupported(
+                    decl.id,
+                    "`Deinit` conformances on a protocol head (Deinit commits per family)",
+                );
                 continue;
             }
             let id = self.catalog.insert_conformance(conformance);

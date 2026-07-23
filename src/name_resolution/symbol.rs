@@ -241,6 +241,9 @@ impl Symbol {
     const WELL_KNOWN_CORE_CHARACTER_ID: u32 = u32::MAX - 24;
     const WELL_KNOWN_CORE_SUBSTRING_ID: u32 = u32::MAX - 23;
     const WELL_KNOWN_CORE_INLINE_ARRAY_ID: u32 = u32::MAX - 22;
+    const WELL_KNOWN_CORE_ADD_ID: u32 = u32::MAX - 21;
+    const WELL_KNOWN_CORE_SHOWABLE_ID: u32 = u32::MAX - 20;
+    const WELL_KNOWN_CORE_EQUATABLE_ID: u32 = u32::MAX - 19;
 
     pub const Int: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
@@ -283,6 +286,12 @@ impl Symbol {
     pub const Unsafe: Symbol = Symbol::Effect(EffectId {
         module_id: ModuleId::Core,
         local_id: u32::MAX,
+    });
+    /// Core's `'io` host-IO effect (core/IO.tlk), pinned at mint time so
+    /// the runtime's implicit-handler dispatch never resolves it by name.
+    pub const Io: Symbol = Symbol::Effect(EffectId {
+        module_id: ModuleId::Core,
+        local_id: u32::MAX - 1,
     });
 
     pub const String: Symbol = Symbol::Struct(StructId {
@@ -329,6 +338,18 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: Self::WELL_KNOWN_CORE_DEINIT_ID,
     });
+    pub const Add: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_ADD_ID,
+    });
+    pub const Showable: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_SHOWABLE_ID,
+    });
+    pub const Equatable: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_EQUATABLE_ID,
+    });
 
     pub fn well_known_core_struct(name: &str) -> Option<Symbol> {
         match name {
@@ -349,6 +370,16 @@ impl Symbol {
             "Copy" => Some(Symbol::Copy),
             "CheapClone" => Some(Symbol::CheapClone),
             "Deinit" => Some(Symbol::Deinit),
+            "Add" => Some(Symbol::Add),
+            "Showable" => Some(Symbol::Showable),
+            "Equatable" => Some(Symbol::Equatable),
+            _ => None,
+        }
+    }
+
+    pub fn well_known_core_effect(name: &str) -> Option<Symbol> {
+        match name {
+            "io" => Some(Symbol::Io),
             _ => None,
         }
     }

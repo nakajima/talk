@@ -47,6 +47,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }
                 for (arg, param) in args.iter().zip(&params) {
                     self.check_expr(&arg.value, param, CtReason::Apply, ctx);
+                    self.note_copy_marker(arg, param);
                 }
                 self.wanteds.push(Constraint::EffectSubset {
                     inferred: eff,
@@ -60,6 +61,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     .iter()
                     .map(|arg| self.infer_expr(&arg.value, ctx))
                     .collect();
+                for (index, (arg, arg_ty)) in args.iter().zip(&arg_tys).enumerate() {
+                    self.note_indexed_marker(arg, &callee_ty, index, args.len(), arg_ty);
+                }
                 let ret = Ty::Var(self.store.fresh_ty(self.level, result_origin));
                 let callee_effects = EffectRow::open(self.store.fresh_eff(self.level, node));
                 let expected = Ty::Func(arg_tys, Box::new(ret.clone()), callee_effects.clone());
@@ -272,6 +276,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 );
                 for (arg, param) in args.iter().zip(&params[1..]) {
                     self.check_expr(&arg.value, param, CtReason::Apply, ctx);
+                    self.note_copy_marker(arg, param);
                 }
                 self.emit_eff_eq(eff, ctx.eff.clone(), expr.id);
                 self.artifacts.node_types.insert(
@@ -296,6 +301,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }
                 let mut arg_tys: Vec<Ty> = vec![self_ty.clone()];
                 arg_tys.extend(args.iter().map(|arg| self.infer_expr(&arg.value, ctx)));
+                for (index, (arg, arg_ty)) in args.iter().zip(&arg_tys[1..]).enumerate() {
+                    self.note_indexed_marker(arg, &signature, index, args.len(), arg_ty);
+                }
                 // Record the constructor node's function type, as the `Ty::Func` arm
                 // does, so every expression has a type.
                 self.artifacts.node_types.insert(
@@ -414,12 +422,60 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
         for (arg, param) in args.iter().zip(&params) {
             self.check_expr(&arg.value, param, CtReason::Apply, ctx);
+            self.note_copy_marker(arg, param);
         }
         self.emit_eff_eq(eff, ctx.eff.clone(), expr.id);
         self.artifacts
             .node_types
             .insert(callee.id, Ty::Func(params, ret.clone(), EffectRow::pure()));
         *ret
+    }
+
+    /// A call-site ownership marker is checked source semantics: `copy`
+    /// demands Copy or CheapClone evidence, `mut` an exclusive-borrow
+    /// parameter, `borrow` a borrowing parameter. The judgments defer to
+    /// finalization, when the argument's slot type has resolved.
+    fn note_copy_marker(&mut self, arg: &CallArg, param: &Ty) {
+        use crate::parsing::node_kinds::call_arg::ArgMode;
+        if matches!(
+            arg.mode,
+            Some(ArgMode::Copy | ArgMode::Mut | ArgMode::Borrow)
+        ) {
+            self.artifacts.marked_args.push((
+                arg.value.id,
+                MarkedSlot::Param(param.clone()),
+                arg.mode.expect("mode matched above"),
+            ));
+        }
+    }
+
+    /// [`Self::note_copy_marker`] through a still-unresolved callee: the
+    /// parameter slot is found post-solve by indexing the callee's
+    /// function type.
+    fn note_indexed_marker(
+        &mut self,
+        arg: &CallArg,
+        callee: &Ty,
+        index: usize,
+        arg_count: usize,
+        arg_ty: &Ty,
+    ) {
+        use crate::parsing::node_kinds::call_arg::ArgMode;
+        if matches!(
+            arg.mode,
+            Some(ArgMode::Copy | ArgMode::Mut | ArgMode::Borrow)
+        ) {
+            self.artifacts.marked_args.push((
+                arg.value.id,
+                MarkedSlot::CalleeIndexed {
+                    callee: callee.clone(),
+                    index,
+                    arg_count,
+                    arg_ty: arg_ty.clone(),
+                },
+                arg.mode.expect("mode matched above"),
+            ));
+        }
     }
 
     // ----- Member resolution ----------------------------------------------

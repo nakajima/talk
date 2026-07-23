@@ -382,7 +382,7 @@ impl<'s> Solver<'s> {
         origin: CtOrigin,
         queue: &mut Vec<Constraint>,
     ) -> bool {
-        if !self.catalog.derivable.contains(&protocol.protocol)
+        if TypeCatalog::derived_recipe(protocol.protocol).is_none()
             || self.catalog.is_heap(symbol)
             || !(self.catalog.structs.contains_key(&symbol)
                 || self.catalog.enums.contains_key(&symbol))

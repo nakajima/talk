@@ -48,7 +48,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         CtReason::Condition,
                     );
                 }
-                self.infer_block_value(body, ctx);
+                self.infer_block_value(body, &ctx.enter_loop());
                 if condition.is_none() && !Self::block_breaks_current_loop(body) {
                     StmtValue::divergent_loop()
                 } else {
@@ -56,8 +56,18 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }
             }
 
-            StmtKind::Break => StmtValue::divergent(),
-            StmtKind::Continue => StmtValue::divergent(),
+            StmtKind::Break => {
+                if !ctx.in_loop {
+                    self.unsupported(stmt.id, "`break` outside a loop");
+                }
+                StmtValue::divergent()
+            }
+            StmtKind::Continue => {
+                if !ctx.in_loop {
+                    self.unsupported(stmt.id, "`continue` outside a loop");
+                }
+                StmtValue::divergent()
+            }
             StmtKind::Resume(payload) => {
                 // `'continue` resumes the enclosing handler's perform; its
                 // payload (unit when bare) checks against the effect's
@@ -178,7 +188,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     origin: CtOrigin::new(pattern.id, CtReason::Pattern),
                 });
                 self.check_pattern(pattern, &element_ty);
-                let body_ty = self.infer_block_value(body, ctx);
+                let body_ty = self.infer_block_value(body, &ctx.enter_loop());
 
                 if matches!(source_mode, Some(ArgMode::Mut)) {
                     // _store_current(value): checked as a real compiler-owned
@@ -270,6 +280,27 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     .as_ref()
                     .map(|sig| sig.params.clone())
                     .unwrap_or_default();
+                // Publish the handler's checked contract (ADR 0038):
+                // clause parameter types and the type-generic
+                // witness-block layout the perform site appends.
+                self.artifacts.effect_contracts.insert(
+                    stmt.id,
+                    crate::types::output::EffectContract {
+                        params: params.clone(),
+                        type_generics: sig
+                            .as_ref()
+                            .map(|sig| {
+                                sig.generics
+                                    .iter()
+                                    .filter(|param| {
+                                        matches!(param.kind, crate::types::ty::ParamKind::Type)
+                                    })
+                                    .map(|param| param.symbol)
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    },
+                );
                 // A handler block either ignores every payload (no
                 // arguments) or names all of them.
                 if !body.args.is_empty() && body.args.len() != params.len() {
@@ -285,6 +316,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     if let Ok(symbol) = arg.name.symbol() {
                         self.mono.insert(symbol, param.clone());
                     }
+                    // Publish the binder's checked type on its node
+                    // (ADR 0038): lowering reads it off the typed tree
+                    // instead of reloading the effect signature.
+                    self.artifacts.node_types.insert(arg.id, param.clone());
                 }
                 // `continue v` inside this block resumes the perform: v
                 // checks against the effect's return type.

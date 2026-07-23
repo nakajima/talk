@@ -574,6 +574,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             let arm_level = self.level.next();
             let start = self.wanteds.len();
             self.level = arm_level;
+            // Arm roots check against the match's already-viewed
+            // scrutinee; publish their occurrence type too (ADR 0038).
+            self.artifacts
+                .pattern_tys
+                .insert(arm.pattern.id, pattern_scrutinee_ty.clone());
             let refinement = self.check_pattern_viewed(&arm.pattern, &pattern_scrutinee_ty);
             let reason = match (checking_reason, refinement.is_empty()) {
                 (Some(CtReason::Recursion), _) => CtReason::Branch,
@@ -1204,6 +1209,24 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     self.unsupported(expr.id, "calling an undeclared effect");
                     return Ty::Error;
                 };
+                // Publish this perform's checked contract (ADR 0038):
+                // declared parameter types and the type-generic
+                // witness-block layout, consumed by lowering off the
+                // typed tree.
+                self.artifacts.effect_contracts.insert(
+                    expr.id,
+                    crate::types::output::EffectContract {
+                        params: sig.params.clone(),
+                        type_generics: sig
+                            .generics
+                            .iter()
+                            .filter(|param| {
+                                matches!(param.kind, crate::types::ty::ParamKind::Type)
+                            })
+                            .map(|param| param.symbol)
+                            .collect(),
+                    },
+                );
                 // A generic effect instantiates fresh at each perform
                 // (Damas-Milner instantiation, exactly like schemes);
                 // explicit type arguments equate positionally by the
@@ -1312,12 +1335,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 instantiate(&sig.ret)
             }
             ExprKind::InlineIR(instruction) => {
-                // The instruction itself is trusted: it takes whatever type its
-                // context demands (a fresh variable solved by the surrounding
-                // annotation or return type). Its operands, however, are ordinary
-                // value expressions and must be typed.
+                // The instruction takes whatever type its context demands
+                // (a fresh variable solved by the surrounding annotation or
+                // return type). Its operands are ordinary value expressions
+                // and must be typed; the operation itself is validated here
+                // and published as a checked op (ADR 0038) — lowering never
+                // interprets the parser instruction.
                 for operand in &instruction.binds {
                     self.infer_expr(operand, ctx);
+                }
+                if let Some(checked) = self.check_inline_ir(expr.id, instruction) {
+                    self.artifacts.checked_ir.insert(expr.id, checked);
                 }
                 Ty::Var(self.store.fresh_ty(self.level, expr.id))
             }
@@ -1338,6 +1366,325 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 Ty::Error
             }
             ExprKind::Incomplete(_) => Ty::Error,
+        }
+    }
+
+    // ----- Inline IR (ADR 0038) -----------------------------------------
+
+    /// Validate one inline-IR instruction and produce its checked,
+    /// target-neutral operation: canonical operation identity, checked
+    /// types, validated operands. Every judgment lowering used to make —
+    /// scalar/operation combinations, comparison operators, operand and
+    /// register forms, annotation shapes — is made once, here.
+    fn check_inline_ir(
+        &mut self,
+        node: NodeID,
+        instruction: &crate::node_kinds::inline_ir_instruction::InlineIRInstruction,
+    ) -> Option<crate::types::output::CheckedIrKind> {
+        use crate::node_kinds::inline_ir_instruction::InlineIRInstructionKind as K;
+        use crate::types::output::{CheckedIrKind as C, IrCmp, IrScalarOp as Op};
+
+        Some(match &instruction.kind {
+            K::Add { ty, a, b, .. } => {
+                let op = if self.ir_annotation_symbol(ty) == Some(Symbol::RawPtr) {
+                    Op::PtrAdd
+                } else {
+                    self.ir_arith(node, ty, Op::IntAdd, Op::FloatAdd)?
+                };
+                C::Scalar {
+                    op,
+                    a: self.ir_operand(node, instruction, a)?,
+                    b: Some(self.ir_operand(node, instruction, b)?),
+                }
+            }
+            K::Sub { ty, a, b, .. } => C::Scalar {
+                op: self.ir_arith(node, ty, Op::IntSub, Op::FloatSub)?,
+                a: self.ir_operand(node, instruction, a)?,
+                b: Some(self.ir_operand(node, instruction, b)?),
+            },
+            K::Mul { ty, a, b, .. } => C::Scalar {
+                op: self.ir_arith(node, ty, Op::IntMul, Op::FloatMul)?,
+                a: self.ir_operand(node, instruction, a)?,
+                b: Some(self.ir_operand(node, instruction, b)?),
+            },
+            K::Div { ty, a, b, .. } => C::Scalar {
+                op: self.ir_arith(node, ty, Op::IntDiv, Op::FloatDiv)?,
+                a: self.ir_operand(node, instruction, a)?,
+                b: Some(self.ir_operand(node, instruction, b)?),
+            },
+            K::And { ty, a, b, .. } => C::Scalar {
+                op: self.ir_bit(node, ty, Op::IntAnd, Op::ByteAnd)?,
+                a: self.ir_operand(node, instruction, a)?,
+                b: Some(self.ir_operand(node, instruction, b)?),
+            },
+            K::Or { ty, a, b, .. } => C::Scalar {
+                op: self.ir_bit(node, ty, Op::IntOr, Op::ByteOr)?,
+                a: self.ir_operand(node, instruction, a)?,
+                b: Some(self.ir_operand(node, instruction, b)?),
+            },
+            K::Xor { ty, a, b, .. } => C::Scalar {
+                op: self.ir_bit(node, ty, Op::IntXor, Op::ByteXor)?,
+                a: self.ir_operand(node, instruction, a)?,
+                b: Some(self.ir_operand(node, instruction, b)?),
+            },
+            K::Shl { ty, a, b, .. } => C::Scalar {
+                op: self.ir_bit(node, ty, Op::IntShl, Op::ByteShl)?,
+                a: self.ir_operand(node, instruction, a)?,
+                b: Some(self.ir_operand(node, instruction, b)?),
+            },
+            K::Shr { ty, a, b, .. } => C::Scalar {
+                op: self.ir_bit(node, ty, Op::IntShr, Op::ByteShr)?,
+                a: self.ir_operand(node, instruction, a)?,
+                b: Some(self.ir_operand(node, instruction, b)?),
+            },
+            K::Not { ty, a, .. } => C::Scalar {
+                op: self.ir_bit(node, ty, Op::IntNot, Op::ByteNot)?,
+                a: self.ir_operand(node, instruction, a)?,
+                b: None,
+            },
+            K::Cmp {
+                ty, lhs, rhs, op, ..
+            } => {
+                let kind = match op {
+                    TokenKind::EqualsEquals => IrCmp::Eq,
+                    TokenKind::BangEquals => IrCmp::Ne,
+                    TokenKind::Less => IrCmp::Lt,
+                    TokenKind::LessEquals => IrCmp::Le,
+                    TokenKind::Greater => IrCmp::Gt,
+                    TokenKind::GreaterEquals => IrCmp::Ge,
+                    _ => {
+                        self.unsupported(node, "this comparison operator in inline IR");
+                        return None;
+                    }
+                };
+                let op = match self.ir_annotation_symbol(ty) {
+                    Some(Symbol::Int) => Op::IntCmp(kind),
+                    Some(Symbol::Float) => Op::FloatCmp(kind),
+                    Some(Symbol::Byte) => Op::ByteCmp(kind),
+                    Some(Symbol::Bool) if matches!(kind, IrCmp::Eq | IrCmp::Ne) => {
+                        Op::BoolCmp(kind)
+                    }
+                    _ => {
+                        self.unsupported(
+                            node,
+                            &format!(
+                                "inline IR comparisons on `{}`",
+                                Self::ir_annotation_name(ty)
+                            ),
+                        );
+                        return None;
+                    }
+                };
+                C::Scalar {
+                    op,
+                    a: self.ir_operand(node, instruction, lhs)?,
+                    b: Some(self.ir_operand(node, instruction, rhs)?),
+                }
+            }
+            K::Trunc { val, .. } => C::Scalar {
+                op: Op::FloatToIntTrunc,
+                a: self.ir_operand(node, instruction, val)?,
+                b: None,
+            },
+            K::IntToFloat { val, .. } => C::Scalar {
+                op: Op::IntToFloat,
+                a: self.ir_operand(node, instruction, val)?,
+                b: None,
+            },
+            K::ByteToInt { val, .. } => C::Scalar {
+                op: Op::ByteToInt,
+                a: self.ir_operand(node, instruction, val)?,
+                b: None,
+            },
+            K::Alloc { ty, count, .. } => C::Alloc {
+                elem: self.ir_annotation_ty(node, ty)?,
+                count: self.ir_operand(node, instruction, count)?,
+            },
+            K::Free { ptr } => C::Free {
+                ptr: self.ir_operand(node, instruction, ptr)?,
+            },
+            K::Retain { ty, value } => C::Retain {
+                ty: self.ir_annotation_ty(node, ty)?,
+                value: self.ir_operand(node, instruction, value)?,
+            },
+            K::IsUnique { ptr, .. } => C::IsUnique {
+                ptr: self.ir_operand(node, instruction, ptr)?,
+            },
+            K::Load { ty, addr, .. } => C::Load {
+                ty: self.ir_annotation_ty(node, ty)?,
+                addr: self.ir_operand(node, instruction, addr)?,
+            },
+            K::Store { value, ty, addr } => C::Store {
+                ty: self.ir_annotation_ty(node, ty)?,
+                value: self.ir_operand(node, instruction, value)?,
+                addr: self.ir_operand(node, instruction, addr)?,
+            },
+            K::Swap { ty, a, b } => C::Swap {
+                ty: self.ir_annotation_ty(node, ty)?,
+                a: self.ir_operand(node, instruction, a)?,
+                b: self.ir_operand(node, instruction, b)?,
+            },
+            K::Take { ty, value, .. } => C::Take {
+                ty: self.ir_annotation_ty(node, ty)?,
+                value: self.ir_operand(node, instruction, value)?,
+            },
+            K::Copy {
+                from, to, length, ..
+            } => C::MemCopy {
+                from: self.ir_operand(node, instruction, from)?,
+                to: self.ir_operand(node, instruction, to)?,
+                length: self.ir_operand(node, instruction, length)?,
+            },
+            K::InlineGet { array, index, .. } => C::InlineGet {
+                array: self.ir_operand(node, instruction, array)?,
+                index: self.ir_operand(node, instruction, index)?,
+            },
+            K::Gep {
+                ty,
+                addr,
+                offset_index,
+                ..
+            } => C::Gep {
+                elem: self.ir_annotation_ty(node, ty)?,
+                addr: self.ir_operand(node, instruction, addr)?,
+                offset: self.ir_operand(node, instruction, offset_index)?,
+            },
+            K::IoWrite { fd, buf, count, .. } => C::IoWrite {
+                fd: self.ir_operand(node, instruction, fd)?,
+                buf: self.ir_operand(node, instruction, buf)?,
+                count: self.ir_operand(node, instruction, count)?,
+            },
+        })
+    }
+
+    fn ir_arith(
+        &mut self,
+        node: NodeID,
+        annotation: &crate::node_kinds::type_annotation::TypeAnnotation,
+        int: crate::types::output::IrScalarOp,
+        float: crate::types::output::IrScalarOp,
+    ) -> Option<crate::types::output::IrScalarOp> {
+        match self.ir_annotation_symbol(annotation) {
+            Some(Symbol::Int) => Some(int),
+            Some(Symbol::Float) => Some(float),
+            _ => {
+                self.unsupported(
+                    node,
+                    &format!(
+                        "inline IR arithmetic on `{}`",
+                        Self::ir_annotation_name(annotation)
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    fn ir_bit(
+        &mut self,
+        node: NodeID,
+        annotation: &crate::node_kinds::type_annotation::TypeAnnotation,
+        int: crate::types::output::IrScalarOp,
+        byte: crate::types::output::IrScalarOp,
+    ) -> Option<crate::types::output::IrScalarOp> {
+        match self.ir_annotation_symbol(annotation) {
+            Some(Symbol::Int) => Some(int),
+            Some(Symbol::Byte) => Some(byte),
+            _ => {
+                self.unsupported(
+                    node,
+                    &format!(
+                        "inline IR bitwise operations on `{}`",
+                        Self::ir_annotation_name(annotation)
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// The resolved head symbol of a bare nominal IR annotation.
+    fn ir_annotation_symbol(
+        &self,
+        annotation: &crate::node_kinds::type_annotation::TypeAnnotation,
+    ) -> Option<Symbol> {
+        use crate::node_kinds::type_annotation::TypeAnnotationKind;
+        match &annotation.kind {
+            TypeAnnotationKind::Nominal {
+                name: Name::Resolved(symbol, _),
+                ..
+            } => Some(*symbol),
+            _ => None,
+        }
+    }
+
+    /// The annotation's source spelling, for diagnostics.
+    fn ir_annotation_name(
+        annotation: &crate::node_kinds::type_annotation::TypeAnnotation,
+    ) -> String {
+        use crate::node_kinds::type_annotation::TypeAnnotationKind;
+        match &annotation.kind {
+            TypeAnnotationKind::Nominal { name, .. } => name.name_str(),
+            _ => "this annotation".to_string(),
+        }
+    }
+
+    /// A memory/value type annotation on an IR operation: a nominal head
+    /// or a borrow of one (the shapes lowering supports), lowered to its
+    /// checked type. Generic heads substitute per instance during
+    /// backend specialization.
+    fn ir_annotation_ty(
+        &mut self,
+        node: NodeID,
+        annotation: &crate::node_kinds::type_annotation::TypeAnnotation,
+    ) -> Option<Ty> {
+        use crate::node_kinds::type_annotation::TypeAnnotationKind;
+        match &annotation.kind {
+            TypeAnnotationKind::Nominal { .. } => Some(self.lower_annotation(annotation)),
+            TypeAnnotationKind::Borrow { inner, .. } => self.ir_annotation_ty(node, inner),
+            _ => {
+                self.unsupported(node, "this inline IR type annotation");
+                None
+            }
+        }
+    }
+
+    /// A validated IR operand: `%N` (parameter), `$N` (bound
+    /// sub-expression, index-checked), or an immediate.
+    fn ir_operand(
+        &mut self,
+        node: NodeID,
+        instruction: &crate::node_kinds::inline_ir_instruction::InlineIRInstruction,
+        value: &crate::node_kinds::inline_ir_instruction::Value,
+    ) -> Option<crate::types::output::IrOperand> {
+        use crate::node_kinds::inline_ir_instruction::Value;
+        use crate::types::output::IrOperand;
+        match value {
+            Value::Reg(index) => match u16::try_from(*index) {
+                Ok(index) => Some(IrOperand::Reg(index)),
+                Err(_) => {
+                    self.unsupported(node, "an inline IR register out of range");
+                    None
+                }
+            },
+            Value::Bind(index) => {
+                if *index < instruction.binds.len()
+                    && let Ok(index) = u16::try_from(*index)
+                {
+                    Some(IrOperand::Bind(index))
+                } else {
+                    self.unsupported(node, "an inline IR bind out of range");
+                    None
+                }
+            }
+            Value::Int(value) => Some(IrOperand::Int(*value)),
+            Value::Float(value) => Some(IrOperand::Float(*value)),
+            Value::Bool(value) => Some(IrOperand::Bool(*value)),
+            Value::Void => Some(IrOperand::Void),
+            _ => {
+                self.unsupported(node, "this inline IR operand");
+                None
+            }
         }
     }
 }

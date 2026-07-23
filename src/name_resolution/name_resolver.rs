@@ -919,6 +919,7 @@ impl NameResolver {
             match kind {
                 Symbol::Struct(..) => Symbol::well_known_core_struct(&name_str),
                 Symbol::Protocol(..) => Symbol::well_known_core_protocol(&name_str),
+                Symbol::Effect(..) => Symbol::well_known_core_effect(&name_str),
                 _ => None,
             }
         } else {
