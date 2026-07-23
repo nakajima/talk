@@ -41,6 +41,34 @@ fn run_source(source: &[u8], arguments: &[&str]) -> std::process::Output {
     child.wait_with_output().expect("read run output")
 }
 
+/// `talk check` compiles every callable rigidly (check-all), exercising
+/// the generic witness machinery without needing a runtime instantiation.
+fn check_source(source: &[u8]) -> std::process::Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .arg("check")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run `talk check`");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(source)
+        .expect("write Talk source");
+    child.wait_with_output().expect("read check output")
+}
+
+fn assert_checks(source: &[u8]) {
+    let output = check_source(source);
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn assert_runs(source: &[u8], arguments: &[&str], expected_stdout: &[u8]) {
     let output = run_source(source, arguments);
     assert!(
@@ -383,7 +411,7 @@ fn postfix_question_mark_propagates_second_enum_variant() {
           func outer(ok: Bool) -> Result<Int, String> {\n\
           \t@handle 'ask {\n\
           \t\tlet value = source(ok)?\n\
-          \t\tcontinue value\n\
+          \t\t'continue value\n\
           \t}\n\
           \tResult.ok('ask())\n\
           }\n\
@@ -520,6 +548,63 @@ fn run_matches_record_patterns() {
           }\n",
         &[],
         b"42\n",
+    );
+}
+
+#[test]
+fn run_destructures_structs_with_let() {
+    // `Point { x, y }` binds each named stored field.
+    assert_runs(
+        b"struct Point {\n\tlet x: Int\n\tlet y: Int\n\tinit(x: Int, y: Int) {\n\t\tself.x = x\n\t\tself.y = y\n\t\tself\n\t}\n}\nlet Point { x, y } = Point(x: 3, y: 4)\nx + y\n",
+        &[],
+        b"7\n",
+    );
+    // `..` leaves the rest to the aggregate; owned unmentioned fields
+    // still release exactly once (balance-verified).
+    assert_runs(
+        b"struct Pair {\n\tlet name: String\n\tlet tag: String\n\tinit(name: String, tag: String) {\n\t\tself.name = name\n\t\tself.tag = tag\n\t\tself\n\t}\n}\nlet Pair { name, .. } = Pair(name: \"ab\" + \"c\", tag: \"x\" + \"y\")\nname.byte_count\n",
+        &[],
+        b"3\n",
+    );
+    // `field: pattern` destructures the interior.
+    assert_runs(
+        b"struct Wrap {\n\tlet inner: (Int, Int)\n\tinit(inner: (Int, Int)) {\n\t\tself.inner = inner\n\t\tself\n\t}\n}\nlet Wrap { inner: (a, b) } = Wrap(inner: (2, 5))\na * b\n",
+        &[],
+        b"10\n",
+    );
+}
+
+#[test]
+fn run_matches_struct_patterns() {
+    // Refutable field sub-patterns select arms.
+    assert_runs(
+        b"struct Point {\n\tlet x: Int\n\tlet y: Int\n\tinit(x: Int, y: Int) {\n\t\tself.x = x\n\t\tself.y = y\n\t\tself\n\t}\n}\nfunc classify(p: Point) -> Int {\n\tmatch p {\n\t\tPoint { x: 0, y } -> y,\n\t\tPoint { x, .. } -> x\n\t}\n}\nclassify(p: Point(x: 0, y: 9)) + classify(p: Point(x: 7, y: 1))\n",
+        &[],
+        b"16\n",
+    );
+    // A consumed scrutinee moves owned fields into the binders.
+    assert_runs(
+        b"struct Named {\n\tlet name: String\n\tlet id: Int\n\tinit(name: String, id: Int) {\n\t\tself.name = name\n\t\tself.id = id\n\t\tself\n\t}\n}\nfunc read(consume n: Named) -> Int {\n\tmatch n {\n\t\tNamed { name, .. } -> name.byte_count\n\t}\n}\nread(n: Named(name: \"ab\" + \"cd\", id: 1))\n",
+        &[],
+        b"4\n",
+    );
+    // Generic structs instantiate field types per scrutinee.
+    assert_runs(
+        b"struct Box<T> {\n\tlet value: T\n\tinit(value: T) {\n\t\tself.value = value\n\t\tself\n\t}\n}\nmatch Box(value: 41) {\n\tBox { value } -> value + 1\n}\n",
+        &[],
+        b"42\n",
+    );
+}
+
+#[test]
+fn run_destructures_heap_structs() {
+    // Heap-struct fields are views of the object: binds donate a
+    // reference; the object's drop releases the stored fields
+    // (balance-verified: 0 live 'heap objects at exit).
+    assert_runs(
+        b"struct Node 'heap {\n\tlet label: String\n\tlet weight: Int\n\tinit(label: String, weight: Int) {\n\t\tself.label = label\n\t\tself.weight = weight\n\t\tself\n\t}\n}\nlet Node { label, weight } = Node(label: \"ab\" + \"c\", weight: 4)\nlabel.byte_count + weight\n",
+        &[],
+        b"7\n",
     );
 }
 
@@ -1507,10 +1592,8 @@ fn reference_flow_corpus_holds() {
     const KNOWN_STRICTER: &[&str] = &[
         "borrowed_generic_payload_requires_copy_or_cheap_clone_bound",
         "generic_heap_extraction_rejects_non_cheap_owned_instantiation",
-        "heap_rvalue_arg_through_witness_call_releases",
         "move_inside_handler_body_is_may_moved_after",
         "move_inside_trailing_block_is_may_moved_after",
-        "protocol_default_method_receiver_is_borrowed_param",
         "rejects_borrowed_loop_element_passed_to_consuming_callback",
     ];
     const PENDING_REJECTION: &[&str] = &[];
@@ -1948,7 +2031,7 @@ fn run_routes_clause_performs_to_outer_handlers() {
     // CHG-01: a perform inside a handler clause searches from below the
     // clause's own delimiter, so it reaches the next handler out.
     assert_runs(
-        b"effect 'ask() -> Int\n@handle 'ask {\n\tcontinue 1\n}\nfunc f() 'ask -> Int {\n\t@handle 'ask {\n\t\tcontinue 'ask() + 10\n\t}\n\t'ask()\n}\nprint(f())\n",
+        b"effect 'ask() -> Int\n@handle 'ask {\n\t'continue 1\n}\nfunc f() 'ask -> Int {\n\t@handle 'ask {\n\t\t'continue 'ask() + 10\n\t}\n\t'ask()\n}\nprint(f())\n",
         &[],
         b"11\n",
     );
@@ -2091,9 +2174,9 @@ fn run_captures_capabilities_lexically() {
     assert_runs(
         b"effect 'boost() -> Int\n\
           func run() -> Int {\n\
-          \t@handle 'boost { continue 100 }\n\
+          \t@handle 'boost { 'continue 100 }\n\
           \tlet f = func() -> Int { 'boost() }\n\
-          \t@handle 'boost { continue 200 }\n\
+          \t@handle 'boost { 'continue 200 }\n\
           \tf() + 'boost()\n\
           }\n\
           run()\n",
@@ -2454,7 +2537,7 @@ fn run_shares_captured_assignments_with_the_frame() {
 fn run_rejects_user_handlers_over_ambient_effects() {
     // The runtime is the implicit handler for core's ambient effects;
     // a user handler over them would be silently bypassed.
-    let output = run_source(b"@handle 'io {\n\tcontinue\n}\nprint(1)\n", &[]);
+    let output = run_source(b"@handle 'io {\n\t'continue 0\n}\nprint(1)\n", &[]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("ambient"), "{stderr}");
@@ -2559,7 +2642,7 @@ fn writeback_matrix_covers_call_shapes_and_mutation_shapes() {
         ),
         (
             "rigid-dictionary/receiver-and-param",
-            format!("{PROTOCOL}effect 'acc<T: Counter>(value: T) -> ()\n@handle 'acc {{ v in\n\tlet step = 3\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\tcontinue ()\n}}\n'acc(C(n: 0, tag: \"t\" + \"g\"))\n"),
+            format!("{PROTOCOL}effect 'acc<T: Counter>(value: T) -> ()\n@handle 'acc {{ v in\n\tlet step = 3\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\t'continue ()\n}}\n'acc(C(n: 0, tag: \"t\" + \"g\"))\n"),
             "3\n6\n9\n12\n",
         ),
         (
@@ -2569,12 +2652,12 @@ fn writeback_matrix_covers_call_shapes_and_mutation_shapes() {
         ),
         (
             "perform/mut-arg",
-            "effect 'adjust(mut value: Int) -> ()\n@handle 'adjust { v in\n\tv = v + 10\n\tcontinue ()\n}\nlet n = 1\n'adjust(mut n)\n'adjust(mut n)\nprint(n)\n".into(),
+            "effect 'adjust(mut value: Int) -> ()\n@handle 'adjust { v in\n\tv = v + 10\n\t'continue ()\n}\nlet n = 1\n'adjust(mut n)\n'adjust(mut n)\nprint(n)\n".into(),
             "21\n",
         ),
         (
             "perform/two-mut-args-with-owned-arg",
-            "effect 'both(mut a: Int, mut b: Int, label: String) -> ()\n@handle 'both { p, q, s in\n\tp = p + s.byte_count\n\tq = q + 2\n\tcontinue ()\n}\nlet x = 0\nlet y = 0\n'both(mut x, mut y, \"ab\" + \"c\")\nprint(x)\nprint(y)\n".into(),
+            "effect 'both(mut a: Int, mut b: Int, label: String) -> ()\n@handle 'both { p, q, s in\n\tp = p + s.byte_count\n\tq = q + 2\n\t'continue ()\n}\nlet x = 0\nlet y = 0\n'both(mut x, mut y, \"ab\" + \"c\")\nprint(x)\nprint(y)\n".into(),
             "3\n2\n",
         ),
         (
@@ -2757,18 +2840,88 @@ fn run_tears_down_globals_after_a_top_level_discontinue() {
 }
 
 #[test]
+fn check_accepts_constrained_generic_bodies() {
+    // A rigid frame's dictionaries come from the function's own scheme
+    // predicates, not only effect signatures.
+    assert_checks(b"func f<T: Showable>(x: T) -> String { x.show() }\nprint(f(x: 42))\n");
+    // Derived operations on rigid leaves dispatch the same way.
+    assert_checks(
+        b"func same<T: Equatable>(a: T, b: T) -> Bool { a == b }\nprint(same(a: 1, b: 1))\n",
+    );
+}
+
+#[test]
+fn check_accepts_refined_protocol_dispatch() {
+    // `T: P` where `protocol P: Q` supplies Q's dictionary too — the
+    // rigid constraint set expands through protocol supers.
+    assert_checks(
+        b"protocol Q {\n\tfunc q() -> Int\n}\nprotocol P: Q {\n\tfunc p() -> Int\n}\nfunc f<T: P>(x: T) -> Int { x.q() }\nstruct S {\n\tinit() { self }\n}\nextend S: P {\n\tfunc q() -> Int { 1 }\n\tfunc p() -> Int { 2 }\n}\nprint(f(x: S()))\n",
+    );
+}
+
+#[test]
+fn check_accepts_owner_param_dictionaries() {
+    // A struct's owner bound serves its method bodies, declared inline...
+    assert_checks(
+        b"struct Box<T: Showable> {\n\tlet value: T\n\tinit(value: T) {\n\t\tself.value = value\n\t\tself\n\t}\n\tfunc render() -> String {\n\t\tself.value.show()\n\t}\n}\nprint(Box(value: 42).render())\n",
+    );
+    // ...via a where clause...
+    assert_checks(
+        b"struct Box<T> where T: Showable {\n\tlet value: T\n\tinit(value: T) {\n\t\tself.value = value\n\t\tself\n\t}\n\tfunc render() -> String {\n\t\tself.value.show()\n\t}\n}\nprint(Box(value: 42).render())\n",
+    );
+    // ...and in inherent extend members.
+    assert_checks(
+        b"struct Box<T: Showable> {\n\tlet value: T\n\tinit(value: T) {\n\t\tself.value = value\n\t\tself\n\t}\n}\nextend Box {\n\tfunc render() -> String {\n\t\tself.value.show()\n\t}\n}\nprint(Box(value: 42).render())\n",
+    );
+}
+
+#[test]
+fn check_accepts_protocol_default_bodies() {
+    // A default body's rigid `Self` dispatches its own protocol's
+    // requirements through the frame's dictionary.
+    assert_checks(
+        b"protocol P {\n\tfunc p() -> Int\n}\nextend P {\n\tfunc twice() -> Int {\n\t\tself.p() + self.p()\n\t}\n}\nstruct S {\n\tinit() { self }\n}\nextend S: P {\n\tfunc p() -> Int { 3 }\n}\nprint(S().twice())\n",
+    );
+}
+
+#[test]
+fn check_accepts_generic_values_in_handler_clauses() {
+    // Handler clauses inherit the enclosing frame's witnesses and
+    // dictionaries through their environments, like ordinary closures.
+    assert_checks(
+        b"effect 'emit(x: Int) -> ()\nfunc run<T: Showable>(v: T) -> () {\n\t@handle 'emit { n in\n\t\tprint(v.show())\n\t\t'continue ()\n\t}\n\t'emit(1)\n}\nrun(v: 42)\n",
+    );
+    // Ownership witnesses too: a clause that consumes a captured rigid
+    // releases it through the inherited drop witness.
+    assert_checks(
+        b"effect 'ping() -> ()\nfunc hold<T>(consume v: T) -> () {\n\t@handle 'ping {\n\t\tlet w = v\n\t\t'continue ()\n\t}\n\t'ping()\n}\nhold(v: \"a\" + \"b\")\n",
+    );
+}
+
+#[test]
+fn run_resumes_from_inside_a_loop_in_a_handler_clause() {
+    // `'continue` is a frame return from the clause, legal at any loop
+    // depth: the loop searches for an answer and resumes with it.
+    assert_runs(
+        b"effect 'ask() -> Int\n@handle 'ask {\n\tlet i = 0\n\tloop i < 10 {\n\t\tif i == 7 {\n\t\t\t'continue i\n\t\t}\n\t\ti = i + 1\n\t}\n\t'continue 0\n}\nprint('ask())\n",
+        &[],
+        b"7\n",
+    );
+}
+
+#[test]
 fn run_passes_owned_payloads_through_generic_effects() {
     // EFF-03: a payload in a directly-generic position travels as an
     // existential-shaped [drop, retain] package, so one clause body
     // serves every instantiation — releasing an unconsumed payload…
     assert_runs(
-        b"effect 'give<T>(value: T) -> ()\n@handle 'give { v in continue () }\nfunc send(consume s: String) 'give -> Void {\n\t'give(s)\n}\nsend(\"a\" + \"b\")\nprint(1)\n",
+        b"effect 'give<T>(value: T) -> ()\n@handle 'give { v in 'continue () }\nfunc send(consume s: String) 'give -> Void {\n\t'give(s)\n}\nsend(\"a\" + \"b\")\nprint(1)\n",
         &[],
         b"1\n",
     );
     // …resuming with it (the perform site unwraps the package)…
     assert_runs(
-        b"effect 'echo<T>(value: T) -> T\n@handle 'echo { v in continue v }\nfunc round(consume s: String) 'echo -> String {\n\t'echo(s)\n}\nprint(round(\"hi\" + \"!\"))\n",
+        b"effect 'echo<T>(value: T) -> T\n@handle 'echo { v in 'continue v }\nfunc round(consume s: String) 'echo -> String {\n\t'echo(s)\n}\nprint(round(\"hi\" + \"!\"))\n",
         &[],
         b"hi!\n",
     );
@@ -2780,59 +2933,59 @@ fn run_passes_owned_payloads_through_generic_effects() {
     );
     // Copy instantiations use the same packaging convention.
     assert_runs(
-        b"effect 'echo<T>(value: T) -> T\n@handle 'echo { v in continue v }\nprint('echo(41) + 1)\n",
+        b"effect 'echo<T>(value: T) -> T\n@handle 'echo { v in 'continue v }\nprint('echo(41) + 1)\n",
         &[],
         b"42\n",
     );
     // Nested positions hold native values; the clause's structural glue
     // reaches rigid leaves through the perform site's witnesses.
     assert_runs(
-        b"effect 'pair<T>(value: (Int, T)) -> ()\n@handle 'pair { v in continue () }\n'pair((1, 2))\nprint(3)\n",
+        b"effect 'pair<T>(value: (Int, T)) -> ()\n@handle 'pair { v in 'continue () }\n'pair((1, 2))\nprint(3)\n",
         &[],
         b"3\n",
     );
     assert_runs(
-        b"effect 'pair<T>(value: (Int, T)) -> ()\n@handle 'pair { v in continue () }\nlet s = \"a\" + \"b\"\n'pair((1, s))\nprint(3)\n",
+        b"effect 'pair<T>(value: (Int, T)) -> ()\n@handle 'pair { v in 'continue () }\nlet s = \"a\" + \"b\"\n'pair((1, s))\nprint(3)\n",
         &[],
         b"3\n",
     );
     // …including through a compound type's own teardown (Array's deinit
     // instantiated at the rigid element receives the same witnesses)…
     assert_runs(
-        b"effect 'batch<T>(values: Array<T>) -> ()\n@handle 'batch { vs in continue () }\nlet xs: Array<String> = [\"a\" + \"b\", \"c\" + \"d\"]\n'batch(xs)\nprint(4)\n",
+        b"effect 'batch<T>(values: Array<T>) -> ()\n@handle 'batch { vs in 'continue () }\nlet xs: Array<String> = [\"a\" + \"b\", \"c\" + \"d\"]\n'batch(xs)\nprint(4)\n",
         &[],
         b"4\n",
     );
     // …and through enum payload glue.
     assert_runs(
-        b"enum Wrap<T> {\n\tcase full(T)\n\tcase empty\n}\neffect 'opt<T>(value: Wrap<T>) -> ()\n@handle 'opt { v in continue () }\n'opt(Wrap.full(\"a\" + \"b\"))\nprint(5)\n",
+        b"enum Wrap<T> {\n\tcase full(T)\n\tcase empty\n}\neffect 'opt<T>(value: Wrap<T>) -> ()\n@handle 'opt { v in 'continue () }\n'opt(Wrap.full(\"a\" + \"b\"))\nprint(5)\n",
         &[],
         b"5\n",
     );
     // A nested payload continued back returns natively.
     assert_runs(
-        b"effect 'swap<T>(value: (Int, T)) -> (Int, T)\n@handle 'swap { v in continue v }\nlet back = 'swap((7, \"x\" + \"y\"))\nprint(back.0)\nprint(back.1)\n",
+        b"effect 'swap<T>(value: (Int, T)) -> (Int, T)\n@handle 'swap { v in 'continue v }\nlet back = 'swap((7, \"x\" + \"y\"))\nprint(back.0)\nprint(back.1)\n",
         &[],
         b"7\nxy\n",
     );
     // A clause handing its rigid value to a generic function threads the
     // witnesses through that instance's hidden parameters.
     assert_runs(
-        b"effect 'sink<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n@handle 'sink { v in\n\tdiscard(v)\n\tcontinue ()\n}\n'sink(\"a\" + \"b\")\nprint(1)\n",
+        b"effect 'sink<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n@handle 'sink { v in\n\tdiscard(v)\n\t'continue ()\n}\n'sink(\"a\" + \"b\")\nprint(1)\n",
         &[],
         b"1\n",
     );
     // A clause re-performing with its rigid value forwards its own
     // witnesses to the next handler out.
     assert_runs(
-        b"effect 'inner<T>(value: T) -> ()\neffect 'outer<T>(value: T) -> ()\n@handle 'inner { v in continue () }\n@handle 'outer { v in\n\t'inner(v)\n\tcontinue ()\n}\n'outer(\"a\" + \"b\")\nprint(2)\n",
+        b"effect 'inner<T>(value: T) -> ()\neffect 'outer<T>(value: T) -> ()\n@handle 'inner { v in 'continue () }\n@handle 'outer { v in\n\t'inner(v)\n\t'continue ()\n}\n'outer(\"a\" + \"b\")\nprint(2)\n",
         &[],
         b"2\n",
     );
     // A compound rigid payload re-performs through glue closures that
     // capture the inner witnesses.
     assert_runs(
-        b"effect 'batch<T>(values: Array<T>) -> ()\neffect 'again<U>(value: U) -> ()\n@handle 'again { u in continue () }\n@handle 'batch { vs in\n\t'again(vs)\n\tcontinue ()\n}\nlet xs: Array<String> = [\"a\" + \"b\"]\n'batch(xs)\nprint(3)\n",
+        b"effect 'batch<T>(values: Array<T>) -> ()\neffect 'again<U>(value: U) -> ()\n@handle 'again { u in 'continue () }\n@handle 'batch { vs in\n\t'again(vs)\n\t'continue ()\n}\nlet xs: Array<String> = [\"a\" + \"b\"]\n'batch(xs)\nprint(3)\n",
         &[],
         b"3\n",
     );
@@ -2844,21 +2997,21 @@ fn run_dispatches_constrained_generic_effects() {
     // alongside [drop, retain]: one clause body calls requirements on
     // every instantiation…
     assert_runs(
-        b"effect 'show<T: Showable>(value: T) -> ()\n@handle 'show { v in\n\tprint(v.show())\n\tcontinue ()\n}\n'show(42)\n'show(\"a\" + \"b\")\n",
+        b"effect 'show<T: Showable>(value: T) -> ()\n@handle 'show { v in\n\tprint(v.show())\n\t'continue ()\n}\n'show(42)\n'show(\"a\" + \"b\")\n",
         &[],
         b"42\nab\n",
     );
     // …and packs the rigid value into an existential from the same
     // dictionary.
     assert_runs(
-        b"effect 'show<T: Showable>(value: T) -> ()\n@handle 'show { v in\n\tlet s: any Showable = v\n\tprint(s.show())\n\tcontinue ()\n}\n'show(42)\n",
+        b"effect 'show<T: Showable>(value: T) -> ()\n@handle 'show { v in\n\tlet s: any Showable = v\n\tprint(s.show())\n\t'continue ()\n}\n'show(42)\n",
         &[],
         b"42\n",
     );
     // A `mut func` requirement returns (result, final self); the rigid
     // dispatch writes the evolved receiver back through the dictionary.
     assert_runs(
-        b"protocol Counter {\n\tmut func bump() -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\neffect 'tick<T: Counter>(value: T) -> ()\n@handle 'tick { v in\n\tprint(v.bump())\n\tprint(v.bump())\n\tcontinue ()\n}\n'tick(C(n: 0))\n",
+        b"protocol Counter {\n\tmut func bump() -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\neffect 'tick<T: Counter>(value: T) -> ()\n@handle 'tick { v in\n\tprint(v.bump())\n\tprint(v.bump())\n\t'continue ()\n}\n'tick(C(n: 0))\n",
         &[],
         b"1\n2\n",
     );
@@ -2887,14 +3040,14 @@ fn run_dispatches_constrained_generic_effects() {
     // `mut` parameters and a `mut` receiver on one requirement land in
     // callee order: (result, final self, final mut values…).
     assert_runs(
-        b"protocol Counter {\n\tmut func bump_by(mut amount: Int) -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump_by(mut amount: Int) -> Int {\n\t\tself.n = self.n + amount\n\t\tamount = amount * 2\n\t\tself.n\n\t}\n}\neffect 'acc<T: Counter>(value: T) -> ()\n@handle 'acc { v in\n\tlet step = 3\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\tcontinue ()\n}\n'acc(C(n: 0))\n",
+        b"protocol Counter {\n\tmut func bump_by(mut amount: Int) -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump_by(mut amount: Int) -> Int {\n\t\tself.n = self.n + amount\n\t\tamount = amount * 2\n\t\tself.n\n\t}\n}\neffect 'acc<T: Counter>(value: T) -> ()\n@handle 'acc { v in\n\tlet step = 3\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\t'continue ()\n}\n'acc(C(n: 0))\n",
         &[],
         b"3\n6\n9\n12\n",
     );
     // A closure created inside the clause inherits the witnesses through
     // its environment.
     assert_runs(
-        b"effect 'hold<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n@handle 'hold { v in\n\tlet run = func(consume x: String) -> Void {\n\t}\n\trun(\"q\" + \"r\")\n\tdiscard(v)\n\tcontinue ()\n}\n'hold(\"a\" + \"b\")\nprint(1)\n",
+        b"effect 'hold<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n@handle 'hold { v in\n\tlet run = func(consume x: String) -> Void {\n\t}\n\trun(\"q\" + \"r\")\n\tdiscard(v)\n\t'continue ()\n}\n'hold(\"a\" + \"b\")\nprint(1)\n",
         &[],
         b"1\n",
     );

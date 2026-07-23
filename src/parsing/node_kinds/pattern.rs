@@ -135,8 +135,13 @@ impl Pattern {
                     }
                 }
             }
-            #[allow(clippy::todo)]
-            PatternKind::Struct { .. } => todo!(),
+            PatternKind::Struct { fields, .. } => {
+                for field in fields {
+                    if let Node::Pattern(pattern) = field {
+                        result.extend(pattern.collect_binders());
+                    }
+                }
+            }
         }
         result
     }

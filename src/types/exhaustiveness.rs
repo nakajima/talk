@@ -16,6 +16,7 @@ use rustc_hash::FxHashMap;
 
 use crate::label::Label;
 use crate::name_resolution::symbol::Symbol;
+use crate::node::Node;
 use crate::node_id::NodeID;
 use crate::node_kinds::pattern::{Pattern, PatternKind, RecordFieldPatternKind};
 use crate::types::catalog::TypeCatalog;
@@ -89,6 +90,9 @@ enum Ctor {
     Tuple(usize),
     /// A record with exactly these (sorted) fields.
     Record(Vec<Label>),
+    /// A struct destructuring: the single constructor of its nominal,
+    /// with one column per stored field in declaration order.
+    Struct(Symbol),
 }
 
 struct Coverage<'a> {
@@ -217,7 +221,45 @@ impl Coverage<'_> {
                     .collect();
                 Pat::Ctor(Ctor::Record(labels), args)
             }
-            PatternKind::Struct { .. } => Pat::Wild,
+            PatternKind::Struct {
+                struct_name,
+                fields,
+                field_names,
+                ..
+            } => {
+                let symbol = match struct_name.as_ref().and_then(|name| name.symbol().ok()) {
+                    Some(symbol) => Some(symbol),
+                    None => match Self::pattern_ty(ty) {
+                        Ty::Nominal(symbol, _) if self.catalog.structs.contains_key(symbol) => {
+                            Some(*symbol)
+                        }
+                        _ => None,
+                    },
+                };
+                let Some(symbol) = symbol.filter(|s| self.catalog.structs.contains_key(s)) else {
+                    return Pat::Wild;
+                };
+                let field_tys = self.ctor_field_tys(&Ctor::Struct(symbol), ty);
+                let info = &self.catalog.structs[&symbol];
+                let by_label: FxHashMap<String, &Pattern> = field_names
+                    .iter()
+                    .zip(fields)
+                    .filter_map(|(name, field)| match field {
+                        Node::Pattern(p) => Some((name.name_str(), p)),
+                        _ => None,
+                    })
+                    .collect();
+                let args = info
+                    .fields
+                    .keys()
+                    .zip(&field_tys)
+                    .map(|(label, field_ty)| match by_label.get(label) {
+                        Some(sub) => self.lower(sub, field_ty),
+                        None => Pat::Wild,
+                    })
+                    .collect();
+                Pat::Ctor(Ctor::Struct(symbol), args)
+            }
         }
     }
 
@@ -240,6 +282,9 @@ impl Coverage<'_> {
             }
             Ctor::Variant(enum_symbol, name) => {
                 self.variant_instantiation(*enum_symbol, name, ty).is_some()
+            }
+            Ctor::Struct(struct_symbol) => {
+                matches!(ty, Ty::Nominal(symbol, _) if symbol == struct_symbol)
             }
         }
     }
@@ -284,6 +329,12 @@ impl Coverage<'_> {
                 .and_then(|info| info.variants.get(name))
                 .map(|variant| variant.argument_types().len())
                 .unwrap_or(0),
+            Ctor::Struct(symbol) => self
+                .catalog
+                .structs
+                .get(symbol)
+                .map(|info| info.fields.len())
+                .unwrap_or(0),
         }
     }
 
@@ -317,6 +368,30 @@ impl Coverage<'_> {
                 .variant_instantiation(*enum_symbol, name, ty)
                 .map(|instantiation| instantiation.argument_types)
                 .unwrap_or_default(),
+            Ctor::Struct(struct_symbol) => {
+                let Some(info) = self.catalog.structs.get(struct_symbol) else {
+                    return vec![];
+                };
+                let substitution: FxHashMap<Symbol, Ty> = match ty {
+                    Ty::Nominal(symbol, args) if symbol == struct_symbol => info
+                        .params
+                        .iter()
+                        .map(|param| param.symbol)
+                        .zip(args.clone())
+                        .collect(),
+                    _ => FxHashMap::default(),
+                };
+                let no_effs = FxHashMap::default();
+                let no_rows = FxHashMap::default();
+                info.fields
+                    .values()
+                    .map(|(_, field_ty)| {
+                        field_ty
+                            .clone()
+                            .substitute(&substitution, &no_effs, &no_rows)
+                    })
+                    .collect()
+            }
         }
     }
 
@@ -329,6 +404,9 @@ impl Coverage<'_> {
         match ty {
             Ty::Nominal(symbol, _) if *symbol == Symbol::Bool => {
                 Some(vec![Ctor::Bool(false), Ctor::Bool(true)])
+            }
+            Ty::Nominal(symbol, _) if self.catalog.structs.contains_key(symbol) => {
+                Some(vec![Ctor::Struct(*symbol)])
             }
             Ty::Nominal(symbol, _) => {
                 let info = self.catalog.enums.get(symbol)?;
@@ -583,6 +661,13 @@ fn render(pat: &Pat) -> String {
                     .map(|(label, arg)| format!("{label}: {}", render(arg)))
                     .collect();
                 format!("{{ {} }}", fields.join(", "))
+            }
+            // Field names are not in reach here; `..` keeps the witness a
+            // legal pattern regardless of which columns matter.
+            Ctor::Struct(symbol) => {
+                let name = crate::name_resolution::symbol::lookup_symbol_name(symbol)
+                    .unwrap_or_else(|| format!("{symbol:?}"));
+                format!("{name} {{ .. }}")
             }
         },
     }

@@ -1,6 +1,6 @@
 effect 'log(msg) -> Int
 @handle 'log { msg in
-	continue msg.byte_count
+	'continue msg.byte_count
 }
 func f(flag: Bool) 'log -> Int {
 	let s = "hello" + " world"

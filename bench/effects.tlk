@@ -11,7 +11,7 @@ func run(n: Int) 'step -> Int {
 	total
 }
 func bench(n: Int) -> Int {
-	@handle 'step { v in continue v + 1 }
+	@handle 'step { v in 'continue v + 1 }
 	run(n)
 }
 print(bench(150000))

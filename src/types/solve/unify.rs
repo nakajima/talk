@@ -335,16 +335,33 @@ impl<'s> Solver<'s> {
                 // *nested* function type (which are contravariant) unify invariantly rather
                 // than letting a function needing `&mut`/owned satisfy one invoked with `&`.
                 let nested = origin.nested();
+                let callback = matches!(origin.reason, CtReason::Apply | CtReason::NestedApply);
+                let parameter_origin = if callback {
+                    CtOrigin {
+                        reason: CtReason::CallbackParameter,
+                        ..origin
+                    }
+                } else {
+                    nested
+                };
+                let result_origin = if callback {
+                    CtOrigin {
+                        reason: CtReason::CallbackResult,
+                        ..origin
+                    }
+                } else {
+                    nested
+                };
                 for (a1, a2) in p1.iter().zip(p2) {
                     if origin.reason == CtReason::Apply {
-                        self.push_apply_param_eq(a1, a2, nested, worklist);
+                        self.push_apply_param_eq(a1, a2, parameter_origin, worklist);
                     } else {
-                        worklist.push(Constraint::Eq(a1.clone(), a2.clone(), nested));
+                        worklist.push(Constraint::Eq(a1.clone(), a2.clone(), parameter_origin));
                     }
                 }
                 // Returns are covariant, so a found `&mut` return may downgrade to an
                 // expected `&` return.
-                self.push_borrow_downgrade_eq(r1, r2, nested, worklist);
+                self.push_borrow_downgrade_eq(r1, r2, result_origin, worklist);
                 worklist.push(Constraint::EffEq(e1.clone(), e2.clone(), nested));
             }
 

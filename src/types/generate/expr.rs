@@ -73,7 +73,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 return;
             }
             match &expr.kind {
-                ExprKind::Member(None, ..) => {
+                ExprKind::Member(None, ..) | ExprKind::Func(..) => {
                     self.check_expr(expr, &inner, reason, ctx);
                     return;
                 }
@@ -237,7 +237,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 if let Ty::Func(params, ret, eff) = self.store.shallow(expected)
                     && params.len() == func.params.len()
                 {
-                    let ty = self.infer_func_against(func, &params, &ret, &eff, ctx);
+                    let result_reason = if matches!(reason, CtReason::Apply | CtReason::NestedApply)
+                    {
+                        CtReason::CallbackResult
+                    } else {
+                        CtReason::Body
+                    };
+                    let ty = self.infer_func_against(func, &params, &ret, &eff, result_reason, ctx);
                     self.artifacts.node_types.insert(expr.id, ty);
                     return;
                 }

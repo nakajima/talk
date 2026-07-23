@@ -498,6 +498,54 @@ pub mod tests {
                 false,
             ),
             (
+                "types::types_struct_pattern_in_match",
+                "\n        struct Point {\n            let x: Int\n            let y: Int\n            init(x: Int, y: Int) {\n                self.x = x\n                self.y = y\n                self\n            }\n        }\n        match Point(x: 1, y: 2) {\n            Point { x, y } -> (x, y)\n        }\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::types_struct_pattern_in_let",
+                "\n        struct Point {\n            let x: Int\n            let y: Int\n            init(x: Int, y: Int) {\n                self.x = x\n                self.y = y\n                self\n            }\n        }\n        let Point { x, y } = Point(x: 1, y: 2)\n        (x, y)\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::struct_pattern_rest_omits_fields",
+                "\n        struct Point {\n            let x: Int\n            let y: Int\n            init(x: Int, y: Int) {\n                self.x = x\n                self.y = y\n                self\n            }\n        }\n        let Point { x, .. } = Point(x: 1, y: 2)\n        x\n        ",
+                true,
+                false,
+            ),
+            (
+                "types::struct_pattern_checks_field_types",
+                "\n        struct Point {\n            let x: Int\n            let y: Int\n            init(x: Int, y: Int) {\n                self.x = x\n                self.y = y\n                self\n            }\n        }\n        match Point(x: 1, y: 2) {\n            Point { x: true, .. } -> ()\n        }\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::struct_pattern_rejects_unknown_fields",
+                "\n        struct Point {\n            let x: Int\n            let y: Int\n            init(x: Int, y: Int) {\n                self.x = x\n                self.y = y\n                self\n            }\n        }\n        match Point(x: 1, y: 2) {\n            Point { z, .. } -> z\n        }\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::struct_pattern_requires_all_fields_without_rest",
+                "\n        struct Point {\n            let x: Int\n            let y: Int\n            init(x: Int, y: Int) {\n                self.x = x\n                self.y = y\n                self\n            }\n        }\n        match Point(x: 1, y: 2) {\n            Point { x } -> x\n        }\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::struct_pattern_with_refutable_field_is_not_exhaustive",
+                "\n        struct Point {\n            let x: Int\n            let y: Int\n            init(x: Int, y: Int) {\n                self.x = x\n                self.y = y\n                self\n            }\n        }\n        match Point(x: 1, y: 2) {\n            Point { x: 0, .. } -> 1\n        }\n        ",
+                false,
+                false,
+            ),
+            (
+                "types::struct_pattern_instantiates_generic_fields",
+                "\n        struct Box<T> {\n            let value: T\n            init(value: T) {\n                self.value = value\n                self\n            }\n        }\n        match Box(value: 41) {\n            Box { value } -> (value, true)\n        }\n        ",
+                true,
+                false,
+            ),
+            (
                 "types::checks_fields_exist",
                 "\n        let rec = { a: 123, b: true }\n        match rec {\n            { a, c } -> (a, c)\n        }\n        ",
                 false,
@@ -1039,7 +1087,7 @@ pub mod tests {
             ),
             (
                 "effects::types_handlers",
-                "\n            effect 'fizz(x: Int, y: Bool) -> Int\n\n            @handle 'fizz { a, b in\n                continue 0\n            }\n            ",
+                "\n            effect 'fizz(x: Int, y: Bool) -> Int\n\n            @handle 'fizz { a, b in\n                'continue 0\n            }\n            ",
                 true,
                 false,
             ),
@@ -1050,32 +1098,44 @@ pub mod tests {
                 false,
             ),
             (
+                "effects::bare_continue_checks_unit_against_effect_return_type",
+                "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                'continue\n            }\n            ",
+                false,
+                false,
+            ),
+            (
+                "effects::bare_continue_in_unit_handler_checks_clean",
+                "\n            effect 'fizz() -> ()\n\n            @handle 'fizz {\n                'continue\n            }\n            ",
+                true,
+                false,
+            ),
+            (
                 "effects::continue_in_handler_uses_effect_return_type",
-                "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                continue 123\n            }\n            ",
+                "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                'continue 123\n            }\n            ",
                 true,
                 false,
             ),
             (
                 "effects::continue_in_handler_checks_return_type",
-                "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                continue true\n            }\n            ",
+                "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                'continue true\n            }\n            ",
                 false,
                 false,
             ),
             (
                 "effects::continue_with_value_outside_handler_errors",
-                "continue 1",
+                "'continue 1",
                 false,
                 false,
             ),
             (
                 "effects::dupe_handlers_warn",
-                "\n                effect 'fizz() -> Int\n\n                @handle 'fizz { continue 0 }\n                @handle 'fizz { continue 1 }\n\n                'fizz()\n                ",
+                "\n                effect 'fizz() -> Int\n\n                @handle 'fizz { 'continue 0 }\n                @handle 'fizz { 'continue 1 }\n\n                'fizz()\n                ",
                 false,
                 false,
             ),
             (
                 "effects::handler_removes_effect_from_enclosing_func",
-                "\n          effect 'fizz() -> Int\n\n          func fizzes() '[] {\n            @handle 'fizz { continue 123 }\n\n            'fizz()\n          }\n        ",
+                "\n          effect 'fizz() -> Int\n\n          func fizzes() '[] {\n            @handle 'fizz { 'continue 123 }\n\n            'fizz()\n          }\n        ",
                 true,
                 false,
             ),
@@ -1087,25 +1147,25 @@ pub mod tests {
             ),
             (
                 "effects::generic_effect_call_with_type_arg",
-                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in continue v }\n            'state<Int>(42)\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state<Int>(42)\n        ",
                 true,
                 false,
             ),
             (
                 "effects::generic_effect_call_inferred",
-                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in continue v }\n            'state(42)\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state(42)\n        ",
                 true,
                 false,
             ),
             (
                 "effects::generic_effect_type_mismatch",
-                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in continue v }\n            'state<Int>(true)\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state<Int>(true)\n        ",
                 false,
                 false,
             ),
             (
                 "effects::generic_effect_multiple_params",
-                "\n            effect 'pair<A, B>(first: A, second: B) -> (A, B)\n            @handle 'pair { a, b in continue (a, b) }\n            'pair<Int, Bool>(42, true)\n        ",
+                "\n            effect 'pair<A, B>(first: A, second: B) -> (A, B)\n            @handle 'pair { a, b in 'continue (a, b) }\n            'pair<Int, Bool>(42, true)\n        ",
                 true,
                 false,
             ),
@@ -1141,13 +1201,13 @@ pub mod tests {
             ),
             (
                 "effects::top_level_let_before_handler_errors",
-                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            let x = f()\n            @handle 'e { continue 1 }\n            x\n        ",
+                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            let x = f()\n            @handle 'e { 'continue 1 }\n            x\n        ",
                 false,
                 false,
             ),
             (
                 "effects::one_handler_covers_two_instantiations",
-                "\n            effect 'state<T>(value: T) -> T\n\n            func g() '[] {\n                @handle 'state { v in continue v }\n                'state(1)\n                'state(true)\n                ()\n            }\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n\n            func g() '[] {\n                @handle 'state { v in 'continue v }\n                'state(1)\n                'state(true)\n                ()\n            }\n        ",
                 true,
                 false,
             ),
@@ -1159,7 +1219,7 @@ pub mod tests {
             ),
             (
                 "effects::top_level_let_after_handler_is_clean",
-                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            @handle 'e { continue 1 }\n            let x = f()\n            x\n        ",
+                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            @handle 'e { 'continue 1 }\n            let x = f()\n            x\n        ",
                 true,
                 false,
             ),
@@ -2074,7 +2134,7 @@ pub mod tests {
     #[test]
     fn effect_where_clause_constrains_perform_type_arguments() {
         let t = check(
-            "// no-core\nprotocol P {}\nextend Int: P {}\neffect 'choose<T>(value: T) -> T where T: P\n@handle 'choose { v in continue v }\n'choose(true)",
+            "// no-core\nprotocol P {}\nextend Int: P {}\neffect 'choose<T>(value: T) -> T where T: P\n@handle 'choose { v in 'continue v }\n'choose(true)",
         );
         let errors = type_errors(&t);
         assert!(
@@ -2394,6 +2454,19 @@ pub mod tests {
         // The `fn` parameter is itself unadorned, so it is a borrowed
         // function value; its own parameters borrow too.
         assert_eq!(ty_of(&t, "walk"), "(&(&Entry) -> ()) -> ()");
+    }
+
+    #[test]
+    fn callback_result_mismatch_names_the_callback_result() {
+        let t = check(
+            "// no-core\nstruct Character {}\nfunc apply(transform: (Character) -> Character) {}\napply { ch in ch }",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error
+                == "Callback returns borrowed &Character, but owned Character is required"),
+            "expected callback-result ownership diagnostic, got {errors:?}"
+        );
     }
 
     #[test]
@@ -3301,7 +3374,7 @@ pub mod tests {
     #[test]
     fn generic_effect_call_with_type_arg() {
         let t = check(
-            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\tcontinue v\n}\n'state<Int>(42)",
+            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state<Int>(42)",
         );
         assert_clean(&t);
     }
@@ -3309,7 +3382,7 @@ pub mod tests {
     #[test]
     fn generic_effect_call_inferred() {
         let t = check(
-            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\tcontinue v\n}\n'state(42)",
+            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state(42)",
         );
         assert_clean(&t);
     }
@@ -3317,7 +3390,7 @@ pub mod tests {
     #[test]
     fn generic_effect_type_mismatch() {
         let t = check(
-            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\tcontinue v\n}\n'state<Int>(true)",
+            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state<Int>(true)",
         );
         assert!(
             !type_errors(&t).is_empty(),
@@ -3328,28 +3401,28 @@ pub mod tests {
     #[test]
     fn generic_effect_multiple_params() {
         let t = check(
-            "// no-core\neffect 'pair<A, B>(first: A, second: B) -> (A, B)\n@handle 'pair { a, b in\n\tcontinue (a, b)\n}\n'pair<Int, Bool>(42, true)",
+            "// no-core\neffect 'pair<A, B>(first: A, second: B) -> (A, B)\n@handle 'pair { a, b in\n\t'continue (a, b)\n}\n'pair<Int, Bool>(42, true)",
         );
         assert_clean(&t);
     }
 
     #[test]
     fn continue_payload_checks_against_the_effect_return() {
-        // `continue v` resumes the perform: v must have the effect's
+        // `'continue v` resumes the perform: v must have the effect's
         // declared return type.
         let t = check(
-            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\tcontinue true\n}\n'ask(1)",
+            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\t'continue true\n}\n'ask(1)",
         );
         let errors = type_errors(&t);
         assert!(
             !errors.is_empty(),
-            "expected a type error for continue true"
+            "expected a type error for 'continue true"
         );
     }
 
     #[test]
     fn continue_payload_outside_a_handler_is_rejected() {
-        let t = check("// no-core\nfunc f() -> Int {\n\tloop true {\n\t\tcontinue 5\n\t}\n\t0\n}");
+        let t = check("// no-core\nfunc f() -> Int {\n\tloop true {\n\t\t'continue 5\n\t}\n\t0\n}");
         let errors = type_errors(&t);
         assert!(
             !errors.is_empty(),
@@ -3394,7 +3467,7 @@ pub mod tests {
     #[test]
     fn continue_payload_in_a_handler_checks_clean() {
         let t = check(
-            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\tcontinue p\n}\n'ask(1)",
+            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\t'continue p\n}\n'ask(1)",
         );
         assert_clean(&t);
     }
@@ -5272,7 +5345,7 @@ mod with_core {
         // deinit body could never receive its handler — the conformance
         // must reject a user effect in the hook's row.
         let t = check_with_core(Source::from(
-            "effect 'noise() -> Void\n@handle 'noise { continue () }\nstruct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\t'noise()\n\t}\n}",
+            "effect 'noise() -> Void\n@handle 'noise { 'continue () }\nstruct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\t'noise()\n\t}\n}",
         ));
         let errors = type_errors(&t);
         assert!(
@@ -5287,7 +5360,7 @@ mod with_core {
         // under it — the hook's row stays pure at the conformance
         // boundary, so drop glue needs no capabilities.
         let t = check_with_core(Source::from(
-            "effect 'noise() -> Void\nstruct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\t@handle 'noise { continue () }\n\t\t'noise()\n\t}\n}",
+            "effect 'noise() -> Void\nstruct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\t@handle 'noise { 'continue () }\n\t\t'noise()\n\t}\n}",
         ));
         assert_no_errors(&t);
     }
@@ -5336,7 +5409,7 @@ mod with_core {
         // An aborting handler whose value matches the scope, and an
         // always-resuming handler (Never body), both check clean.
         let t = check_with_core(Source::from(
-            "effect 'oops(e) -> Never\neffect 'ask(q) -> Int\n@handle 'oops { e in\n\t0\n}\n@handle 'ask { q in\n\tcontinue 1\n}\nfunc go() '[oops, ask] -> Int {\n\t'ask(\"?\")\n}\ngo()",
+            "effect 'oops(e) -> Never\neffect 'ask(q) -> Int\n@handle 'oops { e in\n\t0\n}\n@handle 'ask { q in\n\t'continue 1\n}\nfunc go() '[oops, ask] -> Int {\n\t'ask(\"?\")\n}\ngo()",
         ));
         assert_no_errors(&t);
     }
@@ -6216,7 +6289,7 @@ struct Shrunk<static N: Int> where 0 < N {
             "// no-core
 effect 'tag<static N: Int>(value: Int) -> Int
 @handle 'tag { value in
-	continue value
+	'continue value
 }
 'tag<4>(1)",
         );
@@ -6229,7 +6302,7 @@ effect 'tag<static N: Int>(value: Int) -> Int
             "// no-core
 effect 'tag<static N: Int>(value: Int) -> Int
 @handle 'tag { value in
-	continue value
+	'continue value
 }
 'tag<Bool>(1)",
         );
@@ -6512,7 +6585,7 @@ width<0 - 1>()
             "// no-core
 effect 'tag<static N: Int>(value: Int) -> Int
 @handle 'tag { value in
-	continue value
+	'continue value
 }
 'tag<0 - 1>(1)
 ()",

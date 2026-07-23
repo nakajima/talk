@@ -514,8 +514,9 @@ impl TypedTreeBuilder<'_> {
             stmt::StmtKind::Loop(cond, body) => {
                 typed_ast::StmtKind::Loop(cond.as_ref().map(|e| self.expr(e)), self.block(body))
             }
-            stmt::StmtKind::Continue(e) => {
-                typed_ast::StmtKind::Continue(e.as_ref().map(|e| self.expr(e)))
+            stmt::StmtKind::Continue => typed_ast::StmtKind::Continue,
+            stmt::StmtKind::Resume(e) => {
+                typed_ast::StmtKind::Resume(e.as_ref().map(|e| self.expr(e)))
             }
             stmt::StmtKind::Handling {
                 effect_name, body, ..

@@ -1,6 +1,6 @@
 effect 'ping() -> Int
 @handle 'ping {
-	continue 1
+	'continue 1
 }
 func go() 'ping -> () {
 	'ping()

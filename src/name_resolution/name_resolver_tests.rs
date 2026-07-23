@@ -1941,7 +1941,7 @@ pub mod tests {
             "
         effect 'fizz(x: Int) -> ()
         @handle 'fizz { x in
-            continue x
+            'continue x
         }
         ",
         );
@@ -1973,7 +1973,7 @@ pub mod tests {
         assert_eq!(
             *body,
             vec![
-                any_stmt!(StmtKind::Continue(Some(any_expr!(ExprKind::Variable(
+                any_stmt!(StmtKind::Resume(Some(any_expr!(ExprKind::Variable(
                     Name::Resolved(Symbol::ParamLocal(ParamLocalId(2)), "x".into())
                 )))))
                 .into()

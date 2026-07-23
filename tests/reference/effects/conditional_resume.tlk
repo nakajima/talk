@@ -1,7 +1,7 @@
 effect 'check(n) -> Int
 @handle 'check { n in
 	if n > 0 {
-		continue n
+		'continue n
 	}
 	0 - 1
 }

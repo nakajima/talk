@@ -95,8 +95,8 @@ impl<'a> ProgramBuilder<'a> {
                 dest: retain_local,
                 index: u16::try_from(2 * index + 1).unwrap_or_default(),
             });
-            fx.param_witnesses
-                .insert(*param_symbol, (drop_local, retain_local));
+            let param = fx.canon_rigid(*param_symbol);
+            fx.param_witnesses.insert(param, (drop_local, retain_local));
         }
         match glue {
             Glue::HeapTeardown => unreachable!("heap teardown has its own builder"),
@@ -474,7 +474,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let func = self.program_builder.value_glue(ty, glue)?;
         let mut env = Vec::new();
         for param in glue_witness_params(ty) {
-            let Some((drop_witness, retain_witness)) = self.param_witnesses.get(&param).copied()
+            let Some((drop_witness, retain_witness)) = self
+                .param_witnesses
+                .get(&self.canon_rigid(param))
+                .copied()
             else {
                 return Err(BackendError::unsupported(
                     "a generic value cannot cross this boundary without its ownership witnesses (not supported yet)"

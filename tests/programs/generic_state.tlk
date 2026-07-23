@@ -5,7 +5,7 @@ func echo(n: Int) -> Int {
 }
 
 func run() -> Int {
-	@handle 'ask { v in continue v }
+	@handle 'ask { v in 'continue v }
 	echo(41)
 }
 

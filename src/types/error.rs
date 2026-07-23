@@ -137,6 +137,13 @@ pub enum TypeError {
     },
     IncompatibleOrPatternRefinements,
     AmbiguousGadtMatchResult,
+    DuplicateStructPatternField {
+        label: String,
+    },
+    /// A struct pattern without `..` must name every stored field.
+    MissingStructPatternFields {
+        fields: Vec<String>,
+    },
     /// A user-written `mut`/`consume` parameter mode on an annotation that
     /// already spells a borrow (ADR 0018): the mode and the `&` are rival
     /// spellings of the same decision, so dropping either is a fix.
@@ -284,6 +291,8 @@ impl TypeError {
             Self::InvalidVariantPayloadLabels { .. } => "type.invalid-variant-payload-labels",
             Self::DuplicateVariantPayloadLabel { .. } => "type.duplicate-variant-payload-label",
             Self::IncompatibleOrPatternRefinements => "type.incompatible-or-pattern-refinements",
+            Self::DuplicateStructPatternField { .. } => "type.duplicate-struct-pattern-field",
+            Self::MissingStructPatternFields { .. } => "type.missing-struct-pattern-fields",
             Self::AmbiguousGadtMatchResult => "type.ambiguous-gadt-match-result",
             Self::ParamModeBorrowConflict { .. } => "type.param-mode-borrow-conflict",
             Self::InvalidExistentialProtocol { .. } => "type.invalid-existential-protocol",
@@ -328,6 +337,22 @@ impl Display for TypeError {
                 CtReason::Apply | CtReason::NestedApply => write!(
                     f,
                     "Type mismatch in function argument: the parameter requires {expected}, but the argument has type {found}"
+                ),
+                CtReason::CallbackParameter => write!(
+                    f,
+                    "Type mismatch in callback parameter: the required callback accepts {expected}, but this callback accepts {found}"
+                ),
+                CtReason::CallbackResult
+                    if !expected.starts_with('&') && found.starts_with('&') =>
+                {
+                    write!(
+                        f,
+                        "Callback returns borrowed {found}, but owned {expected} is required"
+                    )
+                }
+                CtReason::CallbackResult => write!(
+                    f,
+                    "Type mismatch in callback result: the receiving function requires this callback to return {expected}, but its final expression has type {found}"
                 ),
                 CtReason::EqualityComparison => write!(
                     f,
@@ -546,6 +571,20 @@ impl Display for TypeError {
                 write!(
                     f,
                     "Or-pattern alternatives introduce different GADT refinements; split them into separate arms"
+                )
+            }
+            TypeError::DuplicateStructPatternField { label } => {
+                write!(f, "Struct pattern names field '{label}' more than once")
+            }
+            TypeError::MissingStructPatternFields { fields } => {
+                write!(
+                    f,
+                    "Struct pattern does not name field(s) {}; add them or `..`",
+                    fields
+                        .iter()
+                        .map(|field| format!("'{field}'"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             }
             TypeError::AmbiguousGadtMatchResult => {

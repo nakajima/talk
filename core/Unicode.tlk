@@ -18,6 +18,7 @@ use package::Optional::{ Optional }
 use package::Iterable::{ Iterable, Iterator }
 use package::Showable::{ Showable }
 use package::UnicodeData::{ _CC_ALPHABETIC, _CC_ALPHANUMERIC, _CC_NUMERIC, _CC_OTHER, _CC_WHITESPACE, _GC_CONTROL, _GC_CR, _GC_EXTEND, _GC_EXTEND_INCB_EXTEND, _GC_EXTEND_INCB_LINKER, _GC_EXT_PICT, _GC_HANGUL_L, _GC_HANGUL_LV, _GC_HANGUL_LVT, _GC_HANGUL_T, _GC_HANGUL_V, _GC_INCB_CONSONANT, _GC_LF, _GC_OTHER, _GC_PREPEND, _GC_REGIONAL_INDICATOR, _GC_SPACINGMARK, _GC_ZWJ, _character_class_table, _gcb_table }
+use package::Ownership::{ CheapClone }
 
 // talk has no bitwise operators; UTF-8's masks and shifts are powers of
 // two, so / and * and - do the same work.
@@ -375,6 +376,7 @@ public struct Character {
 }
 
 extend Character: Borrowed {}
+extend Character: CheapClone {}
 
 // Byte equality of the cluster — same semantic as String equality, so
 // canonically equivalent characters in different normal forms differ.

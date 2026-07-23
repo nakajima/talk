@@ -57,19 +57,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             }
 
             StmtKind::Break => StmtValue::divergent(),
-            StmtKind::Continue(payload) => {
-                // A bare `continue` re-enters the enclosing loop; with a
-                // payload it resumes the enclosing handler's perform.
-                if let Some(expr) = payload {
-                    match ctx.handler_ret.clone() {
-                        Some(expected) => {
-                            self.check_expr(expr, &expected, CtReason::Apply, ctx);
-                        }
-                        None => self.unsupported(
-                            stmt.id,
-                            "continue with a value outside an effect handler",
-                        ),
-                    }
+            StmtKind::Continue => StmtValue::divergent(),
+            StmtKind::Resume(payload) => {
+                // `'continue` resumes the enclosing handler's perform; its
+                // payload (unit when bare) checks against the effect's
+                // return type.
+                match ctx.handler_ret.clone() {
+                    Some(expected) => match payload {
+                        Some(expr) => self.check_expr(expr, &expected, CtReason::Apply, ctx),
+                        None => self.emit_eq(expected, Ty::unit(), stmt.id, CtReason::Apply),
+                    },
+                    None => self.unsupported(stmt.id, "`'continue` outside an effect handler"),
                 }
                 StmtValue::divergent()
             }
@@ -398,7 +396,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             StmtKind::Break => true,
             StmtKind::Expr(expr)
             | StmtKind::Return(Some(expr))
-            | StmtKind::Continue(Some(expr)) => Self::expr_breaks_current_loop(expr),
+            | StmtKind::Resume(Some(expr)) => Self::expr_breaks_current_loop(expr),
             StmtKind::If(condition, then_block, else_block) => {
                 Self::expr_breaks_current_loop(condition)
                     || Self::block_breaks_current_loop(then_block)
@@ -411,7 +409,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             }
             StmtKind::Loop(..) | StmtKind::For { .. } => false,
             StmtKind::Handling { body, .. } => Self::block_breaks_current_loop(body),
-            StmtKind::Return(None) | StmtKind::Continue(None) => false,
+            StmtKind::Return(None) | StmtKind::Resume(None) | StmtKind::Continue => false,
         }
     }
 
@@ -512,9 +510,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     fn stmt_exits_mut_iteration(stmt: &Stmt, loop_depth: usize) -> bool {
         match &stmt.kind {
             StmtKind::Break if loop_depth == 0 => true,
-            StmtKind::Continue(None) if loop_depth == 0 => true,
+            StmtKind::Continue if loop_depth == 0 => true,
             StmtKind::Return(_) => true,
-            StmtKind::Expr(expr) | StmtKind::Continue(Some(expr)) => {
+            StmtKind::Expr(expr) | StmtKind::Resume(Some(expr)) => {
                 Self::expr_exits_mut_iteration(expr, loop_depth)
             }
             StmtKind::If(condition, then_block, else_block) => {
@@ -539,7 +537,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     || Self::block_exits_mut_iteration(body, loop_depth + 1)
             }
             StmtKind::Handling { body, .. } => Self::block_exits_mut_iteration(body, loop_depth),
-            StmtKind::Break | StmtKind::Continue(None) => false,
+            StmtKind::Break | StmtKind::Continue | StmtKind::Resume(None) => false,
         }
     }
 

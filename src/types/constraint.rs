@@ -35,6 +35,12 @@ pub enum CtReason {
     /// argument context for diagnostics without enabling application-only
     /// coercions in the solver.
     NestedApply,
+    /// A mismatch in the parameter type of a function value supplied as an
+    /// argument, such as a callback or trailing block.
+    CallbackParameter,
+    /// A mismatch in the result type of a function value supplied as an
+    /// argument, such as a callback or trailing block.
+    CallbackResult,
     Branch,
     GadtBranch,
     Assignment,

@@ -336,7 +336,7 @@ fn rename_symbol_from_stmt(
         }
         StmtKind::For { iterable, .. } => span_contains(iterable.span, byte_offset)
             .then(|| rename_symbol_from_expr(module, iterable, byte_offset))?,
-        StmtKind::Continue(Some(expr)) => span_contains(expr.span, byte_offset)
+        StmtKind::Resume(Some(expr)) => span_contains(expr.span, byte_offset)
             .then(|| rename_symbol_from_expr(module, expr, byte_offset))?,
         StmtKind::Handling {
             effect_name,

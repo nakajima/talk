@@ -63,7 +63,7 @@ func __talktalk_event_end(status: String) {
 	} else {
 		__talktalk_tests.push(TestCase(name: testCase.name.to_string(), block: testCase.block))
 	}
-	continue ()
+	'continue ()
 }
 
 @handle 'fail { message in
@@ -71,7 +71,7 @@ func __talktalk_event_end(status: String) {
 	__talktalk_failures.push(
 		Failure(test_name: __talktalk_current_test.to_string(), assertion: message)
 	)
-	continue ()
+	'continue ()
 }
 
 public func __talktalk_runAllAndReport() -> Int {

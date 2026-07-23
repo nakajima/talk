@@ -792,7 +792,7 @@ Low-level trusted IR escapes use `@_ir(args...) { ... }` and appear mainly in co
 
 ## Effects
 
-Effects are named with a leading tick: `effect 'throws(error: String) -> Never`. Calling an effect is expression syntax: `'throws("bad")`. Effect rows appear on functions before `->`: `func f() 'throws -> ()`. Handlers use `@handle 'effect { payload in body }` for abortive handling; when the effect return type is not `Never`, `continue expr` inside the handler resumes at the perform site with that value.
+Effects are named with a leading tick: `effect 'throws(error: String) -> Never`. Calling an effect is expression syntax: `'throws("bad")`. Effect rows appear on functions before `->`: `func f() 'throws -> ()`. Handlers use `@handle 'effect { payload in body }` for abortive handling; when the effect return type is not `Never`, `'continue expr` inside the handler resumes at the perform site with that value (loop `continue` is separate and takes no value).
 
 ## Memory and value model
 

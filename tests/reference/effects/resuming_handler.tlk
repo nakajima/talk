@@ -1,7 +1,7 @@
 effect 'ask(prompt) -> Int
 @handle 'ask { p in
 	print(p)
-	continue 42
+	'continue 42
 }
 func question() 'ask -> Int {
 	let answer = 'ask("meaning?")

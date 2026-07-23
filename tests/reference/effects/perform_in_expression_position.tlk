@@ -1,6 +1,6 @@
 effect 'ask(prompt) -> Int
 @handle 'ask { p in
-	continue 21
+	'continue 21
 }
 func go() 'ask -> Int {
 	if 'ask("q") > 10 {

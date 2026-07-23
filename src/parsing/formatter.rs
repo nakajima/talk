@@ -757,11 +757,12 @@ impl<'a> Formatter<'a> {
                 effect_name, body, ..
             } => text(format!("@handle '{} ", effect_name.name_str())) + self.format_block(body),
             StmtKind::Expr(expr) => self.format_expr(expr),
-            StmtKind::Continue(expr) => {
+            StmtKind::Continue => text("continue"),
+            StmtKind::Resume(expr) => {
                 if let Some(expr) = expr {
-                    concat_space(text("continue"), self.format_expr(expr))
+                    concat_space(text("'continue"), self.format_expr(expr))
                 } else {
-                    text("continue")
+                    text("'continue")
                 }
             }
             StmtKind::If(cond, then_block, else_block) => {
@@ -2642,9 +2643,11 @@ impl<'a> Formatter<'a> {
     fn stmt_contains_control_flow(stmt: &Stmt) -> bool {
         match &stmt.kind {
             StmtKind::Expr(expr) => Self::expr_contains_control_flow(expr),
-            StmtKind::If(..) | StmtKind::Loop(..) | StmtKind::Continue(..) | StmtKind::Break => {
-                true
-            }
+            StmtKind::If(..)
+            | StmtKind::Loop(..)
+            | StmtKind::Continue
+            | StmtKind::Resume(..)
+            | StmtKind::Break => true,
             _ => false,
         }
     }
@@ -3287,6 +3290,17 @@ mod formatter_tests {
             format_code("loop {\nif true {\nbreak\n}\n}", 80),
             "loop {\n\tif true {\n\t\tbreak\n\t}\n}"
         );
+
+        // `'continue` resumes the enclosing handler, with or without a
+        // payload.
+        assert_eq!(
+            format_code("@handle 'ask {\n'continue 1\n}", 80),
+            "@handle 'ask {\n\t'continue 1\n}"
+        );
+        assert_eq!(
+            format_code("@handle 'ping {\n'continue\n}", 80),
+            "@handle 'ping {\n\t'continue\n}"
+        );
     }
 
     #[test]
@@ -3461,6 +3475,13 @@ mod formatter_tests {
         assert_eq!(
             format_code("match x { true -> 1\nfalse -> 0 }", 80),
             "match x {\n\ttrue -> 1,\n\tfalse -> 0\n}"
+        );
+
+        // Struct patterns keep shorthand fields and print `field: pattern`
+        // only when the sub-pattern differs from the field name.
+        assert_eq!(
+            format_code("match p { Point { x , y: 1 } -> x }", 80),
+            "match p {\n\tPoint { x, y: 1 } -> x\n}"
         );
 
         assert_eq!(

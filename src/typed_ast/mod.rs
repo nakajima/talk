@@ -400,7 +400,10 @@ pub enum StmtKind {
     Break,
     Assignment(Box<Expr>, Box<Expr>),
     Loop(Option<Expr>, Block),
-    Continue(Option<Expr>),
+    Continue,
+    /// `'continue` — resumes the enclosing handler's perform, optionally
+    /// with a value.
+    Resume(Option<Expr>),
     Handling {
         #[drive(skip)]
         effect_name: Name,

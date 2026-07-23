@@ -128,11 +128,19 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         expected_params: &[Ty],
         expected_ret: &Ty,
         expected_eff: &EffectRow,
+        result_reason: CtReason,
         ctx: &Ctx,
     ) -> Ty {
         self.register_func_bounds(func);
         self.with_declared_givens(&func.generics, func.where_clause.as_ref(), |this| {
-            this.infer_func_against_inner(func, expected_params, expected_ret, expected_eff, ctx)
+            this.infer_func_against_inner(
+                func,
+                expected_params,
+                expected_ret,
+                expected_eff,
+                result_reason,
+                ctx,
+            )
         })
     }
 
@@ -142,6 +150,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         expected_params: &[Ty],
         expected_ret: &Ty,
         expected_eff: &EffectRow,
+        result_reason: CtReason,
         ctx: &Ctx,
     ) -> Ty {
         let params: Vec<Ty> = func
@@ -189,11 +198,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
         // A nested function cannot resume an enclosing handler.
         let inner = ctx.enter_function(ret.clone(), expected_eff.clone());
-        self.check_block_value(&func.body, &ret, &inner);
+        self.check_block_value_with_reason(&func.body, &ret, result_reason, &inner);
 
         Ty::Func(params, Box::new(ret), expected_eff.clone())
     }
-
 
     // ----- Blocks, statements, declarations -----------------------------
 

@@ -1,13 +1,29 @@
 // no-core
 use package::Operators::{ Equatable }
+use package::Result::{ Result }
 
 public enum Optional<Wrapped> {
 	case some(Wrapped)
 	case none
-	func map<T>(transform: (Wrapped) -> T) -> T? {
+
+	consuming func map<T>(transform: (Wrapped) -> T) -> T? {
 		match self {
 			.some(t) -> .some(transform(t)),
 			.none -> .none
+		}
+	}
+
+	consuming func or(default: () -> Wrapped) -> Wrapped {
+		match self {
+			.some(t) -> t,
+			.none -> default()
+		}
+	}
+
+	consuming func or_err<E>(default: () -> E) -> Result<Wrapped, E> {
+		match self {
+			.some(t) -> .ok(t),
+			.none -> .error(default())
 		}
 	}
 }

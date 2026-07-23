@@ -2039,6 +2039,92 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_struct_pattern_in_match_arm() {
+        let parsed = parse("match p {\n\tPoint { x, y: 1 } -> x\n}");
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Match(_, arms),
+            ..
+        }) = &parsed.roots[0].as_stmt().kind
+        else {
+            panic!("expected match, got {:?}", parsed.roots[0]);
+        };
+        let PatternKind::Struct {
+            struct_name: Some(name),
+            fields,
+            field_names,
+            rest,
+        } = &arms[0].pattern.kind
+        else {
+            panic!("expected struct pattern, got {:?}", arms[0].pattern.kind);
+        };
+        assert_eq!(name.name_str(), "Point");
+        assert_eq!(field_names.len(), 2);
+        assert_eq!(field_names[0].name_str(), "x");
+        assert_eq!(field_names[1].name_str(), "y");
+        assert!(!rest);
+        assert!(matches!(
+            fields[0],
+            Node::Pattern(Pattern {
+                kind: PatternKind::Bind(_),
+                ..
+            })
+        ));
+        assert!(matches!(
+            fields[1],
+            Node::Pattern(Pattern {
+                kind: PatternKind::LiteralInt(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_struct_pattern_with_rest_in_let() {
+        let parsed = parse("let Point { x, .. } = p");
+        let DeclKind::Let { lhs, .. } = &parsed.roots[0].as_decl().kind else {
+            panic!("expected let");
+        };
+        let PatternKind::Struct {
+            field_names, rest, ..
+        } = &lhs.kind
+        else {
+            panic!("expected struct pattern, got {:?}", lhs.kind);
+        };
+        assert_eq!(field_names.len(), 1);
+        assert!(rest);
+    }
+
+    #[test]
+    fn parses_resume_with_value() {
+        let parsed = parse("'continue 1");
+        assert!(matches!(
+            &parsed.roots[0].as_stmt().kind,
+            StmtKind::Resume(Some(expr)) if matches!(expr.kind, ExprKind::LiteralInt(_))
+        ));
+    }
+
+    #[test]
+    fn parses_bare_resume() {
+        let parsed = parse("loop {\n\t'continue\n}");
+        let StmtKind::Loop(_, body) = &parsed.roots[0].as_stmt().kind else {
+            panic!("expected loop");
+        };
+        assert!(matches!(
+            body.body[0].as_stmt().kind,
+            StmtKind::Resume(None)
+        ));
+    }
+
+    #[test]
+    fn rejects_continue_with_value() {
+        // The resume statement is spelled `'continue`; loop `continue`
+        // carries no value.
+        let lexer = Lexer::new("loop {\n\tcontinue 1\n}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        assert!(parser.parse().is_err());
+    }
+
+    #[test]
     fn parses_let() {
         let parsed = parse("let fizz");
         assert_eq!(

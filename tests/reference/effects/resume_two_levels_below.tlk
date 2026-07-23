@@ -1,6 +1,6 @@
 effect 'ask(prompt) -> Int
 @handle 'ask { p in
-	continue 10
+	'continue 10
 }
 func inner() 'ask -> Int {
 	let v = 'ask("x")

@@ -7,7 +7,7 @@ func total() -> Int {
 }
 
 func with_answers() -> Int {
-	@handle 'ask { continue 21 }
+	@handle 'ask { 'continue 21 }
 	total()
 }
 

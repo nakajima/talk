@@ -1,6 +1,6 @@
 effect 'step(n) -> Int
 @handle 'step { n in
-	continue n + 1
+	'continue n + 1
 }
 func go() 'step -> Int {
 	let a = 'step(0)

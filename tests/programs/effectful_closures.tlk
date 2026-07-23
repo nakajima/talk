@@ -5,7 +5,7 @@ func apply_twice(fn: () -> Int) -> Int {
 }
 
 func closure_case() -> Int {
-	@handle 'boost { continue 10 }
+	@handle 'boost { 'continue 10 }
 	let doubler = func() -> Int {
 		'boost() * 2
 	}
@@ -17,7 +17,7 @@ func loud() -> Int {
 }
 
 func named_case() -> Int {
-	@handle 'boost { continue 5 }
+	@handle 'boost { 'continue 5 }
 	let f = loud
 	f()
 }

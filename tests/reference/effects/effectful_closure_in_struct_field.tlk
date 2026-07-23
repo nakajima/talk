@@ -4,7 +4,7 @@ struct Wrapper {
 }
 @handle 'ask { p in
 	print(p)
-	continue 42
+	'continue 42
 }
 func go() 'ask -> Int {
 	let w = Wrapper(f: func() {

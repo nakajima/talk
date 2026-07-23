@@ -539,11 +539,139 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 );
                 refinement
             }
-            PatternKind::Struct { .. } => {
-                self.unsupported(pattern.id, "struct destructuring patterns");
-                PatternRefinement::default()
+            PatternKind::Struct {
+                struct_name,
+                fields,
+                field_names,
+                rest,
+            } => self.check_struct_pattern(pattern, struct_name, fields, field_names, *rest, expected),
+        }
+    }
+
+    /// Struct patterns (`Point { x, y: pattern, .. }`): the struct comes
+    /// from the explicit name or the scrutinee's head; each named field
+    /// checks its sub-pattern against the declared field type under this
+    /// instantiation. Without `..`, every stored field must be named.
+    fn check_struct_pattern(
+        &mut self,
+        pattern: &Pattern,
+        struct_name: &Option<Name>,
+        fields: &[Node],
+        field_names: &[Name],
+        rest: bool,
+        expected: &Ty,
+    ) -> PatternRefinement {
+        let shallow = self.store.shallow(expected);
+        let struct_symbol = match struct_name {
+            Some(name) => name.symbol().ok(),
+            None => match &shallow {
+                Ty::Nominal(symbol, _) if self.catalog.structs.contains_key(symbol) => {
+                    Some(*symbol)
+                }
+                _ => None,
+            },
+        };
+        let Some(struct_symbol) = struct_symbol else {
+            self.unsupported(
+                pattern.id,
+                "struct patterns on a scrutinee whose struct is not yet known (annotate the scrutinee)",
+            );
+            return PatternRefinement::default();
+        };
+        let Some(info) = self.catalog.structs.get(&struct_symbol).cloned() else {
+            self.unsupported(pattern.id, "struct patterns on non-struct types");
+            return PatternRefinement::default();
+        };
+
+        // Bind the scrutinee to this struct, reusing its arguments when
+        // the head is already concrete.
+        let args: Vec<Ty> = match &shallow {
+            Ty::Nominal(symbol, args) if *symbol == struct_symbol => args.clone(),
+            _ => {
+                let mut args: Vec<Ty> = info
+                    .params
+                    .iter()
+                    .map(|_| Ty::Var(self.store.fresh_ty(self.level, pattern.id)))
+                    .collect();
+                args.extend(info.eff_params.iter().map(|_| {
+                    Ty::Eff(EffectRow::open(
+                        self.store.fresh_eff(self.level, pattern.id),
+                    ))
+                }));
+                self.emit_eq(
+                    expected.clone(),
+                    Ty::Nominal(struct_symbol, args.clone()),
+                    pattern.id,
+                    CtReason::Pattern,
+                );
+                args
+            }
+        };
+        let substitution = param_subst(&info.params, &args);
+        // A closure field's row is THIS instance's: splice the head's
+        // trailing `Ty::Eff` args over the field's quantified tails (see
+        // the member-read path in solve/member.rs).
+        let mut eff_args = args.iter().filter_map(|arg| match arg {
+            Ty::Eff(row) => Some(row.clone()),
+            _ => None,
+        });
+        let eff_rows: FxHashMap<Symbol, EffectRow> = info
+            .eff_params
+            .iter()
+            .map(|&param| {
+                let row = eff_args.next().unwrap_or_else(|| {
+                    EffectRow::open(self.store.fresh_eff(self.level, pattern.id))
+                });
+                (param, row)
+            })
+            .collect();
+
+        let mut refinement = PatternRefinement::default();
+        let mut seen: Vec<String> = Vec::new();
+        for (name, field) in field_names.iter().zip(fields) {
+            let label = name.name_str();
+            let Node::Pattern(sub) = field else {
+                continue;
+            };
+            if seen.contains(&label) {
+                self.diagnostics.errors.push((
+                    TypeError::DuplicateStructPatternField { label },
+                    pattern.id,
+                ));
+                continue;
+            }
+            seen.push(label.clone());
+            let Some((_, field_ty)) = info.fields.get(&label) else {
+                self.diagnostics.errors.push((
+                    TypeError::UnknownMember {
+                        receiver: self.store.render(expected),
+                        label,
+                    },
+                    pattern.id,
+                ));
+                continue;
+            };
+            let field_ty = field_ty
+                .clone()
+                .substitute(&substitution, &Default::default(), &Default::default())
+                .substitute_eff_rows(&eff_rows);
+            refinement.extend(self.check_pattern(sub, &field_ty));
+        }
+        if !rest {
+            let missing: Vec<String> = info
+                .fields
+                .keys()
+                .filter(|field| !seen.contains(field))
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
+                self.diagnostics.errors.push((
+                    TypeError::MissingStructPatternFields { fields: missing },
+                    pattern.id,
+                ));
             }
         }
+        refinement
     }
 
     /// Variant patterns (`.definitely(x)` / `Maybe.definitely(x)`): the enum

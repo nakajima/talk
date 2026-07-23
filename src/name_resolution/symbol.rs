@@ -21,7 +21,8 @@ pub fn set_symbol_names(names: FxHashMap<Symbol, String>) -> SymbolDisplayContex
     SymbolDisplayContext
 }
 
-fn lookup_symbol_name(sym: &Symbol) -> Option<String> {
+/// The source name for a symbol under the active display context, if any.
+pub fn lookup_symbol_name(sym: &Symbol) -> Option<String> {
     SYMBOL_NAMES.with(|cell| cell.borrow().as_ref().and_then(|map| map.get(sym).cloned()))
 }
 

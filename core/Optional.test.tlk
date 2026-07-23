@@ -1,7 +1,15 @@
 test "map" {
-	let a: Int? = Optional.some(123)
-	let b: Int? = Optional.none
+	let a: Int? = .some(123)
+	let b: Int? = .none
 
 	assert(a.map { $0 } == .some(123))
 	assert(b.map { $0 } == .none)
+}
+
+test "or" {
+	let a: Int? = .some(123)
+	let b: Int? = .none
+
+	assert(a.or { 456 } == 123)
+	assert(b.or { 789 } == 789)
 }

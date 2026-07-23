@@ -1029,9 +1029,12 @@ impl NameResolver {
                     }
                 }
             }
-            #[allow(clippy::todo)]
-            PatternKind::Struct { .. } => {
-                todo!()
+            PatternKind::Struct { fields, .. } => {
+                for field in fields {
+                    if let Node::Pattern(pattern) = field {
+                        self.declare_pattern(pattern, some!(PatternBindLocal));
+                    }
+                }
             }
             PatternKind::Tuple(values) => {
                 for value in values {
@@ -1125,8 +1128,14 @@ impl NameResolver {
                     self.mint_pattern(value, bind_type, out);
                 }
             }
-            PatternKind::Struct { .. }
-            | PatternKind::Wildcard
+            PatternKind::Struct { fields, .. } => {
+                for field in fields {
+                    if let Node::Pattern(pattern) = field {
+                        self.mint_pattern(pattern, some!(PatternBindLocal), out);
+                    }
+                }
+            }
+            PatternKind::Wildcard
             | PatternKind::LiteralFalse
             | PatternKind::LiteralTrue
             | PatternKind::LiteralInt(..)
@@ -1225,11 +1234,27 @@ impl NameResolver {
             | PatternKind::LiteralFalse => (),
             PatternKind::Wildcard => (),
             PatternKind::Struct {
-                struct_name: _,
-                fields: _,
-                field_names: _,
-                rest: _,
-            } => (),
+                struct_name,
+                fields,
+                ..
+            } => {
+                if let Some(name) = struct_name {
+                    match self.lookup(name) {
+                        Some(resolved) => *name = resolved,
+                        None => {
+                            self.diagnostic(
+                                pattern.id,
+                                NameResolverError::UndefinedName(name.name_str()),
+                            );
+                        }
+                    }
+                }
+                for field in fields {
+                    if let Node::Pattern(pattern) = field {
+                        self.enter_pattern(pattern);
+                    }
+                }
+            }
         }
     }
 

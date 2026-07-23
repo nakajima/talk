@@ -1199,6 +1199,11 @@ fn pattern_bind_symbols(pattern: &Pattern) -> Vec<Symbol> {
                     }
                 }
             }
+            PatternKind::Struct { fields, .. } => {
+                for field in fields {
+                    walk(field, symbols);
+                }
+            }
             _ => {}
         }
     }
@@ -1906,7 +1911,7 @@ impl<'a> ProgramBuilder<'a> {
                     self.index_nested_funcs(else_block, program);
                 }
             }
-            StmtKind::Return(Some(expr)) | StmtKind::Continue(Some(expr)) => {
+            StmtKind::Return(Some(expr)) | StmtKind::Resume(Some(expr)) => {
                 self.index_nested_expr(expr, program)
             }
             StmtKind::Assignment(target, value) => {
@@ -1920,7 +1925,10 @@ impl<'a> ProgramBuilder<'a> {
                 self.index_nested_funcs(body, program);
             }
             StmtKind::Handling { body, .. } => self.index_nested_funcs(body, program),
-            StmtKind::Return(None) | StmtKind::Continue(None) | StmtKind::Break => {}
+            StmtKind::Return(None)
+            | StmtKind::Resume(None)
+            | StmtKind::Continue
+            | StmtKind::Break => {}
         }
     }
 
@@ -2411,36 +2419,33 @@ impl<'a> ProgramBuilder<'a> {
         None
     }
 
-    /// Conformance constraints declared on one effect generic (raw symbol,
-    /// as it appears in `Ty::Param` occurrences), from the input catalogs.
-    /// These are the protocol dictionaries the perform site passes
-    /// alongside the `[drop, retain]` pair (Wadler & Blott, POPL 1989).
+    /// Conformance constraints on one rigid generic (raw symbol, as it
+    /// appears in `Ty::Param` occurrences): the frontend-published
+    /// declared bounds (`TypeCatalog::param_bounds` — typing publishes,
+    /// lowering reads), expanded through transitive protocol supers.
+    /// These decide the protocol-dictionary layout of the rigid's hidden
+    /// witness block, so every bind/forward/inherit site derives from
+    /// this one answer (Wadler & Blott, POPL 1989).
     fn rigid_constraints(&self, param: Symbol) -> Vec<crate::types::ty::ProtocolRef> {
-        for input in self.programs {
-            for sig in input.program.types().catalog.effects.values() {
-                if sig.generics.iter().any(|generic| generic.symbol == param) {
-                    return sig
-                        .predicates
-                        .iter()
-                        .filter_map(|predicate| match predicate {
-                            crate::types::ty::Predicate::Conforms {
-                                ty: Ty::Param(subject),
-                                protocol,
-                            } if *subject == param => Some(crate::types::ty::ProtocolRef {
-                                protocol: canonical(protocol.protocol, input.module),
-                                args: protocol
-                                    .args
-                                    .iter()
-                                    .map(|arg| canonical_ty(arg, input.module))
-                                    .collect(),
-                            }),
-                            _ => None,
-                        })
-                        .collect();
+        // The merged catalog keys by imported symbol; a raw module-local
+        // param resolves through its program's canonical form (the same
+        // two spellings `demand`'s subst filter accepts).
+        let bounds = self.catalog.param_bounds.get(&param).or_else(|| {
+            self.programs.iter().find_map(|input| {
+                self.catalog
+                    .param_bounds
+                    .get(&canonical(param, input.module))
+            })
+        });
+        let mut expanded: Vec<crate::types::ty::ProtocolRef> = Vec::new();
+        for bound in bounds.into_iter().flatten() {
+            for protocol in self.catalog.protocol_and_supers(bound) {
+                if !expanded.iter().any(|seen| seen.protocol == protocol.protocol) {
+                    expanded.push(protocol);
                 }
             }
         }
-        Vec::new()
+        expanded
     }
 
     /// A type's display name, for derived rendering.
@@ -2645,6 +2650,22 @@ impl<'a> ProgramBuilder<'a> {
             for info in catalog.enums.values() {
                 if info.methods.values().copied().any(matches) {
                     return Some(owner_params(&info.params));
+                }
+            }
+            // Inherent extend members carry their own rigid params (the
+            // instance-head binders).
+            for members in catalog.extend_members.values() {
+                for rows in members.values() {
+                    for row in rows {
+                        if matches(row.symbol) {
+                            return Some(
+                                row.params
+                                    .iter()
+                                    .map(|param| canonical(*param, input.module))
+                                    .collect(),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -3470,7 +3491,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // A rigid effect-generic holds a native value; its
                 // teardown dispatches through the frame's drop witness
                 // (value-witness-table passing).
-                if let Some((drop_witness, _)) = self.param_witnesses.get(symbol).copied() {
+                if let Some((drop_witness, _)) =
+                    self.param_witnesses.get(&self.canon_rigid(*symbol)).copied()
+                {
                     let dest = self.fresh_local();
                     self.push(Inst::CallIndirect {
                         dest,
@@ -3948,7 +3971,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn can_release(&self, ty: &Ty) -> bool {
         witness_params(std::slice::from_ref(&(Symbol::RawPtr, ty.clone())))
             .iter()
-            .all(|symbol| self.param_witnesses.contains_key(symbol))
+            .all(|symbol| self.param_witnesses.contains_key(&self.canon_rigid(*symbol)))
     }
 
     /// Owned parts to drop OR region claims to release OR linear values to
@@ -4843,6 +4866,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         dest
     }
 
+    /// The one spelling `param_witnesses`/`param_requirements` key by. A
+    /// rigid reaches the frame in two spellings — the typed tree's
+    /// module-local symbol and a substitution's imported one — so every
+    /// insert and lookup normalizes through here (the map-key analog of
+    /// `demand`'s dual-spelling subst filter).
+    fn canon_rigid(&self, symbol: Symbol) -> Symbol {
+        canonical(
+            symbol,
+            self.program_builder.programs[self.program].module,
+        )
+    }
+
     /// Bind the hidden argument block for each rigid generic at
     /// consecutive locals starting at `base`: `[drop, retain]`, then each
     /// constraint protocol's requirement closures in declaration order.
@@ -4850,9 +4885,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// exactly this layout.
     fn bind_witness_params(&mut self, params: &[Symbol], mut base: LocalId) -> LocalId {
         for param in params {
-            self.param_witnesses.insert(*param, (base, base + 1));
+            let param = self.canon_rigid(*param);
+            self.param_witnesses.insert(param, (base, base + 1));
             base += 2;
-            for protocol in self.program_builder.rigid_constraints(*param) {
+            for protocol in self.program_builder.rigid_constraints(param) {
                 let count = self
                     .program_builder
                     .protocol_requirements(protocol.protocol)
@@ -4863,7 +4899,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .collect();
                 base += u16::try_from(count).unwrap_or_default();
                 self.param_requirements
-                    .insert((*param, protocol.protocol), locals);
+                    .insert((param, protocol.protocol), locals);
             }
         }
         base
@@ -4878,6 +4914,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         operands: &mut Vec<Operand>,
         span: Span,
     ) -> Result<(), BackendError> {
+        let param = self.canon_rigid(param);
         let Some((drop_witness, retain_witness)) = self.param_witnesses.get(&param).copied() else {
             return Err(BackendError::unsupported(
                 "a generic value cannot cross this boundary without its ownership witnesses (not supported yet)"
@@ -5131,7 +5168,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             Ty::Param(symbol) => {
                 // Native value; duplicate through the frame's retain
                 // witness (value-witness-table passing).
-                let Some((_, retain_witness)) = self.param_witnesses.get(symbol).copied() else {
+                let Some((_, retain_witness)) =
+                    self.param_witnesses.get(&self.canon_rigid(*symbol)).copied()
+                else {
                     return Err(BackendError::unsupported(
                         "a generic value cannot be retained here without its ownership witnesses (not supported yet)"
                             .into(),
@@ -5649,6 +5688,60 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
                 Ok(())
             }
+            PatternKind::Struct {
+                fields,
+                field_names,
+                ..
+            } => {
+                let (heap, cells) = self.struct_cells(pattern, fields, field_names, ty)?;
+                if heap {
+                    // Heap fields are views of the object: binds donate a
+                    // reference on the way in, unmentioned fields stay the
+                    // object's, and the object's own drop releases the
+                    // stored references exactly once.
+                    let consumed = self.consume_operand(value);
+                    for (index, cell) in cells.iter().enumerate() {
+                        if matches!(cell.pattern.kind, PatternKind::Wildcard) {
+                            continue;
+                        }
+                        let slot = self.fresh_local();
+                        self.push(Inst::ObjectGet {
+                            dest: slot,
+                            src: value,
+                            index: u16::try_from(index).unwrap_or_default(),
+                        });
+                        if self.needs_release(&cell.field_ty) {
+                            self.retain_value(
+                                Operand::Local(slot),
+                                &cell.field_ty,
+                                pattern.span,
+                            )?;
+                            self.produce_temp(slot, &cell.field_ty);
+                        }
+                        self.bind_owned_pattern(
+                            &cell.pattern,
+                            Operand::Local(slot),
+                            &cell.field_ty,
+                        )?;
+                    }
+                    if consumed {
+                        self.drop_value(value, ty);
+                    }
+                    return Ok(());
+                }
+                let extracted = self.extract_struct_fields(value, false, cells.len());
+                if self.consume_operand(value) {
+                    for (operand, cell) in extracted.iter().zip(&cells) {
+                        if let Operand::Local(local) = operand {
+                            self.produce_temp(*local, &cell.field_ty);
+                        }
+                    }
+                }
+                for (cell, slot) in cells.iter().zip(extracted) {
+                    self.bind_owned_pattern(&cell.pattern, slot, &cell.field_ty)?;
+                }
+                Ok(())
+            }
             _ => Err(BackendError::unsupported(
                 "destructuring patterns are not supported yet".into(),
                 pattern.span,
@@ -5870,24 +5963,24 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
                 Ok(Operand::Const(Constant::Unit))
             }
-            StmtKind::Continue(value) => {
-                // Inside a handler clause, `continue v` is Resume: the
-                // clause returns v to the perform site (one-shot resume as
-                // return).
-                if self.clause_delimiter.is_some() && self.loop_stack.is_empty() {
-                    let value = match value {
-                        Some(value) => self.compile_expr(value)?,
-                        None => Operand::Const(Constant::Unit),
-                    };
-                    self.emit_frame_return(value);
-                    return Ok(Operand::Const(Constant::Unit));
-                }
-                if value.is_some() {
-                    return Err(BackendError::unsupported(
-                        "`continue` with a value is not supported yet".into(),
+            StmtKind::Resume(value) => {
+                // `'continue v` resumes the enclosing handler's perform:
+                // the clause returns v to the perform site (one-shot resume
+                // as return), from any loop depth.
+                if self.clause_delimiter.is_none() {
+                    return Err(BackendError::new(
+                        "`'continue` outside an effect handler".into(),
                         stmt.span,
                     ));
                 }
+                let value = match value {
+                    Some(value) => self.compile_expr(value)?,
+                    None => Operand::Const(Constant::Unit),
+                };
+                self.emit_frame_return(value);
+                Ok(Operand::Const(Constant::Unit))
+            }
+            StmtKind::Continue => {
                 let Some(frame) = self.loop_stack.last() else {
                     return Err(BackendError::new(
                         "`continue` outside a loop".into(),
@@ -6700,8 +6793,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         // target generic's constraints are a subset of the
                         // rigid one's (typing proved the perform), so its
                         // dictionaries forward from the same frame.
+                        let rigid = self.canon_rigid(*rigid);
                         let Some((drop_witness, retain_witness)) =
-                            self.param_witnesses.get(rigid).copied()
+                            self.param_witnesses.get(&rigid).copied()
                         else {
                             return Err(BackendError::unsupported(
                                 "a generic value cannot cross this boundary without its ownership witnesses (not supported yet)"
@@ -6714,7 +6808,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         for protocol in self.program_builder.rigid_constraints(*generic) {
                             let Some(locals) = self
                                 .param_requirements
-                                .get(&(*rigid, protocol.protocol))
+                                .get(&(rigid, protocol.protocol))
                                 .cloned()
                             else {
                                 return Err(BackendError::unsupported(
@@ -7077,6 +7171,51 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
                 Ok(())
             }
+            PatternKind::Struct {
+                fields,
+                field_names,
+                ..
+            } => {
+                let (heap, cells) = self.struct_cells(pattern, fields, field_names, &ty)?;
+                for (index, cell) in cells.iter().enumerate() {
+                    if pattern_bind_symbols(&cell.pattern).is_empty()
+                        && !self.needs_release(&cell.field_ty)
+                    {
+                        continue;
+                    }
+                    // A heap object's drop releases its stored fields, so
+                    // its projections settle exactly like fields reached
+                    // through a borrow: binds donate, unbound stays the
+                    // object's.
+                    if heap && matches!(cell.pattern.kind, PatternKind::Wildcard) {
+                        continue;
+                    }
+                    let extracted = self.fresh_local();
+                    if heap {
+                        self.push(Inst::ObjectGet {
+                            dest: extracted,
+                            src: scrutinee,
+                            index: u16::try_from(index).unwrap_or_default(),
+                        });
+                    } else {
+                        self.push(Inst::GetField {
+                            dest: extracted,
+                            src: scrutinee,
+                            index: u16::try_from(index).unwrap_or_default(),
+                        });
+                    }
+                    self.settle_owned_match(
+                        &cell.pattern,
+                        Operand::Local(extracted),
+                        &cell.field_ty,
+                        through_borrow || heap,
+                    )?;
+                }
+                if heap && !through_borrow && self.needs_release(&ty) {
+                    self.drop_value(scrutinee, &ty);
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -7115,6 +7254,19 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             PatternKind::Or(alternatives) => alternatives
                 .iter()
                 .any(|alternative| self.pattern_leaves_owned_unbound(alternative, ty)),
+            PatternKind::Struct {
+                fields,
+                field_names,
+                ..
+            } => match self.struct_cells(pattern, fields, field_names, ty) {
+                // A heap object's unbound fields stay the object's; its
+                // own drop releases them, so nothing is left unowned.
+                Ok((true, _)) => false,
+                Ok((false, cells)) => cells
+                    .iter()
+                    .any(|cell| self.pattern_leaves_owned_unbound(&cell.pattern, &cell.field_ty)),
+                Err(_) => self.needs_release(ty),
+            },
             _ => self.needs_release(ty),
         }
     }
@@ -7196,6 +7348,88 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     },
                     bind: None,
                 }))
+            })
+            .collect()
+    }
+
+    /// One cell per stored field of the struct, in declaration order —
+    /// the struct analog of `record_cells`. Fields the pattern leaves to
+    /// `..` become wildcards. Returns the (canonical symbol, heap flag)
+    /// alongside the cells; heap structs project fields as views of the
+    /// object rather than owned slots.
+    fn struct_cells(
+        &self,
+        pattern: &Pattern,
+        fields: &[Pattern],
+        field_names: &[Name],
+        scrutinee_ty: &Ty,
+    ) -> Result<(bool, Vec<RecordCell>), BackendError> {
+        let Ty::Nominal(symbol, args) = strip_borrows(self.resolved(scrutinee_ty)) else {
+            return Err(BackendError::new(
+                "struct pattern on a non-struct scrutinee".into(),
+                pattern.span,
+            ));
+        };
+        let symbol = canonical(symbol, self.program_builder.programs[self.program].module);
+        let Some((def, _)) = self.program_builder.struct_def(symbol) else {
+            return Err(BackendError::new(
+                "struct pattern without a struct definition".into(),
+                pattern.span,
+            ));
+        };
+        let heap = def.heap;
+        let names: Vec<String> = def.fields.keys().cloned().collect();
+        let Some(field_tys) = self.program_builder.field_types(symbol, &args) else {
+            return Err(BackendError::new(
+                "struct pattern without field types".into(),
+                pattern.span,
+            ));
+        };
+        let cells = names
+            .iter()
+            .zip(field_tys)
+            .map(|(name, field_ty)| {
+                let sub = field_names
+                    .iter()
+                    .zip(fields)
+                    .find(|(label, _)| label.name_str() == *name)
+                    .map(|(_, sub)| sub.clone());
+                RecordCell {
+                    field_ty,
+                    pattern: sub.unwrap_or(Pattern {
+                        id: pattern.id,
+                        kind: PatternKind::Wildcard,
+                        span: pattern.span,
+                    }),
+                    bind: None,
+                }
+            })
+            .collect();
+        Ok((heap, cells))
+    }
+
+    /// Project every stored field of a struct value, `GetField` for value
+    /// structs and `ObjectGet` for heap structs (whose results are views
+    /// of the object, not owned slots).
+    fn extract_struct_fields(&mut self, scrutinee: Operand, heap: bool, len: usize) -> Vec<Operand> {
+        (0..len)
+            .map(|index| {
+                let dest = self.fresh_local();
+                let index = u16::try_from(index).unwrap_or_default();
+                if heap {
+                    self.push(Inst::ObjectGet {
+                        dest,
+                        src: scrutinee,
+                        index,
+                    });
+                } else {
+                    self.push(Inst::GetField {
+                        dest,
+                        src: scrutinee,
+                        index,
+                    });
+                }
+                Operand::Local(dest)
             })
             .collect()
     }
@@ -7459,6 +7693,19 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         src: *slot,
                     });
                 }
+                let patterns: Vec<Pattern> =
+                    cells.iter().map(|cell| cell.pattern.clone()).collect();
+                let tys: Vec<Ty> = cells.iter().map(|cell| cell.field_ty.clone()).collect();
+                self.test_all(&patterns, &extracted, &tys, matched, failed)
+            }
+            PatternKind::Struct {
+                fields,
+                field_names,
+                ..
+            } => {
+                let (heap, cells) =
+                    self.struct_cells(pattern, fields, field_names, scrutinee_ty)?;
+                let extracted = self.extract_struct_fields(scrutinee, heap, cells.len());
                 let patterns: Vec<Pattern> =
                     cells.iter().map(|cell| cell.pattern.clone()).collect();
                 let tys: Vec<Ty> = cells.iter().map(|cell| cell.field_ty.clone()).collect();
@@ -7997,6 +8244,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         // conformance dictionary, like `any P` dispatches
                         // through its witness table.
                         if let Ty::Param(rigid) = &self_ty {
+                            let rigid = &self.canon_rigid(*rigid);
                             let crate::label::Label::Named(name) = label else {
                                 return Err(BackendError::unsupported(
                                     "positional members on generic values are not supported yet"
@@ -8382,7 +8630,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // `[drop, retain]` pair plus the constraint protocol's requirement
         // closures, already selected at the perform site.
         if let Ty::Param(rigid) = &payload_ty {
-            let Some((drop_witness, retain_witness)) = self.param_witnesses.get(rigid).copied()
+            let rigid = self.canon_rigid(*rigid);
+            let Some((drop_witness, retain_witness)) = self.param_witnesses.get(&rigid).copied()
             else {
                 return Err(BackendError::unsupported(
                     "a generic value cannot cross this boundary without its ownership witnesses (not supported yet)"
@@ -8392,7 +8641,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             };
             let Some(requirements) = self
                 .param_requirements
-                .get(&(*rigid, protocol.protocol))
+                .get(&(rigid, protocol.protocol))
                 .cloned()
             else {
                 return Err(BackendError::unsupported(
@@ -8570,6 +8819,20 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             ),
             None => (Vec::new(), Vec::new()),
         };
+        // The clause inherits the enclosing frame's rigid witnesses and
+        // dictionaries through its environment, exactly like an ordinary
+        // closure (`capture_env`/`bind_env`): its body can drop, retain,
+        // and dispatch on the enclosing function's generics. The effect's
+        // own generics arrive as perform-site arguments instead.
+        let inherited: Vec<(Symbol, (LocalId, LocalId))> = self
+            .sorted_witnesses()
+            .into_iter()
+            .filter(|(symbol, _)| !sig_generics.contains(symbol))
+            .collect();
+        let mut inherited_env: Vec<Operand> = Vec::new();
+        for (symbol, _) in &inherited {
+            self.push_witness_block(*symbol, &mut inherited_env, body.span)?;
+        }
         let mut fx = FunctionBuilder::new(self.program_builder, 0, self.program);
         fx.subst = self.subst.clone();
         // Clause bodies read last-use liveness like any frame: seed
@@ -8618,6 +8881,44 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             });
             fx.locals.insert(*symbol, local);
         }
+        // Rebind the inherited witness blocks in the same layout
+        // `push_witness_block` appended them (the clause-frame mirror of
+        // `bind_env`'s inherited section).
+        let mut env_index = u16::try_from(1 + captured.len()).unwrap_or_default();
+        for (param_symbol, _) in &inherited {
+            let drop_local = fx.fresh_local();
+            fx.push(Inst::EnvGet {
+                dest: drop_local,
+                index: env_index,
+            });
+            let retain_local = fx.fresh_local();
+            fx.push(Inst::EnvGet {
+                dest: retain_local,
+                index: env_index + 1,
+            });
+            env_index += 2;
+            fx.param_witnesses
+                .insert(*param_symbol, (drop_local, retain_local));
+            for protocol in fx.program_builder.rigid_constraints(*param_symbol) {
+                let count = fx
+                    .program_builder
+                    .protocol_requirements(protocol.protocol)
+                    .map(|requirements| requirements.len())
+                    .unwrap_or(0);
+                let mut locals = Vec::new();
+                for _ in 0..count {
+                    let local = fx.fresh_local();
+                    fx.push(Inst::EnvGet {
+                        dest: local,
+                        index: env_index,
+                    });
+                    env_index += 1;
+                    locals.push(local);
+                }
+                fx.param_requirements
+                    .insert((*param_symbol, protocol.protocol), locals);
+            }
+        }
         let value = fx.compile_block(body)?;
         if !fx.terminated() {
             // A clause that finishes without `continue` discontinues: its
@@ -8642,6 +8943,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 .filter_map(|symbol| self.locals.get(symbol).copied())
                 .map(Operand::Local),
         );
+        env.extend(inherited_env);
         let clause = self.fresh_local();
         self.push(Inst::MakeClosure {
             dest: clause,

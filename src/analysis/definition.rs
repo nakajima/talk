@@ -290,7 +290,7 @@ fn symbol_from_stmt(
             }
             effect_name.symbol().ok()
         }
-        StmtKind::Continue(Some(expr)) => symbol_from_expr(module, expr, byte_offset),
+        StmtKind::Resume(Some(expr)) => symbol_from_expr(module, expr, byte_offset),
         _ => None,
     }
 }

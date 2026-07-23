@@ -94,12 +94,12 @@ fn collect_stmt(s: &typed_ast::Stmt, ids: &mut Vec<NodeID>) {
                 collect_block(b, ids);
             }
         }
-        K::Return(e) | K::Continue(e) => {
+        K::Return(e) | K::Resume(e) => {
             if let Some(e) = e {
                 collect_expr(e, ids);
             }
         }
-        K::Break => {}
+        K::Break | K::Continue => {}
         K::Assignment(l, r) => {
             collect_expr(l, ids);
             collect_expr(r, ids);

@@ -1292,6 +1292,24 @@ impl<'a> Parser<'a> {
             TokenKind::Continue => {
                 let tok = self.push_source_location();
                 self.consume(TokenKind::Continue)?;
+                if !self.at_implicit_statement_end() {
+                    return Err(ParserError::UnexpectedToken {
+                        expected:
+                            "end of statement (`continue` takes no value; use `'continue` to resume an effect handler)"
+                                .into(),
+                        actual: format!("{:?}", self.current),
+                        token: self.current.clone(),
+                    });
+                }
+                self.save_meta(tok, |id, span| Stmt {
+                    id,
+                    span,
+                    kind: StmtKind::Continue,
+                })
+            }
+            TokenKind::EffectName if self.lexeme(current) == "continue" => {
+                let tok = self.push_source_location();
+                self.consume(TokenKind::EffectName)?;
                 let expr = if self.at_implicit_statement_end() {
                     None
                 } else {
@@ -1300,7 +1318,7 @@ impl<'a> Parser<'a> {
                 self.save_meta(tok, |id, span| Stmt {
                     id,
                     span,
-                    kind: StmtKind::Continue(expr),
+                    kind: StmtKind::Resume(expr),
                 })
             }
             TokenKind::Break => {
@@ -2370,6 +2388,9 @@ impl<'a> Parser<'a> {
                         fields,
                         field_labels,
                     }
+                } else if self.peek_is(TokenKind::LeftBrace) {
+                    self.consume(TokenKind::LeftBrace)?;
+                    self.parse_struct_pattern(name.into())?
                 } else {
                     PatternKind::Bind(name.into())
                 }
@@ -2432,6 +2453,59 @@ impl<'a> Parser<'a> {
         }
 
         self.save_meta(tok, |id, span| Pattern { id, span, kind })
+    }
+
+    /// Fields of a `Name { field, field: pattern, .. }` struct pattern; the
+    /// opening brace is already consumed.
+    fn parse_struct_pattern(&mut self, struct_name: Name) -> Result<PatternKind, ParserError> {
+        self.skip_newlines();
+        let mut fields: Vec<Node> = vec![];
+        let mut field_names: Vec<Name> = vec![];
+        let mut rest = false;
+        while !self.did_match(TokenKind::RightBrace)? {
+            if self.peek_is(TokenKind::DotDot) {
+                self.consume(TokenKind::DotDot)?;
+                // "rest" must be the last item
+                if !self.peek_is(TokenKind::RightBrace) {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: TokenKind::RightBrace.into(),
+                        actual: format!(
+                            "got {:?}. Rest pattern must be at the end of struct pattern",
+                            self.current
+                        ),
+                        token: self.current.clone(),
+                    });
+                }
+                rest = true;
+                self.consume(TokenKind::RightBrace)?;
+                break;
+            }
+
+            let tok = self.push_source_location();
+            let (name, _name_span) = self.identifier()?;
+            let pattern = if self.peek_is(TokenKind::Colon) {
+                self.consume(TokenKind::Colon)?;
+                self.parse_pattern()?
+            } else {
+                // Shorthand `x` binds the field to a same-named local.
+                self.save_meta(tok, |id, span| Pattern {
+                    id,
+                    span,
+                    kind: PatternKind::Bind(Name::Raw(name.clone())),
+                })?
+            };
+            field_names.push(Name::Raw(name));
+            fields.push(Node::Pattern(pattern));
+            self.consume(TokenKind::Comma).ok();
+            self.skip_newlines();
+        }
+
+        Ok(PatternKind::Struct {
+            struct_name: Some(struct_name),
+            fields,
+            field_names,
+            rest,
+        })
     }
 
     fn parse_record_pattern(&mut self) -> Result<PatternKind, ParserError> {
@@ -4101,7 +4175,7 @@ impl<'a> Parser<'a> {
         match &stmt.kind {
             StmtKind::Expr(expr)
             | StmtKind::Return(Some(expr))
-            | StmtKind::Continue(Some(expr)) => Self::max_positional_block_arg_in_expr(expr),
+            | StmtKind::Resume(Some(expr)) => Self::max_positional_block_arg_in_expr(expr),
             StmtKind::If(condition, then_block, else_block) => [
                 Self::max_positional_block_arg_in_expr(condition),
                 Self::max_positional_block_arg(then_block),
@@ -4134,7 +4208,10 @@ impl<'a> Parser<'a> {
             .flatten()
             .max(),
             StmtKind::Handling { body, .. } => Self::max_positional_block_arg(body),
-            StmtKind::Return(None) | StmtKind::Continue(None) | StmtKind::Break => None,
+            StmtKind::Return(None)
+            | StmtKind::Resume(None)
+            | StmtKind::Continue
+            | StmtKind::Break => None,
         }
     }
 
@@ -5092,6 +5169,10 @@ fn pattern_contains_or(pattern: &Pattern) -> bool {
             RecordFieldPatternKind::Equals { value, .. } => pattern_contains_or(value),
             _ => false,
         }),
+        PatternKind::Struct { fields, .. } => fields.iter().any(|field| match field {
+            Node::Pattern(p) => pattern_contains_or(p),
+            _ => false,
+        }),
         _ => false,
     }
 }
@@ -5126,13 +5207,19 @@ fn collect_pattern_binder_names_inner(pattern: &Pattern, names: &mut Vec<Name>) 
                 }
             }
         }
+        PatternKind::Struct { fields, .. } => {
+            for field in fields {
+                if let Node::Pattern(p) = field {
+                    collect_pattern_binder_names_inner(p, names);
+                }
+            }
+        }
         PatternKind::LiteralInt(_)
         | PatternKind::LiteralFloat(_)
         | PatternKind::LiteralCharacter(_)
         | PatternKind::LiteralString(_)
         | PatternKind::LiteralTrue
         | PatternKind::LiteralFalse
-        | PatternKind::Wildcard
-        | PatternKind::Struct { .. } => {}
+        | PatternKind::Wildcard => {}
     }
 }

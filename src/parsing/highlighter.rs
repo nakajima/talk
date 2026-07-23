@@ -469,7 +469,7 @@ impl<'a> Higlighter<'a> {
                 StmtKind::Expr(expr) => {
                     result.extend(self.tokens_from_expr(expr, ast));
                 }
-                StmtKind::Continue(expr) => {
+                StmtKind::Resume(expr) => {
                     if let Some(expr) = expr {
                         result.extend(self.tokens_from_expr(expr, ast))
                     }
@@ -489,6 +489,7 @@ impl<'a> Higlighter<'a> {
                 StmtKind::Break => {
                     result.push(self.make_span(Kind::KEYWORD, stmt.span));
                 }
+                StmtKind::Continue => {}
                 StmtKind::Assignment(box lhs, box rhs) => {
                     result.extend(self.tokens_from_expr(lhs, ast));
                     result.extend(self.tokens_from_expr(rhs, ast));
@@ -646,7 +647,9 @@ impl<'a> Higlighter<'a> {
                         }
                     }
                 }
-                PatternKind::Struct { .. } => (),
+                PatternKind::Struct { fields, .. } => {
+                    result.extend(self.tokens_from_exprs(fields, ast));
+                }
                 _ => (),
             },
             Node::MatchArm(arm) => {
