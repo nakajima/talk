@@ -2925,6 +2925,14 @@ pub mod tests {
     }
 
     #[test]
+    fn leading_dot_borrow_payload_defers_associated_type_projection() {
+        let t = check(
+            "struct Node {\n\tlet value: Int\n}\nstruct Ast {\n\tlet roots: [Node]\n}\nenum ParseError {}\nfunc parse() -> Result<&Node, ParseError> {\n\tlet ast = Ast(roots: [])\n\tlet first = ast.roots[0]\n\t.ok(first)\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
     fn leading_dot_resolves_in_inference_position() {
         // The callee's parameter type is a fresh variable when the argument
         // is checked, so the leading dot cannot resolve eagerly — the enum
@@ -3947,6 +3955,46 @@ pub mod tests {
             errors.iter().any(|error| error.contains("unreachable")),
             "expected an unreachable-code error, got {errors:?}"
         );
+    }
+
+    #[test]
+    fn unreachable_is_a_never_valued_panic_effect() {
+        let t = Driver::new(
+            vec![Source::from("func impossible() -> Int {\n\tunreachable\n}")],
+            DriverConfig::new("UnreachableEffect"),
+        )
+        .parse()
+        .expect("parse failed")
+        .resolve_names()
+        .expect("name resolution failed")
+        .type_check();
+        assert_clean(&t);
+        let types = t.phase.program.types();
+        let resolved = t.phase.program.resolved_names();
+        let impossible = resolved
+            .symbol_names
+            .iter()
+            .find_map(|(symbol, name)| (name == "impossible").then_some(*symbol))
+            .expect("impossible symbol");
+        let _names = crate::name_resolution::symbol::set_symbol_names(types.display_names.clone());
+        assert_eq!(types.schemes[&impossible].render(), "() -> Int ! <'panic>");
+    }
+
+    #[test]
+    fn panic_can_be_handled_as_an_abortive_effect() {
+        let t = Driver::new(
+            vec![Source::from(
+                "func recovered() -> Int {\n\t@handle 'panic { message in 42 }\n\tunreachable\n}",
+            )],
+            DriverConfig::new("HandledPanic"),
+        )
+        .parse()
+        .expect("parse failed")
+        .resolve_names()
+        .expect("name resolution failed")
+        .type_check();
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "recovered"), "() -> Int");
     }
 
     #[test]
@@ -6126,6 +6174,42 @@ struct Pair {
     }
 
     #[test]
+    fn force_unwrap_types_as_first_payload_and_performs_panic() {
+        let t = super::tests::check(
+            "// no-core
+             effect 'panic(message) -> Never
+             enum Outcome<Value, Failure> {
+                 case success(Value)
+                 case failure(Failure)
+             }
+             func force(consume outcome: Outcome<Int, Bool>) -> Int {
+                 outcome!
+             }",
+        );
+        super::tests::assert_clean(&t);
+        assert_eq!(
+            super::tests::ty_of(&t, "force"),
+            "(Outcome<Int, Bool>) -> Int ! <'panic>"
+        );
+    }
+
+    #[test]
+    fn force_unwrap_uses_the_first_variants_payload_shape() {
+        let t = super::tests::check(
+            "// no-core
+             effect 'panic(message) -> Never
+             enum PairOrError<A, B, E> {
+                 case pair(A, B)
+                 case error(E)
+             }
+             func force(consume value: PairOrError<Int, Bool, Int>) -> (Int, Bool) {
+                 value!
+             }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
     fn question_mark_rejects_enums_without_exactly_two_variants() {
         let t = super::tests::check(
             "// no-core
@@ -6139,6 +6223,25 @@ struct Pair {
             errors
                 .iter()
                 .any(|error| error.contains("propagation requires exactly two")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn force_unwrap_rejects_enums_without_exactly_two_variants() {
+        let t = super::tests::check(
+            "// no-core
+             effect 'panic(message) -> Never
+             enum Choice<T> { case first(T) case second case third }
+             func bad(consume choice: Choice<Int>) -> Int {
+                 choice!
+             }",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("force unwrap requires exactly two")),
             "{errors:?}"
         );
     }

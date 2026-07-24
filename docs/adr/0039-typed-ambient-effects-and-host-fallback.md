@@ -44,11 +44,13 @@ effect anywhere**. The host's behavior is ordinary Talk source in
   inline-IR instruction `io <op> <a> <b> <c>` (op is an immediate indexing
   the runtime's operation table; unused slots pass zero). Adding a request
   case forces an arm here via exhaustiveness.
-- `_with_host(consume body: () '[io, alloc, async] -> ()) -> ()` — installs
-  the host fallbacks as three ordinary `@handle` statements (io delegates
-  to `_io_host`; alloc and async resume immediately — allocation
-  bookkeeping is carried by the `'unsafe` intrinsics, and the reference
-  host has no scheduler), then calls the program.
+- `_with_host(consume body: () '[io, alloc, async, panic] -> ()) -> ()` — installs
+  the host fallbacks as ordinary `@handle` statements. IO delegates to
+  `_io_host`; alloc and async resume immediately because allocation
+  bookkeeping is carried by the `'unsafe` intrinsics and the reference host
+  has no scheduler. The public abortive `'panic(message: String) -> Never`
+  effect reports to stderr and terminates through the host adapter. The
+  wrapper then calls the program.
 
 The compiler knows exactly one well-known symbol: `_with_host`.
 
@@ -58,7 +60,10 @@ The compiler knows exactly one well-known symbol: `_with_host`.
   Programs without core run directly and have no ambient effects.
 - **Typing** derives the ambient entry-row base from `_with_host`'s scheme:
   the effect row its callback parameter declares. Which effects are ambient
-  is stated once, in core source, as an ordinary function signature.
+  is stated once, in core source, as an ordinary function signature. The
+  `unreachable` surface expression desugars before resolution to an ordinary
+  `'panic("reached unreachable")` perform, so it needs no compiler-known
+  effect identity.
 - **MIR** treats every declared effect identically: performs use the
   capability path, closures capture capabilities for every declared effect
   in their row (a handler always exists at any legal capture point), and
@@ -73,10 +78,11 @@ nearest user handler -> next outer user handler -> core's fallback clause
 ```
 
 with delegation, substitution, resume, discontinue, unwind cleanup, and
-function-value capture all the existing mechanisms. The fallbacks always
-resume and never discontinue. They die with the wrapper frame like any
-handler; global teardown runs outside them, which is sound because deinit
-hooks are statically barred from performing effects.
+function-value capture all the existing mechanisms. The resumable fallbacks
+always resume. The panic fallback is abortive and terminates the process
+instead. They die with the wrapper frame like any handler; global teardown
+runs outside them, which is sound because deinit hooks are statically barred
+from performing effects.
 
 ## Interception safety for raw `'io`
 

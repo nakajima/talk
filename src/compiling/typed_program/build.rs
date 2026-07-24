@@ -229,12 +229,12 @@ impl TypedTreeBuilder<'_> {
             expr::ExprKind::Tuple(items) if items.len() == 1 => {
                 return self.graft(e, &items[0]);
             }
-            expr::ExprKind::Propagate(_) => {
+            expr::ExprKind::Propagate(_) | expr::ExprKind::ForceUnwrap(..) => {
                 let plan = self
                     .types
                     .propagation_plans
                     .get(&e.id)
-                    .unwrap_or_else(|| panic!("checked propagation {:?} has no plan", e.id));
+                    .unwrap_or_else(|| panic!("checked postfix expression {:?} has no plan", e.id));
                 return self.graft(e, &plan.lowered);
             }
             // Variant construction: the checker resolves `.some(x)` at the
@@ -373,6 +373,9 @@ impl TypedTreeBuilder<'_> {
 
     fn expr_kind(&self, e: &expr::Expr) -> typed_ast::ExprKind {
         match &e.kind {
+            expr::ExprKind::Unreachable => {
+                unreachable!("unreachable expressions are desugared to the panic effect")
+            }
             expr::ExprKind::MacroCall { .. } => {
                 unreachable!("macro calls are expanded before typed-program build")
             }
@@ -512,8 +515,8 @@ impl TypedTreeBuilder<'_> {
                     }
                 }
             }
-            expr::ExprKind::Propagate(..) => {
-                unreachable!("Propagate is elaborated in expr(); expr_kind never sees it")
+            expr::ExprKind::Propagate(..) | expr::ExprKind::ForceUnwrap(..) => {
+                unreachable!("postfix expressions are elaborated in expr(); expr_kind never sees them")
             }
             expr::ExprKind::Unary(..) | expr::ExprKind::Binary(..) => {
                 unreachable!(

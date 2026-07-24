@@ -38,9 +38,9 @@ pub struct ForPlan {
     pub body_ty: Ty,
 }
 
-/// Checked expansion of one postfix `?`. The checker builds and checks the
-/// ordinary match/return tree once; typed-tree construction substitutes it for
-/// the surface node so downstream phases need no propagation-specific form.
+/// Checked expansion of postfix `?` or `!`. The checker builds and checks the
+/// ordinary two-arm match once; typed-tree construction substitutes it for the
+/// surface node so downstream phases need no postfix-specific form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PropagationPlan {
     pub lowered: crate::node_kinds::expr::Expr,
@@ -258,7 +258,7 @@ pub struct TypeOutput {
     /// Consumed only by the typed-tree build, which elaborates the loop
     /// into ordinary nodes at the plan's ids.
     pub for_plans: FxHashMap<NodeID, ForPlan>,
-    /// Checked match/return expansions for postfix early propagation.
+    /// Checked two-variant match expansions for postfix `?` and `!`.
     pub propagation_plans: FxHashMap<NodeID, PropagationPlan>,
     /// Per-file low-water mark of the checker's descending id mint: the
     /// typed-tree build mints its elaborated-node ids below this.

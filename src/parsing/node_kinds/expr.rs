@@ -49,11 +49,16 @@ pub enum ExprKind {
     LiteralFalse,
     LiteralString(#[drive(skip)] String),
     LiteralCharacter(#[drive(skip)] String),
+    Unreachable,
 
     Unary(#[drive(skip)] TokenKind, Box<Expr>),
     /// Postfix early propagation. Typing elaborates this into a two-arm
     /// enum match: the first variant continues and the second returns.
     Propagate(Box<Expr>),
+    /// Postfix force unwrap. The hidden failure expression starts as
+    /// `unreachable`, then follows its ordinary desugaring to `'panic`.
+    /// Typing uses it as the second arm of the same two-variant elaboration.
+    ForceUnwrap(Box<Expr>, Box<Expr>),
     Binary(Box<Expr>, #[drive(skip)] TokenKind, Box<Expr>),
     Subscript(Box<Expr>, Box<Expr>),
     Tuple(Vec<Expr>),
@@ -121,12 +126,14 @@ impl ExprKind {
             | ExprKind::Call { .. }
             | ExprKind::Unary(..)
             | ExprKind::Propagate(..)
+            | ExprKind::ForceUnwrap(..)
             | ExprKind::Binary(..)
             | ExprKind::Subscript(..)
             | ExprKind::Member(..)
             | ExprKind::As(..)
             | ExprKind::InlineIR(..)
-            | ExprKind::CallEffect { .. } => false,
+            | ExprKind::CallEffect { .. }
+            | ExprKind::Unreachable => false,
 
             ExprKind::Func(..) => true,
             ExprKind::LiteralArray(items) => items.iter().all(|e| e.kind.is_syntactic_value()),

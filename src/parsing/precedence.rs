@@ -120,6 +120,12 @@ impl Precedence {
                 precedence: Precedence::None,
             },
 
+            TokenKind::Unreachable => ParseHandler {
+                prefix: Some(Parser::unreachable_expr),
+                infix: None,
+                precedence: Precedence::Primary,
+            },
+
             TokenKind::Enum => ParseHandler {
                 prefix: None,
                 infix: None,
@@ -297,8 +303,8 @@ impl Precedence {
             TokenKind::Equals => ParseHandler::NONE,
             TokenKind::Bang => ParseHandler {
                 prefix: Some(Parser::unary),
-                infix: None,
-                precedence: Precedence::Factor,
+                infix: Some(Parser::force_unwrap),
+                precedence: Precedence::Call,
             },
 
             TokenKind::Tilde => ParseHandler {

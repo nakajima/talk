@@ -3696,6 +3696,47 @@ fn run_enforces_strict_linear_consumption() {
 }
 
 #[test]
+fn postfix_bang_force_unwraps_optional_and_result() {
+    assert_runs(
+        b"let optional: Int? = .some(41)\nlet result: Result<Int, String> = .ok(42)\nprint(optional!)\nprint(result!)\n",
+        &[],
+        b"41\n42\n",
+    );
+}
+
+#[test]
+fn postfix_bang_panics_on_the_second_variant() {
+    let output = run_source(b"let value: Int? = .none\nvalue!\n", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("reached unreachable"), "{stderr}");
+
+    assert_runs(
+        b"func recover() -> Int {\n\t@handle 'panic { message in 7 }\n\tlet value: Result<Int, String> = .error(\"bad\")\n\tvalue!\n}\nprint(recover())\n",
+        &[],
+        b"7\n",
+    );
+}
+
+#[test]
+fn run_can_handle_an_unreachable_panic() {
+    assert_runs(
+        b"func recover() -> Int {\n\t@handle 'panic { message in 42 }\n\tunreachable\n}\nprint(recover())\n",
+        &[],
+        b"42\n",
+    );
+}
+
+#[test]
+fn run_reports_an_unhandled_unreachable_panic() {
+    let output = run_source(b"unreachable\n", &[]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("reached unreachable"), "{stderr}");
+}
+
+#[test]
 fn run_reports_a_clean_division_by_zero_trap() {
     let output = run_source(b"let zero = 0\n1 / zero\n", &[]);
     assert!(!output.status.success());

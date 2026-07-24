@@ -248,6 +248,9 @@ pub enum TypeError {
     InvalidEarlyPropagation {
         reason: String,
     },
+    InvalidForceUnwrap {
+        reason: String,
+    },
     RecursiveConformance {
         constraint: String,
     },
@@ -324,6 +327,7 @@ impl TypeError {
             Self::DeinitEffectRow { .. } => "type.deinit-effect-row",
             Self::UnresolvedVariant { .. } => "type.unresolved-variant",
             Self::InvalidEarlyPropagation { .. } => "type.invalid-early-propagation",
+            Self::InvalidForceUnwrap { .. } => "type.invalid-force-unwrap",
             Self::RecursiveConformance { .. } => "type.recursive-conformance",
             Self::SolverOverflow { .. } => "type.solver-overflow",
             Self::Unsupported(_) => "type.unsupported",
@@ -733,6 +737,9 @@ impl Display for TypeError {
             }
             TypeError::InvalidEarlyPropagation { reason } => {
                 write!(f, "Cannot use '?' here: {reason}")
+            }
+            TypeError::InvalidForceUnwrap { reason } => {
+                write!(f, "Cannot use postfix '!' here: {reason}")
             }
             TypeError::RecursiveConformance { constraint } => {
                 write!(

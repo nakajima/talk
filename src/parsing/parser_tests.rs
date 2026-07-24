@@ -197,6 +197,66 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_force_unwrap_expr() {
+        let parsed = parse("value!");
+
+        assert!(matches!(
+            parsed.roots[0],
+            Node::Stmt(Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::ForceUnwrap(box Expr {
+                        kind: ExprKind::Variable(_),
+                        ..
+                    }, box Expr {
+                        kind: ExprKind::Unreachable,
+                        ..
+                    }),
+                    ..
+                }),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn prefix_not_contains_postfix_force_unwrap() {
+        let parsed = parse("!value!");
+
+        assert!(matches!(
+            parsed.roots[0],
+            Node::Stmt(Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::Unary(
+                        TokenKind::Bang,
+                        box Expr {
+                            kind: ExprKind::ForceUnwrap(..),
+                            ..
+                        }
+                    ),
+                    ..
+                }),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_unreachable_expr() {
+        let parsed = parse("unreachable");
+
+        assert!(matches!(
+            parsed.roots[0],
+            Node::Stmt(Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::Unreachable,
+                    ..
+                }),
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn parses_unsafe_block_expr() {
         let parsed = parse("@unsafe { 123 }");
 

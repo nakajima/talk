@@ -11,6 +11,7 @@ pub mod lower_if_to_match;
 pub mod lower_operators;
 pub mod lower_subscripts;
 pub mod lower_trailing_blocks;
+pub mod lower_unreachable;
 pub mod prepend_self_to_methods;
 pub mod resolve_param_modes;
 
@@ -20,6 +21,7 @@ use lower_if_to_match::LowerIfToMatch;
 use lower_operators::LowerOperators;
 use lower_subscripts::LowerSubscripts;
 use lower_trailing_blocks::LowerTrailingBlocks;
+use lower_unreachable::LowerUnreachable;
 use prepend_self_to_methods::PrependSelfToMethods;
 use resolve_param_modes::ResolveParamModes;
 
@@ -33,6 +35,7 @@ pub fn desugar(asts: &mut [AST<Parsed>]) {
         // any pass synthesizes parameters of its own (synthesized params
         // keep `mode: None` = lowered as written).
         ResolveParamModes::run(ast);
+        LowerUnreachable::run(ast);
         LowerFuncsToLets::run(ast);
         LowerSubscripts::run(ast);
         LowerOperators::run(ast);

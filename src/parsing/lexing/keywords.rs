@@ -33,6 +33,7 @@ pub(super) fn handle(string: &str) -> TokenKind {
         "handling" => Handling,
         "in" => In,
         "continue" => Continue,
+        "unreachable" => Unreachable,
         "mut" => Mut,
         "consuming" => Consuming,
         "for" => For,

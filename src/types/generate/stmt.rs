@@ -458,7 +458,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             ExprKind::Unary(_, inner) | ExprKind::Propagate(inner) | ExprKind::As(inner, _) => {
                 Self::expr_breaks_current_loop(inner)
             }
-            ExprKind::Binary(lhs, _, rhs) | ExprKind::Subscript(lhs, rhs) => {
+            ExprKind::Binary(lhs, _, rhs)
+            | ExprKind::Subscript(lhs, rhs)
+            | ExprKind::ForceUnwrap(lhs, rhs) => {
                 Self::expr_breaks_current_loop(lhs) || Self::expr_breaks_current_loop(rhs)
             }
             ExprKind::Block(block) | ExprKind::Unsafe(block) => {
@@ -507,6 +509,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             | ExprKind::LiteralFalse
             | ExprKind::LiteralString(_)
             | ExprKind::LiteralCharacter(_)
+            | ExprKind::Unreachable
             | ExprKind::Variable(_)
             | ExprKind::Constructor(_) => false,
         }
@@ -587,7 +590,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             ExprKind::Unary(_, inner) | ExprKind::As(inner, _) => {
                 Self::expr_exits_mut_iteration(inner, loop_depth)
             }
-            ExprKind::Binary(lhs, _, rhs) | ExprKind::Subscript(lhs, rhs) => {
+            ExprKind::Binary(lhs, _, rhs)
+            | ExprKind::Subscript(lhs, rhs)
+            | ExprKind::ForceUnwrap(lhs, rhs) => {
                 Self::expr_exits_mut_iteration(lhs, loop_depth)
                     || Self::expr_exits_mut_iteration(rhs, loop_depth)
             }
@@ -637,6 +642,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             | ExprKind::LiteralFalse
             | ExprKind::LiteralString(_)
             | ExprKind::LiteralCharacter(_)
+            | ExprKind::Unreachable
             | ExprKind::Variable(_)
             | ExprKind::Constructor(_) => false,
         }

@@ -2770,7 +2770,11 @@ impl<'a> Parser<'a> {
     pub(super) fn unary(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang, TokenKind::Tilde])?;
-        let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
+        let current_precedence = if op.kind == TokenKind::Bang {
+            Precedence::Factor
+        } else {
+            Precedence::handler(&Some(op.clone()))?.precedence
+        };
         let rhs = self.expr_with_precedence(current_precedence)?.into_expr()?;
 
         Ok(self
@@ -2784,6 +2788,27 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::QuestionMark)?;
         Ok(self
             .add_expr(ExprKind::Propagate(Box::new(lhs)), tok)?
+            .into())
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub fn force_unwrap(&mut self, _can_assign: bool, lhs: Expr) -> Result<Node, ParserError> {
+        let tok = self.push_lhs_location(lhs.id);
+        let bang = self.consume(TokenKind::Bang)?;
+        let failure = Expr {
+            id: self.next_id(),
+            kind: ExprKind::Unreachable,
+            span: Span {
+                file_id: self.file_id,
+                start: bang.start,
+                end: bang.end,
+            },
+        };
+        Ok(self
+            .add_expr(
+                ExprKind::ForceUnwrap(Box::new(lhs), Box::new(failure)),
+                tok,
+            )?
             .into())
     }
 
@@ -2833,6 +2858,13 @@ impl<'a> Parser<'a> {
         };
 
         self.save_meta(tok, |id, span| Node::Expr(Expr { id, span, kind }))
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub(crate) fn unreachable_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Unreachable)?;
+        Ok(self.add_expr(ExprKind::Unreachable, tok)?.into())
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -4239,7 +4271,9 @@ impl<'a> Parser<'a> {
             ExprKind::Unary(_, inner) | ExprKind::Propagate(inner) | ExprKind::As(inner, _) => {
                 Self::max_positional_block_arg_in_expr(inner)
             }
-            ExprKind::Binary(lhs, _, rhs) | ExprKind::Subscript(lhs, rhs) => [
+            ExprKind::Binary(lhs, _, rhs)
+            | ExprKind::Subscript(lhs, rhs)
+            | ExprKind::ForceUnwrap(lhs, rhs) => [
                 Self::max_positional_block_arg_in_expr(lhs),
                 Self::max_positional_block_arg_in_expr(rhs),
             ]
@@ -4299,6 +4333,7 @@ impl<'a> Parser<'a> {
             | ExprKind::LiteralFalse
             | ExprKind::LiteralString(_)
             | ExprKind::LiteralCharacter(_)
+            | ExprKind::Unreachable
             | ExprKind::Constructor(_) => None,
         }
     }

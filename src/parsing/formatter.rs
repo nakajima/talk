@@ -530,8 +530,10 @@ impl<'a> Formatter<'a> {
             ExprKind::LiteralFloat(val) => text(val),
             ExprKind::LiteralTrue => text("true"),
             ExprKind::LiteralFalse => text("false"),
+            ExprKind::Unreachable => text("unreachable"),
             ExprKind::Unary(op, rhs) => self.format_unary(op, rhs),
             ExprKind::Propagate(inner) => concat(self.format_expr(inner), text("?")),
+            ExprKind::ForceUnwrap(inner, _) => concat(self.format_expr(inner), text("!")),
             ExprKind::Binary(lhs, op, rhs) => self.format_binary(lhs, op, rhs),
             ExprKind::Subscript(value, index) => concat(
                 self.format_expr(value),
@@ -3037,6 +3039,20 @@ mod formatter_tests {
             format_with_comments(&ast, width, vec![], Some(input))
         };
         adjust_trailing_newlines(input, formatted)
+    }
+
+    #[test]
+    fn formats_postfix_force_unwrap() {
+        assert_eq!(format_code("let x=value !", 80), "let x = value!");
+        assert_eq!(format_code("!value!", 80), "!value!");
+    }
+
+    #[test]
+    fn formats_unreachable_as_a_keyword_expression() {
+        assert_eq!(
+            format_code("func f()->Int{unreachable}", 80),
+            "func f() -> Int { unreachable }"
+        );
     }
 
     #[test]

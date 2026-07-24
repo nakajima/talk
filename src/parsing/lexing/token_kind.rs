@@ -23,6 +23,7 @@ pub enum TokenKind {
     For,
     Return,
     Continue,
+    Unreachable,
 
     True,
     False,
@@ -120,6 +121,7 @@ impl TokenKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             TokenKind::Continue => "continue",
+            TokenKind::Unreachable => "unreachable",
             TokenKind::EffectName => "'<effect>",
             TokenKind::Dollar => "$",
             TokenKind::Hash => "#",

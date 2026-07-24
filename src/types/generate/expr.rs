@@ -1,6 +1,12 @@
 use super::*;
 use crate::token_kind::TokenKind;
 
+enum BinaryEnumArm<'a> {
+    Value,
+    Return,
+    Failure(&'a Expr),
+}
+
 impl<'s, 'a> BodyChecker<'s, 'a> {
     // ----- Expressions -------------------------------------------------
 
@@ -312,11 +318,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             }
             Ty::Borrow(..) => self.emit_eq(expected, found, node, reason),
             // An unresolved found (a call result whose member is still
-            // being solved) defers under EVERY reason: eagerly equating
-            // the peeled inner would rigidly bind the result var owned,
-            // then conflict with the member scheme's borrow-typed return
-            // once it resolves (ADR 0021's first-class borrow results).
-            Ty::Var(_) => {
+            // being solved, or an associated-type projection) defers under
+            // EVERY reason: eagerly equating the peeled inner would rigidly
+            // bind the result owned, then conflict with the member scheme's
+            // borrow-typed return once it resolves (ADR 0021's first-class
+            // borrow results).
+            Ty::Var(_) | Ty::Proj(..) => {
                 self.wanteds.push(Constraint::ApplyBorrow {
                     expected_perm: expected_kind,
                     expected_inner,
@@ -720,7 +727,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         enum_name: &str,
         variant_name: &str,
         variant: &Variant,
-        returns: bool,
+        action: BinaryEnumArm<'_>,
     ) -> MatchArm {
         let binders =
             self.propagation_binders(source, variant_name, variant.argument_types().len());
@@ -739,26 +746,26 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             },
             span: source.span,
         };
-        let value = if returns {
-            self.propagation_constructor(
-                source,
-                enum_symbol,
-                enum_name,
-                variant_name,
-                variant,
-                &binders,
-            )
-        } else {
-            self.propagation_value(source, &binders)
-        };
-        let body_node = if returns {
-            Node::Stmt(Stmt {
-                id: self.artifacts.synthetic_id(source.id.0),
-                kind: StmtKind::Return(Some(value)),
-                span: source.span,
-            })
-        } else {
-            Node::Expr(value)
+        let body_node = match action {
+            BinaryEnumArm::Value => {
+                Node::Expr(self.propagation_value(source, &binders))
+            }
+            BinaryEnumArm::Return => {
+                let value = self.propagation_constructor(
+                    source,
+                    enum_symbol,
+                    enum_name,
+                    variant_name,
+                    variant,
+                    &binders,
+                );
+                Node::Stmt(Stmt {
+                    id: self.artifacts.synthetic_id(source.id.0),
+                    kind: StmtKind::Return(Some(value)),
+                    span: source.span,
+                })
+            }
+            BinaryEnumArm::Failure(failure) => Node::Expr(failure.clone()),
         };
         MatchArm {
             id: self.artifacts.synthetic_id(source.id.0),
@@ -773,15 +780,49 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
     }
 
+    fn invalid_binary_enum_postfix(
+        &mut self,
+        node: NodeID,
+        force_unwrap: bool,
+        reason: impl Into<String>,
+    ) {
+        let reason = reason.into();
+        let error = if force_unwrap {
+            TypeError::InvalidForceUnwrap { reason }
+        } else {
+            TypeError::InvalidEarlyPropagation { reason }
+        };
+        self.diagnostics.errors.push((error, node));
+    }
+
     fn infer_propagation(&mut self, expr: &Expr, source: &Expr, ctx: &Ctx) -> Ty {
+        self.infer_binary_enum_postfix(expr, source, None, ctx)
+    }
+
+    fn infer_force_unwrap(
+        &mut self,
+        expr: &Expr,
+        source: &Expr,
+        failure: &Expr,
+        ctx: &Ctx,
+    ) -> Ty {
+        self.infer_binary_enum_postfix(expr, source, Some(failure), ctx)
+    }
+
+    fn infer_binary_enum_postfix(
+        &mut self,
+        expr: &Expr,
+        source: &Expr,
+        failure: Option<&Expr>,
+        ctx: &Ctx,
+    ) -> Ty {
         let source_ty = self.infer_expr(source, ctx);
-        if !ctx.has_return_boundary {
-            self.diagnostics.errors.push((
-                TypeError::InvalidEarlyPropagation {
-                    reason: "there is no enclosing function return boundary".into(),
-                },
+        if failure.is_none() && !ctx.has_return_boundary {
+            self.invalid_binary_enum_postfix(
                 expr.id,
-            ));
+                false,
+                "there is no enclosing function return boundary",
+            );
             return Ty::Error;
         }
 
@@ -794,46 +835,52 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             _ => None,
         };
         let source_symbol = nominal_symbol(self.store.shallow(&source_ty));
-        let return_symbol = nominal_symbol(self.store.shallow(&ctx.ret));
+        let return_symbol = failure
+            .is_none()
+            .then(|| nominal_symbol(self.store.shallow(&ctx.ret)))
+            .flatten();
         let enum_symbol = match (source_symbol, return_symbol) {
             (Some(source), Some(ret)) if source != ret => {
-                self.diagnostics.errors.push((
-                    TypeError::InvalidEarlyPropagation {
-                        reason: format!(
-                            "the operand and enclosing return type use different enums ({} and {})",
-                            self.store.render(&source_ty),
-                            self.store.render(&ctx.ret)
-                        ),
-                    },
+                let source = self.store.render(&source_ty);
+                let ret = self.store.render(&ctx.ret);
+                self.invalid_binary_enum_postfix(
                     expr.id,
-                ));
+                    false,
+                    format!(
+                        "the operand and enclosing return type use different enums ({source} and {ret})"
+                    ),
+                );
                 return Ty::Error;
             }
             (Some(symbol), _) | (_, Some(symbol)) => symbol,
             _ => {
-                self.diagnostics.errors.push((
-                    TypeError::InvalidEarlyPropagation {
-                        reason: "the operand or enclosing return type must identify an enum".into(),
-                    },
-                    expr.id,
-                ));
+                let reason = if failure.is_some() {
+                    "the operand must identify an enum"
+                } else {
+                    "the operand or enclosing return type must identify an enum"
+                };
+                self.invalid_binary_enum_postfix(expr.id, failure.is_some(), reason);
                 return Ty::Error;
             }
         };
         let Some(info) = self.catalog.enums.get(&enum_symbol).cloned() else {
-            unreachable!("the selected propagation symbol was checked as an enum")
+            unreachable!("the selected postfix operand was checked as an enum")
         };
         if info.variants.len() != 2 {
-            self.diagnostics.errors.push((
-                TypeError::InvalidEarlyPropagation {
-                    reason: format!(
-                        "{} has {} variants; propagation requires exactly two",
-                        self.store.render(&Ty::Nominal(enum_symbol, vec![])),
-                        info.variants.len()
-                    ),
-                },
+            let operation = if failure.is_some() {
+                "force unwrap"
+            } else {
+                "propagation"
+            };
+            let enum_name = self.store.render(&Ty::Nominal(enum_symbol, vec![]));
+            self.invalid_binary_enum_postfix(
                 expr.id,
-            ));
+                failure.is_some(),
+                format!(
+                    "{enum_name} has {} variants; {operation} requires exactly two",
+                    info.variants.len()
+                ),
+            );
             return Ty::Error;
         }
         let enum_name = self
@@ -844,9 +891,24 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .unwrap_or_else(|| enum_symbol.to_string());
         let (first_name, first) = info.variants.get_index(0).expect("two variants");
         let (second_name, second) = info.variants.get_index(1).expect("two variants");
+        let second_action = failure.map_or(BinaryEnumArm::Return, BinaryEnumArm::Failure);
         let arms = vec![
-            self.propagation_arm(source, enum_symbol, &enum_name, first_name, first, false),
-            self.propagation_arm(source, enum_symbol, &enum_name, second_name, second, true),
+            self.propagation_arm(
+                source,
+                enum_symbol,
+                &enum_name,
+                first_name,
+                first,
+                BinaryEnumArm::Value,
+            ),
+            self.propagation_arm(
+                source,
+                enum_symbol,
+                &enum_name,
+                second_name,
+                second,
+                second_action,
+            ),
         ];
         let lowered_id = self.artifacts.synthetic_id(source.id.0);
         let result = Ty::Var(self.store.fresh_ty(self.level, expr.id));
@@ -965,6 +1027,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         static_member_reason: CtReason,
     ) -> Ty {
         match &expr.kind {
+            ExprKind::Unreachable => {
+                unreachable!("unreachable expressions are desugared to the panic effect")
+            }
             ExprKind::MacroCall { .. } => Ty::Error,
             ExprKind::LiteralInt(source) => {
                 self.check_integer_literal(expr.id, source);
@@ -984,6 +1049,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             }
 
             ExprKind::Propagate(source) => self.infer_propagation(expr, source, ctx),
+            ExprKind::ForceUnwrap(source, failure) => {
+                self.infer_force_unwrap(expr, source, failure, ctx)
+            }
             ExprKind::Tuple(items) => match items.as_slice() {
                 // `()` is the unit value, `(e)` is grouping.
                 [] => Ty::unit(),

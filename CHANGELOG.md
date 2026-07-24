@@ -9,6 +9,7 @@ while fixing several type-checker and lexer correctness bugs.
 
 ### Added
 
+- **Effect-tracked `unreachable` and postfix force unwrap.** The `unreachable` expression performs Core's public abortive `'panic(message: String) -> Never` effect. Functions infer `'panic`, user handlers may intercept it, and Core's outer host fallback reports unhandled panics and terminates the process. On the same two-variant enums supported by postfix `?`, `value!` extracts the first variant's payload shape and evaluates `unreachable` for the second variant instead of returning it.
 - **Lexical unsafe boundaries.** Raw-pointer expressions and `@_ir` now carry
   the compiler-known `'unsafe` effect. `@unsafe { ... }` discharges it
   lexically without installing a runtime handler, replacing the file-wide

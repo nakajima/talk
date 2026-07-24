@@ -126,6 +126,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Loop => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::For => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Return => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Unreachable => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::True => self.make(tok, Kind::NUMBER, &mut tokens),
                 TokenKind::False => self.make(tok, Kind::NUMBER, &mut tokens),
                 TokenKind::Enum => self.make(tok, Kind::KEYWORD, &mut tokens),
@@ -542,9 +543,13 @@ impl<'a> Higlighter<'a> {
                 ExprKind::LiteralFloat(_) => (),
                 ExprKind::LiteralTrue => (),
                 ExprKind::LiteralFalse => (),
+                ExprKind::Unreachable => (),
                 ExprKind::LiteralString(_) => (),
                 ExprKind::LiteralCharacter(_) => (),
                 ExprKind::Unary(.., box expr) | ExprKind::Propagate(box expr) => {
+                    result.extend(self.tokens_from_expr(expr, ast));
+                }
+                ExprKind::ForceUnwrap(box expr, _) => {
                     result.extend(self.tokens_from_expr(expr, ast));
                 }
                 ExprKind::Binary(box lhs, _, box rhs) | ExprKind::Subscript(box lhs, box rhs) => {

@@ -1,7 +1,10 @@
 // no-core
-use package::IO::{ IORequest, io }
+use package::IO::{ IORequest, io, STDERR_FD, write_string }
 use package::Memory::{ alloc }
 use package::Async::{ async }
+use package::String::{ String }
+
+public effect 'panic(message: String) -> Never
 
 // The host adapter, in source: one arm per request case, each a fixed
 // entry in the runtime's io operation table. Exhaustiveness keeps this
@@ -40,9 +43,9 @@ func _io_host(request: IORequest) -> Int {
 // every user handler, installed around the whole program by the entry
 // wrapper. Which effects are ambient at the top level is exactly the
 // row this callback declares — the compiler reads it from this
-// signature rather than naming any effect itself. Fallbacks always
-// resume; they never discontinue.
-public func _with_host(consume body: () '[io, alloc, async] -> ()) -> () {
+// signature rather than naming any effect itself. Resumable fallbacks
+// continue; panic is the abortive process-termination fallback.
+public func _with_host(consume body: () '[io, alloc, async, panic] -> ()) -> () {
 	@handle 'io { request in
 		'continue _io_host(request)
 	}
@@ -54,6 +57,14 @@ public func _with_host(consume body: () '[io, alloc, async] -> ()) -> () {
 	// The reference host has no scheduler: a yield resumes immediately.
 	@handle 'async {
 		'continue
+	}
+	// Panic is an ordinary abortive effect. User handlers may intercept it;
+	// delegation reaches this outer fallback, which reports and terminates.
+	@handle 'panic { message in
+		write_string(STDERR_FD, message)
+		write_string(STDERR_FD, "\n")
+		_io_host(.exit(1))
+		loop {}
 	}
 	body()
 }
