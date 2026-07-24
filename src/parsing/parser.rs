@@ -2018,21 +2018,17 @@ impl<'a> Parser<'a> {
                         },
                     })
                 }
-                "io_write" => {
-                    let fd = self.ir_value()?;
-                    let buf = self.ir_value()?;
-                    let count = self.ir_value()?;
+                "io" => {
+                    let op = self.ir_value()?;
+                    let a = self.ir_value()?;
+                    let b = self.ir_value()?;
+                    let c = self.ir_value()?;
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
                         binds,
                         instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::IoWrite {
-                            dest,
-                            fd,
-                            buf,
-                            count,
-                        },
+                        kind: InlineIRInstructionKind::Io { dest, op, a, b, c },
                     })
                 }
                 "trunc" => {
@@ -2635,7 +2631,7 @@ impl<'a> Parser<'a> {
 
         let member = self.add_expr(ExprKind::Member(None, name, name_span), tok)?;
 
-        self.skip_semicolons_and_newlines();
+        self.skip_semicolons_and_continuation_newlines();
 
         let expr = if let Some(call_expr) = self.check_call(&member, can_assign)? {
             call_expr
@@ -2741,7 +2737,7 @@ impl<'a> Parser<'a> {
             )?;
         }
 
-        self.skip_semicolons_and_newlines();
+        self.skip_semicolons_and_continuation_newlines();
 
         let expr = if let Some(call_expr) = self.check_call(&member, can_assign)? {
             call_expr
@@ -2876,7 +2872,7 @@ impl<'a> Parser<'a> {
         }
         let variable = self.add_expr(ExprKind::Variable(Name::Raw(name.to_string())), tok)?;
 
-        self.skip_newlines();
+        self.skip_continuation_newlines();
 
         if let Some(call_expr) = self.check_call(&variable, can_assign)? {
             Ok(call_expr.into())
@@ -2984,7 +2980,7 @@ impl<'a> Parser<'a> {
         let mut i = 0;
 
         while {
-            self.skip_newlines();
+            self.skip_continuation_newlines();
             handler = Precedence::handler(&self.current)?;
             precedence < handler.precedence
         } {
@@ -4955,6 +4951,55 @@ impl<'a> Parser<'a> {
         while self.peek_is(TokenKind::Newline) {
             self.advance();
         }
+    }
+
+    /// A single line break may continue an expression. A blank line is a
+    /// statement boundary, even when the next token also has an infix form.
+    fn skip_continuation_newlines(&mut self) {
+        while self.peek_is(TokenKind::Newline) && !self.at_blank_line() {
+            self.advance();
+        }
+    }
+
+    fn skip_semicolons_and_continuation_newlines(&mut self) {
+        while self.peek_is(TokenKind::Semicolon)
+            || (self.peek_is(TokenKind::Newline) && !self.at_blank_line())
+        {
+            tracing::trace!("Skipping {:?}", self.current);
+            self.advance();
+        }
+    }
+
+    fn at_blank_line(&self) -> bool {
+        let Some(current) = self
+            .current
+            .as_ref()
+            .filter(|token| token.kind == TokenKind::Newline)
+        else {
+            return false;
+        };
+
+        if self
+            .lexeme(current)
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            > 1
+        {
+            return true;
+        }
+
+        let Some(next) = self
+            .next
+            .as_ref()
+            .filter(|token| token.kind == TokenKind::Newline)
+        else {
+            return false;
+        };
+
+        self.source[current.end as usize..next.start as usize]
+            .chars()
+            .all(char::is_whitespace)
     }
 
     fn skip_semicolons_and_newlines(&mut self) {

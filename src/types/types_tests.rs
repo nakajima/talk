@@ -1620,6 +1620,14 @@ pub mod tests {
     }
 
     #[test]
+    fn blank_line_allows_unqualified_enum_implicit_return_after_call() {
+        let t = check(
+            "// no-core\nenum Fizz { case foo, bar }\nfunc side() -> () { () }\nfunc buzz() -> Fizz {\n\tside()\n\n\t.foo\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
     fn nested_closure_types() {
         // Capture.tlk shape (minus operators, which arrive in M3)
         let t = check(
@@ -3967,6 +3975,24 @@ pub mod tests {
     }
 
     #[test]
+    fn rejects_param_construction_without_an_init_bound() {
+        let t = check(
+            "// no-core\nprotocol Marker {}\nfunc make<T: Marker>() -> T {\n\tT()\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("init requirement"), "{errors:?}");
+    }
+
+    #[test]
+    fn param_construction_resolves_through_the_bound_requirement() {
+        let t = check(
+            "// no-core\nprotocol Makeable {\n\tinit(x: Int)\n}\nstruct Box {\n\tlet x: Int\n\tinit(x: Int) {\n\t\tself.x = x\n\t\tself\n\t}\n}\nextend Box: Makeable {}\nfunc make<T: Makeable>() -> T {\n\tT(x: 1)\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
     fn closed_effect_annotation_accepts_declared_effects() {
         let t = check("// no-core\neffect 'a() -> ()\nfunc f() 'a -> () {\n\t'a()\n}");
         assert_clean(&t);
@@ -5093,6 +5119,22 @@ mod with_core {
         "WebApi.tlk",
         "Website.tlk",
     ];
+
+    #[test]
+    fn host_effects_admit_handlers() {
+        // Every host-list effect routes through the ordinary handler
+        // stack (ADR 0039): user handlers may intercept 'io, 'alloc, and
+        // 'async alike; unhandled performs reach the host fallback.
+        for source in [
+            "@handle 'io { request in\n\t'continue 0\n}\n1",
+            "@handle 'alloc { allocation in\n\t'continue\n}\n1",
+            "@handle 'async {\n\t'continue\n}\n'async()\n1",
+        ] {
+            let t = check_with_core(Source::from(source));
+            let errors = type_errors(&t);
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+        }
+    }
 
     #[test]
     fn range_literals_construct_core_range_types() {

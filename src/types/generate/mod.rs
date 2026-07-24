@@ -266,12 +266,13 @@ struct BindingGroupChecker<'s, 'a> {
     type_aliases: &'s FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'s mut Vec<Symbol>,
     level: Level,
-    /// The effects a top-level computation may always perform: the core
-    /// effects the runtime handles implicitly ('io, 'async, 'alloc).
-    /// Top-level ambient rows close over this set plus the top-level
-    /// `@handle`s installed BEFORE the computation (`handler_positions`),
-    /// so a user effect with no handler on the way up — or only a later
-    /// one — is a type error at the node where it tries to flow in.
+    /// The effects a top-level computation may always perform: the row
+    /// core's `_with_host` entry wrapper discharges around the program
+    /// (ADR 0039), read off its scheme. Top-level ambient rows close
+    /// over this set plus the top-level `@handle`s installed BEFORE the
+    /// computation (`handler_positions`), so a user effect with no
+    /// handler on the way up — or only a later one — is a type error at
+    /// the node where it tries to flow in.
     ambient_effects: std::collections::BTreeSet<Symbol>,
     /// Top-level `@handle`s in source order: (statement id, effect).
     handler_positions: Vec<(NodeID, Symbol)>,

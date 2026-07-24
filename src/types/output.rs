@@ -101,10 +101,14 @@ pub enum CheckedIrKind {
         addr: IrOperand,
         offset: IrOperand,
     },
-    IoWrite {
-        fd: IrOperand,
-        buf: IrOperand,
-        count: IrOperand,
+    /// A host io operation: `op` indexes the runtime's operation table
+    /// and is committed at check time (an integer literal in the IR
+    /// text); unused operand slots pass zero.
+    Io {
+        op: u8,
+        a: IrOperand,
+        b: IrOperand,
+        c: IrOperand,
     },
 }
 

@@ -2573,6 +2573,63 @@ pub mod tests {
     }
 
     #[test]
+    fn single_newline_continues_member_chain() {
+        let parsed = parse("print(\"sup\")\n.foo");
+
+        assert_eq!(parsed.roots.len(), 1);
+        assert!(matches!(
+            &parsed.roots[0].as_stmt().kind,
+            StmtKind::Expr(Expr {
+                kind: ExprKind::Member(Some(receiver), label, _),
+                ..
+            }) if label.to_string() == "foo"
+                && matches!(receiver.kind, ExprKind::Call { .. })
+        ));
+    }
+
+    #[test]
+    fn single_newlines_allow_multiline_method_chain() {
+        let parsed = parse("value\n.foo()\n.bar()");
+
+        assert_eq!(parsed.roots.len(), 1);
+        assert!(matches!(
+            &parsed.roots[0].as_stmt().kind,
+            StmtKind::Expr(Expr {
+                kind: ExprKind::Call { callee, .. },
+                ..
+            }) if matches!(
+                &callee.kind,
+                ExprKind::Member(Some(receiver), label, _)
+                    if label.to_string() == "bar"
+                        && matches!(receiver.kind, ExprKind::Call { .. })
+            )
+        ));
+    }
+
+    #[test]
+    fn blank_line_terminates_member_chain() {
+        for source in ["print(\"sup\")\n\n.foo", "print(\"sup\")\n  \n.foo"] {
+            let parsed = parse(source);
+
+            assert_eq!(parsed.roots.len(), 2, "{source:?}");
+            assert!(matches!(
+                &parsed.roots[0].as_stmt().kind,
+                StmtKind::Expr(Expr {
+                    kind: ExprKind::Call { .. },
+                    ..
+                })
+            ));
+            assert!(matches!(
+                &parsed.roots[1].as_stmt().kind,
+                StmtKind::Expr(Expr {
+                    kind: ExprKind::Member(None, label, _),
+                    ..
+                }) if label.to_string() == "foo"
+            ));
+        }
+    }
+
+    #[test]
     fn parses_empty_enum_instantiation_with_value() {
         let parsed = parse("enum Fizz { case foo(Int) }\nFizz.foo(123)");
 
@@ -2698,6 +2755,44 @@ pub mod tests {
                 )
             })
         );
+    }
+
+    #[test]
+    fn parses_quoted_identifiers() {
+        // @"..." lexes to a plain identifier, so keywords work as names.
+        let parsed = parse(
+            "enum Fizz {
+                case @\"as\", @\"func\"
+                case @\"struct\"
+            }",
+        );
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Enum {
+                linear: false,
+                name: "Fizz".into(),
+                name_span: Span::ANY,
+                generics: vec![],
+                where_clause: None,
+                body: any_body!(
+                    (vec![
+                        any_decl!(enum_variant(Name::Raw("as".into()), Span::ANY, vec![])),
+                        any_decl!(enum_variant(Name::Raw("func".into()), Span::ANY, vec![])),
+                        any_decl!(enum_variant(Name::Raw("struct".into()), Span::ANY, vec![])),
+                    ])
+                )
+            })
+        );
+
+        // A quoted identifier is the same name as its unquoted spelling.
+        let parsed = parse("let @\"foo\" = 1\nfoo");
+        assert!(matches!(
+            &parsed.roots[1].as_stmt().kind,
+            StmtKind::Expr(Expr {
+                kind: ExprKind::Variable(Name::Raw(name)),
+                ..
+            }) if name == "foo"
+        ));
     }
 
     #[test]
@@ -4188,7 +4283,7 @@ pub mod tests {
            @_ir { copy Int %1 %2 3 }
            @_ir { swap Int %1 %2 }
            @_ir { %? = gep Int %1 2 }
-           @_ir { %? = io_write %0 %1 %2 }
+           @_ir { %? = io 1 %0 %1 %2 }
            @_ir { %? = trunc %0 }
            @_ir { %? = itof %0 }
            @_ir { retain Int %0 }

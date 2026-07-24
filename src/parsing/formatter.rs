@@ -12,7 +12,9 @@ use crate::{
         block::Block,
         body::Body,
         call_arg::{ArgMode, CallArg},
-        decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, ReceiverMode, Visibility},
+        decl::{
+            Decl, DeclKind, Import, ImportPath, ImportedSymbols, ReceiverMode, Visibility,
+        },
         expr::{Expr, ExprKind},
         func::{CaptureMode, CaptureSpec, EffectSet, Func},
         func_signature::FuncSignature,
@@ -154,6 +156,23 @@ pub fn empty() -> Doc {
 /// [`group`] fits on the current line.
 pub fn text(s: impl Into<String>) -> Doc {
     Doc::Text(s.into())
+}
+
+/// Spells an identifier, restoring the @"..." quoting for names that can't
+/// lex as a plain identifier (keywords or exotic characters). Compiler-minted
+/// names keep their `$`/`#` sigils unquoted.
+fn identifier_text(name: &str) -> String {
+    let quoted = crate::keywords::is_keyword(name)
+        || name.chars().next().is_some_and(char::is_numeric)
+        || name
+            .chars()
+            .any(|c| !(c.is_alphanumeric() || matches!(c, '_' | '$' | '#')));
+
+    if quoted {
+        format!("@\"{name}\"")
+    } else {
+        name.to_string()
+    }
 }
 
 /// Creates output text that occupies no width for line-fitting purposes.
@@ -1369,10 +1388,10 @@ impl<'a> Formatter<'a> {
                 let mut result = if let Some(name) = enum_name {
                     concat(
                         self.format_name(name),
-                        concat(text("."), text(variant_name)),
+                        concat(text("."), text(identifier_text(variant_name))),
                     )
                 } else {
-                    concat(text("."), text(variant_name))
+                    concat(text("."), text(identifier_text(variant_name)))
                 };
 
                 if !fields.is_empty() {
@@ -1579,7 +1598,7 @@ impl<'a> Formatter<'a> {
         // normalization (`Array<T>` as `[T]`) can never apply to a head.
         result = concat_space(
             result,
-            self.format_nominal_type_annotation(head.name.name_str(), &head.args),
+            self.format_nominal_type_annotation(identifier_text(&head.name.name_str()), &head.args),
         );
 
         if !conformances.is_empty() {
@@ -1774,7 +1793,7 @@ impl<'a> Formatter<'a> {
             {
                 let inner = generics[0].as_type().expect("guarded above");
                 if matches!(inner.kind, TypeAnnotationKind::Borrow { .. }) {
-                    self.format_nominal_type_annotation(name.name_str(), generics)
+                    self.format_nominal_type_annotation(identifier_text(&name.name_str()), generics)
                 } else {
                     concat(self.format_type_annotation(inner), text("?"))
                 }
@@ -1804,7 +1823,7 @@ impl<'a> Formatter<'a> {
                 )
             }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
-                self.format_nominal_type_annotation(name.name_str(), generics)
+                self.format_nominal_type_annotation(identifier_text(&name.name_str()), generics)
             }
             TypeAnnotationKind::Tuple(types) => {
                 let type_docs: Vec<_> = types
@@ -1871,12 +1890,17 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_member(&self, receiver: &Option<Box<Expr>>, property: &Label) -> Doc {
+        let property = match property {
+            Label::Named(name) => identifier_text(name),
+            other => other.to_string(),
+        };
+
         match receiver {
             Some(expr) => group(concat(
                 self.format_expr(expr),
-                concat(text("."), text(property.to_string())),
+                concat(text("."), text(property)),
             )),
-            None => concat(text("."), text(property.to_string())),
+            None => concat(text("."), text(property)),
         }
     }
 
@@ -2059,6 +2083,23 @@ impl<'a> Formatter<'a> {
         type_annotation: Option<&TypeAnnotation>,
         value: Option<&Expr>,
     ) -> Doc {
+        if let Some((source_pattern, source_type, target, else_block)) =
+            Self::let_else_parts(pattern, type_annotation, value)
+        {
+            let mut result = concat_space(text("let"), self.format_pattern(source_pattern));
+            if let Some(ty) = source_type {
+                result = concat(
+                    result,
+                    concat_space(text(":"), self.format_type_annotation(ty)),
+                );
+            }
+            result = concat_space(result, concat_space(text("="), self.format_expr(target)));
+            return concat_space(
+                result,
+                concat_space(text("else"), self.format_block(else_block)),
+            );
+        }
+
         let mut result = concat_space(text("let"), self.format_pattern(pattern));
 
         if let Some(ty) = type_annotation {
@@ -2073,6 +2114,34 @@ impl<'a> Formatter<'a> {
         }
 
         result
+    }
+
+    fn let_else_parts<'b>(
+        outer_pattern: &'b Pattern,
+        outer_type: Option<&'b TypeAnnotation>,
+        value: Option<&'b Expr>,
+    ) -> Option<(&'b Pattern, Option<&'b TypeAnnotation>, &'b Expr, &'b Block)> {
+        if outer_pattern.span != crate::span::Span::SYNTHESIZED || outer_type.is_some() {
+            return None;
+        }
+        let value = value?;
+        if value.span != crate::span::Span::SYNTHESIZED {
+            return None;
+        }
+        let ExprKind::Match(target, arms) = &value.kind else {
+            return None;
+        };
+        if !Self::is_if_let_match(arms) || arms[1].body.span == crate::span::Span::SYNTHESIZED {
+            return None;
+        }
+
+        let (target, source_type) = match &target.kind {
+            ExprKind::As(inner, ty) if target.span == crate::span::Span::SYNTHESIZED => {
+                (inner.as_ref(), Some(ty))
+            }
+            _ => (target.as_ref(), None),
+        };
+        Some((&arms[0].pattern, source_type, target, &arms[1].body))
     }
 
     fn synthesized_expr_continuation(block: &Block) -> Option<&Expr> {
@@ -2426,14 +2495,14 @@ impl<'a> Formatter<'a> {
 
     fn format_record_field_type_annotation(&self, field: &RecordFieldTypeAnnotation) -> Doc {
         group(concat(
-            concat(text(field.label.name_str()), text(": ")),
+            concat(text(identifier_text(&field.label.name_str())), text(": ")),
             self.format_type_annotation(&field.value),
         ))
     }
 
     fn format_record_field(&self, field: &RecordField) -> Doc {
         group(concat(
-            concat(text(field.label.name_str()), text(": ")),
+            concat(text(identifier_text(&field.label.name_str())), text(": ")),
             self.format_expr(&field.value),
         ))
     }
@@ -2627,7 +2696,7 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_name(&self, name: &Name) -> Doc {
-        text(name.name_str())
+        text(identifier_text(&name.name_str()))
     }
 
     fn expr_contains_control_flow(expr: &Expr) -> bool {
@@ -3184,6 +3253,14 @@ mod formatter_tests {
     }
 
     #[test]
+    fn preserves_blank_line_that_terminates_member_chain() {
+        assert_eq!(
+            format_code("print(\"sup\")\n\n.foo", 80),
+            "print(\"sup\")\n\n.foo"
+        );
+    }
+
+    #[test]
     fn formats_macro_rules_and_invocations() {
         assert_eq!(
             format_code("macro choose($yes,$no)=$yes\n#choose(1,2)", 80),
@@ -3220,6 +3297,20 @@ mod formatter_tests {
         assert_eq!(format_code("let x: Int", 80), "let x: Int");
         assert_eq!(format_code("let x = 123", 80), "let x = 123");
         assert_eq!(format_code("let x: Int = 123", 80), "let x: Int = 123");
+        assert_eq!(
+            format_code(
+                "loop {\nlet .some(peeked) = self.peek() else {\nbreak\n}\nprint(peeked)\n}",
+                80,
+            ),
+            "loop {\n\tlet .some(peeked) = self.peek() else {\n\t\tbreak\n\t}\n\tprint(peeked)\n}"
+        );
+        assert_eq!(
+            format_code(
+                "func value(input: Int?) -> Int {\nlet .some(value): Int? = input else { return 0 }\nvalue\n}",
+                80,
+            ),
+            "func value(input: Int?) -> Int {\n\tlet .some(value): Int? = input else { return 0 }\n\tvalue\n}"
+        );
     }
 
     #[test]
@@ -3335,6 +3426,26 @@ mod formatter_tests {
             ),
             "public enum Optional<Wrapped> {\n\tcase some(Wrapped)\n\tcase none\n\n\tfunc map<T>(transform: (Wrapped) -> T) -> T? {\n\t\tmatch self {\n\t\t\t.some(t) -> .some(transform(t)),\n\t\t\t.none -> none\n\t\t}\n\t}\n}"
         );
+    }
+
+    #[test]
+    fn formats_quoted_identifiers() {
+        // Names that collide with keywords keep their @"..." spelling.
+        assert_eq!(
+            format_code("enum Fizz { case @\"as\", @\"func\" }", 80),
+            "enum Fizz {\n\tcase @\"as\"\n\tcase @\"func\"\n}"
+        );
+        assert_eq!(
+            format_code("let @\"struct\" = 1", 80),
+            "let @\"struct\" = 1"
+        );
+        assert_eq!(
+            format_code("let @\"hello world\" = 1", 80),
+            "let @\"hello world\" = 1"
+        );
+        // Quoting an ordinary identifier canonicalizes to the plain spelling.
+        assert_eq!(format_code("let @\"foo\" = 1", 80), "let foo = 1");
+        assert_eq!(format_code("Fizz.@\"as\"", 80), "Fizz.@\"as\"");
     }
 
     #[test]

@@ -170,8 +170,19 @@ public func is_error(result: Int) -> Bool {
 	result < 0
 }
 
+// 'io replies are untrusted for memory safety: a user handler may
+// intercept any request (ADR 0039), so a count is clamped to the
+// capacity the caller actually allocated before it becomes a view's
+// length. A lying handler yields wrong data, never an out-of-bounds
+// view. `_io_clamp(n, n)` sanitizes a bare length (negative becomes 0).
+public func _io_clamp(count: Int, capacity: Int) -> Int {
+	if count < 0 { return 0 }
+	if count > capacity { return capacity }
+	count
+}
+
 public func write_string(fd: Int, s: String) -> Int {
-	@_ir(fd, s.storage.base, s.byte_count) { %? = io_write $0 $1 $2 }
+	@_ir(fd, s.storage.base, s.byte_count) { %? = io 1 $0 $1 $2 }
 }
 
 public func print_raw(s: String) -> Int {
@@ -179,9 +190,9 @@ public func print_raw(s: String) -> Int {
 }
 
 func _print_line(s: String) -> () {
-	@_ir(STDOUT_FD, s.storage.base, s.byte_count) { %? = io_write $0 $1 $2 }
+	@_ir(STDOUT_FD, s.storage.base, s.byte_count) { %? = io 1 $0 $1 $2 }
 	let nl = "\n"
-	@_ir(STDOUT_FD, nl.storage.base, nl.byte_count) { %? = io_write $0 $1 $2 }
+	@_ir(STDOUT_FD, nl.storage.base, nl.byte_count) { %? = io 1 $0 $1 $2 }
 	()
 }
 

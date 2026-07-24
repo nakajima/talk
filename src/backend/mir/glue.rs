@@ -81,22 +81,47 @@ impl<'a> ProgramBuilder<'a> {
         let mut fx = FunctionBuilder::new(self, 0, 0);
         fx.next_local = 1;
         // Glue over a type that mentions rigid effect-generics reads their
-        // witnesses from its closure environment, in the order
-        // `glue_witness_params` reports (the MakeClosure site captures the
-        // same list).
-        for (index, param_symbol) in glue_witness_params(ty).iter().enumerate() {
+        // full witness blocks from its closure environment — the
+        // `[drop, retain]` pair plus each bound protocol's requirement
+        // dictionaries, in the order `glue_witness_params` reports (the
+        // MakeClosure sites capture the same blocks via
+        // `push_witness_block`). The dictionaries let the glue body call
+        // instances whose hidden arguments include them (a compound rigid
+        // payload's deinit, for example).
+        let mut env_index: u16 = 0;
+        for param_symbol in glue_witness_params(ty) {
             let drop_local = fx.fresh_local();
             fx.push(Inst::EnvGet {
                 dest: drop_local,
-                index: u16::try_from(2 * index).unwrap_or_default(),
+                index: env_index,
             });
             let retain_local = fx.fresh_local();
             fx.push(Inst::EnvGet {
                 dest: retain_local,
-                index: u16::try_from(2 * index + 1).unwrap_or_default(),
+                index: env_index + 1,
             });
-            let param = *param_symbol;
-            fx.param_witnesses.insert(param, (drop_local, retain_local));
+            env_index += 2;
+            fx.param_witnesses
+                .insert(param_symbol, (drop_local, retain_local));
+            for protocol in fx.program_builder.rigid_constraints(param_symbol) {
+                let count = fx
+                    .program_builder
+                    .protocol_requirements(protocol.protocol)
+                    .map(|requirements| requirements.len())
+                    .unwrap_or(0);
+                let mut locals = Vec::new();
+                for _ in 0..count {
+                    let local = fx.fresh_local();
+                    fx.push(Inst::EnvGet {
+                        dest: local,
+                        index: env_index,
+                    });
+                    env_index += 1;
+                    locals.push(local);
+                }
+                fx.param_requirements
+                    .insert((param_symbol, protocol.protocol), locals);
+            }
         }
         match glue {
             Glue::HeapTeardown => unreachable!("heap teardown has its own builder"),
@@ -363,43 +388,125 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         span: Span,
     ) -> Result<Operand, BackendError> {
         use crate::types::catalog::{DerivedRecipe, DictionaryEntry};
-        let func = match entry {
-            DictionaryEntry::Derived(DerivedRecipe::Show) => self
-                .program_builder
-                .derived_show(payload_ty, protocol, span)?,
-            DictionaryEntry::Derived(DerivedRecipe::Equality) => self
-                .program_builder
-                .derived_equality(payload_ty, protocol, span)?,
+        let (func, env) = match entry {
+            DictionaryEntry::Derived(DerivedRecipe::Show) => (
+                self.program_builder.derived_show(payload_ty, protocol, span)?,
+                Vec::new(),
+            ),
+            DictionaryEntry::Derived(DerivedRecipe::Equality) => (
+                self.program_builder
+                    .derived_equality(payload_ty, protocol, span)?,
+                Vec::new(),
+            ),
             DictionaryEntry::Implementation {
                 symbol,
                 writeback_width,
             } => {
                 let mut subst = subst.to_vec();
                 subst.push((protocol.protocol, payload_ty.clone()));
-                // The closure calls its chunk directly: an instance with
-                // hidden parameters of its own would break that arity
-                // contract.
-                if !witness_params(&subst).is_empty() {
-                    return Err(BackendError::unsupported(
-                        "conformance evidence for compound rigid payloads is not supported yet"
-                            .into(),
-                        span,
-                    ));
-                }
                 let func = self.program_builder.demand(*symbol, subst, span)?;
                 self.program_builder
                     .writeback_expectations
                     .push((func, *writeback_width, span));
-                func
+                // A compound rigid payload's instance takes hidden
+                // witness arguments. The dictionary's arity contract
+                // stays at the requirement's visible arity: a forwarding
+                // chunk passes the parameters through and appends the
+                // evidence from its environment, which captures this
+                // frame's witness blocks (the same layout `glue_closure`
+                // uses).
+                let hidden = self
+                    .program_builder
+                    .instance_witnesses
+                    .get(&func)
+                    .cloned()
+                    .unwrap_or_default();
+                if hidden.is_empty() {
+                    (func, Vec::new())
+                } else {
+                    let visible = self
+                        .program_builder
+                        .callables
+                        .get(symbol)
+                        .map(|callable| match callable.body {
+                            crate::backend::mir::CallableBody::Func(func) => func.params.len(),
+                            crate::backend::mir::CallableBody::Init { params, .. } => {
+                                params.len()
+                            }
+                        })
+                        .unwrap_or(0);
+                    let visible = u16::try_from(visible).unwrap_or_default();
+                    let forwarder = self.requirement_forwarder(func, visible, &hidden);
+                    let mut env = Vec::new();
+                    for param in &hidden {
+                        self.push_witness_block(*param, &mut env, span)?;
+                    }
+                    (forwarder, env)
+                }
             }
         };
         let closure = self.fresh_local();
         self.push(Inst::MakeClosure {
             dest: closure,
             func,
-            env: Vec::new(),
+            env,
         });
         Ok(Operand::Local(closure))
+    }
+
+    /// A forwarding chunk for a requirement implementation with hidden
+    /// witness arguments: visible parameters pass straight through, the
+    /// evidence blocks ride in the closure environment in
+    /// `instance_witnesses` order.
+    fn requirement_forwarder(
+        &mut self,
+        instance: FuncId,
+        visible: u16,
+        hidden: &[Symbol],
+    ) -> FuncId {
+        let id = self.program_builder.reserve("requirement_forwarder");
+        let mut insts = Vec::new();
+        let mut args: Vec<Operand> = (0..visible).map(Operand::Local).collect();
+        let mut next = visible;
+        let mut env_index: u16 = 0;
+        for param in hidden {
+            let mut slots = 2;
+            for protocol in self.program_builder.rigid_constraints(*param) {
+                slots += self
+                    .program_builder
+                    .protocol_requirements(protocol.protocol)
+                    .map(|requirements| requirements.len())
+                    .unwrap_or(0);
+            }
+            for _ in 0..slots {
+                insts.push(Inst::EnvGet {
+                    dest: next,
+                    index: env_index,
+                });
+                args.push(Operand::Local(next));
+                next += 1;
+                env_index += 1;
+            }
+        }
+        let result = next;
+        insts.push(Inst::Call {
+            dest: result,
+            func: instance,
+            args,
+            unwind: None,
+        });
+        let block = BlockData {
+            params: Vec::new(),
+            insts,
+            term: Some(Term::Return(Operand::Local(result))),
+        };
+        self.program_builder.functions[id] = Function {
+            name: "requirement_forwarder".into(),
+            arity: visible,
+            n_locals: result + 1,
+            blocks: vec![block],
+        };
+        id
     }
 
     /// A `[drop]`/`[retain]` glue closure for a value type, capturing the
@@ -414,19 +521,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let func = self.program_builder.value_glue(ty, glue)?;
         let mut env = Vec::new();
         for param in glue_witness_params(ty) {
-            let Some((drop_witness, retain_witness)) = self
-                .param_witnesses
-                .get(&param)
-                .copied()
-            else {
-                return Err(BackendError::unsupported(
-                    "a generic value cannot cross this boundary without its ownership witnesses (not supported yet)"
-                        .into(),
-                    span,
-                ));
-            };
-            env.push(Operand::Local(drop_witness));
-            env.push(Operand::Local(retain_witness));
+            // The full block — pair plus dictionaries — matching the
+            // layout the glue chunk binds from its environment.
+            self.push_witness_block(param, &mut env, span)?;
         }
         let dest = self.fresh_local();
         self.push(Inst::MakeClosure { dest, func, env });

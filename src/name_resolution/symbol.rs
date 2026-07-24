@@ -332,11 +332,14 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: u32::MAX,
     });
-    /// Core's `'io` host-IO effect (core/IO.tlk), pinned at mint time so
-    /// the runtime's implicit-handler dispatch never resolves it by name.
-    pub const Io: Symbol = Symbol::Effect(EffectId {
+    /// Core's `_with_host` entry wrapper (core/Host.tlk, ADR 0039): the
+    /// one seam the compiler knows about host effects. The entry
+    /// assembler runs the program inside it, and typing derives the
+    /// ambient entry row from its callback's declared effect row — the
+    /// compiler names no effect anywhere.
+    pub const WithHost: Symbol = Symbol::Global(GlobalId {
         module_id: ModuleId::Core,
-        local_id: u32::MAX - 1,
+        local_id: u32::MAX,
     });
 
     pub const String: Symbol = Symbol::Struct(StructId {
@@ -422,9 +425,9 @@ impl Symbol {
         }
     }
 
-    pub fn well_known_core_effect(name: &str) -> Option<Symbol> {
+    pub fn well_known_core_global(name: &str) -> Option<Symbol> {
         match name {
-            "io" => Some(Symbol::Io),
+            "_with_host" => Some(Symbol::WithHost),
             _ => None,
         }
     }

@@ -1,5 +1,5 @@
 // no-core
-use package::IO::{ _io_read, _io_write, _io_close, IORequest, io }
+use package::IO::{ _io_read, _io_write, _io_close, _io_clamp, IORequest, io }
 use package::Memory::{ _alloc }
 use package::String::{ String }
 use package::Operators::{ Comparable }
@@ -44,7 +44,7 @@ public struct TcpStream {
 
 	public func read_string(max: Int) -> String {
 		let buf = _alloc<Byte>(max)
-		let n = _io_read(self.fd, buf, max)
+		let n = _io_clamp(_io_read(self.fd, buf, max), max)
 		String(buf, n, max)
 	}
 

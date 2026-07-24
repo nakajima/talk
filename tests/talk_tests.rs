@@ -423,6 +423,461 @@ fn postfix_question_mark_propagates_second_enum_variant() {
 }
 
 #[test]
+fn run_explicit_capture_modes_over_owned_values() {
+    // `[s]` (copy) retains a snapshot: the frame's binding stays usable.
+    assert_runs(
+        b"func f() -> Int {\n\
+          \tlet s = \"a\" + \"b\"\n\
+          \tlet g = func [s]() -> Int { s.byte_count }\n\
+          \tg() + s.byte_count\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"4\n",
+    );
+    // `[&s]` aliases the frame's binding.
+    assert_runs(
+        b"func f() -> Int {\n\
+          \tlet s = \"a\" + \"b\"\n\
+          \tlet g = func [&s]() -> Int { s.byte_count }\n\
+          \tg() + s.byte_count\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"4\n",
+    );
+    // `[consuming s]` moves the owner into the closure's slot; the
+    // frame's later use is a use of a moved value.
+    assert_runs(
+        b"func f() -> Int {\n\
+          \tlet s = \"a\" + \"b\"\n\
+          \tlet g = func [consuming s]() -> Int { s.byte_count }\n\
+          \tg()\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"2\n",
+    );
+    let output = run_source(
+        b"func f() -> Int {\n\
+          \tlet s = \"a\" + \"b\"\n\
+          \tlet g = func [consuming s]() -> Int { s.byte_count }\n\
+          \tg() + s.byte_count\n\
+          }\n\
+          print(f())\n",
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("moved"), "{stderr}");
+}
+
+#[test]
+fn run_assigns_through_tuple_elements() {
+    // `t.0 = v` and nested struct-tuple spines: runtime records are
+    // tuples, so the write rebuilds the tuple along the place chain.
+    assert_runs(
+        b"func f() -> Int {\n\
+          \tlet t = (1, 2)\n\
+          \tt.0 = 41\n\
+          \tt.0 + t.1\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"43\n",
+    );
+    assert_runs(
+        b"struct P {\n\
+          \tlet pair: (Int, Int)\n\
+          \tinit(pair: (Int, Int)) {\n\
+          \t\tself.pair = pair\n\
+          \t\tself\n\
+          \t}\n\
+          }\n\
+          func f() -> Int {\n\
+          \tlet p = P(pair: (1, 2))\n\
+          \tp.pair.1 = 40\n\
+          \tp.pair.0 + p.pair.1\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"41\n",
+    );
+}
+
+#[test]
+fn run_mut_requirements_on_rvalue_receivers() {
+    // A `mut func` requirement on an rvalue existential or generic
+    // receiver materializes a temporary place: the call evolves the
+    // temporary, which releases like any statement temp.
+    assert_runs(
+        b"protocol Counter {\n\
+          \tmut func bump() -> Int\n\
+          }\n\
+          struct C {\n\
+          \tlet n: Int\n\
+          \tinit(n: Int) {\n\
+          \t\tself.n = n\n\
+          \t\tself\n\
+          \t}\n\
+          }\n\
+          extend C: Counter {\n\
+          \tmut func bump() -> Int {\n\
+          \t\tself.n = self.n + 1\n\
+          \t\tself.n\n\
+          \t}\n\
+          }\n\
+          func make() -> any Counter {\n\
+          \tC(n: 40)\n\
+          }\n\
+          print(make().bump())\n",
+        &[],
+        b"41\n",
+    );
+    assert_runs(
+        b"protocol Counter {\n\
+          \tmut func bump() -> Int\n\
+          }\n\
+          struct C {\n\
+          \tlet n: Int\n\
+          \tinit(n: Int) {\n\
+          \t\tself.n = n\n\
+          \t\tself\n\
+          \t}\n\
+          }\n\
+          extend C: Counter {\n\
+          \tmut func bump() -> Int {\n\
+          \t\tself.n = self.n + 1\n\
+          \t\tself.n\n\
+          \t}\n\
+          }\n\
+          func dup<T>(consume x: T) -> T {\n\
+          \tx\n\
+          }\n\
+          func poke<T: Counter>(consume x: T) -> Int {\n\
+          \tdup(x: x).bump()\n\
+          }\n\
+          print(poke(x: C(n: 40)))\n",
+        &[],
+        b"41\n",
+    );
+}
+
+#[test]
+fn run_packs_compound_rigid_payloads_into_existentials() {
+    // Conditional conformance under a rigid element: inside `pack`'s
+    // generic body, `Array<T>` coerces to `any Showable` via
+    // `extend<Element: Showable> Array<Element>: Showable`. The
+    // requirement closure forwards `T`'s witness block to the
+    // implementation instance, and the pack's glue closures capture the
+    // full evidence blocks. TALK_CHECK_ALL compiles the rigid instance
+    // (the forwarding path); the entry executes the specialized one.
+    let source = b"func pack<T: Showable>(consume x: T) -> any Showable {\n\
+      \tlet xs = [x]\n\
+      \txs\n\
+      }\n\
+      print(pack(x: 41))\n";
+    let mut child = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .arg("run")
+        .env("TALK_CHECK_ALL", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run `talk run`");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(source)
+        .expect("write Talk source");
+    let output = child.wait_with_output().expect("read run output");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(output.stdout, b"[41]\n");
+}
+
+#[test]
+fn run_out_of_order_record_literals() {
+    // Field values evaluate in source order, then permute into the
+    // row's label-sorted layout.
+    assert_runs(
+        b"func f() -> Int {\n\
+          \tlet r = { name: \"a\" + \"b\", id: 7 }\n\
+          \tmatch r {\n\
+          \t\t{ name, id } -> name.byte_count + id\n\
+          \t}\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"9\n",
+    );
+}
+
+#[test]
+fn run_constructor_references_as_values() {
+    // `Enum.variant` used uncalled becomes a captureless function value.
+    assert_runs(
+        b"enum E {\n\
+          \tcase a(Int)\n\
+          \tcase b\n\
+          }\n\
+          func apply(f: (Int) -> E, n: Int) -> E {\n\
+          \tf(n)\n\
+          }\n\
+          match apply(f: E.a, n: 41) {\n\
+          \t.a(n) -> print(n),\n\
+          \t.b -> print(0)\n\
+          }\n",
+        &[],
+        b"41\n",
+    );
+}
+
+#[test]
+fn run_quoted_identifiers() {
+    // @"..." spells a literal identifier, so keywords can name enum
+    // cases, bindings, and patterns.
+    assert_runs(
+        b"enum Fizz {\n\
+          \tcase @\"as\", @\"func\", @\"struct\"\n\
+          }\n\
+          let @\"let\" = 40\n\
+          match Fizz.@\"func\" {\n\
+          \t.@\"as\" -> print(0),\n\
+          \t.@\"func\" -> print(@\"let\" + 2),\n\
+          \t.@\"struct\" -> print(1)\n\
+          }\n",
+        &[],
+        b"42\n",
+    );
+}
+
+#[test]
+fn run_or_patterns_settle_per_alternative() {
+    // Alternatives leaving different owned payloads unbound re-test the
+    // tag on the matched edge and release exactly the payloads the
+    // matching alternative left unbound.
+    assert_runs(
+        b"enum E {\n\
+          \tcase a(String, Int)\n\
+          \tcase b(Int, String)\n\
+          }\n\
+          func f(e: E) -> Int {\n\
+          \tmatch e {\n\
+          \t\t.a(_, n) | .b(n, _) -> n\n\
+          \t}\n\
+          }\n\
+          print(f(e: E.a(\"x\" + \"y\", 1)))\n\
+          print(f(e: E.b(2, \"long\" + \"er\")))\n",
+        &[],
+        b"1\n2\n",
+    );
+    // Consumed (owned) scrutinee takes the same path.
+    assert_runs(
+        b"enum E {\n\
+          \tcase a(String, Int)\n\
+          \tcase b(Int, String)\n\
+          }\n\
+          func f() -> Int {\n\
+          \tlet e = E.a(\"x\" + \"y\", 1)\n\
+          \tmatch e {\n\
+          \t\t.a(_, n) | .b(n, _) -> n\n\
+          \t}\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"1\n",
+    );
+}
+
+#[test]
+fn run_record_patterns_bind_field_and_interior() {
+    // `label: pattern` binds both names: the label binder owns the
+    // value, interior binders take donated references.
+    assert_runs(
+        b"func f() -> Int {\n\
+          \tlet r = { id: 7, name: \"a\" + \"b\" }\n\
+          \tlet { name: n, id } = r\n\
+          \tname.byte_count + n.byte_count + id\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"11\n",
+    );
+    assert_runs(
+        b"func f() -> Int {\n\
+          \tlet r = { id: 7, name: \"a\" + \"b\" }\n\
+          \tmatch r {\n\
+          \t\t{ name: n, id } -> name.byte_count + n.byte_count + id\n\
+          \t}\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"11\n",
+    );
+}
+
+#[test]
+fn run_mut_args_through_places_and_rejects_rvalues() {
+    // A `mut` effect argument through a tuple-element place writes back.
+    assert_runs(
+        b"effect 'adjust(mut value: Int) -> ()\n\
+          @handle 'adjust { v in\n\
+          \tv = v + 10\n\
+          \t'continue ()\n\
+          }\n\
+          let t = (1, 2)\n\
+          'adjust(mut t.0)\n\
+          print(t.0 + t.1)\n",
+        &[],
+        b"13\n",
+    );
+    // A true rvalue `mut` argument is a frontend error: its evolution
+    // would be silently discarded.
+    for source in [
+        &b"effect 'adjust(mut value: Int) -> ()\n@handle 'adjust { v in\n\tv = v + 10\n\t'continue ()\n}\n'adjust(mut (1 + 2))\nprint(9)\n"[..],
+        &b"func inc(mut n: Int) -> Void {\n\tn = n + 1\n}\ninc(mut (1 + 2))\nprint(0)\n"[..],
+    ] {
+        let output = run_source(source, &[]);
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("must name a mutable place"), "{stderr}");
+    }
+}
+
+#[test]
+fn run_uninitialized_lets_use_definite_assignment() {
+    // Declared-then-assigned bindings run; the born-moved state makes
+    // read-before-initialization a path-sensitive diagnostic.
+    assert_runs(
+        b"func f() -> Int {\n\tlet x: Int\n\tx = 41\n\tx + 1\n}\nprint(f())\n",
+        &[],
+        b"42\n",
+    );
+    assert_runs(
+        b"func f(c: Bool) -> Int {\n\tlet x: Int\n\tif c { x = 1 } else { x = 2 }\n\tx\n}\nprint(f(c: true))\n",
+        &[],
+        b"1\n",
+    );
+    // Owned content initializes and releases exactly once; a
+    // never-initialized owned binding releases nothing.
+    assert_runs(
+        b"func f() -> Int {\n\tlet s: String\n\ts = \"a\" + \"b\"\n\ts.byte_count\n}\nprint(f())\n",
+        &[],
+        b"2\n",
+    );
+    assert_runs(
+        b"func f() -> Int {\n\tlet s: String\n\t7\n}\nprint(f())\n",
+        &[],
+        b"7\n",
+    );
+    // Read before any assignment is rejected.
+    let output = run_source(b"func f() -> Int {\n\tlet x: Int\n\tx + 1\n}\nprint(f())\n", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("before it is initialized"), "{stderr}");
+    // Initialization on only one path is rejected at the join.
+    let output = run_source(
+        b"func f(c: Bool) -> Int {\n\tlet x: Int\n\tif c { x = 1 }\n\tx\n}\nprint(f(c: true))\n",
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("before it is initialized"), "{stderr}");
+}
+
+#[test]
+fn run_closure_mutates_captured_owned_value() {
+    // A mutated-and-captured owning binding cells with owning content:
+    // assignment releases the displaced value, the frame releases the
+    // cell's final content at scope exit.
+    assert_runs(
+        b"func f() -> Int {\n\
+          \tlet s = \"a\" + \"b\"\n\
+          \tlet bump = func() -> Void { s = s + \"c\" }\n\
+          \tbump()\n\
+          \tbump()\n\
+          \ts.byte_count\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"4\n",
+    );
+    // The frame's own assignments to a celled owning binding release
+    // displaced content too.
+    assert_runs(
+        b"func f() -> Int {\n\
+          \tlet s = \"a\" + \"b\"\n\
+          \tlet read = func() -> Int { s.byte_count }\n\
+          \ts = s + \"c\"\n\
+          \tread()\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"3\n",
+    );
+}
+
+#[test]
+fn run_closure_captures_owned_local() {
+    // A closure capturing an owned buffer retains a frame-anchored
+    // snapshot; the frame releases it at scope exit (ADR 0037 §closures).
+    assert_runs(
+        b"func f() -> Int {\n\
+          \tlet s = \"a\" + \"b\"\n\
+          \tlet g = func() -> Int { s.byte_count }\n\
+          \tg() + g()\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"4\n",
+    );
+}
+
+#[test]
+fn run_trailing_closure_captures_method_receiver() {
+    // The ADR 0037 motivating case: `self` (a borrowed receiver over a
+    // buffer-holding struct) captured by a trailing block.
+    assert_runs(
+        b"struct Lexer {\n\
+          \tlet source: String\n\
+          \tinit(source: String) {\n\
+          \t\tself.source = source\n\
+          \t\tself\n\
+          \t}\n\
+          \tfunc first_byte_count() -> Optional<Int> {\n\
+          \t\tOptional.some(1).map { n in self.source.byte_count + n }\n\
+          \t}\n\
+          }\n\
+          match Lexer(source: \"ab\" + \"cd\").first_byte_count() {\n\
+          \t.some(n) -> print(n),\n\
+          \t.none -> print(0)\n\
+          }\n",
+        &[],
+        b"5\n",
+    );
+}
+
+#[test]
+fn run_matches_float_literal_patterns() {
+    assert_runs(
+        b"func classify(x: Float) -> Int {\n\
+          \tmatch x {\n\
+          \t\t1.5 -> 1,\n\
+          \t\t2.5 -> 2,\n\
+          \t\t_ -> 0\n\
+          \t}\n\
+          }\n\
+          print(classify(x: 1.5))\n\
+          print(classify(x: 2.5))\n\
+          print(classify(x: 3.5))\n",
+        &[],
+        b"1\n2\n0\n",
+    );
+}
+
+#[test]
 fn run_executes_branches_recursion_and_loops() {
     assert_runs(
         b"func sum(n: Int) -> Int {\n\
@@ -1392,9 +1847,11 @@ fn structural_drops_share_one_teardown_body() {
         .filter(|line| line.contains(" shared_drop "))
         .count();
     // One body for Pair, one for Wrap — and exactly one each, however
-    // many sites drop them.
+    // many sites drop them. The third body is core's io request enum,
+    // dropped by `_with_host`'s always-installed io fallback clause
+    // (ADR 0039).
     assert_eq!(
-        shared_bodies, 2,
+        shared_bodies, 3,
         "expected one shared drop body per type, found {shared_bodies}:\n{rendered}"
     );
 
@@ -1794,8 +2251,9 @@ fn package_run_and_test_use_the_locked_graph() {
 
 #[test]
 fn run_performs_ambient_io_operations() {
-    // IO-02: `'io(request)` performs dispatch to the runtime's host
-    // operations (sleep, open/write/read/close round trip).
+    // `'io(request)` performs route through core's source-level host
+    // fallback to the runtime's host operations (sleep, open/write/
+    // read/close round trip).
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock after epoch")
@@ -2533,13 +2991,146 @@ fn run_shares_captured_assignments_with_the_frame() {
 }
 
 #[test]
-fn run_rejects_user_handlers_over_ambient_effects() {
-    // The runtime is the implicit handler for core's ambient effects;
-    // a user handler over them would be silently bypassed.
-    let output = run_source(b"@handle 'io {\n\t'continue 0\n}\nprint(1)\n", &[]);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("ambient"), "{stderr}");
+fn run_unhandled_ambient_performs_reach_the_host_fallback() {
+    // With no user handler live, an 'ambient perform routes to the host
+    // fallback the entry wrapper installed (ADR 0039): for 'async the
+    // reference host resumes with unit.
+    assert_runs(b"'async()\nprint(1)\n", &[], b"1\n");
+}
+
+#[test]
+fn run_user_handlers_intercept_ambient_effects() {
+    // 'async is 'ambient (ADR 0039): a live user handler intercepts its
+    // performs through the ordinary handler stack.
+    assert_runs(
+        b"@handle 'async {\n\tprint(\"yield\")\n\t'continue\n}\n'async()\nprint(1)\n",
+        &[],
+        b"yield\n1\n",
+    );
+}
+
+#[test]
+fn run_ambient_clause_performs_delegate_to_the_fallback() {
+    // A clause executes below its own search floor (CHG-01), so a
+    // perform inside it reaches the next handler out — here the host
+    // fallback, which resumes with unit.
+    assert_runs(
+        b"@handle 'async {\n\tprint(\"seen\")\n\t'async()\n\t'continue\n}\n'async()\nprint(1)\n",
+        &[],
+        b"seen\n1\n",
+    );
+}
+
+#[test]
+fn run_nested_ambient_handlers_delegate_outward_to_the_fallback() {
+    // inner user handler -> outer user handler -> host fallback: the
+    // ordinary routing order for an ambient effect (ADR 0039 §4).
+    assert_runs(
+        b"@handle 'async {\n\tprint(\"outer\")\n\t'async()\n\t'continue\n}\n@handle 'async {\n\tprint(\"inner\")\n\t'async()\n\t'continue\n}\n'async()\nprint(1)\n",
+        &[],
+        b"inner\nouter\n1\n",
+    );
+}
+
+#[test]
+fn run_ambient_handlers_may_discontinue() {
+    // An ambient handler follows the same one-shot rules as any handler:
+    // a clause that completes without resuming aborts the handled scope
+    // (with its value, which must match the scope's — unit here).
+    assert_runs(
+        b"@handle 'async {\n\tprint(\"abort\")\n}\n'async()\nprint(99)\n",
+        &[],
+        b"abort\n",
+    );
+}
+
+#[test]
+fn run_function_values_reach_the_fallback_without_a_user_handler() {
+    // A function value with no user handler live at creation captures
+    // the fallback capability — ambient effects follow the same
+    // creation-site capture semantics as handled effects (ADR 0039 §5).
+    assert_runs(
+        b"let f = func() {\n\t'async()\n\t7\n}\nprint(f())\n",
+        &[],
+        b"7\n",
+    );
+}
+
+#[test]
+fn run_function_values_capture_ambient_handlers_at_creation() {
+    assert_runs(
+        b"@handle 'async {\n\tprint(\"captured\")\n\t'continue\n}\nlet f = func() {\n\t'async()\n\t7\n}\nprint(f())\n",
+        &[],
+        b"captured\n7\n",
+    );
+}
+
+#[test]
+fn run_module_initialization_may_perform_ambient_effects() {
+    // Fallbacks install before module initialization (ADR 0039 §3), so a
+    // top-level binding's initializer can perform an ambient effect —
+    // under a named entry too, where lets still initialize first.
+    assert_runs(
+        b"func f() -> Int {\n\t'async()\n\t3\n}\nlet ready = f()\npublic func go() -> () {\n\tprint(ready)\n}\n",
+        &["--entry", "go"],
+        b"3\n",
+    );
+}
+
+#[test]
+fn run_constructs_rigid_params_through_init_requirements() {
+    // `T(x: 1)` for `T: Makeable` resolves through the bound's init
+    // requirement; the committed conformance witness (the conforming
+    // type's initializer) runs at the specialized call.
+    assert_runs(
+        b"protocol Makeable {\n\tinit(x: Int)\n}\nstruct Box {\n\tlet x: Int\n\tinit(x: Int) {\n\t\tself.x = x\n\t\tself\n\t}\n}\nextend Box: Makeable {}\nfunc make<T: Makeable>() -> T {\n\tT(x: 1)\n}\nlet b: Box = make()\nprint(b.x)\n",
+        &[],
+        b"1\n",
+    );
+}
+
+#[test]
+fn run_user_handlers_intercept_io() {
+    // A user 'io handler substitutes results without invoking the host:
+    // the intercepted sleeps return immediately, and the handler's count
+    // proves both performs routed to it. (print bypasses 'io — it is a
+    // raw io_write intrinsic — so it still reaches stdout.)
+    assert_runs(
+        b"let count = 0\n@handle 'io { request in\n\tcount = count + 1\n\t'continue 0\n}\nsleep(1)\nsleep(1)\nprint(count)\n",
+        &[],
+        b"2\n",
+    );
+}
+
+#[test]
+fn run_io_handlers_delegate_to_the_host_fallback() {
+    // A clause re-performing the same request reaches the io host
+    // fallback below its floor; the program still behaves normally.
+    assert_runs(
+        b"@handle 'io { request in\n\t'continue 'io(request)\n}\nsleep(1)\nprint(1)\n",
+        &[],
+        b"1\n",
+    );
+}
+
+#[test]
+fn run_lying_io_handlers_cannot_break_memory_safety() {
+    // Core's io wrappers clamp reply counts to the capacity they
+    // allocated: a handler that answers cwd_len with 8 and cwd_copy with
+    // 999999 yields a wrong (truncated) string, never an out-of-bounds
+    // view.
+    assert_runs(
+        b"let calls = 0\n@handle 'io { request in\n\tcalls = calls + 1\n\tif calls == 1 {\n\t\t'continue 8\n\t}\n\t'continue 999999\n}\nlet c = OS.cwd()\nprint(calls)\n",
+        &[],
+        b"2\n",
+    );
+}
+
+#[test]
+fn run_alloc_performs_are_inert() {
+    // Real allocation is carried by intrinsics, not performs; a bare
+    // 'alloc perform reaches the no-op fallback and resumes.
+    assert_runs(b"'alloc(.allocate(8))\nprint(1)\n", &[], b"1\n");
 }
 
 #[test]
@@ -2811,16 +3402,17 @@ fn range_literals_reach_runtime() {
 }
 
 #[test]
-fn run_rejects_owned_captures_in_closures() {
-    // CHG-06: v1 captures are Copy values and handler-extent shared
-    // borrows; a closure capturing an owned buffer would outlive it.
+fn run_rejects_escaping_owned_captures() {
+    // A closure over an owned capture holds a frame-anchored snapshot;
+    // returning it would outlive the environment, so that edge fails
+    // closed until environments own their captures outright.
     let output = run_source(
-        b"func f() -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet g = func() -> Int { s.byte_count }\n\tg()\n}\nf()\n",
+        b"func make() -> () -> Int {\n\tlet s = \"a\" + \"b\"\n\tlet g = func() -> Int { s.byte_count }\n\tg\n}\nlet g = make()\nprint(g())\n",
         &[],
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not supported yet"), "{stderr}");
+    assert!(stderr.contains("cannot escape"), "{stderr}");
 }
 
 #[test]
@@ -3145,7 +3737,11 @@ fn run_executes_existential_values() {
 }
 
 #[test]
-fn run_rejects_unsupported_source_forms_explicitly() {
+fn run_rejects_linear_globals() {
+    // A named language rule (the global twin of the borrowed-global
+    // rule): a linear value's exactly-once consumption cannot be proven
+    // across program-lifetime storage, so linear values stay in function
+    // scopes. Rejected where the binding is written, not at teardown.
     let output = run_source(
         b"enum Token 'linear {\n\tcase active(Int)\n}\nlet t = Token.active(1)\nprint(0)\n",
         &[],
@@ -3154,8 +3750,23 @@ fn run_rejects_unsupported_source_forms_explicitly() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("not supported yet"),
-        "expected an explicit unsupported-form rejection, got: {stderr}"
+        stderr.contains("a linear value cannot be stored in a global binding"),
+        "expected the linear-global rule, got: {stderr}"
+    );
+    // The idiomatic form the diagnostic points to still runs.
+    assert_runs(
+        b"enum Token 'linear {\n\
+          \tcase active(Int)\n\
+          }\n\
+          func f() -> Int {\n\
+          \tlet t = Token.active(41)\n\
+          \tmatch t {\n\
+          \t\t.active(n) -> n\n\
+          \t}\n\
+          }\n\
+          print(f())\n",
+        &[],
+        b"41\n",
     );
 }
 

@@ -1,3 +1,9 @@
 func foo() {
   123
 }
+
+enum Fizz {
+  case @"as", @"func", @"struct"
+}
+
+let @"let" = "not an identifier: @\"escaped\""

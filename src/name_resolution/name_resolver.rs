@@ -919,7 +919,7 @@ impl NameResolver {
             match kind {
                 SymbolKind::Struct => Symbol::well_known_core_struct(&name_str),
                 SymbolKind::Protocol => Symbol::well_known_core_protocol(&name_str),
-                SymbolKind::Effect => Symbol::well_known_core_effect(&name_str),
+                SymbolKind::Global => Symbol::well_known_core_global(&name_str),
                 _ => None,
             }
         } else {
@@ -1467,7 +1467,7 @@ impl NameResolver {
                 | InlineIRInstructionKind::Retain { ty, .. }
                 | InlineIRInstructionKind::Gep { ty, .. }
                 | InlineIRInstructionKind::InlineGet { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::IoWrite { .. }
+                InlineIRInstructionKind::Io { .. }
                 | InlineIRInstructionKind::Trunc { .. }
                 | InlineIRInstructionKind::IsUnique { .. }
                 | InlineIRInstructionKind::IntToFloat { .. }

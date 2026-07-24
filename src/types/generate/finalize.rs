@@ -529,7 +529,7 @@ impl<'a> TypecheckSession<'a> {
                 | C::IsUnique { .. }
                 | C::MemCopy { .. }
                 | C::InlineGet { .. }
-                | C::IoWrite { .. } => {}
+                | C::Io { .. } => {}
             }
         }
 

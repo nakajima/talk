@@ -39,6 +39,7 @@ pub enum TypeError {
         found: String,
     },
     InvalidAssignmentTarget,
+    MutArgumentNotAPlace,
     AssignThroughSharedBorrow {
         target: String,
         ty: String,
@@ -273,6 +274,7 @@ impl TypeError {
             Self::UnknownMemberOnInferred { .. } => "type.unknown-member-on-inferred",
             Self::NotAFunction { .. } => "type.not-a-function",
             Self::InvalidAssignmentTarget => "type.invalid-assignment-target",
+            Self::MutArgumentNotAPlace => "type.mut-argument-not-a-place",
             Self::AssignThroughSharedBorrow { .. } => "type.assign-through-shared-borrow",
             Self::NotConforming { .. } => "type.not-conforming",
             Self::ArgMarkerMismatch { .. } => "type.arg-marker-mismatch",
@@ -435,6 +437,12 @@ impl Display for TypeError {
                 write!(
                     f,
                     "Assignment target must be a variable or stored member path"
+                )
+            }
+            TypeError::MutArgumentNotAPlace => {
+                write!(
+                    f,
+                    "A `mut` argument must name a mutable place (a variable or stored member path)"
                 )
             }
             TypeError::AssignThroughSharedBorrow { target, ty } => {

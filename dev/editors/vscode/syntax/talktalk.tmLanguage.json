@@ -3,7 +3,13 @@
   "name": "Your Language",
   "patterns": [
     {
+      "include": "#quoted-identifiers"
+    },
+    {
       "include": "#keywords"
+    },
+    {
+      "include": "#characters"
     },
     {
       "include": "#strings"
@@ -16,6 +22,20 @@
     }
   ],
   "repository": {
+    "quoted-identifiers": {
+      "name": "variable.other.quoted.talktalk",
+      "match": "@\"[^\"\\\\\\r\\n]+\"",
+      "captures": {
+        "0": {
+          "patterns": [
+            {
+              "name": "punctuation.definition.identifier.talktalk",
+              "match": "@\"|\""
+            }
+          ]
+        }
+      }
+    },
     "keywords": {
       "patterns": [
         {
@@ -23,6 +43,10 @@
           "match": "\\b(func|let|if|else|true|false|loop|enum|case|match|return|struct|extend|break|init|protocol|import)\\b"
         }
       ]
+    },
+    "characters": {
+      "name": "constant.character.talktalk",
+      "match": "'(?:[^'\\\\\\r\\n]|\\\\(?:[ntr\"'\\\\]|u\\{[0-9A-Fa-f]{1,6}\\}))'"
     },
     "strings": {
       "name": "string.quoted.double.talktalk",

@@ -16,6 +16,8 @@ use crate::types::ty::{
 };
 use crate::{compiling::module::ModuleId, name_resolution::symbol::Symbol};
 
+const MAX_MARKER_PROOF_DEPTH: usize = 64;
+
 /// The usage grade of a declaration over the substructural lattice:
 /// `Copy` values duplicate freely, `Affine` values (the default) move and may
 /// be silently dropped, `Linear` values must be consumed exactly once.
@@ -698,6 +700,37 @@ impl TypeCatalog {
     /// carries the where-clause predicates of a conformance currently
     /// being validated, so its own rigid params can satisfy the marker.
     pub fn ty_satisfies_marker(&self, ty: &Ty, marker: Symbol, ambient: &[Predicate]) -> bool {
+        self.ty_satisfies_marker_at(ty, marker, ambient, &mut FxHashSet::default())
+    }
+
+    fn ty_satisfies_marker_at(
+        &self,
+        ty: &Ty,
+        marker: Symbol,
+        ambient: &[Predicate],
+        active: &mut FxHashSet<(Ty, Symbol)>,
+    ) -> bool {
+        if active.len() >= MAX_MARKER_PROOF_DEPTH {
+            return false;
+        }
+
+        let goal = (ty.clone(), marker);
+        if !active.insert(goal.clone()) {
+            return false;
+        }
+
+        let satisfied = self.ty_satisfies_marker_inner(ty, marker, ambient, active);
+        active.remove(&goal);
+        satisfied
+    }
+
+    fn ty_satisfies_marker_inner(
+        &self,
+        ty: &Ty,
+        marker: Symbol,
+        ambient: &[Predicate],
+        active: &mut FxHashSet<(Ty, Symbol)>,
+    ) -> bool {
         match ty {
             // Error is poison; a variable here means the field type is still
             // being collected — the conformance's own use sites will re-check.
@@ -710,14 +743,20 @@ impl TypeCatalog {
                 if self.intrinsic_copy(*symbol) {
                     return true;
                 }
-                // Otherwise the declared rows decide.
-                let row_satisfies = |protocol: Symbol| {
-                    self.matching_conformances(*symbol, args, &ProtocolRef::bare(protocol))
+
+                let copy = self
+                    .matching_conformances(*symbol, args, &ProtocolRef::bare(Symbol::Copy))
+                    .iter()
+                    .any(|found| self.marker_context_satisfied_at(found, ambient, active));
+                copy || (marker == Symbol::CheapClone
+                    && self
+                        .matching_conformances(
+                            *symbol,
+                            args,
+                            &ProtocolRef::bare(Symbol::CheapClone),
+                        )
                         .iter()
-                        .any(|found| self.marker_context_satisfied(found, ambient))
-                };
-                row_satisfies(Symbol::Copy)
-                    || (marker == Symbol::CheapClone && row_satisfies(Symbol::CheapClone))
+                        .any(|found| self.marker_context_satisfied_at(found, ambient, active)))
             }
             Ty::Param(symbol) => {
                 let bound_satisfies = |bounds: &Vec<ProtocolRef>| {
@@ -740,13 +779,12 @@ impl TypeCatalog {
             }
             Ty::Tuple(items) => items
                 .iter()
-                .all(|item| self.ty_satisfies_marker(item, marker, ambient)),
+                .all(|item| self.ty_satisfies_marker_at(item, marker, ambient, active)),
             Ty::Record(row) => {
                 row.tail.is_none()
-                    && row
-                        .fields
-                        .iter()
-                        .all(|(_, field)| self.ty_satisfies_marker(field, marker, ambient))
+                    && row.fields.iter().all(|(_, field)| {
+                        self.ty_satisfies_marker_at(field, marker, ambient, active)
+                    })
             }
             // An effect argument is runtime-inert: it never blocks a
             // marker (Copy/CheapClone judge values, not rows). A static
@@ -761,6 +799,15 @@ impl TypeCatalog {
     /// marker predicates are decidable here without the solver; anything
     /// else stays conservative (the claim's use sites re-check).
     fn marker_context_satisfied(&self, found: &ConformanceMatch, ambient: &[Predicate]) -> bool {
+        self.marker_context_satisfied_at(found, ambient, &mut FxHashSet::default())
+    }
+
+    fn marker_context_satisfied_at(
+        &self,
+        found: &ConformanceMatch,
+        ambient: &[Predicate],
+        active: &mut FxHashSet<(Ty, Symbol)>,
+    ) -> bool {
         found.conformance.context.iter().all(|predicate| {
             let Predicate::Conforms { ty, protocol } = predicate else {
                 return false;
@@ -775,7 +822,7 @@ impl TypeCatalog {
                 &FxHashMap::default(),
                 &FxHashMap::default(),
             );
-            self.ty_satisfies_marker(&bound, protocol.protocol, ambient)
+            self.ty_satisfies_marker_at(&bound, protocol.protocol, ambient, active)
         })
     }
 
@@ -1640,6 +1687,43 @@ mod tests {
         let head = Symbol::Struct(StructId::from(1));
         let catalog = TypeCatalog::default();
         assert!(!catalog.cheap_clone_rows(head, &[]));
+    }
+
+    #[test]
+    fn cyclic_marker_context_fails_closed() {
+        let head = Symbol::Struct(StructId::from(1));
+        let catalog = catalog_with_row(
+            head,
+            Conformance {
+                context: vec![Predicate::Conforms {
+                    ty: Ty::Nominal(head, vec![]),
+                    protocol: ProtocolRef::bare(Symbol::CheapClone),
+                }],
+                ..Conformance::new(head, ProtocolRef::bare(Symbol::CheapClone))
+            },
+        );
+
+        assert!(!catalog.cheap_clone_rows(head, &[]));
+    }
+
+    #[test]
+    fn type_growing_marker_context_hits_the_proof_limit() {
+        let head = Symbol::Struct(StructId::from(1));
+        let param = Symbol::DeclaredLocal(DeclaredLocalId(10));
+        let catalog = catalog_with_row(
+            head,
+            Conformance {
+                params: vec![param],
+                self_args: vec![Ty::Param(param)],
+                context: vec![Predicate::Conforms {
+                    ty: Ty::Nominal(head, vec![Ty::Nominal(head, vec![Ty::Param(param)])]),
+                    protocol: ProtocolRef::bare(Symbol::CheapClone),
+                }],
+                ..Conformance::new(head, ProtocolRef::bare(Symbol::CheapClone))
+            },
+        );
+
+        assert!(!catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));
     }
 
     #[test]

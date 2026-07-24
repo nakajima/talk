@@ -18,6 +18,7 @@ pub enum LexerError {
     EmptyCharacterLiteral,
     UnterminatedCharacterLiteral,
     UnterminatedString,
+    EmptyQuotedIdentifier,
 }
 
 impl LexerError {
@@ -33,6 +34,7 @@ impl LexerError {
             Self::EmptyCharacterLiteral => "Empty character literal".to_string(),
             Self::UnterminatedCharacterLiteral => "Unterminated character literal".to_string(),
             Self::UnterminatedString => "Unterminated string".to_string(),
+            Self::EmptyQuotedIdentifier => "Empty quoted identifier".to_string(),
         }
     }
 }
@@ -442,6 +444,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn at(&mut self) -> Result<Token, LexerError> {
+        if self.peek() == Some('"') {
+            return self.quoted_identifier();
+        }
+
         if !self
             .peek()
             .map(|c| c.is_alphanumeric() || c == '_')
@@ -464,6 +470,34 @@ impl<'a> Lexer<'a> {
         }
 
         self.make(TokenKind::Attribute)
+    }
+
+    // @"..." spells a literal identifier, letting keywords be used as names.
+    // The token is an ordinary Identifier whose span excludes the @ and the
+    // quotes, so downstream lexeme extraction sees just the name.
+    fn quoted_identifier(&mut self) -> Result<Token, LexerError> {
+        self.advance(); // opening quote
+
+        self.started = self.current;
+
+        loop {
+            match self.peek() {
+                None | Some('\n') => return Err(LexerError::UnterminatedString),
+                Some('\\') => return Err(LexerError::InvalidEscape('\\')),
+                Some('"') => break,
+                Some(_) => {
+                    self.advance();
+                }
+            }
+        }
+
+        if self.current == self.started {
+            return Err(LexerError::EmptyQuotedIdentifier);
+        }
+
+        let token = self.make(TokenKind::Identifier);
+        self.advance(); // closing quote
+        token
     }
 
     fn dollar(&mut self) -> Result<Token, LexerError> {
@@ -741,6 +775,40 @@ mod tests {
         let tok = lexer.next().unwrap();
         assert_token(source, &tok, Identifier, "sup");
         assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn quoted_identifier() {
+        let source = "@\"as\".@\"func\" @\"hello world\"";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "as"); // span excludes @"..."
+        assert_eq!(lexer.next().unwrap().kind, Dot);
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "func");
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "hello world");
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn quoted_identifier_errors() {
+        assert_eq!(
+            Lexer::new("@\"\"").next(),
+            Err(LexerError::EmptyQuotedIdentifier)
+        );
+        assert_eq!(
+            Lexer::new("@\"foo").next(),
+            Err(LexerError::UnterminatedString)
+        );
+        assert_eq!(
+            Lexer::new("@\"foo\nbar\"").next(),
+            Err(LexerError::UnterminatedString)
+        );
+        assert_eq!(
+            Lexer::new("@\"a\\nb\"").next(),
+            Err(LexerError::InvalidEscape('\\'))
+        );
     }
 
     #[test]

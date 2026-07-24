@@ -1052,6 +1052,15 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 if let ExprKind::Constructor(_) = &callee.kind {
                     return self.infer_construction(expr, callee, type_args, args, ctx);
                 }
+                // `T(args)` for a rigid type parameter: construction
+                // through a bound's init requirement (never an ordinary
+                // call — a type parameter names no value).
+                if let ExprKind::Variable(name) = &callee.kind
+                    && let Ok(symbol) = name.symbol()
+                    && matches!(symbol, Symbol::TypeParameter(_))
+                {
+                    return self.infer_param_construction(expr, callee, symbol, type_args, args, ctx);
+                }
                 if let ExprKind::Member(Some(receiver), label, _) = &callee.kind
                     && let ExprKind::Constructor(name) = &receiver.kind
                     && let Ok(symbol) = name.symbol()
@@ -1307,6 +1316,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     |ty: &Ty| ty.substitute(&tys, &Default::default(), &Default::default());
                 if args.len() == sig.params.len() {
                     for (arg, param) in args.iter().zip(&sig.params) {
+                        self.check_mut_arg_is_place(arg);
                         self.check_expr(&arg.value, &instantiate(param), CtReason::Apply, ctx);
                     }
                 } else {
@@ -1549,11 +1559,25 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 addr: self.ir_operand(node, instruction, addr)?,
                 offset: self.ir_operand(node, instruction, offset_index)?,
             },
-            K::IoWrite { fd, buf, count, .. } => C::IoWrite {
-                fd: self.ir_operand(node, instruction, fd)?,
-                buf: self.ir_operand(node, instruction, buf)?,
-                count: self.ir_operand(node, instruction, count)?,
-            },
+            K::Io { op, a, b, c, .. } => {
+                // The operation index selects a fixed host-table entry; it
+                // is meaningless as a runtime value, so it must be spelled
+                // as an integer literal in the IR text.
+                let crate::node_kinds::inline_ir_instruction::Value::Int(op) = op else {
+                    self.unsupported(node, "inline IR io with a non-literal operation index");
+                    return None;
+                };
+                let Ok(op) = u8::try_from(*op) else {
+                    self.unsupported(node, "inline IR io operation index out of range");
+                    return None;
+                };
+                C::Io {
+                    op,
+                    a: self.ir_operand(node, instruction, a)?,
+                    b: self.ir_operand(node, instruction, b)?,
+                    c: self.ir_operand(node, instruction, c)?,
+                }
+            }
         })
     }
 

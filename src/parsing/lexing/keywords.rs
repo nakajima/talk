@@ -39,3 +39,7 @@ pub(super) fn handle(string: &str) -> TokenKind {
         _ => Identifier,
     }
 }
+
+pub fn is_keyword(string: &str) -> bool {
+    handle(string) != TokenKind::Identifier
+}

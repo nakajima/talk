@@ -19,20 +19,19 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             self.report_unresolved_residuals(residuals);
         }
 
-        // The closed base of every top-level ambient row: the core
-        // effects (the runtime's implicit handler). Top-level `@handle`s
+        // The closed base of every top-level ambient row: exactly the
+        // effects core's `_with_host` wrapper discharges around the
+        // program (ADR 0039), read from its callback's declared row —
+        // the compiler names no effect anywhere. Programs without core
+        // have no wrapper and no ambient effects. Top-level `@handle`s
         // widen it positionally — a computation sees only the handlers
         // installed before it in source order, matching what the runtime
         // will actually have installed when it runs.
         self.ambient_effects = self
-            .catalog
-            .effects
-            .keys()
-            .filter(|symbol| {
-                symbol.module_id() == Some(ModuleId::Core)
-            })
-            .copied()
-            .collect();
+            .schemes
+            .get(&Symbol::WithHost)
+            .map(|scheme| host_discharged_effects(&scheme.ty))
+            .unwrap_or_default();
         self.handler_positions = stmts
             .iter()
             .filter_map(|stmt| match &stmt.kind {
@@ -887,4 +886,25 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         }
         (self_ty, work)
     }
+}
+
+/// The effect labels `_with_host` discharges: the declared row of its
+/// callback parameter (through the borrow-by-default wrapper if the
+/// parameter is not consuming).
+fn host_discharged_effects(scheme_ty: &Ty) -> std::collections::BTreeSet<Symbol> {
+    let empty = std::collections::BTreeSet::new;
+    let Ty::Func(params, _, _) = scheme_ty else {
+        return empty();
+    };
+    let mut body = match params.first() {
+        Some(param) => param,
+        None => return empty(),
+    };
+    while let Ty::Borrow(_, inner) = body {
+        body = inner;
+    }
+    let Ty::Func(_, _, row) = body else {
+        return empty();
+    };
+    row.effects.iter().map(|entry| entry.effect).collect()
 }

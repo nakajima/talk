@@ -1,5 +1,5 @@
 // no-core
-use package::IO::{ _io_cwd_len, _io_cwd_copy, _io_getenv_len, _io_getenv_copy, _io_argc, _io_arg_len, _io_arg_copy }
+use package::IO::{ _io_cwd_len, _io_cwd_copy, _io_getenv_len, _io_getenv_copy, _io_argc, _io_arg_len, _io_arg_copy, _io_clamp }
 use package::Memory::{ _alloc }
 use package::Operators::{ Add, Comparable }
 use package::String::{ String }
@@ -15,6 +15,7 @@ public struct OS {
 		let copied = _io_cwd_copy(buf)
 		if copied < 0 { return Optional.none }
 
+		let copied = _io_clamp(copied, len)
 		Optional.some(String(buf, copied, copied))
 	}
 
@@ -26,6 +27,7 @@ public struct OS {
 		let copied = _io_getenv_copy(name.storage.base, name.byte_count, buf)
 		if copied < 0 { return Optional.none }
 
+		let copied = _io_clamp(copied, len)
 		Optional.some(String(buf, copied, copied))
 	}
 
@@ -36,8 +38,9 @@ public struct OS {
 
 		loop i < count {
 			let len = _io_arg_len(i)
+			let len = _io_clamp(len, len)
 			let buf = _alloc<Byte>(len)
-			let copied = _io_arg_copy(i, buf)
+			let copied = _io_clamp(_io_arg_copy(i, buf), len)
 			result.storage.set(i, String(buf, copied, copied))
 			i = i + 1
 		}

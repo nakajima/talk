@@ -431,12 +431,122 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         *ret
     }
 
+    /// `T(args)` for a rigid type parameter: construction through an
+    /// `init` requirement of one of `T`'s declared bounds — the
+    /// requirement is ordinary conformance evidence whose committed
+    /// witness is the conforming type's initializer (the Swift
+    /// protocol-init / Eiffel creation-constraint shape). The resolution
+    /// publishes as a requirement operation; the backend forces the
+    /// witness per specialization (ADR 0036's two-point rule).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn infer_param_construction(
+        &mut self,
+        expr: &Expr,
+        callee: &Expr,
+        symbol: Symbol,
+        type_args: &[GenericArg],
+        args: &[CallArg],
+        ctx: &Ctx,
+    ) -> Ty {
+        if !type_args.is_empty() {
+            self.unsupported(expr.id, "type arguments on a type-parameter construction");
+            return Ty::Error;
+        }
+        let bounds = self
+            .catalog
+            .param_bounds
+            .get(&symbol)
+            .cloned()
+            .unwrap_or_default();
+        let resolved = bounds.iter().find_map(|bound| {
+            self.catalog
+                .requirement_in_ref(bound, "init")
+                .map(|(owner, requirement)| (owner, requirement.clone()))
+        });
+        let Some((owner, requirement)) = resolved else {
+            self.unsupported(
+                expr.id,
+                "constructing a type parameter whose bounds declare no init requirement",
+            );
+            return Ty::Error;
+        };
+        let Some(scheme) = self.schemes.get(&requirement.symbol).cloned() else {
+            return Ty::Error;
+        };
+        // `Self` is the rigid parameter itself; the bound's conformance
+        // is a given, so no wanted constraint is owed.
+        let self_ty = Ty::Param(symbol);
+        let app = ProtocolApplication::new(self_ty.clone(), owner.clone());
+        let mut tys = app.substitution(self.catalog);
+        self.freshen_scheme_type_params(expr.id, &scheme, &mut tys);
+        let effs = self.freshen_scheme_effect_params(expr.id, &scheme);
+        for predicate in &scheme.predicates {
+            self.wanteds.push(
+                predicate
+                    .substitute(&tys, &effs, &Default::default())
+                    .into_constraint(CtOrigin::new(expr.id, CtReason::Apply)),
+            );
+        }
+        let signature = scheme.ty.substitute(&tys, &effs, &Default::default());
+        self.artifacts.member_resolutions.insert(
+            callee.id,
+            MemberResolution::ViaRequirement {
+                protocol: owner,
+                requirement: requirement.symbol,
+                self_ty,
+            },
+        );
+
+        let Ty::Func(params, ret, eff) = self.store.shallow(&signature) else {
+            return Ty::Error;
+        };
+        if params.len() != args.len() {
+            self.diagnostics.errors.push((
+                TypeError::ArityMismatch {
+                    expected: params.len(),
+                    found: args.len(),
+                },
+                expr.id,
+            ));
+            return Ty::Error;
+        }
+        for (arg, param) in args.iter().zip(&params) {
+            self.check_expr(&arg.value, param, CtReason::Apply, ctx);
+            self.note_copy_marker(arg, param);
+        }
+        self.emit_eff_eq(eff, ctx.eff.clone(), expr.id);
+        self.artifacts
+            .node_types
+            .insert(callee.id, Ty::Func(params, ret.clone(), EffectRow::pure()));
+        *ret
+    }
+
+    /// A `mut` argument writes its evolved value back, so it must name a
+    /// writable place — the argument-position mirror of
+    /// `infer_assignment_target`. A true rvalue's evolution would be
+    /// silently discarded, which is a source error, not a backend gap.
+    pub(super) fn check_mut_arg_is_place(&mut self, arg: &CallArg) {
+        use crate::parsing::node_kinds::call_arg::ArgMode;
+        if !matches!(arg.mode, Some(ArgMode::Mut)) {
+            return;
+        }
+        if !matches!(
+            &arg.value.kind,
+            ExprKind::Variable(_) | ExprKind::Member(Some(_), ..)
+        ) {
+            self.diagnostics
+                .errors
+                .push((TypeError::MutArgumentNotAPlace, arg.value.id));
+        }
+    }
+
     /// A call-site ownership marker is checked source semantics: `copy`
     /// demands Copy or CheapClone evidence, `mut` an exclusive-borrow
     /// parameter, `borrow` a borrowing parameter. The judgments defer to
     /// finalization, when the argument's slot type has resolved.
     fn note_copy_marker(&mut self, arg: &CallArg, param: &Ty) {
         use crate::parsing::node_kinds::call_arg::ArgMode;
+        self.check_mut_arg_is_place(arg);
         if matches!(
             arg.mode,
             Some(ArgMode::Copy | ArgMode::Mut | ArgMode::Borrow)
@@ -461,6 +571,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         arg_ty: &Ty,
     ) {
         use crate::parsing::node_kinds::call_arg::ArgMode;
+        self.check_mut_arg_is_place(arg);
         if matches!(
             arg.mode,
             Some(ArgMode::Copy | ArgMode::Mut | ArgMode::Borrow)

@@ -1,6 +1,6 @@
 // no-core
 use package::Memory::{ _alloc }
-use package::IO::{ _io_read, _io_write, _io_close }
+use package::IO::{ _io_read, _io_write, _io_close, _io_clamp }
 use package::Net::{ _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM }
 use package::Convert::{ From, Into }
 use package::Operators::{ Add, Comparable, Equatable, Subtract }
@@ -169,6 +169,7 @@ public struct HttpServer 'heap {
 				continue
 			}
 
+			let n = _io_clamp(n, max_request_size)
 			let raw_request = String(buf, n, max_request_size)
 			let wire = self.handle(raw_request)
 			_io_write(client_fd, wire.storage.base, wire.byte_count)

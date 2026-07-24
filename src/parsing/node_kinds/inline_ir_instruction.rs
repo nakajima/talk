@@ -193,12 +193,13 @@ pub enum InlineIRInstructionKind {
         array: Value,
         index: Value,
     },
-    #[doc = "$dest = io_write $fd $buf $count"]
-    IoWrite {
+    #[doc = "$dest = io $op $a $b $c"]
+    Io {
         dest: Register,
-        fd: Value,
-        buf: Value,
-        count: Value,
+        op: Value,
+        a: Value,
+        b: Value,
+        c: Value,
     },
     #[doc = "$dest = trunc $val"]
     Trunc { dest: Register, val: Value },
@@ -502,12 +503,9 @@ impl Display for InlineIRInstruction {
                 array,
                 index
             ),
-            InlineIRInstructionKind::IoWrite {
-                dest,
-                fd,
-                buf,
-                count,
-            } => write!(f, "{dest} = io_write {} {} {}", fd, buf, count),
+            InlineIRInstructionKind::Io { dest, op, a, b, c } => {
+                write!(f, "{dest} = io {} {} {} {}", op, a, b, c)
+            }
             InlineIRInstructionKind::Trunc { dest, val } => {
                 write!(f, "{dest} = trunc {}", val)
             }

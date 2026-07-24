@@ -1,25 +1,28 @@
 # 0037 - Eliminate backend capability rejections
 
-Status: proposed
+Status: proposed; rewritten after ADR 0038
+
+Companion inventory: [0037 unsupported inventory](0037-unsupported-inventory.md)
 
 ## Context
 
-The bytecode backend restored broad source and tool parity behind the deep
-`compile`/`execute` interface adopted by ADR 0034. It still contains 65 calls
-to `BackendError::unsupported`. They cover a mixture of real capability gaps,
-duplicate guards for one gap, conservative restrictions, malformed states that
-should have been rejected by the frontend, and catch-all branches whose source
-reachability is unknown.
+The bytecode backend exposes the deep `compile`/`execute` interface adopted by
+ADR 0034. After the MIR responsibility cleanup in ADR 0038, it still contains
+58 calls to `BackendError::unsupported`: 52 in `mir/mod.rs`, four in
+`mir/glue.rs`, and two in `mir/entries.rs`.
 
-This creates an unstable language contract. A program can parse, resolve, and
-type-check successfully, then fail only when MIR construction happens to visit
-one of these branches. The failures are also demand-sensitive: an unused
-function may appear valid until check-all mode compiles it, a generic body may
-fail only at one instantiation, and an editor cannot tell whether accepted
-source is executable without invoking the backend.
+Those calls do not all mean the same thing. They include:
 
-The motivating example is an ordinary method receiver captured by a trailing
-block:
+- valid source behavior whose runtime representation is incomplete;
+- duplicate guards for one missing mechanism;
+- source behavior that should have received a frontend diagnostic;
+- CFG-sensitive ownership or initialization errors owned by MIR analysis;
+- missing external implementations owned by linking; and
+- recovery forms or violated compiler invariants that should be internal
+  compiler errors.
+
+The motivating example remains an ordinary method receiver captured by a
+trailing block:
 
 ```talk
 self.peek().map { ch in
@@ -27,235 +30,355 @@ self.peek().map { ch in
 }?
 ```
 
-The frontend accepts the closure and the backend already represents closure
-environments, but MIR construction does not give the implicit receiver a safe
-owning capture. It eventually reports `function and global values are not
-supported yet`. Rewriting the source as a `match` avoids the backend path but
-does not resolve the missing behavior.
+Typing accepts the closure and now publishes its structural frame facts, but
+the backend has no owning lifecycle for the receiver's closure-environment
+slot. MIR therefore rejects a valid capture instead of generating environment
+retain and drop operations.
 
-The unsupported sites are not one feature. They fall into these capability
-families:
+ADR 0038 changed where the remaining work belongs. Before that cleanup, MIR
+reconstructed source semantics from parser forms, checker side tables, catalog
+searches, names, and runtime representation properties. The cleanup established
+one owner for each class of decision:
 
-- places, initialization, assignment, and `mut` writeback;
-- generic ownership witnesses and conformance dictionaries;
-- owning, borrowed, mutable, recursive, and generic closure captures;
-- destructuring, open-row, string, generic, and existential patterns;
-- general globals, linear globals, and external callable supply;
-- derived `Showable` and equality operations;
-- user handling of ambient core effects;
-- trusted inline IR operations, operands, and type annotations; and
-- generic fallback branches for declarations, expressions, constructions,
-  values, and patterns.
+| Decision | Owner |
+| --- | --- |
+| Syntax, spelling, and spans | parser |
+| Canonical identity and lexical resolution | resolver |
+| Source legality, finalized types, value-use modes, captures, patterns, effects, conformances, literals, and trusted operations | type checker |
+| Immutable publication of frontend decisions | `TypedProgram` |
+| Rigid substitution and evidence genuinely deferred until specialization | backend specialization |
+| CFG, places, ownership dataflow, runtime representation, cleanup, and glue | MIR |
+| External implementation supply | linker |
+| Serialized bytecode validity | bytecode validator |
 
-Leaving those families as unrelated fail-closed branches is cheaper locally but
-keeps backend completeness unknowable. Moving the same branches into an editor
-preflight pass would improve timing while preserving the capability gaps and
-would create a second owner for backend support.
+The refactor already moved canonical literals, checked pattern types and slots,
+effect contracts, checked inline IR, committed conformance dictionaries,
+callable ownership facts, frame structure, and absolute symbol identity to
+their owning modules. The remaining capability work must preserve that
+separation. Eliminating an unsupported branch by making MIR rediscover a
+frontend fact would regress the architecture even if the branch disappeared.
+
+The current companion inventory predates ADR 0038. Its 65-site count and source
+line references are historical and do not satisfy this ADR's admission rule.
+It must be regenerated before capability implementation resumes.
 
 ## Decision
 
-Every valid, well-typed Talk program has an executable meaning in the reference
-bytecode backend. The backend may not reject such a program merely because a
-source form, type shape, ownership operation, generic boundary, or runtime
-representation has not been implemented.
+The reference bytecode backend has executable semantics for every
+frontend-valid, MIR-valid, closed Talk program. It may not reject such a program
+because a source form, checked operation, runtime value shape, generic boundary,
+or representation has not been implemented.
 
-The implementation will eliminate every current
-`BackendError::unsupported` site. Each site must end in exactly one of three
+A source module may still fail before execution for a stable reason owned by the
+appropriate module:
+
+1. the type checker rejects an invalid source construct or checked operation;
+2. MIR analysis rejects a CFG-sensitive ownership, exclusivity, linearity,
+   initialization, or writeback violation;
+3. the linker rejects a missing, duplicate, or incompatible external supplier;
+4. bytecode validation rejects an untrusted or malformed serialized module; or
+5. a violated compiler invariant produces an internal compiler error.
+
+A successfully linked program that has passed the frontend and MIR analyses
+must not encounter a compile-time capability rejection.
+
+Every current `BackendError::unsupported` site must end in exactly one of these
 states:
 
-1. the source behavior executes through the bytecode backend;
-2. the source is semantically invalid and the owning frontend or MIR analysis
-   reports a structured language diagnostic; or
-3. an external implementation is required and the linker reports a structured
-   missing-supplier diagnostic.
+- valid behavior is implemented through the bytecode backend;
+- invalid source receives a structured frontend diagnostic;
+- invalid control-flow ownership receives a structured MIR diagnostic;
+- missing external supply receives a structured linker diagnostic; or
+- a proven-unreachable recovery form or violated invariant becomes an internal
+  compiler error.
 
-The second and third states are not backend capability rejections. They express
-stable language or linking rules. Recovery-only typed-tree forms and violated
-compiler invariants become internal compiler errors and are never rendered as
-ordinary source diagnostics.
+Moving an unsupported message into a generic frontend `Unsupported` error does
+not satisfy this decision unless the language rule actually declares the form
+invalid and the diagnostic identifies that rule.
 
-Completion requires:
+## Error taxonomy
+
+`BackendError { message, span }` currently conflates source diagnostics,
+capability gaps, linking failures, and internal failures. Removing only the
+`unsupported` constructor would allow the same rejection to survive under
+`BackendError::new`, so constructor spelling is not the final invariant.
+
+The compile seam will distinguish at least:
+
+```text
+CompileFailure
+  frontend diagnostic
+  MIR ownership or initialization diagnostic
+  linker diagnostic
+  internal compiler error
+```
+
+Runtime failures after execution begins remain a separate result of `execute`.
+Each source-facing category has a stable diagnostic kind and source origin.
+Internal compiler errors are never rendered as ordinary source diagnostics.
+
+Completion still requires:
 
 ```text
 rg "BackendError::unsupported" src/backend
 ```
 
-to return no matches.
+to return no matches, but that grep is only one gate. Review must also prove
+that no former capability rejection was renamed into another unstructured
+error path.
 
-This decision preserves ADR 0034's one deep backend interface. MIR,
-monomorphization, glue generation, and bytecode details remain private. The
-work deepens the existing backend module rather than publishing new phase
-artifacts or introducing a second evaluator.
+## Admission rule: stable executable inventory
 
-## Admission rule
+No capability wave begins from source line numbers. Every remaining unsupported
+site first receives a stable identifier and one disposition:
 
-The initial implementation step is an executable inventory, not a refactor.
-Every unsupported call site receives a minimal source fixture and one
-classification:
+- `VALID` - implement executable behavior;
+- `DUP` - duplicate guard closed by another identified mechanism;
+- `FRONTEND` - source-invalid under a named frontend rule;
+- `MIR` - invalid under a named CFG-sensitive ownership rule;
+- `LINKER` - missing or incompatible external supply;
+- `ICE` - recovery-only form or violated compiler invariant.
 
-- valid behavior;
-- duplicate guard for a valid behavior;
-- frontend-invalid source;
-- linker failure;
-- recovery-only or internal invariant.
+The inventory records for each identifier:
 
-The inventory groups duplicate guards by capability family and records the
-expected final behavior. A repository test prevents adding a new unclassified
-unsupported site while the migration is in progress.
+- the triggering checked form;
+- its owning module;
+- its final behavior or diagnostic kind;
+- one minimal source fixture or invariant test by path and test name; and
+- the implementation mechanism that removes the site.
 
-A catch-all branch is not assumed unreachable. It must have a test proving the
-frontend erases or rejects the form before the branch can become an internal
-invariant.
+A repository test extracts the stable identifiers from the source and requires
+an exact match with the inventory. Adding, deleting, or reclassifying a site
+therefore changes the test. Source line numbers may be included for convenience
+but are not identities.
 
-## 1. Places and initialization
+A catch-all is not presumed unreachable. An `ICE` disposition requires a test
+showing that successful `TypedProgram` construction cannot publish the form, or
+that exhaustive matching over a checked enum excludes it.
 
-MIR will use one private place representation for writable storage:
+## 1. Checked uses, captures, and writable-place facts
+
+Before expanding runtime representation, the frontend seam must finish
+publishing the source decisions that MIR still reconstructs.
+
+Every call argument, receiver, capture, and other value-use edge carries its
+checked semantic operation:
+
+```text
+borrow shared
+borrow exclusive
+consume
+proven copy
+selected clone
+writeback
+```
+
+Copy and clone uses carry the evidence that made them legal. A checked writeback
+use identifies a source-valid writable expression. A checked capture records:
+
+- the canonical captured symbol;
+- the finalized capture type;
+- the checked capture operation;
+- required Copy or clone evidence;
+- whether assignment conversion requires a cell; and
+- the capture's source origin.
+
+`FrameFacts` already publishes the structural capture, cell, and nested-reference
+sets. This step completes that publication with semantic use facts. MIR stops
+interpreting `ArgMode`, `CaptureMode`, and runtime properties such as
+`needs_release` as proof of source legality.
+
+A true rvalue is not a writable `mut` argument. Typing reports that source error.
+MIR may materialize internal temporaries for evaluation, but it does not turn an
+invalid source rvalue into a writeback place whose evolved value is silently
+discarded.
+
+## 2. Places and initialization
+
+MIR deepens the existing private place module rather than adding syntax-specific
+assignment paths. A place identifies a storage root and a runtime projection
+spine:
 
 ```text
 Place
-  root: local | global | capture | temporary
-  projections: field | tuple element | record field | payload
+  root: local | global | cell
+  projections: field | tuple element | record slot | payload
 ```
 
-The place interface owns these operations:
+Captured mutable bindings use the cell representation selected by checked frame
+facts. Internal temporaries may participate in MIR operations but are not a new
+source category of writable place.
+
+The place module owns:
 
 ```text
 load
 initialize
 replace
-move/take
+move or take
 borrow shared
-borrow mutable
+borrow exclusive
+write back
 ```
 
-This replaces syntax-specific assignment and writeback branches. It supports:
+It supports:
 
 - `let` declarations without initializers;
 - definite-assignment checking before every read;
-- assignment to globals, captures, and nested projections;
-- replacement with exactly-once destruction of the old value;
-- `mut` arguments and requirements over any writable place; and
-- temporary materialization for a `mut` rvalue whose evolved value is
-  discarded.
+- assignment to globals, cells, and nested projections;
+- replacement with exactly-once destruction of the displaced value;
+- checked `mut` arguments and requirements over writable places; and
+- generic or existential projection using published layout evidence.
 
-Uninitialized storage has no default value. MIR dataflow tracks its state and
-reports a source diagnostic when a path can read it before initialization.
-Storage initialization and ownership liveness are one analysis over the same
-place identities, not parallel syntax walks.
+Uninitialized storage has no default value. MIR computes initialization and
+ownership over the CFG and reports structured diagnostics for reads before
+initialization or invalid path joins.
 
-## 2. Universal value operations and generic evidence
+A projection spine addresses a portion of storage for reading or writing. It
+does not by itself reintroduce source-visible partial moves or field-granular
+initialization. Root-level ownership and initialization remain consistent with
+the implicit-sharing decision in `docs/ownership-rethink-plan.md`; consuming
+destructure accounts for every payload explicitly.
 
-The backend will have one private authority for operations on a resolved runtime
-value type:
+## 3. Runtime value operations and evidence transport
+
+The backend has one private authority for runtime operations on a resolved value
+representation:
 
 ```text
 retain
 destroy
-equality
-show
-selected conformance requirements
+invoke equality evidence
+invoke show evidence
+invoke a committed requirement entry
 ```
 
-Concrete types receive generated operations. A rigid generic type receives the
-same operations in a witness bundle. The bundle is threaded consistently
-through direct generic calls, indirect calls, closure environments,
-existential packages, generic effects, imported generic implementations, and
-generated glue.
+This authority does not select source conformances. Typing commits every
+concrete decision it can make:
 
-The frontend remains the authority for conformance selection. The backend
-transports and invokes the selected evidence; it does not repeat conformance
-search.
+- conformance dictionaries in protocol requirement order;
+- selected implementation symbols and writeback widths;
+- associated evidence;
+- derived-operation recipes;
+- effect contracts and instantiations; and
+- declared bounds on rigid parameters.
 
-This mechanism must handle nested rigid positions such as
-`Array<(Int, T)>`, not only a payload whose complete type is `T`. It replaces
-all branches reporting absent ownership witnesses, absent conformance
-dictionaries, compound rigid evidence, unresolved generic effect
-instantiations, unsupported value types, and existential requirements without a
-runtime implementation.
+Backend specialization performs only the selection genuinely deferred because
+a receiver remained rigid during typing. Coherence makes that operation a
+forced dereference of a committed dictionary, not general conformance search.
 
-Derived equality and `show` use the same value operations. They cover every
-type shape for which the frontend publishes the corresponding conformance,
-including tuples, closed records, structs, enums, existentials, and generic
-values. The frontend must not publish structural conformance for a shape whose
-operation has no language semantics, such as function equality.
+Rigid generic values receive value-operation witnesses and required protocol
+dictionaries through one hidden evidence block. The block is transported
+consistently through:
 
-## 3. Owning closure environments
+- direct and indirect generic calls;
+- closure and handler environments;
+- existential packages;
+- generic effects;
+- imported generic implementations; and
+- generated retain, drop, show, and equality glue.
 
-Closure environments become type-aware owning values. Each environment records
-its capture slots, capture modes, value operations, inherited generic evidence,
-and captured effect capabilities.
+Nested rigid positions such as `Array<(Int, T)>` carry the evidence needed by
+the generated operation. Once evidence population is total, lookup failures
+for a well-formed checked instance become internal compiler errors with fixture
+coverage, not capability diagnostics.
 
-The backend will support:
+Derived equality and show consume frontend-published derivation recipes. The
+backend generates runtime code for every checked recipe and never infers
+structural conformance from a runtime type shape or requirement name.
+
+## 4. Owning closure environments
+
+Closure environments become type-aware owning runtime values. Each environment
+contains the slots and checked capture operations published by typing, inherited
+generic evidence, and captured effect capabilities.
+
+The runtime representation supports:
 
 - implicit method-receiver capture;
-- Copy and implicit-sharing snapshot captures;
+- Copy captures;
+- implicit-sharing snapshot captures;
 - consuming captures;
-- shared and mutable borrow captures;
+- shared and exclusive borrowed captures where their checked lifetime permits;
 - ownership-sensitive mutable cells;
 - recursive closures and mutually recursive local functions;
 - generic local functions that capture; and
 - named functions with explicit capture lists.
 
-Capturing a shareable managed value retains a snapshot according to the
-implicit-sharing decision in `docs/ownership-rethink-plan.md`. Capturing a
-strict-linear value still obeys linear consumption and cannot be silently
-copied. A consuming capture moves it. A stored borrowed capture must either be
-proven not to escape or be promoted to the owning stored-view representation
-required by the same implicit-sharing decision.
+MIR owns environment layout and lifecycle, not capture legality. Capturing a
+shareable managed value retains a snapshot under the implicit-sharing decision.
+A consuming capture moves a strict-linear value. A stored borrowed capture must
+already have a checked non-escaping lifetime or an owning stored-view
+representation.
 
-Closure copy and destruction use generated environment retain/drop glue. The
-last closure reference releases every owning capture exactly once, including on
-early returned and discontinued paths. Generic capture slots carry the witness
-bundle required to perform that cleanup. Cells and recursive environments are
-covered by the same lifecycle rather than exempted from resource accounting.
+Closure retain and destruction use generated environment glue. The last closure
+reference releases every owning slot exactly once on normal return, early
+return, handler resume, and discontinue paths. Generic slots carry the evidence
+needed for cleanup. Cells and recursive environments use the same lifecycle and
+are not exempt from resource accounting.
 
-This section removes all capture-related unsupported branches and directly
-covers the motivating `self` capture.
+This mechanism closes the motivating `self` capture after the checked-capture
+publication in section 1.
 
-## 4. Patterns and dynamic projection
+## 5. Pattern ownership and runtime projection
 
-The pattern compiler will account explicitly for every payload on every arm. A
-payload is moved to a binder, borrowed, retained/copied, or destroyed because
-it is unbound. The outer aggregate is never a second implicit owner after its
-payloads have been extracted.
+Typing now publishes pattern occurrence types, binder types, canonical variant
+identity, struct slots, record slots, and instantiated payload types including
+GADT refinements. MIR consumes those facts; it does not resolve source labels,
+search declarations, instantiate pattern types, or parse pattern literals.
 
-The implementation covers:
+The pattern compiler owns decision-tree CFG and runtime ownership settlement.
+On every arm, every payload is one of:
 
-- every typed destructuring form;
-- or-patterns whose alternatives leave different owned payloads unbound;
-- record patterns that bind a field and inspect its interior;
+- moved to a binder;
+- borrowed;
+- retained as a snapshot;
+- copied using checked evidence; or
+- destroyed because it is unbound.
+
+The outer aggregate is never a second implicit owner after its payloads have
+been transferred.
+
+Remaining executable cases include:
+
+- or-pattern alternatives with different unbound owned payloads;
+- patterns binding a whole field and inspecting its interior;
+- float pattern tests;
 - open-row record patterns;
-- string patterns through checked equality;
-- positional members on generic and existential values; and
-- generic tuple, record, and nominal projections.
+- generic and existential field projection; and
+- positional projection where the checked language form permits it.
 
-Closed and monomorphized rows use static slots. A genuinely open runtime row
-carries a row-layout dictionary mapping labels to slots. Generic and
-existential positional projection uses layout or witness evidence rather than
-reconstructing a concrete type.
+Closed and monomorphized rows use published static slots. If the language admits
+a genuinely open runtime row, typing publishes checked row-layout evidence and
+MIR uses it for dynamic projection. MIR does not reconstruct a label-to-slot map
+from source names. If no such checked evidence exists, typing must reject the
+operation under a named language rule.
 
-A consuming pattern that binds both a whole owning field and an interior value
-must make the ownership relation explicit: the interior is borrowed from the
-whole, copied when evidence permits, or retained as a snapshot. Two binders do
-not independently claim the same ownership reference.
+A pattern binding both a whole owning field and an interior value must express
+one ownership relation: the interior is borrowed from the whole, copied with
+checked evidence, or retained as a snapshot. Two binders never independently
+claim the same ownership reference.
 
-## 5. Globals and external implementations
+## 6. Globals and external implementations
 
-Every global has stable storage, an initializer thunk, initialization state,
-move state, type-aware teardown, and deterministic module ordering. Literal
-shape no longer determines whether a global is executable.
+Every executable global has stable storage, an initializer thunk,
+initialization state, move state, type-aware teardown, and deterministic module
+ordering. Literal shape does not decide whether a global receives storage.
 
 The backend supports aggregate globals, non-literal initializers,
-function-valued globals, global closures, general global reads, and replacement
-where the declaration permits mutation.
+function-valued globals, global closures, general reads, and replacement where
+the declaration permits mutation.
 
-Strict-linear globals use whole-program finite-exit analysis. Callable summaries
-record each global initialization, read, move, reinitialization, and
-consumption. Summaries are solved to a fixed point over the reachable call
-graph, including the finite target sets of indirect calls. A valid entry must
-consume each live linear global exactly once on every finite exit. A program
-that cannot satisfy that rule receives the same linearity diagnostic as an
-invalid local program; linear globals are no longer rejected as a class.
+Absolute symbol identity and frontend-published initialization order from ADR
+0038 are the identities used by storage and linking. MIR does not reconstruct
+module aliases or source import order.
+
+Strict-linear globals require a separate accepted static rule defining the
+decidable analysis, summary domain, recursion treatment, indirect-call target
+policy, and diagnostics. This ADR does not claim an exact semantic analysis of
+all finite paths in arbitrary programs. It does require that linear globals end
+in one stable state: supported under that rule or rejected by that rule, never
+rejected because the backend lacks a representation.
 
 Every callable reference resolves to exactly one supplier:
 
@@ -264,163 +387,173 @@ Every callable reference resolves to exactly one supplier:
 - a declared host function; or
 - a trusted intrinsic.
 
-Separately compiled modules use stable symbol identity and a validated callable
-interface. A declaration for which no supplier exists is a linker error, not an
-unsupported source form.
+Separately compiled modules use absolute symbol identity and a validated
+callable interface. Missing, duplicate, or incompatible supply is a structured
+linker error. It is not a MIR capability diagnostic.
 
-## 6. Ambient core effects
+## 7. Typed ambient effects
 
-The runtime's host implementation becomes the outermost fallback handler for
-ambient core effects rather than an unconditional bypass of the user handler
-stack. A nearer user handler can intercept a core effect, resume or discontinue,
-and delegate by performing outward to the host fallback.
+ADR 0039 owns the runtime policy and host-supply design for ambient effects. It
+distinguishes interceptable typed requests from raw host primitives and unsafe
+intrinsics, installs host implementations as ordinary outer fallback handlers,
+and requires safe request contracts before user interception is enabled.
 
-This applies to typed core operations such as IO and async requests. Trusted
-allocator and raw-memory primitives remain unhandleable unsafe intrinsics. If a
-current core effect conflates a typed request with allocator integrity, it must
-be split before user interception is enabled.
+For this ADR, completion means the current blanket Core-handler rejection is
+removed according to ADR 0039: checked ambient performs use ordinary capability
+routing, raw IO and allocation remain non-interceptable, closure environments
+capture only effects whose published policy permits handlers, and missing host
+supply is a structured linker diagnostic.
 
-Handler routing, cleanup, resource ownership, and one-shot continuation rules
-remain those of ADRs 0011, 0027, and 0032. Tests must cover nested user/core
-handlers, host fallback, resume, discontinue, and cleanup when a handler
-substitutes a result.
+## 8. Trusted inline IR
 
-This supersedes the parity-ledger and rebuild-plan restriction reserving all
-ambient core effects exclusively for the runtime.
+The ADR 0038 refactor completed the backend ownership change for trusted inline
+IR. Typing publishes `CheckedIrKind`: a closed set of canonical operations,
+checked types, and validated operands. MIR lowers that enum exhaustively and
+performs only instance substitution and runtime memory-kind selection.
 
-## 7. Trusted inline IR
+Parser-only operand variants do not automatically become valid checked IR.
+`uninit`, `poison`, aggregate constants, raw pointer literals, and static raw
+buffers currently have no checked value semantics. Until a separate language
+decision defines those semantics, typing rejects them with specific diagnostic
+kinds; they do not reach MIR and are not represented by a generic capability
+error.
 
-Every parser-admitted trusted inline IR instruction receives either a complete
-implementation or a frontend type error for an invalid operation/type
-combination. Backend lowering is exhaustive over instruction and operand
-variants.
+The unsafe effect gate remains mandatory and is owned by typing. Supporting a
+checked trusted operation does not make it safe or remove bytecode validation
+at the serialized-module trust seam.
 
-The implemented instruction families include arithmetic, comparison, bitwise
-operations, allocation, load, take, store, free, retain, memory copy, swap,
-pointer arithmetic, inline array access, host IO, conversions, and uniqueness
-checks.
+No new backend implementation wave is required for the currently checked inline
+IR enum. Future checked operations must add frontend validation and exhaustive
+MIR lowering in the same change.
 
-Inline IR type annotations use the same runtime type and value-operation
-machinery as ordinary source. They are not restricted to the scalar helper.
-Operands include registers, bound expressions, scalar constants, records, raw
-pointers, static raw buffers, `uninit`, and `poison`. `uninit` and `poison` have
-validated trap semantics and may not become ordinary source values.
+## 9. Exhaustive backend lowering
 
-The existing unsafe gate remains mandatory. Supporting trusted inline IR does
-not make raw operations safe or remove bytecode validation at the serialized
-module trust seam.
+After the shared mechanisms land, remaining generic fallbacks are audited
+against checked typed-tree and checked-operation enums, not parser enums.
 
-## 8. Exhaustive backend lowering
-
-After the preceding mechanisms land, the remaining generic fallbacks for
-unsupported declarations, expressions, patterns, constructions, fields, and
-value types are audited against the typed-tree enums.
-
-For every variant, the final state is one of:
+Every checked variant is one of:
 
 - exhaustively lowered;
 - erased by a documented frontend transformation;
-- rejected by the frontend with a structured diagnostic; or
+- rejected before `TypedProgram` publication under a named language rule; or
 - recovery-only and asserted unreachable in compilation.
 
 Generic unsupported messages are not retained as defense in depth. A violated
-construction invariant is an internal compiler error with enough context to
-debug the producer.
+construction invariant is an internal compiler error carrying the checked form,
+instance, and source origin needed to debug its producer.
 
 ## Implementation order
 
-The work lands in dependency order:
+Work lands in dependency order:
 
 ```text
-0. executable inventory
-1. places and initialization
-2. universal value operations and generic evidence
-3. owning closure environments
-4. patterns and dynamic projection
-5. globals and external implementations
-6. ambient core effects
-7. trusted inline IR
-8. exhaustive fallback removal
+0. regenerate the stable executable inventory and add its repository gate
+1. introduce typed compile-failure categories
+2. publish checked value-use, writable-place, and capture facts
+3. deepen places and definite initialization
+4. finish value-operation and evidence transport totality
+5. implement owning closure environments
+6. finish pattern ownership and runtime projection
+7. implement general globals and structured linking
+8. route ambient core effects through the handler stack
+9. remove exhaustive fallbacks and demote proven invariants to ICEs
 ```
 
-Places and value operations are the shared foundation. Closure environments,
-patterns, and globals must not each invent their own projection, retain, or
-drop conventions. Ambient handlers wait for closure and generic-environment
-layout to stabilize. Inline IR reuses place and value semantics rather than
-building a parallel memory model.
+Trusted inline IR is not a pending backend wave; its checked lowering is already
+exhaustive. Its parser-only operands remain a frontend language-design question.
 
-Each wave is driven by the inventory fixtures for that family and removes the
-corresponding unsupported sites in the same change. A wave may not replace one
-unsupported branch with another broader fallback.
+Each wave is driven by inventory fixtures and removes its identified sites in
+the same change. A wave may not replace an unsupported branch with a broader
+fallback, a generic frontend `Unsupported` diagnostic, or an untyped
+`BackendError::new` path.
+
+Places and runtime value operations are shared foundations. Closure
+environments, patterns, globals, and effects reuse their projection, evidence,
+retain, and destruction conventions rather than creating parallel modules.
 
 ## Validation
 
 Every implemented family requires black-box tests through the public backend
 interface. Tests cover, where applicable:
 
-- `talk check` acceptance and `talk run` execution;
+- frontend diagnostics without invoking backend semantic reconstruction;
+- `talk check` and `talk run` agreement for MIR ownership diagnostics;
 - concrete and generic values;
 - direct and indirect calls;
-- local, captured, global, and imported storage;
+- local, cell, global, and imported storage;
 - normal return, early return, loop exit, handler resume, and discontinue;
 - exact allocation, object, cell, closure-environment, and host-resource
   balance;
 - no duplicate destruction or use after move;
-- source modules and linked module suppliers; and
+- source and linked module suppliers; and
 - bytecode encode, decode, validation, and execution for new target forms.
 
 The existing parity programs, Core and stdlib suites, `talk-syntax`, package
-execution, REPL, C/Swift embedding, and browser embedding remain required
-regression surfaces.
+execution, REPL, C and Swift embedding, and browser embedding remain regression
+surfaces.
 
-The final gate additionally requires:
+The final gate requires:
 
-1. every initial unsupported site has a reviewed disposition and fixture;
-2. no `BackendError::unsupported` constructor or call remains;
-3. the typed declaration, expression, pattern, inline-IR instruction, and
-   inline-IR operand enums are exhaustively accounted for;
-4. malformed source fails before backend construction;
-5. missing external supply fails at linking; and
-6. all resource-balance fences pass.
+1. every stable inventory identifier has a reviewed disposition and fixture;
+2. source identifiers and inventory identifiers match exactly;
+3. no `BackendError::unsupported` constructor or call remains;
+4. no former site survives as an unstructured error or generic capability
+   diagnostic;
+5. checked declarations, expressions, patterns, calls, captures, effects, and
+   inline-IR operations are exhaustively accounted for;
+6. malformed source fails in its owning frontend module;
+7. CFG-sensitive ownership failures use structured MIR diagnostics;
+8. missing external supply fails through structured linking;
+9. violated typed facts produce internal compiler errors; and
+10. all resource-balance fences pass.
 
 ## Relationship to earlier decisions
 
-This ADR preserves ADR 0034's one deep backend interface, private phases, trust
-policy, bytecode reference target, and prohibition on a second evaluator. It
-extends ADR 0034's parity goal from the frozen required corpus to all valid
-frontend-accepted behavior.
+This ADR preserves ADR 0034's deep backend interface, private implementation
+phases, trust policy, bytecode reference target, and prohibition on a second
+evaluator.
 
-It preserves the semantic authority of ADR 0032 for ownership, deterministic
-cleanup, generic evidence selection, and one-shot effects. Its implementation
-uses the later implicit-sharing decision in `docs/ownership-rethink-plan.md`
-for managed captures and snapshots.
+It adopts ADR 0038's semantic ownership table. `TypedProgram` is the complete
+frontend seam; specialization is the only backend type-resolution operation;
+MIR does not become a second type checker.
 
-It supersedes only the blanket implementation restrictions recorded in the
-backend parity ledger and lean rebuild reports: owned captures, generic
-capturing local functions, linear globals as a class, uninitialized bindings as
-a class, and user handling of all ambient core effects. Invalid instances of
-those behaviors remain ordinary ownership, initialization, unsafe, or linking
-errors.
+It preserves the ownership, deterministic-cleanup, generic-evidence, and
+one-shot-effect semantics retained by ADRs 0032 and 0034, as amended by the
+implicit-sharing decision in `docs/ownership-rethink-plan.md`.
 
-ADR 0034's size accounting remains mandatory. Its 13,400-line threshold is an
-architecture-review trigger, not permission to retain unsupported behavior.
-Crossing it requires reviewing whether the new implementation has duplicated
-places, value operations, dictionaries, or lifecycle rules before widening the
-budget.
+It supersedes blanket implementation restrictions in the parity ledger only
+where this ADR supplies executable behavior: owning captures, generic capturing
+local functions, uninitialized bindings with definite-assignment analysis,
+general globals, and user handling of typed ambient core effects. Invalid
+instances remain ordinary source, ownership, initialization, unsafe, or linking
+errors under named rules.
+
+## Size accounting
+
+ADR 0038 performed the architecture review required after crossing ADR 0034's
+13,400-line trigger and removed substantial duplicated MIR responsibility. The
+current size report remains above that budget. This ADR does not silently widen
+it.
+
+Before a large runtime wave expands production code, the project must record
+either a revised reviewed budget or an accepted burn-down target. Every wave
+continues to report backend, runtime, frontend-seam, test, and documentation
+lines separately. Growth stops if a wave duplicates places, value operations,
+dictionaries, checked semantic facts, or lifecycle rules.
 
 ## Consequences
 
-- Backend completeness becomes an invariant rather than a ledger of exceptions.
-- Several currently separate branches deepen into shared place, value-operation,
-  closure-environment, and pattern mechanisms.
-- The implementation is substantially larger than moving backend errors into
-  editor diagnostics, but it removes the rejected behavior instead of changing
-  when users discover it.
-- Linear globals, ambient core handlers, open rows, owning stored views, and
-  precompiled callable supply require real semantic and runtime work; they are
-  not hidden behind syntax-specific exceptions.
-- Some failures move earlier because they are language-invalid, but no valid
-  typed program fails for lack of backend support.
-- New source features must extend the backend in the same change or define a
-  frontend rejection. Adding another open-ended backend capability rejection is
-  contrary to this decision.
+- Backend completeness becomes an invariant over checked, linked programs.
+- Source semantics remain local to the frontend; MIR gains no fallback semantic
+  authority while capabilities are implemented.
+- The remaining backend work is narrower than before ADR 0038: runtime places,
+  evidence transport, closure lifecycle, ownership settlement, global storage,
+  linking, and handler routing.
+- Structured error categories make unsupported behavior harder to hide by
+  renaming a constructor.
+- The inventory survives refactoring because stable identifiers and fixtures,
+  not line numbers, define it.
+- New source features must publish complete checked facts and add executable
+  lowering in the same change, or define a stable frontend rejection. An
+  open-ended capability diagnostic in either frontend or backend is contrary to
+  this decision.

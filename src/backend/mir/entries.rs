@@ -134,6 +134,15 @@ impl<'a> ProgramBuilder<'a> {
                     continue;
                 }
                 let ty = rhs.ty.clone();
+                // The global twin of the borrowed-global rule: a linear
+                // value's exactly-once consumption cannot be proven
+                // across program-lifetime storage (OWN-03).
+                if is_linear(self, &ty) {
+                    return Err(BackendError::new(
+                        "a linear value cannot be stored in a global binding; consume linear values within function scopes".into(),
+                        decl.span,
+                    ));
+                }
                 let slot = u32::try_from(self.global_slots.len()).unwrap_or_default();
                 self.global_slots.insert(*symbol, slot);
                 self.global_tys.insert(slot, ty);
@@ -245,15 +254,74 @@ impl<'a> ProgramBuilder<'a> {
         id: FuncId,
         returned_global: Option<u32>,
     ) -> Result<FuncId, BackendError> {
+        // The program runs inside core's `_with_host` (ADR 0039), which
+        // installs the host fallbacks around it as ordinary handlers —
+        // the compiler knows the wrapper, not any effect. Its callback
+        // returns unit, so a synthesized body stashes the program value
+        // in a hidden global slot for this wrapper to return after
+        // teardown. Programs without core have no wrapper (and no
+        // ambient effects to supply) and run directly.
+        let hosted = if self.callables.contains_key(&Symbol::WithHost) {
+            let host = self.demand(Symbol::WithHost, Vec::new(), Span::SYNTHESIZED)?;
+            let slot = u32::try_from(self.global_slots.len()).unwrap_or_default();
+            self.result_slot = Some(slot);
+            let body_id = self.reserve("entry_body");
+            let mut fx = FunctionBuilder::new(self, 0, 0);
+            let result = fx.fresh_local();
+            fx.push(Inst::Call {
+                dest: result,
+                func: id,
+                args: Vec::new(),
+                unwind: None,
+            });
+            fx.push(Inst::GlobalStore {
+                global: slot,
+                src: Operand::Local(result),
+            });
+            let (n_locals, blocks) = fx.finish(Operand::Const(Constant::Unit))?;
+            self.functions[body_id] = Function {
+                name: "entry_body".into(),
+                arity: 0,
+                n_locals,
+                blocks,
+            };
+            Some((host, body_id, slot))
+        } else {
+            None
+        };
+
         let outer = self.reserve("script_main");
         let mut wrapper = FunctionBuilder::new(self, 0, 0);
         let result = wrapper.fresh_local();
-        wrapper.push(Inst::Call {
-            dest: result,
-            func: id,
-            args: Vec::new(),
-            unwind: None,
-        });
+        match hosted {
+            Some((host, body_id, slot)) => {
+                let closure = wrapper.fresh_local();
+                wrapper.push(Inst::MakeClosure {
+                    dest: closure,
+                    func: body_id,
+                    env: Vec::new(),
+                });
+                let unit_result = wrapper.fresh_local();
+                wrapper.push(Inst::Call {
+                    dest: unit_result,
+                    func: host,
+                    args: vec![Operand::Local(closure)],
+                    unwind: None,
+                });
+                wrapper.push(Inst::GlobalLoad {
+                    dest: result,
+                    global: slot,
+                });
+            }
+            None => {
+                wrapper.push(Inst::Call {
+                    dest: result,
+                    func: id,
+                    args: Vec::new(),
+                    unwind: None,
+                });
+            }
+        }
         let mut slots: Vec<(u32, Ty)> = wrapper
             .program_builder
             .global_tys
@@ -264,15 +332,6 @@ impl<'a> ProgramBuilder<'a> {
         for (slot, ty) in slots {
             if Some(slot) == returned_global {
                 continue;
-            }
-            // A linear global would need an exactly-once consumption proof
-            // across every function that can reach the slot plus this
-            // teardown; keep linear values in function scopes (OWN-03).
-            if is_linear(wrapper.program_builder, &ty) {
-                return Err(BackendError::unsupported(
-                    "linear global values are not supported yet (consume linear values within function scopes)".into(),
-                    Span::SYNTHESIZED,
-                ));
             }
             if wrapper.needs_release(&ty) {
                 let loaded = wrapper.fresh_local();
@@ -323,6 +382,12 @@ impl<'a> ProgramBuilder<'a> {
             } = &decl.kind
             {
                 for (symbol, ty) in pattern_bindings_with_tys(lhs) {
+                    if is_linear(self, &ty) {
+                        return Err(BackendError::new(
+                            "a linear value cannot be stored in a global binding; consume linear values within function scopes".into(),
+                            decl.span,
+                        ));
+                    }
                     let slot = u32::try_from(self.global_slots.len()).unwrap_or_default();
                     self.global_slots.insert(symbol, slot);
                     self.global_tys

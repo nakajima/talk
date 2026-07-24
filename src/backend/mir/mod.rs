@@ -843,6 +843,17 @@ fn mem_ty_of(ty: &Ty) -> MemTy {
 /// last-use borrow tracking and loop-carried move checks. This is
 /// ownership-dataflow input, MIR's own concern — the semantic capture
 /// and cell facts arrive published on frame-root blocks (ADR 0038).
+/// The fail-closed rejection for a frame-anchored closure reaching an
+/// edge that outlives its environment (deferred: emission sites are
+/// infallible instruction sinks).
+fn anchored_escape() -> BackendError {
+    BackendError::unsupported(
+        "a closure that captures owned values cannot escape its creating scope (not supported yet)"
+            .into(),
+        Span::SYNTHESIZED,
+    )
+}
+
 fn frame_uses(nodes: &[&Node]) -> FxHashMap<Symbol, usize> {
     use derive_visitor::{Drive, Visitor};
     #[derive(Visitor)]
@@ -1349,7 +1360,8 @@ pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Progr
     Ok(Program {
         functions: builder.functions,
         entry: entry_id,
-        global_slots: u32::try_from(builder.global_slots.len()).unwrap_or_default(),
+        global_slots: u32::try_from(builder.global_slots.len()).unwrap_or_default()
+            + u32::from(builder.result_slot.is_some()),
     })
 }
 
@@ -1380,6 +1392,10 @@ struct ProgramBuilder<'a> {
     /// The root program's top-level bindings get real static slots,
     /// initialized in order by the script entry (LINK-02): symbol → slot.
     global_slots: FxHashMap<Symbol, u32>,
+    /// The hidden slot the entry body stashes the program value in while
+    /// `_with_host`'s unit-returning callback unwinds (ADR 0039); one
+    /// extra static slot past the named globals.
+    result_slot: Option<u32>,
     /// Declared types of global slots (for replacement drops).
     global_tys: FxHashMap<u32, Ty>,
     functions: Vec<Function>,
@@ -1475,6 +1491,7 @@ impl<'a> ProgramBuilder<'a> {
             callables: FxHashMap::default(),
             globals: FxHashMap::default(),
             global_slots: FxHashMap::default(),
+            result_slot: None,
             global_tys: FxHashMap::default(),
             functions: Vec::new(),
             func_ids: FxHashMap::default(),
@@ -2414,6 +2431,17 @@ struct FunctionBuilder<'p, 'a> {
     /// Writing one would mutate the copy, not the binding, so assignments
     /// to them fail closed.
     captured_locals: rustc_hash::FxHashSet<LocalId>,
+    /// Bindings declared without an initializer: they live in `moved`
+    /// until first assignment, and reads while still moved report as
+    /// uninitialized rather than moved.
+    uninitialized: rustc_hash::FxHashSet<LocalId>,
+    /// Closure values whose environments reference frame-anchored state
+    /// (borrowed receivers, snapshot captures released at scope exit).
+    /// They may be called and passed as borrowed arguments freely, but
+    /// storing or returning one would outlive its environment, so those
+    /// edges fail closed. `push`/`terminate` propagate the mark through
+    /// copies and block-parameter edges.
+    anchored_closures: rustc_hash::FxHashSet<LocalId>,
     /// Symbols this frame assignment-converts to cells (see `cell_scan`).
     celled: rustc_hash::FxHashSet<Symbol>,
     /// Symbols referenced under a nested function value in this frame —
@@ -2533,6 +2561,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             param_witnesses: rustc_hash::FxHashMap::default(),
             param_requirements: rustc_hash::FxHashMap::default(),
             captured_locals: rustc_hash::FxHashSet::default(),
+            uninitialized: rustc_hash::FxHashSet::default(),
+            anchored_closures: rustc_hash::FxHashSet::default(),
             celled: rustc_hash::FxHashSet::default(),
             nested_refs: rustc_hash::FxHashSet::default(),
             cell_handles: rustc_hash::FxHashSet::default(),
@@ -2876,6 +2906,19 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// here; owned fields recurse; Borrowed views own nothing.
     fn drop_value(&mut self, value: Operand, ty: &Ty) {
         if matches!(ty, Ty::Borrow(_, _)) {
+            return;
+        }
+        // A cell handle owns its content, not the handle bits: releasing
+        // it releases whatever the cell currently holds.
+        if let Operand::Local(local) = value
+            && self.cell_handles.contains(&local)
+        {
+            let content = self.fresh_local();
+            self.push(Inst::CellGet {
+                dest: content,
+                cell: value,
+            });
+            self.drop_value(Operand::Local(content), ty);
             return;
         }
         // Strict linearity (OWN-03): a linear value reaching an implicit
@@ -3602,12 +3645,95 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     fn push(&mut self, inst: Inst) {
+        self.track_anchored(&inst);
         if !self.terminated() {
             self.blocks[self.current].insts.push(inst);
         }
     }
 
+    /// Propagate the frame-anchored closure mark through value copies,
+    /// and fail closed on any edge that would let an anchored closure
+    /// outlive the frame state its environment references.
+    fn track_anchored(&mut self, inst: &Inst) {
+        if self.anchored_closures.is_empty() {
+            return;
+        }
+        fn hits(set: &rustc_hash::FxHashSet<LocalId>, op: &Operand) -> bool {
+            matches!(op, Operand::Local(local) if set.contains(local))
+        }
+        let set = &self.anchored_closures;
+        let mark = match inst {
+            Inst::Copy { dest, src } if hits(set, src) => Some(*dest),
+            Inst::MakeClosure { dest, env, .. } if env.iter().any(|op| hits(set, op)) => {
+                Some(*dest)
+            }
+            Inst::Tuple { args, .. }
+            | Inst::Variant { args, .. }
+            | Inst::Record { args, .. }
+            | Inst::ObjectNew { args, .. }
+                if args.iter().any(|op| hits(set, op)) =>
+            {
+                self.deferred_errors.push(anchored_escape());
+                None
+            }
+            Inst::SetField { src, .. }
+            | Inst::ObjectSet { src, .. }
+            | Inst::GlobalStore { src, .. }
+            | Inst::CellSet { src, .. }
+            | Inst::Store { src, .. }
+                if hits(set, src) =>
+            {
+                self.deferred_errors.push(anchored_escape());
+                None
+            }
+            Inst::CellNew { init, .. } if hits(set, init) => {
+                self.deferred_errors.push(anchored_escape());
+                None
+            }
+            Inst::SetFinalizer { closure, .. } if hits(set, closure) => {
+                self.deferred_errors.push(anchored_escape());
+                None
+            }
+            Inst::ExistentialPack {
+                payload, witnesses, ..
+            } if hits(set, payload) || witnesses.iter().any(|op| hits(set, op)) => {
+                self.deferred_errors.push(anchored_escape());
+                None
+            }
+            Inst::AbortTo { value, .. } if hits(set, value) => {
+                self.deferred_errors.push(anchored_escape());
+                None
+            }
+            _ => None,
+        };
+        if let Some(dest) = mark {
+            self.anchored_closures.insert(dest);
+        }
+    }
+
     fn terminate(&mut self, term: Term) {
+        if !self.anchored_closures.is_empty() {
+            match &term {
+                Term::Return(Operand::Local(local))
+                    if self.anchored_closures.contains(local) =>
+                {
+                    self.deferred_errors.push(anchored_escape());
+                }
+                Term::Goto(block, args) => {
+                    // Block-parameter SSA edges keep the mark flowing.
+                    let marked: Vec<LocalId> = args
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, arg)| {
+                            matches!(arg, Operand::Local(local) if self.anchored_closures.contains(local))
+                        })
+                        .filter_map(|(ix, _)| self.blocks[*block].params.get(ix).copied())
+                        .collect();
+                    self.anchored_closures.extend(marked);
+                }
+                _ => {}
+            }
+        }
         if !self.terminated() {
             self.blocks[self.current].term = Some(term);
         }
@@ -3650,6 +3776,30 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     }));
                 }
                 Ok(None)
+            }
+            ExprKind::Member(Some(base), crate::label::Label::Positional(index)) => {
+                // Tuple elements share the record convention: runtime
+                // records are tuples, so the link rebuilds the tuple.
+                let mut head = self.resolved(&base.ty);
+                while let Ty::Borrow(_, inner) = head {
+                    head = *inner;
+                }
+                let Ty::Tuple(items) = head else {
+                    return Ok(None);
+                };
+                let Some(field_ty) = items.get(*index).cloned() else {
+                    return Ok(None);
+                };
+                let Some(mut chain) = self.resolve_place(base)? else {
+                    return Ok(None);
+                };
+                chain.links.push(PlaceLink {
+                    index: u16::try_from(*index).unwrap_or_default(),
+                    heap: false,
+                    field_ty,
+                    record_arity: Some(u16::try_from(items.len()).unwrap_or_default()),
+                });
+                Ok(Some(chain))
             }
             ExprKind::Member(base_expr, crate::label::Label::Named(name)) => {
                 let Some(base) = base_expr else {
@@ -3874,6 +4024,33 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             });
         }
         Ok(())
+    }
+
+    /// A captureless function value whose body builds one enum variant —
+    /// an uncalled constructor reference.
+    fn constructor_value(&mut self, enum_symbol: Symbol, tag: u16, arity: u16) -> Operand {
+        let id = self.program_builder.reserve("constructor");
+        let mut block = BlockData::default();
+        block.insts.push(Inst::Variant {
+            dest: arity,
+            enum_symbol,
+            tag,
+            args: (0..arity).map(Operand::Local).collect(),
+        });
+        block.term = Some(Term::Return(Operand::Local(arity)));
+        self.program_builder.functions[id] = Function {
+            name: "constructor".into(),
+            arity,
+            n_locals: arity + 1,
+            blocks: vec![block],
+        };
+        let dest = self.fresh_local();
+        self.push(Inst::MakeClosure {
+            dest,
+            func: id,
+            env: Vec::new(),
+        });
+        Operand::Local(dest)
     }
 
     /// A literal String value (immortal static bytes behind the core
@@ -4695,31 +4872,76 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// CHG-06: v1 closure captures are Copy values only. Handler clauses
     /// (extent-bounded shared borrows) do not pass through here. A closure
     /// capturing an owned buffer or region handle could outlive it.
-    fn check_captures(&self, captured: &[Symbol], span: Span) -> Result<(), BackendError> {
+    /// Prepare implicit captures of owning state. Copy values capture
+    /// as before. A shared borrow (a method receiver) captures its
+    /// handle directly. An owned managed value captures a retained
+    /// snapshot held by a frame-scoped local, released at scope exit —
+    /// implicit sharing's clone-at-boundary rule applied to the
+    /// environment. Either way the closure is frame-anchored: it may be
+    /// called and passed, but not stored or returned. Returns the
+    /// symbol-to-snapshot environment overrides and whether the closure
+    /// is anchored.
+    fn prepare_implicit_captures(
+        &mut self,
+        captured: &[Symbol],
+        span: Span,
+    ) -> Result<(FxHashMap<Symbol, LocalId>, bool), BackendError> {
+        let mut overrides = FxHashMap::default();
+        let mut anchored = false;
         for symbol in captured {
             let Some(local) = self.locals.get(symbol).copied() else {
                 continue;
             };
-            let owning = self
+            let Some(ty) = self
                 .owned_tys
                 .get(&local)
                 .or_else(|| self.local_tys.get(&local))
-                .is_some_and(|ty| {
-                    let mut ty = ty;
-                    while let Ty::Borrow(_, inner) = ty {
-                        ty = inner;
-                    }
-                    contains_buffer(self.program_builder, ty)
-                        || contains_object(self.program_builder, ty)
-                });
-            if owning {
-                return Err(BackendError::unsupported(
-                    "capturing owned values in function values is not supported yet".into(),
-                    span,
-                ));
+                .cloned()
+            else {
+                continue;
+            };
+            let owning = {
+                let mut inner = &ty;
+                while let Ty::Borrow(_, next) = inner {
+                    inner = next;
+                }
+                contains_buffer(self.program_builder, inner)
+                    || contains_object(self.program_builder, inner)
+            };
+            if !owning {
+                continue;
+            }
+            match &ty {
+                Ty::Borrow(Perm::Shared, _) => {
+                    anchored = true;
+                }
+                Ty::Borrow(Perm::Exclusive, _) => {
+                    return Err(BackendError::unsupported(
+                        "capturing an exclusive borrow in a function value is not supported yet"
+                            .into(),
+                        span,
+                    ));
+                }
+                _ if is_linear(self.program_builder, &ty) => {
+                    return Err(BackendError::unsupported(
+                        "capturing linear values in function values is not supported yet".into(),
+                        span,
+                    ));
+                }
+                _ => {
+                    let snap = self.fresh_local();
+                    self.push(Inst::Copy {
+                        dest: snap,
+                        src: Operand::Local(local),
+                    });
+                    self.retain_value(Operand::Local(snap), &ty, span)?;
+                    self.own_local(snap, &ty);
+                    overrides.insert(*symbol, snap);
+                    anchored = true;
+                }
             }
         }
-        Ok(())
+        Ok((overrides, anchored))
     }
 
     /// Re-bind celled parameters through cells (assignment conversion
@@ -4750,8 +4972,20 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// `consuming` moves the owner. Owned (droppable) payloads wait on
     /// closure drop glue and borrow pinning waits on the flow-rule
     /// port, so those modes accept copyable referents only for now.
-    fn check_capture_list(&mut self, func: &Func, captured: &[Symbol]) -> Result<(), BackendError> {
+    /// Prepare an explicit capture list. Owning values follow the same
+    /// frame-anchored conventions as implicit captures: `copy` retains a
+    /// snapshot (implicit sharing's clone-is-retain rule), `consuming`
+    /// moves the value into a frame-scoped slot released at scope exit,
+    /// and a shared borrow aliases the frame's binding. Returns the
+    /// environment overrides and whether the closure is anchored.
+    fn prepare_capture_list(
+        &mut self,
+        func: &Func,
+        captured: &[Symbol],
+    ) -> Result<(FxHashMap<Symbol, LocalId>, bool), BackendError> {
         use crate::node_kinds::func::CaptureMode;
+        let mut overrides = FxHashMap::default();
+        let mut anchored = false;
         for spec in &func.captures {
             let Ok(symbol) = spec.name.symbol() else {
                 continue;
@@ -4766,42 +5000,61 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 .cloned()
                 .unwrap_or(Ty::Error);
             let droppable = self.needs_release(&ty);
-            match spec.mode {
-                CaptureMode::Copy => {
-                    if droppable {
-                        return Err(BackendError::unsupported(
-                            format!(
-                                "cannot capture `{}` by copy: copy captures require a copyable type",
-                                spec.name.name_str()
-                            ),
-                            spec.span,
-                        ));
-                    }
-                }
-                CaptureMode::Move => {
-                    if droppable {
-                        return Err(BackendError::unsupported(
-                            format!(
-                                "consuming captures of owned values are not supported yet (`{}`)",
-                                spec.name.name_str()
-                            ),
-                            spec.span,
-                        ));
-                    }
+            if !droppable {
+                if matches!(spec.mode, CaptureMode::Move) {
                     // The closure owns the value now; later uses in the
                     // frame are uses of a moved value.
                     self.moved.insert(local);
                 }
-                CaptureMode::BorrowShared | CaptureMode::BorrowMut => {
-                    if droppable {
-                        return Err(BackendError::unsupported(
-                            format!(
-                                "borrow captures of owned values are not supported yet (`{}`)",
-                                spec.name.name_str()
-                            ),
-                            spec.span,
-                        ));
-                    }
+                continue;
+            }
+            if is_linear(self.program_builder, &ty) {
+                return Err(BackendError::unsupported(
+                    format!(
+                        "capturing the linear value `{}` in a function value is not supported yet",
+                        spec.name.name_str()
+                    ),
+                    spec.span,
+                ));
+            }
+            match spec.mode {
+                CaptureMode::Copy => {
+                    let snap = self.fresh_local();
+                    self.push(Inst::Copy {
+                        dest: snap,
+                        src: Operand::Local(local),
+                    });
+                    self.retain_value(Operand::Local(snap), &ty, spec.span)?;
+                    self.own_local(snap, &ty);
+                    overrides.insert(symbol, snap);
+                    anchored = true;
+                }
+                CaptureMode::Move => {
+                    // Ownership transfers from the binding to a frame-
+                    // scoped slot the environment references; the binding
+                    // is moved and will not release.
+                    let snap = self.fresh_local();
+                    self.push(Inst::Copy {
+                        dest: snap,
+                        src: Operand::Local(local),
+                    });
+                    self.own_local(snap, &ty);
+                    self.moved.insert(local);
+                    self.record_flow(verify::FlowEvent::Move(local));
+                    overrides.insert(symbol, snap);
+                    anchored = true;
+                }
+                CaptureMode::BorrowShared => {
+                    anchored = true;
+                }
+                CaptureMode::BorrowMut => {
+                    return Err(BackendError::unsupported(
+                        format!(
+                            "mutable-borrow captures of owned values are not supported yet (`{}`)",
+                            spec.name.name_str()
+                        ),
+                        spec.span,
+                    ));
                 }
             }
         }
@@ -4818,7 +5071,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 ));
             }
         }
-        Ok(())
+        Ok((overrides, anchored))
     }
 
     /// Compile a block in its own drop scope. The block's value escapes the
@@ -4859,10 +5112,36 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 ..
             } => {
                 let Some(rhs) = rhs else {
-                    return Err(BackendError::unsupported(
-                        "`let` without an initializer is not supported yet".into(),
-                        decl.span,
-                    ));
+                    // An uninitialized binding is born moved: reads before
+                    // the first assignment report through the moved-value
+                    // diagnostics (path-sensitive via arm merging), the
+                    // first assignment initializes without releasing
+                    // garbage, and a never-initialized owned binding
+                    // releases nothing at scope exit.
+                    let PatternKind::Bind(Name::Resolved(symbol, _)) = &lhs.kind else {
+                        return Err(BackendError::unsupported(
+                            "destructuring in a `let` without an initializer is not supported yet"
+                                .into(),
+                            decl.span,
+                        ));
+                    };
+                    if self.celled.contains(symbol) {
+                        return Err(BackendError::unsupported(
+                            "capturing a `let` without an initializer is not supported yet".into(),
+                            decl.span,
+                        ));
+                    }
+                    let ty = self.resolved(&lhs.ty.clone().unwrap_or(Ty::Error));
+                    let local = self.fresh_local();
+                    self.locals.insert(*symbol, local);
+                    self.local_tys.insert(local, ty.clone());
+                    self.own_local(local, &ty);
+                    self.moved.insert(local);
+                    self.uninitialized.insert(local);
+                    if self.owned_tys.contains_key(&local) {
+                        self.record_flow(verify::FlowEvent::Move(local));
+                    }
+                    return Ok(Operand::Const(Constant::Unit));
                 };
                 // `consume` of a borrowed source drains a retained copy:
                 // the owner is always protected by the reference the
@@ -4964,16 +5243,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             PatternKind::Bind(Name::Resolved(symbol, _)) => {
                 if self.celled.contains(symbol) {
                     // Assignment-converted: the binding becomes a cell
-                    // shared with the closures that capture it. Cell
-                    // contents stay copyable; ownership-sensitive
-                    // mutable captures need explicit modes.
-                    if self.needs_release(ty) {
-                        return Err(BackendError::unsupported(
-                            "cannot capture an ownership-sensitive mutable value in a function value (not supported yet)"
-                                .into(),
-                            pattern.span,
-                        ));
-                    }
+                    // shared with the closures that capture it. Owning
+                    // content transfers into the cell; the frame releases
+                    // whatever the cell holds at scope exit (`drop_value`
+                    // unwraps cell handles), and assignment releases the
+                    // displaced content at the write.
                     let handle = self.fresh_local();
                     self.push(Inst::CellNew {
                         dest: handle,
@@ -4983,6 +5257,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     self.locals.insert(*symbol, handle);
                     self.local_tys.insert(handle, ty.clone());
                     self.cell_handles.insert(handle);
+                    if self.needs_release(ty) {
+                        self.own_local(handle, ty);
+                    }
                     return Ok(());
                 }
                 // An owned rvalue temporary becomes the binding's storage
@@ -5081,21 +5358,35 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         self.bind_owned_pattern(&cell.pattern, slot, &cell.field_ty)?;
                         continue;
                     };
-                    // `label: pattern` binds both names to the slot; two
-                    // owners of one owned value cannot both be real.
-                    if self.needs_release(&cell.field_ty) {
-                        return Err(BackendError::unsupported(
-                            "record destructuring that binds both a field and its interior of an owned value is not supported yet"
-                                .into(),
-                            pattern.span,
-                        ));
-                    }
                     let bind = Pattern {
                         id: cell.pattern.id,
                         kind: PatternKind::Bind(name.clone()),
                         span: pattern.span,
                         ty: None,
                     };
+                    // `label: pattern` binds both names to the slot. One
+                    // owned value cannot have two real owners: the label
+                    // binder keeps the original and interior binders take
+                    // a donated reference (implicit sharing's
+                    // clone-at-boundary rule).
+                    if self.needs_release(&cell.field_ty)
+                        && !pattern_bind_symbols(&cell.pattern).is_empty()
+                    {
+                        let shared = self.fresh_local();
+                        self.push(Inst::Copy {
+                            dest: shared,
+                            src: slot,
+                        });
+                        self.retain_value(Operand::Local(shared), &cell.field_ty, pattern.span)?;
+                        self.produce_temp(shared, &cell.field_ty);
+                        self.bind_owned_pattern(&bind, slot, &cell.field_ty)?;
+                        self.bind_owned_pattern(
+                            &cell.pattern,
+                            Operand::Local(shared),
+                            &cell.field_ty,
+                        )?;
+                        continue;
+                    }
                     self.bind_owned_pattern(&bind, slot, &cell.field_ty)?;
                     self.bind_owned_pattern(&cell.pattern, slot, &cell.field_ty)?;
                 }
@@ -5443,9 +5734,19 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         // the view keeps its snapshot.
                         if self.cell_handles.contains(&local) {
                             // Assignment-converted binding: write the
-                            // shared cell (contents are copyable, so no
-                            // old-value drop is due).
+                            // shared cell, releasing displaced owning
+                            // content at the write.
                             let value = self.compile_expr(rhs)?;
+                            let content_ty = self.resolved(&rhs.ty);
+                            if self.needs_release(&content_ty) {
+                                let old = self.fresh_local();
+                                self.push(Inst::CellGet {
+                                    dest: old,
+                                    cell: Operand::Local(local),
+                                });
+                                self.drop_value(Operand::Local(old), &content_ty);
+                                self.consume_binding(value, &content_ty, rhs.span)?;
+                            }
                             self.push(Inst::CellSet {
                                 cell: Operand::Local(local),
                                 src: value,
@@ -5466,8 +5767,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             if !self.moved.contains(&local) {
                                 self.displace_or_drop(local, &ty);
                             }
-                            self.moved.remove(&local);
                         }
+                        // Also clears the born-moved state of an
+                        // uninitialized `let`, whatever its type.
+                        self.moved.remove(&local);
                         self.consume_binding(value, &rhs.ty, rhs.span)?;
                         self.push(Inst::Copy {
                             dest: local,
@@ -5702,6 +6005,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         *count -= 1;
                     }
                     if self.moved.contains(&local) {
+                        if self.uninitialized.contains(&local) {
+                            return Err(BackendError::new(
+                                format!("`{name}` is read before it is initialized"),
+                                expr.span,
+                            ));
+                        }
                         return Err(BackendError::new(
                             format!("use of moved value `{name}`"),
                             expr.span,
@@ -6070,13 +6379,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     ));
                 };
                 let effect = *effect;
-                // The runtime is the implicit handler for the core `'io`
-                // effect: a perform dispatches on the request's tag
-                // straight to the host operation (IO-02). User handlers
-                // for ambient effects stay out of scope for v1.
-                if effect == Symbol::Io {
-                    return self.compile_io_perform(expr, args);
-                }
                 // One clause body serves every instantiation over rigid
                 // payload types: payloads travel in native layout and the
                 // perform site appends one `[drop, retain]` witness pair
@@ -6237,6 +6539,99 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 });
                 self.apply_writebacks(dest, targets, &ty, expr.span)
             }
+            ExprKind::RecordLiteral { fields, spread } => {
+                // In-row-order spreadless literals became tuples at
+                // typed-program build; this arm is the out-of-order
+                // residue: evaluate in source order, permute into the
+                // row's label-sorted layout. Spreads are checker-rejected.
+                if spread.is_some() {
+                    return Err(BackendError::unsupported(
+                        "record spreads are not supported yet".into(),
+                        expr.span,
+                    ));
+                }
+                let record_ty = self.resolved(&expr.ty);
+                let Ty::Record(row) = &record_ty else {
+                    return Err(BackendError::new(
+                        "record literal without a record row type".into(),
+                        expr.span,
+                    ));
+                };
+                let mut compiled = Vec::new();
+                for field in fields {
+                    let operand = self.compile_expr(&field.value)?;
+                    compiled.push((field.label.name_str(), operand, field.value.span));
+                }
+                let mut args = Vec::new();
+                for (label, field_ty) in &row.fields {
+                    let Some((_, operand, span)) = compiled
+                        .iter()
+                        .find(|(written, _, _)| *written == label.to_string())
+                    else {
+                        return Err(BackendError::new(
+                            "record literal missing a row field".into(),
+                            expr.span,
+                        ));
+                    };
+                    self.consume_binding(*operand, field_ty, *span)?;
+                    args.push(*operand);
+                }
+                let dest = self.fresh_local();
+                self.push(Inst::Tuple { dest, args });
+                self.produce_temp(dest, &record_ty);
+                Ok(Operand::Local(dest))
+            }
+            ExprKind::Constructor(Name::Resolved(symbol, _))
+                if self.program_builder.variant_tag(*symbol).is_some() =>
+            {
+                // An uncalled leading-dot constructor reference.
+                let func_ty = self.resolved(&expr.ty);
+                let Ty::Func(params, _, _) = &func_ty else {
+                    return Err(BackendError::unsupported(
+                        "this constructor cannot be used as a value yet".into(),
+                        expr.span,
+                    ));
+                };
+                let (enum_symbol, tag) = self
+                    .program_builder
+                    .variant_tag(*symbol)
+                    .expect("guarded above");
+                let arity = u16::try_from(params.len())
+                    .map_err(|_| BackendError::new("too many parameters".into(), expr.span))?;
+                Ok(self.constructor_value(enum_symbol, tag, arity))
+            }
+            ExprKind::Member(Some(receiver), crate::label::Label::Named(member_name))
+                if matches!(
+                    &receiver.kind,
+                    ExprKind::Constructor(Name::Resolved(symbol, _))
+                        if self.program_builder.variant_names(*symbol).is_some()
+                ) =>
+            {
+                // An uncalled `Enum.variant` reference: a captureless
+                // function value whose body builds the variant.
+                let ExprKind::Constructor(Name::Resolved(enum_symbol, _)) = &receiver.kind else {
+                    unreachable!("guarded above");
+                };
+                let func_ty = self.resolved(&expr.ty);
+                let (Ty::Func(params, _, _), Some(names)) =
+                    (&func_ty, self.program_builder.variant_names(*enum_symbol))
+                else {
+                    return Err(BackendError::unsupported(
+                        "this constructor cannot be used as a value yet".into(),
+                        expr.span,
+                    ));
+                };
+                let Some(tag) = names.iter().position(|name| name == member_name) else {
+                    return Err(BackendError::new(
+                        "constructor reference without a variant".into(),
+                        expr.span,
+                    ));
+                };
+                let arity = u16::try_from(params.len())
+                    .map_err(|_| BackendError::new("too many parameters".into(), expr.span))?;
+                let tag = u16::try_from(tag).unwrap_or_default();
+                Ok(self.constructor_value(*enum_symbol, tag, arity))
+            }
             _ => Err(BackendError::unsupported(
                 "this expression is not supported yet".into(),
                 expr.span,
@@ -6381,6 +6776,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             PatternKind::Wildcard
             | PatternKind::LiteralInt(_)
+            | PatternKind::LiteralFloat(_)
             | PatternKind::LiteralString(_)
             | PatternKind::LiteralCharacter(_)
             | PatternKind::LiteralTrue
@@ -6448,21 +6844,85 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 Ok(())
             }
             PatternKind::Or(alternatives) => {
-                // Alternatives share their binds; unbound owned payloads
-                // would need to know which alternative matched.
+                // Alternatives share their binds, but each can leave
+                // different payloads unbound. When any owned payload is
+                // unbound, re-test the tag on the matched edge and settle
+                // the alternative that actually matched.
                 let any_unbound_owned = alternatives
                     .iter()
                     .any(|alternative| self.pattern_leaves_owned_unbound(alternative, &ty));
-                if any_unbound_owned {
-                    return Err(BackendError::unsupported(
-                        "or-patterns that leave owned payloads unbound on a consumed value are not supported yet"
-                            .into(),
-                        pattern.span,
-                    ));
+                if !any_unbound_owned {
+                    if let Some(first) = alternatives.first() {
+                        self.settle_owned_match(first, scrutinee, &ty, through_borrow)?;
+                    }
+                    return Ok(());
                 }
-                if let Some(first) = alternatives.first() {
-                    self.settle_owned_match(first, scrutinee, &ty, through_borrow)?;
+                let tag_value = match scrutinee {
+                    Operand::Local(local) => {
+                        if let Some(&cached) = self.match_tag_cache.get(&local) {
+                            cached
+                        } else {
+                            let tag_value = self.fresh_local();
+                            self.push(Inst::GetTag {
+                                dest: tag_value,
+                                src: scrutinee,
+                            });
+                            self.match_tag_cache.insert(local, tag_value);
+                            tag_value
+                        }
+                    }
+                    Operand::Const(_) => {
+                        let tag_value = self.fresh_local();
+                        self.push(Inst::GetTag {
+                            dest: tag_value,
+                            src: scrutinee,
+                        });
+                        tag_value
+                    }
+                };
+                let join = self.new_block();
+                for (ix, alternative) in alternatives.iter().enumerate() {
+                    let subsumes = ix == alternatives.len() - 1
+                        || !matches!(alternative.kind, PatternKind::Variant { .. });
+                    if subsumes {
+                        // The final (or first non-variant) alternative
+                        // needs no test: the or-pattern already matched.
+                        self.settle_owned_match(alternative, scrutinee, &ty, through_borrow)?;
+                        self.terminate(Term::Goto(join, Vec::new()));
+                        break;
+                    }
+                    let PatternKind::Variant {
+                        variant_name,
+                        resolved,
+                        fields,
+                        ..
+                    } = &alternative.kind
+                    else {
+                        unreachable!("non-variant alternatives subsume above");
+                    };
+                    let Some((_, tag, _)) =
+                        self.variant_case(*resolved, variant_name, &ty, fields)
+                    else {
+                        self.settle_owned_match(alternative, scrutinee, &ty, through_borrow)?;
+                        self.terminate(Term::Goto(join, Vec::new()));
+                        break;
+                    };
+                    let this_alternative = self.new_block();
+                    let rest = self.new_block();
+                    self.branch_if_equal(
+                        ScalarOp::IntCmp(CmpKind::Eq),
+                        Operand::Local(tag_value),
+                        Operand::Const(Constant::Int(i64::from(tag))),
+                        this_alternative,
+                        rest,
+                    );
+                    self.switch_to(this_alternative);
+                    self.settle_owned_match(alternative, scrutinee, &ty, through_borrow)?;
+                    self.terminate(Term::Goto(join, Vec::new()));
+                    self.switch_to(rest);
                 }
+                self.terminate(Term::Goto(join, Vec::new()));
+                self.switch_to(join);
                 Ok(())
             }
             PatternKind::Record { fields, slots } => {
@@ -6470,15 +6930,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 for (index, cell) in cells.iter().enumerate() {
                     if let Some(name) = &cell.bind {
                         // The label binder owns the slot; interior binds
-                        // of the same owned value would make two owners.
+                        // of the same owned value are views of it and
+                        // settle as through-borrow binds (each retains a
+                        // donated reference).
                         if self.needs_release(&cell.field_ty) {
-                            if !pattern_bind_symbols(&cell.pattern).is_empty() {
-                                return Err(BackendError::unsupported(
-                                    "record patterns that bind both a field and its interior on a consumed value are not supported yet"
-                                        .into(),
-                                    pattern.span,
-                                ));
-                            }
                             if let Some(local) = name
                                 .symbol()
                                 .ok()
@@ -6492,6 +6947,20 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                     )?;
                                 }
                                 self.produce_temp(local, &cell.field_ty);
+                            }
+                            if !pattern_bind_symbols(&cell.pattern).is_empty() {
+                                let extracted = self.fresh_local();
+                                self.push(Inst::TupleGet {
+                                    dest: extracted,
+                                    src: scrutinee,
+                                    index: u16::try_from(index).unwrap_or_default(),
+                                });
+                                self.settle_owned_match(
+                                    &cell.pattern,
+                                    Operand::Local(extracted),
+                                    &cell.field_ty,
+                                    true,
+                                )?;
                             }
                         }
                         continue;
@@ -6874,6 +7343,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     ScalarOp::IntCmp(CmpKind::Eq),
                     scrutinee,
                     Operand::Const(Constant::Int(*value)),
+                    matched,
+                    failed,
+                );
+                Ok(())
+            }
+            PatternKind::LiteralFloat(value) => {
+                self.branch_if_equal(
+                    ScalarOp::FloatCmp(CmpKind::Eq),
+                    scrutinee,
+                    Operand::Const(Constant::Float(value.0)),
                     matched,
                     failed,
                 );
@@ -7369,6 +7848,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 });
                 return self.compile_indirect_call(Operand::Local(loaded), expr, callee, args);
             }
+            // Rigid `T(args)`: the frontend resolved the construction
+            // through a bound's init requirement; this instance's
+            // substitution makes `T` concrete and forces the witness.
+            ExprKind::Variable(Name::Resolved(Symbol::TypeParameter(_), _))
+                if callee.member_resolution.is_some() =>
+            {
+                return self.compile_construction(expr, callee, args, subst);
+            }
             ExprKind::Variable(Name::Resolved(symbol, _)) => *symbol,
             ExprKind::Member(receiver, label) => {
                 let Some(resolution) = &callee.member_resolution else {
@@ -7419,19 +7906,43 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         // existential rebuilds around the evolved payload
                         // with its own witness table, then writes back.
                         let mut_requirement = self.requirement_is_mut(protocol, name);
-                        let receiver_chain = if mut_requirement {
-                            let Some(chain) = self.resolve_place(receiver)? else {
-                                return Err(BackendError::unsupported(
-                                    "a `mut` requirement on an existential that is not a named place is not supported yet"
-                                        .into(),
-                                    callee.span,
-                                ));
-                            };
-                            Some(chain)
+                        let (receiver_chain, precompiled) = if mut_requirement {
+                            match self.resolve_place(receiver)? {
+                                Some(chain) => (Some(chain), None),
+                                None => {
+                                    // An rvalue receiver materializes as
+                                    // its own temporary place: the call
+                                    // evolves the temporary, which then
+                                    // releases like any statement temp.
+                                    let value = self.compile_expr(receiver)?;
+                                    let base = match value {
+                                        Operand::Local(local) => local,
+                                        Operand::Const(_) => {
+                                            let temp = self.fresh_local();
+                                            self.push(Inst::Copy {
+                                                dest: temp,
+                                                src: value,
+                                            });
+                                            temp
+                                        }
+                                    };
+                                    (
+                                        Some(PlaceChain {
+                                            base,
+                                            global_slot: None,
+                                            links: Vec::new(),
+                                        }),
+                                        Some(Operand::Local(base)),
+                                    )
+                                }
+                            }
                         } else {
-                            None
+                            (None, None)
                         };
-                        let value = self.compile_expr(receiver)?;
+                        let value = match precompiled {
+                            Some(value) => value,
+                            None => self.compile_expr(receiver)?,
+                        };
                         let witness = self.fresh_local();
                         self.push(Inst::ExistentialWitness {
                             dest: witness,
@@ -7599,21 +8110,48 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                         callee.span,
                                     ));
                                 };
-                                let Some(chain) = self.resolve_place(receiver)? else {
-                                    return Err(BackendError::unsupported(
-                                        "a `mut` requirement on a generic value that is not a named place is not supported yet"
-                                            .into(),
-                                        callee.span,
-                                    ));
-                                };
-                                Some(Some(WritebackTarget::Place(chain)))
+                                match self.resolve_place(receiver)? {
+                                    Some(chain) => Some((Some(WritebackTarget::Place(chain)), None)),
+                                    None => {
+                                        // An rvalue receiver materializes
+                                        // as its own temporary place (see
+                                        // the existential twin above).
+                                        let value = self.compile_expr(receiver)?;
+                                        let base = match value {
+                                            Operand::Local(local) => local,
+                                            Operand::Const(_) => {
+                                                let temp = self.fresh_local();
+                                                self.push(Inst::Copy {
+                                                    dest: temp,
+                                                    src: value,
+                                                });
+                                                temp
+                                            }
+                                        };
+                                        Some((
+                                            Some(WritebackTarget::Place(PlaceChain {
+                                                base,
+                                                global_slot: None,
+                                                links: Vec::new(),
+                                            })),
+                                            Some(Operand::Local(base)),
+                                        ))
+                                    }
+                                }
                             } else {
                                 None
+                            };
+                            let (receiver_target, precompiled) = match receiver_target {
+                                Some((target, precompiled)) => (Some(target), precompiled),
+                                None => (None, None),
                             };
                             let implementation = dictionary[index];
                             let mut operands = Vec::new();
                             if let Some(receiver) = value_receiver {
-                                operands.push(self.compile_expr(receiver)?);
+                                match precompiled {
+                                    Some(value) => operands.push(value),
+                                    None => operands.push(self.compile_expr(receiver)?),
+                                }
                             }
                             let mut mut_arg_places: Vec<(usize, PlaceChain)> = Vec::new();
                             self.compile_call_args(args, &mut operands, &mut mut_arg_places)?;
@@ -7954,23 +8492,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             return Ok(Operand::Local(dest));
         }
 
+        // `glue_closure` captures the witness blocks for any rigid
+        // effect-generics the payload type mentions (a concrete payload
+        // captures nothing).
         let mut witnesses = Vec::new();
-        let drop_glue = self.program_builder.value_glue(&payload_ty, Glue::Drop)?;
-        let drop_closure = self.fresh_local();
-        self.push(Inst::MakeClosure {
-            dest: drop_closure,
-            func: drop_glue,
-            env: Vec::new(),
-        });
-        witnesses.push(Operand::Local(drop_closure));
-        let retain_glue = self.program_builder.value_glue(&payload_ty, Glue::Retain)?;
-        let retain_closure = self.fresh_local();
-        self.push(Inst::MakeClosure {
-            dest: retain_closure,
-            func: retain_glue,
-            env: Vec::new(),
-        });
-        witnesses.push(Operand::Local(retain_closure));
+        let drop_closure = self.glue_closure(&payload_ty, Glue::Drop, expr.span)?;
+        witnesses.push(drop_closure);
+        let retain_closure = self.glue_closure(&payload_ty, Glue::Retain, expr.span)?;
+        witnesses.push(retain_closure);
 
         let (entries, subst) = self
             .program_builder
@@ -7998,82 +8527,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         Ok(Operand::Local(dest))
     }
 
-    /// Lower `'io(request)` to a tag dispatch over the request enum: one
-    /// host operation per variant, in declaration order (which matches the
-    /// runtime's operation table one-to-one). Unused operand slots pass
-    /// zero; the host never reads them.
-    fn compile_io_perform(
-        &mut self,
-        expr: &Expr,
-        args: &[crate::typed_ast::CallArg],
-    ) -> Result<Operand, BackendError> {
-        let [request] = args else {
-            return Err(BackendError::new(
-                "'io takes exactly one request".into(),
-                expr.span,
-            ));
-        };
-        let request_ty = self.resolved(&request.value.ty);
-        let Ty::Nominal(request_enum, type_args) = &request_ty else {
-            return Err(BackendError::new(
-                "'io request must be the core request enum".into(),
-                expr.span,
-            ));
-        };
-        let Some(payloads) = self
-            .program_builder
-            .variant_payloads(*request_enum, type_args)
-        else {
-            return Err(BackendError::new(
-                "'io request must be the core request enum".into(),
-                expr.span,
-            ));
-        };
-        let value = self.compile_expr(&request.value)?;
-        let tag = self.fresh_local();
-        self.push(Inst::GetTag {
-            dest: tag,
-            src: value,
-        });
-        let result = self.fresh_local();
-        let join = self.new_block();
-        let zero = Operand::Const(Constant::Int(0));
-        for (variant, payload_tys) in payloads.iter().enumerate() {
-            let arm = self.new_block();
-            let next = self.new_block();
-            self.branch_if_equal(
-                ScalarOp::IntCmp(CmpKind::Eq),
-                Operand::Local(tag),
-                Operand::Const(Constant::Int(i64::try_from(variant).unwrap_or_default())),
-                arm,
-                next,
-            );
-            self.switch_to(arm);
-            let mut operands = [zero, zero, zero];
-            for (index, operand) in operands.iter_mut().take(payload_tys.len()).enumerate() {
-                let payload = self.fresh_local();
-                self.push(Inst::GetPayload {
-                    dest: payload,
-                    src: value,
-                    index: u16::try_from(index).unwrap_or_default(),
-                });
-                *operand = Operand::Local(payload);
-            }
-            self.push(Inst::Io {
-                dest: result,
-                op: u8::try_from(variant).unwrap_or_default(),
-                a: operands[0],
-                b: operands[1],
-                c: operands[2],
-            });
-            self.terminate(Term::Goto(join, Vec::new()));
-            self.switch_to(next);
-        }
-        self.terminate(Term::Trap("unknown io request"));
-        self.switch_to(join);
-        Ok(Operand::Local(result))
-    }
-
     /// Install a deep handler: reify the delimiter (this frame's return),
     /// compile the clause as a closure over `[delimiter, captures…]`, and
     /// push the handler entry. Entries pop with the frame.
@@ -8083,15 +8536,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         body: &Block,
         contract: &crate::types::output::EffectContract,
     ) -> Result<(), BackendError> {
-        // The runtime is the implicit handler for core's ambient effects
-        // ('io, 'alloc, 'async): user handlers over them would be
-        // silently bypassed, so they fail closed.
-        if effect.module_id() == Some(crate::compiling::module::ModuleId::Core) {
-            return Err(BackendError::unsupported(
-                "user handlers over ambient core effects are not supported yet".into(),
-                body.span,
-            ));
-        }
         let body_nodes: Vec<&Node> = body.body.iter().collect();
         let captured = self.live_captures(body);
         let cont = self.fresh_local();
@@ -8267,10 +8711,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         (clause, index)
     }
 
-    /// The user effects a function value may perform, from its resolved
-    /// effect row — the effects whose capabilities the closure captures
-    /// at creation. Ambient core effects dispatch to the host and carry
-    /// no capability.
+    /// The effects a function value may perform, from its resolved effect
+    /// row — the effects whose capabilities the closure captures at
+    /// creation. Every declared effect has a handler at any legal capture
+    /// point (host-list effects always: the entry wrapper's fallback is
+    /// the floor of the stack — ADR 0039). Only the compile-time `'unsafe`
+    /// capability is undeclared and carries no slot.
     fn closure_effects(&mut self, ty: &Ty) -> Vec<Symbol> {
         let Ty::Func(_, _, row) = self.resolved(ty) else {
             return Vec::new();
@@ -8278,12 +8724,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         row.effects
             .iter()
             .map(|entry| entry.effect)
-            // The runtime implicitly handles ALL of core's ambient effects
-            // ('io, 'alloc, 'async), and `install_handler` rejects user
-            // handlers over them — so a closure never carries capabilities
-            // for them (a FindHandler for one would trap). Only user
-            // effects lexically capture their creation-site handler.
-            .filter(|effect| effect.module_id() != Some(crate::compiling::module::ModuleId::Core))
+            .filter(|effect| self.program_builder.catalog.effects.contains_key(effect))
             .collect()
     }
 
@@ -8297,11 +8738,17 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn capture_env(
         &mut self,
         captured: &[Symbol],
+        overrides: &FxHashMap<Symbol, LocalId>,
         effects: &[Symbol],
     ) -> Result<(Vec<Operand>, WitnessPairs), BackendError> {
         let mut env: Vec<Operand> = captured
             .iter()
-            .filter_map(|symbol| self.locals.get(symbol).copied())
+            .filter_map(|symbol| {
+                overrides
+                    .get(symbol)
+                    .copied()
+                    .or_else(|| self.locals.get(symbol).copied())
+            })
             .map(Operand::Local)
             .collect();
         let inherited = self.sorted_witnesses();
@@ -8351,9 +8798,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn compile_closure(&mut self, func: &Func, ty: &Ty) -> Result<Operand, BackendError> {
         let body_nodes: Vec<&Node> = func.body.body.iter().collect();
         let captured = self.live_captures(&func.body);
-        if func.captures.is_empty() {
+        let (overrides, mut anchored) = if func.captures.is_empty() {
             // Implicit captures: celled handles are copyable by
-            // construction; everything else must be a Copy value.
+            // construction; Copy values capture directly; owning state
+            // captures a borrow handle or a frame-scoped snapshot.
             let implicit: Vec<Symbol> = captured
                 .iter()
                 .filter(|symbol| {
@@ -8363,14 +8811,25 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 })
                 .copied()
                 .collect();
-            self.check_captures(&implicit, func.body.span)?;
+            self.prepare_implicit_captures(&implicit, func.body.span)?
         } else {
-            self.check_capture_list(func, &captured)?;
-        }
+            self.prepare_capture_list(func, &captured)?
+        };
+        // A cell whose content owns resources dies with the frame; a
+        // closure sharing it is anchored like any borrowing capture.
+        anchored |= captured.iter().any(|symbol| {
+            self.locals.get(symbol).is_some_and(|local| {
+                self.cell_handles.contains(local)
+                    && self
+                        .local_tys
+                        .get(local)
+                        .is_some_and(|ty| self.needs_release(&ty.clone()))
+            })
+        });
         // Lexical capability capture: the closure carries its creation
         // site's handler for each user effect in its row.
         let effects = self.closure_effects(ty);
-        let (env, inherited) = self.capture_env(&captured, &effects)?;
+        let (env, inherited) = self.capture_env(&captured, &overrides, &effects)?;
 
         let id = self.program_builder.reserve(&func.name.name_str());
         let mut fx = FunctionBuilder::new(self.program_builder, 0, self.program);
@@ -8426,6 +8885,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             func: id,
             env,
         });
+        if anchored {
+            self.anchored_closures.insert(dest);
+        }
         Ok(Operand::Local(dest))
     }
 
@@ -8888,13 +9350,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 });
                 return Ok(Operand::Local(dest));
             }
-            K::IoWrite { fd, buf, count } => {
-                let a = self.ir_value(instruction, fd)?;
-                let b = self.ir_value(instruction, buf)?;
-                let c = self.ir_value(instruction, count)?;
+            K::Io { op, a, b, c } => {
+                let a = self.ir_value(instruction, a)?;
+                let b = self.ir_value(instruction, b)?;
+                let c = self.ir_value(instruction, c)?;
                 self.push(Inst::Io {
                     dest,
-                    op: 1,
+                    op: *op,
                     a,
                     b,
                     c,
