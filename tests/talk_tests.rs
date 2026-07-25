@@ -564,6 +564,25 @@ fn run_mut_requirements_on_rvalue_receivers() {
 }
 
 #[test]
+fn run_derived_equality_through_conditional_conformances() {
+    // A recursive enum whose payload routes through Array's conditional
+    // Equatable row: the catalog's context prover must see derived
+    // conformances (`derivably_conforms`), or the row is never selected
+    // and derived equality dead-ends (the talk-syntax parser.test case).
+    assert_runs(
+        b"enum Lit {\n\
+          \tcase int(String)\n\
+          \tcase list([Lit])\n\
+          }\n\
+          print(Lit.int(\"a\" + \"b\") == Lit.int(\"ab\"))\n\
+          print(Lit.list([Lit.int(\"1\")]) == Lit.list([Lit.int(\"1\")]))\n\
+          print(Lit.list([Lit.int(\"1\")]) == Lit.int(\"1\"))\n",
+        &[],
+        b"true\ntrue\nfalse\n",
+    );
+}
+
+#[test]
 fn run_packs_compound_rigid_payloads_into_existentials() {
     // Conditional conformance under a rigid element: inside `pack`'s
     // generic body, `Array<T>` coerces to `any Showable` via

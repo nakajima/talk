@@ -1590,7 +1590,7 @@ impl Ty {
 
 pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> String {
     match ty {
-        Ty::Var(v) => format!("?{}", v.0),
+        Ty::Var(_) => "_".to_string(),
         Ty::Param(sym) => param_names
             .get(sym)
             .cloned()
@@ -1642,7 +1642,7 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
                 .map(|(l, t)| format!("{l}: {}", render_ty(t, param_names)))
                 .collect();
             match &row.tail {
-                Some(RowTail::Var(v)) => fields.push(format!("..?r{}", v.0)),
+                Some(RowTail::Var(_)) => fields.push("..".to_string()),
                 Some(RowTail::Param(sym)) => fields.push(format!("..{sym}")),
                 None => {}
             }
@@ -1799,7 +1799,7 @@ fn render_full_effect_row(eff: &EffectRow) -> String {
         .map(|entry| render_entry(entry, &names))
         .collect();
     match &eff.tail {
-        Some(EffTail::Var(v)) => labels.push(format!("..?e{}", v.0)),
+        Some(EffTail::Var(_)) => labels.push("..".to_string()),
         Some(EffTail::Param(sym)) => labels.push(format!("..{sym}")),
         None => {}
     }
@@ -1852,6 +1852,21 @@ fn render_nominal_head(sym: &Symbol) -> String {
 #[cfg(test)]
 mod traversal_tests {
     use super::*;
+
+    #[test]
+    fn rendering_never_exposes_internal_inference_variable_ids() {
+        let ty = Ty::Nominal(
+            Symbol::Array,
+            vec![Ty::Var(TyVar(123)), Ty::Var(TyVar(456))],
+        );
+        let record = Ty::Record(Row {
+            fields: vec![],
+            tail: Some(RowTail::Var(RowVar(789))),
+        });
+
+        assert_eq!(ty.render_mono(), "Array<_, _>");
+        assert_eq!(record.render_mono(), "{ .. }");
+    }
 
     #[test]
     fn nested_borrows_collapse_through_folds() {

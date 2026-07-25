@@ -35,6 +35,10 @@ pub(super) struct TypeArtifacts {
     /// published as `TypeOutput::synthetic_floors` so the typed-tree
     /// build keeps minting below it.
     pub(super) synthetic_next: FxHashMap<crate::node_id::FileID, u32>,
+    /// Surface owner for every checker-generated node. Diagnostics may arise
+    /// while checking a lowered form, but source reporting must blame syntax
+    /// the user actually wrote rather than falling back to an unlocated node.
+    pub(super) synthetic_origins: FxHashMap<NodeID, NodeID>,
 }
 
 /// How a marked argument's parameter slot resolves after solving. In
@@ -79,9 +83,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 }
 
 impl TypeArtifacts {
-    pub(super) fn synthetic_id(&mut self, file: crate::node_id::FileID) -> NodeID {
-        let next = self.synthetic_next.entry(file).or_insert(u32::MAX);
+    pub(super) fn synthetic_id(&mut self, owner: NodeID) -> NodeID {
+        let next = self.synthetic_next.entry(owner.0).or_insert(u32::MAX);
         *next -= 1;
-        NodeID(file, *next)
+        let id = NodeID(owner.0, *next);
+        self.synthetic_origins.insert(id, owner);
+        id
     }
 }

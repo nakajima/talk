@@ -784,6 +784,39 @@ mod tests {
     }
 
     #[test]
+    fn question_mark_return_mismatches_blame_surface_syntax_without_internal_types() {
+        let path = "propagation.test.tlk".to_string();
+        let text = "func result() -> Result<Int, String> { .ok(1) }\n\ntest(\"example\") {\n\tassert(result()? == 1)\n}\n";
+        let workspace = Workspace::new(vec![DocumentInput {
+            id: path.clone(),
+            path: path.clone(),
+            version: 0,
+            text: text.to_string(),
+        }])
+        .expect("workspace");
+        let diagnostics = workspace
+            .diagnostics
+            .get(&path)
+            .expect("diagnostics for the test document");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("Cannot use '?' here"))
+            .expect("targeted propagation diagnostic");
+        let expression = text.find("result()?").expect("propagation expression") as u32;
+
+        assert_eq!(diagnostic.range, TextRange::new(expression, expression + 9));
+        assert!(diagnostic.message.contains("returns ()"));
+        assert!(
+            !diagnostic
+                .message
+                .as_bytes()
+                .windows(2)
+                .any(|pair| pair[0] == b'?' && pair[1].is_ascii_digit()),
+            "diagnostic exposed an internal inference variable: {diagnostic:?}"
+        );
+    }
+
+    #[test]
     fn import_discovered_files_report_diagnostics() {
         // A file pulled in by `use ... from` gets a FileID past the input
         // docs; its diagnostics must still reach the workspace instead of

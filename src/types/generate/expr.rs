@@ -618,7 +618,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     ) -> Vec<(Pattern, Name)> {
         (0..count)
             .map(|index| {
-                let id = self.artifacts.synthetic_id(source.id.0);
+                let id = self.artifacts.synthetic_id(source.id);
                 let symbol = Symbol::PatternBindLocal(self.symbols.next_pattern_bind());
                 let text = format!("__{prefix}_{index}_{}", source.id.1);
                 self.artifacts.display_names.insert(symbol, text.clone());
@@ -639,7 +639,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let mut values = binders
             .iter()
             .map(|(_, name)| Expr {
-                id: self.artifacts.synthetic_id(source.id.0),
+                id: self.artifacts.synthetic_id(source.id),
                 kind: ExprKind::Variable(name.clone()),
                 span: source.span,
             })
@@ -652,7 +652,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             _ => ExprKind::Tuple(values),
         };
         Expr {
-            id: self.artifacts.synthetic_id(source.id.0),
+            id: self.artifacts.synthetic_id(source.id),
             kind,
             span: source.span,
         }
@@ -668,12 +668,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         binders: &[(Pattern, Name)],
     ) -> Expr {
         let receiver = Expr {
-            id: self.artifacts.synthetic_id(source.id.0),
+            id: self.artifacts.synthetic_id(source.id),
             kind: ExprKind::Constructor(Name::Resolved(enum_symbol, enum_name.into())),
             span: source.span,
         };
         let member = Expr {
-            id: self.artifacts.synthetic_id(source.id.0),
+            id: self.artifacts.synthetic_id(source.id),
             kind: ExprKind::Member(
                 Some(Box::new(receiver)),
                 Label::Named(variant_name.into()),
@@ -688,7 +688,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .iter()
             .enumerate()
             .map(|(index, (_, name))| CallArg {
-                id: self.artifacts.synthetic_id(source.id.0),
+                id: self.artifacts.synthetic_id(source.id),
                 span: source.span,
                 label: variant
                     .payload_labels
@@ -699,7 +699,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     }),
                 label_span: source.span,
                 value: Expr {
-                    id: self.artifacts.synthetic_id(source.id.0),
+                    id: self.artifacts.synthetic_id(source.id),
                     kind: ExprKind::Variable(name.clone()),
                     span: source.span,
                 },
@@ -708,7 +708,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             })
             .collect();
         Expr {
-            id: self.artifacts.synthetic_id(source.id.0),
+            id: self.artifacts.synthetic_id(source.id),
             kind: ExprKind::Call {
                 callee: Box::new(member),
                 type_args: vec![],
@@ -732,7 +732,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let binders =
             self.propagation_binders(source, variant_name, variant.argument_types().len());
         let pattern = Pattern {
-            id: self.artifacts.synthetic_id(source.id.0),
+            id: self.artifacts.synthetic_id(source.id),
             kind: PatternKind::Variant {
                 enum_name: Some(Name::Resolved(enum_symbol, enum_name.into())),
                 variant_name: variant_name.into(),
@@ -760,7 +760,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     &binders,
                 );
                 Node::Stmt(Stmt {
-                    id: self.artifacts.synthetic_id(source.id.0),
+                    id: self.artifacts.synthetic_id(source.id),
                     kind: StmtKind::Return(Some(value)),
                     span: source.span,
                 })
@@ -768,10 +768,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             BinaryEnumArm::Failure(failure) => Node::Expr(failure.clone()),
         };
         MatchArm {
-            id: self.artifacts.synthetic_id(source.id.0),
+            id: self.artifacts.synthetic_id(source.id),
             pattern,
             body: Block {
-                id: self.artifacts.synthetic_id(source.id.0),
+                id: self.artifacts.synthetic_id(source.id),
                 args: vec![],
                 body: vec![body_node],
                 span: source.span,
@@ -796,7 +796,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     }
 
     fn infer_propagation(&mut self, expr: &Expr, source: &Expr, ctx: &Ctx) -> Ty {
-        self.infer_binary_enum_postfix(expr, source, None, ctx)
+        let source_ty = self.infer_expr(source, ctx);
+        let result = Ty::Var(self.store.fresh_ty(self.level, expr.id));
+        self.check_binary_enum_postfix(expr, source, None, ctx, source_ty, result)
     }
 
     fn infer_force_unwrap(
@@ -806,17 +808,47 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         failure: &Expr,
         ctx: &Ctx,
     ) -> Ty {
-        self.infer_binary_enum_postfix(expr, source, Some(failure), ctx)
+        let source_ty = self.infer_expr(source, ctx);
+        let result = Ty::Var(self.store.fresh_ty(self.level, expr.id));
+        let mut head = self.store.shallow(&source_ty);
+        while let Ty::Borrow(_, inner) = head {
+            head = self.store.shallow(&inner);
+        }
+        if matches!(head, Ty::Var(_) | Ty::Proj(..)) {
+            // The hidden `unreachable` already contributes `'panic` even
+            // though the enum match must wait for the operand's head. This
+            // keeps the surrounding effect row open through the first solve.
+            self.infer_expr(failure, ctx);
+            self.pending_force_unwraps.push(PendingForceUnwrap {
+                expr: expr.clone(),
+                source: source.clone(),
+                failure: failure.clone(),
+                source_ty,
+                result: result.clone(),
+                ctx: ctx.clone(),
+                level: self.level,
+            });
+            return result;
+        }
+        self.check_binary_enum_postfix(
+            expr,
+            source,
+            Some(failure),
+            ctx,
+            source_ty,
+            result,
+        )
     }
 
-    fn infer_binary_enum_postfix(
+    pub(super) fn check_binary_enum_postfix(
         &mut self,
         expr: &Expr,
         source: &Expr,
         failure: Option<&Expr>,
         ctx: &Ctx,
+        source_ty: Ty,
+        result: Ty,
     ) -> Ty {
-        let source_ty = self.infer_expr(source, ctx);
         if failure.is_none() && !ctx.has_return_boundary {
             self.invalid_binary_enum_postfix(
                 expr.id,
@@ -835,10 +867,31 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             _ => None,
         };
         let source_symbol = nominal_symbol(self.store.shallow(&source_ty));
+        let return_ty = self.store.shallow(&ctx.ret);
+        let return_is_open = matches!(return_ty, Ty::Var(_) | Ty::Error);
         let return_symbol = failure
             .is_none()
-            .then(|| nominal_symbol(self.store.shallow(&ctx.ret)))
+            .then(|| nominal_symbol(return_ty))
             .flatten();
+        let recovery_ret = if failure.is_none()
+            && let Some(source_symbol) = source_symbol
+            && return_symbol.is_none()
+            && !return_is_open
+        {
+            let source = self.store.render(&source_ty);
+            let ret = self.store.render(&ctx.ret);
+            let required = self.store.render(&Ty::Nominal(source_symbol, vec![]));
+            self.invalid_binary_enum_postfix(
+                expr.id,
+                false,
+                format!(
+                    "the operand has type {source}, but the enclosing function or block returns {ret}; '?' requires that boundary to return {required}"
+                ),
+            );
+            Some(source_ty.clone())
+        } else {
+            None
+        };
         let enum_symbol = match (source_symbol, return_symbol) {
             (Some(source), Some(ret)) if source != ret => {
                 let source = self.store.render(&source_ty);
@@ -910,9 +963,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 second_action,
             ),
         ];
-        let lowered_id = self.artifacts.synthetic_id(source.id.0);
-        let result = Ty::Var(self.store.fresh_ty(self.level, expr.id));
-        self.check_match_arms_against_known_scrutinee(source, source_ty, &arms, &result, None, ctx);
+        let lowered_id = self.artifacts.synthetic_id(source.id);
+        let recovery_ctx = recovery_ret.map(|ret| ctx.with_ret_eff(ret, ctx.eff.clone()));
+        let match_ctx = recovery_ctx.as_ref().unwrap_or(ctx);
+        self.check_match_arms_against_known_scrutinee(
+            source, source_ty, &arms, &result, None, match_ctx,
+        );
         let lowered = Expr {
             id: lowered_id,
             kind: ExprKind::Match(Box::new(source.clone()), arms),

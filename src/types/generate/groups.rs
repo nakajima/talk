@@ -167,7 +167,52 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
     }
 
     pub(super) fn run_solver(&mut self, wanteds: Vec<Constraint>) -> Vec<Constraint> {
-        self.run_solver_with(wanteds, false)
+        let mut residuals = self.run_solver_with(wanteds, false);
+        while self.resolve_pending_force_unwraps(false) > 0 {
+            let mut generated = std::mem::take(self.wanteds);
+            generated.extend(residuals);
+            residuals = self.run_solver_with(generated, false);
+        }
+        residuals
+    }
+
+    fn resolve_pending_force_unwraps(&mut self, final_pass: bool) -> usize {
+        let mut remaining = Vec::new();
+        let mut resolved = 0;
+        for pending in std::mem::take(self.pending_force_unwraps) {
+            let mut head = self.store.shallow(&pending.source_ty);
+            while let Ty::Borrow(_, inner) = head {
+                head = self.store.shallow(&inner);
+            }
+            if matches!(head, Ty::Var(_) | Ty::Proj(..)) {
+                if final_pass {
+                    self.diagnostics.errors.push((
+                        TypeError::InvalidForceUnwrap {
+                            reason: "the operand must identify an enum".into(),
+                        },
+                        pending.expr.id,
+                    ));
+                } else {
+                    remaining.push(pending);
+                }
+                continue;
+            }
+
+            let old_level = self.level;
+            self.level = pending.level;
+            self.body().check_binary_enum_postfix(
+                &pending.expr,
+                &pending.source,
+                Some(&pending.failure),
+                &pending.ctx,
+                pending.source_ty,
+                pending.result,
+            );
+            self.level = old_level;
+            resolved += 1;
+        }
+        self.pending_force_unwraps.extend(remaining);
+        resolved
     }
 
     pub(super) fn run_solver_with(
@@ -206,11 +251,17 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
     /// applies one last time (the solver owns every level now), then errors.
     pub(super) fn solve_deferred(&mut self) {
         let deferred = std::mem::take(self.deferred);
-        if deferred.is_empty() {
+        if deferred.is_empty() && self.pending_force_unwraps.is_empty() {
             return;
         }
         self.level = OUTER_LEVEL;
-        let leftover = self.run_solver_with(deferred, true);
+        let mut leftover = self.run_solver_with(deferred, true);
+        while self.resolve_pending_force_unwraps(false) > 0 {
+            let mut generated = std::mem::take(self.wanteds);
+            generated.extend(leftover);
+            leftover = self.run_solver_with(generated, true);
+        }
+        self.resolve_pending_force_unwraps(true);
         self.level = GROUP_LEVEL;
         for constraint in leftover {
             match constraint {

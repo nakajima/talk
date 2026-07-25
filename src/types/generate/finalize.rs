@@ -533,7 +533,9 @@ impl<'a> TypecheckSession<'a> {
             }
         }
 
-        let diagnostics = self.diagnostics.into_diagnostics();
+        let diagnostics = self
+            .diagnostics
+            .into_diagnostics(&self.artifacts.synthetic_origins);
 
         (
             TypeOutput {

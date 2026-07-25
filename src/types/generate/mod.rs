@@ -116,6 +116,7 @@ pub fn check_types(
         wanteds: vec![],
         self_types: vec![],
         deferred: vec![],
+        pending_force_unwraps: vec![],
         type_aliases: FxHashMap::default(),
         alias_stack: vec![],
         level: GROUP_LEVEL,
@@ -201,6 +202,7 @@ struct TypecheckSession<'a> {
     wanteds: Vec<Constraint>,
     self_types: Vec<Ty>,
     deferred: Vec<Constraint>,
+    pending_force_unwraps: Vec<PendingForceUnwrap>,
     type_aliases: FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: Vec<Symbol>,
     level: Level,
@@ -245,6 +247,7 @@ struct BodyChecker<'s, 'a> {
     artifacts: &'s mut TypeArtifacts,
     wanteds: &'s mut Vec<Constraint>,
     self_types: &'s mut Vec<Ty>,
+    pending_force_unwraps: &'s mut Vec<PendingForceUnwrap>,
     type_aliases: &'s FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'s mut Vec<Symbol>,
     level: Level,
@@ -263,6 +266,7 @@ struct BindingGroupChecker<'s, 'a> {
     wanteds: &'s mut Vec<Constraint>,
     self_types: &'s mut Vec<Ty>,
     deferred: &'s mut Vec<Constraint>,
+    pending_force_unwraps: &'s mut Vec<PendingForceUnwrap>,
     type_aliases: &'s FxHashMap<Symbol, TypeAliasDef>,
     alias_stack: &'s mut Vec<Symbol>,
     level: Level,
@@ -280,6 +284,16 @@ struct BindingGroupChecker<'s, 'a> {
 
 /// What a statement contributes to its block's value (block value = last
 /// expression; Return/Break/Continue diverge, so they are `Never` at joins).
+struct PendingForceUnwrap {
+    expr: Expr,
+    source: Expr,
+    failure: Expr,
+    source_ty: Ty,
+    result: Ty,
+    ctx: Ctx,
+    level: Level,
+}
+
 enum StmtValue {
     Value(Ty),
     Divergent { report_unreachable: bool },
@@ -436,6 +450,7 @@ impl<'a> TypecheckSession<'a> {
                 wanteds: &mut self.wanteds,
                 self_types: &mut self.self_types,
                 deferred: &mut self.deferred,
+                pending_force_unwraps: &mut self.pending_force_unwraps,
                 type_aliases: &self.type_aliases,
                 alias_stack: &mut self.alias_stack,
                 level: self.level,
@@ -579,6 +594,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             artifacts: &mut *self.artifacts,
             wanteds: &mut *self.wanteds,
             self_types: &mut *self.self_types,
+            pending_force_unwraps: &mut *self.pending_force_unwraps,
             type_aliases: self.type_aliases,
             alias_stack: &mut *self.alias_stack,
             level: self.level,

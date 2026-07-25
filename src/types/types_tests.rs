@@ -6194,6 +6194,31 @@ struct Pair {
     }
 
     #[test]
+    fn force_unwrap_waits_for_a_member_call_result_to_resolve() {
+        let t = super::tests::check(
+            "// no-core
+             effect 'panic(message) -> Never
+             enum Outcome<Value, Failure> {
+                 case success(Value)
+                 case failure(Failure)
+             }
+             struct Parser {
+                 consuming func parse() -> Outcome<Int, Bool> {
+                     .success(42)
+                 }
+             }
+             func force(consume parser: Parser) -> Int {
+                 parser.parse()!
+             }",
+        );
+        super::tests::assert_clean(&t);
+        assert_eq!(
+            super::tests::ty_of(&t, "force"),
+            "(Parser) -> Int ! <'panic>"
+        );
+    }
+
+    #[test]
     fn force_unwrap_uses_the_first_variants_payload_shape() {
         let t = super::tests::check(
             "// no-core

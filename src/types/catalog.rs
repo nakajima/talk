@@ -1332,7 +1332,7 @@ impl TypeCatalog {
         let self_ty = Ty::Nominal(head, self_args.to_vec());
         let target = row.protocol.clone();
         self.match_conformance_row(id, row, Some((head, self_args)), &self_ty, &target)
-            .filter(|matched| self.row_context_holds(matched, 0))
+            .filter(|matched| self.row_context_holds(matched, 0, &mut FxHashSet::default()))
     }
 
     pub fn satisfied_conformances<'a>(
@@ -1343,30 +1343,42 @@ impl TypeCatalog {
     ) -> Vec<ConformanceMatch<'a>> {
         self.matching_conformances(head, self_args, target)
             .into_iter()
-            .filter(|matched| self.row_context_holds(matched, 0))
+            .filter(|matched| self.row_context_holds(matched, 0, &mut FxHashSet::default()))
             .collect()
     }
 
-    fn row_context_holds(&self, matched: &ConformanceMatch, depth: usize) -> bool {
+    fn row_context_holds(
+        &self,
+        matched: &ConformanceMatch,
+        depth: usize,
+        assumed: &mut FxHashSet<(Ty, ProtocolRef)>,
+    ) -> bool {
         matched.conformance.context.iter().all(|predicate| {
             let predicate = predicate.substitute(
                 &matched.substitution,
                 &FxHashMap::default(),
                 &FxHashMap::default(),
             );
-            self.predicate_holds(&predicate, depth)
+            self.predicate_holds(&predicate, depth, assumed)
         })
     }
 
     /// Whether a fully substituted predicate provably holds. Conservative:
     /// unprovable forms are false, so a conditional row is simply not
     /// selected. The depth guard breaks pathological row cycles.
-    fn predicate_holds(&self, predicate: &Predicate, depth: usize) -> bool {
+    fn predicate_holds(
+        &self,
+        predicate: &Predicate,
+        depth: usize,
+        assumed: &mut FxHashSet<(Ty, ProtocolRef)>,
+    ) -> bool {
         if depth > 64 {
             return false;
         }
         match predicate {
-            Predicate::Conforms { ty, protocol } => self.ty_conforms_at(ty, protocol, depth + 1),
+            Predicate::Conforms { ty, protocol } => {
+                self.ty_conforms_at(ty, protocol, depth + 1, assumed)
+            }
             Predicate::TypeEq(left, right) => left == right,
             _ => false,
         }
@@ -1374,15 +1386,21 @@ impl TypeCatalog {
 
     /// Whether a concrete (or bounds-carrying rigid) type provably conforms.
     pub fn ty_conforms(&self, ty: &Ty, target: &ProtocolRef) -> bool {
-        self.ty_conforms_at(ty, target, 0)
+        self.ty_conforms_at(ty, target, 0, &mut FxHashSet::default())
     }
 
-    fn ty_conforms_at(&self, ty: &Ty, target: &ProtocolRef, depth: usize) -> bool {
+    fn ty_conforms_at(
+        &self,
+        ty: &Ty,
+        target: &ProtocolRef,
+        depth: usize,
+        assumed: &mut FxHashSet<(Ty, ProtocolRef)>,
+    ) -> bool {
         if depth > 64 {
             return false;
         }
         match ty {
-            Ty::Borrow(_, inner) => self.ty_conforms_at(inner, target, depth),
+            Ty::Borrow(_, inner) => self.ty_conforms_at(inner, target, depth, assumed),
             Ty::Nominal(head, args) => {
                 if target.args.is_empty()
                     && target.protocol == Symbol::Copy
@@ -1390,9 +1408,14 @@ impl TypeCatalog {
                 {
                     return true;
                 }
-                self.matching_conformances(*head, args, target)
+                if self
+                    .matching_conformances(*head, args, target)
                     .into_iter()
-                    .any(|matched| self.row_context_holds(&matched, depth))
+                    .any(|matched| self.row_context_holds(&matched, depth, assumed))
+                {
+                    return true;
+                }
+                self.derivably_conforms(*head, args, target, depth, assumed)
             }
             Ty::Param(param) => self
                 .param_bounds
@@ -1400,6 +1423,77 @@ impl TypeCatalog {
                 .is_some_and(|bounds| self.bounds_satisfy(bounds, target)),
             _ => false,
         }
+    }
+
+    /// The prover-side mirror of the solver's `try_derive`: a struct or
+    /// enum with no declared row conforms to a derivable protocol when
+    /// every field or payload conforms to the corresponding defaulted
+    /// application, checked coinductively (the assumption set makes
+    /// recursive nominals terminate) so a conditional row's context can
+    /// see the same derived conformances typing granted.
+    fn derivably_conforms(
+        &self,
+        head: Symbol,
+        args: &[Ty],
+        target: &ProtocolRef,
+        depth: usize,
+        assumed: &mut FxHashSet<(Ty, ProtocolRef)>,
+    ) -> bool {
+        if TypeCatalog::derived_recipe(target.protocol).is_none()
+            || self.is_heap(head)
+            || !(self.structs.contains_key(&head) || self.enums.contains_key(&head))
+        {
+            return false;
+        }
+        let self_ty = Ty::Nominal(head, args.to_vec());
+        let Some(derived) = self.derived_protocol_ref(target.protocol, &self_ty) else {
+            return false;
+        };
+        if &derived != target {
+            return false;
+        }
+        if !assumed.insert((self_ty.clone(), derived)) {
+            return true;
+        }
+        if let Some(info) = self.structs.get(&head) {
+            let substitution: FxHashMap<Symbol, Ty> = info
+                .params
+                .iter()
+                .map(|param| param.symbol)
+                .zip(args.iter().cloned())
+                .collect();
+            return info.fields.iter().all(|(_, (_, field_ty))| {
+                let field_ty =
+                    field_ty.substitute(&substitution, &Default::default(), &Default::default());
+                self.derived_protocol_ref(target.protocol, &field_ty)
+                    .is_some_and(|protocol| {
+                        self.ty_conforms_at(&field_ty, &protocol, depth + 1, assumed)
+                    })
+            });
+        }
+        if let Some(info) = self.enums.get(&head) {
+            let substitution: FxHashMap<Symbol, Ty> = info
+                .params
+                .iter()
+                .map(|param| param.symbol)
+                .zip(args.iter().cloned())
+                .collect();
+            return info.variants.values().all(|variant| {
+                let Some(instantiation) = variant
+                    .instantiate(&substitution, &Default::default(), &Default::default())
+                    .refined_by_result(&self_ty)
+                else {
+                    return true;
+                };
+                instantiation.argument_types.iter().all(|payload| {
+                    self.derived_protocol_ref(target.protocol, payload)
+                        .is_some_and(|protocol| {
+                            self.ty_conforms_at(payload, &protocol, depth + 1, assumed)
+                        })
+                })
+            });
+        }
+        false
     }
 
     pub fn matching_conformances<'a>(

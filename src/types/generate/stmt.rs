@@ -99,14 +99,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 // this statement's ForPlan; the typed-tree build elaborates
                 // the loop into ordinary nodes at those ids.
                 use crate::node_kinds::call_arg::ArgMode;
-                let file = stmt.id.0;
-                let iter_callee_id = self.artifacts.synthetic_id(file);
-                let iter_call_id = self.artifacts.synthetic_id(file);
-                let next_callee_id = self.artifacts.synthetic_id(file);
-                let next_call_id = self.artifacts.synthetic_id(file);
-                let mut_store_callee_id = self.artifacts.synthetic_id(file);
-                let mut_store_call_id = self.artifacts.synthetic_id(file);
-                let mut_store_arg_id = self.artifacts.synthetic_id(file);
+                let iter_callee_id = self.artifacts.synthetic_id(stmt.id);
+                let iter_call_id = self.artifacts.synthetic_id(stmt.id);
+                let next_callee_id = self.artifacts.synthetic_id(stmt.id);
+                let next_call_id = self.artifacts.synthetic_id(stmt.id);
+                let mut_store_callee_id = self.artifacts.synthetic_id(stmt.id);
+                let mut_store_call_id = self.artifacts.synthetic_id(stmt.id);
+                let mut_store_arg_id = self.artifacts.synthetic_id(stmt.id);
                 let iter_label = match source_mode {
                     Some(ArgMode::Consume) => "into_iter",
                     Some(ArgMode::Mut) => "iter_mut",
