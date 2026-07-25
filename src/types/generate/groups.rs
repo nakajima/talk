@@ -234,7 +234,6 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             givens: vec![],
             touchable_level: None,
             local_params: vec![],
-            derived_seen: Default::default(),
             conformance_edges: Default::default(),
         };
         solver.solve(wanteds)
@@ -659,6 +658,25 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 let mut predicates = declared.predicates.clone();
                 predicates.extend(scheme.predicates);
                 scheme.predicates = predicates;
+                // Publish inferred parameter bounds where declared ones
+                // already live (typing publishes, lowering reads): the
+                // backend's rigid check-all compile reads
+                // `catalog.param_bounds` to thread each rigid's
+                // dictionaries, and an inference-minted param carries its
+                // constraints only in the scheme's predicates.
+                for predicate in &scheme.predicates {
+                    if let Predicate::Conforms {
+                        ty: Ty::Param(param),
+                        protocol,
+                    } = predicate
+                        && scheme.params.iter().any(|p| p.symbol == *param)
+                    {
+                        let bounds = self.catalog.param_bounds.entry(*param).or_default();
+                        if !bounds.contains(protocol) {
+                            bounds.push(protocol.clone());
+                        }
+                    }
+                }
                 self.diagnostics
                     .errors
                     .extend(Self::ambiguous_declared_predicate_errors(&scheme, declared));

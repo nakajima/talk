@@ -548,7 +548,21 @@ impl Runner {
         }
         let executable = typed.compile_executable(None).map_err(TestError::Compile)?;
         let mut io = talk_runtime::io::CaptureIO::default();
-        let value = execute_module(&executable, &mut io).map_err(TestError::Runtime)?;
+        // An aborting run reports through captured stderr — Core's panic
+        // fallback writes the message there before asking the host to
+        // exit — so the cause leads the error rather than being dropped.
+        let value = match execute_module(&executable, &mut io) {
+            Ok(value) => value,
+            Err(error) => {
+                let reported = String::from_utf8_lossy(&io.err);
+                let reported = reported.trim_end();
+                return Err(TestError::Runtime(if reported.is_empty() {
+                    error
+                } else {
+                    format!("{reported}\n{error}")
+                }));
+            }
+        };
         let output = String::from_utf8_lossy(&io.out).into_owned();
         let failures = value
             .as_deref()
@@ -677,6 +691,11 @@ enum HarnessMode {
 pub(crate) struct Harness;
 
 impl Harness {
+    pub(crate) fn is_source_path(path: &Path) -> bool {
+        path.components()
+            .any(|component| component.as_os_str() == HARNESS_DIR)
+    }
+
     pub(crate) fn human_sources(source_root: &Path) -> [Source; 2] {
         [
             Self::prelude_source(source_root, HarnessMode::Human, None),
@@ -744,6 +763,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("talk-{name}-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("project dir");
         dir
+    }
+
+    #[test]
+    fn harness_source_paths_are_recognized() {
+        assert!(Harness::is_source_path(Path::new(
+            "/project/src/__talk_test_harness/testing_prelude.tlk"
+        )));
+        assert!(!Harness::is_source_path(Path::new(
+            "/project/src/example.test.tlk"
+        )));
     }
 
     #[test]
@@ -835,6 +864,27 @@ test(\"ok\") {\n\tassert(1 + 1 == 2)\n}\n",
             summary.output,
             "\u{1b}[31mF\u{1b}[0m\u{1b}[32m.\u{1b}[0m\n\u{1b}[31mbad\u{1b}[0m: nope\n"
         );
+    }
+
+    /// A panicking test aborts the run and names the panic. Before the exit
+    /// op became terminal, Core's panic fallback asked the capturing host to
+    /// exit, got control back, and spun in the `loop {}` typing its tail.
+    #[test]
+    fn runner_reports_a_panicking_test() {
+        let project = temp_project("panicking-test-runner");
+        std::fs::write(
+            project.join("math.test.tlk"),
+            "test \"panics\" {\n\tunreachable\n}\n",
+        )
+        .expect("test file");
+
+        let Err(error) = Runner::new([project]).run() else {
+            panic!("expected the panic to abort the run");
+        };
+        let TestError::Runtime(message) = error else {
+            panic!("expected a runtime error, got {error:?}");
+        };
+        assert!(message.contains("reached unreachable"), "{message}");
     }
 
     #[test]

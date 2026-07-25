@@ -592,37 +592,6 @@ impl<'s> Solver<'s> {
                         MemberDispatch::NoCandidate => {}
                     }
                 }
-                // Auto-derived protocol members (`optional.show()` or
-                // `point.equals(rhs:)` without an explicit conformance):
-                // dispatch through the requirement at the protocol's
-                // defaulted application for this concrete Self type.
-                let is_derivable_head = self.catalog.structs.contains_key(&symbol)
-                    || self.catalog.enums.contains_key(&symbol);
-                if is_derivable_head {
-                    let self_ty = Ty::Nominal(symbol, args.clone());
-                    for protocol in TypeCatalog::derivable_protocols() {
-                        let Some(protocol) = self.catalog.derived_protocol_ref(protocol, &self_ty)
-                        else {
-                            continue;
-                        };
-                        if let Some((owner, requirement)) =
-                            self.catalog.requirement_in_ref(&protocol, &label_str)
-                        {
-                            let requirement = requirement.clone();
-                            self.bind_requirement(
-                                owner,
-                                &requirement,
-                                &member_receiver,
-                                &self_receiver,
-                                &member,
-                                origin,
-                                queue,
-                                None,
-                            );
-                            return None;
-                        }
-                    }
-                }
                 // Inherent extend members (`extend Float { func _trunc() }`).
                 // The head application binds the extend's rigid params;
                 // everything quantified (method generics, effect rows)
@@ -1192,11 +1161,22 @@ impl<'s> Solver<'s> {
                 .extend(receiver_entries);
         }
         let resolution = if let Some((row, _, substitution)) = evidence {
-            MemberResolution::ViaConformance {
-                row,
-                protocol: protocol.clone(),
-                witness,
-                substitution,
+            if witness == requirement.symbol && !requirement.has_default {
+                // A recipe-backed row (synthesized derivation): there is
+                // no implementation symbol to call, so the backend
+                // dereferences the row's committed dictionary entry.
+                MemberResolution::ViaRequirement {
+                    protocol: protocol.clone(),
+                    requirement: requirement.symbol,
+                    self_ty: receiver_head,
+                }
+            } else {
+                MemberResolution::ViaConformance {
+                    row,
+                    protocol: protocol.clone(),
+                    witness,
+                    substitution,
+                }
             }
         } else {
             MemberResolution::ViaRequirement {

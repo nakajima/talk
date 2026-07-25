@@ -378,17 +378,32 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // keeps `Apply` so the solver's tier-2 coercion (borrowed argument satisfied by a
         // free copy or an O(1) clone) can fire even when either side resolves late.
         let copies = |symbol: Symbol| self.catalog.copies_out_of_borrow(symbol);
-        // An owned rigid-`Param` slot fed a still-unsolved argument (a call
-        // result whose member is being solved) defers: eagerly equating
-        // would bind the result var owned, then conflict with the member
-        // scheme's borrow-typed return once it resolves. A rigid param
-        // never drives the var's inference, so the deferral loses nothing
-        // (ADR 0021's per-instantiation clone coercion).
-        let defer_coercion = reason == CtReason::Apply
-            && matches!(
-                (self.store.shallow(expected), self.store.shallow(&found)),
-                (Ty::Param(_), Ty::Var(_) | Ty::Borrow(..)) | (Ty::Var(_), Ty::Borrow(..))
-            );
+        // A borrow-shaped value (or a projection that may still resolve to
+        // one — a member result reduces only after its head is solved)
+        // checking against an owned slot is the value-boundary coercion:
+        // under implicit sharing the borrow satisfies the slot by donating
+        // a retain, and the solver's constraint waits out late heads
+        // before judging. Bare vars keep the eager equality — checking-
+        // mode unification is what drives inference — except the original
+        // rigid-`Param`-slot deferral (ADR 0021), where eager equating
+        // would bind the result var owned and then conflict with a
+        // borrow-typed member return.
+        let defer_coercion = match (self.store.shallow(expected), self.store.shallow(&found)) {
+            // Borrow-expected slots peeled in `check_expr`; an unsolved
+            // slot must keep the eager equality that drives inference,
+            // except the legacy Apply deferrals above.
+            (Ty::Borrow(..), _) => false,
+            (Ty::Var(_), Ty::Borrow(..)) | (Ty::Param(_), Ty::Var(_)) => {
+                reason == CtReason::Apply
+            }
+            (Ty::Var(_), _) => false,
+            // A concrete owned slot fed a still-unsolved value: the value
+            // may yet resolve borrowed (a binding whose initializer is a
+            // member projection), so the judgment waits. Quiescence
+            // defaults leftovers to the plain equality.
+            (_, Ty::Borrow(..) | Ty::Proj(..) | Ty::Var(_)) => true,
+            _ => false,
+        };
         if defer_coercion {
             self.wanteds.push(Constraint::CoerceOwned {
                 expected: expected.clone(),

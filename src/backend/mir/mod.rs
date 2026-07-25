@@ -1238,7 +1238,11 @@ fn ty_mentions_param(ty: &Ty, symbol: Symbol) -> bool {
 }
 
 
-pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Program, BackendError> {
+pub(crate) fn build(
+    programs: &[ProgramInput<'_>],
+    entry: Entry,
+    check_all: bool,
+) -> Result<Program, BackendError> {
     let mut builder = ProgramBuilder::new(programs);
     builder.index_callables();
 
@@ -1286,7 +1290,7 @@ pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Progr
         }
     }
 
-    let check_all = std::env::var_os("TALK_CHECK_ALL").is_some();
+    let check_all = check_all || std::env::var_os("TALK_CHECK_ALL").is_some();
     let entry_result = match entry {
         Entry::Named(name) => builder.build_named_entry(name),
         Entry::Script => builder.build_script_entry(),
@@ -1319,6 +1323,19 @@ pub(crate) fn build(programs: &[ProgramInput<'_>], entry: Entry) -> Result<Progr
             .callables
             .iter()
             .filter(|(_, callable)| callable.program == 0)
+            // A capturing function value (a trailing closure, a nested
+            // `func` over frame locals) compiles only inside its creation
+            // frame, where its captures exist; the enclosing callable's
+            // compile below checks it. Demanding it standalone would
+            // resolve its captures against nothing.
+            .filter(|(_, callable)| match callable.body {
+                CallableBody::Func(func) => func
+                    .body
+                    .frame
+                    .as_ref()
+                    .is_none_or(|frame| frame.captured.is_empty()),
+                CallableBody::Init { .. } => true,
+            })
             .map(|(symbol, callable)| {
                 let mut subst: Vec<(Symbol, Ty)> = callable
                     .body
@@ -1842,22 +1859,35 @@ impl<'a> ProgramBuilder<'a> {
             .protocols
             .get(&protocol.protocol)
             .map(|info| info.requirements.len())?;
-        if let Ty::Nominal(head, args) = self_ty {
-            let matches = self.catalog.satisfied_conformances(*head, args, protocol);
-            if let [selected] = matches.as_slice() {
-                // One entry per requirement is the slot contract; a short
-                // dictionary would silently misalign every later slot, so
-                // an uncommitted row fails closed here.
-                if selected.conformance.dictionary.len() != expected {
-                    return None;
-                }
-                let mut subst = selected.evidence_substitution();
-                subst.extend(base);
-                return Some((selected.conformance.dictionary.clone(), subst));
-            }
+        // Derived conformances are ordinary synthesized rows, so the row
+        // scan is the whole story: no recipe fallback. Comparison
+        // requirements take `rhs: &RHS` (ADR 0014), so an instantiation
+        // can spell a protocol argument as a borrow; rows declare value
+        // shapes, and the scan matches through the borrow.
+        let Ty::Nominal(head, args) = self_ty else {
+            return None;
+        };
+        let protocol = &crate::types::ty::ProtocolRef {
+            protocol: protocol.protocol,
+            args: protocol
+                .args
+                .iter()
+                .map(|arg| strip_borrows(arg.clone()))
+                .collect(),
+        };
+        let matches = self.catalog.satisfied_conformances(*head, args, protocol);
+        let [selected] = matches.as_slice() else {
+            return None;
+        };
+        // One entry per requirement is the slot contract; a short
+        // dictionary would silently misalign every later slot, so an
+        // uncommitted row fails closed here.
+        if selected.conformance.dictionary.len() != expected {
+            return None;
         }
-        let entries = self.catalog.derived_dictionary(protocol.protocol)?;
-        Some((entries, base))
+        let mut subst = selected.evidence_substitution();
+        subst.extend(base);
+        Some((selected.conformance.dictionary.clone(), subst))
     }
 
     /// The one deferred-selection point (ADR 0036/0038): dereference a
@@ -2259,6 +2289,7 @@ impl<'a> ProgramBuilder<'a> {
         let hidden = witness_params(subst);
         let mut fx = FunctionBuilder::new(self, declared_arity, callable.program);
         fx.flow_label = name.clone();
+        fx.frame_span = body.span;
         let arity = fx.bind_witness_params(&hidden, declared_arity);
         fx.next_local = arity;
         fx.subst = subst.iter().cloned().collect();
@@ -2523,6 +2554,9 @@ struct FunctionBuilder<'p, 'a> {
     flow_events: Vec<verify::FlowRecord>,
     /// Names the function in balance-verifier reports.
     flow_label: String,
+    /// The source span of this frame's body, for frame-level diagnostics
+    /// (a returned-borrow escape has no single instruction to blame).
+    frame_span: Span,
     /// The loop depth at which each tracked local was registered:
     /// consuming a value bound outside the current loop retains (the
     /// loop may repeat), whatever the syntactic use count says.
@@ -2585,6 +2619,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             deferred_errors: Vec::new(),
             flow_events: Vec::new(),
             flow_label: "mir".into(),
+            frame_span: Span::SYNTHESIZED,
             owned_loop_depth: FxHashMap::default(),
             unique_locals: rustc_hash::FxHashSet::default(),
             in_return_consume: false,
@@ -2806,13 +2841,22 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     && !self.moved.contains(&local)
             };
             if named_owned(root) || named_owned(view) {
-                self.deferred_errors.push(BackendError::new(
-                    format!(
-                        "a borrowed return may not escape the returning frame's own value (it is owned by this function; in {})",
-                        self.flow_label
+                let function = self.flow_label.clone();
+                let binding = self
+                    .locals
+                    .iter()
+                    .find(|(_, bound)| **bound == root || **bound == view)
+                    .map(|(symbol, _)| self.program_builder.display_name(*symbol));
+                let message = match binding {
+                    Some(binding) => format!(
+                        "cannot return a borrow of `{binding}` from `{function}`: `{binding}` is destroyed when `{function}` returns — return an owned value instead (drop the `&` from the return type)"
                     ),
-                    Span::SYNTHESIZED,
-                ));
+                    None => format!(
+                        "cannot return a borrow of a value `{function}` owns: it is destroyed when `{function}` returns — return an owned value instead (drop the `&` from the return type)"
+                    ),
+                };
+                self.deferred_errors
+                    .push(BackendError::new(message, self.frame_span));
             }
         }
         // A returned place read the frame does not own donates a
@@ -4618,8 +4662,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             Ty::Func(_, _, _) => Ok(()),
             // A rigid effect-generic payload passes through registers
             // opaquely (a generic clause handles every instantiation); v1
-            // restricts such payloads to Copy shapes.
-            Ty::Param(_) => Ok(()),
+            // restricts such payloads to Copy shapes. An irreducible
+            // associated-type projection over a rigid base is exactly as
+            // opaque.
+            Ty::Param(_) | Ty::Proj(..) => Ok(()),
             // Existential values carry their own drop/retain witnesses.
             Ty::Any { .. } => Ok(()),
             // Static arguments are phase-only (ADR 0035): evidence erases,

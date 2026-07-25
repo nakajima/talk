@@ -96,7 +96,6 @@ pub struct Solver<'s> {
     /// In-flight auto-derived conformances, so recursive nominals resolve
     /// coinductively instead of looping. The complete goal matters: two
     /// applications of the same generic nominal can have different premises.
-    pub(crate) derived_seen: rustc_hash::FxHashSet<ConformanceGoal>,
     /// Axiom-premise dependency edges seen during this solve. A new edge
     /// that reaches back to its source is a recursive conformance cycle.
     pub(crate) conformance_edges: FxHashMap<ConformanceGoal, FxHashSet<ConformanceGoal>>,
@@ -537,12 +536,37 @@ impl<'s> Solver<'s> {
     ) {
         let found = normalize_ty(self.store, self.catalog, &found);
         match self.store.shallow(&found) {
-            Ty::Var(_) => stuck.push(Constraint::CoerceOwned {
+            // An unresolved head (or an irreducible projection of one)
+            // waits: whether the value arrives borrowed is not known yet.
+            Ty::Var(_) | Ty::Proj(..) => stuck.push(Constraint::CoerceOwned {
                 expected,
                 found,
                 origin,
             }),
             Ty::Borrow(_, found_inner) => {
+                if std::env::var_os("TALK_SYNTH_DEBUG").is_some() {
+                    eprintln!(
+                        "COERCE borrow-found reason={:?} expected={:?}",
+                        origin.reason,
+                        self.store.shallow(&expected)
+                    );
+                }
+                // Return-position donation (implicit sharing): a borrow
+                // returned where the frame's type owns always donates a
+                // retained reference. MIR's return path retains any
+                // referent the frame does not own, so no clone marking
+                // is needed — the equation just continues against the
+                // referent.
+                if matches!(origin.reason, CtReason::Return | CtReason::Body)
+                    && !matches!(self.store.shallow(&expected), Ty::Var(_) | Ty::Borrow(..))
+                {
+                    queue.push(Constraint::Eq(
+                        expected,
+                        (*found_inner).clone(),
+                        origin.nested(),
+                    ));
+                    return;
+                }
                 let coerces = match self.store.shallow(&expected) {
                     // The slot's own type is still unsolved: whether this
                     // is a coercion (owned slot) or a plain borrow payload
@@ -597,9 +621,35 @@ impl<'s> Solver<'s> {
                             ));
                             return;
                         }
+                        // Implicit sharing: any non-linear managed value
+                        // satisfies an owned slot from a borrow by
+                        // donating a retain. MIR's consume boundaries
+                        // emit the donation from provenance, so no clone
+                        // mark is recorded here.
+                        if self
+                            .catalog
+                            .implicitly_duplicable(&Ty::Nominal(symbol, args))
+                        {
+                            queue.push(Constraint::Eq(
+                                expected,
+                                (*found_inner).clone(),
+                                origin.nested(),
+                            ));
+                            return;
+                        }
                         false
                     }
-                    _ => false,
+                    other => {
+                        if self.catalog.implicitly_duplicable(&other) {
+                            queue.push(Constraint::Eq(
+                                expected,
+                                (*found_inner).clone(),
+                                origin.nested(),
+                            ));
+                            return;
+                        }
+                        false
+                    }
                 };
                 if coerces {
                     self.coerce_clones.insert(origin.node);
@@ -637,12 +687,17 @@ impl<'s> Solver<'s> {
         let mut defaulted = false;
         for constraint in stuck.drain(..) {
             match constraint {
+                // Group solves hold member chains for the final solve, so
+                // a coercion's value may still resolve borrowed later:
+                // committing it to plain equality is final-solve-only —
+                // group leftovers float with their chains.
                 Constraint::CoerceOwned {
                     expected,
                     found,
                     origin,
-                } if (matches!(self.store.shallow(&found), Ty::Var(_))
-                    || matches!(self.store.shallow(&expected), Ty::Var(_)))
+                } if self.defaulting
+                    && (matches!(self.store.shallow(&found), Ty::Var(_) | Ty::Proj(..))
+                        || matches!(self.store.shallow(&expected), Ty::Var(_)))
                     && !self.mentions_pending_output(&found, &pending_outputs)
                     && !self.mentions_pending_output(&expected, &pending_outputs) =>
                 {

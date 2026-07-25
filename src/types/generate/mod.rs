@@ -429,9 +429,11 @@ impl<'a> TypecheckSession<'a> {
             };
             builder.collect(asts)
         };
-        // Every conformance row exists now: commit the Deinit index and
+        // Every conformance row exists now: materialize derived
+        // conformances as ordinary rows, then commit the Deinit index and
         // each row's dictionary (ADR 0038) so lowering dereferences
         // committed entries instead of searching and guessing.
+        self.catalog.synthesize_derived_conformances(self.module_id);
         self.catalog.commit_deinit_rows();
         self.catalog.commit_dictionaries();
         self.catalog.commit_callable_owners();

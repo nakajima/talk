@@ -703,6 +703,9 @@ impl<'a> Higlighter<'a> {
                 StaticExprKind::Int(_) | StaticExprKind::Bool(_) => {
                     result.push(self.make_span(Kind::NUMBER, expr.span));
                 }
+                StaticExprKind::UnqualifiedCase { name_span, .. } => {
+                    result.push(self.make_span(Kind::ENUM_MEMBER, *name_span));
+                }
                 StaticExprKind::Path(annotation) => {
                     result.extend(self.tokens_from_expr(annotation, ast));
                 }

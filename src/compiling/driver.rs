@@ -34,9 +34,11 @@ use std::{
 
 pub trait DriverPhase {}
 
-/// An ownership rejection: the message and, when the span maps to a
-/// source document, that document's path and byte range.
-pub type OwnershipRejection = (String, Option<(String, u32, u32)>);
+/// An ownership rejection: the message and, when the rejection carries a
+/// real span, the file it belongs to with its byte range. The file id
+/// indexes the compile's document list directly — a path string would
+/// force every consumer to re-derive the mapping it already has.
+pub type OwnershipRejection = (String, Option<(FileID, u32, u32)>);
 
 pub struct Initial {}
 impl DriverPhase for Initial {}
@@ -704,15 +706,10 @@ impl Driver<Typed> {
             if span == crate::parsing::span::Span::SYNTHESIZED {
                 return (error.message.clone(), None);
             }
-            for (source, file) in self.phase.program.files() {
-                if file.file_id == span.file_id {
-                    return (
-                        error.message.clone(),
-                        Some((source.path().to_string(), span.start, span.end)),
-                    );
-                }
-            }
-            (error.message.clone(), None)
+            (
+                error.message,
+                Some((span.file_id, span.start, span.end)),
+            )
         })
     }
 
@@ -822,8 +819,10 @@ impl Driver<Typed> {
             .into_iter()
             .filter(|(symbol, _)| own(symbol))
             .collect();
-        #[cfg_attr(not(debug_assertions), allow(unused_mut))]
         let mut catalog = types.catalog;
+        // Synthesized derived rows are compile-local; importers
+        // re-synthesize against their own merged catalogs.
+        catalog.strip_synthesized_conformances();
         // A module's types outlive this store: nothing var-shaped may
         // cross. Finalization guarantees it through the same walk this
         // assertion re-runs; a future catalog field that skips the walk

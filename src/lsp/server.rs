@@ -798,6 +798,36 @@ fn analysis_root_for_uri(state: &ServerState, uri: &Url) -> Option<PathBuf> {
 }
 
 fn tlk_files_under_root(root: &PathBuf) -> Vec<PathBuf> {
+    // A package manifest scopes the program: only the manifest and files
+    // under its build targets' source directories compile together, the
+    // same set `talk test` and `talk run` use. Stray .tlk files elsewhere
+    // under the folder (scratch, stale copies) are not part of the
+    // program, and their diagnostics must not gate the real ones.
+    let source_roots: Option<Vec<PathBuf>> =
+        crate::compiling::package::PackageManifest::read(root)
+            .ok()
+            .map(|manifest| {
+                manifest
+                    .builds
+                    .iter()
+                    .map(|artifact| match artifact {
+                        crate::compiling::package::PackageArtifact::Library { from }
+                        | crate::compiling::package::PackageArtifact::Binary { from, .. } => {
+                            root.join(from).parent().map(std::path::Path::to_path_buf)
+                        }
+                    })
+                    .flatten()
+                    .collect()
+            });
+    let in_scope = |path: &std::path::Path| match &source_roots {
+        Some(roots) => {
+            path.parent() == Some(root.as_path())
+                && path.file_name().and_then(|n| n.to_str()) == Some("package.tlk")
+                || roots.iter().any(|src| path.starts_with(src))
+        }
+        None => true,
+    };
+
     let mut result = Vec::new();
 
     for entry in WalkBuilder::new(root).build() {
@@ -810,7 +840,7 @@ fn tlk_files_under_root(root: &PathBuf) -> Vec<PathBuf> {
         }
 
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("tlk") {
+        if path.extension().and_then(|e| e.to_str()) == Some("tlk") && in_scope(path) {
             result.push(path.to_path_buf());
         }
     }
@@ -921,6 +951,12 @@ fn publish_workspace_diagnostics(state: &mut ServerState, workspace: &AnalysisWo
         let Some(uri) = url_from_document_id(doc_id) else {
             continue;
         };
+        if uri
+            .to_file_path()
+            .is_ok_and(|path| crate::testing::Harness::is_source_path(&path))
+        {
+            continue;
+        }
         let text = workspace.texts.get(idx).map(|t| t.as_str()).unwrap_or("");
         let diagnostics = workspace
             .diagnostics
@@ -1052,6 +1088,33 @@ fn byte_offset_to_utf16_position(text: &str, byte_offset: u32) -> Option<Positio
 #[cfg(test)]
 mod tests {
     use super::{AnalysisWorkspace, DocumentInput, WorkspaceAnalysisBackoff};
+
+    #[test]
+    fn manifest_scopes_workspace_files() {
+        // A package manifest defines the program: stray .tlk files
+        // outside the build targets' source directories (scratch, stale
+        // copies) stay out of the compile set, so their frontend errors
+        // cannot gate the real program's MIR diagnostics.
+        let root = std::env::temp_dir().join(format!("talk-lsp-scope-{}", std::process::id()));
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("temp source dir");
+        std::fs::write(
+            root.join("package.tlk"),
+            "Package(\n\tname: \"p\",\n\tversion: \"0.1.0\",\n\tbuilds: [.lib(from: \"src/lib.tlk\")],\n\tdependencies: []\n)\n",
+        )
+        .expect("manifest");
+        std::fs::write(src.join("lib.tlk"), "let x = 1\n").expect("lib");
+        std::fs::write(root.join("stale.tlk"), "use package::nope::{ Gone }\n").expect("stale");
+        let files = super::tlk_files_under_root(&root);
+        let names: Vec<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"lib.tlk"), "{names:?}");
+        assert!(names.contains(&"package.tlk"), "{names:?}");
+        assert!(!names.contains(&"stale.tlk"), "{names:?}");
+        std::fs::remove_dir_all(&root).ok();
+    }
     use crate::lsp::document::Document;
     use async_lsp::ClientSocket;
     use async_lsp::lsp_types::HoverContents;
@@ -1615,28 +1678,42 @@ mod tests {
     fn undefined_name_quick_fix_inserts_separated_import() {
         let main_code = "foo\n";
         let lib_code = "public let foo = 1\n";
+        let consumer_code = "use package::auto_import_path_only_lib::{ foo }\nlet consumed = foo\n";
         let uri_main =
             Url::from_file_path(std::env::temp_dir().join("auto_import_path_only_main.tlk"))
                 .expect("main uri");
         let uri_lib =
             Url::from_file_path(std::env::temp_dir().join("auto_import_path_only_lib.tlk"))
                 .expect("lib uri");
-        let module = workspace_for_docs(vec![(uri_main.clone(), main_code), (uri_lib, lib_code)]);
+        let uri_consumer =
+            Url::from_file_path(std::env::temp_dir().join("auto_import_path_only_consumer.tlk"))
+                .expect("consumer uri");
+        let module = workspace_for_docs(vec![
+            (uri_main.clone(), main_code),
+            (uri_lib, lib_code),
+            (uri_consumer, consumer_code),
+        ]);
         let document_id = super::document_id_for_uri(&uri_main);
         let everywhere = Range::new(
             async_lsp::lsp_types::Position::new(0, 0),
             async_lsp::lsp_types::Position::new(999, 0),
         );
         let actions = super::compute_code_actions(&module, &document_id, &uri_main, everywhere);
-        let async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) = actions
+        let import_actions: Vec<_> = actions
             .iter()
-            .find(|a| match a {
+            .filter(|action| match action {
                 async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) => {
                     action.title.contains("Import 'foo'")
                 }
                 _ => false,
             })
-            .expect("import quick-fix")
+            .collect();
+        assert_eq!(
+            import_actions.len(),
+            1,
+            "only the defining export should be offered: {import_actions:?}"
+        );
+        let async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) = import_actions[0]
         else {
             panic!("not a code action");
         };

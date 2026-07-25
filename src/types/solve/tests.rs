@@ -53,7 +53,6 @@ impl Harness {
             givens: vec![],
             touchable_level: None,
             local_params: vec![],
-            derived_seen: Default::default(),
             conformance_edges: Default::default(),
         };
         solver.solve(wanteds)
@@ -659,7 +658,6 @@ fn instantiation_substitutes_perms_into_predicates() {
         givens: vec![],
         touchable_level: None,
         local_params: vec![],
-        derived_seen: Default::default(),
         conformance_edges: Default::default(),
     };
     let instantiated = solver.instantiate_scheme(&scheme, NodeID::ANY, &mut queue);

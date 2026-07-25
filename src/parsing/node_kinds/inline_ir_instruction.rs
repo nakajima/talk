@@ -268,6 +268,7 @@ fn simple_display_static_expr(expr: &crate::node_kinds::generic_arg::StaticExpr)
     match &expr.kind {
         StaticExprKind::Int(literal) => literal.clone(),
         StaticExprKind::Bool(value) => value.to_string(),
+        StaticExprKind::UnqualifiedCase { name, .. } => format!(".{name}"),
         StaticExprKind::Path(annotation) => annotation.simple_display(),
         StaticExprKind::Group(inner) => format!("({})", simple_display_static_expr(inner)),
         StaticExprKind::Op { op, lhs, rhs } => format!(

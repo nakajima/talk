@@ -124,47 +124,33 @@ pub(super) fn compute_code_actions(
         return actions;
     };
 
-    // Build an index of public symbols from all other files
-    // Map from symbol name -> (source file path, symbol)
+    // Build an index from each public symbol's declaration, not from every
+    // file scope where imports made that symbol visible.
     let mut public_exports: FxHashMap<
         String,
         Vec<(String, crate::name_resolution::symbol::Symbol)>,
     > = FxHashMap::default();
 
-    for (idx, doc_id) in workspace.file_id_to_document.iter().enumerate() {
-        if doc_id == document_id {
-            continue; // Skip current file
-        }
+    for &symbol in &workspace.resolved_names.public_symbols {
+        let Some(&definition) = workspace.resolved_names.symbols_to_node.get(&symbol) else {
+            continue;
+        };
         let Some(source_path) = workspace
             .asts
-            .get(idx)
+            .get(definition.0.0 as usize)
             .and_then(|ast| ast.as_ref())
+            .filter(|ast| ast.file_id != file_id)
             .map(|ast| ast.path.clone())
         else {
             continue;
         };
-
-        let target_file_id = crate::node_id::FileID(idx as u32);
-        let scope_id = crate::node_id::NodeID(target_file_id, 0);
-
-        if let Some(scope) = workspace.resolved_names.scopes.get(&scope_id) {
-            for (name, &symbol) in &scope.values {
-                if workspace.resolved_names.public_symbols.contains(&symbol) {
-                    public_exports
-                        .entry(name.clone())
-                        .or_default()
-                        .push((source_path.clone(), symbol));
-                }
-            }
-            for (name, &symbol) in &scope.types {
-                if workspace.resolved_names.public_symbols.contains(&symbol) {
-                    public_exports
-                        .entry(name.clone())
-                        .or_default()
-                        .push((source_path.clone(), symbol));
-                }
-            }
-        }
+        let Some(name) = workspace.resolved_names.symbol_names.get(&symbol) else {
+            continue;
+        };
+        public_exports
+            .entry(name.clone())
+            .or_default()
+            .push((source_path, symbol));
     }
 
     for diagnostic in diagnostics {

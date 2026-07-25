@@ -1854,6 +1854,7 @@ impl<'a> Formatter<'a> {
         match &expr.kind {
             StaticExprKind::Int(literal) => text(literal.clone()),
             StaticExprKind::Bool(value) => text(if *value { "true" } else { "false" }),
+            StaticExprKind::UnqualifiedCase { name, .. } => text(format!(".{name}")),
             StaticExprKind::Path(annotation) => self.format_type_annotation(annotation),
             StaticExprKind::Group(inner) => {
                 concat(text("("), concat(self.format_static_expr(inner), text(")")))

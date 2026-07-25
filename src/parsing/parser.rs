@@ -3941,7 +3941,7 @@ impl<'a> Parser<'a> {
     /// annotation becomes the name-like left operand of a static
     /// expression (`N + 1`).
     fn generic_argument(&mut self) -> Result<GenericArg, ParserError> {
-        if self.starts_static_literal() {
+        if self.starts_static_literal() || self.peek_is(TokenKind::Dot) {
             return Ok(GenericArg::Static(self.static_expr()?));
         }
         if self.peek_is(TokenKind::LeftParen) {
@@ -4087,6 +4087,16 @@ impl<'a> Parser<'a> {
                 id,
                 span,
                 kind: StaticExprKind::Bool(value),
+            });
+        }
+        if self.peek_is(TokenKind::Dot) {
+            let tok = self.push_source_location();
+            self.consume(TokenKind::Dot)?;
+            let (name, name_span) = self.identifier()?;
+            return self.save_meta(tok, |id, span| StaticExpr {
+                id,
+                span,
+                kind: StaticExprKind::UnqualifiedCase { name, name_span },
             });
         }
         // In committed static context `(` is grouping, not a tuple type.

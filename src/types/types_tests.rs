@@ -2488,16 +2488,13 @@ pub mod tests {
     }
 
     #[test]
-    fn callback_result_mismatch_names_the_callback_result() {
+    fn callback_result_donates_owned_from_borrowed_param() {
+        // Implicit sharing: the callback's borrowed parameter satisfies
+        // the owned result slot by donating a retain.
         let t = check(
             "// no-core\nstruct Character {}\nfunc apply(transform: (Character) -> Character) {}\napply { ch in ch }",
         );
-        let errors = type_errors(&t);
-        assert!(
-            errors.iter().any(|error| error
-                == "Callback returns borrowed &Character, but owned Character is required"),
-            "expected callback-result ownership diagnostic, got {errors:?}"
-        );
+        assert_clean(&t);
     }
 
     #[test]
@@ -2618,19 +2615,16 @@ pub mod tests {
     }
 
     #[test]
-    fn inferred_param_cannot_be_returned_owned() {
-        // Callee-side twin of `func steal(x: Str) -> Str { x }`:
-        // a borrowed parameter cannot be returned as an owned value.
+    fn inferred_param_returned_owned_donates_and_stays_borrowed() {
+        // Implicit sharing: a borrowed parameter returned as an owned
+        // value donates a retain at the return — and the donation happens
+        // at the boundary, so the param's inferred type stays a borrow
+        // rather than defaulting to owned.
         let t = check(
             "// no-core\nstruct Str {}\nfunc steal(x) -> Str {\n\tx\n}\nlet s = Str()\nlet y = steal(s)",
         );
-        let errors = type_errors(&t);
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("Str") && error.contains("&Str")),
-            "expected owned/borrowed mismatch, got {errors:?}"
-        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "steal"), "(&Str) -> Str");
     }
 
     #[test]
@@ -2711,33 +2705,24 @@ pub mod tests {
         let t = check("// no-core\nstruct S {}\nfunc take(s: &S) {}\nfunc f(x) {\n\ttake(x)\n}");
         assert_clean(&t);
         assert_eq!(ty_of(&t, "f"), "(&S) -> ()");
-        // And the old test program — which then returned `x` as an owned
-        // `S` — now reports the annotated twin's mismatch instead of
-        // silently defaulting the param to owned.
+        // And the old test program — which then returns `x` as an owned
+        // `S` — donates at the return while the param stays borrowed,
+        // exactly like its annotated twin would.
         let t = check(
             "// no-core\nstruct S {}\nfunc take(s: &S) {}\nfunc f(x) -> S {\n\ttake(x)\n\tx\n}",
         );
-        let errors = type_errors(&t);
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("S") && error.contains("&S")),
-            "expected owned/borrowed mismatch, got {errors:?}"
-        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "f"), "(&S) -> S");
     }
 
     #[test]
-    fn borrowed_return_does_not_satisfy_owned_argument() {
+    fn borrowed_return_donates_into_owned_argument() {
+        // Implicit sharing: a borrowed call result fills a consume
+        // parameter by donating a retain; the owner keeps its value.
         let t = check(
             "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(consume s: String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = take(id(s))",
         );
-        let errors = type_errors(&t);
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("String") && error.contains("&String")),
-            "expected owned/borrowed mismatch, got {errors:?}"
-        );
+        assert_clean(&t);
     }
 
     /// S4: a borrow annotation is not an application — an owned rvalue temp
@@ -2812,17 +2797,14 @@ pub mod tests {
     }
 
     #[test]
-    fn nested_borrow_does_not_satisfy_owned_argument() {
+    fn nested_borrow_donates_into_owned_field() {
+        // Implicit sharing: a borrowed value stored into an owning field
+        // donates a retain at the construction boundary (MIR's stored
+        // slots already consume with donation).
         let t = check(
             "// no-core\nstruct String {\n\tlet length: Int\n}\nstruct Box<T> {\n\tlet value: T\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(b: Box<String>) -> Int {\n\tb.value.length\n}\nlet s = String(length: 4)\nlet b = Box(value: id(s))\nlet y = take(b)",
         );
-        let errors = type_errors(&t);
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("String") && error.contains("&String")),
-            "expected nested owned/borrowed mismatch, got {errors:?}"
-        );
+        assert_clean(&t);
     }
 
     #[test]
@@ -3641,11 +3623,11 @@ pub mod tests {
     }
 
     #[test]
-    fn derived_dictionaries_come_from_committed_recipes() {
-        // Derived Showable/Equatable conformances have no row; their
-        // dictionaries come from the recipe registry keyed by the
-        // well-known protocol identity — requirements without a default
-        // get the structural recipe, defaulted ones their default body.
+    fn derived_conformances_are_synthesized_rows_with_recipe_dictionaries() {
+        // Derivation materializes an ordinary conformance row per
+        // derivable protocol (the derive-generates-an-impl model); its
+        // committed dictionary carries the structural recipe for bodyless
+        // requirements and the default body for defaulted ones.
         use crate::name_resolution::symbol::Symbol;
         use crate::types::catalog::{DerivedRecipe, DictionaryEntry};
         let t = Driver::new(
@@ -3659,28 +3641,50 @@ pub mod tests {
         .type_check();
         assert_clean(&t);
         let catalog = &t.phase.program.types().catalog;
-        let show = catalog
-            .derived_dictionary(Symbol::Showable)
-            .expect("core Showable is derivable");
-        assert_eq!(show, vec![DictionaryEntry::Derived(DerivedRecipe::Show)]);
-        let equatable = catalog
-            .derived_dictionary(Symbol::Equatable)
-            .expect("core Equatable is derivable");
+        let point = catalog
+            .structs
+            .keys()
+            .copied()
+            .find(|symbol| {
+                t.phase
+                    .program
+                    .resolved_names()
+                    .symbol_names
+                    .get(symbol)
+                    .is_some_and(|name| name == "Point")
+            })
+            .expect("Point registered");
+        let row_for = |protocol: Symbol| {
+            catalog
+                .conformances_for_head(point)
+                .map(|(_, row)| row)
+                .find(|row| row.protocol.protocol == protocol)
+                .expect("synthesized row exists")
+        };
+        let show = row_for(Symbol::Showable);
+        assert!(show.synthesized);
         assert_eq!(
-            equatable[0],
+            show.dictionary,
+            vec![DictionaryEntry::Derived(DerivedRecipe::Show)]
+        );
+        let equatable = row_for(Symbol::Equatable);
+        assert!(equatable.synthesized);
+        assert_eq!(
+            equatable.dictionary[0],
             DictionaryEntry::Derived(DerivedRecipe::Equality)
         );
         assert!(
             matches!(
-                equatable[1],
+                equatable.dictionary[1],
                 DictionaryEntry::Implementation {
                     writeback_width: 0,
                     ..
                 }
             ),
-            "notEquals uses its default body: {equatable:?}"
+            "notEquals uses its default body: {:?}",
+            equatable.dictionary
         );
-        assert_eq!(equatable.len(), 2);
+        assert_eq!(equatable.dictionary.len(), 2);
     }
 
     #[test]
@@ -5725,17 +5729,16 @@ mod with_core {
     }
 
     #[test]
-    fn specialized_copy_row_does_not_grade_the_family() {
-        // `extend Box<Int>: Copy` is evidence about Box<Int> only: a
-        // borrowed Box<S> must still refuse to fill an owned parameter.
+    fn specialized_copy_row_does_not_stop_donation() {
+        // `extend Box<Int>: Copy` is evidence about Box<Int> only — but
+        // under implicit sharing a borrowed non-Copy Box<S> still fills
+        // an owned parameter by donating a retain, so no grading question
+        // arises at this boundary at all.
         let t = check_with_core(Source::from(
             "struct Box<T> {\n\tlet value: T\n}\nextend Box<Int>: Copy {}\nstruct S {\n\tlet name: String\n}\nfunc takes(consume b: Box<S>) {}\nfunc caller(b: &Box<S>) {\n\ttakes(b)\n}",
         ));
         let errors = type_errors(&t);
-        assert!(
-            !errors.is_empty(),
-            "a borrowed non-Copy Box<S> must not fill an owned parameter"
-        );
+        assert!(errors.is_empty(), "donation covers this boundary: {errors:?}");
     }
 
     #[test]
@@ -6396,6 +6399,100 @@ func f<static N: Int>(consume g: Grid<N>) -> N { g }",
                 .any(|error| error.contains("static value expression is not a type")),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn gadt_case_result_may_apply_static_argument_to_own_head() {
+        // The enum's param kinds must be visible while its own case
+        // results lower (header pre-pass), or `true` is rejected as a
+        // static value in type position.
+        let t = super::tests::check(
+            "// no-core
+enum GADTResult<T, static IsOK: Bool> {
+case ok(T) -> GADTResult<T, true>
+case err(T) -> GADTResult<T, false>
+}
+func f(consume r: GADTResult<Int, true>) -> GADTResult<Int, true> { r }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn recursive_payload_may_apply_static_argument_to_own_head() {
+        let t = super::tests::check(
+            "// no-core
+enum Chain<T, static Flag: Bool> {
+case leaf(T)
+case nest(Chain<T, true>)
+}",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn struct_field_may_apply_static_argument_to_own_head() {
+        let t = super::tests::check(
+            "// no-core
+struct Grid<static N: Int> {
+let shrink: (Grid<0>) -> Int
+}",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_domain_admits_fieldless_enum_declared_later() {
+        // The domain check reads the enum's variant shapes, which are
+        // header facts — declaration order must not matter.
+        let t = super::tests::check(
+            "// no-core
+struct Flagged<static C: Color> {}
+enum Color {
+case red
+case blue
+}
+func f(consume s: Flagged<Color.red>) -> Flagged<Color.red> { s }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn static_domain_rejects_payload_enum_declared_later() {
+        let t = super::tests::check(
+            "// no-core
+struct Flagged<static C: Color> {}
+enum Color {
+case rgb(Int)
+}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("value type must be Int, Bool, or a fieldless enum")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn self_reference_pads_declared_static_default() {
+        // `Tree<T>` inside the enum's own body must pad to `Tree<T, 0>`,
+        // so `nest`'s payload unifies with an explicit `Tree<Int, 0>`.
+        let t = super::tests::check(
+            "// no-core
+enum Tree<T, static Depth: Int = 0> {
+case leaf(T)
+case nest(Tree<T>)
+}
+func takes(x: Tree<Int, 0>) -> Int { 1 }
+func f(t: Tree<Int>) -> Int {
+    match t {
+        .nest(inner) -> takes(inner),
+        .leaf(_) -> 0
+    }
+}",
+        );
+        super::tests::assert_clean(&t);
     }
 
     #[test]
@@ -7217,6 +7314,20 @@ effect 'tag<static N: Int>(value: Int) -> Int
 enum Color { case red case green }
 struct Paint<static C: Color> {}
 func f(consume p: Paint<Color.red>) -> Paint<Color.red> { p }",
+        );
+        super::tests::assert_clean(&t);
+    }
+
+    #[test]
+    fn unqualified_static_enum_case_arguments_use_the_declared_domain() {
+        let t = super::tests::check(
+            "// no-core
+enum Outcome { case success case failure }
+enum Res<T, static O: Outcome> {
+case ok(T) -> Res<T, .success>
+case err(T) -> Res<T, .failure>
+}
+func f(consume r: Res<Int, .success>) -> Res<Int, Outcome.success> { r }",
         );
         super::tests::assert_clean(&t);
     }

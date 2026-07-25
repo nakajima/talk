@@ -572,6 +572,25 @@ impl<'e> Elaborator<'e> {
                 }
                 Ty::Static(StaticValue::Bool(*value))
             }
+            StaticExprKind::UnqualifiedCase { name, .. } => {
+                match self
+                    .catalog
+                    .enums
+                    .get(&expected_head)
+                    .and_then(|info| info.variants.get(name))
+                {
+                    Some(variant) => Ty::Static(StaticValue::Case(expected_head, variant.symbol)),
+                    None => {
+                        self.diagnostics.errors.push((
+                            TypeError::ExpectedStaticArgument {
+                                found: format!(".{name}"),
+                            },
+                            expr.id,
+                        ));
+                        Ty::Error
+                    }
+                }
+            }
             StaticExprKind::Group(inner) => self.lower_static_expr(inner, expected),
             StaticExprKind::Path(annotation) => self.lower_static_path(annotation, expected),
             StaticExprKind::Op { op, lhs, rhs } => {
@@ -1021,8 +1040,24 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         where_clause: Option<&WhereClause>,
         body: impl FnOnce(&mut Self, &mut DeclContext) -> R,
     ) -> R {
+        self.register_static_param_kinds(generics);
+        self.in_predeclared_context(self_ty, generics, where_clause, body)
+    }
+
+    /// `in_declaration_context` for a nominal whose static param kinds
+    /// the header pass already registered (re-registering would
+    /// duplicate domain diagnostics). Everything declaration-order —
+    /// conformance bounds, where predicates, defaults — still lowers
+    /// here.
+    pub(super) fn in_predeclared_context<R>(
+        &mut self,
+        self_ty: Option<Ty>,
+        generics: &[GenericDecl],
+        where_clause: Option<&WhereClause>,
+        body: impl FnOnce(&mut Self, &mut DeclContext) -> R,
+    ) -> R {
         let start = self.obligations.len();
-        self.register_generic_bounds(generics);
+        self.register_conformance_bounds(generics);
         self.register_where_bounds(where_clause);
         let params = self.declared_params(generics);
         if let Some(ty) = &self_ty {

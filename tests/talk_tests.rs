@@ -564,6 +564,70 @@ fn run_mut_requirements_on_rvalue_receivers() {
 }
 
 #[test]
+fn run_returns_donate_owned_values_from_borrowed_reads() {
+    // Return position follows implicit sharing's clone-at-boundary rule:
+    // a borrow-typed place read returned where the function owns donates
+    // a retained reference, exactly like a call argument.
+    assert_runs(
+        b"enum Node {\n\
+          \tcase n(Int)\n\
+          }\n\
+          func parse() -> Node {\n\
+          \tlet roots = [Node.n(41)]\n\
+          \troots[0]\n\
+          }\n\
+          match parse() {\n\
+          \t.n(v) -> print(v)\n\
+          }\n",
+        &[],
+        b"41\n",
+    );
+    assert_runs(
+        b"func first(items: [String]) -> String {\n\
+          \titems[0]\n\
+          }\n\
+          print(first(items: [\"ab\" + \"cd\"]))\n",
+        &[],
+        b"abcd\n",
+    );
+    // An explicit return statement takes the same path.
+    assert_runs(
+        b"func first(items: [String]) -> String {\n\
+          \treturn items[0]\n\
+          }\n\
+          print(first(items: [\"ab\" + \"cd\"]))\n",
+        &[],
+        b"abcd\n",
+    );
+}
+
+#[test]
+fn run_borrowed_return_escape_names_the_binding() {
+    // A declared `-> &T` return genuinely cannot lend frame-owned data;
+    // the diagnostic names the binding and the function and suggests the
+    // owned spelling.
+    let output = run_source(
+        b"enum Node {\n\
+          \tcase n(Int)\n\
+          }\n\
+          func parse() -> &Node {\n\
+          \tlet roots = [Node.n(41)]\n\
+          \troots[0]\n\
+          }\n\
+          match parse() {\n\
+          \t.n(v) -> print(v)\n\
+          }\n",
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot return a borrow"), "{stderr}");
+    assert!(stderr.contains("`roots`"), "{stderr}");
+    assert!(stderr.contains("`parse`"), "{stderr}");
+    assert!(stderr.contains("drop the `&`"), "{stderr}");
+}
+
+#[test]
 fn run_derived_equality_through_conditional_conformances() {
     // A recursive enum whose payload routes through Array's conditional
     // Equatable row: the catalog's context prover must see derived
@@ -2068,8 +2132,6 @@ fn reference_flow_corpus_holds() {
     const KNOWN_STRICTER: &[&str] = &[
         "borrowed_generic_payload_requires_copy_or_cheap_clone_bound",
         "generic_heap_extraction_rejects_non_cheap_owned_instantiation",
-        "move_inside_trailing_block_is_may_moved_after",
-        "rejects_borrowed_loop_element_passed_to_consuming_callback",
     ];
     const PENDING_REJECTION: &[&str] = &[];
     assert_flow_corpus(
@@ -3691,7 +3753,7 @@ fn run_rejects_escaping_borrowed_returns() {
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("borrowed return"), "{stderr}");
+    assert!(stderr.contains("cannot return a borrow"), "{stderr}");
 }
 
 #[test]
@@ -3764,6 +3826,54 @@ fn run_reports_a_clean_division_by_zero_trap() {
     assert!(stderr.contains("division by zero"), "{stderr}");
     assert!(stderr.contains("0 live allocations"), "{stderr}");
     assert!(stderr.contains("0 live 'heap objects"), "{stderr}");
+}
+
+#[test]
+fn run_reports_an_out_of_range_array_read() {
+    // Without the bounds check the raw `gep` walks off the buffer and the
+    // failure surfaces as the VM's memory guard ("load out of bounds"),
+    // which names neither the array nor the index.
+    let output = run_source(b"let items = [1, 2, 3]\nprint(items[7])\n", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("array index out of bounds"), "{stderr}");
+
+    let output = run_source(b"let empty: [Int] = []\nprint(empty[0])\n", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("array index out of bounds"), "{stderr}");
+
+    let output = run_source(b"let items = [1, 2, 3]\nprint(items[0 - 1])\n", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("array index out of bounds"), "{stderr}");
+}
+
+#[test]
+fn run_reports_an_out_of_range_array_write() {
+    let output = run_source(b"let items = [1, 2, 3]\nitems[7] = 4\n", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("array index out of bounds"), "{stderr}");
+}
+
+#[test]
+fn run_reports_an_out_of_range_array_swap() {
+    let output = run_source(b"let items = [1, 2, 3]\nitems.swap(0, 9)\n", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("array index out of bounds"), "{stderr}");
+}
+
+#[test]
+fn an_array_bounds_panic_is_handleable() {
+    // Panic is an ordinary effect, so a bounds failure routes through a
+    // user handler before reaching the host's abort fallback.
+    assert_runs(
+        b"func lookup() -> Int {\n\t@handle 'panic { message in 0 }\n\tlet items = [1, 2, 3]\n\treturn items[7]\n}\nprint(lookup())\n",
+        &[],
+        b"0\n",
+    );
 }
 
 #[test]

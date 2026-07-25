@@ -167,6 +167,18 @@ impl Workspace {
             texts.push(source.read().unwrap_or_default());
         }
         let typed = resolved.type_check();
+        // The MIR-analysis half of `talk check` (ownership, exclusivity,
+        // initialization, the unsafe gate): the editor surfaces exactly
+        // what compiling would reject. Frontend errors gate it — the
+        // backend assumes a well-typed program — and only the normal
+        // context runs it (core and stdlib compile against themselves).
+        let ownership_rejection = if matches!(compile_context, WorkspaceCompileContext::Normal)
+            && !typed.has_errors()
+        {
+            typed.check_ownership().err()
+        } else {
+            None
+        };
         let Driver { phase, .. } = typed;
         let (resolved_names, types) = phase.program.into_semantic_parts();
         let diagnostics_any = phase.diagnostics;
@@ -187,6 +199,30 @@ impl Workspace {
             {
                 diagnostics.entry(doc_id).or_default().push(diagnostic);
             }
+        }
+        if let Some((message, location)) = ownership_rejection {
+            // File ids index this compile's document list, exactly like
+            // frontend diagnostics (`diagnostic_for_any`). A span-less
+            // rejection (a synthesized frame) still surfaces, anchored to
+            // the first document.
+            let located = location.and_then(|(file_id, start, end)| {
+                let doc_id = file_id_to_document.get(file_id.0 as usize)?;
+                Some((doc_id.clone(), TextRange::new(start, end)))
+            });
+            let (doc_id, range) = match located {
+                Some(located) => located,
+                None => match file_id_to_document.first() {
+                    Some(doc_id) => (doc_id.clone(), TextRange::new(0, 0)),
+                    None => (String::new(), TextRange::new(0, 0)),
+                },
+            };
+            diagnostics.entry(doc_id).or_default().push(Diagnostic {
+                node_id: None,
+                kind: None,
+                range,
+                severity: DiagnosticSeverity::Error,
+                message,
+            });
         }
 
         for ast in asts.iter().flatten() {
@@ -698,6 +734,117 @@ mod tests {
             workspace.diagnostics.is_empty(),
             "expected no stdlib diagnostics, got {:?}",
             workspace.diagnostics
+        );
+    }
+
+    #[test]
+    fn ownership_diagnostics_surface_in_the_workspace() {
+        // The MIR-analysis half of `talk check` (ownership, exclusivity,
+        // initialization) reports through the workspace, so the editor
+        // shows these without compiling.
+        let text = "func f() -> &String {\n\tlet s = \"x\" + \"y\"\n\ts\n}\nf().byte_count\n";
+        let docs = vec![DocumentInput {
+            id: "test.tlk".to_string(),
+            path: "test.tlk".to_string(),
+            version: 0,
+            text: text.to_string(),
+        }];
+        let workspace = Workspace::new(docs).expect("workspace");
+        let diagnostics = workspace
+            .diagnostics
+            .get("test.tlk")
+            .expect("diagnostics for the document");
+        let escape = diagnostics
+            .iter()
+            .find(|d| d.message.contains("cannot return a borrow"))
+            .expect("the MIR ownership diagnostic surfaces");
+        assert_eq!(escape.severity, DiagnosticSeverity::Error);
+        assert!(
+            escape.range.start < escape.range.end,
+            "the diagnostic carries the frame's span, got {:?}",
+            escape.range
+        );
+        // The editor addresses documents by URI while the compiler
+        // reports filesystem paths, and the offending file is rarely the
+        // first one: the rejection must land on the document that owns
+        // its span, not on whatever sorted first (the LSP's ids are
+        // `file://` URLs).
+        let dir = std::env::temp_dir().join(format!("talk-ws-uri-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let first = dir.join("a_first.tlk");
+        let offender = dir.join("z_offender.tlk");
+        std::fs::write(&first, "let ok = 1\n").expect("first source");
+        std::fs::write(&offender, text).expect("offending source");
+        let doc = |path: &std::path::Path, text: &str| DocumentInput {
+            id: format!("file://{}", path.display()),
+            path: path.display().to_string(),
+            version: 0,
+            text: text.to_string(),
+        };
+        let docs = vec![doc(&first, "let ok = 1\n"), doc(&offender, text)];
+        let workspace = Workspace::new(docs).expect("workspace");
+        let offender_id = format!("file://{}", offender.display());
+        let diagnostics = workspace
+            .diagnostics
+            .get(&offender_id)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("cannot return a borrow")),
+            "expected the ownership diagnostic on the offending document, got {:?}",
+            workspace.diagnostics
+        );
+        std::fs::remove_dir_all(&dir).ok();
+
+        // A `.test.tlk` document inserts the harness prelude at file 0,
+        // shifting every other file id. The rejection must follow its
+        // span's file, not the shifted position (this is the talk-syntax
+        // shape: the editor saw silence because the diagnostic landed on
+        // the prelude, which publishing skips).
+        let dir = std::env::temp_dir().join(format!("talk-ws-harness-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let offender = dir.join("parser.test.tlk");
+        let harness_text =
+            "func f() -> &String {\n\tlet s = \"x\" + \"y\"\n\ts\n}\ntest(\"t\") {\n\tassert(1 == 1)\n}\n";
+        std::fs::write(&offender, harness_text).expect("offending source");
+        let docs = vec![doc(&offender, harness_text)];
+        let workspace = Workspace::new(docs).expect("workspace");
+        let offender_id = format!("file://{}", offender.display());
+        let diagnostics = workspace
+            .diagnostics
+            .get(&offender_id)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("cannot return a borrow")),
+            "expected the ownership diagnostic on the test document, got {:?}",
+            workspace.diagnostics
+        );
+        std::fs::remove_dir_all(&dir).ok();
+
+        // Declaration-only programs check every body (`talk check`'s
+        // check-all), with no entry required.
+        let text = "func bad(consume x: *String) -> Int {\n\tlet y = x\n\tx.byte_count\n}\n";
+        let docs = vec![DocumentInput {
+            id: "decls.tlk".to_string(),
+            path: "decls.tlk".to_string(),
+            version: 0,
+            text: text.to_string(),
+        }];
+        let workspace = Workspace::new(docs).expect("workspace");
+        let diagnostics = workspace
+            .diagnostics
+            .get("decls.tlk")
+            .expect("diagnostics for the document");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("use of moved value")),
+            "expected the moved-value diagnostic, got {diagnostics:?}"
         );
     }
 

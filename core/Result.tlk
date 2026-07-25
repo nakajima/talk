@@ -6,12 +6,14 @@ use package::Operators::{ Equatable }
 public enum Result<Success, Failure> {
 	case ok(Success)
 	case error(Failure)
+
 	func is_ok() -> Bool {
 		match self {
 			.ok(_) -> true,
 			.error(_) -> false
 		}
 	}
+
 	func is_error() -> Bool {
 		match self {
 			.ok(_) -> false,

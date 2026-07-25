@@ -1183,7 +1183,15 @@ fn run_io(
                 .ok_or("vm: io dir entry out of bounds")?;
             machine.io.dir_entry_copy(&path, index, buf)
         }
-        IoOp::Exit => machine.io.exit(int(a)?),
+        // Terminal for every host. `StdioIO` never comes back from
+        // `process::exit`, so Core types its exit tails with an idle
+        // `loop {}` (`Host.tlk`'s panic fallback, `IO.tlk`'s `_io_exit`).
+        // A capturing host does return, and handing control back would
+        // drop the VM into that loop — so the run ends here instead.
+        IoOp::Exit => {
+            let code = machine.io.exit(int(a)?);
+            return Err(format!("vm: program exited with code {code}"));
+        }
     })
 }
 
@@ -2059,6 +2067,48 @@ mod tests {
             statics: vec![b'x'],
             entry: 0,
         }
+    }
+
+    /// The exit op ends the run under every host. `StdioIO` never returns
+    /// from `process::exit`, so Core follows its exit requests with an idle
+    /// `loop {}` to type the tail as `Never` (`Host.tlk`'s panic fallback,
+    /// `IO.tlk`'s `_io_exit`). A host that returned a value instead would
+    /// drop the VM into that loop and spin forever.
+    #[test]
+    fn the_exit_op_ends_the_run_under_a_capturing_host() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 }, // exit code 3
+                    Insn::Io {
+                        dest: 1,
+                        op: crate::IoOp::Exit,
+                        a: 0,
+                        b: 0,
+                        c: 0,
+                    },
+                    // Stands in for Core's `loop {}`: reached only if the
+                    // exit op hands control back.
+                    Insn::Jump { target: 1 },
+                ],
+                arity: 0,
+                n_regs: 2,
+                unwind: vec![],
+            }],
+            consts: vec![Value::I64(3)],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+        };
+
+        let mut io = CaptureIO::default();
+        let Err(error) = run_machine(&module, &mut io) else {
+            panic!("exit handed control back to the VM");
+        };
+        assert!(error.contains("exited with code 3"), "{error}");
     }
 
     #[test]

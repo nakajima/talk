@@ -4,12 +4,34 @@ macro_rules! impl_bounds_for {
     ($target:ident<$session:lifetime, $source:lifetime>) => {
         impl<$session, $source> $target<$session, $source> {
             pub(super) fn register_generic_bounds(&mut self, generics: &[GenericDecl]) {
+                self.register_static_param_kinds(generics);
+                self.register_conformance_bounds(generics);
+            }
+
+            /// The kind half of `register_generic_bounds`: record each
+            /// `static` parameter's declared value type. Kinds are header
+            /// facts — the collector's header pass registers a nominal's
+            /// kinds before any signature or member annotation lowers.
+            pub(super) fn register_static_param_kinds(&mut self, generics: &[GenericDecl]) {
                 for generic in generics {
                     let Ok(symbol) = generic.name.symbol() else {
                         continue;
                     };
                     if let Some(static_annotation) = &generic.static_ty {
                         self.register_static_param(symbol, static_annotation);
+                    }
+                }
+            }
+
+            /// The bound half of `register_generic_bounds`: protocol
+            /// conformance bounds on ordinary type parameters. These lower
+            /// in declaration order, never in the header pass.
+            pub(super) fn register_conformance_bounds(&mut self, generics: &[GenericDecl]) {
+                for generic in generics {
+                    let Ok(symbol) = generic.name.symbol() else {
+                        continue;
+                    };
+                    if generic.static_ty.is_some() {
                         continue;
                     }
                     for conformance in &generic.conformances {
@@ -219,6 +241,7 @@ macro_rules! impl_bounds_for {
                         Some(Ty::Nominal(Symbol::Int, vec![]))
                     }
                     StaticExprKind::Bool(_) => Some(Ty::Nominal(Symbol::Bool, vec![])),
+                    StaticExprKind::UnqualifiedCase { .. } => None,
                     StaticExprKind::Group(inner) => self.static_expr_domain(inner),
                     StaticExprKind::Path(annotation) => {
                         self.static_operand_domain(&GenericArg::Type(annotation.clone()))

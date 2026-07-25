@@ -1324,6 +1324,28 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_unqualified_static_enum_case_argument() {
+        let parsed = parse("func f(value: Result<Int, .success>) { value }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func")
+        };
+        let Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Nominal { generics, .. },
+            ..
+        }) = &params[0].type_annotation
+        else {
+            panic!("expected nominal annotation");
+        };
+        assert!(matches!(
+            &generics[1],
+            GenericArg::Static(StaticExpr {
+                kind: StaticExprKind::UnqualifiedCase { name, .. },
+                ..
+            }) if name == "success"
+        ));
+    }
+
+    #[test]
     fn static_generic_arguments_record_node_meta() {
         // Diagnostics resolve a node's range through `ast.meta`; a static
         // argument must locate at its own tokens, not fall back to 1:1.

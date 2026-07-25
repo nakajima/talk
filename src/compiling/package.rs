@@ -61,6 +61,7 @@ pub enum PackageError {
     Cache(String),
     Resolution(String),
     Compile(String),
+    Test(crate::testing::TestError),
 }
 
 impl Display for PackageError {
@@ -92,6 +93,7 @@ impl Display for PackageError {
             Self::Cache(message) | Self::Resolution(message) | Self::Compile(message) => {
                 f.write_str(message)
             }
+            Self::Test(error) => error.fmt(f),
         }
     }
 }
@@ -100,6 +102,7 @@ impl std::error::Error for PackageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
+            Self::Test(error) => Some(error),
             _ => None,
         }
     }
@@ -2168,9 +2171,7 @@ impl PackageProject {
         let Some(runner) = self.test_runner(paths, filter)? else {
             return Ok(crate::testing::Outcome::NoTests);
         };
-        runner
-            .run()
-            .map_err(|error| PackageError::Compile(error.to_string()))
+        runner.run().map_err(PackageError::Test)
     }
 
     pub fn run_tests_json_at_paths(
@@ -2181,9 +2182,7 @@ impl PackageProject {
         let Some(runner) = self.test_runner(paths, filter)? else {
             return Ok(crate::testing::JsonOutcome::NoTests);
         };
-        runner
-            .run_json()
-            .map_err(|error| PackageError::Compile(error.to_string()))
+        runner.run_json().map_err(PackageError::Test)
     }
 
     fn test_runner(
@@ -2507,6 +2506,41 @@ mod tests {
         ));
         assert!(root.join("src/main.tlk").is_file());
         assert!(root.join("tests/hello-world.test.tlk").is_file());
+        fs::remove_dir_all(parent).expect("remove package parent");
+    }
+
+    #[test]
+    fn package_test_compile_errors_keep_source_diagnostics() {
+        let parent = std::env::temp_dir().join(format!(
+            "talk-package-test-diagnostic-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let root = parent.join("diagnostic-demo");
+        PackageProject::create_executable_at(&root, "diagnostic-demo", "0.1.0", "main")
+            .expect("create package");
+        fs::write(
+            root.join("tests/diagnostic-demo.test.tlk"),
+            "test(\"bad\") {\n    let value: Int = \"nope\"\n}\n",
+        )
+        .expect("write invalid test");
+
+        let project = PackageProject::open_at(&root, true).expect("open package");
+        let error = project
+            .run_tests_at_paths_with_filter(&[], None)
+            .expect_err("test compile should fail");
+        let PackageError::Test(crate::testing::TestError::CompileDiagnostics(diagnostics)) = error
+        else {
+            panic!("expected source diagnostics");
+        };
+        let entry = diagnostics
+            .entries
+            .iter()
+            .find(|entry| entry.document_id.ends_with("diagnostic-demo.test.tlk"))
+            .expect("diagnostic for test source");
+        assert!(entry.diagnostic.message.contains("Type mismatch"));
+        assert!(entry.text.contains("let value: Int"));
+
         fs::remove_dir_all(parent).expect("remove package parent");
     }
 

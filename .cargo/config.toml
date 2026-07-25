@@ -1,2 +1,2 @@
-[term]
-quiet = true
+[alias]
+test = "test --quiet"

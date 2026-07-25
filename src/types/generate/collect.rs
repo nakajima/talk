@@ -28,6 +28,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             }
         }
 
+        self.register_nominal_headers(&top_decls);
+
         let mut struct_decls: Vec<(Symbol, &'a Decl)> = vec![];
         for decl in &top_decls {
             match &decl.kind {
@@ -419,6 +421,88 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         vec![]
     }
 
+    /// The header pass: every nominal's existence, variant shape, and
+    /// param kinds register before any signature or member annotation
+    /// lowers, so self- and forward-references interpret static argument
+    /// slots (and the static domain check reads variant shapes) without
+    /// depending on declaration order. Stubs insert first — a `static`
+    /// parameter's domain check may consult ANOTHER enum's variants —
+    /// then param kinds. Defaults, conformance bounds, and predicates
+    /// are declaration-order facts and lower in the registration pass.
+    fn register_nominal_headers(&mut self, top_decls: &[&'a Decl]) {
+        for decl in top_decls {
+            match &decl.kind {
+                DeclKind::Struct {
+                    name, linear, heap, ..
+                } => {
+                    let Ok(symbol) = name.symbol() else { continue };
+                    self.catalog.structs.insert(
+                        symbol,
+                        StructInfo {
+                            linear: *linear,
+                            heap: *heap,
+                            ..Default::default()
+                        },
+                    );
+                }
+                DeclKind::Enum {
+                    name, linear, body, ..
+                } => {
+                    let Ok(symbol) = name.symbol() else { continue };
+                    let mut info = Enum {
+                        linear: *linear,
+                        ..Default::default()
+                    };
+                    for member in &body.decls {
+                        let DeclKind::EnumVariant {
+                            name,
+                            payload_labels,
+                            ..
+                        } = &member.kind
+                        else {
+                            continue;
+                        };
+                        let Ok(variant) = name.symbol() else { continue };
+                        // Names, symbols, and payload shapes are header
+                        // facts; the constructor scheme is a body fact,
+                        // filled in by `register_enum`.
+                        info.variants.insert(
+                            name.name_str(),
+                            Variant {
+                                symbol: variant,
+                                payload_labels: payload_labels
+                                    .iter()
+                                    .map(|label| label.as_ref().map(Name::name_str))
+                                    .collect(),
+                                constructor_scheme: Scheme::mono(Ty::Error),
+                            },
+                        );
+                    }
+                    self.catalog.enums.insert(symbol, info);
+                }
+                _ => {}
+            }
+        }
+        for decl in top_decls {
+            let (name, generics) = match &decl.kind {
+                DeclKind::Struct { name, generics, .. }
+                | DeclKind::Enum { name, generics, .. } => (name, generics),
+                _ => continue,
+            };
+            let Ok(symbol) = name.symbol() else { continue };
+            self.register_static_param_kinds(generics);
+            let params: Vec<SchemeParam> = generic_symbols(generics)
+                .into_iter()
+                .map(|param| scheme_param(self.catalog, param))
+                .collect();
+            if let Some(info) = self.catalog.structs.get_mut(&symbol) {
+                info.params = params;
+            } else if let Some(info) = self.catalog.enums.get_mut(&symbol) {
+                info.params = params;
+            }
+        }
+    }
+
     pub(super) fn register_struct(&mut self, symbol: Symbol, decl: &Decl) {
         let DeclKind::Struct {
             generics,
@@ -438,7 +522,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .map(Ty::Param)
                 .collect(),
         );
-        let info = self.in_declaration_context(
+        let info = self.in_predeclared_context(
             Some(self_ty),
             generics,
             where_clause.as_ref(),
@@ -450,6 +534,12 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     predicates: context.predicates.clone(),
                     ..Default::default()
                 };
+                // Publish the signature before members lower: a member may
+                // apply the head to its own defaults or predicates.
+                if let Some(entry) = this.catalog.structs.get_mut(&symbol) {
+                    entry.params = context.params.clone();
+                    entry.predicates = context.predicates.clone();
+                }
                 this.collect_struct_members(&mut info, symbol, body);
                 info
             },
@@ -577,7 +667,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .map(Ty::Param)
                 .collect(),
         );
-        let info = self.in_declaration_context(
+        let info = self.in_predeclared_context(
             Some(result.clone()),
             generics,
             where_clause.as_ref(),
@@ -588,6 +678,12 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     predicates: context.predicates.clone(),
                     ..Default::default()
                 };
+                // Publish the signature before members lower: a case may
+                // apply the head to its own defaults or predicates.
+                if let Some(entry) = this.catalog.enums.get_mut(&symbol) {
+                    entry.params = context.params.clone();
+                    entry.predicates = context.predicates.clone();
+                }
                 for member in &body.decls {
                     match &member.kind {
                         DeclKind::EnumVariant { .. } => {

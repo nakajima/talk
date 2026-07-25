@@ -6,6 +6,7 @@ use package::String::{ String }
 use package::Operators::{ Add, Subtract, Multiply, Comparable, Equatable, SubscriptRead, SubscriptWrite }
 use package::Showable::{ Showable }
 use package::Ownership::{ Borrowed, CheapClone, Deinit }
+use package::Host::{ panic }
 
 public struct Array<Element> {
 	let storage: Storage<Element>
@@ -24,7 +25,15 @@ public struct Array<Element> {
 		self.capacity = capacity
 	}
 
+	// Every indexed accessor gates on this: a raw `gep` past the buffer
+	// reads whatever memory follows it, so an out-of-range index has to
+	// be caught here rather than left to the VM's memory guard.
+	func _check_index(index: Int) -> Void {
+		if index < 0 || index >= self.count { 'panic("array index out of bounds") }
+	}
+
 	func get(index: Int) -> &Element {
+		self._check_index(index)
 		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
 		_load<Element>(ptr)
 	}
@@ -51,6 +60,7 @@ public struct Array<Element> {
 	// Overwrite: the replaced element is loaded out and dropped at scope
 	// exit (deep, per its own deinit) after the new value is written.
 	mut func set(index: Int, consume value: Element) -> Void {
+		self._check_index(index)
 		self.uniqued_storage()
 		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
 		let old: Element = _load<Element>(ptr)
@@ -66,6 +76,8 @@ public struct Array<Element> {
 	}
 
 	mut func swap(i: Int, j: Int) -> Void {
+		self._check_index(i)
+		self._check_index(j)
 		if i == j { return () }
 		let storage = self.uniqued_storage()
 		let a: RawPtr = @_ir(storage.base, i) { %? = gep Element $0 $1 }

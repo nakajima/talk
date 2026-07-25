@@ -72,7 +72,9 @@ impl StaticExpr {
                 lhs.path_annotations(out);
                 rhs.path_annotations(out);
             }
-            StaticExprKind::Int(_) | StaticExprKind::Bool(_) => {}
+            StaticExprKind::Int(_)
+            | StaticExprKind::Bool(_)
+            | StaticExprKind::UnqualifiedCase { .. } => {}
         }
     }
 }
@@ -82,6 +84,14 @@ pub enum StaticExprKind {
     /// An integer literal, e.g. the `4` in `[Int; 4]`.
     Int(#[drive(skip)] String),
     Bool(#[drive(skip)] bool),
+    /// A fieldless enum case whose owner is inferred from the static
+    /// parameter's declared value type, e.g. `.success`.
+    UnqualifiedCase {
+        #[drive(skip)]
+        name: String,
+        #[drive(skip)]
+        name_span: Span,
+    },
     /// A name-like operand — a static parameter reference or a fieldless
     /// enum case path. Kept as an annotation so name resolution visits it
     /// like every other type reference.

@@ -68,7 +68,7 @@ pub(crate) fn compile(
     programs: &[ProgramInput<'_>],
     entry: Entry,
 ) -> Result<Executable, BackendError> {
-    let mut program = mir::build(programs, entry)?;
+    let mut program = mir::build(programs, entry, false)?;
     inline::inline_small(&mut program);
     for function in &mut program.functions {
         regalloc::reuse_locals(function);
@@ -88,7 +88,9 @@ pub(crate) fn check(
     programs: &[ProgramInput<'_>],
     entry: Entry,
 ) -> Result<(), BackendError> {
-    mir::build(programs, entry).map(|_| ())
+    // Checking means checking everything: every body compiles, called
+    // or not, entry or no entry.
+    mir::build(programs, entry, true).map(|_| ())
 }
 
 /// Render the middle representation for inspection (TOOL-10).
@@ -96,7 +98,7 @@ pub(crate) fn render_mir(
     programs: &[ProgramInput<'_>],
     entry: Entry,
 ) -> Result<String, BackendError> {
-    let program = mir::build(programs, entry)?;
+    let program = mir::build(programs, entry, false)?;
     Ok(program.render())
 }
 

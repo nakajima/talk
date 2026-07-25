@@ -341,18 +341,6 @@ async fn main() {
                 });
             }
 
-            // The ownership pass below re-compiles from the same text:
-            // stdin can only be read once, so the sources it uses are
-            // rebuilt from what was already read, never re-fetched.
-            let compile_sources: Vec<talk::compiling::driver::Source> = docs
-                .iter()
-                .map(|doc| {
-                    talk::compiling::driver::Source::in_memory(
-                        std::path::PathBuf::from(&doc.path),
-                        doc.text.clone(),
-                    )
-                })
-                .collect();
             let Some(workspace) = Workspace::new(docs) else {
                 return;
             };
@@ -377,55 +365,6 @@ async fn main() {
                         // Warnings print but don't fail the check.
                         has_errors |=
                             diagnostic.severity == talk::analysis::DiagnosticSeverity::Error;
-                    }
-                }
-            }
-
-            // The ownership analysis is the check's second half: what
-            // `talk run` rejects at the MIR stage — ownership,
-            // exclusivity, the unsafe gate — reports here too (wave F
-            // of docs/ownership-rethink-plan.md). Frontend errors gate
-            // it: the backend assumes a well-typed program.
-            if !has_errors {
-                use talk::compiling::driver::{Driver, DriverConfig};
-                // Check every declaration, not just the entry's
-                // reachable set. Single-threaded at this point.
-                unsafe { std::env::set_var("TALK_CHECK_ALL", "1") };
-                let driver = Driver::new(compile_sources, DriverConfig::new("Main"));
-                if let Ok(parsed) = driver.parse()
-                    && let Ok(resolved) = parsed.resolve_names()
-                {
-                    let typed = resolved.type_check();
-                    if !typed.has_errors()
-                        && let Err((message, location)) = typed.check_ownership()
-                    {
-                        has_errors = true;
-                        let (path, start, end) = location.unwrap_or((String::new(), 0, 0));
-                        let text = workspace
-                            .text_for(&path)
-                            .map(str::to_string)
-                            .or_else(|| std::fs::read_to_string(&path).ok())
-                            .unwrap_or_default();
-                        let to_utf16 = |byte: u32| {
-                            text.get(..byte as usize)
-                                .map(|prefix| prefix.encode_utf16().count())
-                                .unwrap_or(0) as u32
-                        };
-                        let diagnostic = talk::analysis::Diagnostic {
-                            node_id: None,
-                            kind: None,
-                            range: talk::analysis::TextRange::new(to_utf16(start), to_utf16(end)),
-                            severity: talk::analysis::DiagnosticSeverity::Error,
-                            message,
-                        };
-                        if *json {
-                            json_entries.push(render_json_entry(&path, &text, &diagnostic));
-                        } else {
-                            print!(
-                                "{}",
-                                render_text(&path, &text, &diagnostic, ColorMode::Auto)
-                            );
-                        }
                     }
                 }
             }
@@ -563,6 +502,10 @@ async fn main() {
                                 std::process::exit(1);
                             }
                         }
+                        Err(talk::compiling::package::PackageError::Test(err)) => {
+                            println!("{}", err.to_json());
+                            std::process::exit(1);
+                        }
                         Err(err) => {
                             println!(
                                 "{}",
@@ -582,6 +525,15 @@ async fn main() {
                                 eprintln!("{} test assertion(s) failed", summary.failures);
                                 std::process::exit(1);
                             }
+                        }
+                        Err(talk::compiling::package::PackageError::Test(
+                            talk::testing::TestError::CompileDiagnostics(diagnostics),
+                        )) => {
+                            eprint!(
+                                "{}",
+                                diagnostics.render_text(talk::cli::diagnostics::ColorMode::Auto)
+                            );
+                            std::process::exit(1);
                         }
                         Err(err) => {
                             eprintln!("error: {err}");

@@ -312,43 +312,42 @@ impl<'a> TypecheckSession<'a> {
                         [selected] => Some(selected),
                         _ => None,
                     };
-                    if let Some(selected) = selected {
-                        let label =
-                            self.catalog
-                                .protocols
-                                .get(&protocol.protocol)
-                                .and_then(|info| {
-                                    info.requirements.iter().find_map(|(label, candidate)| {
-                                        (candidate.symbol == requirement).then_some(label)
-                                    })
-                                });
-                        let witness = label
-                            .and_then(|label| selected.conformance.witnesses.get(label))
-                            .copied()
-                            .unwrap_or(requirement);
+                    let commitment = selected.and_then(|selected| {
+                        let info = self.catalog.protocols.get(&protocol.protocol)?;
+                        let (label, candidate) = info
+                            .requirements
+                            .iter()
+                            .find(|(_, candidate)| candidate.symbol == requirement)?;
+                        // A row without a witness for the label is
+                        // recipe-backed (a synthesized derivation) unless
+                        // the requirement carries a default body; the
+                        // recipe case stays ViaRequirement so the backend
+                        // dereferences the committed dictionary entry.
+                        let witness = match selected.conformance.witnesses.get(label).copied() {
+                            Some(witness) => witness,
+                            None if candidate.has_default => requirement,
+                            None => return None,
+                        };
                         let mut substitution = selected.evidence_substitution();
                         substitution.push((protocol.protocol, self_ty.clone()));
-                        if let Some(info) = self.catalog.protocols.get(&protocol.protocol) {
-                            substitution.extend(
-                                info.params
-                                    .iter()
-                                    .zip(&protocol.args)
-                                    .map(|(param, arg)| (param.symbol, arg.clone())),
-                            );
-                        }
-                        MemberResolution::ViaConformance {
+                        substitution.extend(
+                            info.params
+                                .iter()
+                                .zip(&protocol.args)
+                                .map(|(param, arg)| (param.symbol, arg.clone())),
+                        );
+                        Some(MemberResolution::ViaConformance {
                             row: selected.id,
-                            protocol,
+                            protocol: protocol.clone(),
                             witness,
                             substitution,
-                        }
-                    } else {
-                        MemberResolution::ViaRequirement {
-                            protocol,
-                            requirement,
-                            self_ty,
-                        }
-                    }
+                        })
+                    });
+                    commitment.unwrap_or(MemberResolution::ViaRequirement {
+                        protocol,
+                        requirement,
+                        self_ty,
+                    })
                 }
             };
             member_resolutions.insert(node, resolution);
