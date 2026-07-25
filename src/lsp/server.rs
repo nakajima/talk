@@ -244,7 +244,15 @@ pub async fn start() {
                             rename_provider: Some(OneOf::Left(true)),
                             completion_provider: Some(completion_options()),
                             document_formatting_provider: Some(OneOf::Left(true)),
-                            code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                            code_action_provider: Some(CodeActionProviderCapability::Options(
+                                async_lsp::lsp_types::CodeActionOptions {
+                                    code_action_kinds: Some(vec![
+                                        async_lsp::lsp_types::CodeActionKind::QUICKFIX,
+                                        async_lsp::lsp_types::CodeActionKind::SOURCE_FIX_ALL,
+                                    ]),
+                                    ..Default::default()
+                                },
+                            )),
                             semantic_tokens_provider: Some(
                                 SemanticTokensServerCapabilities::SemanticTokensOptions(
                                     SemanticTokensOptions {
@@ -1510,6 +1518,46 @@ mod tests {
         assert_eq!(
             type_action_rewrite(parenthesized_blocks, "Remove extra argument"),
             "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet missing = apply({ 1 })\nfunc identity(value: Int) -> Int { value }\nlet extra = identity(1)\n"
+        );
+    }
+
+    #[test]
+    fn fix_all_source_action_repairs_every_preferred_fix() {
+        // One `source.fixAll` edit covers the whole document, not just the
+        // requested range, and unions only the unambiguous quick fixes.
+        let code = "func id(x: Int) -> Int {\n\tx\n}\nid(1)\nid(other: 2)\n";
+        assert_eq!(
+            type_action_rewrite(code, "Fix all"),
+            "func id(x: Int) -> Int {\n\tx\n}\nid(x: 1)\nid(x: 2)\n"
+        );
+
+        let uri = Url::from_file_path(std::env::temp_dir().join("fix_all_kind.tlk"))
+            .expect("file uri");
+        let workspace = bare_workspace(&uri, code);
+        let document_id = super::document_id_for_uri(&uri);
+        let actions = super::compute_code_actions(
+            &workspace,
+            &document_id,
+            &uri,
+            Range::new(
+                async_lsp::lsp_types::Position::new(0, 0),
+                async_lsp::lsp_types::Position::new(999, 0),
+            ),
+        );
+        let fix_all = actions
+            .iter()
+            .find_map(|action| match action {
+                async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action)
+                    if action.title == "Fix all" =>
+                {
+                    Some(action)
+                }
+                _ => None,
+            })
+            .expect("a fix-all action");
+        assert_eq!(
+            fix_all.kind,
+            Some(async_lsp::lsp_types::CodeActionKind::SOURCE_FIX_ALL)
         );
     }
 

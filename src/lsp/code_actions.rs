@@ -132,17 +132,115 @@ pub(super) fn compute_code_actions(
             .push(candidate.module_path);
     }
 
+    // Every unambiguous (preferred) quick fix in the document joins one
+    // `source.fixAll` action, whatever range the client asked about.
+    let mut fix_all_edits: Vec<TextEdit> = Vec::new();
     for diagnostic in diagnostics {
         let Some(diag_range) =
             byte_span_to_range_utf16(text, diagnostic.range.start, diagnostic.range.end)
         else {
             continue;
         };
-        if !ranges_overlap(diag_range, range) {
-            continue;
+        let diagnostic_actions = actions_for_diagnostic(
+            workspace,
+            document_id,
+            text,
+            uri,
+            file_id,
+            &public_exports,
+            diagnostic,
+            diag_range,
+        );
+        for action in &diagnostic_actions {
+            let CodeActionOrCommand::CodeAction(action) = action else {
+                continue;
+            };
+            if action.is_preferred != Some(true)
+                || action.kind != Some(CodeActionKind::QUICKFIX)
+            {
+                continue;
+            }
+            if let Some(edit) = &action.edit
+                && let Some(changes) = &edit.changes
+                && let Some(edits) = changes.get(uri)
+            {
+                fix_all_edits.extend(edits.iter().cloned());
+            }
         }
+        if ranges_overlap(diag_range, range) {
+            actions.extend(diagnostic_actions);
+        }
+    }
+    if let Some(action) = fix_all_action(uri, fix_all_edits) {
+        actions.push(action);
+    }
+
+    actions
+}
+
+/// One `source.fixAll` action from the document's preferred quick-fix
+/// edits: sorted, deduplicated, overlapping repairs dropped (they
+/// re-resolve on the next request, like every fixed-point repair).
+fn fix_all_action(uri: &Url, mut edits: Vec<TextEdit>) -> Option<CodeActionOrCommand> {
+    if edits.is_empty() {
+        return None;
+    }
+    edits.sort_by_key(|edit| {
+        (
+            edit.range.start.line,
+            edit.range.start.character,
+            edit.range.end.line,
+            edit.range.end.character,
+        )
+    });
+    let mut kept: Vec<TextEdit> = Vec::new();
+    for edit in edits {
+        if let Some(last) = kept.last() {
+            let starts_before_last_end = (edit.range.start.line, edit.range.start.character)
+                < (last.range.end.line, last.range.end.character);
+            if starts_before_last_end || *last == edit {
+                continue;
+            }
+        }
+        kept.push(edit);
+    }
+    let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+        std::collections::HashMap::new();
+    changes.insert(uri.clone(), kept);
+    Some(CodeActionOrCommand::CodeAction(CodeAction {
+        title: "Fix all".to_string(),
+        kind: Some(CodeActionKind::SOURCE_FIX_ALL),
+        diagnostics: None,
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        command: None,
+        is_preferred: None,
+        disabled: None,
+        data: None,
+    }))
+}
+
+/// Every quick fix one diagnostic offers, range-independent; the caller
+/// range-filters for the response and harvests preferred edits for the
+/// document's fix-all action.
+#[allow(clippy::too_many_arguments)]
+fn actions_for_diagnostic(
+    workspace: &AnalysisWorkspace,
+    document_id: &DocumentId,
+    text: &str,
+    uri: &Url,
+    file_id: crate::node_id::FileID,
+    public_exports: &FxHashMap<String, Vec<String>>,
+    diagnostic: &AnalysisDiagnostic,
+    diag_range: Range,
+) -> Vec<CodeActionOrCommand> {
+    let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+    {
         let Some(kind) = diagnostic.kind.as_ref() else {
-            continue;
+            return actions;
         };
         let site = DiagnosticActionSite {
             workspace,

@@ -20,6 +20,20 @@ public enum Result<Success, Failure> {
 			.error(_) -> true
 		}
 	}
+
+	consuming func map<T>(ok: (consume Success) -> T) -> Result<T, Failure> {
+		match self {
+			.ok(val) -> .ok(ok(val)),
+			.error(e) -> .error(e)
+		}
+	}
+
+	consuming func map<T>(err: (consume Failure) -> T) -> Result<Success, T> {
+		match self {
+			.ok(ok) -> .ok(ok),
+			.error(e) -> .error(err(e))
+		}
+	}
 }
 
 extend<Success, Failure> Result<Success, Failure>: Equatable where Success: Equatable<Success> && Failure: Equatable<Failure> {
