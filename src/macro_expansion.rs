@@ -255,7 +255,7 @@ impl<'a> TemplateValidator<'a> {
                 "free identifier `{}` requires definition-site hygiene",
                 name.name_str()
             )),
-            ExprKind::Constructor(name) => self.reject(format!(
+            ExprKind::Constructor(name, ..) => self.reject(format!(
                 "constructor `{}` requires definition-site hygiene",
                 name.name_str()
             )),

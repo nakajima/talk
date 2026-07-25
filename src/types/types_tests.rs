@@ -7477,3 +7477,296 @@ func f(g: Grid<4611686018427387904 * 4>) { }",
         assert_eq!(ab, ba);
     }
 }
+
+#[cfg(test)]
+mod nested_types {
+    use super::tests::{assert_clean, check, ty_of, type_errors};
+
+    // A type declared inside a nominal body captures the enclosing type's
+    // generic context (the C#/Swift model): its parameter list is the
+    // enclosing params followed by its own, so `Res<T>.A` is implicitly
+    // parameterized by `T`. Explicit generics on an expression-position
+    // base (`Res<Int>.A.one(1)`) are a pre-existing parser gap shared
+    // with flat enums (`Opt<Int>.some(1)`), so these tests pin captured
+    // args through annotations.
+
+    #[test]
+    fn nested_enum_declarations_register() {
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase success\n\t\tcase failure\n\t}\n\n\tcase wrap(T)\n}\nlet x: Res<Int>.A = Res.A.success\nmatch x {\n\t.success -> 1,\n\t.failure -> 2\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn nested_enum_captures_outer_generics() {
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase one(T)\n\t}\n}\nlet x: Res<Int>.A = Res.A.one(1)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "Res.A<Int>");
+    }
+
+    #[test]
+    fn qualified_nested_type_pins_captured_args() {
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase one(T)\n\t}\n}\nlet x: Res<Int>.A = Res.A.one(true)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Int") && error.contains("Bool")),
+            "expected the captured arg to pin the payload, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bare_nested_name_in_outer_body_captures_current_self_args() {
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase one(T)\n\t}\n\n\tcase wrap(T)\n\n\tfunc first(consume value: T) -> A {\n\t\tA.one(value)\n\t}\n}\nlet x = Res.wrap(1).first(value: 2)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "Res.A<Int>");
+    }
+
+    #[test]
+    fn nested_variants_resolve_from_leading_dots() {
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase one(T)\n\t\tcase none\n\t}\n}\nfunc id<T>(consume x: T) -> T { x }\nlet x: Res<Int>.A = id(Res.A.one(1))\nlet y: Res<Bool>.A = .none",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "Res.A<Int>");
+        assert_eq!(ty_of(&t, "y"), "Res.A<Bool>");
+    }
+
+    #[test]
+    fn nested_types_nest_recursively() {
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tenum B {\n\t\t\tcase leaf(T)\n\t\t}\n\t}\n}\nlet x: Res<Int>.A.B = Res.A.B.leaf(1)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "Res.A.B<Int>");
+    }
+
+    #[test]
+    fn nested_structs_capture_outer_generics() {
+        let t = check(
+            "// no-core\nstruct Outer<T> {\n\tstruct Inner {\n\t\tlet item: T\n\t}\n\n\tlet value: T\n}\nlet x: Outer<Int>.Inner = Outer.Inner(item: 1)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "Outer.Inner<Int>");
+    }
+
+    #[test]
+    fn nested_type_arity_counts_only_its_own_params() {
+        // The captured slot is invisible: `A` declares no generics of its
+        // own, so applying it to an explicit argument is an arity error
+        // measured against zero, not against the flattened list.
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase one(T)\n\t}\n}\nlet x: Res<Int>.A<Int> = Res.A.one(1)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("expected 0, found 1")),
+            "expected an own-params arity error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn outer_where_clause_carries_to_nested_type() {
+        let t = check(
+            "// no-core\nprotocol P {}\nextend Int: P {}\nenum Res<T> where T: P {\n\tenum A {\n\t\tcase one(T)\n\t}\n}\nlet bad: Res<Bool>.A = Res.A.one(true)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Bool does not conform to P")),
+            "expected the outer bound to burden the nested application, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn outer_where_clause_accepts_conforming_nested_args() {
+        let t = check(
+            "// no-core\nprotocol P {}\nextend Int: P {}\nenum Res<T> where T: P {\n\tenum A {\n\t\tcase one(T)\n\t}\n}\nlet good: Res<Int>.A = Res.A.one(1)",
+        );
+        assert_clean(&t);
+    }
+
+    // ----- Explicit base type args in expression position ----------------
+    // `Type<Args>.member` specializes the type reference itself: the args
+    // pin the head's instantiation, whether the member is a variant call,
+    // a payload-less variant, or a nested type's construction.
+
+    #[test]
+    fn explicit_base_args_pin_variant_calls() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet x = Opt<Int>.some(1)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "Opt<Int>");
+    }
+
+    #[test]
+    fn explicit_base_args_reject_mismatched_payloads() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet x = Opt<Int>.some(true)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Int") && error.contains("Bool")),
+            "expected the explicit arg to pin the payload, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_base_args_pin_payloadless_variants() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet x = Opt<Int>.none",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "Opt<Int>");
+    }
+
+    #[test]
+    fn explicit_base_args_reject_over_arity() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet x = Opt<Int, Bool>.some(1)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("expected 1, found 2")),
+            "expected an arity error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_base_args_pin_nested_variants() {
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase one(T)\n\t\tcase none\n\t}\n}\nlet x = Res<Int>.A.one(1)\nlet y = Res<Bool>.A.none",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "Res.A<Int>");
+        assert_eq!(ty_of(&t, "y"), "Res.A<Bool>");
+    }
+
+    #[test]
+    fn explicit_base_args_pin_nested_struct_constructions() {
+        let t = check(
+            "// no-core\nstruct Outer<T> {\n\tstruct Inner {\n\t\tlet item: T\n\t}\n\n\tlet value: T\n}\nlet x = Outer<Int>.Inner(item: 1)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "Outer.Inner<Int>");
+    }
+
+    // ----- Qualified pattern heads ---------------------------------------
+
+    #[test]
+    fn qualified_pattern_heads_name_nested_enums() {
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase one(T)\n\t\tcase none\n\t}\n}\nfunc f(x: Res<Int>.A) -> Int {\n\tmatch x {\n\t\tRes.A.one(v) -> v,\n\t\tRes.A.none -> 0\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn bare_specialized_references_parse_and_reject_value_use() {
+        let t = check("// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet x = Opt<Int>");
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("type names as values")),
+            "expected a graceful type error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn specialized_member_segments_pin_their_own_params() {
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A<U> {\n\t\tcase pair(T, U)\n\t}\n}\nlet x = Res<Int>.A<Bool>.pair(1, true)\nlet y = Res.A<Bool>.pair(1, true)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "Res.A<Int, Bool>");
+        assert_eq!(ty_of(&t, "y"), "Res.A<Int, Bool>");
+    }
+
+    #[test]
+    fn specialized_member_segments_respect_own_arity() {
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A<U> {\n\t\tcase pair(T, U)\n\t}\n}\nlet x = Res<Int>.A<Bool, Int>.pair(1, true)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("expected 1, found 2")),
+            "expected a per-segment arity error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn call_site_args_fill_the_final_segment() {
+        let t = check(
+            "// no-core\nstruct Outer<T> {\n\tstruct Inner<U> {\n\t\tlet a: T\n\t\tlet b: U\n\t}\n\n\tlet value: T\n}\nlet x = Outer<Int>.Inner<Bool>(a: 1, b: true)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "x"), "Outer.Inner<Int, Bool>");
+    }
+
+    #[test]
+    fn variant_patterns_accept_head_generics() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc f(x: Opt<Int>) -> Int {\n\tmatch x {\n\t\tOpt<Int>.some(v) -> v,\n\t\tOpt.none -> 0\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn variant_pattern_head_generics_must_match_the_scrutinee() {
+        let t = check(
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc f(x: Opt<Int>) -> Int {\n\tmatch x {\n\t\tOpt<Bool>.some(v) -> 1,\n\t\tOpt.none -> 0\n\t}\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Int") && error.contains("Bool")),
+            "expected the pattern head args to conflict with the scrutinee, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn qualified_struct_pattern_heads_resolve() {
+        let t = check(
+            "// no-core\nstruct Outer<T> {\n\tstruct Inner {\n\t\tlet item: T\n\t}\n\n\tlet value: T\n}\nfunc f(consume x: Outer<Int>.Inner) -> Int {\n\tmatch x {\n\t\tOuter.Inner { item } -> item\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn qualified_struct_pattern_heads_accept_generics() {
+        let t = check(
+            "// no-core\nstruct Outer<T> {\n\tstruct Inner {\n\t\tlet item: T\n\t}\n\n\tlet value: T\n}\nfunc f(consume x: Outer<Int>.Inner) -> Int {\n\tmatch x {\n\t\tOuter<Int>.Inner { item } -> item\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn qualified_pattern_heads_reject_unknown_variants() {
+        let t = check(
+            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase one(T)\n\t}\n}\nfunc f(x: Res<Int>.A) -> Int {\n\tmatch x {\n\t\tRes.A.nope(v) -> v\n\t}\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("nope")),
+            "expected an unknown-variant diagnostic, got {errors:?}"
+        );
+    }
+}

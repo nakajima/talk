@@ -49,7 +49,10 @@ pub enum PatternKind {
     // Enum variant destructuring
     Variant {
         #[drive(skip)]
-        enum_name: Option<Name>, // None for .some, Some for Option.some
+        enum_name: Option<Name>, // None for .some, Some for Option.some (may be a dotted nested path)
+        /// Explicit head args, one list per dotted head segment
+        /// (`Opt<Int>.some`): each segment's args pin its own param slots.
+        enum_generics: Vec<Vec<crate::node_kinds::generic_arg::GenericArg>>,
         #[drive(skip)]
         variant_name: String,
         #[drive(skip)]
@@ -68,7 +71,10 @@ pub enum PatternKind {
     // Struct/Record destructuring
     Struct {
         #[drive(skip)]
-        struct_name: Option<Name>, // The struct type name
+        struct_name: Option<Name>, // The struct type name (may be a dotted nested path)
+        /// Explicit head args, one list per dotted head segment
+        /// (`Outer<Int>.Inner { … }`).
+        struct_generics: Vec<Vec<crate::node_kinds::generic_arg::GenericArg>>,
         fields: Vec<Node>, // Field patterns (we'll store field names separately)
         #[drive(skip)]
         field_names: Vec<Name>, // Field names corresponding to patterns

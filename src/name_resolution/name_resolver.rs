@@ -771,6 +771,27 @@ impl NameResolver {
         Some(Name::Resolved(symbol, name.name_str()))
     }
 
+    /// Resolve a possibly-dotted nominal path (`Res.A`): the head segment
+    /// resolves in scope, every later segment walks the nominal's child
+    /// types. A dotless name is an ordinary lookup.
+    pub(super) fn lookup_nominal_path(&mut self, name: &Name) -> Option<Name> {
+        let text = name.name_str();
+        if !text.contains('.') {
+            return self.lookup(name);
+        }
+        let mut segments = text.split('.');
+        let head: Name = segments.next()?.to_string().into();
+        let mut symbol = self.lookup(&head)?.symbol().ok()?;
+        for segment in segments {
+            symbol = *self
+                .phase
+                .child_types
+                .get(&symbol)?
+                .get(&Label::Named(segment.to_string()))?;
+        }
+        Some(Name::Resolved(symbol, text))
+    }
+
     /// The intrinsic effect is reserved independently of ordinary value
     /// shadowing, so a local named `unsafe` cannot change effect syntax.
     fn lookup_effect(&mut self, name: &Name) -> Option<Name> {
@@ -1174,7 +1195,7 @@ impl NameResolver {
                 ..
             } => {
                 // enum_name doesn't have a dedicated span; use pattern span
-                let Some(resolved) = self.lookup(enum_name) else {
+                let Some(resolved) = self.lookup_nominal_path(enum_name) else {
                     self.diagnostic(
                         pattern.id,
                         NameResolverError::UndefinedName(enum_name.name_str()),
@@ -1235,7 +1256,7 @@ impl NameResolver {
                 ..
             } => {
                 if let Some(name) = struct_name {
-                    match self.lookup(name) {
+                    match self.lookup_nominal_path(name) {
                         Some(resolved) => *name = resolved,
                         None => {
                             self.diagnostic(
@@ -1494,7 +1515,21 @@ impl NameResolver {
                     _
                 )
             ) {
-                expr.kind = ExprKind::Constructor(name.clone());
+                expr.kind = ExprKind::Constructor(name.clone(), vec![]);
+            }
+        });
+
+        // A parser-minted specialized reference (`Opt<Int>.`,
+        // `Res.A<Bool>.`) arrives with a raw, possibly-dotted name;
+        // resolve it through the nominal path (its generic args resolve
+        // as ordinary driven children).
+        on!(&mut expr.kind, ExprKind::Constructor(name, _), {
+            if name.symbol().is_err() {
+                let Some(resolved_name) = self.lookup_nominal_path(name) else {
+                    self.diagnostic(expr.id, NameResolverError::UndefinedName(name.name_str()));
+                    return;
+                };
+                *name = resolved_name;
             }
         });
 
@@ -1511,7 +1546,44 @@ impl NameResolver {
         });
     }
 
-    fn exit_expr(&mut self, _expr: &mut Expr) {}
+    fn exit_expr(&mut self, expr: &mut Expr) {
+        // A member access whose receiver is a type name and whose label
+        // names one of its nested types is itself a type name: collapse
+        // to a Constructor so `Res.A.success` types exactly like
+        // `A.success`. Post-order, so qualified chains collapse
+        // inner-first (`Res.A.B` becomes `Constructor(B)`). The
+        // receiver's explicit head args ride along — they stay the
+        // leading (captured) params of the nested type.
+        let ExprKind::Member(Some(receiver), label, _) = &expr.kind else {
+            return;
+        };
+        let ExprKind::Constructor(name, head_args) = &receiver.kind else {
+            return;
+        };
+        let Ok(symbol) = name.symbol() else {
+            return;
+        };
+        let Some(&child) = self
+            .phase
+            .child_types
+            .get(&symbol)
+            .and_then(|children| children.get(label))
+        else {
+            return;
+        };
+        if matches!(child, Symbol::Struct(_) | Symbol::Enum(_)) {
+            let text = format!("{}.{}", name.name_str(), label);
+            // The collapsed constructor gains a path segment; keep the
+            // per-segment arg lists parallel (empty means no explicit
+            // args anywhere).
+            let mut segments = head_args.clone();
+            if !segments.is_empty() {
+                segments.resize(name.name_str().split('.').count(), vec![]);
+                segments.push(vec![]);
+            }
+            expr.kind = ExprKind::Constructor(Name::Resolved(child, text), segments);
+        }
+    }
 
     ///////////////////////////////////////////////////////////////////////////
     // Func scoping

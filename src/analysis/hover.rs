@@ -80,7 +80,7 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
             // generic type, not the use site's instantiation); other
             // named references show `name: type`; any other expression
             // shows its checked type.
-            if let ExprKind::Variable(name) | ExprKind::Constructor(name) = &expr.kind
+            if let ExprKind::Variable(name) | ExprKind::Constructor(name, ..) = &expr.kind
                 && let Ok(symbol) = name.symbol()
                 && let Some(hover) = hover_for_symbol(
                     workspace,

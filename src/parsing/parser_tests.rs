@@ -2132,6 +2132,7 @@ pub mod tests {
         };
         let PatternKind::Struct {
             struct_name: Some(name),
+            struct_generics: _,
             fields,
             field_names,
             rest,
@@ -3110,6 +3111,7 @@ pub mod tests {
                             id: NodeID::ANY,
                             span: Span::ANY,
                             kind: PatternKind::Variant {
+                                enum_generics: vec![],
                                 enum_name: None,
                                 variant_name: "foo".into(),
                                 variant_name_span: Span::ANY,
@@ -3132,6 +3134,7 @@ pub mod tests {
                             id: NodeID::ANY,
                             span: Span::ANY,
                             kind: PatternKind::Variant {
+                                enum_generics: vec![],
                                 enum_name: None,
                                 variant_name: "bar".into(),
                                 variant_name_span: Span::ANY,
@@ -3404,6 +3407,7 @@ pub mod tests {
             parse_pattern("Fizz.buzz").kind,
             PatternKind::Variant {
                 enum_name: Some(Name::Raw("Fizz".into())),
+                enum_generics: vec![vec![]],
                 variant_name: "buzz".into(),
                 variant_name_span: Span::ANY,
                 fields: vec![],
@@ -3414,6 +3418,7 @@ pub mod tests {
         assert_eq!(
             parse_pattern(".foo").kind,
             PatternKind::Variant {
+                enum_generics: vec![],
                 enum_name: None,
                 variant_name: "foo".into(),
                 variant_name_span: Span::ANY,

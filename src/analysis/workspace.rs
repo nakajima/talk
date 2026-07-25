@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
     path::{Path, PathBuf},
     rc::Rc,
@@ -12,7 +12,7 @@ use crate::compiling::driver::{CompilationMode, Driver, DriverConfig, Source};
 use crate::compiling::module::{ModuleEnvironment, ModuleId};
 use crate::compiling::module_path::LocalModulePaths;
 use crate::diagnostic::AnyDiagnostic;
-use crate::name_resolution::symbol::set_symbol_names;
+use crate::name_resolution::symbol::{Symbol, set_symbol_names};
 use crate::node_id::FileID;
 use crate::parser_error::ParserError;
 
@@ -21,6 +21,13 @@ enum WorkspaceCompileContext {
     Core,
     Stdlib(&'static str),
     Normal,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ImportCandidate {
+    pub name: String,
+    pub symbol: Symbol,
+    pub module_path: String,
 }
 
 #[derive(Clone)]
@@ -38,6 +45,7 @@ pub struct Workspace {
     pub types: crate::types::TypeOutput,
     pub diagnostics: FxHashMap<DocumentId, Vec<Diagnostic>>,
     pub stdlib_module_ids: FxHashMap<ModuleId, String>,
+    pub importable_modules: FxHashMap<String, Vec<(String, Symbol)>>,
 }
 
 impl Workspace {
@@ -141,6 +149,23 @@ impl Workspace {
                     .modules
                     .get_module_id_by_name(name)
                     .map(|module_id| (module_id, name.to_string()))
+            })
+            .collect();
+        let importable_modules = driver
+            .config
+            .modules
+            .all_modules()
+            .filter(|module| module.name != "Core")
+            .map(|module| {
+                (
+                    module.name.clone(),
+                    module
+                        .exports
+                        .iter()
+                        .filter(|(_, symbol)| module.symbol_names.contains_key(symbol))
+                        .map(|(name, &symbol)| (name.clone(), symbol))
+                        .collect(),
+                )
             })
             .collect();
         let parsed = driver.parse().ok()?;
@@ -272,6 +297,7 @@ impl Workspace {
             types,
             diagnostics,
             stdlib_module_ids,
+            importable_modules,
         })
     }
 
@@ -466,6 +492,7 @@ impl Workspace {
             types: Default::default(),
             diagnostics: FxHashMap::default(),
             stdlib_module_ids: FxHashMap::default(),
+            importable_modules: FxHashMap::default(),
         })
     }
 
@@ -524,7 +551,88 @@ impl Workspace {
             types: Default::default(),
             diagnostics: FxHashMap::default(),
             stdlib_module_ids: FxHashMap::default(),
+            importable_modules: FxHashMap::default(),
         })
+    }
+
+    pub(crate) fn import_candidates(&self, document_id: &DocumentId) -> Vec<ImportCandidate> {
+        let current_file_id = self.document_to_file_id.get(document_id).copied();
+        let mut seen = FxHashSet::default();
+        let mut candidates = Vec::new();
+
+        for &symbol in &self.resolved_names.public_symbols {
+            let Some(&definition) = self.resolved_names.symbols_to_node.get(&symbol) else {
+                continue;
+            };
+            if Some(definition.0) == current_file_id {
+                continue;
+            }
+            let Some(ast) = self
+                .asts
+                .get(definition.0.0 as usize)
+                .and_then(|ast| ast.as_ref())
+                .filter(|ast| !crate::testing::Harness::is_source_path(Path::new(&ast.path)))
+            else {
+                continue;
+            };
+            let Some(name) = self.resolved_names.symbol_names.get(&symbol) else {
+                continue;
+            };
+            let Some(root_scope) = self
+                .resolved_names
+                .scopes
+                .get(&crate::node_id::NodeID(definition.0, 0))
+            else {
+                continue;
+            };
+            if root_scope.values.get(name) != Some(&symbol)
+                && root_scope.types.get(name) != Some(&symbol)
+            {
+                continue;
+            }
+            let Some(relative_path) = Path::new(&ast.path).strip_prefix(&self.source_root).ok()
+            else {
+                continue;
+            };
+            let segments: Vec<_> = relative_path
+                .with_extension("")
+                .components()
+                .filter_map(|component| match component {
+                    std::path::Component::Normal(segment) => {
+                        segment.to_str().map(ToOwned::to_owned)
+                    }
+                    _ => None,
+                })
+                .collect();
+            if segments.is_empty() {
+                continue;
+            }
+            let module_path = format!("package::{}", segments.join("::"));
+            if seen.insert((name.clone(), module_path.clone())) {
+                candidates.push(ImportCandidate {
+                    name: name.clone(),
+                    symbol,
+                    module_path,
+                });
+            }
+        }
+
+        for (module_path, exports) in &self.importable_modules {
+            for (name, symbol) in exports {
+                if seen.insert((name.clone(), module_path.clone())) {
+                    candidates.push(ImportCandidate {
+                        name: name.clone(),
+                        symbol: *symbol,
+                        module_path: module_path.clone(),
+                    });
+                }
+            }
+        }
+
+        candidates.sort_by(|left, right| {
+            (&left.name, &left.module_path).cmp(&(&right.name, &right.module_path))
+        });
+        candidates
     }
 
     pub fn document_index(&self, id: &DocumentId) -> Option<usize> {

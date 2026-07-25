@@ -976,7 +976,7 @@ pub mod tests {
                         }
                         .into(),
                         "Optional".into(),
-                    )))
+                    ), vec![]))
                     .into()
                 ),
                 "none".into(),
@@ -1006,7 +1006,7 @@ pub mod tests {
             any_expr_stmt!(ExprKind::Constructor(Name::Resolved(
                 Symbol::TypeAlias(TypeAliasId::from(1)),
                 "Intyfresh".into()
-            )))
+            ), vec![]))
         );
     }
 
@@ -1438,7 +1438,7 @@ pub mod tests {
                 callee: any_expr!(ExprKind::Constructor(Name::Resolved(
                     Symbol::Struct(StructId::from(1)),
                     "Person".into()
-                )))
+                ), vec![]))
                 .into(),
                 type_args: vec![],
                 args: vec![],

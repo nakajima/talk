@@ -490,14 +490,15 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             }
             PatternKind::Variant {
                 enum_name,
+                enum_generics,
                 variant_name,
                 variant_name_span: _,
                 fields,
                 field_labels,
-                ..
             } => self.check_variant_pattern(
                 pattern,
                 enum_name,
+                enum_generics,
                 variant_name,
                 fields,
                 field_labels,
@@ -561,10 +562,19 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             }
             PatternKind::Struct {
                 struct_name,
+                struct_generics,
                 fields,
                 field_names,
                 rest,
-            } => self.check_struct_pattern(pattern, struct_name, fields, field_names, *rest, expected),
+            } => self.check_struct_pattern(
+                pattern,
+                struct_name,
+                struct_generics,
+                fields,
+                field_names,
+                *rest,
+                expected,
+            ),
         }
     }
 
@@ -576,6 +586,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         &mut self,
         pattern: &Pattern,
         struct_name: &Option<Name>,
+        struct_generics: &[Vec<GenericArg>],
         fields: &[Node],
         field_names: &[Name],
         rest: bool,
@@ -627,6 +638,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 args
             }
         };
+        // Explicit head args (`Outer<Int>.Inner { … }`) pin the
+        // instantiation per segment, against a concrete scrutinee or a
+        // fresh one alike.
+        self.pin_head_args(
+            struct_symbol,
+            struct_generics,
+            &[],
+            &info.params,
+            &args,
+            pattern.id,
+        );
         let substitution = param_subst(&info.params, &args);
         // A closure field's row is THIS instance's: splice the head's
         // trailing `Ty::Eff` args over the field's quantified tails (see
@@ -718,6 +740,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         &mut self,
         pattern: &Pattern,
         enum_name: &Option<Name>,
+        enum_generics: &[Vec<GenericArg>],
         variant_name: &str,
         fields: &[Pattern],
         field_labels: &[Option<Name>],
@@ -794,6 +817,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 theta
             }
         };
+        // Explicit head args (`Opt<Int>.some(x)`) pin the instantiation
+        // per segment, against a concrete scrutinee or a fresh one alike.
+        self.pin_head_args(
+            enum_symbol,
+            enum_generics,
+            &[],
+            &info.params,
+            &theta,
+            pattern.id,
+        );
 
         let labels: Vec<Label> = fields
             .iter()

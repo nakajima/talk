@@ -110,7 +110,7 @@ pub(super) fn binding_groups(decls: &IndexMap<Symbol, TopEntry<'_>>) -> Vec<Vec<
     impl RefCollector {
         fn enter_expr(&mut self, expr: &Expr) {
             match &expr.kind {
-                ExprKind::Variable(name) | ExprKind::Constructor(name) => {
+                ExprKind::Variable(name) | ExprKind::Constructor(name, ..) => {
                     if let Ok(symbol) = name.symbol() {
                         self.refs.insert(symbol);
                     }

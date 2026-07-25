@@ -482,7 +482,7 @@ impl TypedTreeBuilder<'_> {
             }
             expr::ExprKind::Func(func) => typed_ast::ExprKind::Func(Box::new(self.func(func))),
             expr::ExprKind::Variable(name) => typed_ast::ExprKind::Variable(name.clone()),
-            expr::ExprKind::Constructor(name) => typed_ast::ExprKind::Constructor(name.clone()),
+            expr::ExprKind::Constructor(name, ..) => typed_ast::ExprKind::Constructor(name.clone()),
             expr::ExprKind::If(..) => {
                 unreachable!("if expressions are desugared to match before typed-program build")
             }
@@ -654,6 +654,8 @@ impl TypedTreeBuilder<'_> {
                 fields,
                 field_names,
                 rest,
+                // Explicit head args are consumed by the checker.
+                struct_generics: _,
             } => {
                 let built: Vec<typed_ast::Pattern> = fields
                     .iter()

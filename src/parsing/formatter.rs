@@ -551,7 +551,10 @@ impl<'a> Formatter<'a> {
             } => self.format_call(expr, callee, type_args, args, trailing_block.as_ref()),
             ExprKind::Member(receiver, property, ..) => self.format_member(receiver, property),
             ExprKind::Func(func) => self.format_func(func),
-            ExprKind::Variable(name) | ExprKind::Constructor(name) => self.format_name(name),
+            ExprKind::Variable(name) => self.format_name(name),
+            ExprKind::Constructor(name, segments) => {
+                self.format_dotted_head(&name.name_str(), segments)
+            }
             ExprKind::If(cond, then_block, else_block) => self
                 .format_compound_expr_if(expr)
                 .unwrap_or_else(|| self.format_if(cond, then_block, else_block)),
@@ -1382,6 +1385,7 @@ impl<'a> Formatter<'a> {
             )),
             PatternKind::Variant {
                 enum_name,
+                enum_generics,
                 variant_name,
                 fields,
                 field_labels,
@@ -1389,7 +1393,7 @@ impl<'a> Formatter<'a> {
             } => {
                 let mut result = if let Some(name) = enum_name {
                     concat(
-                        self.format_name(name),
+                        self.format_dotted_head(&name.name_str(), enum_generics),
                         concat(text("."), text(identifier_text(variant_name))),
                     )
                 } else {
@@ -1448,6 +1452,7 @@ impl<'a> Formatter<'a> {
             }
             PatternKind::Struct {
                 struct_name,
+                struct_generics,
                 fields,
                 field_names,
                 rest,
@@ -1455,7 +1460,7 @@ impl<'a> Formatter<'a> {
                 let mut result = Vec::new();
 
                 if let Some(name) = struct_name {
-                    result.push(self.format_name(name));
+                    result.push(self.format_dotted_head(&name.name_str(), struct_generics));
                     result.push(text(" "));
                 }
 
@@ -2702,6 +2707,38 @@ impl<'a> Formatter<'a> {
         text(identifier_text(&name.name_str()))
     }
 
+    /// A possibly-dotted type head with per-segment generic args
+    /// (`Res<Int>.A<Bool>`): each segment is its own identifier, escaped
+    /// per segment, with its arg list attached where it was written.
+    fn format_dotted_head(
+        &self,
+        path: &str,
+        segments: &[Vec<crate::node_kinds::generic_arg::GenericArg>],
+    ) -> Doc {
+        let docs: Vec<Doc> = path
+            .split('.')
+            .enumerate()
+            .map(|(index, segment)| {
+                let mut doc = text(identifier_text(segment));
+                if let Some(args) = segments.get(index)
+                    && !args.is_empty()
+                {
+                    let arg_docs: Vec<_> =
+                        args.iter().map(|arg| self.format_generic_arg(arg)).collect();
+                    doc = concat(
+                        doc,
+                        concat(
+                            text("<"),
+                            concat(join(arg_docs, concat(text(","), text(" "))), text(">")),
+                        ),
+                    );
+                }
+                doc
+            })
+            .collect();
+        join(docs, text("."))
+    }
+
     fn expr_contains_control_flow(expr: &Expr) -> bool {
         matches!(
             &expr.kind,
@@ -3046,6 +3083,26 @@ mod formatter_tests {
     fn formats_postfix_force_unwrap() {
         assert_eq!(format_code("let x=value !", 80), "let x = value!");
         assert_eq!(format_code("!value!", 80), "!value!");
+    }
+
+    #[test]
+    fn formats_specialized_type_references() {
+        // Explicit head args on a type reference round-trip, for member
+        // access, per-segment specialization, and qualified pattern heads.
+        let member = "let x = Opt<Int>.none";
+        assert_eq!(format_code(member, 80), member);
+        let call = "let x = Res<Int>.A.one(1)";
+        assert_eq!(format_code(call, 80), call);
+        let segments = "let x = Res<Int>.A<Bool>.pair(1, true)";
+        assert_eq!(format_code(segments, 80), segments);
+        let bare = "let x = Opt<Int>";
+        assert_eq!(format_code(bare, 80), bare);
+        let pattern = "match x {\n\tRes.A.one(v) -> v,\n\tRes.A.none -> 0\n}";
+        assert_eq!(format_code(pattern, 80), pattern);
+        let pattern_args = "match x {\n\tOpt<Int>.some(v) -> v,\n\tOpt.none -> 0\n}";
+        assert_eq!(format_code(pattern_args, 80), pattern_args);
+        let struct_pattern = "match x {\n\tOuter<Int>.Inner { item } -> item\n}";
+        assert_eq!(format_code(struct_pattern, 80), struct_pattern);
     }
 
     #[test]

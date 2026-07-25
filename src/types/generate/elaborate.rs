@@ -227,6 +227,33 @@ impl<'e> Elaborator<'e> {
                     .unwrap_or(Ty::Error)
             }
             Symbol::Struct(_) | Symbol::Enum(_) | Symbol::Protocol(_) | Symbol::Builtin(_) => {
+                // A nested type captures the base application's args as
+                // its leading params; explicit member generics fill only
+                // its own trailing slots.
+                if let Some(&owner) = self.catalog.nominal_owners.get(&child) {
+                    let owner_len = nominal_params(self.catalog, owner).len();
+                    let own_count = nominal_params(self.catalog, child)
+                        .len()
+                        .saturating_sub(owner_len);
+                    if member_generics.len() > own_count {
+                        self.diagnostics.errors.push((
+                            TypeError::ArityMismatch {
+                                expected: own_count,
+                                found: member_generics.len(),
+                            },
+                            node,
+                        ));
+                        return Ty::Error;
+                    }
+                    let mut combined = args;
+                    combined.extend(self.lower_generic_args_from(
+                        child,
+                        member_generics,
+                        owner_len,
+                    ));
+                    self.pad_default_args(child, &mut combined, node);
+                    return Ty::Nominal(child, combined);
+                }
                 let lowered_args = self.lower_generic_args(child, member_generics);
                 Ty::Nominal(child, lowered_args)
             }
@@ -330,7 +357,12 @@ impl<'e> Elaborator<'e> {
             }
             return self.lower_type_alias(symbol, node, None);
         }
-        let mut args: Vec<Ty> = self.lower_generic_args(symbol, generics);
+        // A nested type named bare inside its owner's declaration context
+        // captures the enclosing Self application's args as its leading
+        // params (explicit generics fill only its own trailing slots).
+        let mut args: Vec<Ty> = self.captured_context_args(symbol).unwrap_or_default();
+        let own_offset = args.len();
+        args.extend(self.lower_generic_args_from(symbol, generics, own_offset));
         self.pad_default_args(symbol, &mut args, node);
         match symbol {
             Symbol::TypeParameter(_) | Symbol::AssociatedType(_) => {
@@ -365,6 +397,30 @@ impl<'e> Elaborator<'e> {
 
     fn lower_type_application(&mut self, head: &TypeApplication) -> Ty {
         self.lower_nominal_application(&head.name, &head.args, head.id)
+    }
+
+    /// The captured leading args for a nested type named bare inside a
+    /// matching declaration context: the owner's slice of the innermost
+    /// enclosing Self application whose head sits inside the owner
+    /// (flattening makes every nested head's args start with its
+    /// ancestors'). `None` when the name is not nested or no enclosing
+    /// context matches.
+    fn captured_context_args(&self, symbol: Symbol) -> Option<Vec<Ty>> {
+        let owner = *self.catalog.nominal_owners.get(&symbol)?;
+        let owner_len = nominal_params(self.catalog, owner).len();
+        for self_ty in self.self_types.iter().rev() {
+            let Ty::Nominal(head, args) = self_ty else {
+                continue;
+            };
+            let mut current = Some(*head);
+            while let Some(nominal) = current {
+                if nominal == owner {
+                    return Some(args.iter().take(owner_len).cloned().collect());
+                }
+                current = self.catalog.nominal_owners.get(&nominal).copied();
+            }
+        }
+        None
     }
 
     fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
@@ -441,12 +497,24 @@ impl<'e> Elaborator<'e> {
     /// declared `static` takes a static value expression; every other
     /// slot takes a type.
     fn lower_generic_args(&mut self, head: Symbol, generics: &[GenericArg]) -> Vec<Ty> {
+        self.lower_generic_args_from(head, generics, 0)
+    }
+
+    /// `lower_generic_args` starting at a parameter offset: a nested
+    /// type's explicit arguments fill the slots after its captured
+    /// (enclosing) params.
+    fn lower_generic_args_from(
+        &mut self,
+        head: Symbol,
+        generics: &[GenericArg],
+        offset: usize,
+    ) -> Vec<Ty> {
         let params = nominal_params(self.catalog, head);
         generics
             .iter()
             .enumerate()
             .map(|(index, generic)| {
-                let expected = params.get(index).and_then(|param| match &param.kind {
+                let expected = params.get(offset + index).and_then(|param| match &param.kind {
                     crate::types::ty::ParamKind::Static(value_ty) => Some(value_ty.clone()),
                     crate::types::ty::ParamKind::Type => None,
                 });
@@ -949,6 +1017,7 @@ impl<'e> Elaborator<'e> {
 
 /// A declaration's canonical checking context: its parameter records
 /// and given predicates, computed once by `in_declaration_context`.
+#[derive(Default)]
 pub(super) struct DeclContext {
     pub(super) params: Vec<SchemeParam>,
     pub(super) predicates: Vec<Predicate>,

@@ -237,7 +237,7 @@ fn rename_symbol_from_expr(
     use crate::node_kinds::expr::ExprKind;
 
     match &expr.kind {
-        ExprKind::Variable(name) | ExprKind::Constructor(name) => name.symbol().ok(),
+        ExprKind::Variable(name) | ExprKind::Constructor(name, ..) => name.symbol().ok(),
         ExprKind::Call { callee, args, .. } => {
             if span_contains(callee.span, byte_offset) {
                 rename_symbol_from_expr(module, callee, byte_offset)
@@ -292,7 +292,7 @@ fn construction_callee_symbol(callee: &crate::node_kinds::expr::Expr) -> Option<
     use crate::node_kinds::expr::ExprKind;
 
     match &callee.kind {
-        ExprKind::Constructor(name) | ExprKind::Variable(name) => name.symbol().ok(),
+        ExprKind::Constructor(name, ..) | ExprKind::Variable(name) => name.symbol().ok(),
         _ => None,
     }
 }
@@ -919,7 +919,7 @@ impl RenameCollector<'_> {
         use crate::node_kinds::expr::ExprKind;
 
         match &expr.kind {
-            ExprKind::Variable(name) | ExprKind::Constructor(name) => {
+            ExprKind::Variable(name) | ExprKind::Constructor(name, ..) => {
                 if name.symbol().ok() == Some(self.target)
                     && self.should_rename_visible_reference(name)
                 {

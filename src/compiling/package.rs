@@ -535,7 +535,7 @@ impl PackageManifest {
     }
 
     fn variable_name(expression: &Expr) -> Option<String> {
-        let (ExprKind::Variable(name) | ExprKind::Constructor(name)) = &expression.kind else {
+        let (ExprKind::Variable(name) | ExprKind::Constructor(name, ..)) = &expression.kind else {
             return None;
         };
         Some(name.name_str())

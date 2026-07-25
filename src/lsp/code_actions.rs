@@ -46,7 +46,7 @@ fn is_import(node: &crate::node::Node) -> bool {
     )
 }
 
-fn auto_import_edit(
+pub(super) fn auto_import_edit(
     text: &str,
     roots: &[crate::node::Node],
     import_statement: &str,
@@ -124,33 +124,12 @@ pub(super) fn compute_code_actions(
         return actions;
     };
 
-    // Build an index from each public symbol's declaration, not from every
-    // file scope where imports made that symbol visible.
-    let mut public_exports: FxHashMap<
-        String,
-        Vec<(String, crate::name_resolution::symbol::Symbol)>,
-    > = FxHashMap::default();
-
-    for &symbol in &workspace.resolved_names.public_symbols {
-        let Some(&definition) = workspace.resolved_names.symbols_to_node.get(&symbol) else {
-            continue;
-        };
-        let Some(source_path) = workspace
-            .asts
-            .get(definition.0.0 as usize)
-            .and_then(|ast| ast.as_ref())
-            .filter(|ast| ast.file_id != file_id)
-            .map(|ast| ast.path.clone())
-        else {
-            continue;
-        };
-        let Some(name) = workspace.resolved_names.symbol_names.get(&symbol) else {
-            continue;
-        };
+    let mut public_exports: FxHashMap<String, Vec<String>> = FxHashMap::default();
+    for candidate in workspace.import_candidates(document_id) {
         public_exports
-            .entry(name.clone())
+            .entry(candidate.name)
             .or_default()
-            .push((source_path, symbol));
+            .push(candidate.module_path);
     }
 
     for diagnostic in diagnostics {
@@ -271,26 +250,8 @@ pub(super) fn compute_code_actions(
                 ));
             }
             AnalysisDiagnosticKind::NameResolution(NameResolverError::UndefinedName(name)) => {
-                if let Some(sources) = public_exports.get(name) {
-                    for (source_path, _symbol) in sources {
-                        let source_path = std::path::Path::new(source_path);
-                        let Some(relative_path) =
-                            source_path.strip_prefix(&workspace.source_root).ok()
-                        else {
-                            continue;
-                        };
-                        let relative_module = relative_path.with_extension("");
-                        let segments: Vec<_> = relative_module
-                            .components()
-                            .filter_map(|component| match component {
-                                std::path::Component::Normal(segment) => segment.to_str(),
-                                _ => None,
-                            })
-                            .collect();
-                        if segments.is_empty() {
-                            continue;
-                        }
-                        let module_path = format!("package::{}", segments.join("::"));
+                if let Some(module_paths) = public_exports.get(name) {
+                    for module_path in module_paths {
                         let Some(roots) = workspace
                             .asts
                             .get(file_id.0 as usize)
@@ -309,7 +270,7 @@ pub(super) fn compute_code_actions(
                             vec![edit],
                             diagnostic,
                             diag_range,
-                            Some(sources.len() == 1),
+                            Some(module_paths.len() == 1),
                         ));
                     }
                 }
@@ -785,7 +746,7 @@ fn call_argument_labels(
             }
         }
     }
-    let ExprKind::Constructor(name) = &callee.kind else {
+    let ExprKind::Constructor(name, ..) = &callee.kind else {
         return None;
     };
     let symbol = name.symbol().ok()?;

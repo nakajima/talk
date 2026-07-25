@@ -90,8 +90,16 @@ pub enum ExprKind {
 
     Variable(#[drive(skip)] Name),
 
-    // These don't get parsed, they get rewritten from Variables by the name resolver
-    Constructor(#[drive(skip)] Name),
+    // A type name used as an expression: rewritten from Variables by the
+    // name resolver, or parsed directly for a specialized reference
+    // (`Opt<Int>.some`, `Res<Int>.A<Bool>`). The name may be a dotted
+    // nested-type path; the outer Vec holds one arg list per path
+    // segment, so each segment's explicit args pin that segment's own
+    // param slots.
+    Constructor(
+        #[drive(skip)] Name,
+        Vec<Vec<crate::node_kinds::generic_arg::GenericArg>>,
+    ),
 
     // Control flow
     If(

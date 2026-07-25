@@ -484,7 +484,7 @@ impl<'a> TypecheckSession<'a> {
                     callees.insert(callee.id);
                 }
                 ExprKind::Member(Some(receiver), Label::Named(label), _) => {
-                    let type_receiver = matches!(&receiver.kind, ExprKind::Constructor(_))
+                    let type_receiver = matches!(&receiver.kind, ExprKind::Constructor(..))
                         || matches!(
                             &receiver.kind,
                             ExprKind::Variable(name) if matches!(

@@ -232,7 +232,7 @@ fn symbol_from_expr(
     use crate::node_kinds::expr::ExprKind;
 
     match &expr.kind {
-        ExprKind::Variable(name) | ExprKind::Constructor(name) => name.symbol().ok(),
+        ExprKind::Variable(name) | ExprKind::Constructor(name, ..) => name.symbol().ok(),
         ExprKind::Call { callee, .. } => symbol_from_expr(module, callee, byte_offset),
         ExprKind::Member(_, _, label_span) => {
             if !span_contains(*label_span, byte_offset) {

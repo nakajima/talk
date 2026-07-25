@@ -253,7 +253,7 @@ fn goto_definition_symbol_from_expr(
     use crate::node_kinds::expr::ExprKind;
 
     match &expr.kind {
-        ExprKind::Variable(name) | ExprKind::Constructor(name) => name.symbol().ok(),
+        ExprKind::Variable(name) | ExprKind::Constructor(name, ..) => name.symbol().ok(),
         ExprKind::Call { callee, .. } => {
             goto_definition_symbol_from_expr(module, callee, byte_offset)
         }

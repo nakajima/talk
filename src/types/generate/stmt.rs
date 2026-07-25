@@ -510,7 +510,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             | ExprKind::LiteralCharacter(_)
             | ExprKind::Unreachable
             | ExprKind::Variable(_)
-            | ExprKind::Constructor(_) => false,
+            | ExprKind::Constructor(..) => false,
         }
     }
 
@@ -643,7 +643,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             | ExprKind::LiteralCharacter(_)
             | ExprKind::Unreachable
             | ExprKind::Variable(_)
-            | ExprKind::Constructor(_) => false,
+            | ExprKind::Constructor(..) => false,
         }
     }
 }

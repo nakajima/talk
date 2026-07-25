@@ -400,6 +400,12 @@ pub struct TypeCatalog {
     /// Transparent type aliases exported through the catalog for imports.
     #[serde(default)]
     pub type_aliases: FxHashMap<Symbol, TypeAliasInfo>,
+    /// Nested type declarations: child nominal → its enclosing nominal.
+    /// A nested type captures the enclosing generic context, so its
+    /// `params` are flattened — the owner's params followed by its own —
+    /// and its declared arity is `params.len()` minus the owner's.
+    #[serde(default)]
+    pub nominal_owners: FxHashMap<Symbol, Symbol>,
 }
 
 /// One type-carrier the catalog embeds. Raw types sanitize per-`Ty`;

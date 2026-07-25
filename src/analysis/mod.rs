@@ -89,6 +89,8 @@ pub struct CompletionItem {
     pub detail: Option<String>,
     pub insert_text: Option<String>,
     pub insert_text_is_snippet: bool,
+    pub sort_text: Option<String>,
+    pub import_from: Option<String>,
 }
 
 pub use definition::{Location, goto_definition};

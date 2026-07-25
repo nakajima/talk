@@ -684,7 +684,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     ) -> Expr {
         let receiver = Expr {
             id: self.artifacts.synthetic_id(source.id),
-            kind: ExprKind::Constructor(Name::Resolved(enum_symbol, enum_name.into())),
+            kind: ExprKind::Constructor(Name::Resolved(enum_symbol, enum_name.into()), vec![]),
             span: source.span,
         };
         let member = Expr {
@@ -750,6 +750,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             id: self.artifacts.synthetic_id(source.id),
             kind: PatternKind::Variant {
                 enum_name: Some(Name::Resolved(enum_symbol, enum_name.into())),
+                enum_generics: vec![],
                 variant_name: variant_name.into(),
                 variant_name_span: source.span,
                 fields: binders.iter().map(|(pattern, _)| pattern.clone()).collect(),
@@ -1188,7 +1189,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 desugared_operator,
                 ..
             } => {
-                if let ExprKind::Constructor(_) = &callee.kind {
+                if let ExprKind::Constructor(..) = &callee.kind {
                     return self.infer_construction(expr, callee, type_args, args, ctx);
                 }
                 // `T(args)` for a rigid type parameter: construction
@@ -1201,7 +1202,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     return self.infer_param_construction(expr, callee, symbol, type_args, args, ctx);
                 }
                 if let ExprKind::Member(Some(receiver), label, _) = &callee.kind
-                    && let ExprKind::Constructor(name) = &receiver.kind
+                    && let ExprKind::Constructor(name, _) = &receiver.kind
                     && let Ok(symbol) = name.symbol()
                     && let Some(variant) = self
                         .catalog
@@ -1218,7 +1219,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     );
                 }
                 if let ExprKind::Member(Some(receiver), _, _) = &callee.kind
-                    && !matches!(receiver.kind, ExprKind::Constructor(_))
+                    && !matches!(receiver.kind, ExprKind::Constructor(..))
                 {
                     if !type_args.is_empty() {
                         self.unsupported(expr.id, "type arguments on method calls");
@@ -1271,7 +1272,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             }
 
             ExprKind::Member(Some(receiver), label, _) => {
-                if let ExprKind::Constructor(name) = &receiver.kind {
+                if let ExprKind::Constructor(name, head_args) = &receiver.kind {
                     let Ok(symbol) = name.symbol() else {
                         return Ty::Error;
                     };
@@ -1282,6 +1283,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     self.artifacts.node_types.insert(receiver.id, Ty::Error);
                     return match self.resolve_type_member(
                         symbol,
+                        head_args,
                         label,
                         expr.id,
                         static_member_reason,
@@ -1326,7 +1328,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 result
             }
 
-            ExprKind::Constructor(_) => {
+            ExprKind::Constructor(..) => {
                 self.unsupported(expr.id, "type names as values");
                 Ty::Error
             }

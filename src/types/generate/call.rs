@@ -123,7 +123,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         args: &[CallArg],
         ctx: &Ctx,
     ) -> Ty {
-        let ExprKind::Constructor(name) = &callee.kind else {
+        let ExprKind::Constructor(name, head_segments) = &callee.kind else {
             return Ty::Error;
         };
         let Ok(symbol) = name.symbol() else {
@@ -137,6 +137,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             return Ty::Error;
         }
         if self.catalog.protocols.contains_key(&symbol) {
+            if head_segments.iter().any(|segment| !segment.is_empty()) {
+                self.unsupported(expr.id, "explicit type arguments on a protocol constructor");
+            }
             return self.infer_protocol_construction(expr, callee, symbol, type_args, args, ctx);
         }
         let Some(info) = self.catalog.structs.get(&symbol).cloned() else {
@@ -151,26 +154,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let theta: Vec<Ty> = info
             .params
             .iter()
-            .enumerate()
-            .map(|(index, param)| {
+            .map(|param| {
                 let fresh = self.store.fresh_ty(self.level, expr.id);
-                if let crate::types::ty::ParamKind::Static(value_ty) = &param.kind {
+                if matches!(param.kind, crate::types::ty::ParamKind::Static(_)) {
                     self.store.mark_static_hole(fresh);
-                    // ADR 0035 §2: this construction forms an application;
-                    // every integer static argument owes nonnegativity.
-                    // An explicit argument owns the obligation (its
-                    // lowering emits at the argument's node); the hole
-                    // covers inferred and defaulted slots.
-                    if index >= type_args.len()
-                        && matches!(value_ty, Ty::Nominal(symbol, _) if *symbol == Symbol::Int)
-                    {
-                        self.wanteds.push(Constraint::StaticCmp {
-                            op: crate::types::ty::StaticCmpOp::Le,
-                            lhs: Ty::Static(StaticValue::Int(StaticInt::constant(0))),
-                            rhs: Ty::Var(fresh),
-                            origin: CtOrigin::new(expr.id, CtReason::Annotation),
-                        });
-                    }
                 }
                 Ty::Var(fresh)
             })
@@ -178,16 +165,49 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         if !info.params.is_empty() {
             self.record_instantiation(expr.id, &info.params, &theta);
         }
-        // `ArrayIterator<Element>(array: self)`: explicit type arguments pin
-        // the instantiation positionally.
-        for ((type_arg, target), param) in type_args.iter().zip(&theta).zip(&info.params) {
-            let ty = self.lower_generic_arg_for_param(param.symbol, type_arg);
-            self.emit_eq(target.clone(), ty, type_arg.id(), CtReason::Annotation);
+        // Explicit type arguments pin the instantiation: per-segment head
+        // args (`Outer<Int>.Inner<Bool>(…)`) plus call-site args
+        // (`ArrayIterator<Element>(array: self)`), which fill the final
+        // segment's remaining own slots.
+        let covered = self.pin_head_args(
+            symbol,
+            head_segments,
+            type_args,
+            &info.params,
+            &theta,
+            expr.id,
+        );
+        // ADR 0035 §2: this construction forms an application; every
+        // integer static argument owes nonnegativity. An explicit
+        // argument owns the obligation (its lowering emits at the
+        // argument's node); the hole covers inferred and defaulted slots.
+        for (index, param) in info.params.iter().enumerate() {
+            if covered[index] {
+                continue;
+            }
+            if let crate::types::ty::ParamKind::Static(value_ty) = &param.kind
+                && matches!(value_ty, Ty::Nominal(symbol, _) if *symbol == Symbol::Int)
+            {
+                self.wanteds.push(Constraint::StaticCmp {
+                    op: crate::types::ty::StaticCmpOp::Le,
+                    lhs: Ty::Static(StaticValue::Int(StaticInt::constant(0))),
+                    rhs: theta[index].clone(),
+                    origin: CtOrigin::new(expr.id, CtReason::Annotation),
+                });
+            }
         }
         // Omitted trailing arguments take their declared defaults — hard,
         // like the annotation form: explicit arguments are the way to
-        // choose another value (`Grid()` IS `Grid<4>()`).
-        for index in type_args.len()..info.params.len() {
+        // choose another value (`Grid()` IS `Grid<4>()`). The trailing
+        // region starts after the final segment's explicit args.
+        let final_offset = self
+            .catalog
+            .nominal_owners
+            .get(&symbol)
+            .map(|owner| nominal_params(self.catalog, *owner).len())
+            .unwrap_or(0);
+        let final_explicit = head_segments.last().map(Vec::len).unwrap_or(0) + type_args.len();
+        for index in (final_offset + final_explicit)..info.params.len() {
             let Some(default) = info.params[index].default.clone() else {
                 break;
             };
@@ -636,9 +656,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// Resolve `Type.label`: enum variants (constructors, or bare values for
     /// payload-less cases), protocol requirements (the protocol-static form
     /// operators desugar to: `Add.add(lhs, rhs)`), and static methods.
+    /// `head_segments` are explicit args on the type reference itself
+    /// (`Opt<Int>.some`, `Res<Int>.A<Bool>.pair`), one list per dotted
+    /// path segment: each pins its segment's own param slots.
     pub(super) fn resolve_type_member(
         &mut self,
         symbol: Symbol,
+        head_segments: &[Vec<GenericArg>],
         label: &Label,
         node: NodeID,
         reason: CtReason,
@@ -652,6 +676,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 .iter()
                 .map(|_| Ty::Var(self.store.fresh_ty(self.level, node)))
                 .collect();
+            self.pin_head_args(symbol, head_segments, &[], &info.params, &theta, node);
             self.artifacts
                 .member_resolutions
                 .insert(node, MemberResolution::Direct(variant.symbol));
@@ -675,6 +700,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // self-prepended signature is returned; Self is a fresh variable
         // constrained to conform, pinned by the first argument.
         if self.catalog.protocols.contains_key(&symbol) {
+            if head_segments.iter().any(|segment| !segment.is_empty()) {
+                self.unsupported(node, "explicit type arguments on a protocol receiver");
+            }
             let protocol_ref = self.fresh_protocol_ref(symbol, node)?;
             let (owner, requirement) =
                 self.catalog.requirement_in_ref(&protocol_ref, &label_str)?;
@@ -731,6 +759,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 .iter()
                 .map(|_| Ty::Var(self.store.fresh_ty(self.level, node)))
                 .collect();
+            self.pin_head_args(symbol, head_segments, &[], &info.params, &theta, node);
             if !info.params.is_empty() {
                 self.record_instantiation(node, &info.params, &theta);
             }
@@ -746,5 +775,88 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             return Some(signature);
         }
         None
+    }
+
+    /// Unify a type reference's explicit head args with the head's
+    /// freshly-minted instantiation. `segments` holds one arg list per
+    /// dotted path segment (`Res<Int>.A<Bool>`), aligned to the tail of
+    /// the nesting chain; `trailing` are call-site type args, which fill
+    /// the final segment's remaining own slots. Each segment's args pin
+    /// positionally from that segment's own offset — its owner's
+    /// flattened param count. Returns which flattened param indexes the
+    /// explicit args covered (their lowering owns those slots'
+    /// formation obligations).
+    pub(super) fn pin_head_args(
+        &mut self,
+        symbol: Symbol,
+        segments: &[Vec<GenericArg>],
+        trailing: &[GenericArg],
+        params: &[SchemeParam],
+        theta: &[Ty],
+        node: NodeID,
+    ) -> Vec<bool> {
+        let mut covered = vec![false; params.len()];
+        if segments.iter().all(Vec::is_empty) && trailing.is_empty() {
+            return covered;
+        }
+        // The nesting chain, outermost first; path segments name its tail.
+        let mut chain = vec![symbol];
+        let mut current = symbol;
+        while let Some(&owner) = self.catalog.nominal_owners.get(&current) {
+            chain.push(owner);
+            current = owner;
+        }
+        chain.reverse();
+        let count = segments.len().max(1);
+        if count > chain.len() {
+            // A path longer than the nesting chain never resolved to
+            // this symbol; resolution already diagnosed it.
+            return covered;
+        }
+        let tail = &chain[chain.len() - count..];
+        let empty = vec![];
+        for (index, seg_symbol) in tail.iter().enumerate() {
+            let offset = self
+                .catalog
+                .nominal_owners
+                .get(seg_symbol)
+                .map(|owner| nominal_params(self.catalog, *owner).len())
+                .unwrap_or(0);
+            let own = nominal_params(self.catalog, *seg_symbol)
+                .len()
+                .saturating_sub(offset);
+            let base = segments.get(index).unwrap_or(&empty);
+            let seg_args: Vec<&GenericArg> = if index + 1 == tail.len() {
+                base.iter().chain(trailing).collect()
+            } else {
+                base.iter().collect()
+            };
+            if seg_args.is_empty() {
+                continue;
+            }
+            if seg_args.len() > own {
+                self.diagnostics.errors.push((
+                    TypeError::ArityMismatch {
+                        expected: own,
+                        found: seg_args.len(),
+                    },
+                    node,
+                ));
+                continue;
+            }
+            for (position, arg) in seg_args.iter().enumerate() {
+                let target_index = offset + position;
+                let (Some(target), Some(param)) =
+                    (theta.get(target_index), params.get(target_index))
+                else {
+                    break;
+                };
+                let target = target.clone();
+                let ty = self.lower_generic_arg_for_param(param.symbol, arg);
+                self.emit_eq(target, ty, arg.id(), CtReason::Annotation);
+                covered[target_index] = true;
+            }
+        }
+        covered
     }
 }

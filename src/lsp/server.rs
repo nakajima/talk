@@ -489,7 +489,22 @@ pub async fn start() {
                                 &document_id,
                                 byte_offset,
                             );
-                            let items = completion::to_lsp_items(items);
+                            let Some(document_index) = workspace.document_index(&document_id)
+                            else {
+                                return Some(CompletionResponse::Array(vec![]));
+                            };
+                            let Some(text) = workspace.texts.get(document_index) else {
+                                return Some(CompletionResponse::Array(vec![]));
+                            };
+                            let Some(roots) = workspace
+                                .asts
+                                .get(document_index)
+                                .and_then(|ast| ast.as_ref())
+                                .map(|ast| ast.roots.as_slice())
+                            else {
+                                return Some(CompletionResponse::Array(vec![]));
+                            };
+                            let items = completion::to_lsp_items(items, text, roots);
                             Some(CompletionResponse::Array(items))
                         },
                     ),
@@ -1232,6 +1247,7 @@ mod tests {
             types: Default::default(),
             diagnostics: diagnostics_by_document,
             stdlib_module_ids: Default::default(),
+            importable_modules: Default::default(),
         }
     }
 
@@ -1291,6 +1307,7 @@ mod tests {
             types,
             diagnostics,
             stdlib_module_ids: Default::default(),
+            importable_modules: Default::default(),
         }
     }
 
@@ -1671,6 +1688,80 @@ mod tests {
         assert_eq!(
             super::completion_options().trigger_characters,
             Some(vec![".".to_string()])
+        );
+    }
+
+    #[test]
+    fn completion_acceptance_adds_import_from_defining_module() {
+        let main_code = "let value = Fo\n";
+        let lib_code = "public struct Foo {}\n";
+        let consumer_code = "use package::completion_auto_import_lib::{ Foo }\nlet used = Foo()\n";
+        let uri_main =
+            Url::from_file_path(std::env::temp_dir().join("completion_auto_import_main.tlk"))
+                .expect("main uri");
+        let uri_lib =
+            Url::from_file_path(std::env::temp_dir().join("completion_auto_import_lib.tlk"))
+                .expect("lib uri");
+        let uri_consumer =
+            Url::from_file_path(std::env::temp_dir().join("completion_auto_import_consumer.tlk"))
+                .expect("consumer uri");
+        let workspace = workspace_for_docs(vec![
+            (uri_main.clone(), main_code),
+            (uri_lib, lib_code),
+            (uri_consumer, consumer_code),
+        ]);
+        let document_id = super::document_id_for_uri(&uri_main);
+        let candidates = workspace.import_candidates(&document_id);
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.name == "Directory" && candidate.module_path == "fs"),
+            "configured module exports should be importable: {candidates:?}"
+        );
+        assert!(
+            !candidates.iter().any(|candidate| candidate.name == "init"),
+            "only top-level exports should be importable: {candidates:?}"
+        );
+        let items = crate::analysis::completion::complete_in_workspace(
+            &workspace,
+            &document_id,
+            main_code.find("Fo").expect("completion prefix") as u32 + 2,
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item.label == "Directory" && item.import_from.as_deref() == Some("fs")),
+            "configured module exports should appear in completion: {items:?}"
+        );
+        let auto_imports: Vec<_> = items
+            .into_iter()
+            .filter(|item| item.label == "Foo" && item.import_from.is_some())
+            .collect();
+        assert_eq!(
+            auto_imports.len(),
+            1,
+            "only the defining module should be offered: {auto_imports:?}; candidates: {candidates:?}"
+        );
+        assert_eq!(
+            auto_imports[0].import_from.as_deref(),
+            Some("package::completion_auto_import_lib")
+        );
+
+        let ast = workspace.asts[workspace
+            .document_index(&document_id)
+            .expect("document index")]
+        .as_ref()
+        .expect("main ast");
+        let lsp_items =
+            crate::lsp::completion::to_lsp_items(auto_imports, main_code, ast.roots.as_slice());
+        let edits = lsp_items[0]
+            .additional_text_edits
+            .as_ref()
+            .expect("additional import edit");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            edits[0].new_text,
+            "use package::completion_auto_import_lib::{ Foo }\n\n"
         );
     }
 

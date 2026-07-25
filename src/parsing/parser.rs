@@ -2374,20 +2374,80 @@ impl<'a> Parser<'a> {
             TokenKind::Identifier => {
                 let name = self.lexeme(&current).to_string();
                 self.advance();
-                if self.did_match(TokenKind::Dot)? {
-                    let (member_name, member_name_span) = self.identifier()?;
+                // A dotted head may name a nested type, and every segment
+                // may take adjacent generic args (`Res<Int>.A<Bool>.pair`,
+                // `Outer<Int>.Inner { … }`): collect the whole path, then
+                // decide struct vs variant by what follows. Resolution
+                // walks the path through the nominal's child types.
+                let mut segments: Vec<(String, Span)> = vec![(name, self.token_span(&current))];
+                let mut segment_generics: Vec<Vec<GenericArg>> = vec![vec![]];
+                loop {
+                    if self.peek_adjacent_less() {
+                        self.consume(TokenKind::Less)?;
+                        let args = self.generic_args()?;
+                        if let Some(last) = segment_generics.last_mut() {
+                            *last = args;
+                        }
+                    }
+                    if self.did_match(TokenKind::Dot)? {
+                        let (next_name, next_span) = self.identifier()?;
+                        segments.push((next_name, next_span));
+                        segment_generics.push(vec![]);
+                        continue;
+                    }
+                    break;
+                }
+                if self.peek_is(TokenKind::LeftBrace) {
+                    self.consume(TokenKind::LeftBrace)?;
+                    let path = segments
+                        .iter()
+                        .map(|(segment, _)| segment.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    self.parse_struct_pattern(path.into(), segment_generics)?
+                } else if segments.len() > 1 {
+                    let (variant_name, variant_name_span) = segments
+                        .pop()
+                        .unwrap_or_else(|| unreachable!("segments start non-empty"));
+                    // The final segment is the variant, which takes no
+                    // generic args of its own.
+                    let variant_generics = segment_generics
+                        .pop()
+                        .unwrap_or_else(|| unreachable!("parallel to segments"));
+                    if let Some(arg) = variant_generics.first() {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "no generic arguments on a variant pattern".into(),
+                            actual: format!("{arg:?}"),
+                            token: self.current.clone(),
+                        });
+                    }
+                    let path = segments
+                        .iter()
+                        .map(|(segment, _)| segment.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
                     let (fields, field_labels) = self.pattern_fields()?;
                     PatternKind::Variant {
-                        enum_name: Some(name.into()),
-                        variant_name: member_name.to_string(),
-                        variant_name_span: member_name_span,
+                        enum_name: Some(path.into()),
+                        enum_generics: segment_generics,
+                        variant_name,
+                        variant_name_span,
                         fields,
                         field_labels,
                     }
-                } else if self.peek_is(TokenKind::LeftBrace) {
-                    self.consume(TokenKind::LeftBrace)?;
-                    self.parse_struct_pattern(name.into())?
+                } else if segment_generics
+                    .first()
+                    .is_some_and(|generics| !generics.is_empty())
+                {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "a member or struct pattern after generic arguments".into(),
+                        actual: format!("{:?}", self.current),
+                        token: self.current.clone(),
+                    });
                 } else {
+                    let (name, _) = segments
+                        .pop()
+                        .unwrap_or_else(|| unreachable!("segments start non-empty"));
                     PatternKind::Bind(name.into())
                 }
             }
@@ -2402,6 +2462,7 @@ impl<'a> Parser<'a> {
 
                 PatternKind::Variant {
                     enum_name: None,
+                    enum_generics: vec![],
                     variant_name: member_name.to_string(),
                     variant_name_span: member_name_span,
                     fields,
@@ -2453,7 +2514,45 @@ impl<'a> Parser<'a> {
 
     /// Fields of a `Name { field, field: pattern, .. }` struct pattern; the
     /// opening brace is already consumed.
-    fn parse_struct_pattern(&mut self, struct_name: Name) -> Result<PatternKind, ParserError> {
+    /// A postfix chain that is purely a dotted name path (`Res`, `Res.A`,
+    /// `Opt<Int>.some`): flatten to the dotted name plus one arg list per
+    /// segment. `None` when the chain contains anything but names.
+    fn flatten_type_path(expr: &Expr) -> Option<(String, Vec<Vec<GenericArg>>)> {
+        match &expr.kind {
+            ExprKind::Variable(name) => Some((name.name_str(), vec![vec![]])),
+            ExprKind::Constructor(name, segments) => {
+                let path = name.name_str();
+                let mut segments = segments.clone();
+                // A constructor minted without explicit args records no
+                // segments; pad so the lists parallel the path.
+                segments.resize(path.split('.').count(), vec![]);
+                Some((path, segments))
+            }
+            ExprKind::Member(Some(receiver), Label::Named(label), _) => {
+                let (mut path, mut segments) = Self::flatten_type_path(receiver)?;
+                path.push('.');
+                path.push_str(label);
+                segments.push(vec![]);
+                Some((path, segments))
+            }
+            _ => None,
+        }
+    }
+
+    /// An adjacent `<` after the just-parsed token opens generic args
+    /// (`Foo<Int>`) — the same adjacency contract as `check_call`.
+    fn peek_adjacent_less(&self) -> bool {
+        match (&self.previous, &self.current) {
+            (Some(prev), Some(cur)) => cur.kind == TokenKind::Less && prev.end == cur.start,
+            _ => false,
+        }
+    }
+
+    fn parse_struct_pattern(
+        &mut self,
+        struct_name: Name,
+        struct_generics: Vec<Vec<GenericArg>>,
+    ) -> Result<PatternKind, ParserError> {
         self.skip_newlines();
         let mut fields: Vec<Node> = vec![];
         let mut field_names: Vec<Name> = vec![];
@@ -2498,6 +2597,7 @@ impl<'a> Parser<'a> {
 
         Ok(PatternKind::Struct {
             struct_name: Some(struct_name),
+            struct_generics,
             fields,
             field_names,
             rest,
@@ -3178,6 +3278,23 @@ impl<'a> Parser<'a> {
         if self.peek_is(TokenKind::Less) && prev.end == cur.start {
             self.consume(TokenKind::Less)?;
             let type_args = self.generic_args()?;
+            if self.peek_is(TokenKind::LeftParen) {
+                self.consume(TokenKind::LeftParen)?;
+                return Ok(Some(self.call(can_assign, type_args, callee.clone())?));
+            }
+            // `Path<Args>` without a call: a specialized type reference —
+            // members chain off it (`Opt<Int>.some`, `Res<Int>.A<Bool>.pair`)
+            // or it stands alone (typing rejects bare type values with a
+            // real diagnostic). The args land on the segment they follow.
+            if let Some((path, mut segments)) = Self::flatten_type_path(callee) {
+                if let Some(last) = segments.last_mut() {
+                    last.extend(type_args);
+                }
+                let tok = self.push_lhs_location(callee.id);
+                return Ok(Some(
+                    self.add_expr(ExprKind::Constructor(path.into(), segments), tok)?,
+                ));
+            }
             self.consume(TokenKind::LeftParen)?;
             return Ok(Some(self.call(can_assign, type_args, callee.clone())?));
         }
@@ -4344,7 +4461,7 @@ impl<'a> Parser<'a> {
             | ExprKind::LiteralString(_)
             | ExprKind::LiteralCharacter(_)
             | ExprKind::Unreachable
-            | ExprKind::Constructor(_) => None,
+            | ExprKind::Constructor(..) => None,
         }
     }
 

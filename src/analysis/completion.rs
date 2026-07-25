@@ -10,7 +10,7 @@ use crate::{
         symbol::Symbol,
     },
     node::Node,
-    node_id::{FileID, NodeID},
+    node_id::NodeID,
     node_kinds::{
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
@@ -53,7 +53,28 @@ pub fn complete_in_workspace(
         types: &workspace.types,
     };
 
-    complete(text, &completion, byte_offset)
+    let mut items = complete(text, &completion, byte_offset);
+    if member_completion_dot(text, byte_offset).is_none() {
+        let visible_labels: FxHashSet<_> = items.iter().map(|item| item.label.clone()).collect();
+        for candidate in workspace.import_candidates(document_id) {
+            if visible_labels.contains(candidate.name.as_str()) {
+                continue;
+            }
+            items.push(CompletionItem {
+                label: candidate.name.clone(),
+                kind: completion_kind(candidate.symbol),
+                detail: Some(format!("Auto import from {}", candidate.module_path)),
+                insert_text: None,
+                insert_text_is_snippet: false,
+                sort_text: Some(format!("~{}::{}", candidate.name, candidate.module_path)),
+                import_from: Some(candidate.module_path),
+            });
+        }
+    }
+    items.sort_by(|left, right| {
+        (&left.label, &left.import_from).cmp(&(&right.label, &right.import_from))
+    });
+    items
 }
 
 pub fn complete(
@@ -104,6 +125,8 @@ fn scope_completions(analysis: &CompletionAnalysis<'_>, byte_offset: u32) -> Vec
             detail: None,
             insert_text: None,
             insert_text_is_snippet: false,
+            sort_text: None,
+            import_from: None,
         })
         .collect();
 
@@ -160,7 +183,7 @@ fn member_completion_receiver(ast: &AST<NameResolved>, dot_offset: u32) -> Optio
 }
 
 fn type_receiver_symbol(receiver: &Expr) -> Option<Symbol> {
-    let ExprKind::Constructor(name) = &receiver.kind else {
+    let ExprKind::Constructor(name, ..) = &receiver.kind else {
         return None;
     };
     name.symbol().ok()
@@ -457,6 +480,8 @@ fn add_member_item(
         detail,
         insert_text: None,
         insert_text_is_snippet: false,
+        sort_text: None,
+        import_from: None,
     });
 }
 
@@ -501,6 +526,8 @@ fn conformance_requirement_completions(
                 detail: Some(format!("required by {owner}: {signature}")),
                 insert_text: Some(method_stub(&signature, true)),
                 insert_text_is_snippet: true,
+                sort_text: None,
+                import_from: None,
             });
         }
 
@@ -514,6 +541,8 @@ fn conformance_requirement_completions(
                 detail: Some(format!("associated type required by {owner}")),
                 insert_text: Some(format!("typealias {name} = $0")),
                 insert_text_is_snippet: true,
+                sort_text: None,
+                import_from: None,
             });
         }
     }
@@ -721,7 +750,7 @@ fn visible_symbols(
     analysis: &CompletionAnalysis<'_>,
     byte_offset: u32,
 ) -> FxHashMap<String, Symbol> {
-    let root_id = NodeID(FileID(0), 0);
+    let root_id = NodeID(analysis.ast.file_id, 0);
 
     let mut best: Option<&Scope> = None;
     for scope in analysis.resolved_names.scopes.values() {

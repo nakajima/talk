@@ -245,12 +245,23 @@ impl<'a> DeclDeclarer<'a> {
         };
 
         if let Some(parent) = self.resolver.nominal_stack.last() {
+            let parent_symbol = parent.0;
             self.resolver
                 .phase
                 .child_types
-                .entry(parent.0)
+                .entry(parent_symbol)
                 .or_default()
                 .insert(name.name_str().into(), sym);
+            // Nested types display qualified (`Res.A`, composing down
+            // chains) — the parent's recorded name is already qualified
+            // by the time its children declare.
+            if !is_extend
+                && matches!(sym, Symbol::Struct(_) | Symbol::Enum(_))
+                && let Some(owner_name) = self.resolver.phase.symbol_names.get(&parent_symbol)
+            {
+                let qualified = format!("{owner_name}.{}", name.name_str());
+                self.resolver.phase.symbol_names.insert(sym, qualified);
+            }
         }
 
         self.resolver.nominal_stack.push((sym, id));

@@ -1,5 +1,6 @@
 use super::*;
 use crate::node_kinds::type_application::TypeApplication;
+use crate::types::generate::elaborate::DeclContext;
 use crate::types::ty::StaticCmpOp;
 
 impl<'s, 'a> CatalogBuilder<'s, 'a> {
@@ -31,19 +32,22 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         self.register_nominal_headers(&top_decls);
 
         let mut struct_decls: Vec<(Symbol, &'a Decl)> = vec![];
+        let top_context = DeclContext::default();
         for decl in &top_decls {
             match &decl.kind {
                 DeclKind::Struct { name, .. } => {
                     if let Ok(symbol) = name.symbol() {
-                        self.register_struct(symbol, decl);
+                        self.register_struct(symbol, decl, &top_context);
                         struct_decls.push((symbol, decl));
                         decls.insert(symbol, TopEntry::Struct { decl });
+                        Self::queue_nested_nominals(decl, &mut decls, &mut struct_decls);
                     }
                 }
                 DeclKind::Enum { name, .. } => {
                     if let Ok(symbol) = name.symbol() {
-                        self.register_enum(symbol, decl);
+                        self.register_enum(symbol, decl, &top_context);
                         decls.insert(symbol, TopEntry::Enum { decl });
+                        Self::queue_nested_nominals(decl, &mut decls, &mut struct_decls);
                     }
                 }
                 DeclKind::Protocol { name, .. } => {
@@ -152,6 +156,37 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             extends,
             protocol_defaults,
             obligations: std::mem::take(&mut self.obligations),
+        }
+    }
+
+    /// Nested nominals join the top-level worklists: a `TopEntry` so
+    /// their member bodies check like any other nominal's, and the
+    /// struct list so their nested `extend Self: P` blocks register.
+    fn queue_nested_nominals(
+        decl: &'a Decl,
+        decls: &mut IndexMap<Symbol, TopEntry<'a>>,
+        struct_decls: &mut Vec<(Symbol, &'a Decl)>,
+    ) {
+        let (DeclKind::Struct { body, .. } | DeclKind::Enum { body, .. }) = &decl.kind else {
+            return;
+        };
+        for member in &body.decls {
+            match &member.kind {
+                DeclKind::Struct { name, .. } => {
+                    if let Ok(symbol) = name.symbol() {
+                        decls.insert(symbol, TopEntry::Struct { decl: member });
+                        struct_decls.push((symbol, member));
+                        Self::queue_nested_nominals(member, decls, struct_decls);
+                    }
+                }
+                DeclKind::Enum { name, .. } => {
+                    if let Ok(symbol) = name.symbol() {
+                        decls.insert(symbol, TopEntry::Enum { decl: member });
+                        Self::queue_nested_nominals(member, decls, struct_decls);
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -431,79 +466,126 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
     /// are declaration-order facts and lower in the registration pass.
     fn register_nominal_headers(&mut self, top_decls: &[&'a Decl]) {
         for decl in top_decls {
-            match &decl.kind {
-                DeclKind::Struct {
-                    name, linear, heap, ..
-                } => {
-                    let Ok(symbol) = name.symbol() else { continue };
-                    self.catalog.structs.insert(
-                        symbol,
-                        StructInfo {
-                            linear: *linear,
-                            heap: *heap,
-                            ..Default::default()
-                        },
-                    );
-                }
-                DeclKind::Enum {
-                    name, linear, body, ..
-                } => {
-                    let Ok(symbol) = name.symbol() else { continue };
-                    let mut info = Enum {
-                        linear: *linear,
-                        ..Default::default()
-                    };
-                    for member in &body.decls {
-                        let DeclKind::EnumVariant {
-                            name,
-                            payload_labels,
-                            ..
-                        } = &member.kind
-                        else {
-                            continue;
-                        };
-                        let Ok(variant) = name.symbol() else { continue };
-                        // Names, symbols, and payload shapes are header
-                        // facts; the constructor scheme is a body fact,
-                        // filled in by `register_enum`.
-                        info.variants.insert(
-                            name.name_str(),
-                            Variant {
-                                symbol: variant,
-                                payload_labels: payload_labels
-                                    .iter()
-                                    .map(|label| label.as_ref().map(Name::name_str))
-                                    .collect(),
-                                constructor_scheme: Scheme::mono(Ty::Error),
-                            },
-                        );
-                    }
-                    self.catalog.enums.insert(symbol, info);
-                }
-                _ => {}
-            }
+            self.register_header_shapes(decl, None);
         }
         for decl in top_decls {
-            let (name, generics) = match &decl.kind {
-                DeclKind::Struct { name, generics, .. }
-                | DeclKind::Enum { name, generics, .. } => (name, generics),
-                _ => continue,
-            };
-            let Ok(symbol) = name.symbol() else { continue };
-            self.register_static_param_kinds(generics);
-            let params: Vec<SchemeParam> = generic_symbols(generics)
-                .into_iter()
-                .map(|param| scheme_param(self.catalog, param))
-                .collect();
-            if let Some(info) = self.catalog.structs.get_mut(&symbol) {
-                info.params = params;
-            } else if let Some(info) = self.catalog.enums.get_mut(&symbol) {
-                info.params = params;
-            }
+            self.register_header_params(decl, &[]);
         }
     }
 
-    pub(super) fn register_struct(&mut self, symbol: Symbol, decl: &Decl) {
+    /// Existence, ownership links, and variant shapes, parents before
+    /// children so a nested header can point at its owner.
+    fn register_header_shapes(&mut self, decl: &'a Decl, owner: Option<Symbol>) {
+        match &decl.kind {
+            DeclKind::Struct {
+                name,
+                linear,
+                heap,
+                body,
+                ..
+            } => {
+                let Ok(symbol) = name.symbol() else { return };
+                self.catalog.structs.insert(
+                    symbol,
+                    StructInfo {
+                        linear: *linear,
+                        heap: *heap,
+                        ..Default::default()
+                    },
+                );
+                if let Some(owner) = owner {
+                    self.catalog.nominal_owners.insert(symbol, owner);
+                }
+                for member in &body.decls {
+                    self.register_header_shapes(member, Some(symbol));
+                }
+            }
+            DeclKind::Enum {
+                name, linear, body, ..
+            } => {
+                let Ok(symbol) = name.symbol() else { return };
+                let mut info = Enum {
+                    linear: *linear,
+                    ..Default::default()
+                };
+                for member in &body.decls {
+                    let DeclKind::EnumVariant {
+                        name,
+                        payload_labels,
+                        ..
+                    } = &member.kind
+                    else {
+                        continue;
+                    };
+                    let Ok(variant) = name.symbol() else { continue };
+                    // Names, symbols, and payload shapes are header
+                    // facts; the constructor scheme is a body fact,
+                    // filled in by `register_enum`.
+                    info.variants.insert(
+                        name.name_str(),
+                        Variant {
+                            symbol: variant,
+                            payload_labels: payload_labels
+                                .iter()
+                                .map(|label| label.as_ref().map(Name::name_str))
+                                .collect(),
+                            constructor_scheme: Scheme::mono(Ty::Error),
+                        },
+                    );
+                }
+                self.catalog.enums.insert(symbol, info);
+                if let Some(owner) = owner {
+                    self.catalog.nominal_owners.insert(symbol, owner);
+                }
+                for member in &body.decls {
+                    self.register_header_shapes(member, Some(symbol));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Params second, parents before children: a nested type captures the
+    /// enclosing generic context, so its params are the flattened
+    /// enclosing list followed by its own.
+    fn register_header_params(&mut self, decl: &'a Decl, inherited: &[SchemeParam]) {
+        let (name, generics, body) = match &decl.kind {
+            DeclKind::Struct {
+                name,
+                generics,
+                body,
+                ..
+            }
+            | DeclKind::Enum {
+                name,
+                generics,
+                body,
+                ..
+            } => (name, generics, body),
+            _ => return,
+        };
+        let Ok(symbol) = name.symbol() else { return };
+        self.register_static_param_kinds(generics);
+        let params: Vec<SchemeParam> = inherited
+            .iter()
+            .cloned()
+            .chain(
+                generic_symbols(generics)
+                    .into_iter()
+                    .map(|param| scheme_param(self.catalog, param)),
+            )
+            .collect();
+        if let Some(info) = self.catalog.structs.get_mut(&symbol) {
+            info.params = params.clone();
+        } else if let Some(info) = self.catalog.enums.get_mut(&symbol) {
+            info.params = params.clone();
+        }
+        for member in &body.decls {
+            self.register_header_params(member, &params);
+        }
+    }
+
+    pub(super) fn register_struct(&mut self, symbol: Symbol, decl: &Decl, inherited: &DeclContext) {
         let DeclKind::Struct {
             generics,
             where_clause,
@@ -517,8 +599,11 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         };
         let self_ty = Ty::Nominal(
             symbol,
-            generic_symbols(generics)
-                .into_iter()
+            inherited
+                .params
+                .iter()
+                .map(|param| param.symbol)
+                .chain(generic_symbols(generics))
                 .map(Ty::Param)
                 .collect(),
         );
@@ -527,18 +612,32 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             generics,
             where_clause.as_ref(),
             |this, context| {
+                // Capture: the enclosing context's params and predicates
+                // are the leading segment of this type's own.
+                let params: Vec<SchemeParam> = inherited
+                    .params
+                    .iter()
+                    .chain(context.params.iter())
+                    .cloned()
+                    .collect();
+                let predicates: Vec<Predicate> = inherited
+                    .predicates
+                    .iter()
+                    .chain(context.predicates.iter())
+                    .cloned()
+                    .collect();
                 let mut info = StructInfo {
                     linear: *linear,
                     heap: *heap,
-                    params: context.params.clone(),
-                    predicates: context.predicates.clone(),
+                    params: params.clone(),
+                    predicates: predicates.clone(),
                     ..Default::default()
                 };
                 // Publish the signature before members lower: a member may
                 // apply the head to its own defaults or predicates.
                 if let Some(entry) = this.catalog.structs.get_mut(&symbol) {
-                    entry.params = context.params.clone();
-                    entry.predicates = context.predicates.clone();
+                    entry.params = params;
+                    entry.predicates = predicates;
                 }
                 this.collect_struct_members(&mut info, symbol, body);
                 info
@@ -596,6 +695,24 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 // Nested `extend Self: P` registers in pass B. Type aliases
                 // are transparent type declarations, not value members.
                 DeclKind::Extend { .. } | DeclKind::TypeAlias(..) => {}
+                DeclKind::Struct { name, .. } => {
+                    if let Ok(child) = name.symbol() {
+                        let inherited = DeclContext {
+                            params: info.params.clone(),
+                            predicates: info.predicates.clone(),
+                        };
+                        self.register_struct(child, member, &inherited);
+                    }
+                }
+                DeclKind::Enum { name, .. } => {
+                    if let Ok(child) = name.symbol() {
+                        let inherited = DeclContext {
+                            params: info.params.clone(),
+                            predicates: info.predicates.clone(),
+                        };
+                        self.register_enum(child, member, &inherited);
+                    }
+                }
                 other => self.unsupported(member.id, decl_kind_name(other)),
             }
         }
@@ -649,7 +766,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         info.eff_params = mint.order;
     }
 
-    pub(super) fn register_enum(&mut self, symbol: Symbol, decl: &Decl) {
+    pub(super) fn register_enum(&mut self, symbol: Symbol, decl: &Decl, inherited: &DeclContext) {
         let DeclKind::Enum {
             generics,
             where_clause,
@@ -662,8 +779,11 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         };
         let result = Ty::Nominal(
             symbol,
-            generic_symbols(generics)
-                .into_iter()
+            inherited
+                .params
+                .iter()
+                .map(|param| param.symbol)
+                .chain(generic_symbols(generics))
                 .map(Ty::Param)
                 .collect(),
         );
@@ -672,17 +792,31 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             generics,
             where_clause.as_ref(),
             |this, context| {
+                // Capture: the enclosing context's params and predicates
+                // are the leading segment of this type's own.
+                let params: Vec<SchemeParam> = inherited
+                    .params
+                    .iter()
+                    .chain(context.params.iter())
+                    .cloned()
+                    .collect();
+                let predicates: Vec<Predicate> = inherited
+                    .predicates
+                    .iter()
+                    .chain(context.predicates.iter())
+                    .cloned()
+                    .collect();
                 let mut info = Enum {
                     linear: *linear,
-                    params: context.params.clone(),
-                    predicates: context.predicates.clone(),
+                    params: params.clone(),
+                    predicates: predicates.clone(),
                     ..Default::default()
                 };
                 // Publish the signature before members lower: a case may
                 // apply the head to its own defaults or predicates.
                 if let Some(entry) = this.catalog.enums.get_mut(&symbol) {
-                    entry.params = context.params.clone();
-                    entry.predicates = context.predicates.clone();
+                    entry.params = params;
+                    entry.predicates = predicates;
                 }
                 for member in &body.decls {
                     match &member.kind {
@@ -699,6 +833,24 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                             }
                         }
                         DeclKind::TypeAlias(..) => {}
+                        DeclKind::Struct { name, .. } => {
+                            if let Ok(child) = name.symbol() {
+                                let nested = DeclContext {
+                                    params: info.params.clone(),
+                                    predicates: info.predicates.clone(),
+                                };
+                                this.register_struct(child, member, &nested);
+                            }
+                        }
+                        DeclKind::Enum { name, .. } => {
+                            if let Ok(child) = name.symbol() {
+                                let nested = DeclContext {
+                                    params: info.params.clone(),
+                                    predicates: info.predicates.clone(),
+                                };
+                                this.register_enum(child, member, &nested);
+                            }
+                        }
                         other => this.unsupported(member.id, decl_kind_name(other)),
                     }
                 }
