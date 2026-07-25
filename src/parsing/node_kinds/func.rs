@@ -46,6 +46,19 @@ impl Default for EffectSet {
     }
 }
 
+/// Whether a function value originated as a named `func` declaration
+/// (ADR 0041). Desugaring a declaration to a function-valued `let` keeps
+/// this so the callable contract survives; a `let` whose value is a
+/// closure never gains one merely because the binder has a name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FuncOrigin {
+    /// A closure or `func` literal in expression position.
+    #[default]
+    Expr,
+    /// A named `func` declaration.
+    Decl,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct Func {
     #[drive(skip)]
@@ -54,6 +67,8 @@ pub struct Func {
     pub name: Name,
     #[drive(skip)]
     pub name_span: Span,
+    #[drive(skip)]
+    pub origin: FuncOrigin,
     #[drive(skip)]
     pub effects: EffectSet,
     pub generics: Vec<GenericDecl>,

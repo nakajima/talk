@@ -9,8 +9,8 @@ func bad() -> Int {
 	let r: &mut String = s
 	let i = 0
 	loop i < 2 {
-		let n = observe(r)
-		let m = mutate(s)
+		let n = observe(s: r)
+		let m = mutate(s: s)
 		i = i + 1
 	}
 	0

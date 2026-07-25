@@ -78,24 +78,47 @@ pub enum CheckedIrKind {
         a: IrOperand,
         b: Option<IrOperand>,
     },
-    Alloc { elem: Ty, count: IrOperand },
-    Free { ptr: IrOperand },
-    Retain { ty: Ty, value: IrOperand },
-    IsUnique { ptr: IrOperand },
-    Load { ty: Ty, addr: IrOperand },
+    Alloc {
+        elem: Ty,
+        count: IrOperand,
+    },
+    Free {
+        ptr: IrOperand,
+    },
+    Retain {
+        ty: Ty,
+        value: IrOperand,
+    },
+    IsUnique {
+        ptr: IrOperand,
+    },
+    Load {
+        ty: Ty,
+        addr: IrOperand,
+    },
     Store {
         ty: Ty,
         value: IrOperand,
         addr: IrOperand,
     },
-    Swap { ty: Ty, a: IrOperand, b: IrOperand },
-    Take { ty: Ty, value: IrOperand },
+    Swap {
+        ty: Ty,
+        a: IrOperand,
+        b: IrOperand,
+    },
+    Take {
+        ty: Ty,
+        value: IrOperand,
+    },
     MemCopy {
         from: IrOperand,
         to: IrOperand,
         length: IrOperand,
     },
-    InlineGet { array: IrOperand, index: IrOperand },
+    InlineGet {
+        array: IrOperand,
+        index: IrOperand,
+    },
     Gep {
         elem: Ty,
         addr: IrOperand,
@@ -251,6 +274,9 @@ pub struct TypeOutput {
     /// checked semantic fact on TypedProgram.
     pub instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    /// The selected callable symbol per statically resolved call node
+    /// (ADR 0041).
+    pub selected_callables: FxHashMap<NodeID, Symbol>,
     /// Signed 64-bit values or explicit recovery for every integer literal
     /// expression and pattern (ledger row LIT-01).
     pub integer_literals: FxHashMap<NodeID, CheckedIntegerLiteral>,

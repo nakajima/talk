@@ -4,9 +4,9 @@ func take(o: String?) -> Int {
 func check(flag: Bool) -> Int {
 	let o = Optional.some("hello" + " world")
 	if flag {
-		take(o)
+		take(o: o)
 	} else {
 		0
 	}
 }
-check(true) + check(false)
+check(flag: true) + check(flag: false)

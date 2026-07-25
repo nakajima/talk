@@ -46,7 +46,7 @@ extend Int: Showable {
 		let result = ""
 		loop n > 0 {
 			let digit = n - (n / 10) * 10
-			result = _digit(digit) + result
+			result = _digit(d: digit) + result
 			n = n / 10
 		}
 		if self < 0 {
@@ -74,7 +74,7 @@ extend Float: Showable {
 			frac = frac * 10.0
 			let d = frac._trunc()
 			frac = frac._frac()
-			frac_str = frac_str + _digit(d)
+			frac_str = frac_str + _digit(d: d)
 			i = i + 1
 			if frac < 0.0000000000001 {
 				break

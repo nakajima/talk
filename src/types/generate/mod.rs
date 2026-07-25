@@ -465,6 +465,7 @@ impl<'a> TypecheckSession<'a> {
 
         self.check_matches(asts);
         self.check_member_references(asts);
+        self.check_call_labels(asts);
         self.finalize()
     }
 
@@ -616,6 +617,7 @@ mod finalize;
 mod func;
 mod groups;
 mod instantiate;
+mod labels;
 mod pattern;
 mod stmt;
 mod support;

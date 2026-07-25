@@ -3,5 +3,5 @@ struct Wrapper {
 }
 func make() -> Wrapper {
 	let s = "ab" + "cd"
-	Wrapper(sub: s.utf8().slice(0, 2))
+	Wrapper(sub: s.utf8().slice(start: 0, byte_count: 2))
 }

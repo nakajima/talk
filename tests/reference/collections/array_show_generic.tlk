@@ -2,4 +2,4 @@ func printy<T: Showable>(showable: T) {
 	print_raw(showable.show())
 	print_raw("\n")
 }
-printy([1, 2, 3])
+printy(showable: [1, 2, 3])

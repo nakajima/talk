@@ -3,11 +3,11 @@ func consume(consume s: String) -> Int {
 }
 func f(flag: Bool) -> Int {
 	let s = "a" + "b"
-	let n = consume(s)
+	let n = consume(s: s)
 	if flag {
 		s = "c" + "d"
 	} else {
 		s = "e" + "f"
 	}
-	consume(s) + n
+	consume(s: s) + n
 }

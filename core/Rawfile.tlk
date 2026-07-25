@@ -20,32 +20,32 @@ public struct Rawfile {
 	let fd: Int
 
 	public func open_read(path: String) -> Rawfile {
-		let fd = open_path(path, O_RDONLY, 0)
+		let fd = open_path(path: path, flags: O_RDONLY, mode: 0)
 		Rawfile(fd: fd)
 	}
 
 	public func open_write(path: String) -> Rawfile {
 		let mode = S_IRUSR + S_IWUSR
-		let fd = open_path(path, O_WRONLY + O_CREAT + O_TRUNC, mode)
+		let fd = open_path(path: path, flags: O_WRONLY + O_CREAT + O_TRUNC, mode: mode)
 		Rawfile(fd: fd)
 	}
 
 	public func open_append(path: String) -> Rawfile {
 		let mode = S_IRUSR + S_IWUSR
-		let fd = open_path(path, O_WRONLY + O_CREAT + O_APPEND, mode)
+		let fd = open_path(path: path, flags: O_WRONLY + O_CREAT + O_APPEND, mode: mode)
 		Rawfile(fd: fd)
 	}
 
 	public func read(buf: RawPtr, count: Int) -> Int {
-		_io_read(self.fd, buf, count)
+		_io_read(fd: self.fd, buf: buf, count: count)
 	}
 
 	public func write(buf: RawPtr, count: Int) -> Int {
-		_io_write(self.fd, buf, count)
+		_io_write(fd: self.fd, buf: buf, count: count)
 	}
 
 	public func close() -> Int {
-		_io_close(self.fd)
+		_io_close(fd: self.fd)
 	}
 
 	public func is_valid() -> Bool { self.fd >= 0 }

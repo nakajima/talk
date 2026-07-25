@@ -3,5 +3,5 @@ enum View {
 }
 func make() -> View {
 	let s = "ab" + "cd"
-	View.path(s.utf8().slice(0, 2))
+	View.path(s.utf8().slice(start: 0, byte_count: 2))
 }

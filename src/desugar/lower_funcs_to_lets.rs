@@ -33,7 +33,6 @@ impl LowerFuncsToLets {
         use crate::node_kinds::{
             decl::DeclKind,
             expr::{Expr, ExprKind},
-            func::Func,
         };
 
         if let DeclKind::Let {
@@ -57,37 +56,14 @@ impl LowerFuncsToLets {
             return;
         }
 
-        if let DeclKind::Func(Func {
-            id,
-            name,
-            name_span,
-            generics,
-            captures,
-            where_clause,
-            params,
-            body,
-            effects,
-            ret,
-            attributes,
-        }) = decl.kind.clone()
-        {
-            // Build an Expr::Func from the decl’s parts (reusing nodes)
+        if let DeclKind::Func(func) = decl.kind.clone() {
+            let name = func.name.clone();
+            // Build an Expr::Func from the decl’s parts (reusing nodes and
+            // keeping the named-callable origin — ADR 0041).
             let func_expr = Expr {
                 id: NodeID(self.file_id, self.node_ids.next_id()),
                 span: decl.span,
-                kind: ExprKind::Func(Func {
-                    id,
-                    name: name.clone(),
-                    name_span,
-                    generics,
-                    captures,
-                    where_clause,
-                    effects,
-                    params,
-                    body,
-                    ret,
-                    attributes,
-                }),
+                kind: ExprKind::Func(func),
             };
 
             // Replace decl with: let <name> = <func_expr>;
@@ -114,7 +90,7 @@ pub mod tests {
         node_kinds::{
             decl::{DeclKind, ReceiverMode},
             expr::ExprKind,
-            func::Func,
+            func::{Func, FuncOrigin},
             pattern::{Pattern, PatternKind},
         },
         parser_tests::tests::parse,
@@ -141,6 +117,7 @@ pub mod tests {
                 },
                 type_annotation: None,
                 rhs: Some(any_expr!(ExprKind::Func(Func {
+                    origin: FuncOrigin::Decl,
                     id: NodeID(FileID(0), 2),
                     name: Name::Raw("fizz".into()),
                     name_span: Span::ANY,
@@ -155,6 +132,30 @@ pub mod tests {
                 })))
             })
         )
+    }
+
+    #[test]
+    fn preserves_named_callable_origin() {
+        // ADR 0041: a lowered `func` decl stays a named callable; a `let`
+        // whose value is a closure never becomes one.
+        let mut parsed = parse(
+            "
+        func fizz(x) {}
+        let buzz = func named(y) {}
+        ",
+        );
+
+        LowerFuncsToLets::run(&mut parsed);
+
+        for (index, expected) in [(0, FuncOrigin::Decl), (1, FuncOrigin::Expr)] {
+            let DeclKind::Let { rhs: Some(rhs), .. } = &parsed.roots[index].as_decl().kind else {
+                panic!("expected let, got {:?}", parsed.roots[index]);
+            };
+            let ExprKind::Func(func) = &rhs.kind else {
+                panic!("expected func rhs");
+            };
+            assert_eq!(func.origin, expected);
+        }
     }
 
     #[test]
@@ -178,6 +179,7 @@ pub mod tests {
                 where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     func: Box::new(Func {
+                        origin: FuncOrigin::Decl,
                         id: NodeID::ANY,
                         name: "fizz".into(),
                         name_span: Span::ANY,

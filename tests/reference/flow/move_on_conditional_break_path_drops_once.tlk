@@ -6,11 +6,11 @@ func f(flag: Bool) -> Int {
 	let n = 0
 	loop {
 		if flag {
-			n = consume(s)
+			n = consume(s: s)
 			break
 		}
 		break
 	}
 	n
 }
-f(true) + f(false)
+f(flag: true) + f(flag: false)

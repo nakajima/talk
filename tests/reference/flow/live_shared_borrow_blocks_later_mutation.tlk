@@ -6,7 +6,7 @@ struct Box {
 }
 func bad() -> Int {
 	let box = Box(value: "hello" + " world")
-	let sub = box.value.utf8().slice(0, 1)
+	let sub = box.value.utf8().slice(start: 0, byte_count: 1)
 	let n = box.touch()
 	sub.byte_count + n
 }

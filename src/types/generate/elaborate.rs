@@ -386,9 +386,11 @@ impl<'e> Elaborator<'e> {
                 // scheme). Collection-time leftovers sanitize to
                 // owner-keyed params at the module boundary.
                 if let Some(info) = self.catalog.structs.get(&symbol) {
-                    args.extend(info.eff_params.iter().map(|_| {
-                        Ty::Eff(EffectRow::open(self.store.fresh_eff(self.level, node)))
-                    }));
+                    args.extend(
+                        info.eff_params.iter().map(|_| {
+                            Ty::Eff(EffectRow::open(self.store.fresh_eff(self.level, node)))
+                        }),
+                    );
                 }
                 Ty::Nominal(symbol, args)
             }
@@ -514,10 +516,12 @@ impl<'e> Elaborator<'e> {
             .iter()
             .enumerate()
             .map(|(index, generic)| {
-                let expected = params.get(offset + index).and_then(|param| match &param.kind {
-                    crate::types::ty::ParamKind::Static(value_ty) => Some(value_ty.clone()),
-                    crate::types::ty::ParamKind::Type => None,
-                });
+                let expected = params
+                    .get(offset + index)
+                    .and_then(|param| match &param.kind {
+                        crate::types::ty::ParamKind::Static(value_ty) => Some(value_ty.clone()),
+                        crate::types::ty::ParamKind::Type => None,
+                    });
                 match expected {
                     Some(expected) => {
                         let arg = self.lower_static_argument(generic, &expected);
@@ -916,6 +920,7 @@ impl<'e> Elaborator<'e> {
             let requirements: Vec<(String, Ty, Vec<Predicate>)> = info
                 .requirements
                 .iter()
+                .flat_map(|(label, set)| set.iter().map(move |req| (label, req)))
                 .filter_map(|(label, requirement)| {
                     let scheme = self.schemes.get(&requirement.symbol)?;
                     Some((label.clone(), scheme.ty.clone(), scheme.predicates.clone()))

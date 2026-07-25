@@ -7,7 +7,7 @@ use crate::{
     name::Name,
     node_id::{FileID, NodeID},
     node_kinds::{
-        call_arg::CallArg,
+        call_arg::{CallArg, CallArgOrigin},
         expr::{Expr, ExprKind},
         stmt::{Stmt, StmtKind},
     },
@@ -65,6 +65,7 @@ impl LowerSubscripts {
             .into_iter()
             .enumerate()
             .map(|(position, value)| CallArg {
+                origin: CallArgOrigin::Synthesized,
                 mode: None,
                 mode_span: None,
                 id: value.id,

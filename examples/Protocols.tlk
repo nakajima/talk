@@ -11,4 +11,4 @@ extend Thing: Foo {
 
 func fizz<T: Foo>(t: T) { t.foo() }
 
-fizz(Thing())
+fizz(t: Thing())

@@ -13,7 +13,7 @@ use crate::{
     node_kinds::{
         attribute::Attribute,
         block::Block,
-        call_arg::CallArg,
+        call_arg::{CallArg, CallArgOrigin},
         decl::{Decl, DeclKind, MacroParameter},
         expr::{Expr, ExprKind},
         func::Func,
@@ -370,6 +370,7 @@ impl MacroExpander<'_> {
             type_args: Vec::new(),
             args: vec![
                 CallArg {
+                    origin: CallArgOrigin::Synthesized,
                     id: condition_id,
                     label: Label::Positional(0),
                     label_span: condition.span,
@@ -379,6 +380,7 @@ impl MacroExpander<'_> {
                     mode_span: None,
                 },
                 CallArg {
+                    origin: CallArgOrigin::Synthesized,
                     id: message_id,
                     label: Label::Positional(1),
                     label_span: message.span,
@@ -595,8 +597,7 @@ mod tests {
         let mut ast = parse(source);
         let invocation_id = ast.roots[0].as_stmt().clone().as_expr().id;
         let sources = HashMap::from([(ast.file_id, source.to_string())]);
-        let diagnostics =
-            expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
+        let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
         let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {

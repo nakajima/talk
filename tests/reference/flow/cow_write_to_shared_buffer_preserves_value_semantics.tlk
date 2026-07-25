@@ -7,8 +7,8 @@ func get_items(h: &Holder) -> Array<Int> {
 func check() -> Int {
 	let arr = [1, 2, 3]
 	let h = Holder(items: arr)
-	let items2 = get_items(h)
-	items2.set(0, 99)
+	let items2 = get_items(h: h)
+	items2.set(index: 0, value: 99)
 	h.items.get(0) * 100 + (items2.get(0) + 0)
 }
 check()

@@ -65,10 +65,27 @@ impl<'s> Solver<'s> {
                         protocol: *protocol,
                         args,
                     };
-                    if let Some((owner, requirement)) =
-                        self.catalog.requirement_in_ref(&protocol, &label_str)
-                    {
-                        let requirement = requirement.clone();
+                    let overloads = self
+                        .catalog
+                        .requirement_overloads_in_ref(&protocol, &label_str);
+                    if !overloads.is_empty() {
+                        // Written labels select among same-base requirement
+                        // overloads (ADR 0041).
+                        let symbols: Vec<Symbol> = overloads
+                            .iter()
+                            .map(|(_, requirement)| requirement.symbol)
+                            .collect();
+                        let Some(selected) =
+                            self.select_method_overload(&symbols, &label_str, origin)
+                        else {
+                            continue;
+                        };
+                        let Some((owner, requirement)) = overloads
+                            .into_iter()
+                            .find(|(_, requirement)| requirement.symbol == selected)
+                        else {
+                            continue;
+                        };
                         self.bind_requirement(
                             owner,
                             &requirement,

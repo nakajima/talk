@@ -4,7 +4,7 @@ enum Maybe<T> {
 }
 func bad() -> Int {
 	let s = "hello" + " world"
-	let maybe = Maybe.some(s.utf8().slice(0, 1))
+	let maybe = Maybe.some(s.utf8().slice(start: 0, byte_count: 1))
 	let moved = s
 	match maybe {
 		.some(sub) -> sub.byte_count,

@@ -9,7 +9,7 @@ func search(flag: Bool) -> Int {
 		i = i + 1
 		let local = "x" + "y"
 		if (flag) {
-			total = total + take(local)
+			total = total + take(s: local)
 			continue
 		}
 		total = total + local.byte_count
@@ -17,5 +17,5 @@ func search(flag: Bool) -> Int {
 	total
 }
 
-print(search(true))
-print(search(false))
+print(search(flag: true))
+print(search(flag: false))

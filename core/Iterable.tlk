@@ -14,7 +14,7 @@ public protocol Iterator {
 	consuming func into_iter() -> Self { self }
 
 	consuming func map<U>(consume fn: (Self.Element) -> U) -> Map<Self, U> {
-		Map(inner: self, fn: fn)
+		Map(inner: self, map: fn)
 	}
 
 	consuming func peekable() -> Peek<Self> {
@@ -131,7 +131,7 @@ extend<T: IndexIterable> IndexIterator<T>: Iterator {
 	mut func next() -> T.Element? {
 		if self.position > self.inner._index_iterable_count() - 1 { return Optional.none }
 
-		if let .some(value) = self.inner._index_iterable_get(self.position) {
+		if let .some(value) = self.inner._index_iterable_get(i: self.position) {
 			self.position = self.position + 1
 			return .some(value)
 		}
@@ -167,7 +167,7 @@ extend<T: Iterator> Peek<T>: Iterator {
 	mut func next() -> T.Element? {
 		if self.has_peeked {
 			let next = self.inner.next()
-			return replace(mut self.peeked, consume next)
+			return replace(place: mut self.peeked, replacement: consume next)
 		} else {
 			self.inner.next()
 		}

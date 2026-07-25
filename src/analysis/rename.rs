@@ -1,5 +1,5 @@
 use derive_visitor::{Drive, Visitor};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::workspace::Workspace;
 use crate::analysis::{DocumentId, TextRange, node_ids_at_offset, span_contains};
@@ -102,12 +102,17 @@ pub fn rename_at(
         let Some(ast) = module.asts.get(idx).and_then(|ast| ast.as_ref()) else {
             continue;
         };
-        let spans = rename_spans_in_ast(module, ast, symbol);
+        let (spans, label_expansions) = rename_spans_in_ast(module, ast, symbol);
         let mut edits: Vec<TextEdit> = spans
             .into_iter()
             .map(|(start, end)| TextEdit {
                 range: TextRange::new(start, end),
-                replacement: new_name.to_string(),
+                // A shorthand parameter declaration keeps its external
+                // label by expanding to the two-name form (ADR 0041).
+                replacement: match label_expansions.get(&(start, end)) {
+                    Some(label) => format!("{label} {new_name}"),
+                    None => new_name.to_string(),
+                },
             })
             .collect();
 
@@ -671,7 +676,7 @@ fn rename_spans_in_ast(
     module: &Workspace,
     ast: &crate::ast::AST<crate::ast::NameResolved>,
     symbol: Symbol,
-) -> Vec<(u32, u32)> {
+) -> (Vec<(u32, u32)>, FxHashMap<(u32, u32), String>) {
     let target_import_aliases = target_import_aliases(module, ast, symbol);
     let mut collector = RenameCollector {
         module,
@@ -679,6 +684,8 @@ fn rename_spans_in_ast(
         target: symbol,
         target_import_aliases,
         spans: FxHashSet::default(),
+        label_expansions: FxHashMap::default(),
+        func_origins: Vec::new(),
     };
 
     for root in &ast.roots {
@@ -687,14 +694,14 @@ fn rename_spans_in_ast(
 
     let mut spans: Vec<(u32, u32)> = collector.spans.into_iter().collect();
     spans.sort_unstable();
-    spans
+    (spans, collector.label_expansions)
 }
 
 #[derive(Visitor)]
 #[visitor(
     Decl(enter),
     Expr(enter),
-    Func(enter),
+    Func(enter, exit),
     FuncSignature(enter),
     GenericDecl(enter),
     Parameter(enter),
@@ -709,6 +716,12 @@ struct RenameCollector<'a> {
     target: Symbol,
     target_import_aliases: FxHashSet<String>,
     spans: FxHashSet<(u32, u32)>,
+    // Shorthand parameter declarations whose external label must survive
+    // a binder rename (ADR 0041): declaration span -> the label to keep.
+    // `func id(value)` renamed to `item` becomes `func id(value item)`.
+    label_expansions: FxHashMap<(u32, u32), String>,
+    // Enclosing function origins; anonymous closures never expand.
+    func_origins: Vec<crate::node_kinds::func::FuncOrigin>,
 }
 
 impl RenameCollector<'_> {
@@ -781,10 +794,15 @@ impl RenameCollector<'_> {
     }
 
     fn enter_func(&mut self, func: &crate::node_kinds::func::Func) {
+        self.func_origins.push(func.origin);
         if func.name.symbol().ok() == Some(self.target) {
             self.push_span(func.name_span);
         }
         self.push_matching_effect_spans(&func.effects);
+    }
+
+    fn exit_func(&mut self, _func: &crate::node_kinds::func::Func) {
+        self.func_origins.pop();
     }
 
     fn enter_func_signature(&mut self, sig: &crate::node_kinds::func_signature::FuncSignature) {
@@ -806,6 +824,16 @@ impl RenameCollector<'_> {
     fn enter_parameter(&mut self, param: &crate::node_kinds::parameter::Parameter) {
         if param.name.symbol().ok() == Some(self.target) {
             self.push_span(param.name_span);
+            // A named callable's shorthand parameter expands so the binder
+            // rename preserves the external API (ADR 0041). Anonymous
+            // closure parameters are local binders only.
+            let in_closure =
+                self.func_origins.last() == Some(&crate::node_kinds::func::FuncOrigin::Expr);
+            let name = param.name.name_str();
+            if param.label.is_none() && !in_closure && name != "self" {
+                self.label_expansions
+                    .insert((param.name_span.start, param.name_span.end), name);
+            }
         }
     }
 
@@ -967,5 +995,70 @@ impl RenameCollector<'_> {
                 self.push_span(*span);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analysis::{DocumentInput, Workspace, rename_at};
+
+    fn apply_rename(code: &str, target_offset: u32, new_name: &str) -> String {
+        let doc = DocumentInput {
+            id: "rename_test.tlk".to_string(),
+            path: "rename_test.tlk".to_string(),
+            version: 0,
+            text: code.to_string(),
+        };
+        let workspace = Workspace::new(vec![doc]).expect("workspace");
+        let edit = rename_at(
+            &workspace,
+            &"rename_test.tlk".to_string(),
+            target_offset,
+            new_name,
+        )
+        .expect("workspace edit");
+        let mut text = code.to_string();
+        let mut edits = edit.documents[0].edits.clone();
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+        for edit in edits {
+            text.replace_range(
+                edit.range.start as usize..edit.range.end as usize,
+                &edit.replacement,
+            );
+        }
+        text
+    }
+
+    #[test]
+    fn parameter_rename_expands_shorthand_to_preserve_the_external_label() {
+        // ADR 0041: renaming the local binder must not change split(value:).
+        let code = "func id(value: Int) -> Int {\n\tvalue\n}\nid(value: 1)\n";
+        let body_use = code.rfind("value\n").expect("body reference") as u32;
+        assert_eq!(
+            apply_rename(code, body_use, "item"),
+            "func id(value item: Int) -> Int {\n\titem\n}\nid(value: 1)\n"
+        );
+    }
+
+    #[test]
+    fn two_name_parameter_rename_keeps_the_label() {
+        let code = "func split(foo fizz: Int) -> Int {\n\tfizz\n}\nsplit(foo: 1)\n";
+        let body_use = code.rfind("fizz\n").expect("body reference") as u32;
+        assert_eq!(
+            apply_rename(code, body_use, "buzz"),
+            "func split(foo buzz: Int) -> Int {\n\tbuzz\n}\nsplit(foo: 1)\n"
+        );
+    }
+
+    #[test]
+    fn closure_parameter_rename_stays_shorthand() {
+        // Anonymous closure parameters are local binders only; no label
+        // expansion applies.
+        let code = "let f = func(value: Int) -> Int {\n\tvalue\n}\nf(1)\n";
+        let body_use = code.rfind("value\n").expect("body reference") as u32;
+        assert_eq!(
+            apply_rename(code, body_use, "item"),
+            "let f = func(item: Int) -> Int {\n\titem\n}\nf(1)\n"
+        );
     }
 }

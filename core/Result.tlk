@@ -23,7 +23,7 @@ public enum Result<Success, Failure> {
 }
 
 extend<Success, Failure> Result<Success, Failure>: Equatable where Success: Equatable<Success> && Failure: Equatable<Failure> {
-	func equals(rhs: Self) -> Bool {
+	func equals(_ rhs: Self) -> Bool {
 		match self {
 			.ok(left) -> {
 				match rhs {

@@ -79,15 +79,17 @@ impl<'a> TypecheckSession<'a> {
             return payload;
         };
         let coerces = match &*inner {
-            Ty::Nominal(symbol, args) => match self.catalog.coerce_kind_application(*symbol, args) {
-                Some(kind) => {
-                    if kind == crate::types::catalog::CoerceKind::CheapClone {
-                        self.artifacts.coerce_clones.insert(node);
+            Ty::Nominal(symbol, args) => {
+                match self.catalog.coerce_kind_application(*symbol, args) {
+                    Some(kind) => {
+                        if kind == crate::types::catalog::CoerceKind::CheapClone {
+                            self.artifacts.coerce_clones.insert(node);
+                        }
+                        true
                     }
-                    true
+                    None => false,
                 }
-                None => false,
-            },
+            }
             Ty::Param(param) => {
                 let bounds = self
                     .catalog
@@ -131,9 +133,10 @@ impl<'a> TypecheckSession<'a> {
         match ty {
             Ty::Borrow(_, inner) => self.copy_marker_coerces(inner),
             Ty::Tuple(items) => items.iter().all(|item| self.copy_marker_coerces(item)),
-            Ty::Nominal(symbol, args) => {
-                self.catalog.coerce_kind_application(*symbol, args).is_some()
-            }
+            Ty::Nominal(symbol, args) => self
+                .catalog
+                .coerce_kind_application(*symbol, args)
+                .is_some(),
             Ty::Param(param) => {
                 let bounds = self
                     .catalog
@@ -317,13 +320,19 @@ impl<'a> TypecheckSession<'a> {
                         let (label, candidate) = info
                             .requirements
                             .iter()
+                            .flat_map(|(label, set)| set.iter().map(move |req| (label, req)))
                             .find(|(_, candidate)| candidate.symbol == requirement)?;
+                        let key = self.catalog.witness_key(
+                            protocol.protocol,
+                            label,
+                            candidate.symbol,
+                        );
                         // A row without a witness for the label is
                         // recipe-backed (a synthesized derivation) unless
                         // the requirement carries a default body; the
                         // recipe case stays ViaRequirement so the backend
                         // dereferences the committed dictionary entry.
-                        let witness = match selected.conformance.witnesses.get(label).copied() {
+                        let witness = match selected.conformance.witnesses.get(&key).copied() {
                             Some(witness) => witness,
                             None if candidate.has_default => requirement,
                             None => return None,
@@ -543,6 +552,7 @@ impl<'a> TypecheckSession<'a> {
                 schemes,
                 instantiations,
                 member_resolutions,
+                selected_callables: self.artifacts.selected_callables,
                 integer_literals: self.artifacts.integer_literals,
                 for_plans,
                 propagation_plans: self.artifacts.propagation_plans,

@@ -43,10 +43,46 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             // associated bindings).
             let label = func.name.name_str();
             for protocol in &work.protocols {
-                let Some((owner, requirement)) = self.catalog.requirement_in_ref(protocol, &label)
-                else {
+                let overloads = self.catalog.requirement_overloads_in_ref(protocol, &label);
+                if overloads.is_empty() {
+                    continue;
+                }
+                // The witness checks against the requirement whose full
+                // callable name agrees with its own (ADR 0041).
+                let witness_labels = self
+                    .catalog
+                    .callable_contracts
+                    .get(&method)
+                    .map(|contract| contract.name.labels.clone());
+                let selected = overloads.iter().find(|(_, requirement)| {
+                    match (
+                        &witness_labels,
+                        self.catalog.callable_contracts.get(&requirement.symbol),
+                    ) {
+                        (Some(witnessing), Some(required)) => {
+                            required.name.labels == *witnessing
+                        }
+                        _ => true,
+                    }
+                });
+                // With contracts on both sides and no agreement, this
+                // member witnesses nothing here — it is a default (or a
+                // reported mismatch), checked over Self separately, so no
+                // requirement scheme to unify against. Without contracts
+                // there is nothing to disagree with: pair by base.
+                let selected = selected.or_else(|| {
+                    let comparable = witness_labels.is_some()
+                        && overloads.iter().all(|(_, requirement)| {
+                            self.catalog
+                                .callable_contracts
+                                .contains_key(&requirement.symbol)
+                        });
+                    if comparable { None } else { overloads.first() }
+                });
+                let Some((owner, requirement)) = selected else {
                     continue;
                 };
+                let owner = owner.clone();
                 let requirement = requirement.clone();
                 // The requirement's type is its scheme (the one signature
                 // carrier); the witness unifies against it with Self,
@@ -162,9 +198,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 continue;
             };
             for entry in &eff.effects {
-                if entry.effect.module_id()
-                    == Some(crate::compiling::module::ModuleId::Core)
-                {
+                if entry.effect.module_id() == Some(crate::compiling::module::ModuleId::Core) {
                     continue;
                 }
                 self.diagnostics.errors.push((

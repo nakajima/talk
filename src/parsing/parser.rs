@@ -10,13 +10,13 @@ use crate::node_id::{FileID, NodeID};
 use crate::node_kinds::attribute::Attribute;
 use crate::node_kinds::block::Block;
 use crate::node_kinds::body::Body;
-use crate::node_kinds::call_arg::{ArgMode, CallArg};
+use crate::node_kinds::call_arg::{ArgMode, CallArg, CallArgOrigin};
 use crate::node_kinds::decl::{
     Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, MacroParameter,
     ReceiverMode, Visibility,
 };
 use crate::node_kinds::expr::{Expr, ExprKind};
-use crate::node_kinds::func::{CaptureMode, CaptureSpec, EffectSet, Func};
+use crate::node_kinds::func::{CaptureMode, CaptureSpec, EffectSet, Func, FuncOrigin};
 use crate::node_kinds::func_signature::FuncSignature;
 use crate::node_kinds::generic_arg::{GenericArg, StaticExpr, StaticExprKind, StaticOpKind};
 use crate::node_kinds::generic_decl::GenericDecl;
@@ -25,7 +25,7 @@ use crate::node_kinds::inline_ir_instruction::{
     InlineIRInstruction, InlineIRInstructionKind, Register, Value,
 };
 use crate::node_kinds::match_arm::MatchArm;
-use crate::node_kinds::parameter::{ParamMode, Parameter};
+use crate::node_kinds::parameter::{ParamLabel, ParamMode, Parameter};
 use crate::node_kinds::pattern::{
     Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
 };
@@ -1105,7 +1105,7 @@ impl<'a> Parser<'a> {
     ) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
 
-        let kind = match self.func(context, consume_func_keyword)? {
+        let kind = match self.func(context, consume_func_keyword, FuncOrigin::Decl)? {
             FuncOrFuncSignature::Func(func) => DeclKind::Func(func),
             FuncOrFuncSignature::FuncSignature(func_sig) => DeclKind::FuncSignature(func_sig),
         };
@@ -1122,6 +1122,7 @@ impl<'a> Parser<'a> {
         &mut self,
         context: BlockContext,
         consume_func_keyword: bool,
+        origin: FuncOrigin,
     ) -> Result<FuncOrFuncSignature, ParserError> {
         let tok = self.push_source_location();
 
@@ -1180,6 +1181,7 @@ impl<'a> Parser<'a> {
                 id,
                 name: name.into(),
                 name_span,
+                origin,
                 effects,
                 generics,
                 captures,
@@ -1400,7 +1402,9 @@ impl<'a> Parser<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn func_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
-        let FuncOrFuncSignature::Func(func) = self.func(BlockContext::None, true)? else {
+        let FuncOrFuncSignature::Func(func) =
+            self.func(BlockContext::None, true, FuncOrigin::Expr)?
+        else {
             return Err(ParserError::IncompleteFuncSignature(
                 "func must have a body".into(),
             ));
@@ -2905,10 +2909,7 @@ impl<'a> Parser<'a> {
             },
         };
         Ok(self
-            .add_expr(
-                ExprKind::ForceUnwrap(Box::new(lhs), Box::new(failure)),
-                tok,
-            )?
+            .add_expr(ExprKind::ForceUnwrap(Box::new(lhs), Box::new(failure)), tok)?
             .into())
     }
 
@@ -3343,7 +3344,11 @@ impl<'a> Parser<'a> {
         callee: Expr,
     ) -> Result<Expr, ParserError> {
         let tok = self.push_lhs_location(callee.id);
-        let mut args = vec![self.argument(0)?];
+        // The paren-less form omits the leading argument's label by syntax
+        // (ADR 0041), like a trailing block omits the final one.
+        let mut first = self.argument(0)?;
+        first.origin = CallArgOrigin::BareString;
+        let mut args = vec![first];
         let mut i = 1;
         while self.did_match(TokenKind::Comma)? {
             args.push(self.argument(i)?);
@@ -3487,6 +3492,40 @@ impl<'a> Parser<'a> {
     fn argument(&mut self, positional_index: usize) -> Result<CallArg, ParserError> {
         let tok = self.push_source_location();
 
+        // ADR 0041: `_:` parses as a written label (never valid — semantic
+        // analysis reports it and the LSP can remove it).
+        if matches!(
+            &self.current,
+            Some(Token {
+                kind: TokenKind::Underscore,
+                ..
+            })
+        ) && matches!(
+            &self.next,
+            Some(Token {
+                kind: TokenKind::Colon,
+                ..
+            })
+        ) {
+            let underscore = self.advance().expect("peeked Underscore");
+            let label_span = self.token_span(&underscore);
+            self.consume(TokenKind::Colon)?;
+            let mode = self.arg_mode();
+            let value = self
+                .expr_with_precedence(Precedence::Assignment)?
+                .into_expr()?;
+            return self.save_meta(tok, |id, span| CallArg {
+                origin: CallArgOrigin::Written,
+                id,
+                span,
+                label: "_".into(),
+                label_span,
+                value,
+                mode: mode.map(|(mode, _)| mode),
+                mode_span: mode.map(|(_, span)| span),
+            });
+        }
+
         if matches!(
             &self.current,
             Some(Token {
@@ -3510,6 +3549,7 @@ impl<'a> Parser<'a> {
                 .expr_with_precedence(Precedence::Assignment)?
                 .into_expr()?;
             self.save_meta(tok, |id, span| CallArg {
+                origin: CallArgOrigin::Written,
                 id,
                 span,
                 label: label.into(),
@@ -3524,6 +3564,7 @@ impl<'a> Parser<'a> {
                 .expr_with_precedence(Precedence::Assignment)?
                 .into_expr()?;
             self.save_meta(tok, |id, span| CallArg {
+                origin: CallArgOrigin::Written,
                 id,
                 span,
                 label: Label::Positional(positional_index),
@@ -4281,6 +4322,8 @@ impl<'a> Parser<'a> {
         {
             block.args = (0..=max_index)
                 .map(|index| Parameter {
+                    label: None,
+                    label_span: None,
                     id: self.next_id(),
                     span: Span::SYNTHESIZED,
                     name: Name::Raw(format!("${index}")),
@@ -4328,9 +4371,9 @@ impl<'a> Parser<'a> {
 
     fn max_positional_block_arg_in_stmt(stmt: &Stmt) -> Option<usize> {
         match &stmt.kind {
-            StmtKind::Expr(expr)
-            | StmtKind::Return(Some(expr))
-            | StmtKind::Resume(Some(expr)) => Self::max_positional_block_arg_in_expr(expr),
+            StmtKind::Expr(expr) | StmtKind::Return(Some(expr)) | StmtKind::Resume(Some(expr)) => {
+                Self::max_positional_block_arg_in_expr(expr)
+            }
             StmtKind::If(condition, then_block, else_block) => [
                 Self::max_positional_block_arg_in_expr(condition),
                 Self::max_positional_block_arg(then_block),
@@ -4585,6 +4628,8 @@ impl<'a> Parser<'a> {
             };
 
             let param = self.save_meta(tok, |id, span| Parameter {
+                label: None,
+                label_span: None,
                 id,
                 span,
                 name: name.into(),
@@ -4838,12 +4883,50 @@ impl<'a> Parser<'a> {
         let mut params: Vec<Parameter> = vec![];
         loop {
             let mode = self.param_mode()?;
-            let (name, name_span) = match self.identifier() {
-                Ok(name) => name,
-                // A mode keyword must be followed by a parameter name.
-                Err(err) if mode.is_some() => return Err(err),
-                Err(_) => break,
+
+            // ADR 0041: `_ name` declares an unlabeled parameter.
+            let (label, label_span, name, name_span) = if self.peek_is(TokenKind::Underscore)
+                && matches!(
+                    &self.next,
+                    Some(Token {
+                        kind: TokenKind::Identifier,
+                        ..
+                    })
+                ) {
+                let underscore = self.advance().expect("peeked Underscore");
+                let label_span = self.token_span(&underscore);
+                let (name, name_span) = self.identifier()?;
+                (Some(ParamLabel::Omitted), Some(label_span), name, name_span)
+            } else {
+                let (first, first_span) = match self.identifier() {
+                    Ok(name) => name,
+                    // A mode keyword must be followed by a parameter name.
+                    Err(err) if mode.is_some() => return Err(err),
+                    Err(_) => break,
+                };
+                // ADR 0041: `foo fizz` — external label then local binder.
+                if self.peek_is(TokenKind::Identifier) {
+                    // Mode keywords never read as external labels; a second
+                    // mode spelling here is a repeated/misordered mode.
+                    if first == "consume" || first == "borrow" {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "parameter name".into(),
+                            actual: first,
+                            token: self.current.clone(),
+                        });
+                    }
+                    let (name, name_span) = self.identifier()?;
+                    (
+                        Some(ParamLabel::Named(first)),
+                        Some(first_span),
+                        name,
+                        name_span,
+                    )
+                } else {
+                    (None, None, first, first_span)
+                }
             };
+
             let tok = self.push_source_location();
             let type_annotation = if self.did_match(TokenKind::Colon)? {
                 Some(self.type_annotation()?)
@@ -4854,6 +4937,8 @@ impl<'a> Parser<'a> {
             let param = self.save_meta(tok, |id, span| Parameter {
                 id,
                 span,
+                label,
+                label_span,
                 name: name.into(),
                 name_span,
                 type_annotation,
@@ -4916,6 +5001,8 @@ impl<'a> Parser<'a> {
     fn next_is_parameter_name(&self, allow_mut: bool) -> bool {
         match self.next.as_ref().map(|token| &token.kind) {
             Some(TokenKind::Identifier) => true,
+            // `consume _ value` — an omitted external label (ADR 0041).
+            Some(TokenKind::Underscore) => true,
             Some(TokenKind::Mut) => allow_mut,
             _ => false,
         }

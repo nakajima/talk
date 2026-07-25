@@ -6,7 +6,7 @@ func extract(person: &Person) -> String {
 }
 func check() -> Int {
 	let p = Person(name: "hello" + " world")
-	let n = extract(p)
+	let n = extract(person: p)
 	n.byte_count
 }
 check()

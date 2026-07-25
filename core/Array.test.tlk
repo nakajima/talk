@@ -35,7 +35,7 @@ test "can push" {
 
 test "can set" {
 	let a = [1, 2, 3]
-	a.set(0, 4)
+	a.set(index: 0, value: 4)
 	assert(a == [4, 2, 3])
 }
 
@@ -52,7 +52,7 @@ test "can write through a subscript" {
 
 test "can swap" {
 	let a = [1, 2, 3]
-	a.swap(0, 2)
+	a.swap(i: 0, j: 2)
 	assert(a == [3, 2, 1])
 }
 
@@ -63,7 +63,7 @@ test "maps" {
 
 test "skips" {
 	let a = [1, 2, 3, 4]
-	assert(a.skip(2).to_array() == [3, 4])
+	assert(a.skip(count: 2).to_array() == [3, 4])
 }
 
 test "sorts by" {

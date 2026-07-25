@@ -8,7 +8,6 @@ pub mod tests {
         annotation, any, any_block, any_body, any_decl, any_expr, any_expr_stmt, any_stmt,
         assert_eq_diff,
         ast::{AST, NameResolved},
-        node_kinds::type_application::TypeApplication,
         compiling::module::{ModuleEnvironment, ModuleId},
         diagnostic::{AnyDiagnostic, Diagnostic, Severity},
         label::Label,
@@ -23,12 +22,13 @@ pub mod tests {
             },
         },
         node_id::{FileID, NodeID},
+        node_kinds::type_application::TypeApplication,
         node_kinds::{
             block::Block,
-            call_arg::CallArg,
+            call_arg::{CallArg, CallArgOrigin},
             decl::{Decl, DeclKind, ReceiverMode},
             expr::{Expr, ExprKind},
-            func::{CaptureMode, EffectSet, Func},
+            func::{CaptureMode, EffectSet, Func, FuncOrigin},
             func_signature::FuncSignature,
             generic_decl::GenericDecl,
             match_arm::MatchArm,
@@ -61,6 +61,8 @@ pub mod tests {
     macro_rules! param {
         ($id:expr, $name:expr) => {
             Parameter {
+                label: None,
+                label_span: None,
                 mode: None,
                 mode_span: None,
                 id: NodeID::ANY,
@@ -72,6 +74,8 @@ pub mod tests {
         };
         ($id:expr, $name:expr, mode: $mode:expr) => {
             Parameter {
+                label: None,
+                label_span: None,
                 mode: $mode,
                 mode_span: None,
                 id: NodeID::ANY,
@@ -83,6 +87,8 @@ pub mod tests {
         };
         ($id:expr, $name:expr, $ty:expr) => {
             Parameter {
+                label: None,
+                label_span: None,
                 mode: None,
                 mode_span: None,
                 id: NodeID::ANY,
@@ -94,6 +100,8 @@ pub mod tests {
         };
         ($id:expr, $name:expr, $ty:expr, mode: $mode:expr) => {
             Parameter {
+                label: None,
+                label_span: None,
                 mode: $mode,
                 mode_span: None,
                 id: NodeID::ANY,
@@ -469,6 +477,7 @@ pub mod tests {
                 },
                 type_annotation: None,
                 rhs: Some(any_expr!(ExprKind::Func(Func {
+                    origin: FuncOrigin::Decl,
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
@@ -517,6 +526,7 @@ pub mod tests {
                 },
                 type_annotation: None,
                 rhs: Some(any_expr!(ExprKind::Func(Func {
+                    origin: FuncOrigin::Decl,
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "odd".into()),
                     name_span: Span::ANY,
@@ -551,6 +561,7 @@ pub mod tests {
                 },
                 type_annotation: None,
                 rhs: Some(any_expr!(ExprKind::Func(Func {
+                    origin: FuncOrigin::Decl,
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "even".into()),
                     name_span: Span::ANY,
@@ -590,6 +601,7 @@ pub mod tests {
                 },
                 type_annotation: None,
                 rhs: Some(any_expr!(ExprKind::Func(Func {
+                    origin: FuncOrigin::Decl,
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
@@ -613,6 +625,7 @@ pub mod tests {
                             },
                             type_annotation: None,
                             rhs: Some(any_expr!(ExprKind::Func(Func {
+                                origin: FuncOrigin::Decl,
                                 id: NodeID::ANY,
                                 name: Name::Resolved(
                                     Symbol::DeclaredLocal(DeclaredLocalId(1)),
@@ -670,6 +683,7 @@ pub mod tests {
                 ))),
                 type_annotation: None,
                 rhs: Some(any_expr!(ExprKind::Func(Func {
+                    origin: FuncOrigin::Decl,
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "fizz".into()),
                     name_span: Span::ANY,
@@ -695,6 +709,7 @@ pub mod tests {
                             ))),
                             type_annotation: None,
                             rhs: Some(any_expr!(ExprKind::Func(Func {
+                                origin: FuncOrigin::Decl,
                                 id: NodeID::ANY,
                                 name: Name::Resolved(
                                     Symbol::DeclaredLocal(DeclaredLocalId(1)),
@@ -818,6 +833,7 @@ pub mod tests {
                 },
                 type_annotation: None,
                 rhs: Some(any_expr!(ExprKind::Func(Func {
+                    origin: FuncOrigin::Decl,
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "fizz".into()),
                     name_span: Span::ANY,
@@ -944,6 +960,7 @@ pub mod tests {
                 .into(),
                 type_args: vec![],
                 args: vec![any!(CallArg, {
+                    origin: CallArgOrigin::Written,
                     mode: None,
                     mode_span: None,
                     label: Label::Positional(0),
@@ -969,14 +986,17 @@ pub mod tests {
             *resolved.0.roots[0].as_stmt(),
             any_expr_stmt!(ExprKind::Member(
                 Some(
-                    any_expr!(ExprKind::Constructor(Name::Resolved(
-                        EnumId {
-                            local_id: 1,
-                            module_id: ModuleId::Core
-                        }
-                        .into(),
-                        "Optional".into(),
-                    ), vec![]))
+                    any_expr!(ExprKind::Constructor(
+                        Name::Resolved(
+                            EnumId {
+                                local_id: 1,
+                                module_id: ModuleId::Core
+                            }
+                            .into(),
+                            "Optional".into(),
+                        ),
+                        vec![]
+                    ))
                     .into()
                 ),
                 "none".into(),
@@ -1003,10 +1023,10 @@ pub mod tests {
 
         assert_eq!(
             *resolved.0.roots[1].as_stmt(),
-            any_expr_stmt!(ExprKind::Constructor(Name::Resolved(
-                Symbol::TypeAlias(TypeAliasId::from(1)),
-                "Intyfresh".into()
-            ), vec![]))
+            any_expr_stmt!(ExprKind::Constructor(
+                Name::Resolved(Symbol::TypeAlias(TypeAliasId::from(1)), "Intyfresh".into()),
+                vec![]
+            ))
         );
     }
 
@@ -1269,6 +1289,7 @@ pub mod tests {
                     }),
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
+                            origin: FuncOrigin::Decl,
                             id: NodeID::ANY,
                             name: Name::Resolved(
                                 Symbol::StaticMethod(StaticMethodId::from(1)),
@@ -1332,6 +1353,7 @@ pub mod tests {
                     }),
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
+                            origin: FuncOrigin::Decl,
                             id: NodeID::ANY,
                             name: Name::Resolved(
                                 Symbol::InstanceMethod(InstanceMethodId::from(1)),
@@ -1378,6 +1400,7 @@ pub mod tests {
                     }),
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
+                            origin: FuncOrigin::Decl,
                             id: NodeID::ANY,
                             name: Name::Resolved(
                                 Symbol::InstanceMethod(InstanceMethodId::from(2)),
@@ -1435,10 +1458,10 @@ pub mod tests {
         assert_eq!(
             *resolved.0.roots[1].as_stmt(),
             any_expr_stmt!(ExprKind::Call {
-                callee: any_expr!(ExprKind::Constructor(Name::Resolved(
-                    Symbol::Struct(StructId::from(1)),
-                    "Person".into()
-                ), vec![]))
+                callee: any_expr!(ExprKind::Constructor(
+                    Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
+                    vec![]
+                ))
                 .into(),
                 type_args: vec![],
                 args: vec![],
@@ -1499,6 +1522,7 @@ pub mod tests {
                 where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     func: Box::new(Func {
+                        origin: FuncOrigin::Decl,
                         id: NodeID::ANY,
                         name: Name::Resolved(
                             Symbol::InstanceMethod(InstanceMethodId::from(1)),
@@ -1510,6 +1534,8 @@ pub mod tests {
                         where_clause: None,
                         effects: Default::default(),
                         params: vec![Parameter {
+                            label: None,
+                            label_span: None,
                             mode: None,
                             mode_span: None,
                             id: NodeID::ANY,
@@ -1679,6 +1705,8 @@ pub mod tests {
                         ),
                         effects: Default::default(),
                         params: vec![Parameter {
+                            label: None,
+                            label_span: None,
                             mode: None,
                             mode_span: None,
                             id: NodeID::ANY,
@@ -1748,6 +1776,8 @@ pub mod tests {
                                 "buzz".into()
                             ),
                             params: vec![Parameter {
+                                label: None,
+                                label_span: None,
                                 mode: None,
                                 mode_span: None,
                                 id: NodeID::ANY,
@@ -1924,6 +1954,8 @@ pub mod tests {
         assert_eq!(
             *params,
             vec![any!(Parameter ,{
+                label: None,
+                label_span: None,
                 mode: Some(ParamMode::Consume),
                 mode_span: None,
                 name: Name::Resolved(ParamLocalId(1).into(), "x".into()),
@@ -1962,6 +1994,8 @@ pub mod tests {
         assert_eq!(
             *args,
             vec![any!(Parameter, {
+                    label: None,
+                    label_span: None,
                     mode: Some(ParamMode::Borrow),
                     mode_span: None,
                 name: Name::Resolved(Symbol::ParamLocal(ParamLocalId(2)), "x".into()),
@@ -1997,6 +2031,7 @@ pub mod tests {
                 effect_name_span: Span::ANY,
                 type_args: vec![],
                 args: vec![any!(CallArg, {
+                    origin: CallArgOrigin::Written,
                     mode: None,
                     mode_span: None,
                     label: Label::Positional(0),
@@ -2024,6 +2059,7 @@ pub mod tests {
                 }),
                 type_annotation: None,
                 rhs: Some(any_expr!(ExprKind::Func(Func {
+                    origin: FuncOrigin::Decl,
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(1.into()), "fizzes".into()),
                     name_span: Span::ANY,

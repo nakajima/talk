@@ -8,4 +8,4 @@ func f(flag: Bool) -> Int {
 	if flag { s.consume_len() }
 	1
 }
-f(true)
+f(flag: true)

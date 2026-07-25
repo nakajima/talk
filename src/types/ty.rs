@@ -213,7 +213,6 @@ impl ProtocolRef {
                 .collect(),
         }
     }
-
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -940,7 +939,6 @@ impl TyFold for Substituter<'_> {
     }
 }
 
-
 /// Prepare a type for export: a leftover unification variable degrades to
 /// `Error` (the store does not travel), and a leftover row/effect var tail
 /// becomes a rigid param keyed by the owning binder. The minted flags let
@@ -1163,7 +1161,6 @@ impl Predicate {
         self.fold_with(&mut PermSubstituter { perms })
     }
 }
-
 
 impl Ty {
     /// Prepare a type for export across a module boundary: unification

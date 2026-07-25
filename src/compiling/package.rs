@@ -2104,8 +2104,11 @@ impl PackageProject {
                 "selected target is not a binary".into(),
             ));
         };
-        let environment =
-            self.environment_for(&graph.base, &self.lock.root_dependencies, &graph.dependencies)?;
+        let environment = self.environment_for(
+            &graph.base,
+            &self.lock.root_dependencies,
+            &graph.dependencies,
+        )?;
         let libraries: Vec<(
             ModuleId,
             std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
@@ -2230,8 +2233,11 @@ impl PackageProject {
             (roots, source_root)
         };
         let graph = self.compile_graph()?;
-        let environment =
-            self.environment_for(&graph.base, &self.lock.root_dependencies, &graph.dependencies)?;
+        let environment = self.environment_for(
+            &graph.base,
+            &self.lock.root_dependencies,
+            &graph.dependencies,
+        )?;
         let libraries: Vec<(
             ModuleId,
             std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
@@ -2281,8 +2287,7 @@ impl PackageProject {
                     manifest.name
                 ))
             })?;
-            let environment =
-                self.environment_for(&base, &package.dependencies, &dependencies)?;
+            let environment = self.environment_for(&base, &package.dependencies, &dependencies)?;
             let module_id = *ids.get(&package.id).ok_or_else(|| {
                 PackageError::Compile(format!("missing module id for package {}", package.name))
             })?;

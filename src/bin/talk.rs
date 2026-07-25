@@ -54,6 +54,17 @@ async fn main() {
             #[arg(long)]
             json: bool,
         },
+        /// Rewrite call sites to match declared argument labels (ADR 0041).
+        FixLabels {
+            #[arg(value_hint = ValueHint::FilePath)]
+            filenames: Vec<std::path::PathBuf>,
+            /// Treat the given directory as the core corpus and fix it.
+            #[arg(long, value_name = "DIR")]
+            core: Option<std::path::PathBuf>,
+            /// Fix each file as its own standalone program.
+            #[arg(long)]
+            each: bool,
+        },
         /// Compile and execute the input (or the current package's binary
         /// when no filenames are given inside a package).
         Run {
@@ -377,6 +388,17 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::FixLabels {
+            filenames,
+            core,
+            each,
+        } => match talk::cli::fix_labels::run(core.as_deref(), filenames, *each) {
+            Ok(applied) => println!("applied {applied} label fixes"),
+            Err(err) => {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+        },
         Commands::Run {
             filenames,
             entry,

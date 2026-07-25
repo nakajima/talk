@@ -5,9 +5,9 @@ func make(flag: Bool) -> Int {
 	let s = "hello" + " world"
 	if flag {
 		let t = s
-		shout(t)
+		shout(s: t)
 	} else {
 		2
 	}
 }
-make(true)
+make(flag: true)

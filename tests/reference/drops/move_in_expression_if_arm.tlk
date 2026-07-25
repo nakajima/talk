@@ -3,8 +3,8 @@ func consume(x: String) -> Int {
 }
 func f(n: Int) -> Int {
 	let s = "a" + "b"
-	let x = if n > 0 { consume(s) } else { 0 }
+	let x = if n > 0 { consume(x: s) } else { 0 }
 	x
 }
-print(f(1))
-print(f(0))
+print(f(n: 1))
+print(f(n: 0))

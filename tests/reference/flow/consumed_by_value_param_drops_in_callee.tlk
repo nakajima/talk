@@ -3,6 +3,6 @@ func take(name: String) -> Int {
 }
 func check() -> Int {
 	let s = "hello" + " world"
-	take(s)
+	take(name: s)
 }
 check()

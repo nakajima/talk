@@ -3,7 +3,6 @@ use std::fmt::Display;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use sha2::{Digest, Sha256};
@@ -22,11 +21,27 @@ impl Display for StableModuleId {
 }
 
 impl StableModuleId {
-    pub fn generate(name: &str, exports: &Exports) -> Self {
+    /// Stable module identity includes full exported callable names
+    /// (ADR 0041), not only base-name keys: an overload set changing
+    /// shape changes the module's interface.
+    pub fn generate(
+        name: &str,
+        exports: &Exports,
+        contracts: &rustc_hash::FxHashMap<Symbol, crate::types::callables::CallableContract>,
+    ) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(name.as_bytes());
         hasher.update([0]);
-        hasher.update(exports.keys().join("\n").as_bytes());
+        for (key, set) in exports {
+            hasher.update(key.as_bytes());
+            for symbol in set {
+                if let Some(contract) = contracts.get(symbol) {
+                    hasher.update([1]);
+                    hasher.update(contract.name.to_string().as_bytes());
+                }
+            }
+            hasher.update([0]);
+        }
         Self(hasher.finalize().into())
     }
 }
@@ -153,7 +168,7 @@ impl ModuleEnvironment {
         let mut matches: Vec<_> = self
             .modules
             .iter()
-            .filter_map(|m| m.1.exports.get(name).copied())
+            .flat_map(|m| m.1.exports.get(name).cloned().unwrap_or_default())
             .collect();
         matches.sort();
         matches
@@ -240,8 +255,7 @@ pub struct Module {
     pub id: StableModuleId,
     pub name: String,
     pub symbol_names: FxHashMap<Symbol, String>,
-    pub exports: IndexMap<String, Symbol>,
+    pub exports: Exports,
     #[serde(default)]
     pub types: ModuleTypes,
 }
-

@@ -1,6 +1,6 @@
 use async_lsp::lsp_types::{TextEdit, Url, WorkspaceEdit};
 use derive_visitor::{Drive, Visitor};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
 use crate::analysis::{node_ids_at_offset, span_contains};
@@ -92,13 +92,19 @@ pub fn rename_at(
         let Some(ast) = module.asts.get(idx).and_then(|a| a.as_ref()) else {
             continue;
         };
-        let spans = rename_spans_in_ast(module, ast, symbol);
+        let (spans, label_expansions) = rename_spans_in_ast(module, ast, symbol);
 
         let mut edits: Vec<TextEdit> = spans
             .into_iter()
             .filter_map(|(start, end)| {
                 let range = byte_span_to_range_utf16(text, start, end)?;
-                Some(TextEdit::new(range, new_name.to_string()))
+                // A shorthand parameter declaration keeps its external
+                // label by expanding to the two-name form (ADR 0041).
+                let replacement = match label_expansions.get(&(start, end)) {
+                    Some(label) => format!("{label} {new_name}"),
+                    None => new_name.to_string(),
+                };
+                Some(TextEdit::new(range, replacement))
             })
             .collect();
 
@@ -648,7 +654,7 @@ fn rename_spans_in_ast(
     module: &AnalysisWorkspace,
     ast: &crate::ast::AST<crate::ast::NameResolved>,
     symbol: Symbol,
-) -> Vec<(u32, u32)> {
+) -> (Vec<(u32, u32)>, FxHashMap<(u32, u32), String>) {
     let target_import_aliases = target_import_aliases(module, ast, symbol);
     let mut collector = RenameCollector {
         module,
@@ -656,6 +662,8 @@ fn rename_spans_in_ast(
         target: symbol,
         target_import_aliases,
         spans: FxHashSet::default(),
+        label_expansions: FxHashMap::default(),
+        func_origins: Vec::new(),
     };
 
     for root in &ast.roots {
@@ -664,14 +672,14 @@ fn rename_spans_in_ast(
 
     let mut spans: Vec<(u32, u32)> = collector.spans.into_iter().collect();
     spans.sort_unstable();
-    spans
+    (spans, collector.label_expansions)
 }
 
 #[derive(Visitor)]
 #[visitor(
     Decl(enter),
     Expr(enter),
-    Func(enter),
+    Func(enter, exit),
     FuncSignature(enter),
     GenericDecl(enter),
     Parameter(enter),
@@ -686,6 +694,11 @@ struct RenameCollector<'a> {
     target: Symbol,
     target_import_aliases: FxHashSet<String>,
     spans: FxHashSet<(u32, u32)>,
+    // Shorthand parameter declarations whose external label must survive
+    // a binder rename (ADR 0041): declaration span -> the label to keep.
+    label_expansions: FxHashMap<(u32, u32), String>,
+    // Enclosing function origins; anonymous closures never expand.
+    func_origins: Vec<crate::node_kinds::func::FuncOrigin>,
 }
 
 impl RenameCollector<'_> {
@@ -758,10 +771,15 @@ impl RenameCollector<'_> {
     }
 
     fn enter_func(&mut self, func: &crate::node_kinds::func::Func) {
+        self.func_origins.push(func.origin);
         if func.name.symbol().ok() == Some(self.target) {
             self.push_span(func.name_span);
         }
         self.push_matching_effect_spans(&func.effects);
+    }
+
+    fn exit_func(&mut self, _func: &crate::node_kinds::func::Func) {
+        self.func_origins.pop();
     }
 
     fn enter_func_signature(&mut self, sig: &crate::node_kinds::func_signature::FuncSignature) {
@@ -783,6 +801,15 @@ impl RenameCollector<'_> {
     fn enter_parameter(&mut self, param: &crate::node_kinds::parameter::Parameter) {
         if param.name.symbol().ok() == Some(self.target) {
             self.push_span(param.name_span);
+            // A named callable's shorthand parameter expands so the binder
+            // rename preserves the external API (ADR 0041).
+            let in_closure =
+                self.func_origins.last() == Some(&crate::node_kinds::func::FuncOrigin::Expr);
+            let name = param.name.name_str();
+            if param.label.is_none() && !in_closure && name != "self" {
+                self.label_expansions
+                    .insert((param.name_span.start, param.name_span.end), name);
+            }
         }
     }
 

@@ -17,6 +17,24 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// a fresh open ambient effect row (Koka-style), body joined into the
     /// return type.
     pub(super) fn infer_func(&mut self, func: &Func, ctx: &Ctx) -> Ty {
+        // A named `func` declaration publishes its argument-label contract
+        // (ADR 0041). Closures never do, and collection-registered roles
+        // (methods, requirements) already claimed their symbols.
+        if func.origin == crate::node_kinds::func::FuncOrigin::Decl
+            && let Ok(symbol) = func.name.symbol()
+        {
+            self.catalog
+                .callable_contracts
+                .entry(symbol)
+                .or_insert_with(|| crate::types::callables::CallableContract {
+                    name: crate::types::callables::CallableName::from_params(
+                        func.name.name_str(),
+                        &func.params,
+                        false,
+                    ),
+                    role: crate::types::callables::CallableRole::Function,
+                });
+        }
         self.register_func_bounds(func);
         self.with_declared_givens(&func.generics, func.where_clause.as_ref(), |this| {
             let inferred =

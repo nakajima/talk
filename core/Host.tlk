@@ -47,7 +47,7 @@ func _io_host(request: IORequest) -> Int {
 // continue; panic is the abortive process-termination fallback.
 public func _with_host(consume body: () '[io, alloc, async, panic] -> ()) -> () {
 	@handle 'io { request in
-		'continue _io_host(request)
+		'continue _io_host(request: request)
 	}
 	// Allocation bookkeeping is carried by the 'unsafe intrinsics; a
 	// bare 'alloc perform asks the host for nothing.
@@ -61,9 +61,9 @@ public func _with_host(consume body: () '[io, alloc, async, panic] -> ()) -> () 
 	// Panic is an ordinary abortive effect. User handlers may intercept it;
 	// delegation reaches this outer fallback, which reports and terminates.
 	@handle 'panic { message in
-		write_string(STDERR_FD, message)
-		write_string(STDERR_FD, "\n")
-		_io_host(.exit(1))
+		write_string(fd: STDERR_FD, s: message)
+		write_string(fd: STDERR_FD, s: "\n")
+		_io_host(request: .exit(1))
 		loop {}
 	}
 	body()

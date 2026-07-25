@@ -9,6 +9,40 @@ use std::fmt::Display;
 
 use super::constraint::CtReason;
 
+/// One mismatched argument-label position (ADR 0041), carrying the node
+/// identities and spans the LSP needs for exact edits.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LabelMismatch {
+    /// Zero-based argument position within the written argument list.
+    pub index: usize,
+    /// The argument's node.
+    pub arg: crate::node_id::NodeID,
+    /// The label the callable declares at this position; `None` means the
+    /// argument must be unlabeled.
+    pub expected: Option<String>,
+    /// The label the caller wrote; `None` means the argument was unlabeled.
+    pub found: Option<String>,
+    /// Span of the written label token (replacement/removal target). Equal
+    /// to the argument span when no label was written.
+    pub label_span: crate::parsing::span::Span,
+    /// Byte offset where an inserted label belongs: before the ownership
+    /// marker when present, otherwise before the value expression.
+    pub insert_at: u32,
+}
+
+impl LabelMismatch {
+    fn message(&self) -> String {
+        match (&self.expected, &self.found) {
+            (Some(expected), None) => format!("Missing argument label '{expected}'"),
+            (Some(expected), Some(found)) => {
+                format!("Expected argument label '{expected}', found '{found}'")
+            }
+            (None, Some(found)) => format!("Unexpected argument label '{found}'"),
+            (None, None) => unreachable!("a label mismatch names at least one label"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TypeError {
     Mismatch {
@@ -19,6 +53,20 @@ pub enum TypeError {
     ArityMismatch {
         expected: usize,
         found: usize,
+    },
+    /// Two declarations share one full callable name (ADR 0041):
+    /// parameter types and local binder names do not distinguish them.
+    DuplicateCallable {
+        name: String,
+    },
+    /// Written argument labels disagree with the selected callable's
+    /// declared labels (ADR 0041). One diagnostic carries every mismatched
+    /// position so the LSP repairs the call atomically.
+    ArgumentLabelMismatch {
+        /// The selected callable's full name, or `None` for an indirect
+        /// function-value call (which is always positional).
+        callable: Option<String>,
+        mismatches: Vec<LabelMismatch>,
     },
     IntegerLiteralOutOfRange {
         literal: String,
@@ -271,6 +319,8 @@ impl TypeError {
         match self {
             Self::Mismatch { .. } => "type.mismatch",
             Self::ArityMismatch { .. } => "type.arity-mismatch",
+            Self::ArgumentLabelMismatch { .. } => "type.argument-label-mismatch",
+            Self::DuplicateCallable { .. } => "type.duplicate-callable",
             Self::IntegerLiteralOutOfRange { .. } => "type.integer-literal-out-of-range",
             Self::InfiniteType { .. } => "type.infinite-type",
             Self::UnknownMember { .. } => "type.unknown-member",
@@ -412,6 +462,13 @@ impl Display for TypeError {
                     "Type mismatch in expression: the surrounding context requires {expected}, but this expression has type {found}"
                 ),
             },
+            TypeError::DuplicateCallable { name } => {
+                write!(f, "Duplicate declaration of '{name}'")
+            }
+            TypeError::ArgumentLabelMismatch { mismatches, .. } => {
+                let messages: Vec<String> = mismatches.iter().map(LabelMismatch::message).collect();
+                write!(f, "{}", messages.join("; "))
+            }
             TypeError::ArityMismatch { expected, found } => {
                 write!(
                     f,

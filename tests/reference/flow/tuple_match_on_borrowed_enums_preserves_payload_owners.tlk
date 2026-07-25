@@ -12,6 +12,6 @@ func lengths(lhs: MaybeText, rhs: MaybeText) -> Int {
 func check() -> Int {
 	let lhs = MaybeText.some("ab" + "cd")
 	let rhs = MaybeText.some("ef" + "gh")
-	lengths(lhs, rhs) + lengths(lhs, rhs)
+	lengths(lhs: lhs, rhs: rhs) + lengths(lhs: lhs, rhs: rhs)
 }
 check()

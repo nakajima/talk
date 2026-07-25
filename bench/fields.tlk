@@ -15,9 +15,9 @@ func bench(n: Int) -> Int {
 	loop i < n {
 		let p = Point(x: i, y: i + 1)
 		let q = Point(x: i * 2, y: i - 3)
-		total = total + dist2(p, q) / 1000
+		total = total + dist2(p: p, q: q) / 1000
 		i = i + 1
 	}
 	total
 }
-print(bench(300000))
+print(bench(n: 300000))

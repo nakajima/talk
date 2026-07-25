@@ -10,6 +10,6 @@ func inspect(lhs: MaybeText) -> Int {
 }
 func check() -> Int {
 	let lhs = MaybeText.some("borrowed" + " payload")
-	inspect(lhs) + inspect(lhs)
+	inspect(lhs: lhs) + inspect(lhs: lhs)
 }
 check()

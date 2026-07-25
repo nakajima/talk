@@ -8,9 +8,9 @@ use crate::{
     node_id::{FileID, NodeID},
     node_kinds::{
         block::Block,
-        call_arg::CallArg,
+        call_arg::{CallArg, CallArgOrigin},
         expr::{Expr, ExprKind},
-        func::{EffectSet, Func},
+        func::{EffectSet, Func, FuncOrigin},
     },
     parsing::span::Span,
 };
@@ -67,6 +67,7 @@ impl LowerTrailingBlocks {
             id: self.next_id(),
             name: Name::Raw(format!("#fn_trailing_{}", block.id.1)),
             name_span: Span::SYNTHESIZED,
+            origin: FuncOrigin::default(),
             effects: EffectSet::default(),
             generics: vec![],
             captures: vec![],
@@ -85,6 +86,8 @@ impl LowerTrailingBlocks {
             id: self.next_id(),
             label: Label::Positional(args.len()),
             label_span: Span::SYNTHESIZED,
+            // The label exception is keyed off this origin (ADR 0041).
+            origin: CallArgOrigin::TrailingBlock,
             value: Expr {
                 id: self.next_id(),
                 span,
@@ -128,6 +131,7 @@ mod tests {
             };
             assert!(trailing_block.is_none(), "trailing block must desugar");
             let Some(CallArg {
+                origin,
                 value:
                     Expr {
                         kind: ExprKind::Func(func),
@@ -138,6 +142,13 @@ mod tests {
             else {
                 panic!("expected a trailing func argument");
             };
+            // ADR 0041: the label exception keys off this origin, never the
+            // synthesized function name or span.
+            assert_eq!(*origin, CallArgOrigin::TrailingBlock);
+            assert_eq!(func.origin, FuncOrigin::Expr);
+            for arg in &args[..args.len() - 1] {
+                assert_eq!(arg.origin, CallArgOrigin::Written);
+            }
             calls += 1;
             match calls {
                 // `{ x in x }` carries its named parameter.

@@ -4,5 +4,5 @@
 
 print_raw("Hello from print_raw!")
 
-write_string(STDOUT_FD, "Hello from write_string!")
-write_string(STDOUT_FD, "sup")
+write_string(fd: STDOUT_FD, s: "Hello from write_string!")
+write_string(fd: STDOUT_FD, s: "sup")

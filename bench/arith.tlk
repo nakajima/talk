@@ -9,4 +9,4 @@ func bench(n: Int) -> Int {
 	}
 	total
 }
-print(bench(1000000))
+print(bench(n: 1000000))

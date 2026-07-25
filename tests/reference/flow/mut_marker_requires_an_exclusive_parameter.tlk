@@ -5,5 +5,5 @@ func read(c: Counter) -> Int {
 	c.count
 }
 func f(mut c: Counter) -> Int {
-	read(mut c)
+	read(c: mut c)
 }

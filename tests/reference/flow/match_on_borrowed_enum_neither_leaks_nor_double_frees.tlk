@@ -10,8 +10,8 @@ func f(e: &E) -> Int {
 }
 func check() -> Int {
 	let e = E.a("hello" + " world")
-	let first = f(e)
-	let second = f(e)
+	let first = f(e: e)
+	let second = f(e: e)
 	first + second
 }
 check()

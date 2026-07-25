@@ -1,12 +1,8 @@
 use derive_visitor::{Drive, DriveMut};
 
 use crate::{
-    name::Name,
-    name_resolution::name_resolver::NameResolverError,
-    name_resolution::symbol::Symbol,
-    node_id::NodeID,
-    node_kinds::generic_arg::GenericArg,
-    parsing::span::Span,
+    name::Name, name_resolution::name_resolver::NameResolverError, name_resolution::symbol::Symbol,
+    node_id::NodeID, node_kinds::generic_arg::GenericArg, parsing::span::Span,
 };
 
 /// A nominal application: a name applied to generic arguments. This is the

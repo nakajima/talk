@@ -226,7 +226,8 @@ fn generic_inline_array_body_specializes_for_multiple_counts() {
           }\n\
           let pair: [Int; 2] = [1, 2]\n\
           let triple: [Int; 3] = [3, 4, 5]\n\
-          sum(pair) + sum(triple)\n",
+          sum(values: pair) + sum(values: triple)\n\
+          ",
         &[],
         b"15\n",
     );
@@ -260,7 +261,8 @@ fn static_value_generics_reach_runtime() {
           \tR\n\
           }\n\
           let g = Grid<7>()\n\
-          width<4>() + width<2 + 1>() + rows(g)\n",
+          width<4>() + width<2 + 1>() + rows(g: g)\n\
+          ",
         &[],
         b"14\n",
     );
@@ -290,7 +292,8 @@ fn static_enum_case_param_usable_as_value() {
           \tC\n\
           }\n\
           let p = Paint<Color.green>()\n\
-          match shade(p) { .red -> print(0), .green -> print(1) }\n",
+          match shade(p: p) { .red -> print(0), .green -> print(1) }\n\
+          ",
         &[],
         b"1\n",
     );
@@ -326,7 +329,8 @@ fn static_generic_func_as_value_specializes_when_type_pins_statics() {
           \tf(g)\n\
           }\n\
           let g = Grid<3>()\n\
-          apply(rows, g)\n",
+          apply(f: rows, g: g)\n\
+          ",
         &[],
         b"3\n",
     );
@@ -341,7 +345,8 @@ fn static_generic_func_as_value_rejects_unpinned_statics() {
           func apply0(f: () -> Int) -> Int {\n\
           \tf()\n\
           }\n\
-          apply0(width)\n",
+          apply0(f: width)\n\
+          ",
         &[],
     );
     assert!(
@@ -366,11 +371,12 @@ fn postfix_question_mark_propagates_second_enum_variant() {
           \tif ok { .success(41) } else { .failure(\"nope\") }\n\
           }\n\
           func outer(ok: Bool) -> Outcome<Bool, String> {\n\
-          \tlet value = source(ok)?\n\
+          \tlet value = source(ok: ok)?\n\
           \tOutcome.success(value == 41)\n\
           }\n\
-          match outer(true) { .success(value) -> print(value), .failure(message) -> print(message) }\n\
-          match outer(false) { .success(value) -> print(value), .failure(message) -> print(message) }\n",
+          match outer(ok: true) { .success(value) -> print(value), .failure(message) -> print(message) }\n\
+          match outer(ok: false) { .success(value) -> print(value), .failure(message) -> print(message) }\n\
+          ",
         &[],
         b"true\nnope\n",
     );
@@ -380,11 +386,12 @@ fn postfix_question_mark_propagates_second_enum_variant() {
           \tif ok { .some(41) } else { .none }\n\
           }\n\
           func outer(ok: Bool) -> Bool? {\n\
-          \tlet value = source(ok)?\n\
+          \tlet value = source(ok: ok)?\n\
           \tOptional.some(value == 41)\n\
           }\n\
-          match outer(true) { .some(value) -> print(value), .none -> print(false) }\n\
-          match outer(false) { .some(value) -> print(value), .none -> print(false) }\n",
+          match outer(ok: true) { .some(value) -> print(value), .none -> print(false) }\n\
+          match outer(ok: false) { .some(value) -> print(value), .none -> print(false) }\n\
+          ",
         &[],
         b"true\nfalse\n",
     );
@@ -394,11 +401,12 @@ fn postfix_question_mark_propagates_second_enum_variant() {
           \tif ok { .ok(41) } else { .error(\"nope\") }\n\
           }\n\
           func outer(ok: Bool) -> Result<Bool, String> {\n\
-          \tlet value = source(ok)?\n\
+          \tlet value = source(ok: ok)?\n\
           \tResult.ok(value == 41)\n\
           }\n\
-          match outer(true) { .ok(value) -> print(value), .error(message) -> print(message) }\n\
-          match outer(false) { .ok(value) -> print(value), .error(message) -> print(message) }\n",
+          match outer(ok: true) { .ok(value) -> print(value), .error(message) -> print(message) }\n\
+          match outer(ok: false) { .ok(value) -> print(value), .error(message) -> print(message) }\n\
+          ",
         &[],
         b"true\nnope\n",
     );
@@ -410,13 +418,14 @@ fn postfix_question_mark_propagates_second_enum_variant() {
           }\n\
           func outer(ok: Bool) -> Result<Int, String> {\n\
           \t@handle 'ask {\n\
-          \t\tlet value = source(ok)?\n\
+          \t\tlet value = source(ok: ok)?\n\
           \t\t'continue value\n\
           \t}\n\
           \tResult.ok('ask())\n\
           }\n\
-          match outer(true) { .ok(value) -> print(value), .error(message) -> print(message) }\n\
-          match outer(false) { .ok(value) -> print(value), .error(message) -> print(message) }\n",
+          match outer(ok: true) { .ok(value) -> print(value), .error(message) -> print(message) }\n\
+          match outer(ok: false) { .ok(value) -> print(value), .error(message) -> print(message) }\n\
+          ",
         &[],
         b"41\nnope\n",
     );
@@ -811,16 +820,17 @@ fn run_mut_args_through_places_and_rejects_rvalues() {
           \t'continue ()\n\
           }\n\
           let t = (1, 2)\n\
-          'adjust(mut t.0)\n\
-          print(t.0 + t.1)\n",
+          'adjust(value: mut t.0)\n\
+          print(t.0 + t.1)\n\
+          ",
         &[],
         b"13\n",
     );
     // A true rvalue `mut` argument is a frontend error: its evolution
     // would be silently discarded.
     for source in [
-        &b"effect 'adjust(mut value: Int) -> ()\n@handle 'adjust { v in\n\tv = v + 10\n\t'continue ()\n}\n'adjust(mut (1 + 2))\nprint(9)\n"[..],
-        &b"func inc(mut n: Int) -> Void {\n\tn = n + 1\n}\ninc(mut (1 + 2))\nprint(0)\n"[..],
+        &b"effect 'adjust(mut value: Int) -> ()\n@handle 'adjust { v in\n\tv = v + 10\n\t'continue ()\n}\n'adjust(value: mut (1 + 2))\nprint(9)\n"[..],
+        &b"func inc(mut n: Int) -> Void {\n\tn = n + 1\n}\ninc(n: mut (1 + 2))\nprint(0)\n"[..],
     ] {
         let output = run_source(source, &[]);
         assert!(!output.status.success());
@@ -856,7 +866,10 @@ fn run_uninitialized_lets_use_definite_assignment() {
         b"7\n",
     );
     // Read before any assignment is rejected.
-    let output = run_source(b"func f() -> Int {\n\tlet x: Int\n\tx + 1\n}\nprint(f())\n", &[]);
+    let output = run_source(
+        b"func f() -> Int {\n\tlet x: Int\n\tx + 1\n}\nprint(f())\n",
+        &[],
+    );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("before it is initialized"), "{stderr}");
@@ -965,9 +978,10 @@ fn run_executes_branches_recursion_and_loops() {
     assert_runs(
         b"func sum(n: Int) -> Int {\n\
           \tif n <= 0 { return 0 }\n\
-          \tn + sum(n - 1)\n\
+          \tn + sum(n: n - 1)\n\
           }\n\
-          sum(10)\n",
+          sum(n: 10)\n\
+          ",
         &[],
         b"55\n",
     );
@@ -981,7 +995,8 @@ fn run_executes_branches_recursion_and_loops() {
           \t}\n\
           \ttotal\n\
           }\n\
-          sum_to(10)\n",
+          sum_to(limit: 10)\n\
+          ",
         &[],
         b"55\n",
     );
@@ -1231,30 +1246,33 @@ fn run_executes_local_functions_that_capture() {
     assert_runs(
         b"func outer() -> Int {\n\
           \tlet step = 2\n\
-          \tfunc down(n: Int) -> Int { if n > 0 { down(n - step) + 1 } else { 0 } }\n\
-          \tdown(6)\n\
+          \tfunc down(n: Int) -> Int { if n > 0 { down(n: n - step) + 1 } else { 0 } }\n\
+          \tdown(n: 6)\n\
           }\n\
-          outer()\n",
+          outer()\n\
+          ",
         &[],
         b"3\n",
     );
     // Reference pins: local self- and mutual recursion keep working.
     assert_runs(
         b"func outer() -> Int {\n\
-          \tfunc fact(n: Int) -> Int { if n > 1 { n * fact(n - 1) } else { 1 } }\n\
-          \tfact(5)\n\
+          \tfunc fact(n: Int) -> Int { if n > 1 { n * fact(n: n - 1) } else { 1 } }\n\
+          \tfact(n: 5)\n\
           }\n\
-          outer()\n",
+          outer()\n\
+          ",
         &[],
         b"120\n",
     );
     assert_runs(
         b"func outer() -> Int {\n\
-          \tfunc a(n: Int) -> Int { if n > 0 { b(n - 1) } else { 0 } }\n\
-          \tfunc b(n: Int) -> Int { a(n) + 1 }\n\
-          \ta(4)\n\
+          \tfunc a(n: Int) -> Int { if n > 0 { b(n: n - 1) } else { 0 } }\n\
+          \tfunc b(n: Int) -> Int { a(n: n) + 1 }\n\
+          \ta(n: 4)\n\
           }\n\
-          outer()\n",
+          outer()\n\
+          ",
         &[],
         b"4\n",
     );
@@ -1328,9 +1346,10 @@ fn run_specializes_recursive_inferred_generics() {
     assert_runs(
         b"func fact(n) {\n\
           \tif n <= 1 { return 1 }\n\
-          \treturn n * fact(n - 1)\n\
+          \treturn n * fact(n: n - 1)\n\
           }\n\
-          print(fact(5))\n",
+          print(fact(n: 5))\n\
+          ",
         &[],
         b"120\n",
     );
@@ -1338,7 +1357,8 @@ fn run_specializes_recursive_inferred_generics() {
     // working alongside the recursive case.
     assert_runs(
         b"func double(x) { x + x }\n\
-          print(double(20) + double(1))\n",
+          print(double(x: 20) + double(x: 1))\n\
+          ",
         &[],
         b"42\n",
     );
@@ -1360,14 +1380,15 @@ fn run_executes_compound_if_conditions_left_to_right() {
           \ttrue\n\
           }\n\
           func inspect(consume value: MaybeInt) {\n\
-          \tif let .some(x) = source(value), allowed(x) {\n\
+          \tif let .some(x) = source(value: value), allowed(value: x) {\n\
           \t\tprint(x)\n\
           \t} else {\n\
           \t\tprint(0)\n\
           \t}\n\
           }\n\
-          inspect(MaybeInt.some(7))\n\
-          inspect(MaybeInt.none)\n",
+          inspect(value: MaybeInt.some(7))\n\
+          inspect(value: MaybeInt.none)\n\
+          ",
         &[],
         b"1\n2\n7\n1\n0\n",
     );
@@ -1648,7 +1669,8 @@ fn memberwise_constructions_build_directly() {
                   \tlet p = Point(x: n, y: n + 1)\n\
                   \tp.x + p.y\n\
                   }\n\
-                  print(make(20))\n";
+                  print(make(n: 20))\n\
+                  ";
     let file = dir.join("cons.tlk");
     std::fs::write(&file, source).expect("write fixture");
 
@@ -1707,7 +1729,7 @@ fn constant_operands_read_the_pool_directly() {
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("talk-rk-{}-{unique}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create fixture dir");
-    let source = "func bump(n: Int) -> Int {\n\tn + 1\n}\nprint(bump(41))\n";
+    let source = "func bump(n: Int) -> Int {\n\tn + 1\n}\nprint(bump(n: 41))\n";
     let file = dir.join("rk.tlk");
     std::fs::write(&file, source).expect("write fixture");
 
@@ -2283,12 +2305,12 @@ fn package_run_and_test_use_the_locked_graph() {
     .expect("root manifest");
     std::fs::write(
         root.join("src/main.tlk"),
-        "use cli_dependency::{ answer_for }\nprint(answer_for(40))\n",
+        "use cli_dependency::{ answer_for }\nprint(answer_for(n: 40))\n",
     )
     .expect("root source");
     std::fs::write(
         root.join("tests/dep.test.tlk"),
-        "use cli_dependency::{ answer_for }\n\ntest(\"dependency math\") {\n\tassert(answer_for(40) == 42)\n}\n",
+        "use cli_dependency::{ answer_for }\n\ntest(\"dependency math\") {\n\tassert(answer_for(n: 40) == 42)\n}\n",
     )
     .expect("test source");
 
@@ -2342,17 +2364,18 @@ fn run_performs_ambient_io_operations() {
     let path = std::env::temp_dir().join(format!("talk-io-{}-{unique}.txt", std::process::id()));
     let source = format!(
         "@unsafe {{\n\
-         let ok = sleep(0)\n\
-         let fd = open_path(\"{}\", O_WRONLY + O_CREAT + O_TRUNC, S_IRUSR + S_IWUSR)\n\
-         write_string(fd, \"hello\")\n\
-         _io_close(fd)\n\
-         let rfd = open_path(\"{}\", O_RDONLY, 0)\n\
-         let buf = _alloc<Byte>(8)\n\
-         let count = _io_read(rfd, buf, 8)\n\
-         _io_close(rfd)\n\
-         _free(buf)\n\
+         let ok = sleep(ms: 0)\n\
+         let fd = open_path(path: \"{}\", flags: O_WRONLY + O_CREAT + O_TRUNC, mode: S_IRUSR + S_IWUSR)\n\
+         write_string(fd: fd, s: \"hello\")\n\
+         _io_close(fd: fd)\n\
+         let rfd = open_path(path: \"{}\", flags: O_RDONLY, mode: 0)\n\
+         let buf = _alloc<Byte>(count: 8)\n\
+         let count = _io_read(fd: rfd, buf: buf, count: 8)\n\
+         _io_close(fd: rfd)\n\
+         _free(ptr: buf)\n\
          print(count)\n\
-         }}\n",
+         }}\n\
+         ",
         path.display(),
         path.display()
     );
@@ -2524,7 +2547,7 @@ fn run_executes_mut_arguments() {
     // `mut` parameters (exclusive borrows, ADR 0018) return their evolved
     // values to the caller for writeback — locals and script globals.
     assert_runs(
-        b"func bump(mut x: Int) -> Void {\n\tx = x + 1\n}\nlet n = 1\nbump(mut n)\nbump(mut n)\nprint(n)\nlet g = 10\nbump(mut g)\nprint(g)\n",
+        b"func bump(mut x: Int) -> Void {\n\tx = x + 1\n}\nlet n = 1\nbump(x: mut n)\nbump(x: mut n)\nprint(n)\nlet g = 10\nbump(x: mut g)\nprint(g)\n",
         &[],
         b"3\n11\n",
     );
@@ -2558,7 +2581,7 @@ fn run_executes_recursive_local_functions() {
     // Nested capture-free `func` declarations index like top-level ones,
     // so self-recursive calls resolve.
     assert_runs(
-        b"func f() -> Int {\n\tfunc inner(n: Int) -> Int {\n\t\tif n <= 0 { return 0 }\n\t\tn + inner(n - 1)\n\t}\n\tinner(3)\n}\nprint(f())\n",
+        b"func f() -> Int {\n\tfunc inner(n: Int) -> Int {\n\t\tif n <= 0 { return 0 }\n\t\tn + inner(n: n - 1)\n\t}\n\tinner(n: 3)\n}\nprint(f())\n",
         &[],
         b"6\n",
     );
@@ -2690,13 +2713,14 @@ fn run_balances_temps_when_a_sibling_arm_returns() {
           \tResult.ok(kinds.count)\n\
           }\n\
           func go() -> Int {\n\
-          \tlet n = match pick([Kind.a, Kind.b, Kind.a]) {\n\
+          \tlet n = match pick(kinds: [Kind.a, Kind.b, Kind.a]) {\n\
           \t\t.ok(n) -> n,\n\
           \t\t.error(e) -> return 0 - 1\n\
           \t}\n\
           \tn\n\
           }\n\
-          print(go())\n",
+          print(go())\n\
+          ",
         &[],
         b"3\n",
     );
@@ -2744,7 +2768,7 @@ fn run_drops_a_payload_binding_on_the_break_path_after_a_sibling_arm_consumed_it
     // deleting from it made the break path's flush skip the drop, a
     // real leak (found by the wave-B balance verifier).
     assert_runs(
-        b"func mk() -> Result<Int, String> {\n\tResult.error(\"boom\" + \"!\")\n}\nfunc f(flag: Bool) -> Result<Int, String> {\n\tlet total = 0\n\tloop {\n\t\tlet x = match mk() {\n\t\t\t.ok(v) -> v,\n\t\t\t.error(err) -> {\n\t\t\t\tif flag { return Result.error(err) }\n\t\t\t\tbreak\n\t\t\t}\n\t\t}\n\t\ttotal = total + x\n\t}\n\tResult.ok(total)\n}\nprint(f(false))\n",
+        b"func mk() -> Result<Int, String> {\n\tResult.error(\"boom\" + \"!\")\n}\nfunc f(flag: Bool) -> Result<Int, String> {\n\tlet total = 0\n\tloop {\n\t\tlet x = match mk() {\n\t\t\t.ok(v) -> v,\n\t\t\t.error(err) -> {\n\t\t\t\tif flag { return Result.error(err) }\n\t\t\t\tbreak\n\t\t\t}\n\t\t}\n\t\ttotal = total + x\n\t}\n\tResult.ok(total)\n}\nprint(f(flag: false))\n",
         &[],
         b"Result.ok(0)\n",
     );
@@ -2758,7 +2782,7 @@ fn run_retains_borrowed_sources_stored_into_owning_containers() {
     // the match decomposition freed the caller's payload — twice by
     // the second call.
     assert_runs(
-        b"enum MaybeText {\n\tcase some(String)\n\tcase none\n}\nfunc inspect(lhs: MaybeText) -> Int {\n\tmatch (lhs, MaybeText.some(\"owned\" + \" payload\")) {\n\t\t(MaybeText.some(value), MaybeText.some(_)) -> value.byte_count,\n\t\t_ -> 0\n\t}\n}\nfunc check() -> Int {\n\tlet lhs = MaybeText.some(\"borrowed\" + \" payload\")\n\tinspect(lhs) + inspect(lhs)\n}\ncheck()\n",
+        b"enum MaybeText {\n\tcase some(String)\n\tcase none\n}\nfunc inspect(lhs: MaybeText) -> Int {\n\tmatch (lhs, MaybeText.some(\"owned\" + \" payload\")) {\n\t\t(MaybeText.some(value), MaybeText.some(_)) -> value.byte_count,\n\t\t_ -> 0\n\t}\n}\nfunc check() -> Int {\n\tlet lhs = MaybeText.some(\"borrowed\" + \" payload\")\n\tinspect(lhs: lhs) + inspect(lhs: lhs)\n}\ncheck()\n",
         &[],
         b"32\n",
     );
@@ -2770,14 +2794,14 @@ fn run_retains_a_consumed_value_that_has_later_uses() {
     // the value's last use donates a reference instead of moving, so
     // use-after-move stops being an error for shareable types.
     assert_runs(
-        b"func take(consume s: String) -> Int {\n\ts.byte_count\n}\nlet s = \"hello\" + \" world\"\nlet n = take(s)\ns.byte_count + n\n",
+        b"func take(consume s: String) -> Int {\n\ts.byte_count\n}\nlet s = \"hello\" + \" world\"\nlet n = take(s: s)\ns.byte_count + n\n",
         &[],
         b"22\n",
     );
     // Consuming an outer binding inside a loop retains on every
     // iteration; the loop may repeat.
     assert_runs(
-        b"func take(consume s: String) -> Int {\n\ts.byte_count\n}\nlet s = \"a\" + \"b\"\nlet i = 0\nlet n = 0\nloop i < 3 {\n\tn = n + take(s)\n\ti = i + 1\n}\nn\n",
+        b"func take(consume s: String) -> Int {\n\ts.byte_count\n}\nlet s = \"a\" + \"b\"\nlet i = 0\nlet n = 0\nloop i < 3 {\n\tn = n + take(s: s)\n\ti = i + 1\n}\nn\n",
         &[],
         b"6\n",
     );
@@ -2789,12 +2813,12 @@ fn run_snapshots_a_live_view_across_owner_move_and_reassignment() {
     // an owner with a live view retains it, and reassigning one
     // displaces the old value to scope exit, so the view stays valid.
     assert_runs(
-        b"func f() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.utf8().slice(0, 1)\n\tlet moved = s\n\tsub.byte_count + moved.byte_count\n}\nf()\n",
+        b"func f() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.utf8().slice(start: 0, byte_count: 1)\n\tlet moved = s\n\tsub.byte_count + moved.byte_count\n}\nf()\n",
         &[],
         b"12\n",
     );
     assert_runs(
-        b"func f() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.utf8().slice(0, 5)\n\ts = \"x\" + \"y\"\n\tsub.byte_count + s.byte_count\n}\nf()\n",
+        b"func f() -> Int {\n\tlet s = \"hello\" + \" world\"\n\tlet sub = s.utf8().slice(start: 0, byte_count: 5)\n\ts = \"x\" + \"y\"\n\tsub.byte_count + s.byte_count\n}\nf()\n",
         &[],
         b"7\n",
     );
@@ -2967,7 +2991,7 @@ fn run_retains_consumes_with_later_uses_inside_trailing_blocks() {
     // seeded the use counts rule 1 reads — so a consume with later
     // uses moved instead of retaining and the later use was rejected.
     assert_runs(
-        b"func take(consume s: String) -> Int {\n\ts.byte_count\n}\nfunc run(f: () -> Int) -> Int {\n\tf()\n}\nfunc check() -> Int {\n\trun {\n\t\tlet s = \"hello\" + \" world\"\n\t\tlet n = take(s)\n\t\ts.byte_count + n\n\t}\n}\ncheck()\n",
+        b"func take(consume s: String) -> Int {\n\ts.byte_count\n}\nfunc run(f: () -> Int) -> Int {\n\tf()\n}\nfunc check() -> Int {\n\trun {\n\t\tlet s = \"hello\" + \" world\"\n\t\tlet n = take(s: s)\n\t\ts.byte_count + n\n\t}\n}\ncheck()\n",
         &[],
         b"22\n",
     );
@@ -2985,75 +3009,75 @@ fn run_releases_statement_position_if_values() {
         b"struct Lex {\n\
           	let code: String\n\
           	let current: Int\n\
-          \n\
+          	\n\
           	init(code: &String) {\n\
-          		self.code = code.to_string()\n\
-          		self.current = 0\n\
+          	self.code = code.to_string()\n\
+          	self.current = 0\n\
           	}\n\
-          }\n\
-          extend Lex {\n\
+          	}\n\
+          	extend Lex {\n\
           	func char_at(pos: Int) -> Character? {\n\
-          		if self.code.byte_count <= pos { return Optional.none }\n\
-          		let iter = self.code.utf8().slice(pos, self.code.byte_count - pos).iter()\n\
-          		iter.next()\n\
+          	if self.code.byte_count <= pos { return Optional.none }\n\
+          	let iter = self.code.utf8().slice(start: pos, byte_count: self.code.byte_count - pos).iter()\n\
+          	iter.next()\n\
           	}\n\
           	func peek() -> Character? {\n\
-          		self.char_at(self.current)\n\
+          	self.char_at(pos: self.current)\n\
           	}\n\
           	func peek_next() -> Character? {\n\
-          		match self.peek() {\n\
-          			.some(ch) -> self.char_at(self.current + ch.utf8_count()),\n\
-          			.none -> Optional.none\n\
-          		}\n\
+          	match self.peek() {\n\
+          	.some(ch) -> self.char_at(pos: self.current + ch.utf8_count()),\n\
+          	.none -> Optional.none\n\
+          	}\n\
           	}\n\
           	mut func advance() -> Character? {\n\
-          		match self.char_at(self.current) {\n\
-          			.some(ch) -> {\n\
-          				self.current = self.current + ch.utf8_count()\n\
-          				Optional.some(ch)\n\
-          			},\n\
-          			.none -> Optional.none\n\
-          		}\n\
+          	match self.char_at(pos: self.current) {\n\
+          	.some(ch) -> {\n\
+          	self.current = self.current + ch.utf8_count()\n\
+          	Optional.some(ch)\n\
+          	},\n\
+          	.none -> Optional.none\n\
+          	}\n\
           	}\n\
           	mut func scan() -> Int {\n\
-          		let is_float = false\n\
-          		let n = 0\n\
-          		loop {\n\
-          			let ch = match self.peek() {\n\
-          				.some(peeked) -> peeked,\n\
-          				.none -> {\n\
-          					break\n\
-          				}\n\
-          			}\n\
-          			if ch == '.' {\n\
-          				if is_float {\n\
-          					break\n\
-          				}\n\
-          				let next_digit = match self.peek_next() {\n\
-          					.some(next) -> next.is_numeric(),\n\
-          					.none -> false\n\
-          				}\n\
-          				if next_digit == false {\n\
-          					break\n\
-          				}\n\
-          				is_float = true\n\
-          				self.advance()\n\
-          			} else {\n\
-          				let continues = ch.is_numeric()\n\
-          				if continues == false {\n\
-          					break\n\
-          				}\n\
-          				n = n + 1\n\
-          				self.advance()\n\
-          			}\n\
-          		}\n\
-          		n\n\
+          	let is_float = false\n\
+          	let n = 0\n\
+          	loop {\n\
+          	let ch = match self.peek() {\n\
+          	.some(peeked) -> peeked,\n\
+          	.none -> {\n\
+          	break\n\
           	}\n\
-          \n\
-          }\n\
-          let lex = Lex(\"1.2x\")\n\
-          print(lex.scan())\n\
-          ",
+          	}\n\
+          	if ch == '.' {\n\
+          	if is_float {\n\
+          	break\n\
+          	}\n\
+          	let next_digit = match self.peek_next() {\n\
+          	.some(next) -> next.is_numeric(),\n\
+          	.none -> false\n\
+          	}\n\
+          	if next_digit == false {\n\
+          	break\n\
+          	}\n\
+          	is_float = true\n\
+          	self.advance()\n\
+          	} else {\n\
+          	let continues = ch.is_numeric()\n\
+          	if continues == false {\n\
+          	break\n\
+          	}\n\
+          	n = n + 1\n\
+          	self.advance()\n\
+          	}\n\
+          	}\n\
+          	n\n\
+          	}\n\
+          	\n\
+          	}\n\
+          	let lex = Lex(code: \"1.2x\")\n\
+          	print(lex.scan())\n\
+          	",
         &[],
         b"2\n",
     );
@@ -3177,7 +3201,7 @@ fn run_user_handlers_intercept_io() {
     // proves both performs routed to it. (print bypasses 'io — it is a
     // raw io_write intrinsic — so it still reaches stdout.)
     assert_runs(
-        b"let count = 0\n@handle 'io { request in\n\tcount = count + 1\n\t'continue 0\n}\nsleep(1)\nsleep(1)\nprint(count)\n",
+        b"let count = 0\n@handle 'io { request in\n\tcount = count + 1\n\t'continue 0\n}\nsleep(ms: 1)\nsleep(ms: 1)\nprint(count)\n",
         &[],
         b"2\n",
     );
@@ -3188,7 +3212,7 @@ fn run_io_handlers_delegate_to_the_host_fallback() {
     // A clause re-performing the same request reaches the io host
     // fallback below its floor; the program still behaves normally.
     assert_runs(
-        b"@handle 'io { request in\n\t'continue 'io(request)\n}\nsleep(1)\nprint(1)\n",
+        b"@handle 'io { request in\n\t'continue 'io(request: request)\n}\nsleep(ms: 1)\nprint(1)\n",
         &[],
         b"1\n",
     );
@@ -3211,7 +3235,7 @@ fn run_lying_io_handlers_cannot_break_memory_safety() {
 fn run_alloc_performs_are_inert() {
     // Real allocation is carried by intrinsics, not performs; a bare
     // 'alloc perform reaches the no-op fallback and resumes.
-    assert_runs(b"'alloc(.allocate(8))\nprint(1)\n", &[], b"1\n");
+    assert_runs(b"'alloc(allocation: .allocate(8))\nprint(1)\n", &[], b"1\n");
 }
 
 #[test]
@@ -3225,7 +3249,7 @@ fn run_assigns_through_nested_places() {
     );
     // A `mut` argument may name a projected place.
     assert_runs(
-        b"struct Box {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nfunc bump(mut x: Int) -> Void {\n\tx = x + 1\n}\nlet b = Box(n: 1)\nbump(mut b.n)\nbump(mut b.n)\nprint(b.n)\n",
+        b"struct Box {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nfunc bump(mut x: Int) -> Void {\n\tx = x + 1\n}\nlet b = Box(n: 1)\nbump(x: mut b.n)\nbump(x: mut b.n)\nprint(b.n)\n",
         &[],
         b"3\n",
     );
@@ -3283,22 +3307,22 @@ fn writeback_matrix_covers_call_shapes_and_mutation_shapes() {
     let cells: Vec<(&str, String, &str)> = vec![
         (
             "direct/mut-param",
-            "func bump(mut x: Int) -> Void {\n\tx = x + 1\n}\nlet n = 0\nbump(mut n)\nbump(mut n)\nprint(n)\n".into(),
+            "func bump(mut x: Int) -> Void {\n\tx = x + 1\n}\nlet n = 0\nbump(x: mut n)\nbump(x: mut n)\nprint(n)\n".into(),
             "2\n",
         ),
         (
             "direct/two-mut-params",
-            "func swap_add(mut a: Int, mut b: Int) -> Void {\n\tlet t = a\n\ta = b + 1\n\tb = t + 1\n}\nlet x = 10\nlet y = 20\nswap_add(mut x, mut y)\nprint(x)\nprint(y)\n".into(),
+            "func swap_add(mut a: Int, mut b: Int) -> Void {\n\tlet t = a\n\ta = b + 1\n\tb = t + 1\n}\nlet x = 10\nlet y = 20\nswap_add(a: mut x, b: mut y)\nprint(x)\nprint(y)\n".into(),
             "21\n11\n",
         ),
         (
             "direct/mut-param-with-owned-arg",
-            "func stamp(mut x: Int, consume s: String) -> Void {\n\tx = x + s.byte_count\n}\nlet n = 0\nstamp(mut n, \"ab\" + \"c\")\nprint(n)\n".into(),
+            "func stamp(mut x: Int, consume s: String) -> Void {\n\tx = x + s.byte_count\n}\nlet n = 0\nstamp(x: mut n, s: \"ab\" + \"c\")\nprint(n)\n".into(),
             "3\n",
         ),
         (
             "method/mut-receiver",
-            format!("{PROTOCOL}let c = C(n: 0, tag: \"t\" + \"g\")\nlet step = 3\nprint(c.bump_by(mut step))\nprint(c.bump_by(mut step))\n"),
+            format!("{PROTOCOL}let c = C(n: 0, tag: \"t\" + \"g\")\nlet step = 3\nprint(c.bump_by(amount: mut step))\nprint(c.bump_by(amount: mut step))\n"),
             "3\n9\n",
         ),
         (
@@ -3313,27 +3337,27 @@ fn writeback_matrix_covers_call_shapes_and_mutation_shapes() {
         ),
         (
             "rigid-dictionary/receiver-and-param",
-            format!("{PROTOCOL}effect 'acc<T: Counter>(value: T) -> ()\n@handle 'acc {{ v in\n\tlet step = 3\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\t'continue ()\n}}\n'acc(C(n: 0, tag: \"t\" + \"g\"))\n"),
+            format!("{PROTOCOL}effect 'acc<T: Counter>(value: T) -> ()\n@handle 'acc {{ v in\n\tlet step = 3\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\t'continue ()\n}}\n'acc(value: C(n: 0, tag: \"t\" + \"g\"))\n"),
             "3\n6\n9\n12\n",
         ),
         (
             "existential/receiver-and-param",
-            format!("{PROTOCOL}let a: any Counter = C(n: 0, tag: \"t\" + \"g\")\nlet step = 3\nprint(a.bump_by(mut step))\nprint(step)\nprint(a.bump_by(mut step))\nprint(step)\n"),
+            format!("{PROTOCOL}let a: any Counter = C(n: 0, tag: \"t\" + \"g\")\nlet step = 3\nprint(a.bump_by(amount: mut step))\nprint(step)\nprint(a.bump_by(amount: mut step))\nprint(step)\n"),
             "3\n6\n9\n12\n",
         ),
         (
             "perform/mut-arg",
-            "effect 'adjust(mut value: Int) -> ()\n@handle 'adjust { v in\n\tv = v + 10\n\t'continue ()\n}\nlet n = 1\n'adjust(mut n)\n'adjust(mut n)\nprint(n)\n".into(),
+            "effect 'adjust(mut value: Int) -> ()\n@handle 'adjust { v in\n\tv = v + 10\n\t'continue ()\n}\nlet n = 1\n'adjust(value: mut n)\n'adjust(value: mut n)\nprint(n)\n".into(),
             "21\n",
         ),
         (
             "perform/two-mut-args-with-owned-arg",
-            "effect 'both(mut a: Int, mut b: Int, label: String) -> ()\n@handle 'both { p, q, s in\n\tp = p + s.byte_count\n\tq = q + 2\n\t'continue ()\n}\nlet x = 0\nlet y = 0\n'both(mut x, mut y, \"ab\" + \"c\")\nprint(x)\nprint(y)\n".into(),
+            "effect 'both(mut a: Int, mut b: Int, label: String) -> ()\n@handle 'both { p, q, s in\n\tp = p + s.byte_count\n\tq = q + 2\n\t'continue ()\n}\nlet x = 0\nlet y = 0\n'both(a: mut x, b: mut y, label: \"ab\" + \"c\")\nprint(x)\nprint(y)\n".into(),
             "3\n2\n",
         ),
         (
             "projected-place/mut-param",
-            "struct Box {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nfunc bump(mut x: Int) -> Void {\n\tx = x + 1\n}\nlet b = Box(n: 0)\nbump(mut b.n)\nbump(mut b.n)\nprint(b.n)\n".into(),
+            "struct Box {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nfunc bump(mut x: Int) -> Void {\n\tx = x + 1\n}\nlet b = Box(n: 0)\nbump(x: mut b.n)\nbump(x: mut b.n)\nprint(b.n)\n".into(),
             "2\n",
         ),
     ];
@@ -3476,7 +3500,8 @@ fn range_literals_reach_runtime() {
     assert_runs(
         b"let c = 1..5\n\
           let r = 1..<5\n\
-          if c.contains(5) && !r.contains(5) && r.contains(4) { 1 } else { 0 }\n",
+          if c.contains(element: 5) && !r.contains(element: 5) && r.contains(element: 4) { 1 } else { 0 }\n\
+          ",
         &[],
         b"1\n",
     );
@@ -3528,14 +3553,14 @@ fn generic_dispatch_reaches_derived_and_default_entries() {
     // dereferences the committed dictionary (ADR 0038): a derived
     // Showable resolves to the structural recipe...
     assert_runs(
-        b"struct Point {\n\tlet x: Int\n\tlet y: Int\n}\nfunc render<T: Showable>(value: T) -> String {\n\tvalue.show()\n}\nprint(render(Point(x: 1, y: 2)))\n",
+        b"struct Point {\n\tlet x: Int\n\tlet y: Int\n}\nfunc render<T: Showable>(value: T) -> String {\n\tvalue.show()\n}\nprint(render(value: Point(x: 1, y: 2)))\n",
         &[],
         b"Point(x: 1, y: 2)\n",
     );
     // ...and a requirement without a declared witness resolves to the
     // protocol's default body.
     assert_runs(
-        b"func differ<T: Equatable>(a: T, b: T) -> Bool {\n\ta.notEquals(rhs: b)\n}\nprint(differ(a: 1, b: 2))\nprint(differ(a: 3, b: 3))\n",
+        b"func differ<T: Equatable>(a: T, b: T) -> Bool {\n\ta.notEquals(b)\n}\nprint(differ(a: 1, b: 2))\nprint(differ(a: 3, b: 3))\n",
         &[],
         b"true\nfalse\n",
     );
@@ -3580,7 +3605,7 @@ fn check_accepts_generic_values_in_handler_clauses() {
     // Handler clauses inherit the enclosing frame's witnesses and
     // dictionaries through their environments, like ordinary closures.
     assert_checks(
-        b"effect 'emit(x: Int) -> ()\nfunc run<T: Showable>(v: T) -> () {\n\t@handle 'emit { n in\n\t\tprint(v.show())\n\t\t'continue ()\n\t}\n\t'emit(1)\n}\nrun(v: 42)\n",
+        b"effect 'emit(x: Int) -> ()\nfunc run<T: Showable>(v: T) -> () {\n\t@handle 'emit { n in\n\t\tprint(v.show())\n\t\t'continue ()\n\t}\n\t'emit(x: 1)\n}\nrun(v: 42)\n",
     );
     // Ownership witnesses too: a clause that consumes a captured rigid
     // releases it through the inherited drop witness.
@@ -3606,79 +3631,90 @@ fn run_passes_owned_payloads_through_generic_effects() {
     // existential-shaped [drop, retain] package, so one clause body
     // serves every instantiation — releasing an unconsumed payload…
     assert_runs(
-        b"effect 'give<T>(value: T) -> ()\n@handle 'give { v in 'continue () }\nfunc send(consume s: String) 'give -> Void {\n\t'give(s)\n}\nsend(\"a\" + \"b\")\nprint(1)\n",
+        b"effect 'give<T>(value: T) -> ()\n@handle 'give { v in 'continue () }\nfunc send(consume s: String) 'give -> Void {\n\t'give(value: s)\n}\nsend(s: \"a\" + \"b\")\nprint(1)\n",
         &[],
         b"1\n",
     );
     // …resuming with it (the perform site unwraps the package)…
     assert_runs(
-        b"effect 'echo<T>(value: T) -> T\n@handle 'echo { v in 'continue v }\nfunc round(consume s: String) 'echo -> String {\n\t'echo(s)\n}\nprint(round(\"hi\" + \"!\"))\n",
+        b"effect 'echo<T>(value: T) -> T\n@handle 'echo { v in 'continue v }\nfunc round(consume s: String) 'echo -> String {\n\t'echo(value: s)\n}\nprint(round(s: \"hi\" + \"!\"))\n",
         &[],
         b"hi!\n",
     );
     // …and discontinuing past it (abort cleanup drops the package).
     assert_runs(
-        b"effect 'toss<T>(value: T) -> Never\nfunc risky() -> Int {\n\t@handle 'toss { v in -1 }\n\tlet s = \"a\" + \"b\"\n\t'toss(s)\n}\nprint(risky())\n",
+        b"effect 'toss<T>(value: T) -> Never\nfunc risky() -> Int {\n\t@handle 'toss { v in -1 }\n\tlet s = \"a\" + \"b\"\n\t'toss(value: s)\n}\nprint(risky())\n",
         &[],
         b"-1\n",
     );
     // Copy instantiations use the same packaging convention.
     assert_runs(
-        b"effect 'echo<T>(value: T) -> T\n@handle 'echo { v in 'continue v }\nprint('echo(41) + 1)\n",
+        b"effect 'echo<T>(value: T) -> T\n@handle 'echo { v in 'continue v }\nprint('echo(value: 41) + 1)\n",
         &[],
         b"42\n",
     );
     // Nested positions hold native values; the clause's structural glue
     // reaches rigid leaves through the perform site's witnesses.
     assert_runs(
-        b"effect 'pair<T>(value: (Int, T)) -> ()\n@handle 'pair { v in 'continue () }\n'pair((1, 2))\nprint(3)\n",
+        b"effect 'pair<T>(value: (Int, T)) -> ()\n@handle 'pair { v in 'continue () }\n'pair(value: (1, 2))\nprint(3)\n",
         &[],
         b"3\n",
     );
     assert_runs(
-        b"effect 'pair<T>(value: (Int, T)) -> ()\n@handle 'pair { v in 'continue () }\nlet s = \"a\" + \"b\"\n'pair((1, s))\nprint(3)\n",
+        b"effect 'pair<T>(value: (Int, T)) -> ()\n@handle 'pair { v in 'continue () }\nlet s = \"a\" + \"b\"\n'pair(value: (1, s))\nprint(3)\n",
         &[],
         b"3\n",
     );
     // …including through a compound type's own teardown (Array's deinit
     // instantiated at the rigid element receives the same witnesses)…
     assert_runs(
-        b"effect 'batch<T>(values: Array<T>) -> ()\n@handle 'batch { vs in 'continue () }\nlet xs: Array<String> = [\"a\" + \"b\", \"c\" + \"d\"]\n'batch(xs)\nprint(4)\n",
+        b"effect 'batch<T>(values: Array<T>) -> ()\n@handle 'batch { vs in 'continue () }\nlet xs: Array<String> = [\"a\" + \"b\", \"c\" + \"d\"]\n'batch(values: xs)\nprint(4)\n",
         &[],
         b"4\n",
     );
     // …and through enum payload glue.
     assert_runs(
-        b"enum Wrap<T> {\n\tcase full(T)\n\tcase empty\n}\neffect 'opt<T>(value: Wrap<T>) -> ()\n@handle 'opt { v in 'continue () }\n'opt(Wrap.full(\"a\" + \"b\"))\nprint(5)\n",
+        b"enum Wrap<T> {\n\tcase full(T)\n\tcase empty\n}\neffect 'opt<T>(value: Wrap<T>) -> ()\n@handle 'opt { v in 'continue () }\n'opt(value: Wrap.full(\"a\" + \"b\"))\nprint(5)\n",
         &[],
         b"5\n",
     );
     // A nested payload continued back returns natively.
     assert_runs(
-        b"effect 'swap<T>(value: (Int, T)) -> (Int, T)\n@handle 'swap { v in 'continue v }\nlet back = 'swap((7, \"x\" + \"y\"))\nprint(back.0)\nprint(back.1)\n",
+        b"effect 'swap<T>(value: (Int, T)) -> (Int, T)\n@handle 'swap { v in 'continue v }\nlet back = 'swap(value: (7, \"x\" + \"y\"))\nprint(back.0)\nprint(back.1)\n",
         &[],
         b"7\nxy\n",
     );
     // A clause handing its rigid value to a generic function threads the
     // witnesses through that instance's hidden parameters.
     assert_runs(
-        b"effect 'sink<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n@handle 'sink { v in\n\tdiscard(v)\n\t'continue ()\n}\n'sink(\"a\" + \"b\")\nprint(1)\n",
+        b"effect 'sink<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n@handle 'sink { v in\n\tdiscard(x: v)\n\t'continue ()\n}\n'sink(value: \"a\" + \"b\")\nprint(1)\n",
         &[],
         b"1\n",
     );
     // A clause re-performing with its rigid value forwards its own
     // witnesses to the next handler out.
     assert_runs(
-        b"effect 'inner<T>(value: T) -> ()\neffect 'outer<T>(value: T) -> ()\n@handle 'inner { v in 'continue () }\n@handle 'outer { v in\n\t'inner(v)\n\t'continue ()\n}\n'outer(\"a\" + \"b\")\nprint(2)\n",
+        b"effect 'inner<T>(value: T) -> ()\neffect 'outer<T>(value: T) -> ()\n@handle 'inner { v in 'continue () }\n@handle 'outer { v in\n\t'inner(value: v)\n\t'continue ()\n}\n'outer(value: \"a\" + \"b\")\nprint(2)\n",
         &[],
         b"2\n",
     );
     // A compound rigid payload re-performs through glue closures that
     // capture the inner witnesses.
     assert_runs(
-        b"effect 'batch<T>(values: Array<T>) -> ()\neffect 'again<U>(value: U) -> ()\n@handle 'again { u in 'continue () }\n@handle 'batch { vs in\n\t'again(vs)\n\t'continue ()\n}\nlet xs: Array<String> = [\"a\" + \"b\"]\n'batch(xs)\nprint(3)\n",
+        b"effect 'batch<T>(values: Array<T>) -> ()\neffect 'again<U>(value: U) -> ()\n@handle 'again { u in 'continue () }\n@handle 'batch { vs in\n\t'again(value: vs)\n\t'continue ()\n}\nlet xs: Array<String> = [\"a\" + \"b\"]\n'batch(values: xs)\nprint(3)\n",
         &[],
         b"3\n",
+    );
+}
+
+#[test]
+fn run_dispatches_overloaded_requirements_through_witness_tables() {
+    // ADR 0041: same-base requirement overloads get distinct witness-table
+    // slots; generic and existential dispatch select by written labels.
+    assert_runs(
+        b"protocol Tagger {\n\tfunc tag(short flag: Bool) -> Int\n\tfunc tag(long count: Int) -> Int\n}\nstruct S {}\nextend S: Tagger {\n\tfunc tag(short flag: Bool) -> Int {\n\t\tif flag { 1 } else { 2 }\n\t}\n\n\tfunc tag(long count: Int) -> Int {\n\t\tcount + 10\n\t}\n}\nfunc generic<T: Tagger>(x: T) -> Int {\n\tx.tag(short: true) + x.tag(long: 5)\n}\nprint(generic(x: S()))\nlet e: any Tagger = S()\nprint(e.tag(short: false) + e.tag(long: 1))\n",
+        &[],
+        b"16\n13\n",
     );
 }
 
@@ -3688,21 +3724,21 @@ fn run_dispatches_constrained_generic_effects() {
     // alongside [drop, retain]: one clause body calls requirements on
     // every instantiation…
     assert_runs(
-        b"effect 'show<T: Showable>(value: T) -> ()\n@handle 'show { v in\n\tprint(v.show())\n\t'continue ()\n}\n'show(42)\n'show(\"a\" + \"b\")\n",
+        b"effect 'show<T: Showable>(value: T) -> ()\n@handle 'show { v in\n\tprint(v.show())\n\t'continue ()\n}\n'show(value: 42)\n'show(value: \"a\" + \"b\")\n",
         &[],
         b"42\nab\n",
     );
     // …and packs the rigid value into an existential from the same
     // dictionary.
     assert_runs(
-        b"effect 'show<T: Showable>(value: T) -> ()\n@handle 'show { v in\n\tlet s: any Showable = v\n\tprint(s.show())\n\t'continue ()\n}\n'show(42)\n",
+        b"effect 'show<T: Showable>(value: T) -> ()\n@handle 'show { v in\n\tlet s: any Showable = v\n\tprint(s.show())\n\t'continue ()\n}\n'show(value: 42)\n",
         &[],
         b"42\n",
     );
     // A `mut func` requirement returns (result, final self); the rigid
     // dispatch writes the evolved receiver back through the dictionary.
     assert_runs(
-        b"protocol Counter {\n\tmut func bump() -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\neffect 'tick<T: Counter>(value: T) -> ()\n@handle 'tick { v in\n\tprint(v.bump())\n\tprint(v.bump())\n\t'continue ()\n}\n'tick(C(n: 0))\n",
+        b"protocol Counter {\n\tmut func bump() -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\neffect 'tick<T: Counter>(value: T) -> ()\n@handle 'tick { v in\n\tprint(v.bump())\n\tprint(v.bump())\n\t'continue ()\n}\n'tick(value: C(n: 0))\n",
         &[],
         b"1\n2\n",
     );
@@ -3710,35 +3746,35 @@ fn run_dispatches_constrained_generic_effects() {
     // owns the payload and the shell drops nothing (no double free), and
     // a wildcard arm still releases the payload (no leak).
     assert_runs(
-        b"enum Work {\n\tcase text(String)\n\tcase gap\n}\nextend Work: CheapClone {}\nfunc take(consume item: Work) -> String {\n\tmatch item {\n\t\t.text(piece) -> piece,\n\t\t_ -> \"\".to_string()\n\t}\n}\nprint(take(Work.text(\"a\" + \"b\")))\nprint(take(Work.gap).byte_count)\n",
+        b"enum Work {\n\tcase text(String)\n\tcase gap\n}\nextend Work: CheapClone {}\nfunc take(consume item: Work) -> String {\n\tmatch item {\n\t\t.text(piece) -> piece,\n\t\t_ -> \"\".to_string()\n\t}\n}\nprint(take(item: Work.text(\"a\" + \"b\")))\nprint(take(item: Work.gap).byte_count)\n",
         &[],
         b"ab\n0\n",
     );
     // A `mut` parameter accepts an unmarked place argument (the checker
     // coerces implicitly); the evolved value still writes back.
     assert_runs(
-        b"func add_one(mut xs: [Int]) -> Void {\n\txs.push(1)\n}\nfunc run() -> Int {\n\tlet xs: [Int] = []\n\tadd_one(xs)\n\tadd_one(xs)\n\txs.count\n}\nprint(run())\n",
+        b"func add_one(mut xs: [Int]) -> Void {\n\txs.push(1)\n}\nfunc run() -> Int {\n\tlet xs: [Int] = []\n\tadd_one(xs: xs)\n\tadd_one(xs: xs)\n\txs.count\n}\nprint(run())\n",
         &[],
         b"2\n",
     );
     // A `mut` receiver reached through a projection writes back through
     // the whole place chain (self.comments.push(…) evolves the field).
     assert_runs(
-        b"struct Holder {\n\tlet items: [Int]\n\tinit() {\n\t\tself.items = []\n\t}\n\tmut func add(n: Int) -> Void {\n\t\tself.items.push(n)\n\t}\n}\nlet h = Holder()\nh.add(1)\nh.add(2)\nprint(h.items.count)\n",
+        b"struct Holder {\n\tlet items: [Int]\n\tinit() {\n\t\tself.items = []\n\t}\n\tmut func add(n: Int) -> Void {\n\t\tself.items.push(n)\n\t}\n}\nlet h = Holder()\nh.add(n: 1)\nh.add(n: 2)\nprint(h.items.count)\n",
         &[],
         b"2\n",
     );
     // `mut` parameters and a `mut` receiver on one requirement land in
     // callee order: (result, final self, final mut values…).
     assert_runs(
-        b"protocol Counter {\n\tmut func bump_by(mut amount: Int) -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump_by(mut amount: Int) -> Int {\n\t\tself.n = self.n + amount\n\t\tamount = amount * 2\n\t\tself.n\n\t}\n}\neffect 'acc<T: Counter>(value: T) -> ()\n@handle 'acc { v in\n\tlet step = 3\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\tprint(v.bump_by(mut step))\n\tprint(step)\n\t'continue ()\n}\n'acc(C(n: 0))\n",
+        b"protocol Counter {\n\tmut func bump_by(mut amount: Int) -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump_by(mut amount: Int) -> Int {\n\t\tself.n = self.n + amount\n\t\tamount = amount * 2\n\t\tself.n\n\t}\n}\neffect 'acc<T: Counter>(value: T) -> ()\n@handle 'acc { v in\n\tlet step = 3\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\t'continue ()\n}\n'acc(value: C(n: 0))\n",
         &[],
         b"3\n6\n9\n12\n",
     );
     // A closure created inside the clause inherits the witnesses through
     // its environment.
     assert_runs(
-        b"effect 'hold<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n@handle 'hold { v in\n\tlet run = func(consume x: String) -> Void {\n\t}\n\trun(\"q\" + \"r\")\n\tdiscard(v)\n\t'continue ()\n}\n'hold(\"a\" + \"b\")\nprint(1)\n",
+        b"effect 'hold<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n@handle 'hold { v in\n\tlet run = func(consume x: String) -> Void {\n\t}\n\trun(\"q\" + \"r\")\n\tdiscard(x: v)\n\t'continue ()\n}\n'hold(value: \"a\" + \"b\")\nprint(1)\n",
         &[],
         b"1\n",
     );
@@ -3760,7 +3796,7 @@ fn run_rejects_escaping_borrowed_returns() {
 fn run_enforces_strict_linear_consumption() {
     // OWN-03: every finite exit consumes a linear value exactly once.
     assert_runs(
-        b"enum Token 'linear {\n\tcase active(Int)\n}\nfunc consume_token(consume t: Token) -> Int {\n\tmatch t {\n\t\t.active(n) -> n\n\t}\n}\nfunc run_it() -> Int {\n\tlet t = Token.active(42)\n\tconsume_token(t)\n}\nrun_it()\n",
+        b"enum Token 'linear {\n\tcase active(Int)\n}\nfunc consume_token(consume t: Token) -> Int {\n\tmatch t {\n\t\t.active(n) -> n\n\t}\n}\nfunc run_it() -> Int {\n\tlet t = Token.active(42)\n\tconsume_token(t: t)\n}\nrun_it()\n",
         &[],
         b"42\n",
     );
@@ -3859,7 +3895,7 @@ fn run_reports_an_out_of_range_array_write() {
 
 #[test]
 fn run_reports_an_out_of_range_array_swap() {
-    let output = run_source(b"let items = [1, 2, 3]\nitems.swap(0, 9)\n", &[]);
+    let output = run_source(b"let items = [1, 2, 3]\nitems.swap(i: 0, j: 9)\n", &[]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("array index out of bounds"), "{stderr}");
@@ -3893,7 +3929,7 @@ fn run_executes_existential_values() {
     );
     // `mut` parameters on existential requirements write back too.
     assert_runs(
-        b"protocol Adder {\n\tfunc add_into(mut total: Int) -> Void\n}\nstruct A {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend A: Adder {\n\tfunc add_into(mut total: Int) -> Void {\n\t\ttotal = total + self.n\n\t}\n}\nlet a: any Adder = A(n: 5)\nlet sum = 0\na.add_into(mut sum)\na.add_into(mut sum)\nprint(sum)\n",
+        b"protocol Adder {\n\tfunc add_into(mut total: Int) -> Void\n}\nstruct A {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend A: Adder {\n\tfunc add_into(mut total: Int) -> Void {\n\t\ttotal = total + self.n\n\t}\n}\nlet a: any Adder = A(n: 5)\nlet sum = 0\na.add_into(total: mut sum)\na.add_into(total: mut sum)\nprint(sum)\n",
         &[],
         b"10\n",
     );

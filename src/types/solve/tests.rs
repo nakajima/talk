@@ -47,6 +47,7 @@ impl Harness {
             mono: &self.mono,
             instantiations: &mut self.instantiations,
             member_resolutions: &mut self.member_resolutions,
+            member_call_slots: &Default::default(),
             coerce_clones: &mut self.coerce_clones,
             level: Level(1),
             defaulting: false,
@@ -123,10 +124,10 @@ fn level_adjustment_propagates_outward() {
 fn apply_reason_clones_borrowed_cheap_clone_argument() {
     let mut h = Harness::new();
     let cheap = Symbol::Struct(StructId::new(ModuleId::Current, 7));
-    h.catalog.insert_conformance(ModuleId::Current, Conformance::new(
-        cheap,
-        ProtocolRef::bare(Symbol::CheapClone),
-    ));
+    h.catalog.insert_conformance(
+        ModuleId::Current,
+        Conformance::new(cheap, ProtocolRef::bare(Symbol::CheapClone)),
+    );
     let owned = Ty::Nominal(cheap, vec![]);
     let borrowed = Ty::Borrow(Perm::Shared, Box::new(owned.clone()));
     let residual = h.solve(vec![Constraint::Eq(owned, borrowed, origin())]);
@@ -652,6 +653,7 @@ fn instantiation_substitutes_perms_into_predicates() {
         mono: &h.mono,
         instantiations: &mut h.instantiations,
         member_resolutions: &mut h.member_resolutions,
+        member_call_slots: &Default::default(),
         coerce_clones: &mut h.coerce_clones,
         level: Level(1),
         defaulting: false,

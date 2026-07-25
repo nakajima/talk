@@ -38,7 +38,7 @@ extend Response: Into<Response> {
 
 extend String: Into<Response> {
 	consuming func into() -> Response {
-		Response(200, self)
+		Response(status: 200, body: self)
 	}
 }
 
@@ -58,12 +58,12 @@ func route_walk(current: RouteNode?, path: Substring) -> Response {
 	match current {
 		.some(node) -> {
 			if path.equals_string(node.path) {
-				Response(200, node.handler.invoke())
+				Response(status: 200, body: node.handler.invoke())
 			} else {
-				route_walk(node.next, path)
+				route_walk(current: node.next, path: path)
 			}
 		},
-		.none -> Response(404, "Not Found")
+		.none -> Response(status: 404, body: "Not Found")
 	}
 }
 
@@ -87,24 +87,24 @@ public struct HttpServer 'heap {
 
 	func extract_method(raw_request: String) -> Substring {
 		let bytes: UTF8View = raw_request.utf8()
-		match raw_request.find(" ") {
-			.some(first_space) -> bytes.slice(0, first_space),
+		match raw_request.find(needle: " ") {
+			.some(first_space) -> bytes.slice(start: 0, byte_count: first_space),
 			.none -> "".as_substring()
 		}
 	}
 
 	func extract_path(raw_request: String) -> Substring {
 		let bytes: UTF8View = raw_request.utf8()
-		match raw_request.find(" ") {
+		match raw_request.find(needle: " ") {
 			.some(first_space) -> {
 				let rest_start: Int = first_space + 1
 				let rest_len: Int = raw_request.byte_count - rest_start
 				if rest_len <= 0 { return "".as_substring() }
 
-				let rest: Substring = bytes.slice(rest_start, rest_len)
+				let rest: Substring = bytes.slice(start: rest_start, byte_count: rest_len)
 				let rest_bytes: UTF8View = rest.utf8()
-				match rest.find(" ") {
-					.some(second_space) -> rest_bytes.slice(0, second_space),
+				match rest.find(needle: " ") {
+					.some(second_space) -> rest_bytes.slice(start: 0, byte_count: second_space),
 					.none -> rest
 				}
 			},
@@ -113,7 +113,7 @@ public struct HttpServer 'heap {
 	}
 
 	func dispatch(path: Substring) -> Response {
-		route_walk(self.routes, path)
+		route_walk(current: self.routes, path: path)
 	}
 
 	func render(response: Response) -> String {
@@ -140,40 +140,40 @@ public struct HttpServer 'heap {
 	}
 
 	public func handle(raw_request: String) -> String {
-		let method: Substring = self.extract_method(raw_request)
+		let method: Substring = self.extract_method(raw_request: raw_request)
 		if method.equals_string("GET") == false { return self.render(
-			Response(404, "Not Found")
+			response: Response(status: 404, body: "Not Found")
 		) }
 
-		let path: Substring = self.extract_path(raw_request)
-		self.render(self.dispatch(path))
+		let path: Substring = self.extract_path(raw_request: raw_request)
+		self.render(response: self.dispatch(path: path))
 	}
 
 	public func run(port: Int) -> () {
-		let listener_fd = _io_socket(AF_INET, SOCK_STREAM, 0)
-		_io_bind(listener_fd, 0, port)
-		_io_listen(listener_fd, 128)
+		let listener_fd = _io_socket(domain: AF_INET, socktype: SOCK_STREAM, proto: 0)
+		_io_bind(fd: listener_fd, addr: 0, port: port)
+		_io_listen(fd: listener_fd, backlog: 128)
 
 		loop {
-			let client_fd = _io_accept(listener_fd)
+			let client_fd = _io_accept(fd: listener_fd)
 			if client_fd < 0 {
 				continue
 			}
 
 			let max_request_size = 8192
-			let buf = _alloc<Byte>(max_request_size)
-			let n = _io_read(client_fd, buf, max_request_size)
+			let buf = _alloc<Byte>(count: max_request_size)
+			let n = _io_read(fd: client_fd, buf: buf, count: max_request_size)
 
 			if n <= 0 {
-				_io_close(client_fd)
+				_io_close(fd: client_fd)
 				continue
 			}
 
-			let n = _io_clamp(n, max_request_size)
-			let raw_request = String(buf, n, max_request_size)
-			let wire = self.handle(raw_request)
-			_io_write(client_fd, wire.storage.base, wire.byte_count)
-			_io_close(client_fd)
+			let n = _io_clamp(count: n, capacity: max_request_size)
+			let raw_request = String(base: buf, byte_count: n, capacity: max_request_size)
+			let wire = self.handle(raw_request: raw_request)
+			_io_write(fd: client_fd, buf: wire.storage.base, count: wire.byte_count)
+			_io_close(fd: client_fd)
 		}
 	}
 }

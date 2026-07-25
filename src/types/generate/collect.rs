@@ -6,6 +6,67 @@ use crate::types::ty::StaticCmpOp;
 impl<'s, 'a> CatalogBuilder<'s, 'a> {
     // ----- Declaration collection ---------------------------------------
 
+    /// Register a named callable's argument-label contract (ADR 0041).
+    /// `has_receiver` drops the implicit `self` parameter from the
+    /// source-facing label list.
+    fn register_callable_contract(
+        &mut self,
+        symbol: Symbol,
+        base: &str,
+        params: &[Parameter],
+        has_receiver: bool,
+        role: crate::types::callables::CallableRole,
+    ) {
+        let name = crate::types::callables::CallableName::from_params(base, params, has_receiver);
+        self.catalog.callable_contracts.insert(
+            symbol,
+            crate::types::callables::CallableContract { name, role },
+        );
+    }
+
+    /// Push a requirement into its base name's overload set (ADR 0041);
+    /// a same-full-name sibling is a duplicate declaration.
+    fn push_requirement_overload(
+        &mut self,
+        requirements: &mut IndexMap<String, Vec<Requirement>>,
+        base: String,
+        requirement: Requirement,
+        node: NodeID,
+    ) {
+        let full_name = self
+            .catalog
+            .callable_contracts
+            .get(&requirement.symbol)
+            .map(|contract| contract.name.clone());
+        let set = requirements.entry(base).or_default();
+        if let Some(full_name) = &full_name
+            && set.iter().any(|existing| {
+                self.catalog
+                    .callable_contracts
+                    .get(&existing.symbol)
+                    .is_some_and(|contract| contract.name == *full_name)
+            })
+        {
+            self.diagnostics.errors.push((
+                TypeError::DuplicateCallable {
+                    name: full_name.to_string(),
+                },
+                node,
+            ));
+            return;
+        }
+        set.push(requirement);
+    }
+
+    /// Whether a declaration's parameter list starts with the implicit
+    /// `self` receiver (inserted by desugaring; explicit `self` parameters
+    /// are rejected at parse time).
+    fn params_have_receiver(params: &[Parameter]) -> bool {
+        params
+            .first()
+            .is_some_and(|param| param.name.name_str() == "self")
+    }
+
     pub(super) fn collect(
         &mut self,
         asts: &'a IndexMap<Source, AST<NameResolved>>,
@@ -65,6 +126,13 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 } => {
                     if let Ok(symbol) = name.symbol() {
                         self.register_effect(symbol, generics, where_clause.as_ref(), params, ret);
+                        self.register_callable_contract(
+                            symbol,
+                            &name.name_str(),
+                            params,
+                            false,
+                            crate::types::callables::CallableRole::Effect,
+                        );
                     }
                 }
                 _ => {}
@@ -119,7 +187,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     let protocol_default_extension =
                         self.protocol_extension_head(decl).is_some() && conformances.is_empty();
                     if !protocol_default_extension
-                        && let Some(work) = self.register_extend(decl, None)
+                        && let Some(work) =
+                            self.register_extend(decl, None, &mut protocol_defaults)
                     {
                         extends.push(work);
                     }
@@ -140,7 +209,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             };
             for member in &body.decls {
                 if matches!(member.kind, DeclKind::Extend { .. })
-                    && let Some(work) = self.register_extend(member, Some(*symbol))
+                    && let Some(work) =
+                        self.register_extend(member, Some(*symbol), &mut protocol_defaults)
                 {
                     extends.push(work);
                 }
@@ -680,16 +750,73 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     let Ok(method) = func.name.symbol() else {
                         continue;
                     };
+                    let full_name = crate::types::callables::CallableName::from_params(
+                        func.name.name_str(),
+                        &func.params,
+                        !*is_static,
+                    );
                     let table = if *is_static {
                         &mut info.statics
                     } else {
                         &mut info.methods
                     };
-                    table.insert(func.name.name_str(), method);
+                    let set = table.entry(func.name.name_str()).or_default();
+                    // Two declarations with one full callable name are
+                    // duplicates; differing full names form an overload set.
+                    if set.iter().any(|existing| {
+                        self.catalog
+                            .callable_contracts
+                            .get(existing)
+                            .is_some_and(|contract| contract.name == full_name)
+                    }) {
+                        self.diagnostics.errors.push((
+                            TypeError::DuplicateCallable {
+                                name: full_name.to_string(),
+                            },
+                            member.id,
+                        ));
+                        continue;
+                    }
+                    set.push(method);
+                    self.register_callable_contract(
+                        method,
+                        &func.name.name_str(),
+                        &func.params,
+                        !*is_static,
+                        crate::types::callables::CallableRole::Method {
+                            is_static: *is_static,
+                        },
+                    );
                 }
                 DeclKind::Init { name, params, .. } => {
                     if let Ok(init) = name.symbol() {
+                        let full_name = crate::types::callables::CallableName::from_params(
+                            "init",
+                            params,
+                            Self::params_have_receiver(params),
+                        );
+                        if info.inits.iter().any(|(existing, _)| {
+                            self.catalog
+                                .callable_contracts
+                                .get(existing)
+                                .is_some_and(|contract| contract.name == full_name)
+                        }) {
+                            self.diagnostics.errors.push((
+                                TypeError::DuplicateCallable {
+                                    name: full_name.to_string(),
+                                },
+                                member.id,
+                            ));
+                            continue;
+                        }
                         info.inits.push((init, params.len()));
+                        self.register_callable_contract(
+                            init,
+                            "init",
+                            params,
+                            Self::params_have_receiver(params),
+                            crate::types::callables::CallableRole::Init,
+                        );
                     }
                 }
                 // Nested `extend Self: P` registers in pass B. Type aliases
@@ -829,7 +956,36 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                             ..
                         } => {
                             if let Ok(method) = func.name.symbol() {
-                                info.methods.insert(func.name.name_str(), method);
+                                let full_name = crate::types::callables::CallableName::from_params(
+                                    func.name.name_str(),
+                                    &func.params,
+                                    true,
+                                );
+                                let set = info.methods.entry(func.name.name_str()).or_default();
+                                if set.iter().any(|existing| {
+                                    this.catalog
+                                        .callable_contracts
+                                        .get(existing)
+                                        .is_some_and(|contract| contract.name == full_name)
+                                }) {
+                                    this.diagnostics.errors.push((
+                                        TypeError::DuplicateCallable {
+                                            name: full_name.to_string(),
+                                        },
+                                        member.id,
+                                    ));
+                                    continue;
+                                }
+                                set.push(method);
+                                this.register_callable_contract(
+                                    method,
+                                    &func.name.name_str(),
+                                    &func.params,
+                                    true,
+                                    crate::types::callables::CallableRole::Method {
+                                        is_static: false,
+                                    },
+                                );
                             }
                         }
                         DeclKind::TypeAlias(..) => {}
@@ -1114,8 +1270,12 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     | DeclKind::FuncSignature(signature)
                     | DeclKind::InitRequirement { signature } => {
                         if let Some(requirement) = this.lower_requirement(signature, false) {
-                            info.requirements
-                                .insert(signature.name.name_str(), requirement);
+                            this.push_requirement_overload(
+                                &mut info.requirements,
+                                signature.name.name_str(),
+                                requirement,
+                                member.id,
+                            );
                         }
                     }
                     // Default-bodied requirements: register the signature now;
@@ -1123,7 +1283,12 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     DeclKind::Method { func, .. } => {
                         if let Some(requirement) = this.lower_default_requirement(func) {
                             protocol_defaults.push((symbol, requirement.symbol, func));
-                            info.requirements.insert(func.name.name_str(), requirement);
+                            this.push_requirement_overload(
+                                &mut info.requirements,
+                                func.name.name_str(),
+                                requirement,
+                                member.id,
+                            );
                         }
                     }
                     DeclKind::TypeAlias(..) => {}
@@ -1151,6 +1316,13 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         has_default: bool,
     ) -> Option<Requirement> {
         let symbol = signature.name.symbol().ok()?;
+        self.register_callable_contract(
+            symbol,
+            &signature.name.name_str(),
+            &signature.params,
+            Self::params_have_receiver(&signature.params),
+            crate::types::callables::CallableRole::Requirement,
+        );
         // The requirement's generics and where clause are their own
         // declaration context: its signature's formation obligations
         // prove under the requirement's predicates, not the protocol's.
@@ -1258,6 +1430,13 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
 
     pub(super) fn lower_default_requirement(&mut self, func: &Func) -> Option<Requirement> {
         let symbol = func.name.symbol().ok()?;
+        self.register_callable_contract(
+            symbol,
+            &func.name.name_str(),
+            &func.params,
+            Self::params_have_receiver(&func.params),
+            crate::types::callables::CallableRole::Requirement,
+        );
         let (params, ret, predicates) = self.in_declaration_context(
             None,
             &func.generics,
@@ -1401,12 +1580,21 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     continue;
                 };
                 let label = func.name.name_str();
-                if this
-                    .catalog
-                    .protocols
-                    .get(&protocol)
-                    .is_some_and(|info| info.requirements.contains_key(&label))
-                {
+                let full_name = crate::types::callables::CallableName::from_params(
+                    label.clone(),
+                    &func.params,
+                    true,
+                );
+                if this.catalog.protocols.get(&protocol).is_some_and(|info| {
+                    info.requirements.get(&label).is_some_and(|set| {
+                        set.iter().any(|existing| {
+                            this.catalog
+                                .callable_contracts
+                                .get(&existing.symbol)
+                                .is_some_and(|contract| contract.name == full_name)
+                        })
+                    })
+                }) {
                     this.unsupported(
                         member.id,
                         "redeclaring an existing protocol member in a protocol extension",
@@ -1427,7 +1615,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 }
                 protocol_defaults.push((protocol, requirement.symbol, func));
                 if let Some(info) = this.catalog.protocols.get_mut(&protocol) {
-                    info.requirements.insert(label.clone(), requirement);
+                    info.requirements
+                        .entry(label.clone())
+                        .or_default()
+                        .push(requirement);
                 }
                 this.catalog
                     .add_owner(&label, MemberOwner::Protocol(protocol));
@@ -1536,6 +1727,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         &mut self,
         decl: &'a Decl,
         enclosing: Option<Symbol>,
+        protocol_defaults: &mut Vec<(Symbol, Symbol, &'a Func)>,
     ) -> Option<ExtendWork<'a>> {
         let DeclKind::Extend {
             binders,
@@ -1605,6 +1797,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     self_args,
                     self_ty,
                     decl_context,
+                    protocol_defaults,
                 )
             },
         )
@@ -1706,6 +1899,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn register_extend_body(
         &mut self,
         decl: &'a Decl,
@@ -1715,6 +1909,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         self_args: Vec<Ty>,
         self_ty: Ty,
         decl_context: &mut elaborate::DeclContext,
+        protocol_defaults: &mut Vec<(Symbol, Symbol, &'a Func)>,
     ) -> Option<ExtendWork<'a>> {
         let DeclKind::Extend {
             conformances, body, ..
@@ -1752,15 +1947,30 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         let context = &decl_context.predicates;
 
         // Collect declared members (witnesses and inherent methods).
-        let mut members: IndexMap<String, (Symbol, &'a Func)> = IndexMap::default();
+        let mut members: IndexMap<String, Vec<(Symbol, &'a Func)>> = IndexMap::default();
         for member in &body.decls {
-            if let DeclKind::Method { func, .. } = &member.kind
+            if let DeclKind::Method {
+                func, is_static, ..
+            } = &member.kind
                 && let Ok(method) = func.name.symbol()
             {
-                members.insert(func.name.name_str(), (method, func));
+                members
+                    .entry(func.name.name_str())
+                    .or_default()
+                    .push((method, func));
+                self.register_callable_contract(
+                    method,
+                    &func.name.name_str(),
+                    &func.params,
+                    !*is_static,
+                    crate::types::callables::CallableRole::Method {
+                        is_static: *is_static,
+                    },
+                );
             }
         }
         let mut witnessed: FxHashSet<String> = FxHashSet::default();
+        let mut witnessed_symbols: FxHashSet<Symbol> = FxHashSet::default();
         let mut declared_assoc: FxHashMap<String, Ty> = FxHashMap::default();
         self.self_types.push(self_ty.clone());
         for member in &body.decls {
@@ -1835,21 +2045,68 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 for (owner, label, requirement) in requirements {
                     // An init requirement witnesses through the conforming
                     // type's initializers (explicit or synthesized
-                    // memberwise), matched by arity.
+                    // memberwise), matched by full callable name.
                     if label == "init"
                         && let Some(init) = self.init_witness(head, &requirement)
                     {
-                        conformance.witnesses.insert(label.clone(), init);
+                        let key =
+                            self.catalog
+                                .witness_key(owner.protocol, &label, requirement.symbol);
+                        conformance.witnesses.insert(key, init);
                         witnessed.insert(label.clone());
                         continue;
                     }
-                    match members.get(&label) {
-                        Some((witness, func)) => {
-                            conformance.witnesses.insert(label.clone(), *witness);
+                    // Witness matching requires the witness's full
+                    // callable name to agree with the requirement's
+                    // (ADR 0041): among same-base candidates, the one
+                    // whose labels agree witnesses; a lone candidate with
+                    // no requirement contract to compare also witnesses.
+                    let agreeing = members.get(&label).and_then(|candidates| {
+                        let required = self
+                            .catalog
+                            .callable_contracts
+                            .get(&requirement.symbol)
+                            .map(|contract| contract.name.labels.clone());
+                        match required {
+                            Some(required) => candidates.iter().find(|(witness, _)| {
+                                self.catalog
+                                    .callable_contracts
+                                    .get(witness)
+                                    .is_some_and(|contract| contract.name.labels == required)
+                            }),
+                            None => candidates.first(),
+                        }
+                    });
+                    match (agreeing, members.contains_key(&label)) {
+                        (Some((witness, func)), _) => {
+                            let key = self.catalog.witness_key(
+                                owner.protocol,
+                                &label,
+                                requirement.symbol,
+                            );
+                            conformance.witnesses.insert(key, *witness);
                             witnessed.insert(label.clone());
+                            witnessed_symbols.insert(*witness);
                             self.infer_assoc_bindings(&requirement, func, conformance);
                         }
-                        None => {
+                        (None, true) => {
+                            let required = self
+                                .catalog
+                                .callable_contracts
+                                .get(&requirement.symbol)
+                                .map(|contract| contract.name.to_string())
+                                .unwrap_or_else(|| label.clone());
+                            if missing_requirements.insert(requirement.symbol) {
+                                self.diagnostics.errors.push((
+                                    TypeError::MissingWitness {
+                                        protocol: owner.to_string(),
+                                        requirement: required,
+                                    },
+                                    decl.id,
+                                ));
+                            }
+                        }
+                        (None, false) => {
                             let already_conforms_to_owner = self
                                 .catalog
                                 .conformances_for_head(head)
@@ -1921,14 +2178,61 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         }
 
         if protocol_head {
-            for label in members.keys() {
-                if !witnessed.contains(label) {
-                    self.unsupported(
-                        decl.id,
-                        "methods in a protocol-extension conformance must witness a target protocol requirement",
+            // A body method that witnesses no target requirement is a
+            // protocol-extension default on the head protocol (ADR 0041):
+            // declared once, dispatchable on every conforming type.
+            self.self_types.push(self_ty.clone());
+            for (label, candidates) in &members {
+                for (method, func) in candidates {
+                    if witnessed_symbols.contains(method) {
+                        continue;
+                    }
+                    let full_name = crate::types::callables::CallableName::from_params(
+                        label.clone(),
+                        &func.params,
+                        true,
                     );
+                    // A full name the head protocol already declares is a
+                    // redefinition, not a default.
+                    if self.catalog.protocols.get(&head).is_some_and(|info| {
+                        info.requirements.values().flatten().any(|existing| {
+                            self.catalog
+                                .callable_contracts
+                                .get(&existing.symbol)
+                                .is_some_and(|contract| contract.name == full_name)
+                        })
+                    }) {
+                        self.diagnostics.errors.push((
+                            TypeError::DuplicateCallable {
+                                name: full_name.to_string(),
+                            },
+                            decl.id,
+                        ));
+                        continue;
+                    }
+                    let Some(requirement) = self.lower_default_requirement(func) else {
+                        continue;
+                    };
+                    // The extension-level context joins the default's
+                    // scheme (the scheme is the signature carrier).
+                    if let Some(scheme) = self.schemes.get_mut(&requirement.symbol) {
+                        for predicate in context {
+                            if !scheme.predicates.contains(predicate) {
+                                scheme.predicates.push(predicate.clone());
+                            }
+                        }
+                    }
+                    protocol_defaults.push((head, requirement.symbol, func));
+                    if let Some(info) = self.catalog.protocols.get_mut(&head) {
+                        info.requirements
+                            .entry(label.clone())
+                            .or_default()
+                            .push(requirement);
+                    }
+                    self.catalog.add_owner(label, MemberOwner::Protocol(head));
                 }
             }
+            self.self_types.pop();
             return Some(ExtendWork {
                 self_ty,
                 context: context.clone(),
@@ -1941,87 +2245,97 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         // Members that witness no requirement are inherent: register their
         // annotation-derived signatures so any group can dispatch on them.
         self.self_types.push(self_ty.clone());
-        for (label, (method, func)) in &members {
-            if witnessed.contains(label) {
-                continue;
-            }
-            // The method's own generics and where clause are a nested
-            // declaration context: its bounds (including static value
-            // params) register before its annotations lower, and its
-            // formation obligations prove under its own predicates.
-            let (sig_params, ret, method_predicates) = self.in_declaration_context(
-                None,
-                &func.generics,
-                func.where_clause.as_ref(),
-                |this, method_context| {
-                    let sig_params: Vec<Ty> = func
-                        .params
-                        .iter()
-                        .map(|p| match &p.type_annotation {
-                            Some(annotation) => {
-                                let ty = this.lower_annotation(annotation);
-                                elaborate::apply_param_mode(this.catalog, p, ty, this.diagnostics)
-                            }
-                            None => Ty::Var(this.store.fresh_ty(OUTER_LEVEL, p.id)),
-                        })
-                        .collect();
-                    let ret = match &func.ret {
-                        Some(annotation) => this.lower_annotation(annotation),
-                        None => Ty::Var(this.store.fresh_ty(OUTER_LEVEL, func.id)),
-                    };
-                    (sig_params, ret, method_context.predicates.clone())
-                },
-            );
-            let mut predicates = context.clone();
-            for predicate in method_predicates {
-                if !predicates.contains(&predicate) {
-                    predicates.push(predicate);
+        for (label, candidates) in &members {
+            for (method, func) in candidates {
+                if witnessed_symbols.contains(method) {
+                    continue;
                 }
-            }
-            let eff = EffectRow {
-                effects: Default::default(),
-                tail: Some(EffTail::Param(*method)),
-            };
-            // The annotation-derived signature is an ordinary scheme (the
-            // one signature carrier); `check_extend` replaces it with the
-            // inferred, zonked scheme after the body checks. The catalog
-            // keeps only the instance-head pattern.
-            self.insert_requirement_scheme(
-                *method,
-                Ty::Func(sig_params, Box::new(ret), eff),
-                generic_symbols(&func.generics),
-                predicates,
-            );
-            let member = crate::types::catalog::InherentMember {
-                symbol: *method,
-                params: params.clone(),
-                self_args: self_args.clone(),
-            };
-            // Disjoint instance rows may define the same label; overlapping
-            // rows are rejected — there is no priority relation (ADR 0036).
-            let rows = self
-                .catalog
-                .extend_members
-                .entry(head)
-                .or_default()
-                .entry(label.clone())
-                .or_default();
-            let overlaps = rows.iter().any(|existing| {
-                crate::types::catalog::inherent_rows_overlap(&existing.self_args, &member.self_args)
-            });
-            if overlaps {
-                self.diagnostics.errors.push((
-                    TypeError::OverlappingConformance {
-                        ty: self_ty.render_mono(),
-                        protocol: format!("inherent member '{label}'"),
-                        existing: "an earlier extension's definition".into(),
+                // The method's own generics and where clause are a nested
+                // declaration context: its bounds (including static value
+                // params) register before its annotations lower, and its
+                // formation obligations prove under its own predicates.
+                let (sig_params, ret, method_predicates) = self.in_declaration_context(
+                    None,
+                    &func.generics,
+                    func.where_clause.as_ref(),
+                    |this, method_context| {
+                        let sig_params: Vec<Ty> = func
+                            .params
+                            .iter()
+                            .map(|p| match &p.type_annotation {
+                                Some(annotation) => {
+                                    let ty = this.lower_annotation(annotation);
+                                    elaborate::apply_param_mode(
+                                        this.catalog,
+                                        p,
+                                        ty,
+                                        this.diagnostics,
+                                    )
+                                }
+                                None => Ty::Var(this.store.fresh_ty(OUTER_LEVEL, p.id)),
+                            })
+                            .collect();
+                        let ret = match &func.ret {
+                            Some(annotation) => this.lower_annotation(annotation),
+                            None => Ty::Var(this.store.fresh_ty(OUTER_LEVEL, func.id)),
+                        };
+                        (sig_params, ret, method_context.predicates.clone())
                     },
-                    decl.id,
-                ));
-            } else {
-                rows.push(member);
+                );
+                let mut predicates = context.clone();
+                for predicate in method_predicates {
+                    if !predicates.contains(&predicate) {
+                        predicates.push(predicate);
+                    }
+                }
+                let eff = EffectRow {
+                    effects: Default::default(),
+                    tail: Some(EffTail::Param(*method)),
+                };
+                // The annotation-derived signature is an ordinary scheme (the
+                // one signature carrier); `check_extend` replaces it with the
+                // inferred, zonked scheme after the body checks. The catalog
+                // keeps only the instance-head pattern.
+                self.insert_requirement_scheme(
+                    *method,
+                    Ty::Func(sig_params, Box::new(ret), eff),
+                    generic_symbols(&func.generics),
+                    predicates,
+                );
+                let member = crate::types::catalog::InherentMember {
+                    symbol: *method,
+                    params: params.clone(),
+                    self_args: self_args.clone(),
+                };
+                // Disjoint instance rows may define the same label; overlapping
+                // rows are rejected — there is no priority relation (ADR 0036).
+                let rows = self
+                    .catalog
+                    .extend_members
+                    .entry(head)
+                    .or_default()
+                    .entry(label.clone())
+                    .or_default();
+                let overlaps = rows.iter().any(|existing| {
+                    crate::types::catalog::inherent_rows_overlap(
+                        &existing.self_args,
+                        &member.self_args,
+                    )
+                });
+                if overlaps {
+                    self.diagnostics.errors.push((
+                        TypeError::OverlappingConformance {
+                            ty: self_ty.render_mono(),
+                            protocol: format!("inherent member '{label}'"),
+                            existing: "an earlier extension's definition".into(),
+                        },
+                        decl.id,
+                    ));
+                } else {
+                    rows.push(member);
+                }
+                self.catalog.add_owner(label, MemberOwner::Nominal(head));
             }
-            self.catalog.add_owner(label, MemberOwner::Nominal(head));
         }
         self.self_types.pop();
 
@@ -2044,10 +2358,22 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             return None;
         };
         let arity = params.len();
-        self.catalog
-            .structs
-            .get(&head)?
-            .inits
+        let inits = &self.catalog.structs.get(&head)?.inits;
+        // The witness's full callable name must agree with the
+        // requirement's (ADR 0041); arity recovers only when the
+        // requirement has no registered contract.
+        if let Some(required) = self.catalog.callable_contracts.get(&requirement.symbol) {
+            return inits
+                .iter()
+                .find(|(init, _)| {
+                    self.catalog
+                        .callable_contracts
+                        .get(init)
+                        .is_some_and(|contract| contract.name.labels == required.name.labels)
+                })
+                .map(|(init, _)| *init);
+        }
+        inits
             .iter()
             .find(|(_, init_arity)| *init_arity == arity + 1)
             .map(|(init, _)| *init)

@@ -4,6 +4,6 @@ func take(consume s: String) -> Int {
 let s = "hello" + " world"
 let i = 0
 loop i < 2 {
-	let n = take(s)
+	let n = take(s: s)
 	i = i + 1
 }

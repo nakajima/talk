@@ -6,4 +6,4 @@ func check(flag: Bool) -> Int {
 	}
 	s.byte_count
 }
-check(true) + check(false)
+check(flag: true) + check(flag: false)

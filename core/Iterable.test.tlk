@@ -5,7 +5,7 @@ test "generic into iterator" {
 test "replace returns the previous owned value" {
 	let current = "old" + " value"
 	let replacement = "new" + " value"
-	let previous = replace(mut current, replacement)
+	let previous = replace(place: mut current, replacement: replacement)
 	assert(previous.byte_count == 9)
 	assert(current.byte_count == 9)
 }

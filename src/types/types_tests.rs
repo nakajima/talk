@@ -145,25 +145,25 @@ pub mod tests {
         let cases: &[(&str, &str, bool, bool)] = &[
             (
                 "types::row_projection_polymorphic",
-                "\n        func fstA(r) { r.a }\n        (fstA({ a: 1 }), fstA({ a: 2, b: true }))\n    ",
+                "\n        func fstA(r) { r.a }\n        (fstA(r: { a: 1 }), fstA(r: { a: 2, b: true }))\n    ",
                 true,
                 false,
             ),
             (
                 "types::row_presence_constraint_is_polymorphic",
-                "\n        func useA(r) { r.a } // imposes HasField(row_var, \"a\", Int)\n        (useA({ a: 1 }), useA({ a: 2, c: true }))\n    ",
+                "\n        func useA(r) { r.a } // imposes HasField(row_var, \"a\", Int)\n        (useA(r: { a: 1 }), useA(r: { a: 2, c: true }))\n    ",
                 true,
                 false,
             ),
             (
                 "types::types_non_annotated_record_param",
-                "\n        func foo(x) {\n            (x.y, x.z)\n        }\n\n        foo({ y: 123, z: 1.23 })\n        foo({ y: 123, z: 123 })\n        ",
+                "\n        func foo(x) {\n            (x.y, x.z)\n        }\n\n        foo(x: { y: 123, z: 1.23 })\n        foo(x: { y: 123, z: 123 })\n        ",
                 true,
                 false,
             ),
             (
                 "types::checks_generic_struct_arg",
-                "\n        struct Person {\n            func getAge<T>(consume t: T) -> T { t }\n        }\n\n        Person().getAge(123)\n        Person().getAge(1.23)\n        ",
+                "\n        struct Person {\n            func getAge<T>(consume t: T) -> T { t }\n        }\n\n        Person().getAge(t: 123)\n        Person().getAge(t: 1.23)\n        ",
                 true,
                 false,
             ),
@@ -175,7 +175,7 @@ pub mod tests {
             ),
             (
                 "types::record_field_func_generalizes_with_row_forall",
-                "\n            func getX(r) { r.x }\n            getX({ x: 1 })\n            ",
+                "\n            func getX(r) { r.x }\n            getX(r: { x: 1 })\n            ",
                 true,
                 false,
             ),
@@ -197,13 +197,13 @@ pub mod tests {
             ),
             (
                 "types::types_string_slice",
-                "\"hello\".utf8().slice(1, 3)",
+                "\"hello\".utf8().slice(start: 1, byte_count: 3)",
                 true,
                 true,
             ),
             (
                 "types::types_string_find",
-                "\"hello\".find(\"ll\"); \"hello\".find_from(\"l\", 3)",
+                "\"hello\".find(needle: \"ll\"); \"hello\".find_from(needle: \"l\", start: 3)",
                 true,
                 true,
             ),
@@ -241,7 +241,7 @@ pub mod tests {
             ("types::types_array_properties", "[1,2,3].count", true, true),
             (
                 "types::types_basic_binary",
-                "func a(x) { x + 1 } ; a(123)",
+                "func a(x) { x + 1 } ; a(x: 123)",
                 true,
                 true,
             ),
@@ -265,13 +265,13 @@ pub mod tests {
             ),
             (
                 "types::types_identity",
-                "\n        func identity(x) { x }\n        identity(123)\n        identity(true)\n        ",
+                "\n        func identity(x) { x }\n        identity(x: 123)\n        identity(x: true)\n        ",
                 true,
                 false,
             ),
             (
                 "types::stores_func_instantiations",
-                "\n        func identity(x) { x }\n        identity(123)\n        identity(true)\n        ",
+                "\n        func identity(x) { x }\n        identity(x: 123)\n        identity(x: true)\n        ",
                 true,
                 false,
             ),
@@ -288,43 +288,43 @@ pub mod tests {
             // — exactly like the annotated twin `func fizz<T>(x: T)`.
             (
                 "types::infers_simple_recursion",
-                "\n        func rec(x, y, z) {\n            if x == y { x } else { rec(y-z, y, z) }\n        }\n\n        rec(0, 2, 1)\n        rec(0.0, 2.0, 1.0)\n        ",
+                "\n        func rec(x, y, z) {\n            if x == y { x } else { rec(x: y-z, y: y, z: z) }\n        }\n\n        rec(x: 0, y: 2, z: 1)\n        rec(x: 0.0, y: 2.0, z: 1.0)\n        ",
                 true,
                 true,
             ),
             (
                 "types::explicit_generic_function_instantiates",
-                "\n        func id<T>(consume x: T) -> T { x }\n        id(123)\n        id(true)\n    ",
+                "\n        func id<T>(consume x: T) -> T { x }\n        id(x: 123)\n        id(x: true)\n    ",
                 true,
                 false,
             ),
             (
                 "types::explicit_call_args",
-                "\n        func id<T>(x) { x }\n        id<Byte>(123)\n    ",
+                "\n        func id<T>(x) { x }\n        id<Byte>(x: 123)\n    ",
                 true,
                 false,
             ),
             (
                 "types::generic_function_body_must_respect_its_own_type_vars",
-                "\n        func bad<T>(x: T) -> T { 0 } // 0 == Int != T\n        bad(true)\n    ",
+                "\n        func bad<T>(x: T) -> T { 0 } // 0 == Int != T\n        bad(x: true)\n    ",
                 false,
                 false,
             ),
             (
                 "types::types_call_let",
-                "\n        func id(x) { x }\n        let a = id(123)\n        let b = id(1.23)\n        a\n        b\n        ",
+                "\n        func id(x) { x }\n        let a = id(x: 123)\n        let b = id(x: 1.23)\n        a\n        b\n        ",
                 true,
                 false,
             ),
             (
                 "types::types_nested_identity",
-                "\n        func identity(x) { x }\n        identity(identity(123))\n        identity(identity(true))\n        ",
+                "\n        func identity(x) { x }\n        identity(x: identity(x: 123))\n        identity(x: identity(x: true))\n        ",
                 true,
                 false,
             ),
             (
                 "types::types_multiple_args",
-                "\n        func makeTuple(x, y) {\n            (x, y)\n        }\n\n        makeTuple(123, true)\n            ",
+                "\n        func makeTuple(x, y) {\n            (x, y)\n        }\n\n        makeTuple(x: 123, y: true)\n            ",
                 true,
                 false,
             ),
@@ -426,7 +426,7 @@ pub mod tests {
             ),
             (
                 "types::call_time_type_args_are_checked",
-                "\n        func id<T>(x: T) -> T { x }\n        id<Bool>(123)\n    ",
+                "\n        func id<T>(x: T) -> T { x }\n        id<Bool>(x: 123)\n    ",
                 false,
                 false,
             ),
@@ -438,25 +438,25 @@ pub mod tests {
             ),
             (
                 "types::param_annotation_is_enforced_at_call",
-                "\n        func f(x: Int) -> Int { x }\n        f(true)\n    ",
+                "\n        func f(x: Int) -> Int { x }\n        f(x: true)\n    ",
                 false,
                 false,
             ),
             (
                 "types::return_annotation_is_enforced_in_body",
-                "\n        func f(x: Int) -> Int { true }\n        f(1)\n    ",
+                "\n        func f(x: Int) -> Int { true }\n        f(x: 1)\n    ",
                 false,
                 false,
             ),
             (
                 "types::types_recursive_func",
-                "\n        func fizz(n) {\n            if true {\n                123\n            } else {\n                fizz(n)\n            }\n        }\n\n        fizz(456)\n        ",
+                "\n        func fizz(n) {\n            if true {\n                123\n            } else {\n                fizz(n: n)\n            }\n        }\n\n        fizz(n: 456)\n        ",
                 true,
                 false,
             ),
             (
                 "types::recursion_is_monomorphic_within_binding_group",
-                "\n        func g(x) {\n            // Force a shape change on the recursive call to try to “polymorphically” recurse.\n            g( (x, x) )\n        }\n        g(1)\n    ",
+                "\n        func g(x) {\n            // Force a shape change on the recursive call to try to “polymorphically” recurse.\n            g( x: (x, x) )\n        }\n        g(x: 1)\n    ",
                 false,
                 false,
             ),
@@ -588,7 +588,7 @@ pub mod tests {
             ),
             (
                 "types::row_env_tail_not_generalized_in_local_let",
-                "\n        func outer(r) {\n            let _x = r.a;               // forces r to have field `a`\n            let k  = func() { r };      // returns the *same* env row (no row-generalization)\n            match k() {\n                { c } -> c              // `c` is not known; should produce one error\n            }\n        }\n        outer({ a: 1 })\n    ",
+                "\n        func outer(r) {\n            let _x = r.a;               // forces r to have field `a`\n            let k  = func() { r };      // returns the *same* env row (no row-generalization)\n            match k() {\n                { c } -> c              // `c` is not known; should produce one error\n            }\n        }\n        outer(r: { a: 1 })\n    ",
                 false,
                 false,
             ),
@@ -600,25 +600,25 @@ pub mod tests {
             ),
             (
                 "types::row_meta_levels_prevent_leak",
-                "\n        func outer(r) {\n            let x = r.a; // creates an internal Row::Var tail for r's row (your ensure_row/projection does this)\n            let k = func() { r } // local let; do NOT generalize the outer row var into a Row::Param\n            match k() {\n                { c } -> c // should be a missing-field error (no 'c' in r)\n            }\n        }\n        outer({ a: 1 })\n    ",
+                "\n        func outer(r) {\n            let x = r.a; // creates an internal Row::Var tail for r's row (your ensure_row/projection does this)\n            let k = func() { r } // local let; do NOT generalize the outer row var into a Row::Param\n            match k() {\n                { c } -> c // should be a missing-field error (no 'c' in r)\n            }\n        }\n        outer(r: { a: 1 })\n    ",
                 false,
                 false,
             ),
             (
                 "types::types_row_type_as_params",
-                "\n        func foo(x: { y: Int, z: Bool }) {\n            (x.y, x.z)\n        }\n\n        foo({ y: 123, z: true })\n        ",
+                "\n        func foo(x: { y: Int, z: Bool }) {\n            (x.y, x.z)\n        }\n\n        foo(x: { y: 123, z: true })\n        ",
                 true,
                 false,
             ),
             (
                 "types::enforces_non_annotated_record",
-                "\n        func foo(point) {\n            (point.x, point.y)\n        }\n\n        foo({ x: 123, z: 123 })\n        ",
+                "\n        func foo(point) {\n            (point.x, point.y)\n        }\n\n        foo(point: { x: 123, z: 123 })\n        ",
                 false,
                 false,
             ),
             (
                 "types::enforces_row_type_as_params",
-                "\n        func foo(x: { y: Int, z: Bool }) {\n            (x.y, x.z)\n        }\n\n        foo({ y: 123 })\n        ",
+                "\n        func foo(x: { y: Int, z: Bool }) {\n            (x.y, x.z)\n        }\n\n        foo(x: { y: 123 })\n        ",
                 false,
                 false,
             ),
@@ -654,7 +654,7 @@ pub mod tests {
             ),
             (
                 "types::types_generic_struct_init",
-                "\n        struct Person<T> {\n            let age: T\n\n            init(other: T) {\n                self.age = other\n            }\n        }\n\n        Person(age: 123).age\n        ",
+                "\n        struct Person<T> {\n            let age: T\n\n            init(other: T) {\n                self.age = other\n            }\n        }\n\n        Person(other: 123).age\n        ",
                 true,
                 false,
             ),
@@ -678,7 +678,7 @@ pub mod tests {
             ),
             (
                 "types::checks_struct_method_on_arg",
-                "\n        struct Person {\n            let age: Int\n        }\n\n        let person = Person(age: 123)\n        callNonExisting(person)\n\n        func callNonExisting(aged) {\n            aged.getAge()\n        }\n        ",
+                "\n        struct Person {\n            let age: Int\n        }\n\n        let person = Person(age: 123)\n        callNonExisting(aged: person)\n\n        func callNonExisting(aged) {\n            aged.getAge()\n        }\n        ",
                 false,
                 false,
             ),
@@ -744,7 +744,7 @@ pub mod tests {
             ),
             (
                 "types::checks_nested_or_patterns",
-                "\n          enum Outer {\n              case a(Inner)\n              case b(Inner)\n          }\n\n          enum Inner {\n              case x(Int)\n              case y(Int)\n          }\n\n          func extract(o: Outer) -> Int {\n              match o {\n                  .a(.x(n) | .y(n)) | .b(.x(n) | .y(n)) -> n\n              }\n          }\n\n          extract(Outer.a(Inner.x(99)))\n          ",
+                "\n          enum Outer {\n              case a(Inner)\n              case b(Inner)\n          }\n\n          enum Inner {\n              case x(Int)\n              case y(Int)\n          }\n\n          func extract(o: Outer) -> Int {\n              match o {\n                  .a(.x(n) | .y(n)) | .b(.x(n) | .y(n)) -> n\n              }\n          }\n\n          extract(o: Outer.a(Inner.x(99)))\n          ",
                 true,
                 false,
             ),
@@ -786,13 +786,13 @@ pub mod tests {
             ),
             (
                 "types::rejects_missing_concrete_conformance_for_generic_bound",
-                "\n            protocol Marker {\n                func mark() -> Int\n            }\n\n            struct Foo {}\n\n            func takes<T: Marker>(x: T) {}\n\n            takes(Foo())\n            ",
+                "\n            protocol Marker {\n                func mark() -> Int\n            }\n\n            struct Foo {}\n\n            func takes<T: Marker>(x: T) {}\n\n            takes(x: Foo())\n            ",
                 false,
                 false,
             ),
             (
                 "types::rejects_missing_marker_conformance_without_requirements",
-                "\n            protocol Marker {}\n\n            struct Foo {}\n\n            func takes<T: Marker>(x: T) {}\n\n            takes(Foo())\n            ",
+                "\n            protocol Marker {}\n\n            struct Foo {}\n\n            func takes<T: Marker>(x: T) {}\n\n            takes(x: Foo())\n            ",
                 false,
                 false,
             ),
@@ -822,13 +822,13 @@ pub mod tests {
             ),
             (
                 "types::types_simple_protocol",
-                "\n            protocol Countable { func getCount() -> Int }\n            struct Person { let count: Int }\n            extend Person: Countable {\n                func getCount() {\n                    self.count\n                }\n            }\n\n            func getCount<T: Countable>(countable: T) {\n                countable.getCount()\n            }\n\n            let person = Person(count: 1)\n            getCount(person)\n            ",
+                "\n            protocol Countable { func getCount() -> Int }\n            struct Person { let count: Int }\n            extend Person: Countable {\n                func getCount() {\n                    self.count\n                }\n            }\n\n            func getCount<T: Countable>(countable: T) {\n                countable.getCount()\n            }\n\n            let person = Person(count: 1)\n            getCount(countable: person)\n            ",
                 true,
                 false,
             ),
             (
                 "types::tests_infers_associated_types",
-                "\n        protocol Aged {\n            associated T\n\n            func getAge() -> T\n        }\n\n        struct Inty {}\n        extend Inty: Aged {\n            func getAge() {\n                123\n            }\n        }\n\n        struct Floaty {}\n        extend Floaty: Aged {\n            func getAge() {\n                1.23\n            }\n        }\n\n        func get<A: Aged>(aged: A) {\n            aged.getAge()\n        }\n\n        get(Inty())\n        get(Floaty())\n        ",
+                "\n        protocol Aged {\n            associated T\n\n            func getAge() -> T\n        }\n\n        struct Inty {}\n        extend Inty: Aged {\n            func getAge() {\n                123\n            }\n        }\n\n        struct Floaty {}\n        extend Floaty: Aged {\n            func getAge() {\n                1.23\n            }\n        }\n\n        func get<A: Aged>(aged: A) {\n            aged.getAge()\n        }\n\n        get(aged: Inty())\n        get(aged: Floaty())\n        ",
                 true,
                 false,
             ),
@@ -840,7 +840,7 @@ pub mod tests {
             ),
             (
                 "types::add_protocol_prototype",
-                "\n        protocol Addy {\n            associated RHS\n            associated Ret\n            consuming func addy(rhs: RHS) -> Ret\n        }\n\n        extend Int: Addy {\n            consuming func addy(rhs: Int) -> Int {\n                self\n            }\n        }\n\n        1.addy(2)\n        ",
+                "\n        protocol Addy {\n            associated RHS\n            associated Ret\n            consuming func addy(rhs: RHS) -> Ret\n        }\n\n        extend Int: Addy {\n            consuming func addy(rhs: Int) -> Int {\n                self\n            }\n        }\n\n        1.addy(rhs: 2)\n        ",
                 true,
                 false,
             ),
@@ -888,13 +888,13 @@ pub mod tests {
             ),
             (
                 "types::types_custom_add",
-                "\n        struct A {}\n        struct B {}\n        struct C {}\n        extend A: Add<B> {\n            func add(rhs: B) -> C {\n                C()\n            }\n        }\n        A() + B()\n        ",
+                "\n        struct A {}\n        struct B {}\n        struct C {}\n        extend A: Add<B> {\n            func add(_ rhs: B) -> C {\n                C()\n            }\n        }\n        A() + B()\n        ",
                 true,
                 true,
             ),
             (
                 "types::types_add_method_in_func",
-                "func add(x) { x + 1 }\n\n            add(2)\n            ",
+                "func add(x) { x + 1 }\n\n            add(x: 2)\n            ",
                 true,
                 true,
             ),
@@ -918,7 +918,7 @@ pub mod tests {
             ),
             (
                 "types::types_fib",
-                "\n        func fib(n) {\n            if n <= 1 { return n }\n\n            return fib(n - 2) + fib(n - 1)\n        }\n\n        fib(3)\n        ",
+                "\n        func fib(n) {\n            if n <= 1 { return n }\n\n            return fib(n: n - 2) + fib(n: n - 1)\n        }\n\n        fib(n: 3)\n        ",
                 true,
                 true,
             ),
@@ -942,19 +942,19 @@ pub mod tests {
             ),
             (
                 "types::types_nested_extend_conformance",
-                "\n            protocol Counter {\n                func next() -> Int\n            }\n\n            struct MyCounter {\n                let value: Int\n\n                extend Self: Counter {\n                    func next() -> Int {\n                        self.value\n                    }\n                }\n            }\n\n            func useCounter<T: Counter>(c: T) -> Int {\n                c.next()\n            }\n\n            useCounter(MyCounter(value: 42))\n            ",
+                "\n            protocol Counter {\n                func next() -> Int\n            }\n\n            struct MyCounter {\n                let value: Int\n\n                extend Self: Counter {\n                    func next() -> Int {\n                        self.value\n                    }\n                }\n            }\n\n            func useCounter<T: Counter>(c: T) -> Int {\n                c.next()\n            }\n\n            useCounter(c: MyCounter(value: 42))\n            ",
                 true,
                 false,
             ),
             (
                 "types::nested_self_extend_can_use_protocol_default_method",
-                "\n            protocol P {\n                func f() { 1 }\n            }\n\n            struct S {\n                extend Self: P {}\n            }\n\n            func call<T: P>(x: T) -> Int {\n                x.f()\n            }\n\n            call(S())\n            ",
+                "\n            protocol P {\n                func f() { 1 }\n            }\n\n            struct S {\n                extend Self: P {}\n            }\n\n            func call<T: P>(x: T) -> Int {\n                x.f()\n            }\n\n            call(x: S())\n            ",
                 true,
                 false,
             ),
             (
                 "types::nested_self_extend_does_not_use_outer_method_as_witness",
-                "\n            protocol P {\n                func f() -> Int\n            }\n\n            struct S {\n                func f() -> Int { 1 }\n\n                extend Self: P {}\n            }\n\n            func call<T: P>(x: T) -> Int {\n                x.f()\n            }\n\n            call(S())\n            ",
+                "\n            protocol P {\n                func f() -> Int\n            }\n\n            struct S {\n                func f() -> Int { 1 }\n\n                extend Self: P {}\n            }\n\n            func call<T: P>(x: T) -> Int {\n                x.f()\n            }\n\n            call(x: S())\n            ",
                 false,
                 false,
             ),
@@ -978,13 +978,13 @@ pub mod tests {
             ),
             (
                 "types::types_func_literal_call_arg_with_contextual_param_type",
-                "\n            func transform(x: Int, f: (Int) -> Int) -> Int {\n                f(x)\n            }\n            transform(1, func(n) { n })\n            ",
+                "\n            func transform(x: Int, f: (Int) -> Int) -> Int {\n                f(x)\n            }\n            transform(x: 1, f: func(n) { n })\n            ",
                 true,
                 false,
             ),
             (
                 "types::types_func_literal_call_arg_return_mismatch_returns_error",
-                "\n            func apply(f: () -> Int) -> Int {\n                f()\n            }\n            apply(func() { true })\n            ",
+                "\n            func apply(f: () -> Int) -> Int {\n                f()\n            }\n            apply(f: func() { true })\n            ",
                 false,
                 false,
             ),
@@ -996,13 +996,13 @@ pub mod tests {
             ),
             (
                 "types::types_trailing_block_with_params",
-                "\n            func transform(x: Int, f: (Int) -> Int) -> Int {\n                f(x)\n            }\n            transform(1){ n in n }\n            ",
+                "\n            func transform(x: Int, f: (Int) -> Int) -> Int {\n                f(x)\n            }\n            transform(x: 1){ n in n }\n            ",
                 true,
                 false,
             ),
             (
                 "types::finalize_ty_produces_correct_poly_entry",
-                "\n            func id(x) { x }\n            id(123)\n            ",
+                "\n            func id(x) { x }\n            id(x: 123)\n            ",
                 true,
                 false,
             ),
@@ -1026,7 +1026,7 @@ pub mod tests {
             ),
             (
                 "types::if_let_stmt_no_else",
-                "\n            enum Opt<T> { case some(T), none }\n            func use_int(x: Int) {}\n            let val = Opt.some(42)\n            if let .some(x) = val { use_int(x) }\n            ",
+                "\n            enum Opt<T> { case some(T), none }\n            func use_int(x: Int) {}\n            let val = Opt.some(42)\n            if let .some(x) = val { use_int(x: x) }\n            ",
                 true,
                 false,
             ),
@@ -1044,7 +1044,7 @@ pub mod tests {
             ),
             (
                 "types::bounded_param_substitution_in_conditional_conformance",
-                "\n            func printy<T: Showable>(showable: T) {\n                print_raw(showable.show())\n            }\n            printy([1, 2, 3])\n            ",
+                "\n            func printy<T: Showable>(showable: T) {\n                print_raw(showable.show())\n            }\n            printy(showable: [1, 2, 3])\n            ",
                 true,
                 true,
             ),
@@ -1056,7 +1056,7 @@ pub mod tests {
             ),
             (
                 "types::rejects_extra_explicit_function_type_args",
-                "\n            func id<T>(x: T) -> T { x }\n            id<Int, Bool>(1)\n            ",
+                "\n            func id<T>(x: T) -> T { x }\n            id<Int, Bool>(x: 1)\n            ",
                 false,
                 false,
             ),
@@ -1170,25 +1170,25 @@ pub mod tests {
             ),
             (
                 "effects::generic_effect_call_with_type_arg",
-                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state<Int>(42)\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state<Int>(value: 42)\n        ",
                 true,
                 false,
             ),
             (
                 "effects::generic_effect_call_inferred",
-                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state(42)\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state(value: 42)\n        ",
                 true,
                 false,
             ),
             (
                 "effects::generic_effect_type_mismatch",
-                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state<Int>(true)\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state<Int>(value: true)\n        ",
                 false,
                 false,
             ),
             (
                 "effects::generic_effect_multiple_params",
-                "\n            effect 'pair<A, B>(first: A, second: B) -> (A, B)\n            @handle 'pair { a, b in 'continue (a, b) }\n            'pair<Int, Bool>(42, true)\n        ",
+                "\n            effect 'pair<A, B>(first: A, second: B) -> (A, B)\n            @handle 'pair { a, b in 'continue (a, b) }\n            'pair<Int, Bool>(first: 42, second: true)\n        ",
                 true,
                 false,
             ),
@@ -1230,7 +1230,7 @@ pub mod tests {
             ),
             (
                 "effects::one_handler_covers_two_instantiations",
-                "\n            effect 'state<T>(value: T) -> T\n\n            func g() '[] {\n                @handle 'state { v in 'continue v }\n                'state(1)\n                'state(true)\n                ()\n            }\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n\n            func g() '[] {\n                @handle 'state { v in 'continue v }\n                'state(value: 1)\n                'state(value: true)\n                ()\n            }\n        ",
                 true,
                 false,
             ),
@@ -1380,7 +1380,7 @@ pub mod tests {
     #[test]
     fn object_safe_any_protocol_satisfies_generic_protocol_bounds() {
         let t = check(
-            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nfunc render<T: Showable>(consume value: T) -> Int { value.show() }\nlet value: any Showable = 1\nlet rendered = render(value)",
+            "// no-core\nprotocol Showable {\n  consuming func show() -> Int\n}\nextend Int: Showable {\n  consuming func show() -> Int { self }\n}\nfunc render<T: Showable>(consume value: T) -> Int { value.show() }\nlet value: any Showable = 1\nlet rendered = render(value: value)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "rendered"), "Int");
@@ -1456,7 +1456,7 @@ pub mod tests {
     #[test]
     fn existential_self_conformance_satisfies_superprotocol_bounds() {
         let t = check(
-            "// no-core\nprotocol Readable {\n  consuming func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> Int\n}\nextend Int: ReadWrite {\n  consuming func read() -> Int { self }\n  func write(value: Int) -> Int { value }\n}\nfunc readIt<T: Readable>(consume value: T) -> Int { value.read() }\nlet value: any ReadWrite = 1\nlet result = readIt(value)",
+            "// no-core\nprotocol Readable {\n  consuming func read() -> Int\n}\nprotocol ReadWrite: Readable {\n  func write(value: Int) -> Int\n}\nextend Int: ReadWrite {\n  consuming func read() -> Int { self }\n  func write(value: Int) -> Int { value }\n}\nfunc readIt<T: Readable>(consume value: T) -> Int { value.read() }\nlet value: any ReadWrite = 1\nlet result = readIt(value: value)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "result"), "Int");
@@ -1586,7 +1586,7 @@ pub mod tests {
         // to inferred params too — plan 3.3(b)), so identity returns a
         // borrow of its argument; Copy instantiations erase the wrap.
         let t = check(
-            "// no-core\nfunc identity(x) { x }\nlet a = identity(123)\nlet b = identity(1.5)",
+            "// no-core\nfunc identity(x) { x }\nlet a = identity(x: 123)\nlet b = identity(x: 1.5)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "identity"), "<T0>(&T0) -> &T0");
@@ -1655,7 +1655,7 @@ pub mod tests {
         // Monomorphic recursion within a binding group (THIH binding groups):
         // the recursive call types against the group's skeleton, generalization
         // happens after.
-        let t = check("// no-core\nfunc f(n) { f(n) }");
+        let t = check("// no-core\nfunc f(n) { f(n: n) }");
         assert_clean(&t);
         assert_eq!(ty_of(&t, "f"), "<T0, T1>(&T0) -> T1");
     }
@@ -1709,7 +1709,7 @@ pub mod tests {
 
     #[test]
     fn argument_mismatch_explains_parameter_and_argument_types() {
-        let t = check("// no-core\nfunc f(value: Int) { value }\nf(true)");
+        let t = check("// no-core\nfunc f(value: Int) { value }\nf(value: true)");
         assert_eq!(
             type_errors(&t),
             [
@@ -1881,7 +1881,7 @@ pub mod tests {
     #[test]
     fn labeled_leading_dot_payloads_resolve_after_inference() {
         let t = check(
-            "// no-core\nenum Foo {\n\tcase bar(fizz: Int, buzz: Int)\n}\nfunc id<T>(consume value: T) -> T { value }\nlet foo: Foo = id(.bar(fizz: 123, buzz: 456))",
+            "// no-core\nenum Foo {\n\tcase bar(fizz: Int, buzz: Int)\n}\nfunc id<T>(consume value: T) -> T { value }\nlet foo: Foo = id(value: .bar(fizz: 123, buzz: 456))",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "foo"), "Foo");
@@ -1954,7 +1954,7 @@ pub mod tests {
         // Protocols.tlk shape: classes-as-predicates (Wadler & Blott 1989),
         // retroactive conformance via extend, declared bound on T.
         let t = check(
-            "// no-core\nprotocol Foo {\n\tfunc foo() -> Int\n}\nstruct Thing {}\nextend Thing: Foo {\n\tfunc foo() { 123 }\n}\nfunc fizz<T: Foo>(t: T) { t.foo() }\nlet r = fizz(Thing())",
+            "// no-core\nprotocol Foo {\n\tfunc foo() -> Int\n}\nstruct Thing {}\nextend Thing: Foo {\n\tfunc foo() { 123 }\n}\nfunc fizz<T: Foo>(t: T) { t.foo() }\nlet r = fizz(t: Thing())",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "fizz"), "<T0: Foo>(&T0) -> Int");
@@ -1964,7 +1964,7 @@ pub mod tests {
     #[test]
     fn conformance_violation_errors() {
         let t = check(
-            "// no-core\nprotocol Foo {\n\tfunc foo() -> Int\n}\nfunc fizz<T: Foo>(t: T) { t.foo() }\nfizz(123)",
+            "// no-core\nprotocol Foo {\n\tfunc foo() -> Int\n}\nfunc fizz<T: Foo>(t: T) { t.foo() }\nfizz(t: 123)",
         );
         let errors = type_errors(&t);
         assert_eq!(errors.len(), 1, "{errors:?}");
@@ -2104,7 +2104,7 @@ pub mod tests {
         // The same ambiguity reached through a scheme-carried constraint:
         // the discharge site (the call) gets the error.
         let t = check(
-            "// no-core\nprotocol Aa {\n\tfunc m() -> Int\n}\nprotocol Bb {\n\tfunc m() -> Int\n}\nextend Int: Aa {\n\tfunc m() -> Int { 1 }\n}\nextend Int: Bb {\n\tfunc m() -> Int { 2 }\n}\nfunc f(x) { x.m() }\nlet r = f(2)",
+            "// no-core\nprotocol Aa {\n\tfunc m() -> Int\n}\nprotocol Bb {\n\tfunc m() -> Int\n}\nextend Int: Aa {\n\tfunc m() -> Int { 1 }\n}\nextend Int: Bb {\n\tfunc m() -> Int { 2 }\n}\nfunc f(x) { x.m() }\nlet r = f(x: 2)",
         );
         let errors = type_errors(&t);
         assert_eq!(errors.len(), 1, "{errors:?}");
@@ -2138,7 +2138,7 @@ pub mod tests {
         // against Int's conformances (Chakravarty/Keller/Peyton Jones,
         // Associated Type Synonyms).
         let t = check(
-            "// no-core\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nprotocol Subtract<RHS> {\n\tassociated Ret\n\tfunc minus(rhs: RHS) -> Ret\n}\nprotocol Comparable<RHS> {\n\tfunc lte(rhs: RHS) -> Bool\n}\nextend Int: Add<Int> {\n\tfunc add(rhs: Int) -> Int { 0 }\n}\nextend Int: Subtract<Int> {\n\tfunc minus(rhs: Int) -> Int { 0 }\n}\nextend Int: Comparable<Int> {\n\tfunc lte(rhs: Int) -> Bool { true }\n}\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n - 2) + fib(n - 1)\n}\nlet x = fib(24)",
+            "// no-core\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nprotocol Subtract<RHS> {\n\tassociated Ret\n\tfunc minus(rhs: RHS) -> Ret\n}\nprotocol Comparable<RHS> {\n\tfunc lte(rhs: RHS) -> Bool\n}\nextend Int: Add<Int> {\n\tfunc add(rhs: Int) -> Int { 0 }\n}\nextend Int: Subtract<Int> {\n\tfunc minus(rhs: Int) -> Int { 0 }\n}\nextend Int: Comparable<Int> {\n\tfunc lte(rhs: Int) -> Bool { true }\n}\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n: n - 2) + fib(n: n - 1)\n}\nlet x = fib(n: 24)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "x"), "Int");
@@ -2157,7 +2157,7 @@ pub mod tests {
     fn generic_bound_call_at_two_types() {
         // Show.tlk shape (two conforming types through one bounded generic).
         let t = check(
-            "// no-core\nprotocol Showy {\n\tfunc show() -> Int\n}\nstruct Fizz {\n\tlet a: Int\n}\nextend Fizz: Showy {\n\tfunc show() { self.a }\n}\nextend Int: Showy {\n\tfunc show() { 0 }\n}\nfunc printy<T: Showy>(s: T) { s.show() }\nprinty(123)\nprinty(Fizz(a: 1))",
+            "// no-core\nprotocol Showy {\n\tfunc show() -> Int\n}\nstruct Fizz {\n\tlet a: Int\n}\nextend Fizz: Showy {\n\tfunc show() { self.a }\n}\nextend Int: Showy {\n\tfunc show() { 0 }\n}\nfunc printy<T: Showy>(s: T) { s.show() }\nprinty(s: 123)\nprinty(s: Fizz(a: 1))",
         );
         assert_clean(&t);
     }
@@ -2165,7 +2165,7 @@ pub mod tests {
     #[test]
     fn effect_where_clause_constrains_perform_type_arguments() {
         let t = check(
-            "// no-core\nprotocol P {}\nextend Int: P {}\neffect 'choose<T>(value: T) -> T where T: P\n@handle 'choose { v in 'continue v }\n'choose(true)",
+            "// no-core\nprotocol P {}\nextend Int: P {}\neffect 'choose<T>(value: T) -> T where T: P\n@handle 'choose { v in 'continue v }\n'choose(value: true)",
         );
         let errors = type_errors(&t);
         assert!(
@@ -2393,7 +2393,9 @@ pub mod tests {
         );
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|e| e.contains("arity") || e.contains("argument")),
+            errors
+                .iter()
+                .any(|e| e.contains("arity") || e.contains("argument")),
             "omitting a non-defaulted suffix parameter must be an arity error, got {errors:?}"
         );
     }
@@ -2405,7 +2407,9 @@ pub mod tests {
         );
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|e| e.contains("arity") || e.contains("argument")),
+            errors
+                .iter()
+                .any(|e| e.contains("arity") || e.contains("argument")),
             "underapplied head must be an arity error, got {errors:?}"
         );
     }
@@ -2417,7 +2421,9 @@ pub mod tests {
         );
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|e| e.contains("arity") || e.contains("argument")),
+            errors
+                .iter()
+                .any(|e| e.contains("arity") || e.contains("argument")),
             "overapplied head must be an arity error, got {errors:?}"
         );
     }
@@ -2425,7 +2431,7 @@ pub mod tests {
     #[test]
     fn declaration_where_conformance_and_same_type_are_scheme_predicates() {
         let t = check(
-            "// no-core\nprotocol Boxy {\n\tassociated Item\n\tfunc item() -> Item\n}\nstruct S {}\nextend S: Boxy {\n\tfunc item() -> Int { 1 }\n}\nfunc intItem<T>(x: T) -> Int where T: Boxy && T.Item == Int {\n\tx.item()\n}\nlet y = intItem(S())",
+            "// no-core\nprotocol Boxy {\n\tassociated Item\n\tfunc item() -> Item\n}\nstruct S {}\nextend S: Boxy {\n\tfunc item() -> Int { 1 }\n}\nfunc intItem<T>(x: T) -> Int where T: Boxy && T.Item == Int {\n\tx.item()\n}\nlet y = intItem(x: S())",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "y"), "Int");
@@ -2451,7 +2457,7 @@ pub mod tests {
     #[test]
     fn extension_method_parameters_borrow_by_default() {
         let t = check(
-            "// no-core\nstruct Wrap {\n\tlet value: Int\n}\nstruct Token {}\nextend Wrap {\n\tfunc poke(borrow t: Token) -> Int {\n\t\tself.value\n\t}\n}\nfunc caller(w: Wrap, t: Token) -> Int {\n\tw.poke(t)\n}",
+            "// no-core\nstruct Wrap {\n\tlet value: Int\n}\nstruct Token {}\nextend Wrap {\n\tfunc poke(borrow t: Token) -> Int {\n\t\tself.value\n\t}\n}\nfunc caller(w: Wrap, t: Token) -> Int {\n\tw.poke(t: t)\n}",
         );
         assert_clean(&t);
     }
@@ -2479,7 +2485,7 @@ pub mod tests {
     #[test]
     fn unadorned_function_type_parameters_borrow_by_default() {
         let t = check(
-            "// no-core\nstruct Entry {}\nfunc walk(fn: (Entry) -> ()) {}\nfunc visit(entry: Entry) {}\nwalk(visit)",
+            "// no-core\nstruct Entry {}\nfunc walk(fn: (Entry) -> ()) {}\nfunc visit(entry: Entry) {}\nwalk(fn: visit)",
         );
         assert_clean(&t);
         // The `fn` parameter is itself unadorned, so it is a borrowed
@@ -2599,7 +2605,7 @@ pub mod tests {
         // The stamped mode is the authority: an explicit `consume` on an
         // unannotated param keeps today's owned-parameter typing.
         let t = check(
-            "// no-core\nstruct S {}\nfunc eat(consume x) -> Int {\n\t0\n}\nlet s = S()\nlet n = eat(s)",
+            "// no-core\nstruct S {}\nfunc eat(consume x) -> Int {\n\t0\n}\nlet s = S()\nlet n = eat(x: s)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "eat"), "<T0>(T0) -> Int");
@@ -2610,7 +2616,7 @@ pub mod tests {
         // Copy erasure must stay decidable for inferred borrow params:
         // `&?a` meeting Int erases to Int (the annotated twin's param never
         // wraps a Copy head at all).
-        let t = check("func add(a, b) {\n\ta + b\n}\nlet r: Int = add(1, 2)");
+        let t = check("func add(a, b) {\n\ta + b\n}\nlet r: Int = add(a: 1, b: 2)");
         assert_clean(&t);
     }
 
@@ -2621,7 +2627,7 @@ pub mod tests {
         // at the boundary, so the param's inferred type stays a borrow
         // rather than defaulting to owned.
         let t = check(
-            "// no-core\nstruct Str {}\nfunc steal(x) -> Str {\n\tx\n}\nlet s = Str()\nlet y = steal(s)",
+            "// no-core\nstruct Str {}\nfunc steal(x) -> Str {\n\tx\n}\nlet s = Str()\nlet y = steal(x: s)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "steal"), "(&Str) -> Str");
@@ -2652,7 +2658,7 @@ pub mod tests {
     #[test]
     fn borrow_parameters_auto_borrow_owned_arguments() {
         let t = check(
-            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = len(s)\nlet z = s.length",
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = len(s: s)\nlet z = s.length",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "len"), "(&String) -> Int");
@@ -2663,7 +2669,7 @@ pub mod tests {
     #[test]
     fn auto_borrow_does_not_overwrite_argument_node_type() {
         let t = check(
-            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &String) -> Int {\n\t0\n}\nlet s = String(length: 4)\nlet y = len(s)",
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc len(s: &String) -> Int {\n\t0\n}\nlet s = String(length: 4)\nlet y = len(s: s)",
         );
         assert_clean(&t);
         let borrowed_exprs: Vec<_> = t
@@ -2702,14 +2708,14 @@ pub mod tests {
         // param is a borrow, so feeding it to a borrow slot solves its
         // payload without any owned defaulting — `f` borrows exactly like
         // its annotated twin `func f(x: S)`.
-        let t = check("// no-core\nstruct S {}\nfunc take(s: &S) {}\nfunc f(x) {\n\ttake(x)\n}");
+        let t = check("// no-core\nstruct S {}\nfunc take(s: &S) {}\nfunc f(x) {\n\ttake(s: x)\n}");
         assert_clean(&t);
         assert_eq!(ty_of(&t, "f"), "(&S) -> ()");
         // And the old test program — which then returns `x` as an owned
         // `S` — donates at the return while the param stays borrowed,
         // exactly like its annotated twin would.
         let t = check(
-            "// no-core\nstruct S {}\nfunc take(s: &S) {}\nfunc f(x) -> S {\n\ttake(x)\n\tx\n}",
+            "// no-core\nstruct S {}\nfunc take(s: &S) {}\nfunc f(x) -> S {\n\ttake(s: x)\n\tx\n}",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "f"), "(&S) -> S");
@@ -2720,7 +2726,7 @@ pub mod tests {
         // Implicit sharing: a borrowed call result fills a consume
         // parameter by donating a retain; the owner keeps its value.
         let t = check(
-            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(consume s: String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = take(id(s))",
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(consume s: String) -> Int {\n\ts.length\n}\nlet s = String(length: 4)\nlet y = take(s: id(s: s))",
         );
         assert_clean(&t);
     }
@@ -2791,7 +2797,7 @@ pub mod tests {
     #[test]
     fn borrow_annotation_accepts_borrow_returning_call() {
         let t = check(
-            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc use_it() -> Int {\n\tlet s = String(length: 4)\n\tlet x: &String = id(s)\n\tx.length\n}",
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc use_it() -> Int {\n\tlet s = String(length: 4)\n\tlet x: &String = id(s: s)\n\tx.length\n}",
         );
         assert_clean(&t);
     }
@@ -2802,7 +2808,7 @@ pub mod tests {
         // donates a retain at the construction boundary (MIR's stored
         // slots already consume with donation).
         let t = check(
-            "// no-core\nstruct String {\n\tlet length: Int\n}\nstruct Box<T> {\n\tlet value: T\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(b: Box<String>) -> Int {\n\tb.value.length\n}\nlet s = String(length: 4)\nlet b = Box(value: id(s))\nlet y = take(b)",
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nstruct Box<T> {\n\tlet value: T\n}\nfunc id(s: &String) -> &String {\n\ts\n}\nfunc take(b: Box<String>) -> Int {\n\tb.value.length\n}\nlet s = String(length: 4)\nlet b = Box(value: id(s: s))\nlet y = take(b: b)",
         );
         assert_clean(&t);
     }
@@ -2810,7 +2816,7 @@ pub mod tests {
     #[test]
     fn function_return_borrow_does_not_satisfy_owned_function_argument() {
         let t = check(
-            "// no-core\nstruct String {\n\tlet length: Int\n}\nlet s = String(length: 4)\nlet f: () -> &String = func() { s }\nfunc take(f: () -> String) -> String {\n\tf()\n}\nlet y = take(f)",
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nlet s = String(length: 4)\nlet f: () -> &String = func() { s }\nfunc take(f: () -> String) -> String {\n\tf()\n}\nlet y = take(f: f)",
         );
         let errors = type_errors(&t);
         assert!(
@@ -2826,7 +2832,7 @@ pub mod tests {
         // `take` will invoke f with only a shared borrow, but `needs_mut` requires &mut.
         // Function parameters are contravariant, so this substitution is unsound.
         let t = check(
-            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc needs_mut(s: &mut String) -> Int {\n\ts.length\n}\nfunc take(f: (&String) -> Int) -> Int {\n\t0\n}\nlet y = take(needs_mut)",
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc needs_mut(s: &mut String) -> Int {\n\ts.length\n}\nfunc take(f: (&String) -> Int) -> Int {\n\t0\n}\nlet y = take(f: needs_mut)",
         );
         let errors = type_errors(&t);
         assert!(
@@ -2839,7 +2845,7 @@ pub mod tests {
     fn function_with_owned_param_does_not_satisfy_shared_param_argument() {
         // `take` passes a borrow, but `needs_owned` consumes an owned value.
         let t = check(
-            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc needs_owned(consume s: String) -> Int {\n\ts.length\n}\nfunc take(f: (&String) -> Int) -> Int {\n\t0\n}\nlet y = take(needs_owned)",
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc needs_owned(consume s: String) -> Int {\n\ts.length\n}\nfunc take(f: (&String) -> Int) -> Int {\n\t0\n}\nlet y = take(f: needs_owned)",
         );
         let errors = type_errors(&t);
         assert!(
@@ -2920,7 +2926,7 @@ pub mod tests {
         // is checked, so the leading dot cannot resolve eagerly — the enum
         // arrives later, through the result unification.
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(.some(1))",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(x: .some(1))",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "y"), "Opt<Int>");
@@ -2929,7 +2935,7 @@ pub mod tests {
     #[test]
     fn bare_leading_dot_resolves_in_inference_position() {
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(.none)",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(x: .none)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "y"), "Opt<Int>");
@@ -2967,7 +2973,7 @@ pub mod tests {
     #[test]
     fn nested_leading_dots_resolve_in_inference_position() {
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Opt<Int>> = id(.some(.some(1)))",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Opt<Int>> = id(x: .some(.some(1)))",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "y"), "Opt<Opt<Int>>");
@@ -2976,7 +2982,7 @@ pub mod tests {
     #[test]
     fn inferred_leading_dot_unknown_variant_errors() {
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(.nope)",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(x: .nope)",
         );
         let errors = type_errors(&t);
         assert!(
@@ -2988,7 +2994,7 @@ pub mod tests {
     #[test]
     fn inferred_leading_dot_arity_mismatch_errors() {
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(.some(1, 2))",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(x: .some(1, 2))",
         );
         let errors = type_errors(&t);
         assert!(
@@ -3034,7 +3040,7 @@ pub mod tests {
     #[test]
     fn shared_borrows_do_not_satisfy_mutable_borrow_parameters() {
         let t = check(
-            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc takes_mut(s: &mut String) -> Int {\n\ts.length\n}\nfunc bad(s: &String) -> Int {\n\ttakes_mut(s)\n}",
+            "// no-core\nstruct String {\n\tlet length: Int\n}\nfunc takes_mut(s: &mut String) -> Int {\n\ts.length\n}\nfunc bad(s: &String) -> Int {\n\ttakes_mut(s: s)\n}",
         );
         let errors = type_errors(&t);
         assert!(
@@ -3057,7 +3063,9 @@ pub mod tests {
 
     #[test]
     fn inline_ir_arithmetic_on_an_unsupported_scalar_is_rejected() {
-        let t = check("// no-core\nfunc bad() -> Bool {\n\t@unsafe { @_ir { %? = add Bool true false } }\n}");
+        let t = check(
+            "// no-core\nfunc bad() -> Bool {\n\t@unsafe { @_ir { %? = add Bool true false } }\n}",
+        );
         assert!(
             type_errors(&t)
                 .iter()
@@ -3122,9 +3130,8 @@ pub mod tests {
     fn raw_pointer_escaping_an_unsafe_block_needs_outer_authority() {
         // The wrapper's own type is checked in the outer context: a RawPtr
         // cannot escape merely by being the block's result.
-        let t = check(
-            "// no-core\nlet pointer: RawPtr = @unsafe { __IR(\"$? = alloc int 1\") }\n()",
-        );
+        let t =
+            check("// no-core\nlet pointer: RawPtr = @unsafe { __IR(\"$? = alloc int 1\") }\n()");
         assert!(
             type_errors(&t)
                 .iter()
@@ -3179,7 +3186,7 @@ pub mod tests {
         // extent (here, the prescanned top-level `@handle`), not at the
         // perform site.
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nsafe()",
+            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(e: 1)\n\t2\n}\nsafe()",
         );
         assert_clean(&t);
         let safe = ty_of(&t, "safe");
@@ -3197,7 +3204,7 @@ pub mod tests {
         // catalog signature, which the lowerer builds capability types
         // from.
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}\nouter()",
+            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(e: 1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}\nouter()",
         );
         assert_clean(&t);
         let safe = ty_of(&t, "safe");
@@ -3230,8 +3237,9 @@ pub mod tests {
         // Effect rows carry the instantiation, not just the label
         // (docs/generic-effects-plan.md): a perform of a generic effect
         // puts the concrete arguments in the row entry.
-        let t =
-            check("// no-core\neffect 'state<T>(value: T) -> T\nfunc f() {\n\t'state(42)\n\t()\n}");
+        let t = check(
+            "// no-core\neffect 'state<T>(value: T) -> T\nfunc f() {\n\t'state(value: 42)\n\t()\n}",
+        );
         assert_clean(&t);
         let f = ty_of(&t, "f");
         assert!(
@@ -3246,7 +3254,7 @@ pub mod tests {
         // labels): one function may perform 'state<Int> and
         // 'state<Bool> with no handler in scope.
         let t = check(
-            "// no-core\neffect 'state<T>(value: T) -> T\nfunc f() {\n\t'state(42)\n\t'state(true)\n\t()\n}",
+            "// no-core\neffect 'state<T>(value: T) -> T\nfunc f() {\n\t'state(value: 42)\n\t'state(value: true)\n\t()\n}",
         );
         assert_clean(&t);
         let f = ty_of(&t, "f");
@@ -3263,7 +3271,7 @@ pub mod tests {
         // row and is discharged where the call meets the handler's
         // extent, never escaping the caller.
         let t = check(
-            "// no-core\neffect 'throw(ret) -> ()\nfunc this_is_fine() {\n\t@handle 'throw { err in () }\n\tthis_is_not_fine()\n}\nfunc this_is_not_fine() {\n\t'throw(1)\n\t()\n}\nthis_is_fine()",
+            "// no-core\neffect 'throw(ret) -> ()\nfunc this_is_fine() {\n\t@handle 'throw { err in () }\n\tthis_is_not_fine()\n}\nfunc this_is_not_fine() {\n\t'throw(ret: 1)\n\t()\n}\nthis_is_fine()",
         );
         assert_clean(&t);
         let callee = ty_of(&t, "this_is_not_fine");
@@ -3331,7 +3339,7 @@ pub mod tests {
     #[test]
     fn compound_if_conditions_scope_pattern_binders_left_to_right() {
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc next(x: Int) -> Opt<Int> { .some(x) }\nfunc allowed(x: Int) -> Bool { true }\nfunc f(first: Opt<Int>) -> Int {\n\tif let .some(x) = first, let .some(y) = next(x), allowed(y) {\n\t\treturn y\n\t}\n\t0\n}",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc next(x: Int) -> Opt<Int> { .some(x) }\nfunc allowed(x: Int) -> Bool { true }\nfunc f(first: Opt<Int>) -> Int {\n\tif let .some(x) = first, let .some(y) = next(x: x), allowed(x: y) {\n\t\treturn y\n\t}\n\t0\n}",
         );
         assert_clean(&t);
     }
@@ -3339,7 +3347,7 @@ pub mod tests {
     #[test]
     fn compound_if_expression_checks_all_branches() {
         let t = check(
-            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc allowed(x: Int) -> Bool { true }\nfunc f(value: Opt<Int>) -> Int {\n\tif let .some(x) = value, allowed(x) { x } else { 0 }\n}",
+            "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc allowed(x: Int) -> Bool { true }\nfunc f(value: Opt<Int>) -> Int {\n\tif let .some(x) = value, allowed(x: x) { x } else { 0 }\n}",
         );
         assert_clean(&t);
     }
@@ -3404,7 +3412,7 @@ pub mod tests {
     #[test]
     fn member_constraints_reject_receivers_without_the_member() {
         let t = check(
-            "// no-core\nstruct A {\n\tfunc go() -> Int { 1 }\n}\nstruct C {}\nfunc call_go(x) {\n\tx.go()\n}\ncall_go(C())",
+            "// no-core\nstruct A {\n\tfunc go() -> Int { 1 }\n}\nstruct C {}\nfunc call_go(x) {\n\tx.go()\n}\ncall_go(x: C())",
         );
         assert!(
             !type_errors(&t).is_empty(),
@@ -3415,7 +3423,7 @@ pub mod tests {
     #[test]
     fn generic_methods_instantiate_per_call() {
         let t = check(
-            "// no-core\nstruct Person {\n\tfunc getAge<T>(consume t: T) -> T { t }\n}\nPerson().getAge(123)\nPerson().getAge(1.23)",
+            "// no-core\nstruct Person {\n\tfunc getAge<T>(consume t: T) -> T { t }\n}\nPerson().getAge(t: 123)\nPerson().getAge(t: 1.23)",
         );
         assert_clean(&t);
     }
@@ -3435,12 +3443,13 @@ pub mod tests {
         // solver's fixpoint; the row tail generalizes (Gaster & Jones,
         // POPL 1996 / Leijen, Trends in FP 2005), and each call
         // instantiates it afresh.
-        let t =
-            check("// no-core\nfunc fstA(r) { r.a }\n(fstA({ a: 1 }), fstA({ a: 2, b: true }))");
+        let t = check(
+            "// no-core\nfunc fstA(r) { r.a }\n(fstA(r: { a: 1 }), fstA(r: { a: 2, b: true }))",
+        );
         assert_clean(&t);
 
         let t = check(
-            "// no-core\nfunc foo(x) {\n\t(x.y, x.z)\n}\nfoo({ y: 123, z: 1.23 })\nfoo({ y: 123, z: 123 })",
+            "// no-core\nfunc foo(x) {\n\t(x.y, x.z)\n}\nfoo(x: { y: 123, z: 1.23 })\nfoo(x: { y: 123, z: 123 })",
         );
         assert_clean(&t);
     }
@@ -3454,7 +3463,7 @@ pub mod tests {
     #[test]
     fn generic_effect_call_with_type_arg() {
         let t = check(
-            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state<Int>(42)",
+            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state<Int>(value: 42)",
         );
         assert_clean(&t);
     }
@@ -3462,7 +3471,7 @@ pub mod tests {
     #[test]
     fn generic_effect_call_inferred() {
         let t = check(
-            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state(42)",
+            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state(value: 42)",
         );
         assert_clean(&t);
     }
@@ -3470,7 +3479,7 @@ pub mod tests {
     #[test]
     fn generic_effect_type_mismatch() {
         let t = check(
-            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state<Int>(true)",
+            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state<Int>(value: true)",
         );
         assert!(
             !type_errors(&t).is_empty(),
@@ -3481,7 +3490,7 @@ pub mod tests {
     #[test]
     fn generic_effect_multiple_params() {
         let t = check(
-            "// no-core\neffect 'pair<A, B>(first: A, second: B) -> (A, B)\n@handle 'pair { a, b in\n\t'continue (a, b)\n}\n'pair<Int, Bool>(42, true)",
+            "// no-core\neffect 'pair<A, B>(first: A, second: B) -> (A, B)\n@handle 'pair { a, b in\n\t'continue (a, b)\n}\n'pair<Int, Bool>(first: 42, second: true)",
         );
         assert_clean(&t);
     }
@@ -3491,7 +3500,7 @@ pub mod tests {
         // `'continue v` resumes the perform: v must have the effect's
         // declared return type.
         let t = check(
-            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\t'continue true\n}\n'ask(1)",
+            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\t'continue true\n}\n'ask(p: 1)",
         );
         let errors = type_errors(&t);
         assert!(
@@ -3566,6 +3575,7 @@ pub mod tests {
         let again = info
             .requirements
             .get("again")
+            .and_then(|set| set.first())
             .expect("the defaulted requirement is registered")
             .symbol;
         assert_eq!(
@@ -3619,7 +3629,7 @@ pub mod tests {
             .values()
             .next()
             .expect("the protocol is collected");
-        assert!(info.requirements["bump"].mut_receiver);
+        assert!(info.requirements["bump"][0].mut_receiver);
     }
 
     #[test]
@@ -3702,7 +3712,7 @@ pub mod tests {
 
         let (_, holder) = catalog.structs.iter().next().expect("Holder collected");
         let holder_params: Vec<_> = holder.params.iter().map(|param| param.symbol).collect();
-        let get = holder.methods["get"];
+        let get = holder.methods["get"][0];
         assert_eq!(
             catalog.callable_owners.get(&get),
             Some(&OwnerBinding::Nominal {
@@ -3711,7 +3721,7 @@ pub mod tests {
         );
 
         let (_, flag) = catalog.enums.iter().next().expect("Flag collected");
-        let tag = flag.methods["tag"];
+        let tag = flag.methods["tag"][0];
         assert_eq!(
             catalog.callable_owners.get(&tag),
             Some(&OwnerBinding::Nominal { params: vec![] })
@@ -3733,7 +3743,7 @@ pub mod tests {
         assert!(!row.params.is_empty(), "the extend row binds its own X");
 
         let (protocol, info) = catalog.protocols.iter().next().expect("P collected");
-        let q = info.requirements["q"].symbol;
+        let q = info.requirements["q"][0].symbol;
         assert_eq!(
             catalog.callable_owners.get(&q),
             Some(&OwnerBinding::Protocol(*protocol))
@@ -3766,10 +3776,7 @@ pub mod tests {
                 DeclKind::Struct { body, .. } => {
                     for member in &body.decls {
                         if let DeclKind::Method { func, .. } = &member.kind {
-                            assert_eq!(
-                                func.receiver,
-                                crate::node_kinds::decl::ReceiverMode::Ref
-                            );
+                            assert_eq!(func.receiver, crate::node_kinds::decl::ReceiverMode::Ref);
                             saw_method = true;
                         }
                     }
@@ -3834,7 +3841,7 @@ pub mod tests {
         // CheapClone evidence, not merely a value that happens to need no
         // runtime cleanup.
         let t = check(
-            "// no-core\nstruct Sock {\n\tlet fd: Int\n}\nfunc eat(consume s: Sock) -> Int { 0 }\nlet s = Sock(fd: 1)\neat(copy s)\n()",
+            "// no-core\nstruct Sock {\n\tlet fd: Int\n}\nfunc eat(consume s: Sock) -> Int { 0 }\nlet s = Sock(fd: 1)\neat(s: copy s)\n()",
         );
         assert!(
             type_errors(&t)
@@ -3848,7 +3855,7 @@ pub mod tests {
     #[test]
     fn mut_marker_requires_an_exclusive_borrow_parameter() {
         let t = check(
-            "// no-core\nfunc eat(consume n: Int) -> Int { n }\nlet x = 1\neat(mut x)\n()",
+            "// no-core\nfunc eat(consume n: Int) -> Int { n }\nlet x = 1\neat(n: mut x)\n()",
         );
         assert!(
             type_errors(&t)
@@ -3862,7 +3869,7 @@ pub mod tests {
     #[test]
     fn borrow_marker_requires_a_borrowing_parameter() {
         let t = check(
-            "// no-core\nfunc eat(consume n: Int) -> Int { n }\nlet x = 1\neat(borrow x)\n()",
+            "// no-core\nfunc eat(consume n: Int) -> Int { n }\nlet x = 1\neat(n: borrow x)\n()",
         );
         assert!(
             type_errors(&t)
@@ -3876,14 +3883,16 @@ pub mod tests {
     #[test]
     fn mut_marker_on_a_mut_parameter_is_clean() {
         let t = check(
-            "// no-core\nfunc set(mut n: Int) -> () {\n\tn = 2\n}\nlet x = 1\nset(mut x)\n()",
+            "// no-core\nfunc set(mut n: Int) -> () {\n\tn = 2\n}\nlet x = 1\nset(n: mut x)\n()",
         );
         assert_clean(&t);
     }
 
     #[test]
     fn copy_marker_with_copy_evidence_is_clean() {
-        let t = check("// no-core\nfunc eat(consume n: Int) -> Int { n }\nlet n = 1\neat(copy n)\n()");
+        let t = check(
+            "// no-core\nfunc eat(consume n: Int) -> Int { n }\nlet n = 1\neat(n: copy n)\n()",
+        );
         assert_clean(&t);
     }
 
@@ -4004,14 +4013,15 @@ pub mod tests {
     #[test]
     fn continue_payload_in_a_handler_checks_clean() {
         let t = check(
-            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\t'continue p\n}\n'ask(1)",
+            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\t'continue p\n}\n'ask(p: 1)",
         );
         assert_clean(&t);
     }
 
     #[test]
     fn unhandled_effects_grow_the_latent_row() {
-        let t = check("// no-core\neffect 'oops(e) -> Never\nfunc risky() {\n\t'oops(1)\n\t2\n}");
+        let t =
+            check("// no-core\neffect 'oops(e) -> Never\nfunc risky() {\n\t'oops(e: 1)\n\t2\n}");
         assert_clean(&t);
         assert_eq!(ty_of(&t, "risky"), "() -> Int ! <'oops>");
     }
@@ -4028,9 +4038,7 @@ pub mod tests {
 
     #[test]
     fn rejects_param_construction_without_an_init_bound() {
-        let t = check(
-            "// no-core\nprotocol Marker {}\nfunc make<T: Marker>() -> T {\n\tT()\n}",
-        );
+        let t = check("// no-core\nprotocol Marker {}\nfunc make<T: Marker>() -> T {\n\tT()\n}");
         let errors = type_errors(&t);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("init requirement"), "{errors:?}");
@@ -4079,7 +4087,7 @@ pub mod tests {
         // handler's parameter meet in the effect signature's shared
         // placeholder, so both get Int here.
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n@handle 'oops { e in wants(e) }\n'oops(123)",
+            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n@handle 'oops { e in wants(i: e) }\n'oops(e: 123)",
         );
         assert_clean(&t);
     }
@@ -4087,7 +4095,7 @@ pub mod tests {
     #[test]
     fn handler_parameter_type_conflicts_error() {
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n@handle 'oops { e in wants(e) }\n'oops(1.5)",
+            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n@handle 'oops { e in wants(i: e) }\n'oops(e: 1.5)",
         );
         assert_eq!(type_errors(&t).len(), 1, "{:?}", type_errors(&t));
     }
@@ -4099,7 +4107,7 @@ pub mod tests {
         // mk's return is the projection T.D (Chakravarty et al., ICFP 2005);
         // instantiating T at Int normalizes it through Int's conformance.
         let t = check(
-            "// no-core\nprotocol Defaulted {\n\tassociated D\n\tfunc make() -> D\n}\nextend Int: Defaulted {\n\tfunc make() -> Bool { true }\n}\nfunc mk<T: Defaulted>(t: T) { t.make() }\nlet v = mk(123)",
+            "// no-core\nprotocol Defaulted {\n\tassociated D\n\tfunc make() -> D\n}\nextend Int: Defaulted {\n\tfunc make() -> Bool { true }\n}\nfunc mk<T: Defaulted>(t: T) { t.make() }\nlet v = mk(t: 123)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "mk"), "<T0: Defaulted>(&T0) -> T0.D");
@@ -4125,7 +4133,7 @@ pub mod tests {
     #[test]
     fn overlapping_generic_protocol_argument_conformance_is_rejected() {
         let t = check(
-            "// no-core\nstruct String {}\nstruct Name {}\nprotocol Into<Target> {\n\tfunc into() -> Target\n}\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nextend Name: Into<String> {\n\tfunc into() -> String { String() }\n}\nextend<T: Into<String>> String: Add<T> {\n\tfunc add(other: T) -> String { other.into() }\n}\nextend String: Add<Name> {\n\tfunc add(other: Name) -> String { other.into() }\n}",
+            "// no-core\nstruct String {}\nstruct Name {}\nprotocol Into<Target> {\n\tfunc into() -> Target\n}\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nextend Name: Into<String> {\n\tfunc into() -> String { String() }\n}\nextend<T: Into<String>> String: Add<T> {\n\tfunc add(rhs other: T) -> String { other.into() }\n}\nextend String: Add<Name> {\n\tfunc add(other: Name) -> String { other.into() }\n}",
         );
         let errors = type_errors(&t);
         assert!(
@@ -4139,7 +4147,7 @@ pub mod tests {
     #[test]
     fn generic_protocol_argument_conformance_uses_prefix_extend_generics() {
         let t = check(
-            "// no-core\nstruct String {}\nstruct Name {}\nprotocol Into<Target> {\n\tfunc into() -> Target\n}\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nextend Name: Into<String> {\n\tfunc into() -> String { String() }\n}\nextend<T: Into<String>> String: Add<T> {\n\tfunc add(other: T) -> String { other.into() }\n}\nlet result = String() + Name()",
+            "// no-core\nstruct String {}\nstruct Name {}\nprotocol Into<Target> {\n\tfunc into() -> Target\n}\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nextend Name: Into<String> {\n\tfunc into() -> String { String() }\n}\nextend<T: Into<String>> String: Add<T> {\n\tfunc add(rhs other: T) -> String { other.into() }\n}\nlet result = String() + Name()",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "result"), "String");
@@ -4188,7 +4196,7 @@ pub mod tests {
     #[test]
     fn subprotocol_conformance_satisfies_superprotocol_bounds() {
         let t = check(
-            "// no-core\nprotocol A {\n\tfunc a() -> Int\n}\nprotocol B: A {}\nstruct S {}\nextend S: B {\n\tfunc a() -> Int { 1 }\n}\nfunc useA<T: A>(x: T) -> Int { x.a() }\nlet value = useA(S())",
+            "// no-core\nprotocol A {\n\tfunc a() -> Int\n}\nprotocol B: A {}\nstruct S {}\nextend S: B {\n\tfunc a() -> Int { 1 }\n}\nfunc useA<T: A>(x: T) -> Int { x.a() }\nlet value = useA(x: S())",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "value"), "Int");
@@ -4197,7 +4205,7 @@ pub mod tests {
     #[test]
     fn inherited_associated_types_reduce_through_subprotocol_conformance() {
         let t = check(
-            "// no-core\nprotocol A {\n\tassociated Item\n\tfunc get() -> Item\n}\nprotocol B: A {}\nstruct S {}\nextend S: B {\n\tfunc get() -> Int { 1 }\n}\nfunc useA<T: A>(x: T) -> T.Item { x.get() }\nlet value = useA(S())",
+            "// no-core\nprotocol A {\n\tassociated Item\n\tfunc get() -> Item\n}\nprotocol B: A {}\nstruct S {}\nextend S: B {\n\tfunc get() -> Int { 1 }\n}\nfunc useA<T: A>(x: T) -> T.Item { x.get() }\nlet value = useA(x: S())",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "value"), "Int");
@@ -4206,7 +4214,7 @@ pub mod tests {
     #[test]
     fn subprotocol_conformance_can_rely_on_later_superprotocol_conformance() {
         let t = check(
-            "// no-core\nprotocol A {\n\tfunc a() -> Int\n}\nprotocol B: A {}\nstruct S {}\nextend S: B {}\nextend S: A {\n\tfunc a() -> Int { 1 }\n}\nfunc useA<T: A>(x: T) -> Int { x.a() }\nlet genericValue = useA(S())\nlet directValue = S().a()",
+            "// no-core\nprotocol A {\n\tfunc a() -> Int\n}\nprotocol B: A {}\nstruct S {}\nextend S: B {}\nextend S: A {\n\tfunc a() -> Int { 1 }\n}\nfunc useA<T: A>(x: T) -> Int { x.a() }\nlet genericValue = useA(x: S())\nlet directValue = S().a()",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "genericValue"), "Int");
@@ -4369,7 +4377,7 @@ pub mod tests {
     #[test]
     fn protocol_extension_methods_callable_on_conforming_types() {
         let t = check(
-            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nextend P {\n\tfunc doubled() -> Int {\n\t\tself.base()\n\t}\n}\nstruct S {}\nextend S: P {\n\tfunc base() -> Int { 1 }\n}\nfunc useP<T: P>(x: T) -> Int { x.doubled() }\nlet genericValue = useP(S())\nlet directValue = S().doubled()",
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nextend P {\n\tfunc doubled() -> Int {\n\t\tself.base()\n\t}\n}\nstruct S {}\nextend S: P {\n\tfunc base() -> Int { 1 }\n}\nfunc useP<T: P>(x: T) -> Int { x.doubled() }\nlet genericValue = useP(x: S())\nlet directValue = S().doubled()",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "genericValue"), "Int");
@@ -4406,7 +4414,7 @@ pub mod tests {
     #[test]
     fn protocol_extension_method_with_where_clause() {
         let t = check(
-            "// no-core\nprotocol Eq2 {\n\tfunc same(rhs: &Self) -> Bool\n}\nprotocol I {\n\tassociated E\n\tmut func next() -> E\n}\nextend I {\n\tmut func matches(needle: &Self.E) -> Bool where E: Eq2 {\n\t\tself.next().same(needle)\n\t}\n}",
+            "// no-core\nprotocol Eq2 {\n\tfunc same(rhs: &Self) -> Bool\n}\nprotocol I {\n\tassociated E\n\tmut func next() -> E\n}\nextend I {\n\tmut func matches(needle: &Self.E) -> Bool where E: Eq2 {\n\t\tself.next().same(rhs: needle)\n\t}\n}",
         );
         assert_clean(&t);
     }
@@ -4424,7 +4432,7 @@ pub mod tests {
     #[test]
     fn protocol_extension_conformance_solves_wanted_conformance() {
         let t = check(
-            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nprotocol R {\n\tfunc r() -> Int\n}\nextend P: R {\n\tfunc r() -> Int { self.base() }\n}\nfunc takeR<T: R>(x: T) {}\nfunc useP<T: P>(x: T) { takeR(x) }",
+            "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nprotocol R {\n\tfunc r() -> Int\n}\nextend P: R {\n\tfunc r() -> Int { self.base() }\n}\nfunc takeR<T: R>(x: T) {}\nfunc useP<T: P>(x: T) { takeR(x: x) }",
         );
         assert_clean(&t);
     }
@@ -4475,7 +4483,7 @@ pub mod tests {
     #[test]
     fn recursive_protocol_head_axiom_reports_cycle() {
         let t = check(
-            "// no-core\nprotocol P {\n\tfunc p() -> Int\n}\nprotocol R {\n\tfunc r() -> Int\n}\nextend P: R where Self: R {\n\tfunc r() -> Int { self.p() }\n}\nfunc takeR<T: R>(x: T) {}\nfunc use<T: P>(x: T) { takeR(x) }",
+            "// no-core\nprotocol P {\n\tfunc p() -> Int\n}\nprotocol R {\n\tfunc r() -> Int\n}\nextend P: R where Self: R {\n\tfunc r() -> Int { self.p() }\n}\nfunc takeR<T: R>(x: T) {}\nfunc use<T: P>(x: T) { takeR(x: x) }",
         );
         let errors = type_errors(&t);
         assert!(
@@ -4507,7 +4515,7 @@ pub mod tests {
 
     #[test]
     fn instantiations_recorded_at_call_sites() {
-        let t = check("// no-core\nfunc identity(x) { x }\nlet a = identity(123)");
+        let t = check("// no-core\nfunc identity(x) { x }\nlet a = identity(x: 123)");
         assert_clean(&t);
         let instantiations = &t.phase.program.types().instantiations;
         let int_instantiation = instantiations
@@ -4779,8 +4787,8 @@ pub mod tests {
                 }
             }
 
-            let i: Int = eval(Expr.int(1))
-            let b: Bool = eval(Expr.bool(true))
+            let i: Int = eval(expr: Expr.int(1))
+            let b: Bool = eval(expr: Expr.bool(true))
             ",
         );
         assert_clean(&typed);
@@ -4826,8 +4834,8 @@ pub mod tests {
                 }
             }
 
-            let i: Int = tag(Expr.int(1))
-            let j: Int = tag(Expr.bool(true))
+            let i: Int = tag(expr: Expr.int(1))
+            let j: Int = tag(expr: Expr.bool(true))
             ",
         );
         assert_clean(&typed);
@@ -4849,8 +4857,8 @@ pub mod tests {
                 }
             }
 
-            let i: Int = to_int(Expr.int(1), 41)
-            let j: Int = to_int(Expr.bool(true), false)
+            let i: Int = to_int(expr: Expr.int(1), value: 41)
+            let j: Int = to_int(expr: Expr.bool(true), value: false)
             ",
         );
         assert_clean(&typed);
@@ -4957,7 +4965,7 @@ pub mod tests {
                 }
             }
 
-            read(Box.boxed(S()))
+            read(box: Box.boxed(S()))
             ",
         );
         assert_clean(&typed);
@@ -5045,7 +5053,7 @@ pub mod tests {
         // rules out.
         let typed = Driver::new(
             vec![Source::from(
-                "enum GBox<T> {\n\tcase int(Int) -> GBox<Int>\n\tcase hidden<A>(A) -> GBox<Bool>\n}\n\nfunc render<T: Showable>(value: T) -> String {\n\tvalue.show()\n}\n\nrender(GBox.int(1))\n()\n",
+                "enum GBox<T> {\n\tcase int(Int) -> GBox<Int>\n\tcase hidden<A>(A) -> GBox<Bool>\n}\n\nfunc render<T: Showable>(value: T) -> String {\n\tvalue.show()\n}\n\nrender(value: GBox.int(1))\n()\n",
             )],
             DriverConfig::new("TypesTest"),
         )
@@ -5372,7 +5380,7 @@ mod with_core {
         };
         let driver_b = Driver::new(
             vec![Source::from(
-                "use A::{ make }\nlet v = make(3).x\nlet bad: Int = make(3)",
+                "use A::{ make }\nlet v = make(v: 3).x\nlet bad: Int = make(v: 3)",
             )],
             config,
         );
@@ -5458,7 +5466,7 @@ mod with_core {
     #[test]
     fn fib_against_core_is_int() {
         let typed = check_with_core(Source::from(
-            "let x = fib(24)\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n - 2) + fib(n - 1)\n}",
+            "let x = fib(n: 24)\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n: n - 2) + fib(n: n - 1)\n}",
         ));
         let errors = type_errors(&typed);
         assert!(errors.is_empty(), "{errors:?}");
@@ -5481,7 +5489,7 @@ mod with_core {
         // ADR 0014: comparison requirements take `rhs: &RHS`, so a
         // non-Copy conforming type witnesses with the borrow spelled out.
         let typed = check_with_core(Source::from(
-            "struct Pt {\n\tlet x: Int\n}\nextend Pt: Equatable<Pt> {\n\tfunc equals(rhs: &Pt) -> Bool {\n\t\tself.x == rhs.x\n\t}\n}\nlet hit = Pt(x: 1) == Pt(x: 1)",
+            "struct Pt {\n\tlet x: Int\n}\nextend Pt: Equatable<Pt> {\n\tfunc equals(_ rhs: &Pt) -> Bool {\n\t\tself.x == rhs.x\n\t}\n}\nlet hit = Pt(x: 1) == Pt(x: 1)",
         ));
         let errors = type_errors(&typed);
         assert!(errors.is_empty(), "{errors:?}");
@@ -5508,7 +5516,7 @@ mod with_core {
     #[test]
     fn equality_keeps_concrete_cross_type_conformance_as_fallback() {
         let typed = check_with_core(Source::from(
-            "struct A {}\nstruct B {}\nextend A: Equatable<B> {\n\tfunc equals(rhs: B) -> Bool { true }\n}\nlet matches = A() == B()",
+            "struct A {}\nstruct B {}\nextend A: Equatable<B> {\n\tfunc equals(_ rhs: B) -> Bool { true }\n}\nlet matches = A() == B()",
         ));
         let errors = type_errors(&typed);
         assert!(errors.is_empty(), "{errors:?}");
@@ -5568,7 +5576,7 @@ mod with_core {
         // head), not just method generics — lowering reads, never
         // re-derives.
         let typed = check_with_core(Source::from(
-            "let xs = [10, 20, 30]\nlet it = xs.iter()\nlet r = it.skip(1)",
+            "let xs = [10, 20, 30]\nlet it = xs.iter()\nlet r = it.skip(count: 1)",
         ));
         let errors = type_errors(&typed);
         assert!(errors.is_empty(), "{errors:?}");
@@ -5663,7 +5671,7 @@ mod with_core {
         // fixpoint. Termination is the assertion; the diagnostics are
         // whatever the borrow story currently yields.
         let typed = check_with_core(Source::from(
-            "let xs = [10, 20, 30]\nlet r = xs.iter().index(20)",
+            "let xs = [10, 20, 30]\nlet r = xs.iter().index(needle: 20)",
         ));
         let _ = type_errors(&typed);
     }
@@ -5735,10 +5743,13 @@ mod with_core {
         // an owned parameter by donating a retain, so no grading question
         // arises at this boundary at all.
         let t = check_with_core(Source::from(
-            "struct Box<T> {\n\tlet value: T\n}\nextend Box<Int>: Copy {}\nstruct S {\n\tlet name: String\n}\nfunc takes(consume b: Box<S>) {}\nfunc caller(b: &Box<S>) {\n\ttakes(b)\n}",
+            "struct Box<T> {\n\tlet value: T\n}\nextend Box<Int>: Copy {}\nstruct S {\n\tlet name: String\n}\nfunc takes(consume b: Box<S>) {}\nfunc caller(b: &Box<S>) {\n\ttakes(b: b)\n}",
         ));
         let errors = type_errors(&t);
-        assert!(errors.is_empty(), "donation covers this boundary: {errors:?}");
+        assert!(
+            errors.is_empty(),
+            "donation covers this boundary: {errors:?}"
+        );
     }
 
     #[test]
@@ -5914,7 +5925,7 @@ mod with_core {
         // scope with its value: an Int-valued handler over a ()-valued
         // scope must be a type error, not a lowering panic.
         let t = check_with_core(Source::from(
-            "effect 'oops(e) -> Never\n@handle 'oops { e in\n\t42\n}\nfunc boom() 'oops -> () {\n\t'oops(\"x\")\n}\nboom()",
+            "effect 'oops(e) -> Never\n@handle 'oops { e in\n\t42\n}\nfunc boom() 'oops -> () {\n\t'oops(e: \"x\")\n}\nboom()",
         ));
         let errors = type_errors(&t);
         assert!(
@@ -5926,7 +5937,7 @@ mod with_core {
     #[test]
     fn aborting_handler_body_must_match_the_function_return_type() {
         let t = check_with_core(Source::from(
-            "effect 'oops(e) -> Never\nfunc f() -> Int {\n\t@handle 'oops { e in\n\t\t\"nope\"\n\t}\n\t'oops(\"x\")\n\t42\n}\nf()",
+            "effect 'oops(e) -> Never\nfunc f() -> Int {\n\t@handle 'oops { e in\n\t\t\"nope\"\n\t}\n\t'oops(e: \"x\")\n\t42\n}\nf()",
         ));
         let errors = type_errors(&t);
         assert!(
@@ -5940,7 +5951,7 @@ mod with_core {
         // An aborting handler whose value matches the scope, and an
         // always-resuming handler (Never body), both check clean.
         let t = check_with_core(Source::from(
-            "effect 'oops(e) -> Never\neffect 'ask(q) -> Int\n@handle 'oops { e in\n\t0\n}\n@handle 'ask { q in\n\t'continue 1\n}\nfunc go() '[oops, ask] -> Int {\n\t'ask(\"?\")\n}\ngo()",
+            "effect 'oops(e) -> Never\neffect 'ask(q) -> Int\n@handle 'oops { e in\n\t0\n}\n@handle 'ask { q in\n\t'continue 1\n}\nfunc go() '[oops, ask] -> Int {\n\t'ask(q: \"?\")\n}\ngo()",
         ));
         assert_no_errors(&t);
     }
@@ -6487,7 +6498,7 @@ case nest(Tree<T>)
 func takes(x: Tree<Int, 0>) -> Int { 1 }
 func f(t: Tree<Int>) -> Int {
     match t {
-        .nest(inner) -> takes(inner),
+        .nest(inner) -> takes(x: inner),
         .leaf(_) -> 0
     }
 }",
@@ -6506,7 +6517,7 @@ func grow<static N: Int>(consume g: Grid<N>) -> Grid<N + 1> { Grid() }
 func same<static M: Int>(a: Grid<M>, b: Grid<M>) -> Int { 1 }
 func use() -> Int {
     let g = Grid()
-    same(grow(g), g)
+    same(a: grow(g: g), b: g)
 }",
         );
         let errors = super::tests::type_errors(&t);
@@ -6547,7 +6558,7 @@ protocol Sized<static N: Int> {}
 struct Cell {}
 extend Cell: Sized<1> {}
 func need<T>(x: T) -> Int where T: Sized<1> { 1 }
-func use(c: Cell) -> Int { need(c) }",
+func use(c: Cell) -> Int { need(x: c) }",
         );
         super::tests::assert_clean(&t);
     }
@@ -6560,7 +6571,7 @@ protocol Sized<static N: Int> {}
 struct Cell {}
 extend Cell: Sized<1> {}
 func need<T>(x: T) -> Int where T: Sized<2> { 1 }
-func use(c: Cell) -> Int { need(c) }",
+func use(c: Cell) -> Int { need(x: c) }",
         );
         let errors = super::tests::type_errors(&t);
         assert!(
@@ -6577,7 +6588,7 @@ protocol Sized<static N: Int = 1> {}
 struct Cell {}
 extend Cell: Sized {}
 func need<T>(x: T) -> Int where T: Sized<1> { 1 }
-func use(c: Cell) -> Int { need(c) }",
+func use(c: Cell) -> Int { need(x: c) }",
         );
         super::tests::assert_clean(&t);
     }
@@ -6698,7 +6709,7 @@ func width<static N: Int>() -> Int { N }",
         };
         let driver_b = Driver::new(
             vec![Source::from(
-                "use A::{ Grid, grow }\nfunc f(consume g: Grid<4>) -> Grid<5> { grow(g) }",
+                "use A::{ Grid, grow }\nfunc f(consume g: Grid<4>) -> Grid<5> { grow(g: g) }",
             )],
             config,
         );
@@ -6765,7 +6776,7 @@ func use() -> Int { number() }",
             "// no-core
 struct Grid<static Rows: Int> {}
 func rows<static N: Int = 4>(g: Grid<N>) -> Grid<N> { Grid() }
-func use(g: Grid<7>) -> Grid<7> { rows(g) }",
+func use(g: Grid<7>) -> Grid<7> { rows(g: g) }",
         );
         super::tests::assert_clean(&t);
     }
@@ -6779,7 +6790,7 @@ struct Grid<static N: Int = 4> {}
 func five(g: Grid<5>) -> Int { 5 }
 func use() -> Int {
     let g = Grid()
-    five(g)
+    five(g: g)
 }",
         );
         let errors = super::tests::type_errors(&t);
@@ -6791,7 +6802,7 @@ struct Grid<static N: Int = 4> {}
 func four(g: Grid<4>) -> Int { 4 }
 func use() -> Int {
     let g = Grid()
-    four(g)
+    four(g: g)
 }",
         );
         super::tests::assert_clean(&ok);
@@ -6990,7 +7001,7 @@ effect 'tag<static N: Int>(value: Int) -> Int
 @handle 'tag { value in
 	'continue value
 }
-'tag<4>(1)",
+'tag<4>(value: 1)",
         );
         super::tests::assert_clean(&t);
     }
@@ -7003,7 +7014,7 @@ effect 'tag<static N: Int>(value: Int) -> Int
 @handle 'tag { value in
 	'continue value
 }
-'tag<Bool>(1)",
+'tag<Bool>(value: 1)",
         );
         let errors = super::tests::type_errors(&t);
         assert!(!errors.is_empty(), "expected a kind mismatch, got clean");
@@ -7134,7 +7145,7 @@ func f(consume flag: Flag<true>) -> Flag<false> { flag }",
             "// no-core
 struct Grid<static Rows: Int> {}
 func grow<static N: Int>(g: Grid<N>) -> Grid<N + 1> { Grid() }
-func use(g: Grid<4>) -> Grid<5> { grow(g) }",
+func use(g: Grid<4>) -> Grid<5> { grow(g: g) }",
         );
         super::tests::assert_clean(&t);
     }
@@ -7145,7 +7156,7 @@ func use(g: Grid<4>) -> Grid<5> { grow(g) }",
             "// no-core
 struct Grid<static Rows: Int> {}
 func grow<static N: Int>(g: Grid<N>) -> Grid<N + 1> { Grid() }
-func use(g: Grid<4>) -> Grid<6> { grow(g) }",
+func use(g: Grid<4>) -> Grid<6> { grow(g: g) }",
         );
         let errors = super::tests::type_errors(&t);
         assert!(!errors.is_empty(), "expected a mismatch, got clean");
@@ -7195,7 +7206,7 @@ func shrink<static Count: Int>(g: Grid<Count>) -> Grid<Count - 1> { Grid() }",
             "// no-core
 struct Grid<static Rows: Int> {}
 func first<static Count: Int>(g: Grid<Count>) -> Int where 0 < Count { 1 }
-func use(g: Grid<3>) -> Int { first(g) }",
+func use(g: Grid<3>) -> Int { first(g: g) }",
         );
         super::tests::assert_clean(&t);
     }
@@ -7206,7 +7217,7 @@ func use(g: Grid<3>) -> Int { first(g) }",
             "// no-core
 struct Grid<static Rows: Int> {}
 func first<static Count: Int>(g: Grid<Count>) -> Int where 0 < Count { 1 }
-func use(g: Grid<0>) -> Int { first(g) }",
+func use(g: Grid<0>) -> Int { first(g: g) }",
         );
         let errors = super::tests::type_errors(&t);
         assert!(
@@ -7286,7 +7297,7 @@ effect 'tag<static N: Int>(value: Int) -> Int
 @handle 'tag { value in
 	'continue value
 }
-'tag<0 - 1>(1)
+'tag<0 - 1>(value: 1)
 ()",
         );
         for (name, t) in [
@@ -7533,7 +7544,7 @@ mod nested_types {
     #[test]
     fn nested_variants_resolve_from_leading_dots() {
         let t = check(
-            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase one(T)\n\t\tcase none\n\t}\n}\nfunc id<T>(consume x: T) -> T { x }\nlet x: Res<Int>.A = id(Res.A.one(1))\nlet y: Res<Bool>.A = .none",
+            "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase one(T)\n\t\tcase none\n\t}\n}\nfunc id<T>(consume x: T) -> T { x }\nlet x: Res<Int>.A = id(x: Res.A.one(1))\nlet y: Res<Bool>.A = .none",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "x"), "Res.A<Int>");
@@ -7679,10 +7690,13 @@ mod nested_types {
 
     #[test]
     fn bare_specialized_references_parse_and_reject_value_use() {
-        let t = check("// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet x = Opt<Int>");
+        let t =
+            check("// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet x = Opt<Int>");
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|error| error.contains("type names as values")),
+            errors
+                .iter()
+                .any(|error| error.contains("type names as values")),
             "expected a graceful type error, got {errors:?}"
         );
     }
@@ -7767,6 +7781,609 @@ mod nested_types {
         assert!(
             errors.iter().any(|error| error.contains("nope")),
             "expected an unknown-variant diagnostic, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enforces_labels_on_direct_calls() {
+        // ADR 0041: a normal argument must have exactly the declared label.
+        let t = check("func id(x: Int) -> Int {\n\tx\n}\nid(x: 1)");
+        assert_clean(&t);
+
+        let t = check("func id(x: Int) -> Int {\n\tx\n}\nid(1)");
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Missing argument label 'x'")),
+            "{errors:?}"
+        );
+
+        let t = check("func id(x: Int) -> Int {\n\tx\n}\nid(other: 1)");
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Expected argument label 'x', found 'other'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn enforces_omitted_labels() {
+        // `_` declares positional calling; written labels are unexpected.
+        let t = check("func id(_ x: Int) -> Int {\n\tx\n}\nid(1)");
+        assert_clean(&t);
+
+        let t = check("func id(_ x: Int) -> Int {\n\tx\n}\nid(x: 1)");
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Unexpected argument label 'x'")),
+            "{errors:?}"
+        );
+
+        let t = check("func id(_ x: Int) -> Int {\n\tx\n}\nid(_: 1)");
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Unexpected argument label '_'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn two_name_params_use_the_external_label() {
+        let t = check("func split(foo fizz: Int) -> Int {\n\tfizz\n}\nsplit(foo: 1)");
+        assert_clean(&t);
+
+        let t = check("func split(foo fizz: Int) -> Int {\n\tfizz\n}\nsplit(fizz: 1)");
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Expected argument label 'foo', found 'fizz'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn function_values_erase_labels() {
+        // Indirect calls are positional; a written label is unexpected.
+        let t = check("func id(value: Int) -> Int {\n\tvalue\n}\nlet fn = id\nfn(1)");
+        assert_clean(&t);
+
+        let t = check("func id(value: Int) -> Int {\n\tvalue\n}\nlet fn = id\nfn(value: 1)");
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Unexpected argument label 'value'")),
+            "{errors:?}"
+        );
+
+        // Callback parameters are indirect calls too.
+        let t = check(
+            "func apply(callback: (Int) -> Int) -> Int {\n\tcallback(1)\n}\napply(callback: func(n: Int) -> Int {\n\tn\n})",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn enforces_labels_on_method_calls() {
+        let t = check(
+            "struct Point {\n\tlet x: Int\n\n\tfunc scaled(by factor: Int) -> Int {\n\t\tfactor\n\t}\n}\nfunc use(p: Point) -> Int {\n\tp.scaled(by: 2)\n}",
+        );
+        assert_clean(&t);
+
+        let t = check(
+            "struct Point {\n\tlet x: Int\n\n\tfunc scaled(by factor: Int) -> Int {\n\t\tfactor\n\t}\n}\nfunc use(p: Point) -> Int {\n\tp.scaled(2)\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Missing argument label 'by'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn arity_failures_suppress_label_cascades() {
+        let t = check("func id(x: Int) -> Int {\n\tx\n}\nid(1, 2)");
+        let errors = type_errors(&t);
+        assert!(errors.iter().any(|e| e.contains("arguments")), "{errors:?}");
+        assert!(
+            !errors.iter().any(|e| e.contains("argument label")),
+            "label errors must not cascade after arity errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn trailing_blocks_satisfy_labeled_final_params() {
+        // The trailing block omits the final label by syntax; preceding
+        // parenthesized arguments keep their labels.
+        let t = check(
+            "func map(count: Int, transform fn: (Int) -> Int) -> Int {\n\tfn(count)\n}\nmap(count: 1) { $0 }",
+        );
+        assert_clean(&t);
+
+        let t = check(
+            "func map(count: Int, transform fn: (Int) -> Int) -> Int {\n\tfn(count)\n}\nmap(1) { $0 }",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Missing argument label 'count'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn label_overloads_select_by_full_name() {
+        // ADR 0041: fizz(a:) and fizz(b:) coexist; calls select by labels
+        // before ordinary type checking.
+        let t = check(
+            "// no-core\nfunc fizz(a: Int) -> Int {\n\ta\n}\nfunc fizz(b: Bool) -> Bool {\n\tb\n}\nlet x: Int = fizz(a: 1)\nlet y: Bool = fizz(b: true)",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn local_label_overloads_select_by_full_name() {
+        let t = check(
+            "// no-core\nfunc run() -> Int {\n\tfunc fizz(a: Int) -> Int {\n\t\ta\n\t}\n\tfunc fizz(b: Bool) -> Int {\n\t\t0\n\t}\n\tfizz(a: 1) + fizz(b: true)\n}",
+        );
+        assert_clean(&t);
+    }
+
+    fn all_diagnostics(
+        driver: &crate::compiling::driver::Driver<crate::compiling::driver::Typed>,
+    ) -> Vec<String> {
+        driver
+            .phase
+            .diagnostics
+            .iter()
+            .map(|d| format!("{d:?}"))
+            .collect()
+    }
+
+    #[test]
+    fn duplicate_full_callable_names_are_rejected() {
+        // Parameter types and binder names do not distinguish declarations.
+        let t = check(
+            "// no-core\nfunc fizz(_ a: Int) -> Int {\n\ta\n}\nfunc fizz(_ b: Bool) -> Int {\n\t0\n}\nfizz(1)",
+        );
+        let diagnostics = all_diagnostics(&t);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.contains("DuplicateDeclaration")),
+            "expected a duplicate-declaration diagnostic, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn ambiguous_bare_overload_references_error() {
+        // A bare reference resolves only when the set has one callable.
+        let t = check(
+            "// no-core\nfunc fizz(a: Int) -> Int {\n\ta\n}\nfunc fizz(b: Bool) -> Bool {\n\tb\n}\nlet f = fizz",
+        );
+        let diagnostics = all_diagnostics(&t);
+        assert!(
+            diagnostics.iter().any(|d| d.contains("AmbiguousCallable")),
+            "expected an ambiguous-reference diagnostic, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn overload_miss_recovers_to_unique_arity_candidate() {
+        // No exact label match, one same-arity candidate: recover to it and
+        // report its label mismatch (no cascade, no guessing among many).
+        let t = check(
+            "// no-core\nfunc fizz(a: Int) -> Int {\n\ta\n}\nfunc fizz(c: Int, d: Int) -> Int {\n\tc\n}\nfizz(zz: 1)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Expected argument label 'a', found 'zz'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn method_label_overloads_select_by_full_name() {
+        // ADR 0041: scaled(by:) and scaled(times:) coexist on one type;
+        // instance and static calls select by written labels.
+        let t = check(
+            "// no-core\nstruct P {\n\tlet x: Int\n\n\tfunc scaled(by factor: Int) -> Int {\n\t\tfactor\n\t}\n\n\tfunc scaled(times count: Bool) -> Bool {\n\t\tcount\n\t}\n\n\tstatic func make(x: Int) -> Int {\n\t\tx\n\t}\n\n\tstatic func make(flag: Bool) -> Bool {\n\t\tflag\n\t}\n}\nfunc use(p: P) -> Int {\n\tlet a: Int = p.scaled(by: 2)\n\tlet b: Bool = p.scaled(times: true)\n\tlet c: Int = P.make(x: 1)\n\tlet d: Bool = P.make(flag: true)\n\ta\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn duplicate_method_full_names_are_rejected() {
+        let t = check(
+            "// no-core\nstruct P {\n\tlet x: Int\n\n\tfunc scaled(by factor: Int) -> Int {\n\t\tfactor\n\t}\n\n\tfunc scaled(by count: Int) -> Int {\n\t\tcount\n\t}\n}\nP(x: 1).scaled(by: 2)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("scaled(by:)")),
+            "expected a duplicate-callable diagnostic, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn ambiguous_bare_method_references_error() {
+        // A bare member reference cannot disambiguate an overload set.
+        let t = check(
+            "// no-core\nstruct P {\n\tlet x: Int\n\n\tfunc scaled(by factor: Int) -> Int {\n\t\tfactor\n\t}\n\n\tfunc scaled(times count: Bool) -> Bool {\n\t\tcount\n\t}\n}\nfunc use(p: P) -> Int {\n\tlet f = p.scaled\n\tp.x\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("mbiguous")),
+            "expected an ambiguity diagnostic, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn overloaded_conformance_methods_witness_by_full_name() {
+        // A conformance body may overload a base name; the candidate whose
+        // labels agree with the requirement witnesses, the other is
+        // inherent.
+        let t = check(
+            "// no-core\nprotocol Greeter {\n\tfunc greet(name: Bool) -> Bool\n}\nstruct S {}\nextend S: Greeter {\n\tfunc greet(name: Bool) -> Bool {\n\t\tname\n\t}\n\n\tfunc greet(loud flag: Bool) -> Bool {\n\t\tflag\n\t}\n}\nfunc use(s: S) -> Bool {\n\ts.greet(name: true) == s.greet(loud: false)\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_head_extend_non_witness_members_become_defaults() {
+        // Option 2 for `extend P: Q`: a body method that witnesses no Q
+        // requirement is a protocol-extension default on P — declared
+        // once, dispatchable on every conforming type.
+        let t = check(
+            "// no-core\nprotocol Show2 {\n\tfunc show2() -> Int\n}\nprotocol Pretty {\n\tfunc pretty(indent: Int) -> Int\n}\nextend Show2: Pretty {\n\tfunc pretty(indent: Int) -> Int {\n\t\tself.show2() + indent\n\t}\n\n\tfunc pretty(compact flag: Bool) -> Int {\n\t\tself.show2()\n\t}\n}\nstruct S {}\nextend S: Show2 {\n\tfunc show2() -> Int {\n\t\t1\n\t}\n}\nfunc use(s: S) -> Int {\n\ts.pretty(indent: 2) + s.pretty(compact: true)\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn protocol_head_extend_defaults_collide_on_full_names() {
+        // A non-witness member whose full name matches an existing
+        // requirement of the head protocol is a duplicate, not a default.
+        let t = check(
+            "// no-core\nprotocol Show2 {\n\tfunc show2() -> Int\n}\nprotocol Pretty {\n\tfunc pretty(indent: Int) -> Int\n}\nextend Show2: Pretty {\n\tfunc pretty(indent: Int) -> Int {\n\t\tself.show2() + indent\n\t}\n\n\tfunc show2() -> Int {\n\t\t0\n\t}\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("show2()")),
+            "expected a duplicate-callable diagnostic, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn requirement_label_overloads_select_by_full_name() {
+        // ADR 0041: protocol requirements use the same full-name rule;
+        // concrete and generic dispatch select by written labels.
+        let t = check(
+            "// no-core\nprotocol Greeter {\n\tfunc greet(name: Bool) -> Bool\n\tfunc greet(loud flag: Bool) -> Bool\n}\nstruct S {}\nextend S: Greeter {\n\tfunc greet(name: Bool) -> Bool {\n\t\tname\n\t}\n\n\tfunc greet(loud flag: Bool) -> Bool {\n\t\tflag\n\t}\n}\nfunc direct(s: S) -> Bool {\n\ts.greet(name: true) == s.greet(loud: false)\n}\nfunc generic<T: Greeter>(x: T) -> Bool {\n\tx.greet(name: true) == x.greet(loud: false)\n}\ngeneric(x: S())",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn duplicate_requirement_full_names_are_rejected() {
+        let t = check(
+            "// no-core\nprotocol Greeter {\n\tfunc greet(name: Bool) -> Bool\n\tfunc greet(name other: Bool) -> Bool\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("greet(name:)")),
+            "expected a duplicate-callable diagnostic, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn init_overloads_select_by_label_sequence() {
+        // ADR 0041: initializer selection uses the declared label sequence,
+        // not arity alone.
+        let t = check(
+            "// no-core\nstruct P {\n\tlet x: Int\n\n\tinit(x: Int) {\n\t\tself.x = x\n\t}\n\n\tinit(flag: Bool) {\n\t\tself.x = 0\n\t}\n}\nlet a: P = P(x: 1)\nlet b: P = P(flag: true)",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn duplicate_init_full_names_are_rejected() {
+        let t = check(
+            "// no-core\nstruct P {\n\tlet x: Int\n\n\tinit(x: Int) {\n\t\tself.x = x\n\t}\n\n\tinit(x other: Int) {\n\t\tself.x = other\n\t}\n}\nP(x: 1)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("init(x:)")),
+            "expected a duplicate-callable diagnostic naming init(x:), got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn witness_full_names_must_agree() {
+        // A witness whose labels differ from the requirement's does not
+        // satisfy it (ADR 0041).
+        let t = check(
+            "// no-core\nprotocol Greeter {\n\tfunc greet(name: Bool) -> Bool\n}\nstruct S {}\nextend S: Greeter {\n\tfunc greet(_ name: Bool) -> Bool {\n\t\tname\n\t}\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("greet")),
+            "expected a witness mismatch diagnostic, got {errors:?}"
+        );
+
+        let t = check(
+            "// no-core\nprotocol Greeter {\n\tfunc greet(name: Bool) -> Bool\n}\nstruct S {}\nextend S: Greeter {\n\tfunc greet(name: Bool) -> Bool {\n\t\tname\n\t}\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn enforces_labels_on_effect_operations() {
+        // Effect names are non-overloadable but their calls obey the same
+        // parameter label rules (ADR 0041).
+        let t = check(
+            "// no-core\neffect 'ask(prompt: Int) -> Int\n@handle 'ask { v in 'continue v }\n'ask(prompt: 1)",
+        );
+        assert_clean(&t);
+
+        let t = check(
+            "// no-core\neffect 'ask(prompt: Int) -> Int\n@handle 'ask { v in 'continue v }\n'ask(1)",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Missing argument label 'prompt'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn public_overloads_cross_the_module_boundary() {
+        // ADR 0041: public declarations with the same base but different
+        // full callable names coexist in the export table; the importer
+        // gets the whole overload set.
+        use super::tests::compile_library;
+        use crate::compiling::driver::{Driver, Source};
+        use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
+
+        let id_a = ModuleId::External(0);
+        let module_a = compile_library(
+            "A",
+            id_a,
+            "public func fizz(a: Int) -> Int {\n\ta\n}\npublic func fizz(flag: Bool) -> Bool {\n\tflag\n}",
+            ModuleEnvironment::default(),
+        );
+
+        let mut modules = ModuleEnvironment::default();
+        modules.import_compiled(module_a, id_a).unwrap();
+        let config = crate::compiling::driver::DriverConfig {
+            module_id: ModuleId::Main,
+            modules: Rc::new(modules),
+            mode: crate::compiling::driver::CompilationMode::Library,
+            module_name: "B".to_string(),
+            parse_mode: crate::compiling::driver::ParseMode::Strict,
+            preserve_comments: false,
+            workspace_root: None,
+            source_root: None,
+            libraries: Vec::new(),
+        };
+        let driver_b = Driver::new(
+            vec![Source::from(
+                "use A::{ fizz }\nfunc f() -> Int {\n\tfizz(a: 1)\n}\nfunc g() -> Bool {\n\tfizz(flag: true)\n}",
+            )],
+            config,
+        );
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        assert_eq!(type_errors(&typed), Vec::<String>::new());
+    }
+
+    #[test]
+    fn imported_bare_overload_references_are_ambiguous() {
+        use super::tests::compile_library;
+        use crate::compiling::driver::{Driver, Source};
+        use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
+
+        let id_a = ModuleId::External(0);
+        let module_a = compile_library(
+            "A",
+            id_a,
+            "public func fizz(a: Int) -> Int {\n\ta\n}\npublic func fizz(flag: Bool) -> Bool {\n\tflag\n}",
+            ModuleEnvironment::default(),
+        );
+
+        let mut modules = ModuleEnvironment::default();
+        modules.import_compiled(module_a, id_a).unwrap();
+        let config = crate::compiling::driver::DriverConfig {
+            module_id: ModuleId::Main,
+            modules: Rc::new(modules),
+            mode: crate::compiling::driver::CompilationMode::Library,
+            module_name: "B".to_string(),
+            parse_mode: crate::compiling::driver::ParseMode::Strict,
+            preserve_comments: false,
+            workspace_root: None,
+            source_root: None,
+            libraries: Vec::new(),
+        };
+        let driver_b = Driver::new(
+            vec![Source::from("use A::{ fizz }\nlet f = fizz")],
+            config,
+        );
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        let diagnostics = all_diagnostics(&typed);
+        assert!(
+            diagnostics.iter().any(|d| d.contains("AmbiguousCallable")),
+            "expected an ambiguous-reference diagnostic, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_public_full_names_still_collide() {
+        let t = check(
+            "// no-core\npublic func fizz(a: Int) -> Int {\n\ta\n}\npublic func fizz(a: Int) -> Int {\n\ta\n}",
+        );
+        let diagnostics = all_diagnostics(&t);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.contains("DuplicateExport") || d.contains("DuplicateDeclaration")),
+            "expected a duplicate diagnostic, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn callable_contracts_cross_the_module_boundary() {
+        // ADR 0041: imported contracts merge alongside imported schemes,
+        // surviving module serialization.
+        use super::tests::compile_library;
+        use crate::compiling::driver::{Driver, Source};
+        use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
+
+        let id_a = ModuleId::External(0);
+        let module_a = compile_library(
+            "A",
+            id_a,
+            "public func split(foo fizz) -> Int {\n\tfizz\n}\npublic struct Point {\n\tlet x: Int\n\n\tpublic func scaled(by factor: Int) -> Int {\n\t\tfactor\n\t}\n}",
+            ModuleEnvironment::default(),
+        );
+
+        let mut modules = ModuleEnvironment::default();
+        modules.import_compiled(module_a, id_a).unwrap();
+        let config = crate::compiling::driver::DriverConfig {
+            module_id: ModuleId::Main,
+            modules: Rc::new(modules),
+            mode: crate::compiling::driver::CompilationMode::Library,
+            module_name: "B".to_string(),
+            parse_mode: crate::compiling::driver::ParseMode::Strict,
+            preserve_comments: false,
+            workspace_root: None,
+            source_root: None,
+            libraries: Vec::new(),
+        };
+        let driver_b = Driver::new(
+            vec![Source::from(
+                "use A::{ split, Point }\nfunc use_them(p: Point) -> Int {\n\tsplit(foo: p.scaled(by: 2))\n}",
+            )],
+            config,
+        );
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        assert_eq!(type_errors(&typed), Vec::<String>::new());
+
+        let catalog = &typed.phase.program.types().catalog;
+        let names: Vec<String> = catalog
+            .callable_contracts
+            .values()
+            .map(|contract| contract.name.to_string())
+            .collect();
+        assert!(names.contains(&"split(foo:)".to_string()), "{names:?}");
+        assert!(names.contains(&"scaled(by:)".to_string()), "{names:?}");
+    }
+
+    #[test]
+    fn registers_callable_contracts() {
+        // ADR 0041: every named callable publishes a full callable name —
+        // external labels only, implicit receivers excluded.
+        use crate::types::callables::CallableRole;
+
+        let t = check(
+            "
+            func split(foo fizz) -> Int { fizz }
+            func positional(_ value) -> Int { value }
+
+            struct Point {
+                let x: Int
+                let y: Int
+
+                func scaled(by factor: Int) -> Int { factor }
+                static func origin() -> Int { 0 }
+                init(fromX x: Int, fromY y: Int) {
+                    self.x = x
+                    self.y = y
+                }
+            }
+
+            struct Size {
+                let width: Int
+                let height: Int
+            }
+
+            protocol Greeter {
+                func greet(name: String) -> String
+            }
+
+            effect 'ask(prompt: String) -> String
+            ",
+        );
+
+        let catalog = &t.phase.program.types().catalog;
+        let contracts: std::collections::HashMap<String, CallableRole> = catalog
+            .callable_contracts
+            .values()
+            .map(|contract| (contract.name.to_string(), contract.role))
+            .collect();
+
+        assert_eq!(contracts.get("split(foo:)"), Some(&CallableRole::Function));
+        assert_eq!(
+            contracts.get("positional(_:)"),
+            Some(&CallableRole::Function)
+        );
+        assert_eq!(
+            contracts.get("scaled(by:)"),
+            Some(&CallableRole::Method { is_static: false })
+        );
+        assert_eq!(
+            contracts.get("origin()"),
+            Some(&CallableRole::Method { is_static: true })
+        );
+        assert_eq!(
+            contracts.get("init(fromX:fromY:)"),
+            Some(&CallableRole::Init)
+        );
+        // The memberwise init's labels are the field names.
+        assert_eq!(
+            contracts.get("init(width:height:)"),
+            Some(&CallableRole::Init)
+        );
+        assert_eq!(
+            contracts.get("greet(name:)"),
+            Some(&CallableRole::Requirement)
+        );
+        assert_eq!(contracts.get("ask(prompt:)"), Some(&CallableRole::Effect));
+        // Local binder names never leak into callable names.
+        assert!(!contracts.contains_key("split(fizz:)"));
+        assert!(
+            !contracts.keys().any(|name| name.contains("self")),
+            "implicit receivers must stay out of callable names: {contracts:?}"
         );
     }
 }

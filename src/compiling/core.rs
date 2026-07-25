@@ -164,25 +164,25 @@ mod tests {
     fn core_exports_use_well_known_symbols() {
         let module = _compile().module;
 
-        assert_eq!(module.exports.get("String").copied(), Some(Symbol::String));
-        assert_eq!(module.exports.get("Array").copied(), Some(Symbol::Array));
+        assert_eq!(module.exports.get("String").and_then(|set| set.first().copied()), Some(Symbol::String));
+        assert_eq!(module.exports.get("Array").and_then(|set| set.first().copied()), Some(Symbol::Array));
         assert_eq!(
-            module.exports.get("InlineArray").copied(),
+            module.exports.get("InlineArray").and_then(|set| set.first().copied()),
             Some(Symbol::InlineArray)
         );
         assert_eq!(
-            module.exports.get("Storage").copied(),
+            module.exports.get("Storage").and_then(|set| set.first().copied()),
             Some(Symbol::Storage)
         );
         assert_eq!(
-            module.exports.get("Character").copied(),
+            module.exports.get("Character").and_then(|set| set.first().copied()),
             Some(Symbol::Character)
         );
         assert_eq!(
-            module.exports.get("Borrowed").copied(),
+            module.exports.get("Borrowed").and_then(|set| set.first().copied()),
             Some(Symbol::Borrowed)
         );
-        assert_eq!(module.exports.get("Owner").copied(), Some(Symbol::Owner));
+        assert_eq!(module.exports.get("Owner").and_then(|set| set.first().copied()), Some(Symbol::Owner));
 
         let catalog = &module.types.catalog;
         assert!(catalog.structs.contains_key(&Symbol::String));
@@ -197,8 +197,8 @@ mod tests {
     #[test]
     fn core_iterator_into_array_conformance_is_exported() {
         let module = _compile().module;
-        let array_into_iterator = module.exports["ArrayIntoIterator"];
-        let into = module.exports["Into"];
+        let array_into_iterator = module.exports["ArrayIntoIterator"][0];
+        let into = module.exports["Into"][0];
         let target = crate::types::ty::ProtocolRef {
             protocol: into,
             args: vec![crate::types::ty::Ty::Nominal(

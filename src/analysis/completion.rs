@@ -264,14 +264,18 @@ fn add_nominal_member_items(
                 Some(ty.render_mono()),
             );
         }
-        for (label, method) in &info.methods {
-            add_symbol_member_item(types, label, *method, &info.params, args, true, items);
+        for (label, set) in &info.methods {
+            for method in set {
+                add_symbol_member_item(types, label, *method, &info.params, args, true, items);
+            }
         }
     }
 
     if let Some(info) = types.catalog.enums.get(&symbol) {
-        for (label, method) in &info.methods {
-            add_symbol_member_item(types, label, *method, &info.params, args, true, items);
+        for (label, set) in &info.methods {
+            for method in set {
+                add_symbol_member_item(types, label, *method, &info.params, args, true, items);
+            }
         }
     }
 
@@ -303,12 +307,9 @@ fn add_nominal_member_items(
             // is absent from Box<String>.
             let Some(inherent) = rows.iter().find(|row| {
                 let mut probe = FxHashMap::default();
-                row.self_args
-                    .iter()
-                    .zip(args)
-                    .all(|(pattern, actual)| {
-                        crate::types::ty::match_pattern(pattern, actual, &mut probe)
-                    })
+                row.self_args.iter().zip(args).all(|(pattern, actual)| {
+                    crate::types::ty::match_pattern(pattern, actual, &mut probe)
+                })
             }) else {
                 continue;
             };
@@ -347,8 +348,10 @@ fn add_type_member_items(
     }
 
     if let Some(info) = types.catalog.structs.get(&symbol) {
-        for (label, method) in &info.statics {
-            add_symbol_member_item(types, label, *method, &info.params, &[], false, items);
+        for (label, set) in &info.statics {
+            for method in set {
+                add_symbol_member_item(types, label, *method, &info.params, &[], false, items);
+            }
         }
     }
 

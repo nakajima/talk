@@ -7,13 +7,13 @@ effect 'oops(message) -> Never
 
 func risky(flag: Bool) 'oops -> Int {
 	if (flag) {
-		'oops("boom")
+		'oops(message: "boom")
 	}
 	10
 }
 
-let ok = risky(false)
+let ok = risky(flag: false)
 print(ok)
-let bad = risky(true)
+let bad = risky(flag: true)
 print(bad)
 bad

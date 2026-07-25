@@ -23,9 +23,9 @@ public struct String {
 	}
 
 	func to_string() -> String {
-		let base: RawPtr = _alloc<Byte>(self.byte_count)
-		_copy(self.storage.base, base, self.byte_count)
-		String(base, self.byte_count, self.byte_count)
+		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
+		_copy(from: self.storage.base, to: base, length: self.byte_count)
+		String(base: base, byte_count: self.byte_count, capacity: self.byte_count)
 	}
 }
 
@@ -61,7 +61,11 @@ public struct UTF8View {
 	}
 
 	func slice(start: Int, byte_count: Int) -> Substring {
-		Substring(self.storage, self.start + start, byte_count)
+		Substring(
+			storage: self.storage,
+			start: self.start + start,
+			byte_count: byte_count
+		)
 	}
 }
 
@@ -78,7 +82,7 @@ public protocol StringMethods {
 
 extend String: StringMethods {
 	func as_substring() -> Substring {
-		Substring(self.storage, 0, self.byte_count)
+		Substring(storage: self.storage, start: 0, byte_count: self.byte_count)
 	}
 
 	func utf8() -> UTF8View {
@@ -86,19 +90,19 @@ extend String: StringMethods {
 	}
 
 	func find(needle: String) -> Int? {
-		self.as_substring().find(needle)
+		self.as_substring().find(needle: needle)
 	}
 
 	func find_from(needle: String, start: Int) -> Int? {
-		self.as_substring().find_from(needle, start)
+		self.as_substring().find_from(needle: needle, start: start)
 	}
 
 	func starts_with(needle: String) -> Bool {
-		self.as_substring().starts_with(needle)
+		self.as_substring().starts_with(needle: needle)
 	}
 
 	func ends_with(needle: String) -> Bool {
-		self.as_substring().ends_with(needle)
+		self.as_substring().ends_with(needle: needle)
 	}
 }
 
@@ -108,7 +112,7 @@ extend Substring {
 	}
 
 	func find(needle: String) -> Int? {
-		self.find_from(needle, 0)
+		self.find_from(needle: needle, start: 0)
 	}
 
 	// The found offset is a UTF-8 byte offset, valid as `utf8().slice`
@@ -126,7 +130,10 @@ extend Substring {
 			if last < i {
 				break
 			}
-			let window: Substring = self.utf8().slice(i, needle.byte_count)
+			let window: Substring = self.utf8().slice(
+				start: i,
+				byte_count: needle.byte_count
+			)
 			if window.equals_string(needle) { return Optional.some(i) }
 			i = i + 1
 		}
@@ -134,13 +141,13 @@ extend Substring {
 	}
 
 	func to_string() -> String {
-		let base: RawPtr = _alloc<Byte>(self.byte_count)
-		let source: RawPtr = _ptr_add(self.storage.base, self.start)
-		_copy(source, base, self.byte_count)
-		String(base, self.byte_count, self.byte_count)
+		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
+		let source: RawPtr = _ptr_add(ptr: self.storage.base, offset: self.start)
+		_copy(from: source, to: base, length: self.byte_count)
+		String(base: base, byte_count: self.byte_count, capacity: self.byte_count)
 	}
 
-	func equals_string(rhs: String) -> Bool {
+	func equals_string(_ rhs: String) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 
 		let i = 0
@@ -172,7 +179,7 @@ extend Substring {
 
 	func ends_with(needle: String) -> Bool {
 		if needle.count() > self.count() { return false }
-		let chars = self.iter().skip(self.count() - needle.count())
+		let chars = self.iter().skip(count: self.count() - needle.count())
 		let needle_chars = needle.iter()
 
 		for char in chars {
@@ -188,27 +195,27 @@ extend Substring {
 }
 
 extend Substring: Add<String> {
-	func add(rhs: String) -> String {
+	func add(_ rhs: String) -> String {
 		self.to_string() + rhs
 	}
 }
 
 extend String: Add<String> {
-	func add(rhs: String) -> String {
+	func add(_ rhs: String) -> String {
 		let selfLen: Int = self.byte_count
 		let rhsLen: Int = rhs.byte_count
 		let newLen: Int = selfLen + rhsLen
-		let newBase: RawPtr = _alloc<Byte>(newLen)
-		_copy(self.storage.base, newBase, selfLen)
+		let newBase: RawPtr = _alloc<Byte>(count: newLen)
+		_copy(from: self.storage.base, to: newBase, length: selfLen)
 
-		let rhsDest: RawPtr = _ptr_add(newBase, selfLen)
-		_copy(rhs.storage.base, rhsDest, rhsLen)
-		String(newBase, newLen, newLen)
+		let rhsDest: RawPtr = _ptr_add(ptr: newBase, offset: selfLen)
+		_copy(from: rhs.storage.base, to: rhsDest, length: rhsLen)
+		String(base: newBase, byte_count: newLen, capacity: newLen)
 	}
 }
 
 extend String: Equatable<String> {
-	func equals(rhs: String) -> Bool {
+	func equals(_ rhs: String) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 
 		let i = 0

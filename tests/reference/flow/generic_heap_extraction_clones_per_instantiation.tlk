@@ -9,9 +9,9 @@ func extract_copy<Value: Copy>(h: Holder<Value>) -> Value {
 }
 func check() -> Int {
 	let h = Holder(value: "hello" + " world")
-	let s = extract_clone(h)
+	let s = extract_clone(h: h)
 	let i = Holder(value: 41)
-	let n = extract_copy(i)
+	let n = extract_copy(h: i)
 	s.byte_count + n
 }
 check()

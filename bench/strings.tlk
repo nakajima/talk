@@ -14,4 +14,4 @@ func bench(n: Int) -> Int {
 	}
 	total
 }
-print(bench(1500))
+print(bench(n: 1500))

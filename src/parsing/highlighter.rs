@@ -398,6 +398,10 @@ impl<'a> Higlighter<'a> {
                 }
             }
             Node::Parameter(parameter) => {
+                // ADR 0041: the external label highlights as a parameter too.
+                if let Some(label_span) = parameter.label_span {
+                    result.push(self.make_span(Kind::PARAMETER, label_span));
+                }
                 result.push(self.make_span(Kind::PARAMETER, parameter.name_span));
                 if let Some(ty) = &parameter.type_annotation {
                     result.extend(self.tokens_from_expr(&ty, ast));

@@ -50,7 +50,10 @@ pub struct Parsed {
     pub diagnostics: Vec<AnyDiagnostic>,
 }
 
-pub type Exports = IndexMap<String, Symbol>;
+/// Exported names, each carrying its full overload set (ADR 0041):
+/// public declarations with one base but different full callable names
+/// must not overwrite one another in the export table.
+pub type Exports = IndexMap<String, Vec<Symbol>>;
 
 impl DriverPhase for NameResolved {}
 pub struct NameResolved {
@@ -530,12 +533,12 @@ impl Driver<Parsed> {
         );
 
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
-        self.phase.diagnostics.extend(
-            crate::macro_expansion::expand_macros_with_sources(
+        self.phase
+            .diagnostics
+            .extend(crate::macro_expansion::expand_macros_with_sources(
                 &mut asts,
                 &self.phase.source_texts,
-            ),
-        );
+            ));
         crate::desugar::desugar(&mut asts);
         let (asts, resolved) = resolver.resolve(asts);
         let asts = paths.into_iter().zip(asts).collect();
@@ -627,7 +630,7 @@ impl Driver<NameResolved> {
         let name = name.into();
         let exports = self.phase.resolved_names.exports();
         Module {
-            id: StableModuleId::generate(&name, &exports),
+            id: StableModuleId::generate(&name, &exports, &Default::default()),
             name,
             symbol_names: self.phase.resolved_names.symbol_names,
             exports,
@@ -706,10 +709,7 @@ impl Driver<Typed> {
             if span == crate::parsing::span::Span::SYNTHESIZED {
                 return (error.message.clone(), None);
             }
-            (
-                error.message,
-                Some((span.file_id, span.start, span.end)),
-            )
+            (error.message, Some((span.file_id, span.start, span.end)))
         })
     }
 
@@ -830,7 +830,7 @@ impl Driver<Typed> {
         #[cfg(debug_assertions)]
         catalog.debug_assert_portable();
         Module {
-            id: StableModuleId::generate(&name, &exports),
+            id: StableModuleId::generate(&name, &exports, &catalog.callable_contracts),
             name,
             symbol_names,
             exports,
@@ -873,9 +873,7 @@ pub mod tests {
             .types
             .schemes
             .keys()
-            .filter(|symbol| {
-                symbol.module_id() != Some(crate::compiling::module::ModuleId::Main)
-            })
+            .filter(|symbol| symbol.module_id() != Some(crate::compiling::module::ModuleId::Main))
             .collect();
         assert!(
             foreign.is_empty(),

@@ -84,10 +84,7 @@ pub(crate) fn compile(
 /// check`'s second half (wave F of docs/ownership-rethink-plan.md).
 /// Everything `compile` would reject at the MIR stage — ownership,
 /// exclusivity, the unsafe gate — reports here.
-pub(crate) fn check(
-    programs: &[ProgramInput<'_>],
-    entry: Entry,
-) -> Result<(), BackendError> {
+pub(crate) fn check(programs: &[ProgramInput<'_>], entry: Entry) -> Result<(), BackendError> {
     // Checking means checking everything: every body compiles, called
     // or not, entry or no entry.
     mir::build(programs, entry, true).map(|_| ())

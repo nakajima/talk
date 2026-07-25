@@ -1,10 +1,10 @@
 func check() -> Int {
 	let d = Dict<Int>()
-	d.insert("one", 1)
-	d.insert("two", 2)
-	d.insert("three", 3)
-	let two = d.get("two")
-	let four = d.get("four")
+	d.insert(key: "one", value: 1)
+	d.insert(key: "two", value: 2)
+	d.insert(key: "three", value: 3)
+	let two = d.get(key: "two")
+	let four = d.get(key: "four")
 	let hit = match two {
 		.some(v) -> v + 0,
 		.none -> 0 - 1

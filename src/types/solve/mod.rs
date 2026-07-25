@@ -72,6 +72,10 @@ pub struct Solver<'s> {
     pub mono: &'s FxHashMap<Symbol, Ty>,
     pub instantiations: &'s mut FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub member_resolutions: &'s mut FxHashMap<NodeID, MemberResolution>,
+    /// Written argument slots per member-call callee node (ADR 0041),
+    /// for selecting among label-overloaded methods. Bare member
+    /// references have no entry and cannot disambiguate a set.
+    pub member_call_slots: &'s FxHashMap<NodeID, Vec<crate::types::callables::WrittenSlot>>,
     /// Argument nodes where a borrowed value satisfied an owned CheapClone
     /// parameter by cloning (an O(1) buffer retain, emitted by lowering).
     pub coerce_clones: &'s mut FxHashSet<NodeID>,

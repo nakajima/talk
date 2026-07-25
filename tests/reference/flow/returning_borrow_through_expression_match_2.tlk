@@ -1,7 +1,7 @@
 func bad(flag: Bool) -> Substring {
 	let s = "hello" + " world"
 	match flag {
-		true -> s.utf8().slice(0, 1),
-		false -> s.utf8().slice(1, 1)
+		true -> s.utf8().slice(start: 0, byte_count: 1),
+		false -> s.utf8().slice(start: 1, byte_count: 1)
 	}
 }

@@ -9,6 +9,6 @@ func wrap<T>(v: &T) -> Box2<T> {
 }
 func main() -> Int {
 	let item = Item(name: "a" + "b")
-	let b = wrap(item)
+	let b = wrap(v: item)
 	0
 }

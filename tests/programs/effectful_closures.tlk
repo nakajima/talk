@@ -9,7 +9,7 @@ func closure_case() -> Int {
 	let doubler = func() -> Int {
 		'boost() * 2
 	}
-	apply_twice(doubler)
+	apply_twice(fn: doubler)
 }
 
 func loud() -> Int {

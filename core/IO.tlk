@@ -77,93 +77,93 @@ public let STDOUT_FD: Int = 1
 public let STDERR_FD: Int = 2
 
 public func sleep(ms: Int) 'io -> Int {
-	'io(.sleep(ms))
+	'io(request: .sleep(ms))
 }
 
 // Low-level open for raw pointers. `path` is expected to point to a
 // NUL-terminated C string.
 public func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {
-	'io(.open(path, flags, mode))
+	'io(request: .open(path, flags, mode))
 }
 
 // High-level open for Talk strings: copy the path into fresh memory with
 // a NUL terminator (allocations are zero-filled, so the terminator comes
 // free) and open through the C-string path.
 public func open_path(path: String, flags: Int, mode: Int) '[io, alloc] -> Int {
-	let buf = _alloc<Byte>(path.byte_count + 1)
-	_copy(path.storage.base, buf, path.byte_count)
-	let fd = _io_open(buf, flags, mode)
-	_free(buf)
+	let buf = _alloc<Byte>(count: path.byte_count + 1)
+	_copy(from: path.storage.base, to: buf, length: path.byte_count)
+	let fd = _io_open(path: buf, flags: flags, mode: mode)
+	_free(ptr: buf)
 	fd
 }
 
 public func _io_read(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
-	'io(.read(fd, buf, count))
+	'io(request: .read(fd, buf, count))
 }
 
 public func _io_write(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
-	'io(.write(fd, buf, count))
+	'io(request: .write(fd, buf, count))
 }
 
 public func _io_close(fd: Int) 'io -> Int {
-	'io(.close(fd))
+	'io(request: .close(fd))
 }
 
 public func _io_cwd_len() 'io -> Int {
-	'io(.cwd_len)
+	'io(request: .cwd_len)
 }
 
 public func _io_cwd_copy(buf: RawPtr) 'io -> Int {
-	'io(.cwd_copy(buf))
+	'io(request: .cwd_copy(buf))
 }
 
 public func _io_getenv_len(name: RawPtr, name_len: Int) 'io -> Int {
-	'io(.getenv_len(name, name_len))
+	'io(request: .getenv_len(name, name_len))
 }
 
 public func _io_getenv_copy(name: RawPtr, name_len: Int, buf: RawPtr) 'io -> Int {
-	'io(.getenv_copy(name, name_len, buf))
+	'io(request: .getenv_copy(name, name_len, buf))
 }
 
 public func _io_argc() 'io -> Int {
-	'io(.argc)
+	'io(request: .argc)
 }
 
 public func _io_arg_len(index: Int) 'io -> Int {
-	'io(.arg_len(index))
+	'io(request: .arg_len(index))
 }
 
 public func _io_arg_copy(index: Int, buf: RawPtr) 'io -> Int {
-	'io(.arg_copy(index, buf))
+	'io(request: .arg_copy(index, buf))
 }
 
 public func _io_dir_count(path: RawPtr) 'io -> Int {
-	'io(.dir_count(path))
+	'io(request: .dir_count(path))
 }
 
 public func _io_dir_entry_kind(path: RawPtr, index: Int) 'io -> Int {
-	'io(.dir_entry_kind(path, index))
+	'io(request: .dir_entry_kind(path, index))
 }
 
 public func _io_dir_entry_len(path: RawPtr, index: Int) 'io -> Int {
-	'io(.dir_entry_len(path, index))
+	'io(request: .dir_entry_len(path, index))
 }
 
 public func _io_dir_entry_copy(path: RawPtr, index: Int, buf: RawPtr) 'io -> Int {
-	'io(.dir_entry_copy(path, index, buf))
+	'io(request: .dir_entry_copy(path, index, buf))
 }
 
 public func _io_exit(code: Int) 'io -> Never {
-	'io(.exit(code))
+	'io(request: .exit(code))
 	loop {}
 }
 
 public func _io_ctl(fd: Int, op: Int, arg: Int) 'io -> Int {
-	'io(.ctl(fd, op, arg))
+	'io(request: .ctl(fd, op, arg))
 }
 
 public func _io_poll(fds: RawPtr, count: Int, timeout: Int) 'io -> Int {
-	'io(.poll(fds, count, timeout))
+	'io(request: .poll(fds, count, timeout))
 }
 
 public func is_error(result: Int) -> Bool {
@@ -185,8 +185,8 @@ public func write_string(fd: Int, s: String) -> Int {
 	@_ir(fd, s.storage.base, s.byte_count) { %? = io 1 $0 $1 $2 }
 }
 
-public func print_raw(s: String) -> Int {
-	write_string(STDOUT_FD, s)
+public func print_raw(_ s: String) -> Int {
+	write_string(fd: STDOUT_FD, s: s)
 }
 
 func _print_line(s: String) -> () {
@@ -196,6 +196,6 @@ func _print_line(s: String) -> () {
 	()
 }
 
-public func print<T: Showable>(value: T) -> () {
-	_print_line(value.show())
+public func print<T: Showable>(_ value: T) -> () {
+	_print_line(s: value.show())
 }

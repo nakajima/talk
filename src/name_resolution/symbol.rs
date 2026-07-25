@@ -601,7 +601,6 @@ impl Symbol {
 
         Some(*module_id)
     }
-
 }
 
 // Cross-module IDs (include ModuleId)

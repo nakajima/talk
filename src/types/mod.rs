@@ -5,6 +5,7 @@
 //! Jones 1996). Solving is scoped to one SCC binding group at a time; nothing
 //! survives a group except finished schemes and output tables.
 
+pub mod callables;
 pub mod catalog;
 pub mod constraint;
 pub mod error;

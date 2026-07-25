@@ -32,10 +32,25 @@ impl ParamMode {
     }
 }
 
+/// A parameter's external argument label (ADR 0041). `None` on
+/// `Parameter.label` means the one-token shorthand was used: the local
+/// binder name doubles as the external label.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ParamLabel {
+    /// `foo fizz` — callers write `foo:`; the body reads `fizz`.
+    Named(String),
+    /// `_ fizz` — callers pass the argument unlabeled.
+    Omitted,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct Parameter {
     #[drive(skip)]
     pub id: NodeID,
+    #[drive(skip)]
+    pub label: Option<ParamLabel>,
+    #[drive(skip)]
+    pub label_span: Option<Span>,
     #[drive(skip)]
     pub name: Name,
     #[drive(skip)]
@@ -61,12 +76,24 @@ impl Parameter {
     ) -> Self {
         Self {
             id,
+            label: None,
+            label_span: None,
             name,
             name_span,
             type_annotation,
             span,
             mode: None,
             mode_span: None,
+        }
+    }
+
+    /// The label callers must write for this parameter, or `None` when the
+    /// declaration requires an unlabeled argument.
+    pub fn external_label(&self) -> Option<String> {
+        match &self.label {
+            Some(ParamLabel::Named(name)) => Some(name.clone()),
+            Some(ParamLabel::Omitted) => None,
+            None => Some(self.name.name_str()),
         }
     }
 }

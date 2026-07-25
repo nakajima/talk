@@ -29,24 +29,24 @@ func __talktalk_print_hex_string(value: String) {
 	let bytes = value.utf8()
 	let i = 0
 	loop i < bytes.count() {
-		let byte_value: Int = bytes.at(i)._toInt()
+		let byte_value: Int = bytes.at(index: i)._toInt()
 		let high: Int = byte_value / 16
 		let low: Int = byte_value - high * 16
-		print_raw(__talktalk_hex_digit(high))
-		print_raw(__talktalk_hex_digit(low))
+		print_raw(__talktalk_hex_digit(value: high))
+		print_raw(__talktalk_hex_digit(value: low))
 		i = i + 1
 	}
 }
 
 func __talktalk_event_start(name: String) {
 	print_raw("__TALKTEST_EVENT_V1__\tstart\t")
-	__talktalk_print_hex_string(name)
+	__talktalk_print_hex_string(value: name)
 	print("")
 }
 
 func __talktalk_event_failure(message: String) {
 	print_raw("__TALKTEST_EVENT_V1__\tfailure\t")
-	__talktalk_print_hex_string(message)
+	__talktalk_print_hex_string(value: message)
 	print("")
 }
 
@@ -67,7 +67,7 @@ func __talktalk_event_end(status: String) {
 }
 
 @handle 'fail { message in
-	__talktalk_event_failure(message.to_string())
+	__talktalk_event_failure(message: message.to_string())
 	__talktalk_failures.push(
 		Failure(test_name: __talktalk_current_test.to_string(), assertion: message)
 	)
@@ -78,12 +78,12 @@ public func __talktalk_runAllAndReport() -> Int {
 	for testCase in __talktalk_tests {
 		__talktalk_current_test = testCase.name.to_string()
 		let failures_before = __talktalk_failures.count
-		__talktalk_event_start(__talktalk_current_test.to_string())
+		__talktalk_event_start(name: __talktalk_current_test.to_string())
 		testCase.block()
 		if __talktalk_failures.count == failures_before {
-			__talktalk_event_end("passed")
+			__talktalk_event_end(status: "passed")
 		} else {
-			__talktalk_event_end("failed")
+			__talktalk_event_end(status: "failed")
 		}
 	}
 

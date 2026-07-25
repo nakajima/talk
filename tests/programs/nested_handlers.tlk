@@ -1,20 +1,20 @@
 effect 'signal(n: Int) -> Never
 
 func emit(n: Int) {
-	'signal(n)
+	'signal(n: n)
 	print("emit after")
 }
 
 func inner_scope() {
 	@handle 'signal { n in print("inner caught") }
-	emit(1)
+	emit(n: 1)
 	print("inner after")
 }
 
 func outer_scope() {
 	@handle 'signal { n in print("outer caught") }
 	inner_scope()
-	emit(2)
+	emit(n: 2)
 	print("outer after")
 }
 

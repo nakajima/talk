@@ -4,7 +4,7 @@ effect 'ask(prompt) -> Int
 	'continue 42
 }
 func question() 'ask -> Int {
-	let answer = 'ask("meaning?")
+	let answer = 'ask(prompt: "meaning?")
 	answer + 1
 }
 let r = question()

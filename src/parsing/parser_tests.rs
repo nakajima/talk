@@ -10,10 +10,10 @@ pub mod tests {
         node_id::FileID,
         node_kinds::{
             block::Block,
-            call_arg::{ArgMode, CallArg},
+            call_arg::{ArgMode, CallArg, CallArgOrigin},
             decl::{Decl, DeclKind, ReceiverMode, Visibility},
             expr::{Expr, ExprKind},
-            func::{CaptureMode, EffectSet, Func},
+            func::{CaptureMode, EffectSet, Func, FuncOrigin},
             func_signature::FuncSignature,
             generic_arg::{GenericArg, StaticExpr, StaticExprKind, StaticOpKind},
             generic_decl::GenericDecl,
@@ -22,7 +22,7 @@ pub mod tests {
                 InlineIRInstruction, InlineIRInstructionKind, Register, Value,
             },
             match_arm::MatchArm,
-            parameter::{ParamMode, Parameter},
+            parameter::{ParamLabel, ParamMode, Parameter},
             pattern::{Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind},
             record_field::{RecordField, RecordFieldTypeAnnotation},
             stmt::{Stmt, StmtKind},
@@ -203,16 +203,21 @@ pub mod tests {
         assert!(matches!(
             parsed.roots[0],
             Node::Stmt(Stmt {
-                kind: StmtKind::Expr(Expr {
-                    kind: ExprKind::ForceUnwrap(box Expr {
-                        kind: ExprKind::Variable(_),
-                        ..
-                    }, box Expr {
-                        kind: ExprKind::Unreachable,
+                kind:
+                    StmtKind::Expr(Expr {
+                        kind:
+                            ExprKind::ForceUnwrap(
+                                box Expr {
+                                    kind: ExprKind::Variable(_),
+                                    ..
+                                },
+                                box Expr {
+                                    kind: ExprKind::Unreachable,
+                                    ..
+                                },
+                            ),
                         ..
                     }),
-                    ..
-                }),
                 ..
             })
         ));
@@ -225,16 +230,18 @@ pub mod tests {
         assert!(matches!(
             parsed.roots[0],
             Node::Stmt(Stmt {
-                kind: StmtKind::Expr(Expr {
-                    kind: ExprKind::Unary(
-                        TokenKind::Bang,
-                        box Expr {
-                            kind: ExprKind::ForceUnwrap(..),
-                            ..
-                        }
-                    ),
-                    ..
-                }),
+                kind:
+                    StmtKind::Expr(Expr {
+                        kind:
+                            ExprKind::Unary(
+                                TokenKind::Bang,
+                                box Expr {
+                                    kind: ExprKind::ForceUnwrap(..),
+                                    ..
+                                },
+                            ),
+                        ..
+                    }),
                 ..
             })
         ));
@@ -901,6 +908,7 @@ pub mod tests {
                 span: Span::ANY,
                 visibility: Visibility::default(),
                 kind: DeclKind::Func(Func {
+                    origin: FuncOrigin::Decl,
                     id: NodeID::ANY,
                     name: "foo".into(),
                     name_span: Span::ANY,
@@ -1122,6 +1130,7 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
                 id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
                 name_span: Span::ANY,
@@ -1129,6 +1138,8 @@ pub mod tests {
                 captures: vec![],
                 where_clause: None,
                 params: vec![Parameter {
+                    label: None,
+                    label_span: None,
                     mode: None,
                     mode_span: None,
                     id: NodeID::ANY,
@@ -1161,6 +1172,7 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
                 id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
                 name_span: Span::ANY,
@@ -1590,6 +1602,7 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
                 id: NodeID::ANY,
                 name: Name::Raw("hello".to_string()),
                 name_span: Span::ANY,
@@ -1612,6 +1625,7 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[1].as_decl(),
             any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
                 id: NodeID::ANY,
                 name: Name::Raw("world".to_string()),
                 name_span: Span::ANY,
@@ -1639,6 +1653,7 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
                 id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
                 name_span: Span::ANY,
@@ -1647,6 +1662,8 @@ pub mod tests {
                 where_clause: None,
                 params: vec![
                     Parameter {
+                        label: None,
+                        label_span: None,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -1656,6 +1673,8 @@ pub mod tests {
                         type_annotation: None,
                     },
                     Parameter {
+                        label: None,
+                        label_span: None,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -1684,6 +1703,7 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
                 id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
                 name_span: Span::ANY,
@@ -1691,6 +1711,8 @@ pub mod tests {
                 captures: vec![],
                 where_clause: None,
                 params: vec![Parameter {
+                    label: None,
+                    label_span: None,
                     mode: None,
                     mode_span: None,
                     id: NodeID::ANY,
@@ -1721,6 +1743,175 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_two_name_param() {
+        // ADR 0041: `foo` is the external label, `fizz` the local binder.
+        let parsed = parse("func split(foo fizz) { }");
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
+                id: NodeID::ANY,
+                name: Name::Raw("split".to_string()),
+                name_span: Span::ANY,
+                generics: vec![],
+                captures: vec![],
+                where_clause: None,
+                params: vec![Parameter {
+                    mode: None,
+                    mode_span: None,
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    label: Some(ParamLabel::Named("foo".into())),
+                    label_span: Some(Span::ANY),
+                    name: "fizz".into(),
+                    name_span: Span::ANY,
+                    type_annotation: None,
+                }],
+                body: Block {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    args: vec![],
+                    body: vec![],
+                },
+                effects: Default::default(),
+                ret: None,
+                attributes: vec![],
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_omitted_label_param() {
+        // ADR 0041: `_ value` declares an unlabeled parameter.
+        let parsed = parse("func positional(_ value) { }");
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
+                id: NodeID::ANY,
+                name: Name::Raw("positional".to_string()),
+                name_span: Span::ANY,
+                generics: vec![],
+                captures: vec![],
+                where_clause: None,
+                params: vec![Parameter {
+                    mode: None,
+                    mode_span: None,
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    label: Some(ParamLabel::Omitted),
+                    label_span: Some(Span::ANY),
+                    name: "value".into(),
+                    name_span: Span::ANY,
+                    type_annotation: None,
+                }],
+                body: Block {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    args: vec![],
+                    body: vec![],
+                },
+                effects: Default::default(),
+                ret: None,
+                attributes: vec![],
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_two_name_param_with_mode_and_type() {
+        // Ownership modes prefix the label pair and stay out of it (ADR 0041).
+        let parsed = parse("func store(consume value item: Item) { }");
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
+                id: NodeID::ANY,
+                name: Name::Raw("store".to_string()),
+                name_span: Span::ANY,
+                generics: vec![],
+                captures: vec![],
+                where_clause: None,
+                params: vec![Parameter {
+                    mode: Some(ParamMode::Consume),
+                    mode_span: Some(Span::ANY),
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    label: Some(ParamLabel::Named("value".into())),
+                    label_span: Some(Span::ANY),
+                    name: "item".into(),
+                    name_span: Span::ANY,
+                    type_annotation: Some(TypeAnnotation {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        kind: TypeAnnotationKind::Nominal {
+                            name: "Item".into(),
+                            name_span: Span::ANY,
+                            generics: vec![]
+                        }
+                    }),
+                }],
+                body: Block {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    args: vec![],
+                    body: vec![],
+                },
+                effects: Default::default(),
+                ret: None,
+                attributes: vec![],
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_mode_with_omitted_label_param() {
+        // `mut _ item` — the mode prefixes an unlabeled parameter.
+        let parsed = parse("func update(mut _ item) { }");
+        let DeclKind::Func(func) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func decl");
+        };
+        assert_eq!(func.params.len(), 1);
+        assert_eq!(func.params[0].mode, Some(ParamMode::Mut));
+        assert_eq!(func.params[0].label, Some(ParamLabel::Omitted));
+        assert_eq!(func.params[0].name, "item".into());
+
+        let parsed = parse("func store(consume _ value) { }");
+        let DeclKind::Func(func) = &parsed.roots[0].as_decl().kind else {
+            panic!("expected func decl");
+        };
+        assert_eq!(func.params[0].mode, Some(ParamMode::Consume));
+        assert_eq!(func.params[0].label, Some(ParamLabel::Omitted));
+        assert_eq!(func.params[0].name, "value".into());
+    }
+
+    #[test]
+    fn parses_underscore_call_label() {
+        // ADR 0041: `_:` parses as a written label so semantic analysis can
+        // reject it; it is never a valid call-site spelling.
+        let parsed = parse("id(_: 123)");
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Call {
+                callee: any_expr!(ExprKind::Variable("id".into())).into(),
+                type_args: vec![],
+                args: vec![CallArg {
+                    origin: CallArgOrigin::Written,
+                    mode: None,
+                    mode_span: None,
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    label: "_".into(),
+                    label_span: Span::ANY,
+                    value: any_expr!(ExprKind::LiteralInt("123".into()))
+                }],
+                trailing_block: None,
+                desugared_operator: None,
+            })
+        );
+    }
+
+    #[test]
     fn parses_call_no_args() {
         let parsed = parse("fizz()");
         assert_eq!(
@@ -1744,6 +1935,7 @@ pub mod tests {
                 callee: any_expr!(ExprKind::Variable("fizz".into())).into(),
                 type_args: vec![],
                 args: vec![CallArg {
+                    origin: CallArgOrigin::Written,
                     mode: None,
                     mode_span: None,
                     id: NodeID::ANY,
@@ -1767,6 +1959,7 @@ pub mod tests {
                 callee: any_expr!(ExprKind::Variable("say".into())).into(),
                 type_args: vec![],
                 args: vec![CallArg {
+                    origin: CallArgOrigin::BareString,
                     mode: None,
                     mode_span: None,
                     id: NodeID::ANY,
@@ -1790,6 +1983,7 @@ pub mod tests {
                 callee: any_expr!(ExprKind::Variable("say".into())).into(),
                 type_args: vec![],
                 args: vec![CallArg {
+                    origin: CallArgOrigin::BareString,
                     mode: None,
                     mode_span: None,
                     id: NodeID::ANY,
@@ -1819,6 +2013,8 @@ pub mod tests {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     args: vec![Parameter {
+                        label: None,
+                        label_span: None,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -1872,6 +2068,7 @@ pub mod tests {
                 callee: any_expr!(ExprKind::Variable("fizz".into())).into(),
                 type_args: vec![],
                 args: vec![CallArg {
+                    origin: CallArgOrigin::Written,
                     mode: None,
                     mode_span: None,
                     id: NodeID::ANY,
@@ -1920,6 +2117,8 @@ pub mod tests {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     args: vec![Parameter {
+                        label: None,
+                        label_span: None,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -2338,6 +2537,7 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
                 id: NodeID::ANY,
                 name: Name::Raw("fizz".to_string()),
                 name_span: Span::ANY,
@@ -2727,6 +2927,7 @@ pub mod tests {
                 .into(),
                 type_args: vec![],
                 args: vec![CallArg {
+                    origin: CallArgOrigin::Written,
                     mode: None,
                     mode_span: None,
                     id: NodeID::ANY,
@@ -3160,6 +3361,7 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
                 id: NodeID::ANY,
                 name: Name::Raw("greet".into()),
                 name_span: Span::ANY,
@@ -3167,6 +3369,8 @@ pub mod tests {
                 captures: vec![],
                 where_clause: None,
                 params: vec![Parameter {
+                    label: None,
+                    label_span: None,
                     mode: None,
                     mode_span: None,
                     id: NodeID::ANY,
@@ -3275,6 +3479,7 @@ pub mod tests {
                         is_static: false,
                         receiver_mode: ReceiverMode::None,
                         func: Box::new(Func {
+                            origin: FuncOrigin::Decl,
                             id: NodeID::ANY,
                             name: Name::Raw("fizz".into()),
                             name_span: Span::ANY,
@@ -3529,6 +3734,7 @@ pub mod tests {
                 where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     func: Box::new(Func {
+                        origin: FuncOrigin::Decl,
                         id: NodeID::ANY,
                         name: "foo".into(),
                         name_span: Span::ANY,
@@ -3791,6 +3997,7 @@ pub mod tests {
                     is_static: true,
                     receiver_mode: ReceiverMode::None,
                     func: Func {
+                        origin: FuncOrigin::Decl,
                         id: NodeID::ANY,
                         name: "getAge".into(),
                         name_span: Span::ANY,
@@ -3834,6 +4041,7 @@ pub mod tests {
                     is_static: false,
                     receiver_mode: ReceiverMode::None,
                     func: Func {
+                        origin: FuncOrigin::Decl,
                         id: NodeID::ANY,
                         name: "getAge".into(),
                         name_span: Span::ANY,
@@ -3915,6 +4123,8 @@ pub mod tests {
                 body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: Name::Raw("init".into()),
                     params: vec![Parameter {
+                        label: None,
+                        label_span: None,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -4473,6 +4683,8 @@ pub mod tests {
                 generics: vec![],
                 where_clause: None,
                 params: vec![any!(Parameter, {
+                    label: None,
+                    label_span: None,
                     mode: None,
                     mode_span: None,
                     name: "x".into(),
@@ -4490,6 +4702,8 @@ pub mod tests {
                 effect_name_span: Span::ANY,
                 body: any!(Block, {
                     args: vec![any!(Parameter, {
+                    label: None,
+                    label_span: None,
                     mode: None,
                     mode_span: None,
                         name: "x".into(),
@@ -4506,6 +4720,7 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[2].as_decl(),
             any_decl!(DeclKind::Func(Func {
+                origin: FuncOrigin::Decl,
                 id: NodeID::ANY,
                 name: "fizzes".into(),
                 name_span: Span::ANY,
@@ -4513,6 +4728,8 @@ pub mod tests {
                 captures: vec![],
                 where_clause: None,
                 params: vec![any!(Parameter, {
+                    label: None,
+                    label_span: None,
                     mode: None,
                     mode_span: None,
                     name: "x".into(),
@@ -4528,6 +4745,7 @@ pub mod tests {
                     args: Default::default(),
                     body: vec![
                         any_expr_stmt!(ExprKind::CallEffect { effect_name: "fizz".into(), effect_name_span: Span::ANY, type_args: vec![], args: vec![any!(CallArg, {
+                    origin: CallArgOrigin::Written,
                     mode: None,
                     mode_span: None,
                             label: Label::Positional(0),

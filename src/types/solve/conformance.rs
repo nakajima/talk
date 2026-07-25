@@ -364,5 +364,4 @@ impl<'s> Solver<'s> {
         self.errors.push((error, origin.node));
         None
     }
-
 }

@@ -5,6 +5,14 @@ pub(super) struct TypeArtifacts {
     pub(super) node_types: FxHashMap<NodeID, Ty>,
     pub(super) instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub(super) member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    /// The selected callable symbol per statically resolved call node
+    /// (ADR 0041): direct calls, methods, statics, initializers,
+    /// requirements, witnesses, and effects. Editor tooling and lowering
+    /// consume this instead of searching a catalog again.
+    pub(super) selected_callables: FxHashMap<NodeID, Symbol>,
+    /// Written argument slots per member-call callee node (ADR 0041),
+    /// read by the solver to select among label-overloaded methods.
+    pub(super) member_call_slots: FxHashMap<NodeID, Vec<crate::types::callables::WrittenSlot>>,
     pub(super) integer_literals: FxHashMap<NodeID, CheckedIntegerLiteral>,
     pub(super) for_plans: FxHashMap<NodeID, ForPlan>,
     pub(super) propagation_plans: FxHashMap<NodeID, PropagationPlan>,
@@ -12,7 +20,11 @@ pub(super) struct TypeArtifacts {
     /// Mode-marked call arguments awaiting the post-solve marker checks
     /// (ADR 0038): `copy` demands Copy or CheapClone evidence; `mut` and
     /// `borrow` must agree with the callee's parameter mode.
-    pub(super) marked_args: Vec<(NodeID, MarkedSlot, crate::parsing::node_kinds::call_arg::ArgMode)>,
+    pub(super) marked_args: Vec<(
+        NodeID,
+        MarkedSlot,
+        crate::parsing::node_kinds::call_arg::ArgMode,
+    )>,
     pub(super) existential_packs: FxHashMap<NodeID, ExistentialPack>,
     pub(super) checked_ir: FxHashMap<NodeID, crate::types::output::CheckedIrKind>,
     pub(super) effect_contracts: FxHashMap<NodeID, crate::types::output::EffectContract>,

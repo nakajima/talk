@@ -6,7 +6,7 @@ effect 'check(n) -> Int
 	0 - 1
 }
 func go(x: Int) 'check -> Int {
-	let v = 'check(x)
+	let v = 'check(n: x)
 	v * 10
 }
-go(5)
+go(x: 5)

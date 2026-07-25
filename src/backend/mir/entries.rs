@@ -364,8 +364,7 @@ impl<'a> ProgramBuilder<'a> {
             .flat_map(|file| file.roots.iter())
             .filter_map(|node| match node {
                 Node::Decl(decl)
-                    if matches!(decl.kind, DeclKind::Let { .. })
-                        && bound_func(decl).is_none() =>
+                    if matches!(decl.kind, DeclKind::Let { .. }) && bound_func(decl).is_none() =>
                 {
                     Some(decl)
                 }
@@ -390,8 +389,7 @@ impl<'a> ProgramBuilder<'a> {
                     }
                     let slot = u32::try_from(self.global_slots.len()).unwrap_or_default();
                     self.global_slots.insert(symbol, slot);
-                    self.global_tys
-                        .insert(slot, ty);
+                    self.global_tys.insert(slot, ty);
                 }
             }
         }

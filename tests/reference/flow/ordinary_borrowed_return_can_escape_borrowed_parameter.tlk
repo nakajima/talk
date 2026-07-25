@@ -1,6 +1,6 @@
 func first(s: &String) -> Substring {
-	s.utf8().slice(0, 1)
+	s.utf8().slice(start: 0, byte_count: 1)
 }
 func ok(s: &String) -> Substring {
-	first(s)
+	first(s: s)
 }

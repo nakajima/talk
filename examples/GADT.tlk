@@ -13,7 +13,7 @@ func evaluate<T>(expr: Expr<T>) -> T {
 	// T is String
 }
 
-let i = evaluate(.int(123))
-let s = evaluate(.string("sup"))
+let i = evaluate(expr: .int(123))
+let s = evaluate(expr: .string("sup"))
 print(i) // typed as Int
 print(s) // typed as String

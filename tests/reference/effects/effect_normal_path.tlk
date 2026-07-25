@@ -5,9 +5,9 @@ effect 'oops(error) -> Never
 }
 func check(x: Bool) 'oops -> Int {
 	if x {
-		'oops("nope")
+		'oops(error: "nope")
 	}
 	42
 }
-let result = check(false)
+let result = check(x: false)
 result + 1

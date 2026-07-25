@@ -1,7 +1,7 @@
 func check() -> Int {
 	let d = Dict<Int>()
-	d.insert("one", 1)
-	d.insert("two", 2)
+	d.insert(key: "one", value: 1)
+	d.insert(key: "two", value: 2)
 	d.count
 }
 check()

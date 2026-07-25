@@ -161,6 +161,11 @@ pub(super) fn compute_code_actions(
             AnalysisDiagnosticKind::Types(TypeError::ArityMismatch { expected, found }) => {
                 actions.extend(arity_mismatch_quick_fixes(&site, *expected, *found));
             }
+            AnalysisDiagnosticKind::Types(TypeError::ArgumentLabelMismatch {
+                mismatches, ..
+            }) => {
+                actions.extend(argument_label_quick_fixes(&site, mismatches));
+            }
             AnalysisDiagnosticKind::Types(TypeError::MissingWitness {
                 protocol,
                 requirement,
@@ -417,6 +422,54 @@ fn comma_list_item_removal_range(text: &str, start: usize, end: usize) -> Option
     Some((before, end))
 }
 
+/// One atomic quick fix for a call's complete label mismatch (ADR 0041):
+/// inserting a missing label before the ownership marker or value,
+/// replacing only the incorrect label token, or removing an unexpected
+/// label together with its colon and whitespace. Trailing blocks never
+/// appear here — the checker exempts them by argument origin.
+fn argument_label_quick_fixes(
+    site: &DiagnosticActionSite<'_>,
+    mismatches: &[crate::types::error::LabelMismatch],
+) -> Vec<CodeActionOrCommand> {
+    let mut edits: Vec<TextEdit> = Vec::new();
+    for mismatch in mismatches {
+        let (start, end, replacement) = match (&mismatch.expected, &mismatch.found) {
+            (Some(expected), None) => (
+                mismatch.insert_at,
+                mismatch.insert_at,
+                format!("{expected}: "),
+            ),
+            (Some(expected), Some(_)) => (
+                mismatch.label_span.start,
+                mismatch.label_span.end,
+                expected.clone(),
+            ),
+            (None, Some(_)) => (mismatch.label_span.start, mismatch.insert_at, String::new()),
+            (None, None) => continue,
+        };
+        let Some(range) = byte_span_to_range_utf16(site.text, start, end) else {
+            return vec![];
+        };
+        edits.push(TextEdit::new(range, replacement));
+    }
+    if edits.is_empty() {
+        return vec![];
+    }
+    let title = if edits.len() == 1 {
+        "Fix argument label".to_string()
+    } else {
+        format!("Fix {} argument labels", edits.len())
+    };
+    vec![quick_fix_action(
+        site.uri,
+        title,
+        edits,
+        site.diagnostic,
+        site.diag_range,
+        Some(true),
+    )]
+}
+
 fn arity_mismatch_quick_fixes(
     site: &DiagnosticActionSite<'_>,
     expected: usize,
@@ -476,6 +529,7 @@ fn arity_mismatch_quick_fixes(
                     callee,
                     args,
                     trailing_span,
+                    call_argument_labels(site.workspace, &expression, callee),
                     expected,
                     found,
                 );
@@ -491,10 +545,18 @@ fn arity_mismatch_quick_fixes(
                     expected - found,
                 )
             } else {
-                remove_excess_arguments(site, args, trailing_span, close, expected, found - expected)
+                remove_excess_arguments(
+                    site,
+                    args,
+                    trailing_span,
+                    close,
+                    expected,
+                    found - expected,
+                )
             }
         }
         ExprKind::CallEffect {
+            effect_name,
             effect_name_span,
             args,
             ..
@@ -512,7 +574,20 @@ fn arity_mismatch_quick_fixes(
                 return vec![];
             };
             if found < expected {
-                let placeholders = vec!["{}".to_string(); expected - found];
+                let labels = effect_name
+                    .symbol()
+                    .ok()
+                    .and_then(|symbol| contract_labels(site.workspace, symbol));
+                let placeholders = (found..expected)
+                    .map(|index| {
+                        labels
+                            .as_ref()
+                            .and_then(|labels| labels.get(index))
+                            .and_then(Clone::clone)
+                            .map(|label| format!("{label}: {{}}"))
+                            .unwrap_or_else(|| "{}".to_string())
+                    })
+                    .collect();
                 missing_argument_action(site, close, !args.is_empty(), placeholders)
             } else {
                 remove_excess_arguments(site, args, None, close, expected, found - expected)
@@ -527,12 +602,23 @@ fn omitted_call_arity_quick_fixes(
     callee: &crate::node_kinds::expr::Expr,
     arguments: &[crate::node_kinds::call_arg::CallArg],
     trailing_span: Option<crate::span::Span>,
+    labels: Option<Vec<Option<String>>>,
     expected: usize,
     found: usize,
 ) -> Vec<CodeActionOrCommand> {
     if found < expected {
         let missing = expected - found;
-        let placeholders = vec!["{}"; missing].join(", ");
+        let placeholders = (found..expected)
+            .map(|index| {
+                labels
+                    .as_ref()
+                    .and_then(|labels| labels.get(index))
+                    .and_then(Clone::clone)
+                    .map(|label| format!("{label}: {{}}"))
+                    .unwrap_or_else(|| "{}".to_string())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         let start = callee.span.end as usize;
         let (end, contents) =
             if let (Some(first), Some(last)) = (arguments.first(), arguments.last()) {
@@ -721,6 +807,29 @@ fn add_missing_arguments(
     missing_argument_action(site, close, !arguments.is_empty(), placeholders)
 }
 
+/// The labels a callable's slots expect, for arity placeholders (ADR 0041):
+/// the selected callable's contract is the authority for functions,
+/// methods, requirements, effects, and initializers; enum variants keep
+/// their payload labels; memberwise construction falls back to fields.
+fn contract_labels(
+    workspace: &AnalysisWorkspace,
+    symbol: crate::name_resolution::symbol::Symbol,
+) -> Option<Vec<Option<String>>> {
+    use crate::types::callables::ArgumentLabel;
+    let contract = workspace.types.catalog.callable_contracts.get(&symbol)?;
+    Some(
+        contract
+            .name
+            .labels
+            .iter()
+            .map(|label| match label {
+                ArgumentLabel::Named(name) => Some(name.clone()),
+                ArgumentLabel::Omitted => None,
+            })
+            .collect(),
+    )
+}
+
 fn call_argument_labels(
     workspace: &AnalysisWorkspace,
     expression: &crate::node_kinds::expr::Expr,
@@ -729,6 +838,14 @@ fn call_argument_labels(
     use crate::node_kinds::expr::ExprKind;
     use crate::types::output::MemberResolution;
 
+    if let Some(labels) = workspace
+        .types
+        .selected_callables
+        .get(&expression.id)
+        .and_then(|symbol| contract_labels(workspace, *symbol))
+    {
+        return Some(labels);
+    }
     let resolved = [expression.id, callee.id].into_iter().find_map(|id| {
         match workspace.types.member_resolutions.get(&id) {
             Some(MemberResolution::Direct(symbol)) => Some(*symbol),
@@ -736,6 +853,9 @@ fn call_argument_labels(
         }
     });
     if let Some(resolved) = resolved {
+        if let Some(labels) = contract_labels(workspace, resolved) {
+            return Some(labels);
+        }
         for info in workspace.types.catalog.enums.values() {
             if let Some(variant) = info
                 .variants
@@ -869,11 +989,7 @@ fn remove_excess_arguments(
     )]
 }
 
-fn block_source_range(
-    text: &str,
-    span: crate::span::Span,
-    limit: usize,
-) -> Option<(usize, usize)> {
+fn block_source_range(text: &str, span: crate::span::Span, limit: usize) -> Option<(usize, usize)> {
     let anchor = (span.start as usize).min(text.len());
     let start = if text.as_bytes().get(anchor) == Some(&b'{') {
         anchor

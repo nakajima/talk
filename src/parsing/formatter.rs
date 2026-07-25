@@ -12,16 +12,14 @@ use crate::{
         block::Block,
         body::Body,
         call_arg::{ArgMode, CallArg},
-        decl::{
-            Decl, DeclKind, Import, ImportPath, ImportedSymbols, ReceiverMode, Visibility,
-        },
+        decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, ReceiverMode, Visibility},
         expr::{Expr, ExprKind},
         func::{CaptureMode, CaptureSpec, EffectSet, Func},
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
         inline_ir_instruction::InlineIRInstruction,
         match_arm::MatchArm,
-        parameter::{ParamMode, Parameter},
+        parameter::{ParamLabel, ParamMode, Parameter},
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
         record_field::{RecordField, RecordFieldTypeAnnotation},
         stmt::{Stmt, StmtKind},
@@ -2054,6 +2052,17 @@ impl<'a> Formatter<'a> {
     fn format_parameter(&self, param: &Parameter) -> Doc {
         let mut result = self.format_name(&param.name);
 
+        // ADR 0041: print the external label before the local binder.
+        match &param.label {
+            None => {}
+            Some(ParamLabel::Named(label)) => {
+                result = concat_space(text(label.clone()), result);
+            }
+            Some(ParamLabel::Omitted) => {
+                result = concat_space(text("_"), result);
+            }
+        }
+
         if let Some(ref ty) = param.type_annotation {
             result = concat(
                 result,
@@ -2723,8 +2732,10 @@ impl<'a> Formatter<'a> {
                 if let Some(args) = segments.get(index)
                     && !args.is_empty()
                 {
-                    let arg_docs: Vec<_> =
-                        args.iter().map(|arg| self.format_generic_arg(arg)).collect();
+                    let arg_docs: Vec<_> = args
+                        .iter()
+                        .map(|arg| self.format_generic_arg(arg))
+                        .collect();
                     doc = concat(
                         doc,
                         concat(
@@ -3153,6 +3164,31 @@ mod formatter_tests {
             format_code("func f(fn: (&Foo, &mut Bar) -> Void) {}", 100),
             "func f(fn: (Foo, mut Bar) -> Void) {}"
         );
+    }
+
+    #[test]
+    fn formats_parameter_labels() {
+        // ADR 0041 spellings round-trip: shorthand, two-name, and `_` forms,
+        // with and without ownership modes.
+        assert_eq!(format_code("func same(x) {}", 100), "func same(x) {}");
+        assert_eq!(
+            format_code("func split(foo fizz) {}", 100),
+            "func split(foo fizz) {}"
+        );
+        assert_eq!(
+            format_code("func positional(_ value) {}", 100),
+            "func positional(_ value) {}"
+        );
+        assert_eq!(
+            format_code("func store(consume value item: Item) {}", 100),
+            "func store(consume value item: Item) {}"
+        );
+        assert_eq!(
+            format_code("func update(mut _ item: Item) {}", 100),
+            "func update(mut _ item: Item) {}"
+        );
+        // A written `_:` call label survives formatting for the LSP to remove.
+        assert_eq!(format_code("id(_: 123)", 100), "id(_: 123)");
     }
 
     #[test]

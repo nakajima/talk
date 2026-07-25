@@ -1,14 +1,14 @@
 effect 'ask<T>(value: T) -> T
 
 func probe<T>(consume x: T) -> T {
-	'ask(x)
+	'ask(value: x)
 }
 
 func run() -> Int {
 	@handle 'ask { v in 'continue v }
-	let n = probe(21)
-	let b = probe(true)
-	let direct = 'ask(n + n)
+	let n = probe(x: 21)
+	let b = probe(x: true)
+	let direct = 'ask(value: n + n)
 	if b {
 		direct
 	} else {

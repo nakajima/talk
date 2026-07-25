@@ -1,12 +1,12 @@
 effect 'ask<T>(prompt: T) -> T
 
 func echo(n: Int) -> Int {
-	'ask(n) + 1
+	'ask(prompt: n) + 1
 }
 
 func run() -> Int {
 	@handle 'ask { v in 'continue v }
-	echo(41)
+	echo(n: 41)
 }
 
 print(run())

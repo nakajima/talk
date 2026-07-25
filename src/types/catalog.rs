@@ -57,9 +57,9 @@ pub struct StructInfo {
     /// Field name → (property symbol, declared type over `params`).
     pub fields: IndexMap<String, (Symbol, Ty)>,
     /// Instance method name → method symbol.
-    pub methods: IndexMap<String, Symbol>,
+    pub methods: IndexMap<String, Vec<Symbol>>,
     /// Static method name → method symbol.
-    pub statics: IndexMap<String, Symbol>,
+    pub statics: IndexMap<String, Vec<Symbol>>,
     /// Initializers (explicit or resolver-synthesized memberwise) with
     /// their declared arity, `self` included.
     pub inits: Vec<(Symbol, usize)>,
@@ -91,7 +91,7 @@ pub struct Enum {
     pub variants: IndexMap<String, Variant>,
     /// Instance method name → method symbol (methods on enums dispatch
     /// exactly like struct methods).
-    pub methods: IndexMap<String, Symbol>,
+    pub methods: IndexMap<String, Vec<Symbol>>,
     /// Well-formedness predicates over `params` for every application of
     /// this nominal.
     pub predicates: Vec<Predicate>,
@@ -179,7 +179,11 @@ pub struct ProtocolInfo {
     pub supers: Vec<ProtocolRef>,
     /// Protocol refinements over `Self = Ty::Param(protocol symbol)`.
     pub predicates: Vec<Predicate>,
-    pub requirements: IndexMap<String, Requirement>,
+    /// Requirement overload sets by base name (ADR 0041): full callable
+    /// names distinguish same-base requirements; flattened iteration
+    /// order (per base, declaration order within) is witness-table slot
+    /// order.
+    pub requirements: IndexMap<String, Vec<Requirement>>,
 }
 
 /// A selected protocol application: `self_ty` witnesses the full protocol
@@ -259,7 +263,6 @@ impl ConformanceId {
             local_id,
         }
     }
-
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -395,6 +398,12 @@ pub struct TypeCatalog {
     /// registered instance row (ADR 0036): disjoint heads may define the
     /// same label; overlapping heads are rejected at collection.
     pub extend_members: FxHashMap<Symbol, IndexMap<String, Vec<InherentMember>>>,
+    /// Named callables' argument-label contracts (ADR 0041): declaration
+    /// symbol → its full callable name and role. Registered at collection
+    /// (methods, inits, requirements, effects) and at the generate seam for
+    /// named function declarations; merged alongside imported schemes.
+    #[serde(default)]
+    pub callable_contracts: FxHashMap<Symbol, crate::types::callables::CallableContract>,
     /// Effect operation signatures.
     pub effects: FxHashMap<Symbol, EffectSig>,
     /// Transparent type aliases exported through the catalog for imports.
@@ -949,6 +958,33 @@ impl TypeCatalog {
         Some(self.canonical_protocol_ref(ProtocolRef { protocol, args }))
     }
 
+    /// The witness-table key for a requirement (ADR 0041): the base label
+    /// while it is unique in its protocol, the full callable name once the
+    /// base is overloaded — so single-requirement lookups by string
+    /// (`deinit`, `clone`) stay stable.
+    pub fn witness_key(&self, protocol: Symbol, base: &str, requirement: Symbol) -> String {
+        let overloaded = self
+            .protocols
+            .get(&protocol)
+            .and_then(|info| info.requirements.get(base))
+            .is_some_and(|set| set.len() > 1);
+        if overloaded && let Some(contract) = self.callable_contracts.get(&requirement) {
+            return contract.name.to_string();
+        }
+        base.to_string()
+    }
+
+    /// A protocol requirement's flattened witness-table slot index
+    /// (ADR 0041): per base in declaration order, overloads in declaration
+    /// order within their base.
+    pub fn requirement_slot_index(&self, protocol: Symbol, requirement: Symbol) -> Option<usize> {
+        let info = self.protocols.get(&protocol)?;
+        info.requirements
+            .values()
+            .flatten()
+            .position(|candidate| candidate.symbol == requirement)
+    }
+
     /// Merge an imported module's catalog (Phase 0 of checking: the
     /// environment a group solves against).
     pub fn merge(&mut self, other: TypeCatalog) {
@@ -992,6 +1028,7 @@ impl TypeCatalog {
                 }
             }
         }
+        self.callable_contracts.extend(other.callable_contracts);
         self.effects.extend(other.effects);
         self.type_aliases.extend(other.type_aliases);
         // Row ids shift across the value-dedup above; the committed
@@ -1051,14 +1088,16 @@ impl TypeCatalog {
             let Some(info) = self.protocols.get(&owner.protocol) else {
                 continue;
             };
-            for (label, requirement) in &info.requirements {
-                if requirements
-                    .iter()
-                    .any(|(_, _, existing)| existing.symbol == requirement.symbol)
-                {
-                    continue;
+            for (label, set) in &info.requirements {
+                for requirement in set {
+                    if requirements
+                        .iter()
+                        .any(|(_, _, existing)| existing.symbol == requirement.symbol)
+                    {
+                        continue;
+                    }
+                    requirements.push((owner.clone(), label.clone(), requirement.clone()));
                 }
-                requirements.push((owner.clone(), label.clone(), requirement.clone()));
             }
         }
         requirements
@@ -1358,7 +1397,11 @@ impl TypeCatalog {
             let mut leaves = Vec::new();
             for variant in info.variants.values() {
                 let Some(instantiation) = variant
-                    .instantiate(&FxHashMap::default(), &Default::default(), &Default::default())
+                    .instantiate(
+                        &FxHashMap::default(),
+                        &Default::default(),
+                        &Default::default(),
+                    )
                     .refined_by_result(&self_ty)
                 else {
                     continue;
@@ -1467,8 +1510,10 @@ impl TypeCatalog {
             }
         };
         for leaf in &leaves {
-            let mentions_param =
-                mentions(leaf, &|ty| matches!(ty, Ty::Param(param) if params.contains(param)));
+            let mentions_param = mentions(
+                leaf,
+                &|ty| matches!(ty, Ty::Param(param) if params.contains(param)),
+            );
             if !mentions_param {
                 continue;
             }
@@ -1523,20 +1568,27 @@ impl TypeCatalog {
             let entries = info
                 .requirements
                 .iter()
-                .map(|(label, requirement)| match row.witnesses.get(label) {
-                    Some(witness) => DictionaryEntry::Implementation {
-                        symbol: *witness,
-                        writeback_width: requirement.writeback_width,
-                    },
-                    None => match recipe {
-                        Some(recipe) if !requirement.has_default => {
-                            DictionaryEntry::Derived(recipe)
-                        }
-                        _ => DictionaryEntry::Implementation {
-                            symbol: requirement.symbol,
+                .flat_map(|(label, set)| {
+                    set.iter().map(move |requirement| (label, requirement))
+                })
+                .map(|(label, requirement)| {
+                    let key =
+                        self.witness_key(row.protocol.protocol, label, requirement.symbol);
+                    match row.witnesses.get(&key) {
+                        Some(witness) => DictionaryEntry::Implementation {
+                            symbol: *witness,
                             writeback_width: requirement.writeback_width,
                         },
-                    },
+                        None => match recipe {
+                            Some(recipe) if !requirement.has_default => {
+                                DictionaryEntry::Derived(recipe)
+                            }
+                            _ => DictionaryEntry::Implementation {
+                                symbol: requirement.symbol,
+                                writeback_width: requirement.writeback_width,
+                            },
+                        },
+                    }
                 })
                 .collect();
             dictionaries.push((*id, entries));
@@ -1560,6 +1612,7 @@ impl TypeCatalog {
                 .methods
                 .values()
                 .chain(info.statics.values())
+                .flatten()
                 .copied()
                 .chain(info.inits.iter().map(|(init, _)| *init))
             {
@@ -1573,7 +1626,7 @@ impl TypeCatalog {
         }
         for info in self.enums.values() {
             let params: Vec<Symbol> = info.params.iter().map(|param| param.symbol).collect();
-            for symbol in info.methods.values().copied() {
+            for symbol in info.methods.values().flatten().copied() {
                 owners.insert(
                     symbol,
                     OwnerBinding::Nominal {
@@ -1597,7 +1650,7 @@ impl TypeCatalog {
             }
         }
         for (protocol, info) in &self.protocols {
-            for requirement in info.requirements.values() {
+            for requirement in info.requirements.values().flatten() {
                 owners.insert(requirement.symbol, OwnerBinding::Protocol(*protocol));
             }
         }
@@ -1871,12 +1924,41 @@ impl TypeCatalog {
     ) -> Option<(ProtocolRef, &Requirement)> {
         for current in self.protocol_and_supers(protocol) {
             if let Some(info) = self.protocols.get(&current.protocol)
-                && let Some(requirement) = info.requirements.get(label)
+                && let Some(requirement) = info.requirements.get(label).and_then(|set| set.first())
             {
                 return Some((current, requirement));
             }
         }
         None
+    }
+
+    /// Every same-base requirement overload reachable through `protocol`
+    /// (ADR 0041), each with its owning protocol application — the whole
+    /// super chain, because an overload set can span it (a blanket
+    /// `extend P: Q` default beside Q's own requirement). Dispatch
+    /// selects among them by written labels.
+    pub fn requirement_overloads_in_ref(
+        &self,
+        protocol: &ProtocolRef,
+        label: &str,
+    ) -> Vec<(ProtocolRef, Requirement)> {
+        let mut overloads: Vec<(ProtocolRef, Requirement)> = Vec::new();
+        for current in self.protocol_and_supers(protocol) {
+            if let Some(info) = self.protocols.get(&current.protocol)
+                && let Some(set) = info.requirements.get(label)
+            {
+                for requirement in set {
+                    if overloads
+                        .iter()
+                        .any(|(_, existing)| existing.symbol == requirement.symbol)
+                    {
+                        continue;
+                    }
+                    overloads.push((current.clone(), requirement.clone()));
+                }
+            }
+        }
+        overloads
     }
 
     pub fn requirement_in(&self, protocol: Symbol, label: &str) -> Option<(Symbol, &Requirement)> {

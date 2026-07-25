@@ -6,8 +6,8 @@ func f(flag: Bool) 'log -> Int {
 	let s = "hello" + " world"
 	let n = 0
 	if flag {
-		n = 'log(s)
+		n = 'log(msg: s)
 	}
 	n
 }
-f(true) + f(false)
+f(flag: true) + f(flag: false)

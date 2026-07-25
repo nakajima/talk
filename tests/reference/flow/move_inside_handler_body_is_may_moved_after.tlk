@@ -5,7 +5,7 @@ effect 'oops(error) -> Never
 func check() -> Int {
 	let s = "a" + "b"
 	@handle 'oops { err in
-		take(s)
+		take(s: s)
 		0
 	}
 	s.byte_count

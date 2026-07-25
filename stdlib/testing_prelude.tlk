@@ -35,6 +35,6 @@ public func __talktalk_runAllAndReport() -> Int {
 	}
 
 	print("")
-	report(__talktalk_tests, __talktalk_failures)
+	report(tests: __talktalk_tests, failures: __talktalk_failures)
 	__talktalk_failures.count
 }

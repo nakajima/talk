@@ -28,22 +28,50 @@ impl<'s> Solver<'s> {
         member: &Ty,
         origin: CtOrigin,
         queue: &mut Vec<Constraint>,
+        strict_labels: bool,
     ) -> MemberDispatch {
         let mut candidates: Vec<(ProtocolRef, ProtocolRef, Requirement)> = vec![];
         for protocol in protocols {
-            let Some((owner, requirement)) = self.catalog.requirement_in_ref(protocol, label)
-            else {
-                continue;
-            };
-            // Two protocols inheriting one base share its requirement —
-            // that is one candidate, not an ambiguity.
-            if candidates
-                .iter()
-                .any(|(_, _, r)| r.symbol == requirement.symbol)
+            for (owner, requirement) in
+                self.catalog.requirement_overloads_in_ref(protocol, label)
             {
-                continue;
+                // Two protocols inheriting one base share its requirement —
+                // that is one candidate, not an ambiguity.
+                if candidates
+                    .iter()
+                    .any(|(_, _, r)| r.symbol == requirement.symbol)
+                {
+                    continue;
+                }
+                candidates.push((protocol.clone(), owner, requirement));
             }
-            candidates.push((protocol.clone(), owner, requirement.clone()));
+        }
+        // Written labels select among same-base requirement overloads
+        // before any shape or coherence judgment (ADR 0041).
+        if !candidates.is_empty()
+            && let Some(slots) = self.member_call_slots.get(&origin.node)
+        {
+            let admitted: Vec<_> = candidates
+                .iter()
+                .filter(|(_, _, requirement)| {
+                    self.catalog
+                        .callable_contracts
+                        .get(&requirement.symbol)
+                        .is_some_and(|contract| {
+                            crate::types::callables::labels_admit(&contract.name.labels, slots)
+                        })
+                })
+                .cloned()
+                .collect();
+            if !admitted.is_empty() {
+                candidates = admitted;
+            } else if strict_labels {
+                // Every candidate's labels reject the call: yield so a
+                // later provider (owner-protocol fallback, inherent
+                // members) can admit it; the permissive last resort still
+                // recovers plain label typos.
+                return MemberDispatch::NoCandidate;
+            }
         }
         if candidates.len() > 1 {
             let filtered: Vec<_> = candidates
@@ -66,8 +94,14 @@ impl<'s> Solver<'s> {
         match candidates.as_slice() {
             [] => MemberDispatch::NoCandidate,
             [(protocol, owner, requirement)] => {
-                let evidence =
-                    self.evidence_for_requirement(head, lookup_receiver, protocol, label);
+                let evidence = self.evidence_for_requirement(
+                    head,
+                    lookup_receiver,
+                    protocol,
+                    owner.protocol,
+                    requirement.symbol,
+                    label,
+                );
                 self.bind_requirement(
                     owner.clone(),
                     requirement,
@@ -104,11 +138,14 @@ impl<'s> Solver<'s> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn evidence_for_requirement(
         &mut self,
         head: Option<Symbol>,
         lookup_receiver: &Ty,
         protocol: &ProtocolRef,
+        owner: Symbol,
+        requirement: Symbol,
         label: &str,
     ) -> Option<(
         crate::types::catalog::ConformanceId,
@@ -130,7 +167,8 @@ impl<'s> Solver<'s> {
         let [matched] = matches.as_slice() else {
             return None;
         };
-        let witness = matched.conformance.witnesses.get(label).copied();
+        let key = self.catalog.witness_key(owner, label, requirement);
+        let witness = matched.conformance.witnesses.get(&key).copied();
         let mut substitution = matched.evidence_substitution();
         substitution.push((protocol.protocol, receiver));
         if let Some(info) = self.catalog.protocols.get(&protocol.protocol) {
@@ -263,6 +301,7 @@ impl<'s> Solver<'s> {
                     &member,
                     origin,
                     queue,
+                    true,
                 ) {
                     MemberDispatch::Handled => return None,
                     MemberDispatch::Stuck => {
@@ -286,6 +325,7 @@ impl<'s> Solver<'s> {
                         &member,
                         origin,
                         queue,
+                        false,
                     ) {
                         MemberDispatch::Handled => return None,
                         MemberDispatch::Stuck => {
@@ -358,6 +398,7 @@ impl<'s> Solver<'s> {
                     &member,
                     origin,
                     queue,
+                    true,
                 ) {
                     MemberDispatch::Handled => return None,
                     MemberDispatch::Stuck => {
@@ -381,6 +422,7 @@ impl<'s> Solver<'s> {
                         &member,
                         origin,
                         queue,
+                        false,
                     ) {
                         MemberDispatch::Handled => return None,
                         MemberDispatch::Stuck => {
@@ -405,10 +447,21 @@ impl<'s> Solver<'s> {
                 None
             }
             Ty::Any { protocol, .. } => {
-                if let Some((owner, requirement)) =
-                    self.catalog.requirement_in_ref(&protocol, &label_str)
-                {
-                    let requirement = requirement.clone();
+                let overloads = self
+                    .catalog
+                    .requirement_overloads_in_ref(&protocol, &label_str);
+                if !overloads.is_empty() {
+                    // Written labels select among same-base requirement
+                    // overloads (ADR 0041).
+                    let symbols: Vec<Symbol> = overloads
+                        .iter()
+                        .map(|(_, requirement)| requirement.symbol)
+                        .collect();
+                    let selected =
+                        self.select_method_overload(&symbols, &label_str, origin)?;
+                    let (owner, requirement) = overloads
+                        .into_iter()
+                        .find(|(_, requirement)| requirement.symbol == selected)?;
                     self.bind_requirement(
                         owner,
                         &requirement,
@@ -432,6 +485,7 @@ impl<'s> Solver<'s> {
                         &member,
                         origin,
                         queue,
+                        false,
                     ) {
                         MemberDispatch::Handled => return None,
                         MemberDispatch::Stuck => {
@@ -495,7 +549,9 @@ impl<'s> Solver<'s> {
                             .insert(origin.node, MemberResolution::Direct(*property));
                         return None;
                     }
-                    if let Some(&method) = info.methods.get(&label_str) {
+                    if let Some(set) = info.methods.get(&label_str) {
+                        let set = set.clone();
+                        let method = self.select_method_overload(&set, &label_str, origin)?;
                         return self.dispatch_nominal_method(
                             method,
                             &substitution,
@@ -511,14 +567,16 @@ impl<'s> Solver<'s> {
                 // instantiate the (possibly generic) scheme, pin self,
                 // and the member is the self-dropped signature.
                 if let Some(info) = self.catalog.enums.get(&symbol)
-                    && let Some(&method) = info.methods.get(&label_str)
+                    && let Some(set) = info.methods.get(&label_str)
                 {
+                    let set = set.clone();
                     let substitution: FxHashMap<Symbol, Ty> = info
                         .params
                         .iter()
                         .map(|param| param.symbol)
                         .zip(args.iter().cloned())
                         .collect();
+                    let method = self.select_method_overload(&set, &label_str, origin)?;
                     return self.dispatch_nominal_method(
                         method,
                         &substitution,
@@ -563,7 +621,9 @@ impl<'s> Solver<'s> {
                 // type via the protocol requirement, which is always valid if
                 // the conformance is (the witness is checked against the
                 // requirement when the extend body is checked).
-                if self.catalog.conformances_by_head.contains_key(&symbol) {
+                if self.catalog.conformances_by_head.contains_key(&symbol)
+                    && !self.slots_prefer_inherent(symbol, &label_str, origin)
+                {
                     let mut protocols = self
                         .catalog
                         .conformances_for_head(symbol)
@@ -579,6 +639,7 @@ impl<'s> Solver<'s> {
                         &member,
                         origin,
                         queue,
+                        true,
                     ) {
                         MemberDispatch::Handled => return None,
                         MemberDispatch::Stuck => {
@@ -613,20 +674,23 @@ impl<'s> Solver<'s> {
                 // but sibling modules can export overlapping rows without
                 // seeing each other — matching more than one is an
                 // ambiguity at the use site, never import-order dispatch.
-                let matching_inherent = self.catalog.extend_members.get(&symbol).and_then(|members| {
-                    let rows = members.get(&label_str)?;
-                    let matching: Vec<_> = rows
-                        .iter()
-                        .filter(|row| {
-                            let mut probe = FxHashMap::default();
-                            row.self_args
+                let matching_inherent =
+                    self.catalog
+                        .extend_members
+                        .get(&symbol)
+                        .and_then(|members| {
+                            let rows = members.get(&label_str)?;
+                            let matching: Vec<_> = rows
                                 .iter()
-                                .zip(&args)
-                                .all(|(pattern, actual)| match_pattern(pattern, actual, &mut probe))
-                        })
-                        .collect();
-                    Some(matching)
-                });
+                                .filter(|row| {
+                                    let mut probe = FxHashMap::default();
+                                    row.self_args.iter().zip(&args).all(|(pattern, actual)| {
+                                        match_pattern(pattern, actual, &mut probe)
+                                    })
+                                })
+                                .collect();
+                            Some(matching)
+                        });
                 if let Some(matching) = &matching_inherent
                     && matching.len() > 1
                 {
@@ -735,6 +799,7 @@ impl<'s> Solver<'s> {
                         &member,
                         origin,
                         queue,
+                        false,
                     ) {
                         MemberDispatch::Handled => return None,
                         MemberDispatch::Stuck => {
@@ -963,6 +1028,126 @@ impl<'s> Solver<'s> {
     /// pin `self` to the receiver, and hand back the self-dropped signature as
     /// the member type. Structs and enums dispatch methods identically.
     #[allow(clippy::too_many_arguments)]
+    /// When the call's written labels reject every same-base protocol
+    /// requirement but admit an inherent extension member, the inherent
+    /// member is the selection (ADR 0041) — protocol dispatch would bind
+    /// the wrong callable.
+    fn slots_prefer_inherent(&mut self, symbol: Symbol, label: &str, origin: CtOrigin) -> bool {
+        use crate::types::callables::labels_admit;
+
+        let Some(slots) = self.member_call_slots.get(&origin.node) else {
+            return false;
+        };
+        let Some(rows) = self
+            .catalog
+            .extend_members
+            .get(&symbol)
+            .and_then(|members| members.get(label))
+        else {
+            return false;
+        };
+        let inherent_admits = rows.iter().any(|row| {
+            self.catalog
+                .callable_contracts
+                .get(&row.symbol)
+                .is_some_and(|contract| labels_admit(&contract.name.labels, slots))
+        });
+        if !inherent_admits {
+            return false;
+        }
+        let requirement_admits = self.catalog.conformances_for_head(symbol).any(|(_, row)| {
+            self.catalog
+                .requirement_overloads_in_ref(&row.protocol, label)
+                .iter()
+                .any(|(_, requirement)| {
+                    self.catalog
+                        .callable_contracts
+                        .get(&requirement.symbol)
+                        .is_some_and(|contract| labels_admit(&contract.name.labels, slots))
+                })
+        });
+        !requirement_admits
+    }
+
+    /// Select one method from an overload set by the call's written labels
+    /// (ADR 0041). A single entry selects directly. Several entries need
+    /// the call's labels (a bare member reference cannot disambiguate) and
+    /// exactly one admitting candidate; with none, a unique same-arity
+    /// candidate recovers and the label pass reports its mismatch.
+    /// Anything else is ambiguous — reported, then recovered to the first
+    /// candidate so checking continues.
+    pub(super) fn select_method_overload(
+        &mut self,
+        set: &[Symbol],
+        label: &str,
+        origin: CtOrigin,
+    ) -> Option<Symbol> {
+        use crate::types::callables::labels_admit;
+
+        match set {
+            [] => None,
+            [one] => Some(*one),
+            _ => {
+                let slots = self.member_call_slots.get(&origin.node);
+                if let Some(slots) = slots {
+                    let admitted: Vec<Symbol> =
+                        set.iter()
+                            .copied()
+                            .filter(|symbol| {
+                                self.catalog.callable_contracts.get(symbol).is_some_and(
+                                    |contract| labels_admit(&contract.name.labels, slots),
+                                )
+                            })
+                            .collect();
+                    if let [one] = admitted.as_slice() {
+                        return Some(*one);
+                    }
+                    if admitted.is_empty() {
+                        let same_arity: Vec<Symbol> = set
+                            .iter()
+                            .copied()
+                            .filter(|symbol| {
+                                self.catalog.callable_contracts.get(symbol).is_some_and(
+                                    |contract| contract.name.labels.len() == slots.len(),
+                                )
+                            })
+                            .collect();
+                        if let [one] = same_arity.as_slice() {
+                            return Some(*one);
+                        }
+                    }
+                }
+                let candidates = set
+                    .iter()
+                    .filter_map(|symbol| {
+                        Some(
+                            crate::types::callables::CallableName {
+                                base: label.to_string(),
+                                labels: self
+                                    .catalog
+                                    .callable_contracts
+                                    .get(symbol)?
+                                    .name
+                                    .labels
+                                    .clone(),
+                            }
+                            .to_string(),
+                        )
+                    })
+                    .collect();
+                self.errors.push((
+                    TypeError::AmbiguousMember {
+                        receiver: String::new(),
+                        label: label.to_string(),
+                        candidates,
+                    },
+                    origin.node,
+                ));
+                set.first().copied()
+            }
+        }
+    }
+
     fn dispatch_nominal_method(
         &mut self,
         method: Symbol,
@@ -1076,7 +1261,11 @@ impl<'s> Solver<'s> {
         // defaulted requirement's scheme predicates are its body's givens,
         // not extra call-site wanteds beyond the Conforms demanded below.
         let witness_substitution = (witness != requirement.symbol)
-            .then(|| evidence.as_ref().map(|(_, _, substitution)| substitution.clone()))
+            .then(|| {
+                evidence
+                    .as_ref()
+                    .map(|(_, _, substitution)| substitution.clone())
+            })
             .flatten();
         let witness_signature = witness_substitution.as_ref().and_then(|substitution| {
             let substitution = substitution.iter().cloned().collect::<FxHashMap<_, _>>();

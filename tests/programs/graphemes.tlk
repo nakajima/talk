@@ -39,4 +39,4 @@ print(total)
 
 // Substrings iterate too: everything after the first two bytes of
 // "héllo" (h + two-byte é).
-print("héllo".utf8().slice(3, 3).count())
+print("héllo".utf8().slice(start: 3, byte_count: 3).count())

@@ -11,24 +11,28 @@ public struct OS {
 		let len = _io_cwd_len()
 		if len < 0 { return Optional.none }
 
-		let buf = _alloc<Byte>(len)
-		let copied = _io_cwd_copy(buf)
+		let buf = _alloc<Byte>(count: len)
+		let copied = _io_cwd_copy(buf: buf)
 		if copied < 0 { return Optional.none }
 
-		let copied = _io_clamp(copied, len)
-		Optional.some(String(buf, copied, copied))
+		let copied = _io_clamp(count: copied, capacity: len)
+		Optional.some(String(base: buf, byte_count: copied, capacity: copied))
 	}
 
 	public static func getenv(name: String) -> String? {
-		let len = _io_getenv_len(name.storage.base, name.byte_count)
+		let len = _io_getenv_len(name: name.storage.base, name_len: name.byte_count)
 		if len < 0 { return Optional.none }
 
-		let buf = _alloc<Byte>(len)
-		let copied = _io_getenv_copy(name.storage.base, name.byte_count, buf)
+		let buf = _alloc<Byte>(count: len)
+		let copied = _io_getenv_copy(
+			name: name.storage.base,
+			name_len: name.byte_count,
+			buf: buf
+		)
 		if copied < 0 { return Optional.none }
 
-		let copied = _io_clamp(copied, len)
-		Optional.some(String(buf, copied, copied))
+		let copied = _io_clamp(count: copied, capacity: len)
+		Optional.some(String(base: buf, byte_count: copied, capacity: copied))
 	}
 
 	public static func argc() -> [String] {
@@ -37,11 +41,14 @@ public struct OS {
 		let i = 0
 
 		loop i < count {
-			let len = _io_arg_len(i)
-			let len = _io_clamp(len, len)
-			let buf = _alloc<Byte>(len)
-			let copied = _io_clamp(_io_arg_copy(i, buf), len)
-			result.storage.set(i, String(buf, copied, copied))
+			let len = _io_arg_len(index: i)
+			let len = _io_clamp(count: len, capacity: len)
+			let buf = _alloc<Byte>(count: len)
+			let copied = _io_clamp(count: _io_arg_copy(index: i, buf: buf), capacity: len)
+			result.storage.set(
+				index: i,
+				value: String(base: buf, byte_count: copied, capacity: copied)
+			)
 			i = i + 1
 		}
 

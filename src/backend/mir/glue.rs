@@ -390,7 +390,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         use crate::types::catalog::{DerivedRecipe, DictionaryEntry};
         let (func, env) = match entry {
             DictionaryEntry::Derived(DerivedRecipe::Show) => (
-                self.program_builder.derived_show(payload_ty, protocol, span)?,
+                self.program_builder
+                    .derived_show(payload_ty, protocol, span)?,
                 Vec::new(),
             ),
             DictionaryEntry::Derived(DerivedRecipe::Equality) => (
@@ -430,9 +431,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         .get(symbol)
                         .map(|callable| match callable.body {
                             crate::backend::mir::CallableBody::Func(func) => func.params.len(),
-                            crate::backend::mir::CallableBody::Init { params, .. } => {
-                                params.len()
-                            }
+                            crate::backend::mir::CallableBody::Init { params, .. } => params.len(),
                         })
                         .unwrap_or(0);
                     let visible = u16::try_from(visible).unwrap_or_default();

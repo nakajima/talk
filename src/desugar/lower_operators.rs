@@ -8,7 +8,7 @@ use crate::{
     node_id::NodeID,
     node_kinds::{
         block::Block,
-        call_arg::CallArg,
+        call_arg::{CallArg, CallArgOrigin},
         expr::{Expr, ExprKind},
     },
     span::Span,
@@ -125,6 +125,7 @@ impl LowerOperators {
                         type_args: vec![],
                         args: vec![
                             CallArg {
+                                origin: CallArgOrigin::Synthesized,
                                 mode: None,
                                 mode_span: None,
                                 id: expr.id,
@@ -134,6 +135,7 @@ impl LowerOperators {
                                 span: expr.span,
                             },
                             CallArg {
+                                origin: CallArgOrigin::Synthesized,
                                 mode: None,
                                 mode_span: None,
                                 id: rhs.id,
@@ -193,6 +195,7 @@ impl LowerOperators {
                         type_args: vec![],
                         args: vec![
                             CallArg {
+                                origin: CallArgOrigin::Synthesized,
                                 mode: None,
                                 mode_span: None,
                                 id: expr.id,
@@ -202,6 +205,7 @@ impl LowerOperators {
                                 span: expr.span,
                             },
                             CallArg {
+                                origin: CallArgOrigin::Synthesized,
                                 mode: None,
                                 mode_span: None,
                                 id: rhs.id,
@@ -235,7 +239,11 @@ pub mod tests {
         invocation,
         label::Label,
         node_id::NodeID,
-        node_kinds::{call_arg::CallArg, expr::ExprKind, stmt::StmtKind},
+        node_kinds::{
+            call_arg::{CallArg, CallArgOrigin},
+            expr::ExprKind,
+            stmt::StmtKind,
+        },
         parser_tests::tests::parse,
         span::Span,
     };
@@ -265,6 +273,7 @@ pub mod tests {
                 "add",
                 vec![
                     CallArg {
+                        origin: CallArgOrigin::Synthesized,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -274,6 +283,7 @@ pub mod tests {
                         span: Span::ANY,
                     },
                     CallArg {
+                        origin: CallArgOrigin::Synthesized,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -299,6 +309,7 @@ pub mod tests {
                 "minus",
                 vec![
                     CallArg {
+                        origin: CallArgOrigin::Synthesized,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -308,6 +319,7 @@ pub mod tests {
                         span: Span::ANY,
                     },
                     CallArg {
+                        origin: CallArgOrigin::Synthesized,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -333,6 +345,7 @@ pub mod tests {
                 "multiply",
                 vec![
                     CallArg {
+                        origin: CallArgOrigin::Synthesized,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -342,6 +355,7 @@ pub mod tests {
                         span: Span::ANY,
                     },
                     CallArg {
+                        origin: CallArgOrigin::Synthesized,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -367,6 +381,7 @@ pub mod tests {
                 "divide",
                 vec![
                     CallArg {
+                        origin: CallArgOrigin::Synthesized,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,
@@ -376,6 +391,7 @@ pub mod tests {
                         span: Span::ANY,
                     },
                     CallArg {
+                        origin: CallArgOrigin::Synthesized,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,

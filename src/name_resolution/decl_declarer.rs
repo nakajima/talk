@@ -17,7 +17,7 @@ use crate::{
         body::Body,
         decl::{Decl, DeclKind, Visibility},
         expr::{Expr, ExprKind},
-        func::Func,
+        func::{Func, FuncOrigin},
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
         parameter::{ParamMode, Parameter},
@@ -29,7 +29,6 @@ use crate::{
     on,
     span::Span,
 };
-
 
 #[derive(VisitorMut)]
 #[visitor(FuncSignature, Decl(enter, exit), Block(enter, exit))]
@@ -170,9 +169,9 @@ impl<'a> DeclDeclarer<'a> {
     pub(super) fn predeclare_type_aliases(&mut self, decls: &[&Decl]) {
         for decl in decls.iter() {
             if let DeclKind::TypeAlias(name, name_span, ..) = &decl.kind {
-                let resolved = self
-                    .resolver
-                    .declare(name, SymbolKind::TypeAlias, decl.id, *name_span);
+                let resolved =
+                    self.resolver
+                        .declare(name, SymbolKind::TypeAlias, decl.id, *name_span);
                 if decl.visibility == Visibility::Public
                     && let Ok(sym) = resolved.symbol()
                 {
@@ -186,29 +185,72 @@ impl<'a> DeclDeclarer<'a> {
     /// Only handles simple Bind patterns (not destructuring).
     /// Only public bindings are predeclared since they're the only ones that can be imported.
     pub(super) fn predeclare_values(&mut self, decls: &[&Decl]) {
-        let mut exported_names: FxHashMap<String, NodeID> = FxHashMap::default();
+        use crate::types::callables::ArgumentLabel;
+        // Public overloads coexist when their full callable names differ
+        // (ADR 0041); non-callables (labels `None`) still collide by name.
+        type ExportedLabels = Option<Vec<ArgumentLabel>>;
+        let mut exported_names: FxHashMap<String, Vec<ExportedLabels>> = FxHashMap::default();
 
         for decl in decls.iter() {
             // Only predeclare public Let bindings
             if decl.visibility != Visibility::Public {
                 continue;
             }
-            if let DeclKind::Let { lhs, .. } = &decl.kind {
+            if let DeclKind::Let { lhs, rhs, .. } = &decl.kind {
                 // For simple bind patterns, predeclare as Global
                 // Use lhs.id (pattern id) to match what declare_pattern uses
                 if let PatternKind::Bind(name) = &lhs.kind {
                     let name_str = name.name_str();
-                    if exported_names.contains_key(&name_str) {
-                        self.resolver
-                            .diagnostic(lhs.id, NameResolverError::DuplicateExport(name_str));
-                        continue;
-                    }
-                    exported_names.insert(name_str, lhs.id);
+                    let labels: ExportedLabels = match rhs {
+                        Some(Expr {
+                            kind: ExprKind::Func(func),
+                            ..
+                        }) if func.origin == FuncOrigin::Decl => Some(
+                            crate::types::callables::CallableName::from_params(
+                                name_str.clone(),
+                                &func.params,
+                                false,
+                            )
+                            .labels,
+                        ),
+                        _ => None,
+                    };
+                    let overloading = match exported_names.get(&name_str) {
+                        None => false,
+                        Some(entries) => {
+                            if entries.iter().any(|entry| *entry == labels) || labels.is_none() {
+                                self.resolver.diagnostic(
+                                    lhs.id,
+                                    NameResolverError::DuplicateExport(name_str),
+                                );
+                                continue;
+                            }
+                            true
+                        }
+                    };
+                    exported_names
+                        .entry(name_str.clone())
+                        .or_default()
+                        .push(labels);
 
                     // Pattern span is used for the binding since Bind pattern doesn't have name_span
-                    let resolved = self.resolver.declare(name, SymbolKind::Global, lhs.id, lhs.span);
+                    // An overload sibling must never reuse the earlier
+                    // public Global by name: it mints fresh.
+                    let resolved = if overloading {
+                        let minted =
+                            self.resolver
+                                .mint(name, SymbolKind::Global, lhs.id, lhs.span);
+                        if let Ok(sym) = minted.symbol() {
+                            self.resolver.bind_value(&name_str, sym);
+                        }
+                        minted
+                    } else {
+                        self.resolver
+                            .declare(name, SymbolKind::Global, lhs.id, lhs.span)
+                    };
                     if let Ok(sym) = resolved.symbol() {
                         self.resolver.mark_public(sym);
+                        self.resolver.predeclared.insert(lhs.id, sym);
                     }
                 }
             }
@@ -381,9 +423,9 @@ impl<'a> DeclDeclarer<'a> {
             },
             {
                 // FuncSignature doesn't have a name_span, use its span
-                *name = self
-                    .resolver
-                    .declare(name, SymbolKind::MethodRequirement, func.id, func_span);
+                *name =
+                    self.resolver
+                        .declare(name, SymbolKind::MethodRequirement, func.id, func_span);
 
                 self.start_scope(func.id);
 
@@ -466,9 +508,9 @@ impl<'a> DeclDeclarer<'a> {
             &mut decl.kind,
             DeclKind::TypeAlias(lhs_name, name_span, ..),
             {
-                *lhs_name = self
-                    .resolver
-                    .declare(lhs_name, SymbolKind::TypeAlias, decl.id, *name_span);
+                *lhs_name =
+                    self.resolver
+                        .declare(lhs_name, SymbolKind::TypeAlias, decl.id, *name_span);
 
                 if let Some(parent) = self.resolver.nominal_stack.last() {
                     self.resolver
@@ -553,7 +595,9 @@ impl<'a> DeclDeclarer<'a> {
             }),
             {
                 // FuncSignature doesn't have name_span, use its span
-                *name = self.resolver.declare(name, SymbolKind::Global, decl.id, *span);
+                *name = self
+                    .resolver
+                    .declare(name, SymbolKind::Global, decl.id, *span);
 
                 self.declare_generics(generics, false);
             }
@@ -603,11 +647,37 @@ impl<'a> DeclDeclarer<'a> {
             self.start_scope(decl.id);
         });
 
-        on!(&mut decl.kind, DeclKind::Let { lhs, .. }, {
+        on!(&mut decl.kind, DeclKind::Let { lhs, rhs, .. }, {
             // Module-scope lets only: they predeclare (order-independent,
             // rule 4). Locals declare at their point in the resolver pass.
             if self.block_depth == 0 {
-                self.resolver.declare_pattern(lhs, SymbolKind::Global);
+                // A public binding predeclared for import resolution keeps
+                // its exact symbol — reuse-by-name would collapse overload
+                // siblings onto one declaration (ADR 0041).
+                if let Some(&predeclared) = self.resolver.predeclared.get(&lhs.id)
+                    && let PatternKind::Bind(name) = &mut lhs.kind
+                {
+                    *name = Name::Resolved(predeclared, name.name_str());
+                } else {
+                    self.resolver.declare_pattern(lhs, SymbolKind::Global);
+                }
+                // A lowered `func` declaration joins its scope's overload
+                // set (ADR 0041).
+                if let PatternKind::Bind(name) = &lhs.kind
+                    && let Ok(symbol) = name.symbol()
+                    && let Some(Expr {
+                        kind: ExprKind::Func(func),
+                        ..
+                    }) = rhs
+                    && func.origin == FuncOrigin::Decl
+                {
+                    self.resolver.register_callable(
+                        symbol,
+                        &name.name_str(),
+                        &func.params,
+                        decl.id,
+                    );
+                }
             }
         });
 
@@ -829,6 +899,8 @@ impl<'a> DeclDeclarer<'a> {
             Span::SYNTHESIZED,
         );
         let mut params: Vec<Parameter> = vec![Parameter {
+            label: None,
+            label_span: None,
             mode: None,
             mode_span: None,
             id: NodeID(file_id, self.node_ids.next_id()),
@@ -865,6 +937,8 @@ impl<'a> DeclDeclarer<'a> {
                 Span::SYNTHESIZED,
             );
             params.push(Parameter {
+                label: None,
+                label_span: None,
                 // Memberwise init params consume their arguments (ADR 0018),
                 // like every other init parameter.
                 mode: Some(ParamMode::Consume),

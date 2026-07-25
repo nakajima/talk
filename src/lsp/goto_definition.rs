@@ -317,9 +317,7 @@ fn goto_definition_symbol_from_stmt(
             }
             effect_name.symbol().ok()
         }
-        StmtKind::Resume(Some(expr)) => {
-            goto_definition_symbol_from_expr(module, expr, byte_offset)
-        }
+        StmtKind::Resume(Some(expr)) => goto_definition_symbol_from_expr(module, expr, byte_offset),
         _ => None,
     }
 }

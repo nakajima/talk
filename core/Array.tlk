@@ -16,7 +16,7 @@ public struct Array<Element> {
 	init(capacity: Int) {
 		self.capacity = capacity
 		self.count = 0
-		self.storage = _storage<Element>(capacity)
+		self.storage = _storage<Element>(capacity: capacity)
 	}
 
 	init(storage: Storage<Element>, count: Int, capacity: Int) {
@@ -29,16 +29,18 @@ public struct Array<Element> {
 	// reads whatever memory follows it, so an out-of-range index has to
 	// be caught here rather than left to the VM's memory guard.
 	func _check_index(index: Int) -> Void {
-		if index < 0 || index >= self.count { 'panic("array index out of bounds") }
+		if index < 0 || index >= self.count { 'panic(
+			message: "array index out of bounds"
+		) }
 	}
 
-	func get(index: Int) -> &Element {
-		self._check_index(index)
+	func get(_ index: Int) -> &Element {
+		self._check_index(index: index)
 		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
-		_load<Element>(ptr)
+		_load<Element>(ptr: ptr)
 	}
 
-	mut func push(consume value: Element) -> () {
+	mut func push(consume _ value: Element) -> () {
 		let new_capacity = if self.capacity == 0 {
 			1
 		} else {
@@ -46,25 +48,25 @@ public struct Array<Element> {
 		}
 
 		if self.count >= self.capacity {
-			let fresh = self.allocate_with_capacity(new_capacity)
+			let fresh = self.allocate_with_capacity(capacity: new_capacity)
 			self.capacity = new_capacity
 			self.storage = fresh
 		} else {
 			self.uniqued_storage()
 		}
 
-		self._init_slot(self.count, value)
+		self._init_slot(index: self.count, value: value)
 		self.count = self.count + 1
 	}
 
 	// Overwrite: the replaced element is loaded out and dropped at scope
 	// exit (deep, per its own deinit) after the new value is written.
 	mut func set(index: Int, consume value: Element) -> Void {
-		self._check_index(index)
+		self._check_index(index: index)
 		self.uniqued_storage()
 		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
-		let old: Element = _load<Element>(ptr)
-		_store<Element>(ptr, value)
+		let old: Element = _load<Element>(ptr: ptr)
+		_store<Element>(ptr: ptr, value: value)
 	}
 
 	// Raw write into a slot that holds no element yet (push's fresh
@@ -72,35 +74,35 @@ public struct Array<Element> {
 	// buffer.
 	mut func _init_slot(index: Int, consume value: Element) -> Void {
 		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
-		_store<Element>(ptr, value)
+		_store<Element>(ptr: ptr, value: value)
 	}
 
 	mut func swap(i: Int, j: Int) -> Void {
-		self._check_index(i)
-		self._check_index(j)
+		self._check_index(index: i)
+		self._check_index(index: j)
 		if i == j { return () }
 		let storage = self.uniqued_storage()
 		let a: RawPtr = @_ir(storage.base, i) { %? = gep Element $0 $1 }
 		let b: RawPtr = @_ir(storage.base, j) { %? = gep Element $0 $1 }
-		_swap<Element>(a, b)
+		_swap<Element>(a: a, b: b)
 	}
 
 	consuming func map<T>(consume fn: (Element) -> T) -> Map<ArrayIntoIterator<Element>, T> {
-		self.into_iter().map(fn)
+		self.into_iter().map(fn: fn)
 	}
 
 	consuming func skip(count: Int) -> ArrayIntoIterator<Element> {
-		self.into_iter().skip(count)
+		self.into_iter().skip(count: count)
 	}
 
 	// Copy-on-write: a buffer shared with another Array (or with
 	// static data) is copied before the first write, so writes never
 	// alias — Arrays keep value semantics.
 	mut func uniqued_storage() -> &mut Storage<Element> {
-		if _is_unique(self.storage.base) {
+		if _is_unique(ptr: self.storage.base) {
 			return self.storage
 		} else {
-			let fresh = self.allocate_with_capacity(self.capacity)
+			let fresh = self.allocate_with_capacity(capacity: self.capacity)
 			self.storage = fresh
 			return self.storage
 		}
@@ -109,19 +111,19 @@ public struct Array<Element> {
 	func allocate_with_capacity(capacity: Int) -> Storage<Element> {
 		// If capacity is 0, it'll never double.
 		if capacity == 0 { capacity = 1 }
-		let fresh = _storage<Element>(capacity)
+		let fresh = _storage<Element>(capacity: capacity)
 		// A shared (or static) source buffer survives this copy, so both
 		// buffers end up owning the elements: retain each one as it is
 		// written. A unique source is a grow-in-place MOVE — its elements
 		// are donated and its shell is freed (shallowly) when the caller
 		// replaces self.storage.
-		let source_survives = _is_unique(self.storage.base) == false
+		let source_survives = _is_unique(ptr: self.storage.base) == false
 		let i = 0
 		loop i < self.count {
 			let from: RawPtr = @_ir(self.storage.base, i) { %? = gep Element $0 $1 }
 			let to: RawPtr = @_ir(fresh.base, i) { %? = gep Element $0 $1 }
-			if source_survives { _retain<Element>(self.get(i)) }
-			_store<Element>(to, _load<Element>(from))
+			if source_survives { _retain<Element>(value: self.get(i)) }
+			_store<Element>(ptr: to, value: _load<Element>(ptr: from))
 			i = i + 1
 		}
 		fresh
@@ -147,7 +149,7 @@ extend<Element> Array<Element> where Element: Comparable<Element> {
 			}
 
 			// Swap only if a smaller element was found
-			if min != i { self.swap(i, min) }
+			if min != i { self.swap(i: i, j: min) }
 
 			i = i + 1
 		}
@@ -164,7 +166,7 @@ extend<Element> Array<Element>: SubscriptRead<Int> {
 
 extend<Element> Array<Element>: SubscriptWrite<Int, Element> {
 	mut func subscript_write(at: Int, consume value: Element) -> Void {
-		self.set(at, value)
+		self.set(index: at, value: value)
 	}
 }
 
@@ -177,11 +179,11 @@ extend<Element> Array<Element>: CheapClone {}
 // dispatch their own deinit).
 extend<Element> Array<Element>: Deinit {
 	consuming func deinit() -> Void {
-		if _is_unique(self.storage.base) {
+		if _is_unique(ptr: self.storage.base) {
 			let i = 0
 			loop i < self.count {
 				let ptr: RawPtr = @_ir(self.storage.base, i) { %? = gep Element $0 $1 }
-				let element: Element = _load<Element>(ptr)
+				let element: Element = _load<Element>(ptr: ptr)
 				i = i + 1
 			}
 		}
@@ -202,7 +204,7 @@ extend<Element: Showable> Array<Element>: Showable {
 }
 
 extend<Element: Equatable<Element>> Array<Element>: Equatable {
-	func equals(rhs: Self) -> Bool {
+	func equals(_ rhs: Self) -> Bool {
 		if self.count != rhs.count { return false }
 		let i = 0
 		loop i < self.count {
@@ -225,7 +227,7 @@ extend<Element> Array<Element>: IndexIterable {
 		self.count
 	}
 
-	func _index_iterable_get(index: Int) -> Optional<&Element> {
+	func _index_iterable_get(i index: Int) -> Optional<&Element> {
 		.some(self.get(index))
 	}
 }
@@ -243,7 +245,7 @@ extend<Element> Array<Element>: IntoIterator<Element, ArrayIntoIterator<Element>
 		self.uniqued_storage()
 		let storage = self.storage
 		let count = self.count
-		self.storage = _storage<Element>(0)
+		self.storage = _storage<Element>(capacity: 0)
 		self.count = 0
 		self.capacity = 0
 		ArrayIntoIterator(storage: storage, count: count, position: 0)
@@ -256,7 +258,7 @@ extend<T> ArrayIntoIterator<T>: Iterator {
 		let index = self.position
 		self.position = self.position + 1
 		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep T $0 $1 }
-		let element: T = _load<T>(ptr)
+		let element: T = _load<T>(ptr: ptr)
 		return .some(element)
 	}
 }
@@ -266,7 +268,7 @@ extend<T> ArrayIntoIterator<T>: Deinit {
 		let i = self.position
 		loop i < self.count {
 			let ptr: RawPtr = @_ir(self.storage.base, i) { %? = gep T $0 $1 }
-			let element: T = _load<T>(ptr)
+			let element: T = _load<T>(ptr: ptr)
 			i = i + 1
 		}
 	}
@@ -295,12 +297,12 @@ extend<T> ArrayMutIterator<T> {
 		let index = self.position
 		self.position = self.position + 1
 		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep T $0 $1 }
-		let element: T = _load<T>(ptr)
+		let element: T = _load<T>(ptr: ptr)
 		return .some(element)
 	}
 
 	mut func _store_current(consume value: T) -> Void {
 		let ptr: RawPtr = @_ir(self.storage.base, self.position - 1) { %? = gep T $0 $1 }
-		_store<T>(ptr, value)
+		_store<T>(ptr: ptr, value: value)
 	}
 }

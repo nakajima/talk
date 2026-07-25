@@ -36,10 +36,10 @@ test "scalar iteration separates grapheme components" {
 }
 
 test "scalar classification functions" {
-	assert(scalar_is_whitespace(10))
-	assert(scalar_is_alphabetic(955))
-	assert(scalar_is_numeric(1633))
-	assert(scalar_is_alphanumeric(8544))
-	assert(scalar_is_ascii_hexdigit(70))
-	assert(!scalar_is_ascii_hexdigit(71))
+	assert(scalar_is_whitespace(scalar: 10))
+	assert(scalar_is_alphabetic(scalar: 955))
+	assert(scalar_is_numeric(scalar: 1633))
+	assert(scalar_is_alphanumeric(scalar: 8544))
+	assert(scalar_is_ascii_hexdigit(scalar: 70))
+	assert(!scalar_is_ascii_hexdigit(scalar: 71))
 }

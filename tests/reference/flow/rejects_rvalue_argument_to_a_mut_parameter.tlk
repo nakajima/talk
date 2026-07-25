@@ -6,5 +6,5 @@ func bump(mut c: Counter) -> Int {
 	c.count
 }
 func f() -> Int {
-	bump(Counter(count: 0))
+	bump(c: Counter(count: 0))
 }

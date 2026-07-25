@@ -7,7 +7,7 @@ use package::Operators::{ Comparable }
 public struct InlineArray<Element, static Count: Int> {
 	func count() -> Int { Count }
 
-	func get(index: Int) -> Optional<&Element> {
+	func get(_ index: Int) -> Optional<&Element> {
 		if index < 0 { return .none }
 		if Count <= index { return .none }
 		.some(@_ir(index) { %? = inline_get Element %0 $0 })

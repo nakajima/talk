@@ -2,5 +2,5 @@ struct Wrapper {
 	let sub: Substring
 }
 func make(s: &String) -> Wrapper {
-	Wrapper(sub: s.utf8().slice(0, 2))
+	Wrapper(sub: s.utf8().slice(start: 0, byte_count: 2))
 }

@@ -393,9 +393,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             // slot must keep the eager equality that drives inference,
             // except the legacy Apply deferrals above.
             (Ty::Borrow(..), _) => false,
-            (Ty::Var(_), Ty::Borrow(..)) | (Ty::Param(_), Ty::Var(_)) => {
-                reason == CtReason::Apply
-            }
+            (Ty::Var(_), Ty::Borrow(..)) | (Ty::Param(_), Ty::Var(_)) => reason == CtReason::Apply,
             (Ty::Var(_), _) => false,
             // A concrete owned slot fed a still-unsolved value: the value
             // may yet resolve borrowed (a binding whose initializer is a
@@ -703,6 +701,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .iter()
             .enumerate()
             .map(|(index, (_, name))| CallArg {
+                origin: crate::node_kinds::call_arg::CallArgOrigin::Synthesized,
                 id: self.artifacts.synthetic_id(source.id),
                 span: source.span,
                 label: variant
@@ -763,9 +762,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             span: source.span,
         };
         let body_node = match action {
-            BinaryEnumArm::Value => {
-                Node::Expr(self.propagation_value(source, &binders))
-            }
+            BinaryEnumArm::Value => Node::Expr(self.propagation_value(source, &binders)),
             BinaryEnumArm::Return => {
                 let value = self.propagation_constructor(
                     source,
@@ -817,13 +814,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         self.check_binary_enum_postfix(expr, source, None, ctx, source_ty, result)
     }
 
-    fn infer_force_unwrap(
-        &mut self,
-        expr: &Expr,
-        source: &Expr,
-        failure: &Expr,
-        ctx: &Ctx,
-    ) -> Ty {
+    fn infer_force_unwrap(&mut self, expr: &Expr, source: &Expr, failure: &Expr, ctx: &Ctx) -> Ty {
         let source_ty = self.infer_expr(source, ctx);
         let result = Ty::Var(self.store.fresh_ty(self.level, expr.id));
         let mut head = self.store.shallow(&source_ty);
@@ -846,14 +837,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             });
             return result;
         }
-        self.check_binary_enum_postfix(
-            expr,
-            source,
-            Some(failure),
-            ctx,
-            source_ty,
-            result,
-        )
+        self.check_binary_enum_postfix(expr, source, Some(failure), ctx, source_ty, result)
     }
 
     pub(super) fn check_binary_enum_postfix(
@@ -1189,6 +1173,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 desugared_operator,
                 ..
             } => {
+                // Member callees record their written labels so static and
+                // instance overload sets can select (ADR 0041).
+                if let ExprKind::Member(..) = &callee.kind {
+                    self.artifacts.member_call_slots.insert(
+                        callee.id,
+                        args.iter()
+                            .map(crate::types::callables::WrittenSlot::of)
+                            .collect(),
+                    );
+                }
                 if let ExprKind::Constructor(..) = &callee.kind {
                     return self.infer_construction(expr, callee, type_args, args, ctx);
                 }
@@ -1199,7 +1193,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     && let Ok(symbol) = name.symbol()
                     && matches!(symbol, Symbol::TypeParameter(_))
                 {
-                    return self.infer_param_construction(expr, callee, symbol, type_args, args, ctx);
+                    return self
+                        .infer_param_construction(expr, callee, symbol, type_args, args, ctx);
                 }
                 if let ExprKind::Member(Some(receiver), label, _) = &callee.kind
                     && let ExprKind::Constructor(name, _) = &receiver.kind
@@ -1370,9 +1365,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         type_generics: sig
                             .generics
                             .iter()
-                            .filter(|param| {
-                                matches!(param.kind, crate::types::ty::ParamKind::Type)
-                            })
+                            .filter(|param| matches!(param.kind, crate::types::ty::ParamKind::Type))
                             .map(|param| param.symbol)
                             .collect(),
                     },

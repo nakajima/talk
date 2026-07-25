@@ -7,7 +7,7 @@ func run(f: () -> Int) -> Int {
 func check() -> Int {
 	let s = "a" + "b"
 	let n = run {
-		take(s)
+		take(s: s)
 	}
 	s.byte_count
 }

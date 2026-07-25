@@ -11,6 +11,6 @@ extend Sink: Taker {
 	}
 }
 func check<T: Taker>(sink: T) -> Int {
-	sink.take(Node(value: 3))
+	sink.take(n: Node(value: 3))
 }
-check(Sink())
+check(sink: Sink())

@@ -4,5 +4,5 @@ enum Maybe<T> {
 }
 func bad() -> Maybe<Substring> {
 	let s = "hello" + " world"
-	Maybe.some(s.utf8().slice(0, 1))
+	Maybe.some(s.utf8().slice(start: 0, byte_count: 1))
 }

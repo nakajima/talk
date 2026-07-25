@@ -2,5 +2,5 @@ func eat(consume s: String) -> Int {
 	s.byte_count
 }
 let s = "hi" + "!"
-let n = eat(copy s)
+let n = eat(s: copy s)
 print(n + s.byte_count)

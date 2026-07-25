@@ -13,22 +13,22 @@ public struct TestCase {
 	let block: () -> ()
 }
 
-public func test(consume name: String, consume block: () -> ()) 'registerTest {
-	'registerTest(TestCase(name: name, block: block))
+public func test(consume _ name: String, consume _ block: () -> ()) 'registerTest {
+	'registerTest(testCase: TestCase(name: name, block: block))
 }
 
-public func assert(condition: Bool) 'fail {
-	if !condition { 'fail("assertion failed") }
+public func assert(_ condition: Bool) 'fail {
+	if !condition { 'fail(message: "assertion failed") }
 }
 
 // The pre-reset stdlib's name for assert_message; existing programs
 // (talk-syntax among them) call it, so it stays as an alias.
-public func assertMessage(condition: Bool, message: String) 'fail {
+public func assertMessage(_ condition: Bool, _ message: String) 'fail {
 	assert_message(condition, message)
 }
 
-public func assert_message(condition: Bool, message: String) 'fail {
-	if !condition { 'fail(message) }
+public func assert_message(_ condition: Bool, _ message: String) 'fail {
+	if !condition { 'fail(message: message) }
 }
 
 public func report(tests: [TestCase], failures: [Failure]) {

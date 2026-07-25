@@ -15,7 +15,7 @@ func dict_find<Value>(current: DictNode<Value>?, key: String) -> Optional<&Value
 			if node.key == key {
 				Optional.some(node.value)
 			} else {
-				dict_find(node.next, key)
+				dict_find(current: node.next, key: key)
 			}
 		},
 		.none -> Optional.none
@@ -44,6 +44,6 @@ public struct Dict<Value> 'heap {
 
 extend<Value> Dict<Value> {
 	func get(key: String) -> Optional<&Value> {
-		dict_find(self.head, key)
+		dict_find(current: self.head, key: key)
 	}
 }

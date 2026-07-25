@@ -42,7 +42,7 @@ public func _utf8_decode(storage: ByteStorage, offset: Int, end: Int) -> Int {
 	if b0 < 224 {
 		if end <= offset + 1 { return replacement * 8 + 1 }
 		let b1: Int = storage.get(offset + 1)._toInt()
-		if _is_continuation(b1) == false { return replacement * 8 + 1 }
+		if _is_continuation(b: b1) == false { return replacement * 8 + 1 }
 		let scalar: Int = (b0 - 192) * 64 + (b1 - 128)
 		return scalar * 8 + 2
 	}
@@ -67,7 +67,7 @@ public func _utf8_decode(storage: ByteStorage, offset: Int, end: Int) -> Int {
 		if hi < b1 { return replacement * 8 + 1 }
 		if end <= offset + 2 { return replacement * 8 + 2 }
 		let b2: Int = storage.get(offset + 2)._toInt()
-		if _is_continuation(b2) == false { return replacement * 8 + 2 }
+		if _is_continuation(b: b2) == false { return replacement * 8 + 2 }
 		let scalar: Int = (b0 - 224) * 4096 + (b1 - 128) * 64 + (b2 - 128)
 		return scalar * 8 + 3
 	}
@@ -92,10 +92,10 @@ public func _utf8_decode(storage: ByteStorage, offset: Int, end: Int) -> Int {
 		if hi < b1 { return replacement * 8 + 1 }
 		if end <= offset + 2 { return replacement * 8 + 2 }
 		let b2: Int = storage.get(offset + 2)._toInt()
-		if _is_continuation(b2) == false { return replacement * 8 + 2 }
+		if _is_continuation(b: b2) == false { return replacement * 8 + 2 }
 		if end <= offset + 3 { return replacement * 8 + 3 }
 		let b3: Int = storage.get(offset + 3)._toInt()
-		if _is_continuation(b3) == false { return replacement * 8 + 3 }
+		if _is_continuation(b: b3) == false { return replacement * 8 + 3 }
 		let scalar: Int = (b0 - 240) * 262144 + (b1 - 128) * 4096 + (b2 - 128) * 64 + (b3 - 128)
 		return scalar * 8 + 4
 	}
@@ -130,14 +130,14 @@ public func _grapheme_category(scalar: Int) -> Int {
 	let hi: Int = entry_count - 1
 	loop lo < hi {
 		let mid: Int = (lo + hi + 1) / 2
-		let mid_start: Int = _entry_value(table.storage, mid) / 32
+		let mid_start: Int = _entry_value(storage: table.storage, index: mid) / 32
 		if scalar < mid_start {
 			hi = mid - 1
 		} else {
 			lo = mid
 		}
 	}
-	let v: Int = _entry_value(table.storage, lo)
+	let v: Int = _entry_value(storage: table.storage, index: lo)
 	v - (v / 32) * 32
 }
 
@@ -160,33 +160,33 @@ func _character_class(scalar: Int) -> Int {
 	let hi: Int = entry_count - 1
 	loop lo < hi {
 		let mid: Int = (lo + hi + 1) / 2
-		let mid_start: Int = _entry_value(table.storage, mid) / 32
+		let mid_start: Int = _entry_value(storage: table.storage, index: mid) / 32
 		if scalar < mid_start {
 			hi = mid - 1
 		} else {
 			lo = mid
 		}
 	}
-	let v: Int = _entry_value(table.storage, lo)
+	let v: Int = _entry_value(storage: table.storage, index: lo)
 	v - (v / 32) * 32
 }
 
 public func scalar_is_whitespace(scalar: Int) -> Bool {
-	_character_class(scalar) == _CC_WHITESPACE
+	_character_class(scalar: scalar) == _CC_WHITESPACE
 }
 
 public func scalar_is_alphabetic(scalar: Int) -> Bool {
-	let cat: Int = _character_class(scalar)
+	let cat: Int = _character_class(scalar: scalar)
 	cat == _CC_ALPHABETIC || cat == _CC_ALPHANUMERIC
 }
 
 public func scalar_is_numeric(scalar: Int) -> Bool {
-	let cat: Int = _character_class(scalar)
+	let cat: Int = _character_class(scalar: scalar)
 	cat == _CC_NUMERIC || cat == _CC_ALPHANUMERIC
 }
 
 public func scalar_is_alphanumeric(scalar: Int) -> Bool {
-	scalar_is_alphabetic(scalar) || scalar_is_numeric(scalar)
+	scalar_is_alphabetic(scalar: scalar) || scalar_is_numeric(scalar: scalar)
 }
 
 public func scalar_is_ascii_digit(scalar: Int) -> Bool {
@@ -194,7 +194,7 @@ public func scalar_is_ascii_digit(scalar: Int) -> Bool {
 }
 
 public func scalar_is_ascii_hexdigit(scalar: Int) -> Bool {
-	if scalar_is_ascii_digit(scalar) { return true }
+	if scalar_is_ascii_digit(scalar: scalar) { return true }
 	if 64 < scalar && scalar < 71 { return true }
 	96 < scalar && scalar < 103
 }
@@ -217,7 +217,7 @@ func _joins(prev: Int, cat: Int, emoji: Int, incb: Int, ri_run: Int) -> Bool {
 	if cat == _GC_CR { return false }
 	if cat == _GC_LF { return false }
 	// GB9/GB9a: extending marks, ZWJ, and spacing marks join.
-	if _extends_cluster(cat) { return true }
+	if _extends_cluster(cat: cat) { return true }
 	if cat == _GC_SPACINGMARK { return true }
 	// GB9b: anything joins after a prepend.
 	if prev == _GC_PREPEND { return true }
@@ -256,15 +256,17 @@ func _joins(prev: Int, cat: Int, emoji: Int, incb: Int, ri_run: Int) -> Bool {
 // GB9c's conjunct chain, GB12/13's regional-indicator parity) is local to
 // this one scan — the iterator carries none.
 public func _next_boundary(storage: ByteStorage, offset: Int, end: Int) -> Int {
-	let head: Int = _utf8_decode(storage, offset, end)
-	let head_cat: Int = _grapheme_category(_packed_scalar(head))
-	let pos: Int = offset + _packed_size(head)
+	let head: Int = _utf8_decode(storage: storage, offset: offset, end: end)
+	let head_cat: Int = _grapheme_category(scalar: _packed_scalar(packed: head))
+	let pos: Int = offset + _packed_size(packed: head)
 
 	// GB3/GB4: CR joins only a following LF; controls stand alone.
 	if head_cat == _GC_CR {
 		if pos < end {
-			let after_cr: Int = _utf8_decode(storage, pos, end)
-			if _packed_scalar(after_cr) == 10 { return pos + _packed_size(after_cr) }
+			let after_cr: Int = _utf8_decode(storage: storage, offset: pos, end: end)
+			if _packed_scalar(packed: after_cr) == 10 { return pos + _packed_size(
+				packed: after_cr
+			) }
 		}
 		return pos
 	}
@@ -283,14 +285,14 @@ public func _next_boundary(storage: ByteStorage, offset: Int, end: Int) -> Int {
 	if head_cat == _GC_REGIONAL_INDICATOR { ri_run = 1 }
 
 	loop pos < end {
-		let next_packed: Int = _utf8_decode(storage, pos, end)
-		let cat: Int = _grapheme_category(_packed_scalar(next_packed))
-		if _joins(prev, cat, emoji, incb, ri_run) == false { return pos }
+		let next_packed: Int = _utf8_decode(storage: storage, offset: pos, end: end)
+		let cat: Int = _grapheme_category(scalar: _packed_scalar(packed: next_packed))
+		if _joins(prev: prev, cat: cat, emoji: emoji, incb: incb, ri_run: ri_run) == false { return pos }
 
 		if cat == _GC_EXT_PICT {
 			emoji = 1
 		} else {
-			let emoji_extends: Bool = emoji == 1 && _extends_cluster(cat)
+			let emoji_extends: Bool = emoji == 1 && _extends_cluster(cat: cat)
 			if emoji_extends {
 				if cat == _GC_ZWJ { emoji = 2 }
 			} else {
@@ -318,7 +320,7 @@ public func _next_boundary(storage: ByteStorage, offset: Int, end: Int) -> Int {
 			ri_run = 0
 		}
 		prev = cat
-		pos = pos + _packed_size(next_packed)
+		pos = pos + _packed_size(packed: next_packed)
 	}
 	pos
 }
@@ -334,7 +336,7 @@ public struct Character {
 	}
 
 	func as_substring() -> Substring {
-		Substring(self.storage, self.start, self.byte_count)
+		Substring(storage: self.storage, start: self.start, byte_count: self.byte_count)
 	}
 
 	func to_string() -> String {
@@ -346,32 +348,36 @@ public struct Character {
 	// combining mark as numeric.
 	func first_scalar() -> Int {
 		_packed_scalar(
-			_utf8_decode(self.storage, self.start, self.start + self.byte_count)
+			packed: _utf8_decode(
+				storage: self.storage,
+				offset: self.start,
+				end: self.start + self.byte_count
+			)
 		)
 	}
 
 	func is_whitespace() -> Bool {
-		scalar_is_whitespace(self.first_scalar())
+		scalar_is_whitespace(scalar: self.first_scalar())
 	}
 
 	func is_alphabetic() -> Bool {
-		scalar_is_alphabetic(self.first_scalar())
+		scalar_is_alphabetic(scalar: self.first_scalar())
 	}
 
 	func is_numeric() -> Bool {
-		scalar_is_numeric(self.first_scalar())
+		scalar_is_numeric(scalar: self.first_scalar())
 	}
 
 	func is_alphanumeric() -> Bool {
-		scalar_is_alphanumeric(self.first_scalar())
+		scalar_is_alphanumeric(scalar: self.first_scalar())
 	}
 
 	func is_ascii_digit() -> Bool {
-		scalar_is_ascii_digit(self.first_scalar())
+		scalar_is_ascii_digit(scalar: self.first_scalar())
 	}
 
 	func is_ascii_hexdigit() -> Bool {
-		scalar_is_ascii_hexdigit(self.first_scalar())
+		scalar_is_ascii_hexdigit(scalar: self.first_scalar())
 	}
 }
 
@@ -381,7 +387,7 @@ extend Character: CheapClone {}
 // Byte equality of the cluster — same semantic as String equality, so
 // canonically equivalent characters in different normal forms differ.
 extend Character: Equatable {
-	func equals(rhs: Character) -> Bool {
+	func equals(_ rhs: Character) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 		let idx = 0
 		loop idx < self.byte_count {
@@ -402,7 +408,9 @@ extend Character: Showable {
 }
 
 extend Character: Add<String> {
-	func add(rhs: String) -> String { "hi" }
+	func add(_ rhs: String) -> String {
+		"hi"
+	}
 }
 
 public struct CharacterIterator {
@@ -416,7 +424,11 @@ extend CharacterIterator: Borrowed {}
 extend CharacterIterator: Iterator<Character> {
 	mut func next() -> Character? {
 		if self.end <= self.offset { return Optional.none }
-		let next_offset: Int = _next_boundary(self.storage, self.offset, self.end)
+		let next_offset: Int = _next_boundary(
+			storage: self.storage,
+			offset: self.offset,
+			end: self.end
+		)
 
 		let ch = Character(
 			storage: self.storage,
@@ -441,9 +453,13 @@ extend ScalarIterator: Borrowed {}
 extend ScalarIterator: Iterator<Int> {
 	mut func next() -> Int? {
 		if self.end <= self.offset { return Optional.none }
-		let packed: Int = _utf8_decode(self.storage, self.offset, self.end)
-		self.offset = self.offset + _packed_size(packed)
-		Optional.some(_packed_scalar(packed))
+		let packed: Int = _utf8_decode(
+			storage: self.storage,
+			offset: self.offset,
+			end: self.end
+		)
+		self.offset = self.offset + _packed_size(packed: packed)
+		Optional.some(_packed_scalar(packed: packed))
 	}
 }
 
@@ -486,7 +502,7 @@ extend Substring {
 		let scan = self.start
 		let stop: Int = self.start + self.byte_count
 		loop scan < stop {
-			scan = _next_boundary(self.storage, scan, stop)
+			scan = _next_boundary(storage: self.storage, offset: scan, end: stop)
 			n = n + 1
 		}
 		n

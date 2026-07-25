@@ -55,6 +55,12 @@ pub enum NameResolverError {
     SymbolNotPublic(String),
     DuplicateExport(String),
     DuplicateDeclaration(String),
+    /// A bare reference or unresolvable call into an overload set
+    /// (ADR 0041): several full callable names remain viable.
+    AmbiguousCallable {
+        name: String,
+        candidates: Vec<String>,
+    },
 }
 
 impl Error for NameResolverError {}
@@ -84,6 +90,13 @@ impl Display for NameResolverError {
             Self::DuplicateDeclaration(name) => {
                 write!(f, "'{name}' is declared more than once in this scope")
             }
+            Self::AmbiguousCallable { name, candidates } => {
+                write!(
+                    f,
+                    "Ambiguous reference to '{name}': candidates are {}",
+                    candidates.join(", ")
+                )
+            }
         }
     }
 }
@@ -95,6 +108,11 @@ pub struct Scope {
     pub values: FxHashMap<String, Symbol>,
     pub types: FxHashMap<String, Symbol>,
     pub handlers: FxHashMap<Symbol, (Symbol, NodeID)>,
+    /// Named-callable overload sets by base name (ADR 0041). Every
+    /// func-valued binder registers here; a set of two or more supersedes
+    /// the single `types` entry (which keeps the last declaration for
+    /// name-keyed consumers) and calls select among it by written labels.
+    pub overloads: FxHashMap<String, Vec<Symbol>>,
     pub depth: u32,
 }
 
@@ -107,6 +125,7 @@ impl Scope {
             values: Default::default(),
             types: Default::default(),
             handlers: Default::default(),
+            overloads: Default::default(),
         }
     }
 }
@@ -114,6 +133,11 @@ impl Scope {
 #[derive(Clone, Debug, Default)]
 pub struct ResolvedNames {
     pub scopes: FxHashMap<NodeID, Scope>,
+    /// Declared external label sequences for named callables (ADR 0041),
+    /// used for resolution-time overload selection. Labels are syntactic,
+    /// so resolution reads them off declarations directly; typing's
+    /// callable contracts remain the checking authority.
+    pub callable_labels: FxHashMap<Symbol, Vec<crate::types::callables::ArgumentLabel>>,
     pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
@@ -138,14 +162,33 @@ impl ResolvedNames {
 
             for (name, &symbol) in &scope.types {
                 if self.public_symbols.contains(&symbol) && !matches!(symbol, Symbol::Builtin(..)) {
-                    res.insert(name.clone(), symbol);
+                    res.entry(name.clone()).or_default().push(symbol);
                 }
             }
             for (name, &symbol) in &scope.values {
                 if self.public_symbols.contains(&symbol) && !matches!(symbol, Symbol::Builtin(..)) {
-                    res.insert(name.clone(), symbol);
+                    res.entry(name.clone()).or_default().push(symbol);
                 }
             }
+            // Overloaded callables export their whole public set; the
+            // single scope entry above only carried the last declaration.
+            for (name, set) in &scope.overloads {
+                if set.len() < 2 {
+                    continue;
+                }
+                let public: Vec<Symbol> = set
+                    .iter()
+                    .copied()
+                    .filter(|symbol| self.public_symbols.contains(symbol))
+                    .collect();
+                if public.len() < 2 {
+                    continue;
+                }
+                res.insert(name.clone(), public);
+            }
+        }
+        for set in res.values_mut() {
+            set.dedup();
         }
         res
     }
@@ -182,6 +225,13 @@ pub struct NameResolver {
     // they are staged here on decl entry and inserted into the enclosing
     // scope on decl exit, so the rhs resolves against outer bindings.
     pending_locals: Vec<Vec<(String, Symbol)>>,
+    // Call callees already bound by overload selection (ADR 0041); the
+    // generic variable pass must not re-resolve them by base name.
+    overload_selected: FxHashSet<NodeID>,
+    // Predeclared public module binders by pattern node (ADR 0041): the
+    // declaring pass reuses the exact symbol, never reuse-by-name, so
+    // overload siblings keep distinct declarations.
+    pub(super) predeclared: FxHashMap<NodeID, Symbol>,
 
     // For figuring out child types
     pub(super) nominal_stack: Vec<(Symbol, NodeID)>,
@@ -209,6 +259,8 @@ impl NameResolver {
             scopes: Default::default(),
             current_scope_id: None,
             pending_locals: Default::default(),
+            overload_selected: Default::default(),
+            predeclared: Default::default(),
             nominal_stack: Default::default(),
             for_pattern_roots: Default::default(),
             modules,
@@ -235,25 +287,23 @@ impl NameResolver {
 
         // Import Core module exports as prelude (unless the file opts out)
         if !skip_core_prelude && let Some(core_module) = self.modules.get_module_by_name("Core") {
-            for (name, &symbol) in &core_module.exports {
-                if is_type_symbol(&symbol) {
-                    scope.types.insert(name.clone(), symbol);
-                } else {
-                    scope.values.insert(name.clone(), symbol);
-                }
+            let mut pairs = Vec::new();
+            for (name, set) in &core_module.exports {
+                Self::bind_export_set(&mut scope, name, set);
+                pairs.extend(Self::collect_module_labels(core_module, set));
             }
+            self.apply_callable_labels(pairs);
         }
 
         if Path::new(path).file_name().and_then(|name| name.to_str()) == Some("package.tlk")
             && let Some(package_module) = self.modules.get_module_by_name("Package")
         {
-            for (name, &symbol) in &package_module.exports {
-                if is_type_symbol(&symbol) {
-                    scope.types.insert(name.clone(), symbol);
-                } else {
-                    scope.values.insert(name.clone(), symbol);
-                }
+            let mut pairs = Vec::new();
+            for (name, set) in &package_module.exports {
+                Self::bind_export_set(&mut scope, name, set);
+                pairs.extend(Self::collect_module_labels(package_module, set));
             }
+            self.apply_callable_labels(pairs);
         }
 
         self.scopes.insert(scope_id, scope);
@@ -418,7 +468,8 @@ impl NameResolver {
                     let mut imported_module = false;
                     let mut imported_file_id = None;
 
-                    let target_symbols: Vec<(String, Symbol, bool)> = match &import.path {
+                    let mut harvested = Vec::new();
+                    let target_symbols: Vec<(String, Vec<Symbol>, bool)> = match &import.path {
                         ImportPath::Package(pkg_name) => {
                             let Some(module) = self.modules.get_module_by_name(pkg_name) else {
                                 self.diagnostic(
@@ -428,13 +479,19 @@ impl NameResolver {
                                 continue;
                             };
                             imported_module = true;
-                            module
+                            let symbols: Vec<(String, Vec<Symbol>, bool)> = module
                                 .exports
                                 .iter()
-                                .map(|(name, &symbol)| {
-                                    (name.clone(), symbol, is_type_symbol(&symbol))
+                                .map(|(name, set)| {
+                                    let is_type =
+                                        set.last().is_some_and(|symbol| is_type_symbol(symbol));
+                                    (name.clone(), set.clone(), is_type)
                                 })
-                                .collect()
+                                .collect();
+                            for (_, set, _) in &symbols {
+                                harvested.extend(Self::collect_module_labels(module, set));
+                            }
+                            symbols
                         }
                         ImportPath::Local(module_path) => {
                             let Some(resolved) =
@@ -470,50 +527,68 @@ impl NameResolver {
                                 .flatten();
                             if let Some(core) = core_module {
                                 imported_module = true;
-                                core.exports
+                                let symbols: Vec<(String, Vec<Symbol>, bool)> = core
+                                    .exports
                                     .iter()
-                                    .map(|(name, &symbol)| {
-                                        (name.clone(), symbol, is_type_symbol(&symbol))
+                                    .map(|(name, set)| {
+                                        let is_type = set
+                                            .last()
+                                            .is_some_and(|symbol| is_type_symbol(symbol));
+                                        (name.clone(), set.clone(), is_type)
                                     })
-                                    .collect()
+                                    .collect();
+                                for (_, set, _) in &symbols {
+                                    harvested.extend(Self::collect_module_labels(core, set));
+                                }
+                                symbols
                             } else {
                                 let Some(target_scope) = self.scopes.get(&target_scope_id) else {
                                     continue;
                                 };
-                                let mut symbols = Vec::new();
+                                let mut symbols: Vec<(String, Vec<Symbol>, bool)> = Vec::new();
                                 for (name, &symbol) in &target_scope.values {
-                                    symbols.push((name.clone(), symbol, is_type_symbol(&symbol)));
+                                    // A sibling file's overload set travels
+                                    // whole (ADR 0041); labels are already in
+                                    // this session's table.
+                                    let set = match target_scope.overloads.get(name) {
+                                        Some(set) if set.len() > 1 => set.clone(),
+                                        _ => vec![symbol],
+                                    };
+                                    symbols.push((name.clone(), set, is_type_symbol(&symbol)));
                                 }
                                 for (name, &symbol) in &target_scope.types {
-                                    symbols.push((name.clone(), symbol, is_type_symbol(&symbol)));
+                                    symbols.push((
+                                        name.clone(),
+                                        vec![symbol],
+                                        is_type_symbol(&symbol),
+                                    ));
                                 }
                                 symbols
                             }
                         }
                     };
 
+                    self.apply_callable_labels(harvested);
                     // Import the requested symbols
                     match &import.symbols {
                         ImportedSymbols::All => {
                             // Import all public non-builtin symbols
+                            let public_symbols = self.phase.public_symbols.clone();
                             let Some(source_scope) = self.scopes.get_mut(&source_scope_id) else {
                                 continue;
                             };
-                            for (name, symbol, is_type) in target_symbols {
+                            for (name, set, _) in target_symbols {
                                 // Skip builtins and private symbols
                                 // (core exports are public by definition)
-                                if matches!(symbol, Symbol::Builtin(..)) {
-                                    continue;
-                                }
-                                if !imported_module && !self.phase.public_symbols.contains(&symbol)
-                                {
-                                    continue;
-                                }
-                                if is_type {
-                                    source_scope.types.insert(name, symbol);
-                                } else {
-                                    source_scope.values.insert(name, symbol);
-                                }
+                                let set: Vec<Symbol> = set
+                                    .into_iter()
+                                    .filter(|symbol| {
+                                        !matches!(symbol, Symbol::Builtin(..))
+                                            && (imported_module
+                                                || public_symbols.contains(symbol))
+                                    })
+                                    .collect();
+                                Self::bind_export_set(source_scope, &name, &set);
                             }
                         }
                         ImportedSymbols::Named(named_imports) => {
@@ -526,12 +601,18 @@ impl NameResolver {
                                     target_symbols.iter().find(|(n, _, _)| n == name_to_find);
 
                                 match found {
-                                    Some((_, symbol, is_type)) => {
-                                        // Check if the symbol is public
+                                    Some((_, set, _)) => {
+                                        // Check if the set is public
                                         // (core exports are public by definition)
-                                        if !imported_module
-                                            && !self.phase.public_symbols.contains(symbol)
-                                        {
+                                        let set: Vec<Symbol> = set
+                                            .iter()
+                                            .copied()
+                                            .filter(|symbol| {
+                                                imported_module
+                                                    || self.phase.public_symbols.contains(symbol)
+                                            })
+                                            .collect();
+                                        if set.is_empty() {
                                             self.diagnostic(
                                                 decl_id,
                                                 NameResolverError::SymbolNotPublic(
@@ -545,11 +626,7 @@ impl NameResolver {
                                         else {
                                             continue;
                                         };
-                                        if *is_type {
-                                            source_scope.types.insert(local_name.clone(), *symbol);
-                                        } else {
-                                            source_scope.values.insert(local_name.clone(), *symbol);
-                                        }
+                                        Self::bind_export_set(source_scope, local_name, &set);
                                     }
                                     None => {
                                         // Check if the symbol is a private let binding
@@ -673,92 +750,165 @@ impl NameResolver {
         None
     }
 
-    fn lookup_qualified(&mut self, raw: &str, scope_id: NodeID) -> Option<Symbol> {
-        let (module_path, symbol_name) = raw.rsplit_once("::")?;
-        let target_symbols = if LocalModulePaths::is_local(module_path) {
+    /// Bind an exported set into a scope (ADR 0041): the last symbol takes
+    /// the plain name entry, and a multi-symbol callable set registers for
+    /// label selection.
+    fn bind_export_set(scope: &mut Scope, name: &str, set: &[Symbol]) {
+        let Some(&last) = set.last() else {
+            return;
+        };
+        if is_type_symbol(&last) {
+            scope.types.insert(name.to_string(), last);
+        } else {
+            scope.values.insert(name.to_string(), last);
+        }
+        if set.len() > 1 {
+            scope.overloads.insert(name.to_string(), set.to_vec());
+        }
+    }
+
+    /// Harvest exported callables' labels from a module's contracts so
+    /// overload selection can run in the importing module (ADR 0041).
+    /// Collect-then-apply, because the module handle borrows the resolver.
+    fn collect_module_labels(
+        module: &crate::compiling::module::Module,
+        set: &[Symbol],
+    ) -> Vec<(Symbol, Vec<crate::types::callables::ArgumentLabel>)> {
+        set.iter()
+            .filter_map(|symbol| {
+                let contract = module.types.catalog.callable_contracts.get(symbol)?;
+                Some((*symbol, contract.name.labels.clone()))
+            })
+            .collect()
+    }
+
+    fn apply_callable_labels(
+        &mut self,
+        pairs: Vec<(Symbol, Vec<crate::types::callables::ArgumentLabel>)>,
+    ) {
+        for (symbol, labels) in pairs {
+            self.phase.callable_labels.insert(symbol, labels);
+        }
+    }
+
+    /// Resolve `Module::name` to its exported symbol set, silently: the
+    /// diagnosing wrapper and the call-site overload selection share this.
+    /// The bool is the set's visibility to the requesting file.
+    fn lookup_qualified_set(
+        &mut self,
+        raw: &str,
+        scope_id: NodeID,
+    ) -> Result<(Vec<Symbol>, bool), NameResolverError> {
+        let Some((module_path, symbol_name)) = raw.rsplit_once("::") else {
+            return Err(NameResolverError::ModuleNotFound(raw.to_string()));
+        };
+        if LocalModulePaths::is_local(module_path) {
             let source_file = scope_id.0;
-            let source_path = self.file_path_by_id.get(&source_file)?.clone();
-            let Some(resolved) = self.local_modules.resolve(&source_path, module_path) else {
-                self.diagnostic(
-                    scope_id,
-                    NameResolverError::ModuleNotFound(module_path.to_string()),
-                );
-                return None;
-            };
+            let source_path = self
+                .file_path_by_id
+                .get(&source_file)
+                .cloned()
+                .ok_or_else(|| NameResolverError::ModuleNotFound(module_path.to_string()))?;
+            let resolved = self
+                .local_modules
+                .resolve(&source_path, module_path)
+                .ok_or_else(|| NameResolverError::ModuleNotFound(module_path.to_string()))?;
             let target_path = resolved.to_string_lossy().to_string();
-            let Some(target_file_id) = module_path_keys(&target_path)
+            let target_file_id = module_path_keys(&target_path)
                 .into_iter()
                 .find_map(|key| self.path_to_file_id.get(&key).copied())
-            else {
-                self.diagnostic(
-                    scope_id,
-                    NameResolverError::ModuleNotFound(module_path.to_string()),
-                );
-                return None;
-            };
+                .ok_or_else(|| NameResolverError::ModuleNotFound(module_path.to_string()))?;
             let target_scope_id = NodeID(target_file_id, 0);
             if let Some(core) = is_core_source_path(&target_path)
                 .then(|| self.modules.get_module_by_name("Core"))
                 .flatten()
             {
-                core.exports
-                    .iter()
-                    .map(|(name, &symbol)| (name.clone(), symbol, true))
-                    .collect_vec()
-            } else {
-                let target_scope = self.scopes.get(&target_scope_id)?;
-                let mut symbols = Vec::new();
-                for (name, &symbol) in &target_scope.values {
-                    symbols.push((
-                        name.clone(),
-                        symbol,
-                        self.phase.public_symbols.contains(&symbol),
-                    ));
-                }
-                for (name, &symbol) in &target_scope.types {
-                    symbols.push((
-                        name.clone(),
-                        symbol,
-                        self.phase.public_symbols.contains(&symbol),
-                    ));
-                }
-                symbols
+                let set = core
+                    .exports
+                    .get(symbol_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        NameResolverError::SymbolNotFoundInModule(symbol_name.to_string())
+                    })?;
+                let pairs = Self::collect_module_labels(core, &set);
+                self.apply_callable_labels(pairs);
+                return Ok((set, true));
             }
+            let target_scope = self
+                .scopes
+                .get(&target_scope_id)
+                .ok_or_else(|| NameResolverError::ModuleNotFound(module_path.to_string()))?;
+            if let Some(set) = target_scope.overloads.get(symbol_name)
+                && set.len() > 1
+            {
+                let set = set.clone();
+                let public: Vec<Symbol> = set
+                    .iter()
+                    .copied()
+                    .filter(|symbol| self.phase.public_symbols.contains(symbol))
+                    .collect();
+                if public.is_empty() {
+                    return Err(NameResolverError::SymbolNotPublic(symbol_name.to_string()));
+                }
+                return Ok((public, true));
+            }
+            let symbol = target_scope
+                .values
+                .get(symbol_name)
+                .or_else(|| target_scope.types.get(symbol_name))
+                .copied()
+                .ok_or_else(|| {
+                    NameResolverError::SymbolNotFoundInModule(symbol_name.to_string())
+                })?;
+            let public = self.phase.public_symbols.contains(&symbol);
+            if !public {
+                return Err(NameResolverError::SymbolNotPublic(symbol_name.to_string()));
+            }
+            Ok((vec![symbol], true))
         } else {
             let Some(module) = self.modules.get_module_by_name(module_path) else {
-                self.diagnostic(
-                    scope_id,
-                    NameResolverError::ModuleNotFound(module_path.to_string()),
-                );
-                return None;
+                return Err(NameResolverError::ModuleNotFound(module_path.to_string()));
             };
-            module
-                .exports
-                .iter()
-                .map(|(name, &symbol)| (name.clone(), symbol, true))
-                .collect_vec()
-        };
+            let set = module.exports.get(symbol_name).cloned().ok_or_else(|| {
+                NameResolverError::SymbolNotFoundInModule(symbol_name.to_string())
+            })?;
+            let pairs = Self::collect_module_labels(module, &set);
+            self.apply_callable_labels(pairs);
+            Ok((set, true))
+        }
+    }
 
-        let found = target_symbols
-            .iter()
-            .find(|(name, _, _)| name == symbol_name);
-        if let Some((_, _, is_public)) = found
-            && !*is_public
-        {
-            self.diagnostic(
-                scope_id,
-                NameResolverError::SymbolNotPublic(symbol_name.to_string()),
-            );
-            return None;
+    fn lookup_qualified(&mut self, raw: &str, scope_id: NodeID) -> Option<Symbol> {
+        match self.lookup_qualified_set(raw, scope_id) {
+            Err(error) => {
+                self.diagnostic(scope_id, error);
+                None
+            }
+            Ok((set, _)) => match set.as_slice() {
+                [] => None,
+                [one] => Some(*one),
+                _ => {
+                    let name = raw.to_string();
+                    let candidates = set
+                        .iter()
+                        .filter_map(|symbol| {
+                            Some(
+                                crate::types::callables::CallableName {
+                                    base: name.clone(),
+                                    labels: self.phase.callable_labels.get(symbol)?.clone(),
+                                }
+                                .to_string(),
+                            )
+                        })
+                        .collect();
+                    self.diagnostic(
+                        scope_id,
+                        NameResolverError::AmbiguousCallable { name, candidates },
+                    );
+                    set.first().copied()
+                }
+            },
         }
-        let found = found.map(|(_, symbol, _)| *symbol);
-        if found.is_none() {
-            self.diagnostic(
-                scope_id,
-                NameResolverError::SymbolNotFoundInModule(symbol_name.to_string()),
-            );
-        }
-        found
     }
 
     pub(super) fn lookup(&mut self, name: &Name) -> Option<Name> {
@@ -928,12 +1078,180 @@ impl NameResolver {
         resolved
     }
 
+    /// Bind a name to a symbol in the current scope without minting or
+    /// reuse — the overload-sibling predeclare path (ADR 0041).
+    pub(super) fn bind_value(&mut self, name: &str, symbol: Symbol) {
+        let Some(scope_id) = self.current_scope_id else {
+            return;
+        };
+        if let Some(scope) = self.scopes.get_mut(&scope_id) {
+            scope.types.insert(name.to_string(), symbol);
+        }
+    }
+
+    /// Register a func-valued binder in its scope's overload set
+    /// (ADR 0041). A same-scope callable with an identical external-label
+    /// sequence is a duplicate declaration; differing sequences coexist
+    /// and calls select among them by written labels.
+    pub(super) fn register_callable(
+        &mut self,
+        symbol: Symbol,
+        base: &str,
+        params: &[crate::node_kinds::parameter::Parameter],
+        node_id: NodeID,
+    ) {
+        use crate::types::callables::ArgumentLabel;
+        let labels: Vec<ArgumentLabel> = params
+            .iter()
+            .map(|param| match param.external_label() {
+                Some(name) => ArgumentLabel::Named(name),
+                None => ArgumentLabel::Omitted,
+            })
+            .collect();
+        let Some(scope_id) = self.current_scope_id else {
+            return;
+        };
+        let existing = self
+            .scopes
+            .get(&scope_id)
+            .and_then(|scope| scope.overloads.get(base));
+        if let Some(set) = existing {
+            if set.contains(&symbol) {
+                return;
+            }
+            if set
+                .iter()
+                .any(|candidate| self.phase.callable_labels.get(candidate) == Some(&labels))
+            {
+                self.diagnostic(
+                    node_id,
+                    NameResolverError::DuplicateDeclaration(
+                        crate::types::callables::CallableName {
+                            base: base.to_string(),
+                            labels: labels.clone(),
+                        }
+                        .to_string(),
+                    ),
+                );
+                return;
+            }
+        }
+        self.phase.callable_labels.insert(symbol, labels);
+        if let Some(scope) = self.scopes.get_mut(&scope_id) {
+            scope
+                .overloads
+                .entry(base.to_string())
+                .or_default()
+                .push(symbol);
+        }
+    }
+
+    /// The overload set visible for `base`: from the nearest scope that
+    /// defines the name at all, and only when it holds two or more
+    /// callables (an inner single binding shadows any outer set).
+    fn visible_overloads(&self, base: &str) -> Option<Vec<Symbol>> {
+        let mut scope_id = self.current_scope_id?;
+        loop {
+            let scope = self.scopes.get(&scope_id)?;
+            if let Some(set) = scope.overloads.get(base)
+                && set.len() > 1
+            {
+                return Some(set.clone());
+            }
+            if scope.types.contains_key(base) || scope.values.contains_key(base) {
+                return None;
+            }
+            scope_id = scope.parent_id.filter(|parent| *parent != scope_id)?;
+        }
+    }
+
+    /// Select one callable from an overload set by the call's written
+    /// labels (ADR 0041). Trailing blocks and paren-less leading strings
+    /// omit their labels by syntax and match any declared label. One exact
+    /// match selects; otherwise a unique same-arity candidate recovers
+    /// (typing reports its label mismatch); anything else is ambiguous.
+    fn select_overload(
+        &mut self,
+        name: &mut Name,
+        node_id: NodeID,
+        set: &[Symbol],
+        args: &[crate::node_kinds::call_arg::CallArg],
+    ) {
+        use crate::types::callables::{WrittenSlot, labels_admit};
+
+        let slots: Vec<WrittenSlot> = args.iter().map(WrittenSlot::of).collect();
+        let exact: Vec<Symbol> = set
+            .iter()
+            .copied()
+            .filter(|symbol| {
+                self.phase
+                    .callable_labels
+                    .get(symbol)
+                    .is_some_and(|declared| labels_admit(declared, &slots))
+            })
+            .collect();
+        let selected = match exact.as_slice() {
+            [one] => Some(*one),
+            [] => {
+                let same_arity: Vec<Symbol> = set
+                    .iter()
+                    .copied()
+                    .filter(|symbol| {
+                        self.phase
+                            .callable_labels
+                            .get(symbol)
+                            .is_some_and(|declared| declared.len() == slots.len())
+                    })
+                    .collect();
+                match same_arity.as_slice() {
+                    [one] => Some(*one),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        match selected {
+            Some(symbol) => *name = Name::Resolved(symbol, name.name_str()),
+            None => {
+                let candidates = set
+                    .iter()
+                    .filter_map(|symbol| {
+                        Some(
+                            crate::types::callables::CallableName {
+                                base: name.name_str(),
+                                labels: self.phase.callable_labels.get(symbol)?.clone(),
+                            }
+                            .to_string(),
+                        )
+                    })
+                    .collect();
+                self.diagnostic(
+                    node_id,
+                    NameResolverError::AmbiguousCallable {
+                        name: name.name_str(),
+                        candidates,
+                    },
+                );
+                // Recover to the first candidate so checking continues.
+                if let Some(first) = set.first() {
+                    *name = Name::Resolved(*first, name.name_str());
+                }
+            }
+        }
+    }
+
     /// Mint a fresh symbol for `name` (recording its defining node and
     /// name string) without making it visible in any scope. Local `let`
     /// binders go through this at their declaration point and only insert
     /// into scope once their initializer has resolved (rule 1 of
     /// docs/sequential-scoping-plan.md).
-    pub(super) fn mint(&mut self, name: &Name, kind: SymbolKind, node_id: NodeID, span: Span) -> Name {
+    pub(super) fn mint(
+        &mut self,
+        name: &Name,
+        kind: SymbolKind,
+        node_id: NodeID,
+        span: Span,
+    ) -> Name {
         let name_str = name.name_str();
         let module_id = self.current_module_id;
         let well_known_core_symbol = if self.at_module_scope() && module_id == ModuleId::Core {
@@ -1030,16 +1348,24 @@ impl NameResolver {
                 for field in fields {
                     match &mut field.kind {
                         RecordFieldPatternKind::Bind(name) => {
-                            *name =
-                                self.declare(name, SymbolKind::PatternBindLocal, pattern.id, field.span);
+                            *name = self.declare(
+                                name,
+                                SymbolKind::PatternBindLocal,
+                                pattern.id,
+                                field.span,
+                            );
                         }
                         RecordFieldPatternKind::Equals {
                             name,
                             name_span,
                             value,
                         } => {
-                            *name =
-                                self.declare(name, SymbolKind::PatternBindLocal, pattern.id, *name_span);
+                            *name = self.declare(
+                                name,
+                                SymbolKind::PatternBindLocal,
+                                pattern.id,
+                                *name_span,
+                            );
                             self.declare_pattern(value, SymbolKind::PatternBindLocal);
                         }
                         RecordFieldPatternKind::Rest => (),
@@ -1332,7 +1658,7 @@ impl NameResolver {
                         lhs,
                         rhs:
                             Some(Expr {
-                                kind: ExprKind::Func(..),
+                                kind: ExprKind::Func(func),
                                 ..
                             }),
                         ..
@@ -1342,6 +1668,13 @@ impl NameResolver {
                 && let PatternKind::Bind(name @ Name::Raw(_)) = &mut lhs.kind
             {
                 *name = self.declare(name, SymbolKind::DeclaredLocal, lhs.id, lhs.span);
+                // A lowered local `func` declaration joins the block
+                // scope's overload set (ADR 0041).
+                if func.origin == crate::node_kinds::func::FuncOrigin::Decl
+                    && let Ok(symbol) = name.symbol()
+                {
+                    self.register_callable(symbol, &name.name_str(), &func.params, lhs.id);
+                }
             }
         }
     }
@@ -1364,7 +1697,8 @@ impl NameResolver {
             // and the loop binder live in it and die with it.
             self.push_scope(stmt.id);
             self.for_pattern_roots.push(pattern.id);
-            *hidden_source = self.mint(hidden_source, SymbolKind::DeclaredLocal, stmt.id, stmt.span);
+            *hidden_source =
+                self.mint(hidden_source, SymbolKind::DeclaredLocal, stmt.id, stmt.span);
             *hidden_iter = self.mint(hidden_iter, SymbolKind::DeclaredLocal, stmt.id, stmt.span);
             // `for x in mut xs` restores its source at loop end — the
             // source is mutated exactly as an assignment target is.
@@ -1497,7 +1831,45 @@ impl NameResolver {
             }
         });
 
+        // Overloaded callees select by written labels before the generic
+        // variable resolution below reaches them (ADR 0041).
+        on!(&mut expr.kind, ExprKind::Call { callee, args, .. }, {
+            if let ExprKind::Variable(name) = &mut callee.kind
+                && name.symbol().is_err()
+                && let Some(set) = self.visible_overloads(&name.name_str())
+            {
+                self.select_overload(name, expr.id, &set, args);
+                self.overload_selected.insert(callee.id);
+            }
+        });
+
         on!(&mut expr.kind, ExprKind::Variable(name), {
+            // A call callee selected from an overload set stays selected.
+            if self.overload_selected.contains(&expr.id) {
+                return;
+            }
+            // A bare reference resolves only when the set has one callable.
+            if let Some(set) = self.visible_overloads(&name.name_str()) {
+                let candidates = set
+                    .iter()
+                    .filter_map(|symbol| {
+                        Some(
+                            crate::types::callables::CallableName {
+                                base: name.name_str(),
+                                labels: self.phase.callable_labels.get(symbol)?.clone(),
+                            }
+                            .to_string(),
+                        )
+                    })
+                    .collect();
+                self.diagnostic(
+                    expr.id,
+                    NameResolverError::AmbiguousCallable {
+                        name: name.name_str(),
+                        candidates,
+                    },
+                );
+            }
             let Some(resolved_name) = self.lookup(name) else {
                 self.diagnostic(expr.id, NameResolverError::UndefinedName(name.name_str()));
                 return;
@@ -1633,7 +2005,12 @@ impl NameResolver {
         }
 
         for param in &mut func.params {
-            param.name = self.declare(&param.name, SymbolKind::ParamLocal, param.id, param.name_span);
+            param.name = self.declare(
+                &param.name,
+                SymbolKind::ParamLocal,
+                param.id,
+                param.name_span,
+            );
         }
 
         for name in func.effects.names.iter_mut() {
@@ -1687,8 +2064,12 @@ impl NameResolver {
             self.enter_scope(decl.id);
 
             for param in params {
-                param.name =
-                    self.declare(&param.name, SymbolKind::ParamLocal, param.id, param.name_span);
+                param.name = self.declare(
+                    &param.name,
+                    SymbolKind::ParamLocal,
+                    param.id,
+                    param.name_span,
+                );
             }
         });
 
@@ -1700,7 +2081,23 @@ impl NameResolver {
             self.enter_scope(decl.id);
         });
 
-        on!(&mut decl.kind, DeclKind::Let { lhs, .. }, {
+        on!(&mut decl.kind, DeclKind::Let { lhs, rhs, .. }, {
+            // A lowered `func` declaration IS its binder: bind the func's
+            // own name to the binder's symbol before the body resolves, so
+            // an overloaded base name never re-resolves to a sibling
+            // declaration (ADR 0041).
+            if let PatternKind::Bind(binder) = &lhs.kind
+                && let Ok(symbol) = binder.symbol()
+                && let Some(Expr {
+                    kind: ExprKind::Func(func),
+                    ..
+                }) = rhs
+                && func.origin == crate::node_kinds::func::FuncOrigin::Decl
+                && func.name.symbol().is_err()
+            {
+                func.name = Name::Resolved(symbol, func.name.name_str());
+            }
+
             // Local binders resolve to fresh symbols here, at their point
             // of declaration, but stay invisible until the decl exits
             // (rule 1 — the rhs sees the outer binding). Func-valued let

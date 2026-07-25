@@ -7,32 +7,32 @@
 // Usage: talk run examples/ChatClient.tlk
 
 @unsafe {
-	let sock = _io_socket(AF_INET, SOCK_STREAM, 0)
-	_io_connect(sock, LOCALHOST, 9900)
+	let sock = _io_socket(domain: AF_INET, socktype: SOCK_STREAM, proto: 0)
+	_io_connect(fd: sock, addr: LOCALHOST, port: 9900)
 
 	// Read and print welcome message
-	let welcome_buf = _alloc(1024)
-	let welcome_n = _io_read(sock, welcome_buf, 1024)
-	_io_write(STDOUT_FD, welcome_buf, welcome_n)
-	_free(welcome_buf)
+	let welcome_buf = _alloc(count: 1024)
+	let welcome_n = _io_read(fd: sock, buf: welcome_buf, count: 1024)
+	_io_write(fd: STDOUT_FD, buf: welcome_buf, count: welcome_n)
+	_free(ptr: welcome_buf)
 
 	loop {
 		// Read a message from stdin and send it
-		let msg_buf = _alloc(1024)
-		let msg_n = _io_read(STDIN_FD, msg_buf, 1024)
-		_io_write(sock, msg_buf, msg_n)
-		_free(msg_buf)
+		let msg_buf = _alloc(count: 1024)
+		let msg_n = _io_read(fd: STDIN_FD, buf: msg_buf, count: 1024)
+		_io_write(fd: sock, buf: msg_buf, count: msg_n)
+		_free(ptr: msg_buf)
 
 		// Read and print echo response
-		let buf = _alloc(1024)
-		let n = _io_read(sock, buf, 1024)
+		let buf = _alloc(count: 1024)
+		let n = _io_read(fd: sock, buf: buf, count: 1024)
 		if n <= 0 {
-			_free(buf)
+			_free(ptr: buf)
 			break
 		}
-		_io_write(STDOUT_FD, buf, n)
-		_free(buf)
+		_io_write(fd: STDOUT_FD, buf: buf, count: n)
+		_free(ptr: buf)
 	}
 
-	_io_close(sock)
+	_io_close(fd: sock)
 }

@@ -67,10 +67,7 @@ fn is_frame_local(symbol: &Symbol) -> bool {
 /// unique per binder, so a symbol bound anywhere in the frame's subtree
 /// (including a hoisted func-valued `let` used before its declaration)
 /// is not free.
-fn frame_facts(
-    block: &typed_ast::Block,
-    params: &[typed_ast::Parameter],
-) -> typed_ast::FrameFacts {
+fn frame_facts(block: &typed_ast::Block, params: &[typed_ast::Parameter]) -> typed_ast::FrameFacts {
     use derive_visitor::{Drive, Visitor};
     use typed_ast::{DeclKind, ExprKind, PatternKind};
 
@@ -230,11 +227,10 @@ impl TypedTreeBuilder<'_> {
                 return self.graft(e, &items[0]);
             }
             expr::ExprKind::Propagate(_) | expr::ExprKind::ForceUnwrap(..) => {
-                let plan = self
-                    .types
-                    .propagation_plans
-                    .get(&e.id)
-                    .unwrap_or_else(|| panic!("checked postfix expression {:?} has no plan", e.id));
+                let plan =
+                    self.types.propagation_plans.get(&e.id).unwrap_or_else(|| {
+                        panic!("checked postfix expression {:?} has no plan", e.id)
+                    });
                 return self.graft(e, &plan.lowered);
             }
             // Variant construction: the checker resolves `.some(x)` at the
@@ -516,7 +512,9 @@ impl TypedTreeBuilder<'_> {
                 }
             }
             expr::ExprKind::Propagate(..) | expr::ExprKind::ForceUnwrap(..) => {
-                unreachable!("postfix expressions are elaborated in expr(); expr_kind never sees them")
+                unreachable!(
+                    "postfix expressions are elaborated in expr(); expr_kind never sees them"
+                )
             }
             expr::ExprKind::Unary(..) | expr::ExprKind::Binary(..) => {
                 unreachable!(
@@ -620,9 +618,7 @@ impl TypedTreeBuilder<'_> {
                 enum_name: enum_name.clone(),
                 variant_name: variant_name.clone(),
                 resolved: match self.types.member_resolutions.get(&p.id) {
-                    Some(crate::types::output::MemberResolution::Direct(variant)) => {
-                        Some(*variant)
-                    }
+                    Some(crate::types::output::MemberResolution::Direct(variant)) => Some(*variant),
                     _ => None,
                 },
                 fields: fields.iter().map(|p| self.pattern(p)).collect(),

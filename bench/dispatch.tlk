@@ -23,9 +23,9 @@ func bench(n: Int) -> Int {
 		} else {
 			Shape.rect(i, 2)
 		}
-		total = total + area(s)
+		total = total + area(s: s)
 		i = i + 1
 	}
 	total
 }
-print(bench(400000))
+print(bench(n: 400000))

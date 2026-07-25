@@ -5,6 +5,6 @@ let tag = "caught: "
 	print(err)
 }
 func boom() 'oops -> () {
-	'oops("bang")
+	'oops(error: "bang")
 }
 boom()

@@ -162,8 +162,10 @@ impl Workspace {
                     module
                         .exports
                         .iter()
+                        .flat_map(|(name, set)| {
+                            set.iter().map(move |&symbol| (name.clone(), symbol))
+                        })
                         .filter(|(_, symbol)| module.symbol_names.contains_key(symbol))
-                        .map(|(name, &symbol)| (name.clone(), symbol))
                         .collect(),
                 )
             })
@@ -197,13 +199,12 @@ impl Workspace {
         // what compiling would reject. Frontend errors gate it — the
         // backend assumes a well-typed program — and only the normal
         // context runs it (core and stdlib compile against themselves).
-        let ownership_rejection = if matches!(compile_context, WorkspaceCompileContext::Normal)
-            && !typed.has_errors()
-        {
-            typed.check_ownership().err()
-        } else {
-            None
-        };
+        let ownership_rejection =
+            if matches!(compile_context, WorkspaceCompileContext::Normal) && !typed.has_errors() {
+                typed.check_ownership().err()
+            } else {
+                None
+            };
         let Driver { phase, .. } = typed;
         let (resolved_names, types) = phase.program.into_semantic_parts();
         let diagnostics_any = phase.diagnostics;
@@ -914,8 +915,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("talk-ws-harness-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let offender = dir.join("parser.test.tlk");
-        let harness_text =
-            "func f() -> &String {\n\tlet s = \"x\" + \"y\"\n\ts\n}\ntest(\"t\") {\n\tassert(1 == 1)\n}\n";
+        let harness_text = "func f() -> &String {\n\tlet s = \"x\" + \"y\"\n\ts\n}\ntest(\"t\") {\n\tassert(1 == 1)\n}\n";
         std::fs::write(&offender, harness_text).expect("offending source");
         let docs = vec![doc(&offender, harness_text)];
         let workspace = Workspace::new(docs).expect("workspace");

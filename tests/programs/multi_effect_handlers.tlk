@@ -4,7 +4,7 @@ effect 'quit(message: String) -> Never
 func work(n: Int) -> Int {
 	let bonus = 'ask()
 	if n > 9 {
-		'quit("too big")
+		'quit(message: "too big")
 	}
 	n + bonus
 }
@@ -15,8 +15,8 @@ func attempt(n: Int) -> Int {
 		0 - 1
 	}
 	@handle 'ask { 'continue 5 }
-	work(n)
+	work(n: n)
 }
 
-print(attempt(3))
-print(attempt(30))
+print(attempt(n: 3))
+print(attempt(n: 30))

@@ -8,7 +8,7 @@ func this_is_fine() {
 
 func this_is_not_fine() {
 	print("uh oh, something is going to happen")
-	'throw("oh no")
+	'throw(ret: "oh no")
 	print("this shouldn't print either")
 }
 

@@ -3,5 +3,5 @@ func take(x: *String) -> Int {
 }
 func ok() -> Int {
 	let s = "hello" + " world"
-	take(s)
+	take(x: s)
 }

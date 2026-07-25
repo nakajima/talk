@@ -1,5 +1,5 @@
 @unsafe {
-	let p = _alloc<Int>(1)
-	_free(p)
+	let p = _alloc<Int>(count: 1)
+	_free(ptr: p)
 }
 0

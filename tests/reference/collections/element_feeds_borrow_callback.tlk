@@ -5,7 +5,7 @@ func each(entries: Array<String>, fn: (&String) -> ()) {
 }
 func main() -> Int {
 	let xs = ["a" + "b", "c" + "d"]
-	each(xs) { e in
+	each(entries: xs) { e in
 		print(e)
 	}
 	0

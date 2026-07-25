@@ -1,2 +1,2 @@
-let p = _alloc<Int>(1)
+let p = _alloc<Int>(count: 1)
 0

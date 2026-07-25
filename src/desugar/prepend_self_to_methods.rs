@@ -97,6 +97,8 @@ impl PrependSelfToMethods {
             ReceiverMode::Consuming => self_ty.kind,
         };
         Parameter {
+            label: None,
+            label_span: None,
             mode: None,
             mode_span: None,
             id: NodeID(self.file_id, self.node_ids.next_id()),
@@ -120,7 +122,7 @@ pub mod tests {
         node_id::NodeID,
         node_kinds::{
             decl::{DeclKind, ReceiverMode},
-            func::Func,
+            func::{Func, FuncOrigin},
             parameter::Parameter,
             type_annotation::TypeAnnotationKind,
         },
@@ -152,6 +154,7 @@ pub mod tests {
                 where_clause: None,
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     func: Box::new(Func {
+                        origin: FuncOrigin::Decl,
                         id: NodeID::ANY,
                         name: "fizz".into(),
                         name_span: Span::ANY,
@@ -161,6 +164,8 @@ pub mod tests {
                         effects: Default::default(),
                         params: vec![
                             Parameter {
+                                label: None,
+                                label_span: None,
                                 mode: None,
                                 mode_span: None,
                                 id: NodeID::ANY,
@@ -175,6 +180,8 @@ pub mod tests {
                                 }))
                             },
                             Parameter {
+                                label: None,
+                                label_span: None,
                                 mode: None,
                                 mode_span: None,
                                 id: NodeID::ANY,
@@ -272,6 +279,8 @@ pub mod tests {
                 body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: "init".into(),
                     params: vec![Parameter {
+                        label: None,
+                        label_span: None,
                         mode: None,
                         mode_span: None,
                         id: NodeID::ANY,

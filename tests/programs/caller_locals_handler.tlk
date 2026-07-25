@@ -2,7 +2,7 @@ effect 'fail(message: String) -> Never
 
 func risky(n: Int) {
 	if n > 2 {
-		'fail("too big")
+		'fail(message: "too big")
 	}
 	print("ok")
 }
@@ -10,9 +10,9 @@ func risky(n: Int) {
 func attempt(n: Int) {
 	let prefix = "caught: "
 	@handle 'fail { message in print(prefix + message) }
-	risky(n)
+	risky(n: n)
 	print("after risky")
 }
 
-attempt(1)
-attempt(5)
+attempt(n: 1)
+attempt(n: 5)

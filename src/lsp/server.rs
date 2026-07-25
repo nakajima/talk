@@ -818,22 +818,21 @@ fn tlk_files_under_root(root: &PathBuf) -> Vec<PathBuf> {
     // same set `talk test` and `talk run` use. Stray .tlk files elsewhere
     // under the folder (scratch, stale copies) are not part of the
     // program, and their diagnostics must not gate the real ones.
-    let source_roots: Option<Vec<PathBuf>> =
-        crate::compiling::package::PackageManifest::read(root)
-            .ok()
-            .map(|manifest| {
-                manifest
-                    .builds
-                    .iter()
-                    .map(|artifact| match artifact {
-                        crate::compiling::package::PackageArtifact::Library { from }
-                        | crate::compiling::package::PackageArtifact::Binary { from, .. } => {
-                            root.join(from).parent().map(std::path::Path::to_path_buf)
-                        }
-                    })
-                    .flatten()
-                    .collect()
-            });
+    let source_roots: Option<Vec<PathBuf>> = crate::compiling::package::PackageManifest::read(root)
+        .ok()
+        .map(|manifest| {
+            manifest
+                .builds
+                .iter()
+                .map(|artifact| match artifact {
+                    crate::compiling::package::PackageArtifact::Library { from }
+                    | crate::compiling::package::PackageArtifact::Binary { from, .. } => {
+                        root.join(from).parent().map(std::path::Path::to_path_buf)
+                    }
+                })
+                .flatten()
+                .collect()
+        });
     let in_scope = |path: &std::path::Path| match &source_roots {
         Some(roots) => {
             path.parent() == Some(root.as_path())
@@ -1453,19 +1452,19 @@ mod tests {
         let missing = "func add(a: Int, b: Int) -> Int { a }\nlet n = add(1)\n";
         assert_eq!(
             type_action_rewrite(missing, "Add missing argument"),
-            "func add(a: Int, b: Int) -> Int { a }\nlet n = add(1, {})\n"
+            "func add(a: Int, b: Int) -> Int { a }\nlet n = add(1, b: {})\n"
         );
 
         let multiple_missing = "func add(a: Int, b: Int) -> Int { a }\nlet n = add()\n";
         assert_eq!(
             type_action_rewrite(multiple_missing, "Add 2 missing arguments"),
-            "func add(a: Int, b: Int) -> Int { a }\nlet n = add({}, {})\n"
+            "func add(a: Int, b: Int) -> Int { a }\nlet n = add(a: {}, b: {})\n"
         );
 
         let effect_call = "effect 'ask(a: Int, b: Int) -> Int\nlet n = 'ask(1)\n";
         assert_eq!(
             type_action_rewrite(effect_call, "Add missing argument"),
-            "effect 'ask(a: Int, b: Int) -> Int\nlet n = 'ask(1, {})\n"
+            "effect 'ask(a: Int, b: Int) -> Int\nlet n = 'ask(1, b: {})\n"
         );
 
         let too_many = "func add(a: Int, b: Int) -> Int { a }\nlet n = add(1, 2, 3, 4)\n";
@@ -1484,7 +1483,7 @@ mod tests {
             "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet n = apply() { 1 }\n";
         assert_eq!(
             type_action_rewrite(missing_before_block, "Add missing argument"),
-            "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet n = apply({}) { 1 }\n"
+            "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet n = apply(value: {}) { 1 }\n"
         );
 
         let extra_block = "func identity(value: Int) -> Int { value }\nlet n = identity(1) { 2 }\n";
@@ -1496,7 +1495,7 @@ mod tests {
         let omitted_parentheses = "func combine(value: String, n: Int) -> String { value }\nlet missing = combine \"x\"\nfunc no_args() -> Int { 1 }\nlet extra = no_args \"x\"\n";
         assert_eq!(
             type_action_rewrite(omitted_parentheses, "Add missing argument"),
-            "func combine(value: String, n: Int) -> String { value }\nlet missing = combine(\"x\", {})\nfunc no_args() -> Int { 1 }\nlet extra = no_args \"x\"\n"
+            "func combine(value: String, n: Int) -> String { value }\nlet missing = combine(\"x\", n: {})\nfunc no_args() -> Int { 1 }\nlet extra = no_args \"x\"\n"
         );
         assert_eq!(
             type_action_rewrite(omitted_parentheses, "Remove extra argument"),
@@ -1506,11 +1505,69 @@ mod tests {
         let parenthesized_blocks = "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet missing = apply({ 1 })\nfunc identity(value: Int) -> Int { value }\nlet extra = identity(1, { 2 })\n";
         assert_eq!(
             type_action_rewrite(parenthesized_blocks, "Add missing argument"),
-            "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet missing = apply({}, { 1 })\nfunc identity(value: Int) -> Int { value }\nlet extra = identity(1, { 2 })\n"
+            "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet missing = apply(value: {}, { 1 })\nfunc identity(value: Int) -> Int { value }\nlet extra = identity(1, { 2 })\n"
         );
         assert_eq!(
             type_action_rewrite(parenthesized_blocks, "Remove extra argument"),
             "func apply(value: Int, fn: () -> Int) -> Int { value }\nlet missing = apply({ 1 })\nfunc identity(value: Int) -> Int { value }\nlet extra = identity(1)\n"
+        );
+    }
+
+    #[test]
+    fn argument_label_code_actions_insert_replace_and_remove() {
+        // ADR 0041: one atomic quick fix per call, edits derived from the
+        // structured diagnostic's spans.
+        let missing = "func id(x: Int) -> Int { x }\nid(x: 1)\nid(1)\n";
+        assert_eq!(
+            type_action_rewrite(missing, "Fix argument label"),
+            "func id(x: Int) -> Int { x }\nid(x: 1)\nid(x: 1)\n"
+        );
+
+        let incorrect = "func id(foo: Int) -> Int { foo }\nid(fizz: 1)\n";
+        assert_eq!(
+            type_action_rewrite(incorrect, "Fix argument label"),
+            "func id(foo: Int) -> Int { foo }\nid(foo: 1)\n"
+        );
+
+        let unexpected = "func id(_ x: Int) -> Int { x }\nid(x: 1)\n";
+        assert_eq!(
+            type_action_rewrite(unexpected, "Fix argument label"),
+            "func id(_ x: Int) -> Int { x }\nid(1)\n"
+        );
+
+        let written_underscore = "func id(_ x: Int) -> Int { x }\nid(_: 1)\n";
+        assert_eq!(
+            type_action_rewrite(written_underscore, "Fix argument label"),
+            "func id(_ x: Int) -> Int { x }\nid(1)\n"
+        );
+
+        // Multi-argument mismatches repair in one workspace edit.
+        let multiple = "func f(a: Int, b: Int) -> Int { a }\nf(1, 2)\n";
+        assert_eq!(
+            type_action_rewrite(multiple, "Fix 2 argument labels"),
+            "func f(a: Int, b: Int) -> Int { a }\nf(a: 1, b: 2)\n"
+        );
+
+        // Ownership markers belong to the value: the label inserts before
+        // the marker and removal stops at it.
+        let marker = "func store(value item: Int) -> Int { item }\nlet n = 1\nstore(consume n)\n";
+        assert_eq!(
+            type_action_rewrite(marker, "Fix argument label"),
+            "func store(value item: Int) -> Int { item }\nlet n = 1\nstore(value: consume n)\n"
+        );
+
+        // Indirect function values are positional: the fix removes labels.
+        let indirect = "func id(value: Int) -> Int { value }\nlet fn = id\nfn(value: 1)\n";
+        assert_eq!(
+            type_action_rewrite(indirect, "Fix argument label"),
+            "func id(value: Int) -> Int { value }\nlet fn = id\nfn(1)\n"
+        );
+
+        // UTF-16 conversion holds after non-ASCII text on the same line.
+        let unicode = "func id(x: Int) -> Int { x }\nlet s = \"héllo\"; id(1)\n";
+        assert_eq!(
+            type_action_rewrite(unicode, "Fix argument label"),
+            "func id(x: Int) -> Int { x }\nlet s = \"héllo\"; id(x: 1)\n"
         );
     }
 

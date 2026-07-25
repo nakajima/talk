@@ -6,5 +6,5 @@ struct Sink {
 }
 let sink = Sink(id: 1)
 let s = "hello" + " world"
-let n = sink.take(s)
+let n = sink.take(value: s)
 s.byte_count + n

@@ -677,7 +677,9 @@ const OBJECT_WALK: ContainsWalk = ContainsWalk {
 /// whole nominal family, and a conditional row only where its context is
 /// proven (ADR 0036).
 fn conforms_to(builder: &ProgramBuilder<'_>, ty: &Ty, protocol: Symbol) -> bool {
-    builder.catalog.ty_conforms(ty, &ProtocolRef::bare(protocol))
+    builder
+        .catalog
+        .ty_conforms(ty, &ProtocolRef::bare(protocol))
 }
 
 /// Whether dropping a value of this type does work: it owns refcounted
@@ -773,9 +775,7 @@ fn is_linear(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
             .first()
             .is_some_and(|element| is_linear(builder, element)),
         Ty::Nominal(symbol, _) => {
-            builder
-                .struct_def(*symbol)
-                .is_some_and(|def| def.linear)
+            builder.struct_def(*symbol).is_some_and(|def| def.linear)
                 || builder.enum_def(*symbol).is_some_and(|def| def.linear)
         }
         Ty::Tuple(items) => items.iter().any(|item| is_linear(builder, item)),
@@ -1237,7 +1237,6 @@ fn ty_mentions_param(ty: &Ty, symbol: Symbol) -> bool {
     search.found
 }
 
-
 pub(crate) fn build(
     programs: &[ProgramInput<'_>],
     entry: Entry,
@@ -1481,9 +1480,7 @@ impl<'a> ProgramBuilder<'a> {
         for input in programs {
             let source = &input.program.types().catalog;
             for (declared, def) in &source.structs {
-                struct_index
-                    .entry(*declared)
-                    .or_insert(def);
+                struct_index.entry(*declared).or_insert(def);
             }
             for (declared, def) in &source.enums {
                 let enum_symbol = *declared;
@@ -1550,8 +1547,7 @@ impl<'a> ProgramBuilder<'a> {
                                 {
                                     self.index_func(func, program_ix);
                                 } else {
-                                    let symbol =
-                                        *symbol;
+                                    let symbol = *symbol;
                                     self.globals.insert(symbol, (rhs, program_ix));
                                     self.index_decl(decl, program_ix);
                                 }
@@ -1762,17 +1758,15 @@ impl<'a> ProgramBuilder<'a> {
         span: Span,
     ) -> Result<FuncId, BackendError> {
         let Some(callable) = self.callables.get(&symbol).copied() else {
-            let name = self
-                .programs
-                .iter()
-                .find_map(|input| {
-                    input.program.resolved_names().symbol_names.iter().find_map(
-                        |(candidate, name)| {
-                            (*candidate == symbol).then(|| name.clone())
-                        },
-                    )
-                })
-                .unwrap_or_else(|| format!("{symbol:?}"));
+            let name =
+                self.programs
+                    .iter()
+                    .find_map(|input| {
+                        input.program.resolved_names().symbol_names.iter().find_map(
+                            |(candidate, name)| (*candidate == symbol).then(|| name.clone()),
+                        )
+                    })
+                    .unwrap_or_else(|| format!("{symbol:?}"));
             return Err(BackendError::unsupported(
                 format!("calls to `{name}` without an available source body are not supported yet"),
                 span,
@@ -1854,11 +1848,12 @@ impl<'a> ProgramBuilder<'a> {
         while let Ty::Borrow(_, inner) = self_ty {
             self_ty = inner;
         }
+        // One flattened slot per requirement overload (ADR 0041).
         let expected = self
             .catalog
             .protocols
             .get(&protocol.protocol)
-            .map(|info| info.requirements.len())?;
+            .map(|info| info.requirements.values().map(Vec::len).sum::<usize>())?;
         // Derived conformances are ordinary synthesized rows, so the row
         // scan is the whole story: no recipe fallback. Comparison
         // requirements take `rhs: &RHS` (ADR 0014), so an instantiation
@@ -1903,19 +1898,26 @@ impl<'a> ProgramBuilder<'a> {
         self_ty: &Ty,
         protocol: &crate::types::ty::ProtocolRef,
         label: &crate::label::Label,
-    ) -> Option<(
-        crate::types::catalog::DictionaryEntry,
-        Vec<(Symbol, Ty)>,
-    )> {
+        requirement: Option<Symbol>,
+    ) -> Option<(crate::types::catalog::DictionaryEntry, Vec<(Symbol, Ty)>)> {
         let crate::label::Label::Named(label) = label else {
             return None;
         };
-        let index = self
-            .catalog
-            .protocols
-            .get(&protocol.protocol)?
-            .requirements
-            .get_index_of(label.as_str())?;
+        let info = self.catalog.protocols.get(&protocol.protocol)?;
+        // Flattened witness-table slots (ADR 0041): typing's selected
+        // requirement names the slot; sugar (no per-node selection) takes
+        // the base's first — an overloaded sugar target would be an
+        // ambiguity in the sugar contract itself.
+        let index = match requirement
+            .and_then(|requirement| self.catalog.requirement_slot_index(protocol.protocol, requirement))
+        {
+            Some(index) => index,
+            None => info
+                .requirements
+                .iter()
+                .flat_map(|(base, set)| set.iter().map(move |req| (base, req)))
+                .position(|(base, _)| base == label.as_str())?,
+        };
         let (entries, subst) = self.conformance_dictionary(self_ty, protocol)?;
         Some((entries.get(index)?.clone(), subst))
     }
@@ -1962,11 +1964,7 @@ impl<'a> ProgramBuilder<'a> {
             def.fields
                 .values()
                 .map(|(_, ty)| {
-                    ty.substitute(
-                        &substitution,
-                        &FxHashMap::default(),
-                        &FxHashMap::default(),
-                    )
+                    ty.substitute(&substitution, &FxHashMap::default(), &FxHashMap::default())
                 })
                 .collect(),
         )
@@ -2085,8 +2083,7 @@ impl<'a> ProgramBuilder<'a> {
                 let Some(fields) = self.field_types(*symbol, args) else {
                     return false;
                 };
-                self.deinit_witness(*symbol, args).is_some()
-                    || dropping(&mut fields.iter()) >= 2
+                self.deinit_witness(*symbol, args).is_some() || dropping(&mut fields.iter()) >= 2
             }
             Ty::Tuple(items) => dropping(&mut items.iter()) >= 2,
             Ty::Record(row) => dropping(&mut row.fields.iter().map(|(_, item)| item)) >= 2,
@@ -2106,7 +2103,10 @@ impl<'a> ProgramBuilder<'a> {
         let mut expanded: Vec<crate::types::ty::ProtocolRef> = Vec::new();
         for bound in bounds.into_iter().flatten() {
             for protocol in self.catalog.protocol_and_supers(bound) {
-                if !expanded.iter().any(|seen| seen.protocol == protocol.protocol) {
+                if !expanded
+                    .iter()
+                    .any(|seen| seen.protocol == protocol.protocol)
+                {
                     expanded.push(protocol);
                 }
             }
@@ -2124,9 +2124,7 @@ impl<'a> ProgramBuilder<'a> {
                     .resolved_names()
                     .symbol_names
                     .iter()
-                    .find_map(|(candidate, name)| {
-                        (*candidate == symbol).then(|| name.clone())
-                    })
+                    .find_map(|(candidate, name)| (*candidate == symbol).then(|| name.clone()))
             })
             .unwrap_or_else(|| format!("{symbol:?}"))
     }
@@ -2210,10 +2208,15 @@ impl<'a> ProgramBuilder<'a> {
     /// A protocol's requirement labels in declaration order (witness-table
     /// slot order, after the two fixed slots).
     fn protocol_requirements(&self, protocol: Symbol) -> Option<Vec<String>> {
-        self.catalog
-            .protocols
-            .get(&protocol)
-            .map(|info| info.requirements.keys().cloned().collect())
+        self.catalog.protocols.get(&protocol).map(|info| {
+            info.requirements
+                .iter()
+                .flat_map(|(base, set)| {
+                    set.iter()
+                        .map(|req| self.catalog.witness_key(protocol, base, req.symbol))
+                })
+                .collect()
+        })
     }
 
     /// The declared value type of a static parameter (ADR 0035).
@@ -3056,9 +3059,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // A rigid effect-generic holds a native value; its
                 // teardown dispatches through the frame's drop witness
                 // (value-witness-table passing).
-                if let Some((drop_witness, _)) =
-                    self.param_witnesses.get(&*symbol).copied()
-                {
+                if let Some((drop_witness, _)) = self.param_witnesses.get(&*symbol).copied() {
                     let dest = self.fresh_local();
                     self.push(Inst::CallIndirect {
                         dest,
@@ -3758,9 +3759,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn terminate(&mut self, term: Term) {
         if !self.anchored_closures.is_empty() {
             match &term {
-                Term::Return(Operand::Local(local))
-                    if self.anchored_closures.contains(local) =>
-                {
+                Term::Return(Operand::Local(local)) if self.anchored_closures.contains(local) => {
                     self.deferred_errors.push(anchored_escape());
                 }
                 Term::Goto(block, args) => {
@@ -4124,13 +4123,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let label = crate::label::Label::Named("add".into());
         let entry = self
             .program_builder
-            .forced_witness(&string_ty, &add_ref, &label)
+            .forced_witness(&string_ty, &add_ref, &label, None)
             .or_else(|| {
                 let bare = crate::types::ty::ProtocolRef {
                     protocol: Symbol::Add,
                     args: Vec::new(),
                 };
-                self.program_builder.forced_witness(&string_ty, &bare, &label)
+                self.program_builder
+                    .forced_witness(&string_ty, &bare, &label, None)
             });
         let Some((
             crate::types::catalog::DictionaryEntry::Implementation {
@@ -4175,7 +4175,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             ty = *inner;
         }
         let label = crate::label::Label::Named("show".into());
-        let func = match self.program_builder.forced_witness(&ty, protocol, &label) {
+        let func = match self.program_builder.forced_witness(&ty, protocol, &label, None) {
             Some((
                 crate::types::catalog::DictionaryEntry::Implementation { symbol, .. },
                 mut subst,
@@ -4232,7 +4232,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         ..
                     },
                     mut subst,
-                )) = self.program_builder.forced_witness(&ty, protocol, &label)
+                )) = self.program_builder.forced_witness(&ty, protocol, &label, None)
                 {
                     subst.push((protocol.protocol, ty.clone()));
                     let func = self.program_builder.demand(implementation, subst, span)?;
@@ -4518,7 +4518,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             .protocols
             .get(&protocol)
             .and_then(|info| info.requirements.get(name))
-            .is_some_and(|requirement| requirement.mut_receiver)
+            .is_some_and(|set| set.iter().any(|requirement| requirement.mut_receiver))
     }
 
     /// Rebuild a tuple-layout value with one slot replaced (runtime
@@ -4803,9 +4803,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             Ty::Param(symbol) => {
                 // Native value; duplicate through the frame's retain
                 // witness (value-witness-table passing).
-                let Some((_, retain_witness)) =
-                    self.param_witnesses.get(&*symbol).copied()
-                else {
+                let Some((_, retain_witness)) = self.param_witnesses.get(&*symbol).copied() else {
                     return Err(BackendError::unsupported(
                         "a generic value cannot be retained here without its ownership witnesses (not supported yet)"
                             .into(),
@@ -5457,11 +5455,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             index: u16::try_from(index).unwrap_or_default(),
                         });
                         if self.needs_release(&cell.field_ty) {
-                            self.retain_value(
-                                Operand::Local(slot),
-                                &cell.field_ty,
-                                pattern.span,
-                            )?;
+                            self.retain_value(Operand::Local(slot), &cell.field_ty, pattern.span)?;
                             self.produce_temp(slot, &cell.field_ty);
                         }
                         self.bind_owned_pattern(
@@ -6100,9 +6094,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     self.push(Inst::GlobalLoad { dest, global: slot });
                     self.global_loads.insert(dest, slot);
                     Ok(Operand::Local(dest))
-                } else if let Some(value) = self.subst.get(symbol).or_else(|| {
-                    self.subst.get(&*symbol)
-                }) {
+                } else if let Some(value) =
+                    self.subst.get(symbol).or_else(|| self.subst.get(&*symbol))
+                {
                     // ADR 0035 §6: a static parameter used as an ordinary
                     // value; this instance's substitution carries the
                     // concrete value, so specialization substitutes it.
@@ -6121,9 +6115,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             Ok(Operand::Const(Constant::Bool(*value)))
                         }
                         Ty::Static(StaticValue::Case(_, variant)) => {
-                            let Some((enum_symbol, tag)) = self
-                                .program_builder
-                                .variant_tag(*variant)
+                            let Some((enum_symbol, tag)) =
+                                self.program_builder.variant_tag(*variant)
                             else {
                                 return Err(BackendError::new(
                                     format!(
@@ -6185,8 +6178,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     // function value, specialized against the use site's
                     // recorded instantiation (the value's type pinned any
                     // generic and static arguments the frontend solved).
-                    let target =
-                        *symbol;
+                    let target = *symbol;
                     let mut subst: Vec<(Symbol, Ty)> = Vec::new();
                     if let Some(instantiation) = &expr.instantiation {
                         for (param, ty) in instantiation {
@@ -6223,18 +6215,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         env: Vec::new(),
                     });
                     Ok(Operand::Local(dest))
-                } else if let Some((initializer, _)) = self
-                    .program_builder
-                    .globals
-                    .get(&*symbol)
-                    .copied()
+                } else if let Some((initializer, _)) =
+                    self.program_builder.globals.get(&*symbol).copied()
                 {
                     // Only literal global initializers inline; anything
                     // needing real once-only storage stays rejected.
                     match &initializer.kind {
                         ExprKind::Lit(Literal::Int(_) | Literal::Float(_) | Literal::Bool(_)) => {
-                            let owner = self.program_builder.globals[&*symbol]
-                                .1;
+                            let owner = self.program_builder.globals[&*symbol].1;
                             let previous = self.program;
                             self.program = owner;
                             let value = self.compile_expr(initializer);
@@ -6687,7 +6675,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
     /// Canonical-value-to-MIR-constant emission: the typed tree carries
     /// checked literal values, so nothing here parses source text.
-    fn compile_literal(&mut self, _expr: &Expr, literal: &Literal) -> Result<Operand, BackendError> {
+    fn compile_literal(
+        &mut self,
+        _expr: &Expr,
+        literal: &Literal,
+    ) -> Result<Operand, BackendError> {
         match literal {
             Literal::Int(value) => Ok(Operand::Const(Constant::Int(*value))),
             Literal::Float(value) => Ok(Operand::Const(Constant::Float(value.0))),
@@ -6946,8 +6938,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     else {
                         unreachable!("non-variant alternatives subsume above");
                     };
-                    let Some((_, tag, _)) =
-                        self.variant_case(*resolved, variant_name, &ty, fields)
+                    let Some((_, tag, _)) = self.variant_case(*resolved, variant_name, &ty, fields)
                     else {
                         self.settle_owned_match(alternative, scrutinee, &ty, through_borrow)?;
                         self.terminate(Term::Goto(join, Vec::new()));
@@ -7088,13 +7079,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .any(|(element, item)| self.pattern_leaves_owned_unbound(element, item)),
                 _ => false,
             },
-            PatternKind::Record { fields, slots } => match self.record_cells(pattern, fields, slots) {
-                Ok(cells) => cells.iter().any(|cell| {
-                    cell.bind.is_none()
-                        && self.pattern_leaves_owned_unbound(&cell.pattern, &cell.field_ty)
-                }),
-                Err(_) => self.needs_release(ty),
-            },
+            PatternKind::Record { fields, slots } => {
+                match self.record_cells(pattern, fields, slots) {
+                    Ok(cells) => cells.iter().any(|cell| {
+                        cell.bind.is_none()
+                            && self.pattern_leaves_owned_unbound(&cell.pattern, &cell.field_ty)
+                    }),
+                    Err(_) => self.needs_release(ty),
+                }
+            }
             PatternKind::Variant {
                 variant_name,
                 resolved,
@@ -7111,15 +7104,17 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             PatternKind::Or(alternatives) => alternatives
                 .iter()
                 .any(|alternative| self.pattern_leaves_owned_unbound(alternative, ty)),
-            PatternKind::Struct { fields, slots, .. } => match self.struct_cells(pattern, fields, slots, ty) {
-                // A heap object's unbound fields stay the object's; its
-                // own drop releases them, so nothing is left unowned.
-                Ok((true, _)) => false,
-                Ok((false, cells)) => cells
-                    .iter()
-                    .any(|cell| self.pattern_leaves_owned_unbound(&cell.pattern, &cell.field_ty)),
-                Err(_) => self.needs_release(ty),
-            },
+            PatternKind::Struct { fields, slots, .. } => {
+                match self.struct_cells(pattern, fields, slots, ty) {
+                    // A heap object's unbound fields stay the object's; its
+                    // own drop releases them, so nothing is left unowned.
+                    Ok((true, _)) => false,
+                    Ok((false, cells)) => cells.iter().any(|cell| {
+                        self.pattern_leaves_owned_unbound(&cell.pattern, &cell.field_ty)
+                    }),
+                    Err(_) => self.needs_release(ty),
+                }
+            }
             _ => self.needs_release(ty),
         }
     }
@@ -7254,7 +7249,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// Project every stored field of a struct value, `GetField` for value
     /// structs and `ObjectGet` for heap structs (whose results are views
     /// of the object, not owned slots).
-    fn extract_struct_fields(&mut self, scrutinee: Operand, heap: bool, len: usize) -> Vec<Operand> {
+    fn extract_struct_fields(
+        &mut self,
+        scrutinee: Operand,
+        heap: bool,
+        len: usize,
+    ) -> Vec<Operand> {
         (0..len)
             .map(|index| {
                 let dest = self.fresh_local();
@@ -7322,9 +7322,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             _ => None,
         };
         let resolved = match variant {
-            Some(variant) => self
-                .program_builder
-                .variant_tag(variant),
+            Some(variant) => self.program_builder.variant_tag(variant),
             None => head_from_ty.and_then(|head| {
                 self.program_builder
                     .enum_def(head)
@@ -7542,8 +7540,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.test_all(&patterns, &extracted, &tys, matched, failed)
             }
             PatternKind::Struct { fields, slots, .. } => {
-                let (heap, cells) =
-                    self.struct_cells(pattern, fields, slots, scrutinee_ty)?;
+                let (heap, cells) = self.struct_cells(pattern, fields, slots, scrutinee_ty)?;
                 let extracted = self.extract_struct_fields(scrutinee, heap, cells.len());
                 let patterns: Vec<Pattern> =
                     cells.iter().map(|cell| cell.pattern.clone()).collect();
@@ -7882,7 +7879,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 return self.compile_indirect_call(callee_value, expr, callee, args);
             }
             ExprKind::Variable(Name::Resolved(symbol, _))
-                if !self.program_builder.callables.contains_key(&*symbol) && self.program_builder.global_slots.contains_key(symbol) =>
+                if !self.program_builder.callables.contains_key(&*symbol)
+                    && self.program_builder.global_slots.contains_key(symbol) =>
             {
                 // A function value in a global slot: load and call
                 // indirectly.
@@ -7935,18 +7933,24 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 callee.span,
                             ));
                         };
-                        let index = self
-                            .program_builder
-                            .protocol_requirements(protocol)
-                            .and_then(|requirements| {
-                                requirements.iter().position(|slot| slot == name)
-                            })
-                            .ok_or_else(|| {
-                                BackendError::new(
-                                    "existential member without a requirement slot".into(),
-                                    callee.span,
-                                )
-                            })?;
+                        let index = match resolution {
+                            crate::types::output::MemberResolution::ViaRequirement {
+                                requirement,
+                                ..
+                            } => self
+                                .program_builder
+                                .catalog
+                                .requirement_slot_index(protocol, *requirement),
+                            _ => self.program_builder.protocol_requirements(protocol).and_then(
+                                |requirements| requirements.iter().position(|slot| slot == name),
+                            ),
+                        }
+                        .ok_or_else(|| {
+                            BackendError::new(
+                                "existential member without a requirement slot".into(),
+                                callee.span,
+                            )
+                        })?;
                         // A `mut func` requirement evolves the payload; the
                         // call returns `(result, final payload)` and the
                         // existential rebuilds around the evolved payload
@@ -8101,11 +8105,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         // matching rows.
                         let protocol = crate::types::ty::ProtocolRef {
                             protocol: protocol.protocol,
-                            args: protocol
-                                .args
-                                .iter()
-                                .map(|arg| self.resolved(arg))
-                                .collect(),
+                            args: protocol.args.iter().map(|arg| self.resolved(arg)).collect(),
                         };
                         let protocol = &protocol;
                         // A rigid receiver dispatches through the frame's
@@ -8120,18 +8120,27 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                     callee.span,
                                 ));
                             };
-                            let index = self
-                                .program_builder
-                                .protocol_requirements(protocol.protocol)
-                                .and_then(|requirements| {
-                                    requirements.iter().position(|slot| slot == name)
-                                })
-                                .ok_or_else(|| {
-                                    BackendError::new(
-                                        "generic member without a requirement slot".into(),
-                                        callee.span,
-                                    )
-                                })?;
+                            let index = match resolution {
+                                crate::types::output::MemberResolution::ViaRequirement {
+                                    requirement,
+                                    ..
+                                } => self
+                                    .program_builder
+                                    .catalog
+                                    .requirement_slot_index(protocol.protocol, *requirement),
+                                _ => self
+                                    .program_builder
+                                    .protocol_requirements(protocol.protocol)
+                                    .and_then(|requirements| {
+                                        requirements.iter().position(|slot| slot == name)
+                                    }),
+                            }
+                            .ok_or_else(|| {
+                                BackendError::new(
+                                    "generic member without a requirement slot".into(),
+                                    callee.span,
+                                )
+                            })?;
                             let Some(dictionary) = self
                                 .param_requirements
                                 .get(&(*rigid, protocol.protocol))
@@ -8157,7 +8166,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                     ));
                                 };
                                 match self.resolve_place(receiver)? {
-                                    Some(chain) => Some((Some(WritebackTarget::Place(chain)), None)),
+                                    Some(chain) => {
+                                        Some((Some(WritebackTarget::Place(chain)), None))
+                                    }
                                     None => {
                                         // An rvalue receiver materializes
                                         // as its own temporary place (see
@@ -8241,12 +8252,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             // Typing published this substitution in the
                             // generic body's own terms; the instance
                             // substitution makes it concrete here.
-                            subst.extend(evidence_substitution.iter().map(|(symbol, ty)| {
-                                (
-                                    *symbol,
-                                    self.resolved(ty),
-                                )
-                            }));
+                            subst.extend(
+                                evidence_substitution
+                                    .iter()
+                                    .map(|(symbol, ty)| (*symbol, self.resolved(ty))),
+                            );
                             *witness
                         } else {
                             // Deferred selection (ADR 0036): the receiver
@@ -8258,9 +8268,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             // dereferences typing's decision, it does not
                             // make a new one.
                             use crate::types::catalog::{DerivedRecipe, DictionaryEntry};
+                            let selected_requirement = match resolution {
+                                crate::types::output::MemberResolution::ViaRequirement {
+                                    requirement,
+                                    ..
+                                } => Some(*requirement),
+                                _ => None,
+                            };
                             let Some((entry, dictionary_subst)) = self
                                 .program_builder
-                                .forced_witness(&self_ty, protocol, label)
+                                .forced_witness(&self_ty, protocol, label, selected_requirement)
                             else {
                                 return Err(BackendError::unsupported(
                                     "a requirement operation without a selectable conformance is not supported yet"
@@ -8485,11 +8502,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         };
         let protocol = crate::types::ty::ProtocolRef {
             protocol: protocol.protocol,
-            args: protocol
-                .args
-                .iter()
-                .map(|arg| arg.clone())
-                .collect(),
+            args: protocol.args.iter().map(|arg| arg.clone()).collect(),
         };
 
         // A `'heap` payload's region cannot escape into an existential:
@@ -8557,7 +8570,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 )
             })?;
         for entry in &entries {
-            let closure = self.requirement_closure(&payload_ty, &protocol, entry, &subst, expr.span)?;
+            let closure =
+                self.requirement_closure(&payload_ty, &protocol, entry, &subst, expr.span)?;
             witnesses.push(closure);
         }
 
@@ -8981,57 +8995,47 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // The frontend picked the initializer directly, or — constructing
         // through a protocol's init requirement — via the conformance;
         // dereference its witness table for the implementation.
-        let init =
-            match &callee.member_resolution {
-                Some(crate::types::output::MemberResolution::Direct(init)) => {
-                    Some(*init)
-                }
-                Some(crate::types::output::MemberResolution::ViaConformance {
-                    witness,
-                    substitution,
-                    ..
-                }) => {
-                    subst.extend(substitution.iter().map(|(symbol, ty)| {
-                        (
-                            *symbol,
-                            self.resolved(ty),
-                        )
-                    }));
-                    Some(*witness)
-                }
-                Some(crate::types::output::MemberResolution::ViaRequirement {
-                    protocol, ..
-                }) => {
-                    // Deferred selection: the constructed type was rigid at
-                    // typing; the instance substitution has made it
-                    // concrete, so the shared selector's answer is forced.
-                    let protocol = crate::types::ty::ProtocolRef {
-                        protocol: protocol.protocol,
-                        args: protocol
-                            .args
-                            .iter()
-                            .map(|arg| self.resolved(arg))
-                            .collect(),
-                    };
-                    let label = crate::label::Label::Named("init".into());
-                    let Some((
-                        crate::types::catalog::DictionaryEntry::Implementation {
-                            symbol: implementation,
-                            ..
-                        },
-                        row_subst,
-                    )) = self.program_builder.forced_witness(&ty, &protocol, &label)
-                    else {
-                        return Err(BackendError::new(
-                            "protocol construction without a selectable conformance".into(),
-                            callee.span,
-                        ));
-                    };
-                    subst.extend(row_subst);
-                    Some(implementation)
-                }
-                None => None,
-            };
+        let init = match &callee.member_resolution {
+            Some(crate::types::output::MemberResolution::Direct(init)) => Some(*init),
+            Some(crate::types::output::MemberResolution::ViaConformance {
+                witness,
+                substitution,
+                ..
+            }) => {
+                subst.extend(
+                    substitution
+                        .iter()
+                        .map(|(symbol, ty)| (*symbol, self.resolved(ty))),
+                );
+                Some(*witness)
+            }
+            Some(crate::types::output::MemberResolution::ViaRequirement { protocol, .. }) => {
+                // Deferred selection: the constructed type was rigid at
+                // typing; the instance substitution has made it
+                // concrete, so the shared selector's answer is forced.
+                let protocol = crate::types::ty::ProtocolRef {
+                    protocol: protocol.protocol,
+                    args: protocol.args.iter().map(|arg| self.resolved(arg)).collect(),
+                };
+                let label = crate::label::Label::Named("init".into());
+                let Some((
+                    crate::types::catalog::DictionaryEntry::Implementation {
+                        symbol: implementation,
+                        ..
+                    },
+                    row_subst,
+                )) = self.program_builder.forced_witness(&ty, &protocol, &label, None)
+                else {
+                    return Err(BackendError::new(
+                        "protocol construction without a selectable conformance".into(),
+                        callee.span,
+                    ));
+                };
+                subst.extend(row_subst);
+                Some(implementation)
+            }
+            None => None,
+        };
 
         let mut operands = Vec::new();
         let mut operand_tys = Vec::new();

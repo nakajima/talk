@@ -6,6 +6,6 @@ func wrap<T: CheapClone>(v: &T) -> Box2<T> {
 }
 func main() -> Int {
 	let s = "a" + "b"
-	let b = wrap(s)
+	let b = wrap(v: s)
 	0
 }

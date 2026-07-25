@@ -102,6 +102,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let receiver_ty = self.infer_expr(receiver, ctx);
         let member = Ty::Var(self.store.fresh_ty(self.level, callee.id));
         self.artifacts.node_types.insert(callee.id, member.clone());
+        // The written labels let the solver select among label-overloaded
+        // methods once the receiver's head is known (ADR 0041).
+        self.artifacts.member_call_slots.insert(
+            callee.id,
+            args.iter()
+                .map(crate::types::callables::WrittenSlot::of)
+                .collect(),
+        );
         let result =
             self.finish_call_with_result_origin(expr.id, callee.id, member.clone(), args, ctx);
         self.wanteds.push(Constraint::HasMember {
@@ -244,10 +252,27 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         self.emit_nominal_well_formedness(symbol, &theta, expr.id);
 
         let arg_count = args.len();
+        // ADR 0041: initializer selection uses the declared label sequence;
+        // with no exact match, a same-arity candidate recovers and the
+        // label pass reports its mismatch.
+        let written: Vec<crate::types::callables::WrittenSlot> = args
+            .iter()
+            .map(crate::types::callables::WrittenSlot::of)
+            .collect();
         let init = info
             .inits
             .iter()
-            .find(|(_, arity)| *arity == arg_count + 1)
+            .find(|(init, arity)| {
+                *arity == arg_count + 1
+                    && self
+                        .catalog
+                        .callable_contracts
+                        .get(init)
+                        .is_some_and(|contract| {
+                            crate::types::callables::labels_admit(&contract.name.labels, &written)
+                        })
+            })
+            .or_else(|| info.inits.iter().find(|(_, arity)| *arity == arg_count + 1))
             .or_else(|| info.inits.first())
             .map(|(init, _)| *init);
         let Some(init) = init else {
@@ -545,6 +570,80 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// writable place — the argument-position mirror of
     /// `infer_assignment_target`. A true rvalue's evolution would be
     /// silently discarded, which is a source error, not a backend gap.
+    /// Select one static method from an overload set by written labels
+    /// (ADR 0041), mirroring the solver's instance-method selection.
+    fn select_static_overload(
+        &mut self,
+        set: &[Symbol],
+        label: &str,
+        node: NodeID,
+    ) -> Option<Symbol> {
+        use crate::types::callables::labels_admit;
+
+        match set {
+            [] => None,
+            [one] => Some(*one),
+            _ => {
+                let slots = self.artifacts.member_call_slots.get(&node);
+                if let Some(slots) = slots {
+                    let admitted: Vec<Symbol> =
+                        set.iter()
+                            .copied()
+                            .filter(|symbol| {
+                                self.catalog.callable_contracts.get(symbol).is_some_and(
+                                    |contract| labels_admit(&contract.name.labels, slots),
+                                )
+                            })
+                            .collect();
+                    if let [one] = admitted.as_slice() {
+                        return Some(*one);
+                    }
+                    if admitted.is_empty() {
+                        let same_arity: Vec<Symbol> = set
+                            .iter()
+                            .copied()
+                            .filter(|symbol| {
+                                self.catalog.callable_contracts.get(symbol).is_some_and(
+                                    |contract| contract.name.labels.len() == slots.len(),
+                                )
+                            })
+                            .collect();
+                        if let [one] = same_arity.as_slice() {
+                            return Some(*one);
+                        }
+                    }
+                }
+                let candidates = set
+                    .iter()
+                    .filter_map(|symbol| {
+                        Some(
+                            crate::types::callables::CallableName {
+                                base: label.to_string(),
+                                labels: self
+                                    .catalog
+                                    .callable_contracts
+                                    .get(symbol)?
+                                    .name
+                                    .labels
+                                    .clone(),
+                            }
+                            .to_string(),
+                        )
+                    })
+                    .collect();
+                self.diagnostics.errors.push((
+                    TypeError::AmbiguousMember {
+                        receiver: String::new(),
+                        label: label.to_string(),
+                        candidates,
+                    },
+                    node,
+                ));
+                set.first().copied()
+            }
+        }
+    }
+
     pub(super) fn check_mut_arg_is_place(&mut self, arg: &CallArg) {
         use crate::parsing::node_kinds::call_arg::ArgMode;
         if !matches!(arg.mode, Some(ArgMode::Mut)) {
@@ -752,7 +851,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
 
         if let Some(info) = self.catalog.structs.get(&symbol).cloned()
-            && let Some(&method) = info.statics.get(&label_str)
+            && let Some(method) = info
+                .statics
+                .get(&label_str)
+                .and_then(|set| self.select_static_overload(set, &label_str, node))
         {
             let theta: Vec<Ty> = info
                 .params

@@ -3,7 +3,7 @@ effect 'ask(prompt) -> Int
 	'continue 7
 }
 func query() 'ask -> Int {
-	'ask("q")
+	'ask(prompt: "q")
 }
 let a = query()
 a + 1

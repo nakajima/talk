@@ -10,4 +10,4 @@ func f(flag: Bool) -> Int {
 	0
 }
 
-f(true)
+f(flag: true)

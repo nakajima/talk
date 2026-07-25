@@ -7,7 +7,7 @@ use crate::{
     name::Name,
     node_id::{FileID, NodeID},
     node_kinds::{
-        call_arg::CallArg,
+        call_arg::{CallArg, CallArgOrigin},
         expr::{Expr, ExprKind},
     },
     span::Span,
@@ -60,6 +60,7 @@ impl LowerUnreachable {
             effect_name_span: expr.span,
             type_args: Vec::new(),
             args: vec![CallArg {
+                origin: CallArgOrigin::Synthesized,
                 id: arg_id,
                 label: Label::Positional(0),
                 label_span: Span::SYNTHESIZED,

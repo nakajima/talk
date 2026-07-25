@@ -5,5 +5,5 @@ func take(name: String) -> Int {
 	name.byte_count
 }
 func ok(person: &Person) -> Int {
-	take(person.name)
+	take(name: person.name)
 }

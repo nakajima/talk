@@ -3,5 +3,5 @@ struct Socket 'linear {
 }
 func close(consume s: Socket) -> Int { 0 }
 func f(consume s: Socket) -> Int {
-	close(copy s)
+	close(s: copy s)
 }

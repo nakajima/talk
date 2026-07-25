@@ -4,8 +4,8 @@ func take(name: String) -> Int {
 func f(s: String, flag: Bool) -> Int {
 	let n = 0
 	if flag {
-		n = take(s)
+		n = take(name: s)
 	}
 	n
 }
-f("hello" + " world", true) + f("bye" + " now", false)
+f(s: "hello" + " world", flag: true) + f(s: "bye" + " now", flag: false)

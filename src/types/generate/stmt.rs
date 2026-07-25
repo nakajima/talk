@@ -144,8 +144,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.artifacts
                     .node_types
                     .insert(iter_callee_id, iter_member.clone());
-                let iterator_ty =
-                    self.finish_call(iter_call_id, iter_member.clone(), &[], ctx);
+                let iterator_ty = self.finish_call(iter_call_id, iter_member.clone(), &[], ctx);
                 self.artifacts
                     .node_types
                     .insert(iter_call_id, iterator_ty.clone());
@@ -163,8 +162,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.artifacts
                     .node_types
                     .insert(next_callee_id, next_member.clone());
-                let next_result_ty =
-                    self.finish_call(next_call_id, next_member.clone(), &[], ctx);
+                let next_result_ty = self.finish_call(next_call_id, next_member.clone(), &[], ctx);
                 self.artifacts
                     .node_types
                     .insert(next_call_id, next_result_ty.clone());
@@ -208,6 +206,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                             kind: crate::node_kinds::expr::ExprKind::Variable(binder_name),
                         };
                         let arg = crate::node_kinds::call_arg::CallArg {
+                            origin: crate::node_kinds::call_arg::CallArgOrigin::Synthesized,
                             id: mut_store_arg_id,
                             label: Label::Positional(0),
                             label_span: pattern.span,
@@ -428,9 +427,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     fn stmt_breaks_current_loop(stmt: &Stmt) -> bool {
         match &stmt.kind {
             StmtKind::Break => true,
-            StmtKind::Expr(expr)
-            | StmtKind::Return(Some(expr))
-            | StmtKind::Resume(Some(expr)) => Self::expr_breaks_current_loop(expr),
+            StmtKind::Expr(expr) | StmtKind::Return(Some(expr)) | StmtKind::Resume(Some(expr)) => {
+                Self::expr_breaks_current_loop(expr)
+            }
             StmtKind::If(condition, then_block, else_block) => {
                 Self::expr_breaks_current_loop(condition)
                     || Self::block_breaks_current_loop(then_block)

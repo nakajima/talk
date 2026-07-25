@@ -257,7 +257,8 @@ fn literals_carry_canonical_values() {
 
 #[test]
 fn pattern_literals_carry_canonical_values() {
-    let source = "// no-core\nfunc f(n: Int) -> Int {\n\tmatch n {\n\t\t1_0 -> 1,\n\t\t_ -> 0,\n\t}\n}";
+    let source =
+        "// no-core\nfunc f(n: Int) -> Int {\n\tmatch n {\n\t\t1_0 -> 1,\n\t\t_ -> 0,\n\t}\n}";
     let mut ints = vec![];
     for (_, hir_nodes) in lower(source) {
         visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
@@ -276,8 +277,7 @@ fn handler_clause_binders_carry_their_checked_types() {
     // Clause binders take the effect's declared parameter types; the
     // typed tree publishes them on the parameter nodes (ADR 0038) so
     // lowering never reloads the effect signature for binder types.
-    let source =
-        "// no-core\neffect 'ask(question: Int) -> Int\n@handle 'ask { q in\n\t'continue q\n}\n'ask(1)\n()";
+    let source = "// no-core\neffect 'ask(question: Int) -> Int\n@handle 'ask { q in\n\t'continue q\n}\n'ask(question: 1)\n()";
     let mut clause_param_tys = vec![];
     for (_, hir_nodes) in lower(source) {
         let mut collect = derive_visitor::visitor_enter_fn(|stmt: &typed_ast::Stmt| {
@@ -302,7 +302,8 @@ fn record_patterns_carry_row_layout_slots() {
     // layout order — the slot type and the covering written field
     // (ADR 0038). Lowering builds cells from these instead of matching
     // labels against a decomposed row.
-    let source = "// no-core\nlet rec = { b: true, a: 1 }\nlet n = match rec {\n\t{ a, .. } -> a,\n}\n()";
+    let source =
+        "// no-core\nlet rec = { b: true, a: 1 }\nlet n = match rec {\n\t{ a, .. } -> a,\n}\n()";
     let mut slot_sets = vec![];
     for (_, hir_nodes) in lower(source) {
         visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
@@ -388,8 +389,7 @@ fn effect_sites_carry_their_contracts() {
     // Perform sites and handlers both carry the effect's checked
     // contract (ADR 0038): declared parameter types and the type-generic
     // layout, so lowering never reloads effect signatures.
-    let source =
-        "// no-core\neffect 'ask(question: Int) -> Int\n@handle 'ask { q in\n\t'continue q\n}\n'ask(1)\n()";
+    let source = "// no-core\neffect 'ask(question: Int) -> Int\n@handle 'ask { q in\n\t'continue q\n}\n'ask(question: 1)\n()";
     let mut call_contracts = vec![];
     let mut handler_contracts = vec![];
     for (_, hir_nodes) in lower(source) {

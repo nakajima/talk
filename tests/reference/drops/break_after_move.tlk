@@ -4,7 +4,7 @@ func consume(x: String) -> Int {
 func f() -> Int {
 	loop {
 		let s = "a" + "b"
-		let n = consume(s)
+		let n = consume(x: s)
 		break
 	}
 	0

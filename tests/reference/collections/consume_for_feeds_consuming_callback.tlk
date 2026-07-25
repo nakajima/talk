@@ -4,7 +4,7 @@ func takes(consume s: String) {
 func main() -> Int {
 	let xs = ["a" + "b"]
 	for x in consume xs {
-		takes(consume x)
+		takes(s: consume x)
 	}
 	0
 }

@@ -3,9 +3,9 @@ effect 'step(n) -> Int
 	'continue n + 1
 }
 func go() 'step -> Int {
-	let a = 'step(0)
-	let b = 'step(a)
-	let c = 'step(b)
+	let a = 'step(n: 0)
+	let b = 'step(n: a)
+	let c = 'step(n: b)
 	c
 }
 go()

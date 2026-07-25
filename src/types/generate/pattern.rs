@@ -693,10 +693,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 continue;
             };
             if seen.contains(&label) {
-                self.diagnostics.errors.push((
-                    TypeError::DuplicateStructPatternField { label },
-                    pattern.id,
-                ));
+                self.diagnostics
+                    .errors
+                    .push((TypeError::DuplicateStructPatternField { label }, pattern.id));
                 continue;
             }
             seen.push(label.clone());
@@ -714,7 +713,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             slots[slot].1 = Some(sub.id);
             refinement.extend(self.check_pattern(sub, &field_ty));
         }
-        self.artifacts.struct_pattern_slots.insert(pattern.id, slots);
+        self.artifacts
+            .struct_pattern_slots
+            .insert(pattern.id, slots);
         if !rest {
             let missing: Vec<String> = info
                 .fields
