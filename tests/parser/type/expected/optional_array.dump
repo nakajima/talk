@@ -1,0 +1,10 @@
+tokens:
+  LeftBracket @0..1 "["
+  Identifier @1..4 "Int"
+  RightBracket @4..5 "]"
+  QuestionMark @5..6 "?"
+  Newline @6..7
+tree:
+  TypeAnnotation::Nominal @0..6 "[Int]?"
+    TypeAnnotation::Nominal @0..5 "[Int]"
+      TypeAnnotation::Nominal @1..4 "Int"

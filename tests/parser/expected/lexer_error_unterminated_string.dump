@@ -1,0 +1,6 @@
+tokens:
+  Let @0..3 "let"
+  Identifier @4..5 "s"
+  Equals @6..7 "="
+  lexer error: Unterminated string
+parse error: parser.lexer Lex error at line 2, column 0: Unterminated string

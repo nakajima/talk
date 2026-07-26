@@ -1,0 +1,6 @@
+let h = 72
+let i = 105
+let bytes: [Byte] = [h._toByte(), i._toByte()]
+print(String.from_bytes(bytes: bytes))
+let a = 65
+print(a._toByte()._toInt())

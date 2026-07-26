@@ -32,10 +32,6 @@ The compiler already has a portable, validated bytecode execution path. A
 checked-in frontend bytecode artifact can break the cycle while keeping the
 canonical implementation in Talk.
 
-This is a separate architecture project. Hiding it inside the procedural macro
-implementation would combine parser replacement, bootstrap design, syntax
-hygiene, compile-time execution, and package integration in one migration.
-
 ## Decision
 
 ### 1. The source frontend is implemented in Talk
@@ -62,10 +58,9 @@ is not: these Talk files are the single implementation of source lexing and
 parsing used by the compiler, LSP, formatter-facing parse path, and future
 procedural macros.
 
-The frontend sources remain macro-free. They may use the ordinary language
-subset supported by the checked-in bootstrap artifact, but compiling the
-frontend may never require expanding a user macro. This is the permanent
-bootstrap kernel boundary.
+The frontend sources may use the ordinary language subset supported by the
+checked-in bootstrap artifact, but compiling the frontend may never require expanding
+a user macro. This is the permanent bootstrap kernel boundary.
 
 ### 2. The compiler executes a checked-in frontend artifact
 
@@ -227,6 +222,36 @@ depend on either system.
 
 ## Migration
 
+### Stage 0 - Close the core gaps the frontend subset requires
+
+ADR §7 bars `@unsafe` and inline IR from the frontend source set. Core
+currently builds every `String` through `_alloc`/`_copy` behind `@_ir`, so
+that restriction leaves frontend code unable to construct a string from
+computed bytes at all, and able to concatenate only in O(n²). The following
+core and language work precedes the frontend port:
+
+1. A safe growable string builder in Core, plus a `[Byte] -> String`
+   constructor. No frontend source may allocate raw buffers.
+2. `Int`-to-`Byte` conversion, so byte-level lexing does not route through
+   `_toInt()` or `@_ir { cmp Byte }`.
+3. `Substring: Equatable<Substring>`, so comparing two source slices does not
+   allocate.
+4. `Array` stack operations (`pop`, `last`), required for delimiter-stack
+   token-tree capture.
+
+These are language and Core deficiencies of exactly the kind this ADR's
+Consequences anticipate ("Parser development uses Talk's own type, effect,
+ownership, and module systems, exposing deficiencies that matter for
+self-hosting"). They are fixed in Core rather than worked around in the
+frontend, because a workaround would either re-admit `@unsafe` or bake
+quadratic string building into the compiler's hot path.
+
+Match guards are a known ergonomic gap in the same area and are deliberately
+excluded: a guarded arm is always expressible as an `if` inside the arm body,
+and threading guards through exhaustiveness checking risks incorrect coverage
+diagnostics across every existing `match`. That work is independent of the
+bootstrap path.
+
 ### Stage 1 - Freeze the frontend contract
 
 Record the existing lexer/parser behavior required by compilation and tooling:
@@ -329,6 +354,8 @@ The self-hosting project is complete when:
 7. no production path contains or selects the old Rust lexer/parser;
 8. malformed or incompatible frontend artifacts and results fail closed;
 9. frontend execution has no inline IR, `@unsafe`, or ambient host capability;
-10. `cargo check --workspace --exclude www` and
+10. no frontend source constructs a `String` through raw allocation, and
+    string building in the lexer and diagnostics path is linear;
+11. `cargo check --workspace --exclude www` and
     `cargo test --workspace --exclude www` pass; and
-11. measured parse and editor latency are recorded and accepted before cutover.
+12. measured parse and editor latency are recorded and accepted before cutover.

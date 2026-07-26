@@ -1,0 +1,7 @@
+let s = "hello world hello"
+let a = s.utf8().slice(start: 0, byte_count: 5)
+let b = s.utf8().slice(start: 12, byte_count: 5)
+let c = s.utf8().slice(start: 6, byte_count: 5)
+print(a == b)
+print(a == c)
+print(a != c)

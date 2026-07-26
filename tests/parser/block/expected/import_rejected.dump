@@ -1,0 +1,11 @@
+tokens:
+  Use @0..3 "use"
+  Identifier @4..11 "package"
+  DoubleColon @11..13 "::"
+  Identifier @13..16 "Foo"
+  DoubleColon @16..18 "::"
+  LeftBrace @18..19 "{"
+  Identifier @20..23 "bar"
+  RightBrace @24..25 "}"
+  Newline @25..26
+parse error: parser.import-in-block-items imports are not allowed in block items

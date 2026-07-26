@@ -1,0 +1,7 @@
+tokens:
+  Int @0..1 "1"
+  Plus @2..3 "+"
+  Int @4..5 "2"
+  Int @6..7 "2"
+  Newline @7..8
+parse error: parser.unexpected-token Unexpected token. Expected end of input, got "2"

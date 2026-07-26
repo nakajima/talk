@@ -1,0 +1,3 @@
+struct {
+	let x: Int
+}

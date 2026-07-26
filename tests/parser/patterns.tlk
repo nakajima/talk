@@ -1,0 +1,27 @@
+func classify(word: String) -> Int {
+	match word {
+		"func" -> 1,
+		"if" | "else" -> 2,
+		_ -> 0
+	}
+}
+
+enum Shape {
+	case circle(Float)
+	case rect(Float, Float)
+}
+
+func area(shape: &Shape) -> Float {
+	match shape {
+		.circle(r) -> r * r * 3.14,
+		.rect(w, h) -> w * h
+	}
+}
+
+func peek(value: Int?) -> Int {
+	if let .some(v) = value {
+		v
+	} else {
+		0
+	}
+}

@@ -4,7 +4,9 @@ use crate::symbol::{LocalSymbolId, ModuleId, ModuleSymbolId, Symbol};
 use crate::{Chunk, Insn, IoOp, MemKind, Module};
 
 const MAGIC: &[u8; 7] = b"TALKBC\0";
-const FORMAT_VERSION: u32 = 2;
+/// The wire-format version, embedded in every image header and recorded
+/// in artifact manifests (ADR 0043): a loader refuses any other version.
+pub const FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EncodeError {
@@ -89,12 +91,22 @@ impl Encoder {
         self.bytes.extend_from_slice(MAGIC);
         self.u32(FORMAT_VERSION);
         self.u32(module.entry);
+        self.exports(&module.exports)?;
         self.chunks(&module.chunks)?;
         self.consts(&module.consts)?;
         self.u16_vec("arg_pool", &module.arg_pool)?;
         self.u32_vec("switch_pool", &module.switch_pool)?;
         self.strings("traps", &module.traps)?;
         self.bytes("statics", &module.statics)?;
+        Ok(())
+    }
+
+    fn exports(&mut self, exports: &[(String, u32)]) -> Result<(), EncodeError> {
+        self.len("exports", exports.len())?;
+        for (name, chunk) in exports {
+            self.string(name)?;
+            self.u32(*chunk);
+        }
         Ok(())
     }
 
@@ -187,6 +199,7 @@ impl Encoder {
             Insn::Trunc { dest, src } => self.reg2(7, dest, src),
             Insn::IToF { dest, src } => self.reg2(8, dest, src),
             Insn::BToI { dest, src } => self.reg2(48, dest, src),
+            Insn::IToB { dest, src } => self.reg2(62, dest, src),
             Insn::CellNew { dest, init } => self.reg2(9, dest, init),
             Insn::CellGet { dest, cell } => self.reg2(10, dest, cell),
             Insn::CellSet { cell, src } => self.reg2(11, cell, src),
@@ -619,6 +632,7 @@ impl<'a> Decoder<'a> {
             return Err(DecodeError::UnsupportedVersion(version));
         }
         let entry = self.u32()?;
+        let exports = self.exports()?;
         let chunks = self.chunks()?;
         let consts = self.consts()?;
         let arg_pool = self.u16_vec()?;
@@ -633,7 +647,19 @@ impl<'a> Decoder<'a> {
             traps,
             statics,
             entry,
+            exports,
         })
+    }
+
+    fn exports(&mut self) -> Result<Vec<(String, u32)>, DecodeError> {
+        let len = self.len_of(8)?;
+        let mut exports = Vec::with_capacity(len);
+        for _ in 0..len {
+            let name = self.string()?;
+            let chunk = self.u32()?;
+            exports.push((name, chunk));
+        }
+        Ok(exports)
     }
 
     fn chunks(&mut self) -> Result<Vec<Chunk>, DecodeError> {
@@ -925,6 +951,10 @@ impl<'a> Decoder<'a> {
                 rec: self.u16()?,
                 index: self.u16()?,
             }),
+            62 => Ok(Insn::IToB {
+                dest: self.u16()?,
+                src: self.u16()?,
+            }),
             _ => Err(DecodeError::InvalidTag("instruction", tag)),
         }
     }
@@ -1146,6 +1176,11 @@ impl Module {
         if self.entry as usize >= self.chunks.len() {
             return Err(DecodeError::InvalidIndex("entry chunk"));
         }
+        for (_, chunk) in &self.exports {
+            if *chunk as usize >= self.chunks.len() {
+                return Err(DecodeError::InvalidIndex("export chunk"));
+            }
+        }
         for chunk in &self.chunks {
             chunk.validate(self)?;
         }
@@ -1200,6 +1235,7 @@ impl Insn {
             | Insn::Trunc { dest, src }
             | Insn::IToF { dest, src }
             | Insn::BToI { dest, src }
+            | Insn::IToB { dest, src }
             | Insn::Not { dest, src }
             | Insn::Extract { dest, src, .. }
             | Insn::GetPayload { dest, src, .. }
@@ -1516,6 +1552,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
         let encoded = module.encode_bytecode().unwrap();
         assert!(Module::decode_bytecode(&encoded).is_err());
@@ -1540,6 +1577,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
         let encoded = module.encode_bytecode().unwrap();
         // Corrupt every u32 in the image to the maximum count in turn:
@@ -1572,6 +1610,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
         let encoded = jump.encode_bytecode().unwrap();
         assert!(Module::decode_bytecode(&encoded).is_err(), "jump");
@@ -1598,6 +1637,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
         let encoded = switch.encode_bytecode().unwrap();
         assert!(Module::decode_bytecode(&encoded).is_err(), "switch pool");
@@ -1619,6 +1659,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
 
         let encoded = module.encode_bytecode().unwrap();
@@ -1653,6 +1694,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
 
         let encoded = module.encode_bytecode().unwrap();
@@ -1693,6 +1735,7 @@ mod tests {
                 traps: vec![],
                 statics: vec![],
                 entry: 0,
+                exports: vec![],
             }
         }
 
@@ -1744,6 +1787,75 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        let decoded = Module::decode_bytecode(&encoded).unwrap();
+        assert_eq!(decoded.render(), module.render());
+    }
+
+    #[test]
+    fn round_trips_exports_table() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "f".into(),
+                code: vec![Insn::Ret { src: 0 }],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            }],
+            exports: vec![("lex".into(), 0), ("parse_expr".into(), 0)],
+            ..Default::default()
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        let decoded = Module::decode_bytecode(&encoded).unwrap();
+        assert_eq!(decoded.exports, module.exports);
+    }
+
+    #[test]
+    fn rejects_export_with_bad_chunk_index() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "f".into(),
+                code: vec![Insn::Ret { src: 0 }],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            }],
+            exports: vec![("lex".into(), 7)],
+            ..Default::default()
+        };
+
+        let encoded = module.encode_bytecode().unwrap();
+        assert_eq!(
+            Module::decode_bytecode(&encoded).unwrap_err(),
+            DecodeError::InvalidIndex("export chunk")
+        );
+    }
+
+    #[test]
+    fn round_trips_int_to_byte_opcode() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::IToB { dest: 1, src: 0 },
+                    Insn::Ret { src: 1 },
+                ],
+                arity: 0,
+                n_regs: 2,
+                unwind: vec![],
+            }],
+            consts: vec![Value::I64(65)],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+            exports: vec![],
         };
 
         let encoded = module.encode_bytecode().unwrap();
@@ -1774,6 +1886,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
 
         let encoded = module.encode_bytecode().unwrap();
@@ -1818,6 +1931,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
         let encoded = module.encode_bytecode().unwrap();
         let decoded = Module::decode_bytecode(&encoded).unwrap();
@@ -1944,6 +2058,7 @@ mod tests {
             traps: vec!["round-trip trap".into()],
             statics: vec![1, 2, 3, 4],
             entry: 0,
+            exports: vec![],
         };
 
         let encoded = module.encode_bytecode().unwrap();
@@ -1974,6 +2089,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
 
         let encoded = module.encode_bytecode().unwrap();
@@ -2004,6 +2120,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
 
         let encoded = module.encode_bytecode().unwrap();
@@ -2044,6 +2161,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
 
         let encoded = module.encode_bytecode().unwrap();
@@ -2067,6 +2185,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
 
         let encoded = module.encode_bytecode().unwrap();
@@ -2114,6 +2233,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
 
         let encoded = module.encode_bytecode().unwrap();

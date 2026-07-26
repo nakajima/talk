@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod dump;
 pub mod formatter;
 pub mod label;
 pub mod lexing;
@@ -14,6 +15,7 @@ pub use lexing::*;
 pub mod highlighter;
 pub mod parser_error;
 pub mod span;
+pub mod token_tree;
 
 #[cfg(test)]
 pub mod parser_tests;

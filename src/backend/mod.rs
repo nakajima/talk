@@ -19,7 +19,9 @@ mod regalloc;
 pub(crate) use mir::{Entry, ProgramInput};
 
 use crate::parsing::span::Span;
-use talk_runtime::interp::{ValueNames, run_displayed_counted};
+use talk_runtime::interp::{StringShape, ValueNames, run_displayed_counted};
+
+pub use talk_runtime::interp::{Budgets, HostValue, RunOutcome};
 
 /// A compiled program: the runtime module plus the display metadata that
 /// renders results Talk-style (enum case names, struct fields).
@@ -38,6 +40,27 @@ impl Executable {
     /// Render the target bytecode for inspection (TOOL-12).
     pub fn render_bytecode(&self) -> String {
         self.module.render()
+    }
+
+    /// Call an exported service function on a fresh machine (ADR 0043
+    /// call ABI). Only executables from `compile_service` have exports.
+    pub fn run_export<'io>(
+        &self,
+        name: &str,
+        args: &[HostValue],
+        budgets: Budgets,
+        io: &'io mut dyn talk_runtime::io::IO,
+    ) -> Result<RunOutcome<'io>, String> {
+        talk_runtime::interp::run_export(&self.module, name, args, string_shape(), budgets, io)
+    }
+}
+
+/// The core String layout's record symbols, for fabricating host string
+/// arguments (layout owned by core/String.tlk; parity tests pin it).
+pub(crate) fn string_shape() -> StringShape {
+    StringShape {
+        string: lower::runtime_symbol(crate::name_resolution::symbol::Symbol::String),
+        storage: lower::runtime_symbol(crate::name_resolution::symbol::Symbol::Storage),
     }
 }
 

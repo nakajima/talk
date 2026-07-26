@@ -1,0 +1,22 @@
+tokens:
+  Let @0..3 "let"
+  Identifier @4..5 "x"
+  Equals @6..7 "="
+  Int @8..9 "1"
+  Newline @9..10
+  Let @10..13 "let"
+  Identifier @14..15 "y"
+  Equals @16..17 "="
+  Identifier @18..19 "x"
+  Plus @20..21 "+"
+  Int @22..23 "1"
+  Newline @23..24
+tree:
+  Decl::Let @0..9 "let x = 1"
+    Pattern::Bind @4..5 "x"
+    Expr::LiteralInt @8..9 "1"
+  Decl::Let @10..23 "let y = x + 1"
+    Pattern::Bind @14..15 "y"
+    Expr::Binary @18..23 "x + 1"
+      Expr::Variable @18..19 "x"
+      Expr::LiteralInt @22..23 "1"

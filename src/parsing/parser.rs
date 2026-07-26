@@ -232,6 +232,17 @@ pub struct SourceLocationStart {
 }
 pub type SourceLocationStack = Vec<SourceLocationStart>;
 
+/// Which grammar category a parse entry owns (ADR 0043): the whole
+/// file, one expression/pattern/type, or a block-item sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParseCategory {
+    File,
+    Expr,
+    Pattern,
+    Type,
+    BlockItems,
+}
+
 pub struct Parser<'a> {
     source: &'a str,
     lexer: Lexer<'a>,
@@ -295,42 +306,174 @@ impl<'a> Parser<'a> {
 
     #[allow(clippy::type_complexity)]
     pub fn parse_with_comments(
+        self,
+    ) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>, Vec<Token>), ParserError> {
+        self.parse_category(ParseCategory::File)
+    }
+
+    /// Lenient whole-file parse (ADR 0043): the editor contract,
+    /// frozen as-is. Recoverable problems already come back as
+    /// Ok-with-diagnostics from the strict parse; an unrecoverable one
+    /// degrades to an EMPTY file AST carrying the failure as a
+    /// diagnostic, so a pipeline keeps going. Deliberately per-file
+    /// all-or-nothing — finer-grained recovery is a post-cutover
+    /// upgrade, not part of the frozen contract.
+    #[allow(clippy::type_complexity)]
+    pub fn parse_lenient(self) -> (AST<Parsed>, Vec<AnyDiagnostic>, Vec<Token>) {
+        let path = self.ast.path.clone();
+        let file_id = self.file_id;
+        match self.parse_with_comments() {
+            Ok(result) => result,
+            Err(error) => (
+                AST::<Parsed> {
+                    path,
+                    roots: vec![],
+                    meta: Default::default(),
+                    phase: Parsed,
+                    node_ids: Default::default(),
+                    synthsized_ids: Default::default(),
+                    file_id,
+                    skip_core_prelude: false,
+                },
+                vec![
+                    Diagnostic {
+                        id: NodeID(file_id, 0),
+                        severity: Severity::Error,
+                        kind: error,
+                    }
+                    .into(),
+                ],
+                vec![],
+            ),
+        }
+    }
+
+    /// Parse the whole input as one expression (ADR 0043 category
+    /// entry). Trailing newlines are allowed; any other trailing token
+    /// errors, so a token range parses as exactly one expression.
+    #[allow(clippy::type_complexity)]
+    pub fn parse_expr(
+        self,
+    ) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>, Vec<Token>), ParserError> {
+        self.parse_category(ParseCategory::Expr)
+    }
+
+    /// Parse the whole input as one pattern (ADR 0043 category entry).
+    #[allow(clippy::type_complexity)]
+    pub fn parse_pattern(
+        self,
+    ) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>, Vec<Token>), ParserError> {
+        self.parse_category(ParseCategory::Pattern)
+    }
+
+    /// Parse the whole input as one type annotation (ADR 0043 category
+    /// entry).
+    #[allow(clippy::type_complexity)]
+    pub fn parse_type(
+        self,
+    ) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>, Vec<Token>), ParserError> {
+        self.parse_category(ParseCategory::Type)
+    }
+
+    /// Parse the whole input as a statement/declaration sequence (ADR
+    /// 0043 category entry) — the same production as file top-level,
+    /// except imports are file-level only and rejected here.
+    #[allow(clippy::type_complexity)]
+    pub fn parse_block_items(
+        self,
+    ) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>, Vec<Token>), ParserError> {
+        self.parse_category(ParseCategory::BlockItems)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn parse_category(
         mut self,
+        category: ParseCategory,
     ) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>, Vec<Token>), ParserError> {
         self.advance();
         self.advance();
         self.skip_semicolons_and_newlines();
 
-        let mut last_start = u32::MAX;
+        match category {
+            ParseCategory::File | ParseCategory::BlockItems => {
+                let mut last_start = u32::MAX;
 
-        while let Some(current) = self.current.clone() {
-            self.skip_semicolons_and_newlines();
+                while let Some(current) = self.current.clone() {
+                    self.skip_semicolons_and_newlines();
 
-            if current.start == last_start {
-                return Err(ParserError::InfiniteLoop(Some(current)));
+                    if current.start == last_start {
+                        return Err(ParserError::InfiniteLoop(Some(current)));
+                    }
+
+                    last_start = current.start;
+
+                    if current.kind == TokenKind::EOF {
+                        break;
+                    }
+
+                    let root = match self.next_root(&current.kind) {
+                        Ok(root) => root,
+                        // Errors caused by a failed lex report the lex
+                        // failure, not the downstream missing-token
+                        // symptom.
+                        Err(error) => return Err(self.take_lexer_error().unwrap_or(error)),
+                    };
+                    if matches!(category, ParseCategory::BlockItems)
+                        && let Node::Decl(Decl {
+                            kind: DeclKind::Import(_),
+                            ..
+                        }) = &root
+                    {
+                        return Err(ParserError::ImportInBlockItems);
+                    }
+                    self.ast.roots.push(root);
+
+                    self.skip_semicolons_and_newlines();
+                }
             }
-
-            last_start = current.start;
-
-            if current.kind == TokenKind::EOF {
-                break;
+            ParseCategory::Expr => {
+                let node = match self.expr() {
+                    Ok(node) => node,
+                    Err(error) => return Err(self.take_lexer_error().unwrap_or(error)),
+                };
+                self.ast.roots.push(node);
             }
-
-            let root = match self.next_root(&current.kind) {
-                Ok(root) => root,
-                // Errors caused by a failed lex report the lex failure,
-                // not the downstream missing-token symptom.
-                Err(error) => return Err(self.take_lexer_error().unwrap_or(error)),
-            };
-            self.ast.roots.push(root);
-
-            self.skip_semicolons_and_newlines();
+            ParseCategory::Pattern => {
+                let pattern = match self.pattern() {
+                    Ok(pattern) => pattern,
+                    Err(error) => return Err(self.take_lexer_error().unwrap_or(error)),
+                };
+                self.ast.roots.push(Node::Pattern(pattern));
+            }
+            ParseCategory::Type => {
+                let annotation = match self.type_annotation() {
+                    Ok(annotation) => annotation,
+                    Err(error) => return Err(self.take_lexer_error().unwrap_or(error)),
+                };
+                self.ast.roots.push(Node::TypeAnnotation(annotation));
+            }
         }
+
+        self.skip_semicolons_and_newlines();
 
         // A lexer error can end the token stream between roots; without
         // this check the parse would silently truncate the file.
         if let Some(error) = self.take_lexer_error() {
             return Err(error);
+        }
+
+        // A single-category parse owns the whole input: anything after
+        // the category (beyond trailing newlines) is an error rather
+        // than silently unparsed text.
+        if !matches!(category, ParseCategory::File | ParseCategory::BlockItems)
+            && let Some(current) = self.current.clone()
+            && current.kind != TokenKind::EOF
+        {
+            return Err(ParserError::UnexpectedToken {
+                expected: "end of input".into(),
+                actual: self.lexeme(&current).to_string(),
+                token: Some(current),
+            });
         }
 
         let ast = AST::<Parsed> {
@@ -1129,7 +1272,7 @@ impl<'a> Parser<'a> {
     pub(crate) fn let_decl(&mut self) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Let)?;
-        let lhs = self.parse_pattern()?;
+        let lhs = self.pattern()?;
 
         let type_annotation = if self.did_match(TokenKind::Colon)? {
             Some(self.type_annotation()?)
@@ -1562,7 +1705,7 @@ impl<'a> Parser<'a> {
         let mut clauses = vec![];
         loop {
             let clause = if self.did_match(TokenKind::Let)? {
-                let pattern = self.parse_pattern()?;
+                let pattern = self.pattern()?;
                 self.consume(TokenKind::Equals)?;
                 let scrutinee = self.condition(ParseContext::If)?.into_expr()?;
                 ConditionalClause::Let(pattern, scrutinee)
@@ -1862,7 +2005,7 @@ impl<'a> Parser<'a> {
     fn for_stmt(&mut self) -> Result<Stmt, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::For)?;
-        let mut pattern = self.parse_pattern()?;
+        let mut pattern = self.pattern()?;
         self.consume(TokenKind::In)?;
         self.push_context(ParseContext::For);
         let source_mode = self.arg_mode();
@@ -2143,6 +2286,16 @@ impl<'a> Parser<'a> {
                         kind: InlineIRInstructionKind::ByteToInt { dest, val },
                     })
                 }
+                "itob" => {
+                    let val = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IntToByte { dest, val },
+                    })
+                }
                 _ => {
                     return Err(ParserError::UnexpectedToken {
                         expected: "supported @_ir instr".into(),
@@ -2375,7 +2528,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             let arm_tok = self.push_source_location();
-            let pattern = self.parse_pattern()?;
+            let pattern = self.pattern()?;
             self.consume(TokenKind::Arrow)?;
 
             let body = self.block(BlockContext::MatchArmBody, true)?;
@@ -2400,7 +2553,7 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub(super) fn parse_pattern(&mut self) -> Result<Pattern, ParserError> {
+    pub(super) fn pattern(&mut self) -> Result<Pattern, ParserError> {
         let tok = self.push_source_location();
         let Some(current) = self.current.clone() else {
             return Err(ParserError::UnexpectedEndOfInput(Some(
@@ -2545,7 +2698,7 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let mut items = vec![];
                 while !self.did_match(TokenKind::RightParen)? {
-                    items.push(self.parse_pattern()?);
+                    items.push(self.pattern()?);
                     self.consume(TokenKind::Comma).ok();
                 }
 
@@ -2570,7 +2723,7 @@ impl<'a> Parser<'a> {
             let mut patterns = vec![first_pattern];
 
             while self.did_match(TokenKind::Pipe)? {
-                patterns.push(self.parse_pattern()?);
+                patterns.push(self.pattern()?);
             }
 
             let loc = self.push_lhs_location(patterns[0].id);
@@ -2652,7 +2805,7 @@ impl<'a> Parser<'a> {
             let (name, _name_span) = self.identifier()?;
             let pattern = if self.peek_is(TokenKind::Colon) {
                 self.consume(TokenKind::Colon)?;
-                self.parse_pattern()?
+                self.pattern()?
             } else {
                 // Shorthand `x` binds the field to a same-named local.
                 self.save_meta(tok, |id, span| Pattern {
@@ -2718,7 +2871,7 @@ impl<'a> Parser<'a> {
                     let name = Name::Raw(name);
                     let kind = if self.peek_is(TokenKind::Colon) {
                         self.consume(TokenKind::Colon).ok();
-                        let value = self.parse_pattern()?;
+                        let value = self.pattern()?;
                         RecordFieldPatternKind::Equals {
                             name,
                             name_span,
@@ -2757,10 +2910,10 @@ impl<'a> Parser<'a> {
                 {
                     let (label, _) = self.identifier()?;
                     self.consume(TokenKind::Colon)?;
-                    fields.push(self.parse_pattern()?);
+                    fields.push(self.pattern()?);
                     labels.push(Some(label.into()));
                 } else {
-                    fields.push(self.parse_pattern()?);
+                    fields.push(self.pattern()?);
                     labels.push(None);
                 }
                 self.consume(TokenKind::Comma).ok();

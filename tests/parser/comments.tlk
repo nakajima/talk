@@ -1,0 +1,5 @@
+// Leading file comment.
+let x = 1 // trailing comment
+
+// Comment between statements.
+let y = 2

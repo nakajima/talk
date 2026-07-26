@@ -1,0 +1,22 @@
+tokens:
+  Identifier @0..3 "cat"
+  Dot @3..4 "."
+  Identifier @4..9 "greet"
+  LeftParen @9..10 "("
+  Identifier @10..16 "volume"
+  Colon @16..17 ":"
+  Int @18..19 "3"
+  RightParen @19..20 ")"
+  Dot @20..21 "."
+  Identifier @21..26 "count"
+  LeftParen @26..27 "("
+  RightParen @27..28 ")"
+  Newline @28..29
+tree:
+  Expr::Call @0..28 "cat.greet(volume: 3).count()"
+    Expr::Member @0..26 "cat.greet(volume: 3).count"
+      Expr::Call @0..20 "cat.greet(volume: 3)"
+        Expr::Member @0..9 "cat.greet"
+          Expr::Variable @0..3 "cat"
+        CallArg @10..19 "volume: 3"
+          Expr::LiteralInt @18..19 "3"

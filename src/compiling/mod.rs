@@ -1,5 +1,6 @@
 pub mod core;
 pub mod driver;
+pub mod manifest;
 pub(crate) mod interface;
 pub mod module;
 pub mod module_path;

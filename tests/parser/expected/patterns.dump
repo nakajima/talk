@@ -1,0 +1,221 @@
+tokens:
+  Func @0..4 "func"
+  Identifier @5..13 "classify"
+  LeftParen @13..14 "("
+  Identifier @14..18 "word"
+  Colon @18..19 ":"
+  Identifier @20..26 "String"
+  RightParen @26..27 ")"
+  Arrow @28..30 "->"
+  Identifier @31..34 "Int"
+  LeftBrace @35..36 "{"
+  Newline @36..37
+  Match @38..43 "match"
+  Identifier @44..48 "word"
+  LeftBrace @49..50 "{"
+  Newline @50..51
+  StringLiteral @53..59 "\"func\""
+  Arrow @60..62 "->"
+  Int @63..64 "1"
+  Comma @64..65 ","
+  Newline @65..66
+  StringLiteral @68..72 "\"if\""
+  Pipe @73..74 "|"
+  StringLiteral @75..81 "\"else\""
+  Arrow @82..84 "->"
+  Int @85..86 "2"
+  Comma @86..87 ","
+  Newline @87..88
+  Underscore @90..91 "_"
+  Arrow @92..94 "->"
+  Int @95..96 "0"
+  Newline @96..97
+  RightBrace @98..99 "}"
+  Newline @99..100
+  RightBrace @100..101 "}"
+  Newline @101..103
+  Enum @103..107 "enum"
+  Identifier @108..113 "Shape"
+  LeftBrace @114..115 "{"
+  Newline @115..116
+  Case @117..121 "case"
+  Identifier @122..128 "circle"
+  LeftParen @128..129 "("
+  Identifier @129..134 "Float"
+  RightParen @134..135 ")"
+  Newline @135..136
+  Case @137..141 "case"
+  Identifier @142..146 "rect"
+  LeftParen @146..147 "("
+  Identifier @147..152 "Float"
+  Comma @152..153 ","
+  Identifier @154..159 "Float"
+  RightParen @159..160 ")"
+  Newline @160..161
+  RightBrace @161..162 "}"
+  Newline @162..164
+  Func @164..168 "func"
+  Identifier @169..173 "area"
+  LeftParen @173..174 "("
+  Identifier @174..179 "shape"
+  Colon @179..180 ":"
+  Amp @181..182 "&"
+  Identifier @182..187 "Shape"
+  RightParen @187..188 ")"
+  Arrow @189..191 "->"
+  Identifier @192..197 "Float"
+  LeftBrace @198..199 "{"
+  Newline @199..200
+  Match @201..206 "match"
+  Identifier @207..212 "shape"
+  LeftBrace @213..214 "{"
+  Newline @214..215
+  Dot @217..218 "."
+  Identifier @218..224 "circle"
+  LeftParen @224..225 "("
+  Identifier @225..226 "r"
+  RightParen @226..227 ")"
+  Arrow @228..230 "->"
+  Identifier @231..232 "r"
+  Star @233..234 "*"
+  Identifier @235..236 "r"
+  Star @237..238 "*"
+  Float @239..243 "3.14"
+  Comma @243..244 ","
+  Newline @244..245
+  Dot @247..248 "."
+  Identifier @248..252 "rect"
+  LeftParen @252..253 "("
+  Identifier @253..254 "w"
+  Comma @254..255 ","
+  Identifier @256..257 "h"
+  RightParen @257..258 ")"
+  Arrow @259..261 "->"
+  Identifier @262..263 "w"
+  Star @264..265 "*"
+  Identifier @266..267 "h"
+  Newline @267..268
+  RightBrace @269..270 "}"
+  Newline @270..271
+  RightBrace @271..272 "}"
+  Newline @272..274
+  Func @274..278 "func"
+  Identifier @279..283 "peek"
+  LeftParen @283..284 "("
+  Identifier @284..289 "value"
+  Colon @289..290 ":"
+  Identifier @291..294 "Int"
+  QuestionMark @294..295 "?"
+  RightParen @295..296 ")"
+  Arrow @297..299 "->"
+  Identifier @300..303 "Int"
+  LeftBrace @304..305 "{"
+  Newline @305..306
+  If @307..309 "if"
+  Let @310..313 "let"
+  Dot @314..315 "."
+  Identifier @315..319 "some"
+  LeftParen @319..320 "("
+  Identifier @320..321 "v"
+  RightParen @321..322 ")"
+  Equals @323..324 "="
+  Identifier @325..330 "value"
+  LeftBrace @331..332 "{"
+  Newline @332..333
+  Identifier @335..336 "v"
+  Newline @336..337
+  RightBrace @338..339 "}"
+  Else @340..344 "else"
+  LeftBrace @345..346 "{"
+  Newline @346..347
+  Int @349..350 "0"
+  Newline @350..351
+  RightBrace @352..353 "}"
+  Newline @353..354
+  RightBrace @354..355 "}"
+  Newline @355..356
+tree:
+  Decl::Func @0..101
+    Func @35..101 tokens=0..101
+      Parameter @18..26 ": String"
+        TypeAnnotation::Nominal @20..26 "String"
+      Block @35..101
+        Stmt::Expr @38..99
+          Expr::Match @38..99
+            Expr::Variable @44..48 "word"
+            MatchArm @53..64 "\"func\" -> 1"
+              Pattern::LiteralString @53..59 "\"func\""
+              Block @63..64 "1"
+                Stmt::Expr @63..64 "1"
+                  Expr::LiteralInt @63..64 "1"
+            MatchArm @68..86 "\"if\" | \"else\" -> 2"
+              Pattern::Or @68..81 "\"if\" | \"else\""
+                Pattern::LiteralString @68..72 "\"if\""
+                Pattern::LiteralString @75..81 "\"else\""
+              Block @85..86 "2"
+                Stmt::Expr @85..86 "2"
+                  Expr::LiteralInt @85..86 "2"
+            MatchArm @90..96 "_ -> 0"
+              Pattern::Wildcard @90..91 "_"
+              Block @95..96 "0"
+                Stmt::Expr @95..96 "0"
+                  Expr::LiteralInt @95..96 "0"
+      TypeAnnotation::Nominal @31..34 "Int"
+  Decl::Enum @103..162
+    Body @114..162
+      Decl::EnumVariant @117..135 "case circle(Float)"
+        TypeAnnotation::Nominal @129..134 "Float"
+      Decl::EnumVariant @137..160 "case rect(Float, Float)"
+        TypeAnnotation::Nominal @147..152 "Float"
+        TypeAnnotation::Nominal @154..159 "Float"
+  Decl::Func @164..272
+    Func @198..272 tokens=164..272
+      Parameter @179..187 ": &Shape"
+        TypeAnnotation::Borrow @181..187 "&Shape"
+          TypeAnnotation::Nominal @182..187 "Shape"
+      Block @198..272
+        Stmt::Expr @201..270
+          Expr::Match @201..270
+            Expr::Variable @207..212 "shape"
+            MatchArm @217..243 ".circle(r) -> r * r * 3.14"
+              Pattern::Variant @217..227 ".circle(r)"
+                Pattern::Bind @225..226 "r"
+              Block @231..243 "r * r * 3.14"
+                Stmt::Expr @231..243 "r * r * 3.14"
+                  Expr::Binary @231..243 "r * r * 3.14"
+                    Expr::Binary @231..236 "r * r"
+                      Expr::Variable @231..232 "r"
+                      Expr::Variable @235..236 "r"
+                    Expr::LiteralFloat @239..243 "3.14"
+            MatchArm @247..267 ".rect(w, h) -> w * h"
+              Pattern::Variant @247..258 ".rect(w, h)"
+                Pattern::Bind @253..254 "w"
+                Pattern::Bind @256..257 "h"
+              Block @262..267 "w * h"
+                Stmt::Expr @262..267 "w * h"
+                  Expr::Binary @262..267 "w * h"
+                    Expr::Variable @262..263 "w"
+                    Expr::Variable @266..267 "h"
+      TypeAnnotation::Nominal @192..197 "Float"
+  Decl::Func @274..355
+    Func @304..355 tokens=274..355
+      Parameter @289..295 ": Int?"
+        TypeAnnotation::Nominal @291..295 "Int?"
+          TypeAnnotation::Nominal @291..294 "Int"
+      Block @304..355
+        Stmt::Expr @307..353
+          Expr::Match @307..353
+            Expr::Variable @325..330 "value"
+            MatchArm @synthesized
+              Pattern::Variant @314..322 ".some(v)"
+                Pattern::Bind @320..321 "v"
+              Block @331..339
+                Stmt::Expr @335..336 "v"
+                  Expr::Variable @335..336 "v"
+            MatchArm @synthesized
+              Pattern::Wildcard @synthesized
+              Block @345..353
+                Stmt::Expr @349..350 "0"
+                  Expr::LiteralInt @349..350 "0"
+      TypeAnnotation::Nominal @300..303 "Int"
+duplicate node ids: 10

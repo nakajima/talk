@@ -1,5 +1,82 @@
 use std::collections::{HashMap, HashSet};
 
+/// Macro-expansion failures (ADR 0026). These were historically
+/// `ParserError` variants; the expander is a post-parse pass, so the
+/// parser's diagnostic schema does not own them (ADR 0043).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum MacroError {
+    DuplicateMacroRule {
+        name: String,
+        arity: usize,
+        span: crate::parsing::span::Span,
+    },
+    UndefinedMacro {
+        name: String,
+        span: crate::parsing::span::Span,
+    },
+    MacroArityMismatch {
+        name: String,
+        actual: usize,
+        expected: Vec<usize>,
+        span: crate::parsing::span::Span,
+    },
+    InvalidMacroTemplate {
+        name: String,
+        reason: String,
+        span: crate::parsing::span::Span,
+    },
+    MacroExpansionLimit {
+        name: String,
+        span: crate::parsing::span::Span,
+    },
+}
+
+impl MacroError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::DuplicateMacroRule { .. } => "macro.duplicate-rule",
+            Self::UndefinedMacro { .. } => "macro.undefined",
+            Self::MacroArityMismatch { .. } => "macro.arity-mismatch",
+            Self::InvalidMacroTemplate { .. } => "macro.invalid-template",
+            Self::MacroExpansionLimit { .. } => "macro.expansion-limit",
+        }
+    }
+}
+
+impl std::fmt::Display for MacroError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateMacroRule { name, arity, .. } => {
+                write!(f, "Duplicate macro rule `#{name}` with {arity} argument(s)")
+            }
+            Self::UndefinedMacro { name, .. } => write!(f, "Undefined macro `#{name}`"),
+            Self::MacroArityMismatch {
+                name,
+                actual,
+                expected,
+                ..
+            } => write!(
+                f,
+                "Macro `#{name}` received {actual} argument(s); available arities: {}",
+                expected
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Self::InvalidMacroTemplate { name, reason, .. } => {
+                write!(f, "Invalid template for macro `{name}`: {reason}")
+            }
+            Self::MacroExpansionLimit { name, .. } => write!(
+                f,
+                "Macro expansion exceeded its work limit while expanding `#{name}`"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MacroError {}
+
 use derive_visitor::{Drive, DriveMut, Visitor, VisitorMut};
 
 use crate::{
@@ -78,7 +155,7 @@ pub fn expand_macros_with_sources(
                     Diagnostic {
                         id: decl.id,
                         severity: Severity::Error,
-                        kind: ParserError::InvalidMacroTemplate {
+                        kind: MacroError::InvalidMacroTemplate {
                             name: name.clone(),
                             reason: "`assert` is a compiler-provided macro".into(),
                             span: decl.span,
@@ -95,7 +172,7 @@ pub fn expand_macros_with_sources(
                     Diagnostic {
                         id: decl.id,
                         severity: Severity::Error,
-                        kind: ParserError::DuplicateMacroRule {
+                        kind: MacroError::DuplicateMacroRule {
                             name: name.clone(),
                             arity: params.len(),
                             span: *name_span,
@@ -120,7 +197,7 @@ pub fn expand_macros_with_sources(
                     Diagnostic {
                         id: decl.id,
                         severity: Severity::Error,
-                        kind: ParserError::InvalidMacroTemplate {
+                        kind: MacroError::InvalidMacroTemplate {
                             name: name.clone(),
                             reason,
                             span: decl.span,
@@ -270,7 +347,7 @@ struct MacroExpander<'a> {
 }
 
 impl MacroExpander<'_> {
-    fn error(&mut self, id: NodeID, kind: ParserError) {
+    fn error(&mut self, id: NodeID, kind: MacroError) {
         self.diagnostics.push(
             Diagnostic {
                 id,
@@ -320,7 +397,7 @@ impl MacroExpander<'_> {
         if args.len() != 1 {
             self.error(
                 expr.id,
-                ParserError::MacroArityMismatch {
+                MacroError::MacroArityMismatch {
                     name,
                     actual: args.len(),
                     expected: vec![1],
@@ -394,7 +471,7 @@ impl MacroExpander<'_> {
         if self.expansions >= MAX_EXPANSIONS_PER_FILE {
             self.error(
                 expr.id,
-                ParserError::MacroExpansionLimit {
+                MacroError::MacroExpansionLimit {
                     name,
                     span: expr.span,
                 },
@@ -420,12 +497,12 @@ impl MacroExpander<'_> {
             expected.sort_unstable();
             expected.dedup();
             let kind = if expected.is_empty() {
-                ParserError::UndefinedMacro {
+                MacroError::UndefinedMacro {
                     name,
                     span: name_span,
                 }
             } else {
-                ParserError::MacroArityMismatch {
+                MacroError::MacroArityMismatch {
                     name,
                     actual: args.len(),
                     expected,
@@ -570,7 +647,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::{
-        macro_expansion::{expand_macros, expand_macros_with_sources},
+        macro_expansion::{MacroError, expand_macros, expand_macros_with_sources},
         node_kinds::{decl::DeclKind, expr::ExprKind, stmt::StmtKind},
         parser_tests::tests::parse,
     };
@@ -646,8 +723,8 @@ mod tests {
         let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
         assert!(diagnostics.iter().any(|diagnostic| matches!(
             diagnostic,
-            crate::diagnostic::AnyDiagnostic::Parsing(crate::diagnostic::Diagnostic {
-                kind: crate::parser_error::ParserError::InvalidMacroTemplate { reason, .. },
+            crate::diagnostic::AnyDiagnostic::Macro(crate::diagnostic::Diagnostic {
+                kind: MacroError::InvalidMacroTemplate { reason, .. },
                 ..
             }) if reason == "type names in templates require definition-site hygiene"
         )));
@@ -660,8 +737,8 @@ mod tests {
         assert_eq!(diagnostics.len(), 2);
         assert!(matches!(
             diagnostics[0],
-            crate::diagnostic::AnyDiagnostic::Parsing(crate::diagnostic::Diagnostic {
-                kind: crate::parser_error::ParserError::InvalidMacroTemplate { .. },
+            crate::diagnostic::AnyDiagnostic::Macro(crate::diagnostic::Diagnostic {
+                kind: MacroError::InvalidMacroTemplate { .. },
                 ..
             })
         ));
@@ -682,8 +759,8 @@ mod tests {
         let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
         assert!(diagnostics.iter().any(|diagnostic| matches!(
             diagnostic,
-            crate::diagnostic::AnyDiagnostic::Parsing(crate::diagnostic::Diagnostic {
-                kind: crate::parser_error::ParserError::MacroArityMismatch { .. },
+            crate::diagnostic::AnyDiagnostic::Macro(crate::diagnostic::Diagnostic {
+                kind: MacroError::MacroArityMismatch { .. },
                 ..
             })
         )));
@@ -695,8 +772,8 @@ mod tests {
         let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
         assert!(diagnostics.iter().any(|diagnostic| matches!(
             diagnostic,
-            crate::diagnostic::AnyDiagnostic::Parsing(crate::diagnostic::Diagnostic {
-                kind: crate::parser_error::ParserError::MacroExpansionLimit { .. },
+            crate::diagnostic::AnyDiagnostic::Macro(crate::diagnostic::Diagnostic {
+                kind: MacroError::MacroExpansionLimit { .. },
                 ..
             })
         )));

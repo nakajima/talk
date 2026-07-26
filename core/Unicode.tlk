@@ -346,7 +346,7 @@ pub struct Character {
 	// Classification uses the cluster's first Unicode scalar. This keeps
 	// combining marks attached for iteration while classifying `1` plus a
 	// combining mark as numeric.
-	func first_scalar() -> Int {
+	pub func first_scalar() -> Int {
 		_packed_scalar(
 			packed: _utf8_decode(
 				storage: self.storage,

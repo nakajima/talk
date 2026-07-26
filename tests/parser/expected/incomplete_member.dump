@@ -1,0 +1,14 @@
+tokens:
+  Let @0..3 "let"
+  Identifier @4..9 "value"
+  Equals @10..11 "="
+  Identifier @12..17 "thing"
+  Dot @17..18 "."
+  Newline @18..19
+tree:
+  Decl::Let @0..18 "let value = thing."
+    Pattern::Bind @4..9 "value"
+    Expr::Incomplete @12..18 "thing."
+      Expr::Variable @12..17 "thing"
+diagnostics:
+  error parser.expected-identifier Expected identifier, got: Some(Token { kind: Newline, start: 18, end: 19, line: 1, col: 0 })

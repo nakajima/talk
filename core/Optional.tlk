@@ -20,7 +20,7 @@ pub enum Optional<Wrapped> {
 		}
 	}
 
-	consuming func or_err<E>(default: () -> E) -> Result<Wrapped, E> {
+	pub consuming func or_err<E>(default: () -> E) -> Result<Wrapped, E> {
 		match self {
 			.some(t) -> .ok(t),
 			.none -> .error(default())

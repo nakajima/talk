@@ -1,0 +1,9 @@
+tokens:
+  Identifier @0..4 "Dict"
+  Less @4..5 "<"
+  Identifier @5..8 "Int"
+  Greater @8..9 ">"
+  Newline @9..10
+tree:
+  TypeAnnotation::Nominal @0..9 "Dict<Int>"
+    TypeAnnotation::Nominal @5..8 "Int"

@@ -134,6 +134,10 @@ pub enum Insn {
         dest: u16,
         src: u16,
     },
+    IToB {
+        dest: u16,
+        src: u16,
+    },
     CellNew {
         dest: u16,
         init: u16,
@@ -420,6 +424,10 @@ pub struct Module {
     pub traps: Vec<String>,
     pub statics: Vec<u8>,
     pub entry: u32,
+    /// Host-callable entry points: export name → wrapper chunk index.
+    /// Unlike chunk names (diagnostic strings), these are an ABI: the
+    /// host dispatches `interp::run_export` through this table.
+    pub exports: Vec<(String, u32)>,
 }
 
 impl Module {
@@ -503,6 +511,7 @@ impl Module {
             Insn::Trunc { dest, src } => format!("trunc r{dest} <- r{src}"),
             Insn::IToF { dest, src } => format!("itof r{dest} <- r{src}"),
             Insn::BToI { dest, src } => format!("btoi r{dest} <- r{src}"),
+            Insn::IToB { dest, src } => format!("itob r{dest} <- r{src}"),
             Insn::CellNew { dest, init } => format!("cell_new r{dest} <- r{init}"),
             Insn::CellGet { dest, cell } => format!("cell_get r{dest} <- r{cell}"),
             Insn::CellSet { cell, src } => format!("cell_set r{cell} <- r{src}"),

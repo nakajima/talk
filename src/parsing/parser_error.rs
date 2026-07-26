@@ -58,6 +58,9 @@ pub enum ParserError {
         token: Option<Token>,
     },
     UnexpectedEndOfInput(Option<String>),
+    /// `use` inside a block-items parse (ADR 0043 category entry):
+    /// imports are file-level only.
+    ImportInBlockItems,
     InfiniteLoop(Option<Token>),
     ExpectedIdentifier(Option<Token>),
     UnbalancedLocationStack,
@@ -109,30 +112,6 @@ pub enum ParserError {
     MacroExportUnsupported {
         span: Span,
     },
-    DuplicateMacroRule {
-        name: String,
-        arity: usize,
-        span: Span,
-    },
-    UndefinedMacro {
-        name: String,
-        span: Span,
-    },
-    MacroArityMismatch {
-        name: String,
-        actual: usize,
-        expected: Vec<usize>,
-        span: Span,
-    },
-    InvalidMacroTemplate {
-        name: String,
-        reason: String,
-        span: Span,
-    },
-    MacroExpansionLimit {
-        name: String,
-        span: Span,
-    },
 }
 
 impl ParserError {
@@ -156,6 +135,7 @@ impl ParserError {
         match self {
             Self::Lexer { .. } => "parser.lexer",
             Self::UnexpectedToken { .. } => "parser.unexpected-token",
+            Self::ImportInBlockItems => "parser.import-in-block-items",
             Self::UnexpectedEndOfInput(_) => "parser.unexpected-end-of-input",
             Self::InfiniteLoop(_) => "parser.infinite-loop",
             Self::ExpectedIdentifier(_) => "parser.expected-identifier",
@@ -176,11 +156,6 @@ impl ParserError {
             Self::VisibilityNotAllowed { .. } => "parser.visibility-not-allowed",
             Self::RepeatedVisibilityModifier { .. } => "parser.repeated-visibility-modifier",
             Self::MacroExportUnsupported { .. } => "parser.macro-export-unsupported",
-            Self::DuplicateMacroRule { .. } => "macro.duplicate-rule",
-            Self::UndefinedMacro { .. } => "macro.undefined",
-            Self::MacroArityMismatch { .. } => "macro.arity-mismatch",
-            Self::InvalidMacroTemplate { .. } => "macro.invalid-template",
-            Self::MacroExpansionLimit { .. } => "macro.expansion-limit",
         }
     }
 }
@@ -188,6 +163,9 @@ impl ParserError {
 impl Display for ParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ImportInBlockItems => {
+                write!(f, "imports are not allowed in block items")
+            }
             Self::Lexer { error, line, col } => {
                 write!(
                     f,
@@ -264,31 +242,6 @@ impl Display for ParserError {
             Self::MacroExportUnsupported { .. } => {
                 write!(f, "Macros cannot be exported; remove `pub`")
             }
-            Self::DuplicateMacroRule { name, arity, .. } => {
-                write!(f, "Duplicate macro rule `#{name}` with {arity} argument(s)")
-            }
-            Self::UndefinedMacro { name, .. } => write!(f, "Undefined macro `#{name}`"),
-            Self::MacroArityMismatch {
-                name,
-                actual,
-                expected,
-                ..
-            } => write!(
-                f,
-                "Macro `#{name}` received {actual} argument(s); available arities: {}",
-                expected
-                    .iter()
-                    .map(usize::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            Self::InvalidMacroTemplate { name, reason, .. } => {
-                write!(f, "Invalid template for macro `{name}`: {reason}")
-            }
-            Self::MacroExpansionLimit { name, .. } => write!(
-                f,
-                "Macro expansion exceeded its work limit while expanding `#{name}`"
-            ),
         }
     }
 }

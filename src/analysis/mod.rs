@@ -41,6 +41,7 @@ pub enum DiagnosticSeverity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DiagnosticKind {
     Parsing(ParserError),
+    Macro(crate::macro_expansion::MacroError),
     NameResolution(NameResolverError),
     Types(TypeError),
 }
@@ -49,6 +50,7 @@ impl DiagnosticKind {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Parsing(error) => error.code(),
+            Self::Macro(error) => error.code(),
             Self::NameResolution(NameResolverError::UndefinedName(_)) => "name.undefined",
             Self::NameResolution(_) => "name.resolution",
             Self::Types(error) => error.code(),

@@ -1,0 +1,9 @@
+tokens:
+  StringLiteral @0..4 "\"if\""
+  Pipe @5..6 "|"
+  StringLiteral @7..13 "\"else\""
+  Newline @13..14
+tree:
+  Pattern::Or @0..13 "\"if\" | \"else\""
+    Pattern::LiteralString @0..4 "\"if\""
+    Pattern::LiteralString @7..13 "\"else\""

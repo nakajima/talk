@@ -1,0 +1,18 @@
+tokens:
+  Let @0..3 "let"
+  Identifier @4..5 "x"
+  Equals @6..7 "="
+  LeftParen @8..9 "("
+  Int @9..10 "1"
+  Plus @11..12 "+"
+  Int @13..14 "2"
+  Newline @14..15
+tree:
+  Decl::Let @0..14 "let x = (1 + 2"
+    Pattern::Bind @4..5 "x"
+    Expr::Tuple @8..14 "(1 + 2"
+      Expr::Binary @9..14 "1 + 2"
+        Expr::LiteralInt @9..10 "1"
+        Expr::LiteralInt @13..14 "2"
+diagnostics:
+  error parser.unexpected-token Unexpected token. Expected ), got "Some(Token { kind: EOF, start: 15, end: 15, line: 1, col: 0 })"

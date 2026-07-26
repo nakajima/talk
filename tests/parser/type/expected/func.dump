@@ -1,0 +1,16 @@
+tokens:
+  LeftParen @0..1 "("
+  Identifier @1..4 "Int"
+  Comma @4..5 ","
+  Identifier @6..10 "Bool"
+  RightParen @10..11 ")"
+  Arrow @12..14 "->"
+  Identifier @15..21 "String"
+  Newline @21..22
+tree:
+  TypeAnnotation::Func @0..21 "(Int, Bool) -> String"
+    TypeAnnotation::Borrow @1..4 "Int"
+      TypeAnnotation::Nominal @1..4 "Int"
+    TypeAnnotation::Borrow @6..10 "Bool"
+      TypeAnnotation::Nominal @6..10 "Bool"
+    TypeAnnotation::Nominal @15..21 "String"

@@ -113,3 +113,11 @@ extend Byte {
 		@_ir { %? = btoi %0 }
 	}
 }
+
+extend Int {
+	// Out of range (outside 0..=255) is a VM error: callers wanting
+	// wrapping must mask explicitly first.
+	pub func _toByte() -> Byte {
+		@_ir { %? = itob %0 }
+	}
+}

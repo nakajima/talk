@@ -357,6 +357,40 @@ impl<'a> ProgramBuilder<'a> {
     /// the call — the same LINK-02 discipline scripts get.
     pub(super) fn build_named_entry(&mut self, name: &str) -> Result<FuncId, BackendError> {
         let symbol = self.named_entry(name, true)?;
+        let entry = self.demand(symbol, Vec::new(), Span::SYNTHESIZED)?;
+        let Some(globals_init) = self.build_globals_init()? else {
+            return Ok(entry);
+        };
+        let id = self.reserve("entry_init");
+        let mut fx = FunctionBuilder::new(self, 0, 0);
+        let unit = fx.fresh_local();
+        fx.push(Inst::Call {
+            dest: unit,
+            func: globals_init,
+            args: Vec::new(),
+            unwind: None,
+        });
+        let result = fx.fresh_local();
+        fx.push(Inst::Call {
+            dest: result,
+            func: entry,
+            args: Vec::new(),
+            unwind: None,
+        });
+        let (n_locals, blocks) = fx.finish(Operand::Local(result))?;
+        self.functions[id] = Function {
+            name: "entry_init".into(),
+            arity: 0,
+            n_locals,
+            blocks,
+        };
+        self.wrap_with_teardown(id, None)
+    }
+
+    /// Register the root program's top-level `let` bindings as globals and
+    /// compile their initializers into one shared arity-0 function, or
+    /// `None` when there are no top-level bindings.
+    fn build_globals_init(&mut self) -> Result<Option<FuncId>, BackendError> {
         let program = self.programs[0].program;
         let lets: Vec<&Decl> = program
             .files()
@@ -371,9 +405,8 @@ impl<'a> ProgramBuilder<'a> {
                 _ => None,
             })
             .collect();
-        let entry = self.demand(symbol, Vec::new(), Span::SYNTHESIZED)?;
         if lets.is_empty() {
-            return Ok(entry);
+            return Ok(None);
         }
         for decl in &lets {
             if let DeclKind::Let {
@@ -393,7 +426,7 @@ impl<'a> ProgramBuilder<'a> {
                 }
             }
         }
-        let id = self.reserve("entry_init");
+        let id = self.reserve("globals_init");
         let mut fx = FunctionBuilder::new(self, 0, 0);
         for decl in &lets {
             let DeclKind::Let {
@@ -441,21 +474,298 @@ impl<'a> ProgramBuilder<'a> {
             });
             fx.flush_stmt_temps(None);
         }
-        let result = fx.fresh_local();
-        let unwind = None;
-        fx.push(Inst::Call {
-            dest: result,
-            func: entry,
-            args: Vec::new(),
-            unwind,
-        });
-        let (n_locals, blocks) = fx.finish(Operand::Local(result))?;
+        let (n_locals, blocks) = fx.finish(Operand::Const(Constant::Unit))?;
         self.functions[id] = Function {
-            name: "entry_init".into(),
+            name: "globals_init".into(),
             arity: 0,
             n_locals,
             blocks,
         };
-        self.wrap_with_teardown(id, None)
+        Ok(Some(id))
+    }
+
+    /// A symbol's display name, from whichever program declared it.
+    fn symbol_name(&self, symbol: Symbol) -> Option<String> {
+        self.programs.iter().find_map(|input| {
+            input
+                .program
+                .resolved_names()
+                .symbol_names
+                .get(&symbol)
+                .cloned()
+        })
+    }
+
+    /// Resolve one exported service function (ADR 0043 call ABI): public,
+    /// top-level, non-generic, free of `mut` parameters (the
+    /// writeback-tuple return convention would corrupt the host-visible
+    /// result value), and performing only allowed effects.
+    fn export_entry(
+        &self,
+        name: &str,
+        allowed_effects: &[String],
+    ) -> Result<(Symbol, u16), BackendError> {
+        for file in self.programs[0].program.files().values() {
+            for node in &file.roots {
+                let (visibility, bound, func) = match node {
+                    Node::Decl(
+                        decl @ Decl {
+                            kind: DeclKind::Func(func),
+                            ..
+                        },
+                    ) => (decl.visibility, &func.name, func),
+                    Node::Decl(decl) => match bound_func(decl) {
+                        Some((bound, func)) => (decl.visibility, bound, func),
+                        None => continue,
+                    },
+                    _ => continue,
+                };
+                if bound.name_str() == name
+                    && let Name::Resolved(symbol, _) = bound
+                {
+                    if visibility != crate::parsing::node_kinds::decl::Visibility::Public {
+                        return Err(BackendError::new(
+                            format!("exported function `{name}` must be public"),
+                            func.body.span,
+                        ));
+                    }
+                    if !func.scheme.params.is_empty() {
+                        return Err(BackendError::new(
+                            format!("exported function `{name}` may not be generic"),
+                            func.body.span,
+                        ));
+                    }
+                    // The same exclusive-borrow classification that
+                    // populates `writeback_params` in `compile_func`;
+                    // exports are non-generic, so the raw type suffices.
+                    if func.params.iter().any(|param| {
+                        param
+                            .ty
+                            .as_ref()
+                            .is_some_and(|ty| matches!(ty, Ty::Borrow(Perm::Exclusive, _)))
+                    }) {
+                        return Err(BackendError::new(
+                            format!("exported function `{name}` may not take `mut` parameters"),
+                            func.body.span,
+                        ));
+                    }
+                    // The capability gate: the export's latent row must
+                    // stay within the service's allowed effects. Typing
+                    // guarantees the body cannot perform outside its row
+                    // (a local `@handle`'s clauses are row-checked too),
+                    // so this subset check is the whole denial.
+                    // The AST node's scheme is the declared one; the
+                    // inferred row lives in typing's published scheme
+                    // (ADR 0015: typing publishes, the backend reads).
+                    let Some(scheme) = self.programs[0].program.types().schemes.get(symbol) else {
+                        return Err(BackendError::new(
+                            format!("exported function `{name}` has no published scheme"),
+                            func.body.span,
+                        ));
+                    };
+                    let Ty::Func(_, _, row) = &scheme.ty else {
+                        return Err(BackendError::new(
+                            format!("exported function `{name}` has a non-function scheme"),
+                            func.body.span,
+                        ));
+                    };
+                    // A generalized row tail (`'[ | ρ]`) is subsumption
+                    // slack, not a capability: the body can only perform
+                    // the row's concrete labels. A label that is not a
+                    // declared effect is a caller-chosen effect parameter
+                    // — rejected, since the host instantiates nothing.
+                    for entry in &row.effects {
+                        if !matches!(entry.effect, Symbol::Effect(_)) {
+                            return Err(BackendError::new(
+                                format!(
+                                    "exported function `{name}` may not take effect parameters"
+                                ),
+                                func.body.span,
+                            ));
+                        }
+                        let effect = self.symbol_name(entry.effect);
+                        let allowed = effect
+                            .as_ref()
+                            .is_some_and(|effect| allowed_effects.iter().any(|a| a == effect));
+                        if !allowed {
+                            return Err(BackendError::new(
+                                format!(
+                                    "exported function `{name}` performs '{}, which this service does not allow",
+                                    effect.as_deref().unwrap_or("<unknown>")
+                                ),
+                                func.body.span,
+                            ));
+                        }
+                    }
+                    let arity = u16::try_from(func.params.len()).unwrap_or_default();
+                    return Ok((*symbol, arity));
+                }
+            }
+        }
+        Err(BackendError::new(
+            format!("no function named `{name}` to export"),
+            Span::SYNTHESIZED,
+        ))
+    }
+
+    /// Compile a service module (ADR 0043): one host-callable wrapper per
+    /// export. The returned entry chunk is inert — a service module is
+    /// dispatched through its export table, not run.
+    pub(super) fn build_export_entries(
+        &mut self,
+        names: &[String],
+        allowed_effects: &[String],
+    ) -> Result<FuncId, BackendError> {
+        if let Some(duplicate) = names
+            .iter()
+            .enumerate()
+            .find(|(ix, name)| names[..*ix].contains(name))
+        {
+            return Err(BackendError::new(
+                format!("duplicate export `{}`", duplicate.1),
+                Span::SYNTHESIZED,
+            ));
+        }
+        let globals_init = self.build_globals_init()?;
+        for name in names {
+            let (symbol, arity) = self.export_entry(name, allowed_effects)?;
+            let target = self.demand(symbol, Vec::new(), Span::SYNTHESIZED)?;
+            let wrapper = self.wrap_export(name, target, arity, globals_init)?;
+            self.exports.push((name.clone(), wrapper));
+        }
+        let id = self.reserve("empty_entry");
+        let fx = FunctionBuilder::new(self, 0, 0);
+        let (n_locals, blocks) = fx.finish(Operand::Const(Constant::Unit))?;
+        self.functions[id] = Function {
+            name: "empty_entry".into(),
+            arity: 0,
+            n_locals,
+            blocks,
+        };
+        Ok(id)
+    }
+
+    /// One host-callable wrapper per export, mirroring the script entry
+    /// (ADR 0039/0033): the wrapper's arguments ride into `_with_host`'s
+    /// nullary callback through its closure environment, the callback
+    /// stashes the result in the hidden slot, and the wrapper reloads it
+    /// and tears globals down in the outer frame. Every call runs on a
+    /// fresh machine, so each wrapper owns the full init/teardown cycle.
+    /// The host's argument values are scalars or static-backed strings,
+    /// so the wrapper frame drops none of them.
+    fn wrap_export(
+        &mut self,
+        name: &str,
+        target: FuncId,
+        arity: u16,
+        globals_init: Option<FuncId>,
+    ) -> Result<FuncId, BackendError> {
+        let outer = self.reserve(&format!("export:{name}"));
+        if !self.callables.contains_key(&Symbol::WithHost) {
+            // No core, no ambient effects to install: call directly.
+            let mut fx = FunctionBuilder::new(self, arity, 0);
+            let args: Vec<Operand> = (0..arity).map(Operand::Local).collect();
+            let result = fx.fresh_local();
+            fx.push(Inst::Call {
+                dest: result,
+                func: target,
+                args,
+                unwind: None,
+            });
+            let (n_locals, blocks) = fx.finish(Operand::Local(result))?;
+            self.functions[outer] = Function {
+                name: format!("export:{name}"),
+                arity,
+                n_locals,
+                blocks,
+            };
+            return Ok(outer);
+        }
+
+        let host = self.demand(Symbol::WithHost, Vec::new(), Span::SYNTHESIZED)?;
+        let slot = u32::try_from(self.global_slots.len()).unwrap_or_default();
+        self.result_slot = Some(slot);
+
+        let body_id = self.reserve("export_body");
+        let mut fx = FunctionBuilder::new(self, 0, 0);
+        if let Some(init) = globals_init {
+            let unit = fx.fresh_local();
+            fx.push(Inst::Call {
+                dest: unit,
+                func: init,
+                args: Vec::new(),
+                unwind: None,
+            });
+        }
+        let mut args = Vec::new();
+        for index in 0..arity {
+            let local = fx.fresh_local();
+            fx.push(Inst::EnvGet { dest: local, index });
+            args.push(Operand::Local(local));
+        }
+        let result = fx.fresh_local();
+        fx.push(Inst::Call {
+            dest: result,
+            func: target,
+            args,
+            unwind: None,
+        });
+        fx.push(Inst::GlobalStore {
+            global: slot,
+            src: Operand::Local(result),
+        });
+        let (n_locals, blocks) = fx.finish(Operand::Const(Constant::Unit))?;
+        self.functions[body_id] = Function {
+            name: "export_body".into(),
+            arity: 0,
+            n_locals,
+            blocks,
+        };
+
+        let mut wrapper = FunctionBuilder::new(self, arity, 0);
+        let closure = wrapper.fresh_local();
+        let env: Vec<Operand> = (0..arity).map(Operand::Local).collect();
+        wrapper.push(Inst::MakeClosure {
+            dest: closure,
+            func: body_id,
+            env,
+        });
+        let unit_result = wrapper.fresh_local();
+        wrapper.push(Inst::Call {
+            dest: unit_result,
+            func: host,
+            args: vec![Operand::Local(closure)],
+            unwind: None,
+        });
+        let result = wrapper.fresh_local();
+        wrapper.push(Inst::GlobalLoad {
+            dest: result,
+            global: slot,
+        });
+        let mut slots: Vec<(u32, Ty)> = wrapper
+            .program_builder
+            .global_tys
+            .iter()
+            .map(|(slot, ty)| (*slot, ty.clone()))
+            .collect();
+        slots.sort_unstable_by_key(|(slot, _)| std::cmp::Reverse(*slot));
+        for (slot, ty) in slots {
+            if wrapper.needs_release(&ty) {
+                let loaded = wrapper.fresh_local();
+                wrapper.push(Inst::GlobalLoad {
+                    dest: loaded,
+                    global: slot,
+                });
+                wrapper.drop_value(Operand::Local(loaded), &ty);
+            }
+        }
+        let (n_locals, blocks) = wrapper.finish(Operand::Local(result))?;
+        self.functions[outer] = Function {
+            name: format!("export:{name}"),
+            arity,
+            n_locals,
+            blocks,
+        };
+        Ok(outer)
     }
 }

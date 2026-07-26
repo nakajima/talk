@@ -670,6 +670,7 @@ impl Runner {
     fn diagnostic_file_index(diagnostic: &AnyDiagnostic) -> usize {
         match diagnostic {
             AnyDiagnostic::Parsing(diagnostic) => diagnostic.id.0.0 as usize,
+            AnyDiagnostic::Macro(diagnostic) => diagnostic.id.0.0 as usize,
             AnyDiagnostic::NameResolution(diagnostic) => diagnostic.id.0.0 as usize,
             AnyDiagnostic::Types(diagnostic) => diagnostic.id.0.0 as usize,
         }

@@ -1,0 +1,14 @@
+tokens:
+  LeftBrace @0..1 "{"
+  LeftParen @2..3 "("
+  Identifier @3..4 "n"
+  Colon @4..5 ":"
+  Identifier @6..9 "Int"
+  RightParen @9..10 ")"
+  In @11..13 "in"
+  Identifier @14..15 "n"
+  Star @16..17 "*"
+  Int @18..19 "2"
+  RightBrace @20..21 "}"
+  Newline @21..22
+parse error: parser.unexpected-token Unexpected token. Expected ,, got "Some(Token { kind: Colon, start: 4, end: 5, line: 0, col: 5 })"

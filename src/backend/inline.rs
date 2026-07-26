@@ -376,6 +376,7 @@ mod tests {
             ],
             entry: 1,
             global_slots: 0,
+            exports: Vec::new(),
         };
         inline_small(&mut program);
         let insts = &program.functions[1].blocks[0].insts;
@@ -459,6 +460,7 @@ mod tests {
             ],
             entry: 1,
             global_slots: 0,
+            exports: Vec::new(),
         };
         inline_small(&mut program);
         let function = &program.functions[1];
@@ -517,6 +519,7 @@ mod tests {
             ],
             entry: 1,
             global_slots: 0,
+            exports: Vec::new(),
         };
         inline_small(&mut program);
         assert!(
@@ -553,6 +556,7 @@ mod tests {
             ],
             entry: 1,
             global_slots: 0,
+            exports: Vec::new(),
         };
         inline_small(&mut program);
         let function = &program.functions[1];

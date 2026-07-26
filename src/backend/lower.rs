@@ -76,6 +76,11 @@ pub(crate) fn lower(program: &Program) -> Result<Module, BackendError> {
     }
     module.consts = consts.values;
     module.traps = traps.messages;
+    module.exports = program
+        .exports
+        .iter()
+        .map(|(name, id)| (name.clone(), u32::try_from(*id).unwrap_or_default()))
+        .collect();
     Ok(module)
 }
 
@@ -633,6 +638,10 @@ impl Lowering<'_> {
                     (ScalarOp::ByteToInt, None) => {
                         let src = self.demote_rk(a);
                         self.code.push(Insn::BToI { dest, src });
+                    }
+                    (ScalarOp::IntToByte, None) => {
+                        let src = self.demote_rk(a);
+                        self.code.push(Insn::IToB { dest, src });
                     }
                     _ => {
                         return Err(BackendError::new(

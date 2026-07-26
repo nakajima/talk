@@ -460,7 +460,17 @@ impl Driver {
             file_index += 1;
             source_texts.insert(file_id, input.clone());
             let parser = Parser::new(file.path(), file_id, lexer);
-            match parser.parse() {
+            let result = match self.config.parse_mode {
+                ParseMode::Strict => parser.parse(),
+                // The lenient contract lives in the parser (ADR 0043):
+                // a hard failure degrades to an empty AST plus the
+                // failure as a diagnostic.
+                ParseMode::Lenient => {
+                    let (ast, ast_diagnostics, _comments) = parser.parse_lenient();
+                    Ok((ast, ast_diagnostics))
+                }
+            };
+            match result {
                 Ok((mut parsed, ast_diagnostics)) => {
                     parsed.skip_core_prelude = input.starts_with("// no-core");
                     diagnostics.extend(ast_diagnostics);
@@ -483,31 +493,7 @@ impl Driver {
                     asts.insert(file.clone(), parsed);
                 }
                 Err(err) => {
-                    if self.config.parse_mode == ParseMode::Strict {
-                        return Err(CompileError::Parsing(err));
-                    }
-
-                    diagnostics.push(
-                        Diagnostic {
-                            id: NodeID(file_id, 0),
-                            severity: Severity::Error,
-                            kind: err,
-                        }
-                        .into(),
-                    );
-                    asts.insert(
-                        file.clone(),
-                        AST::<ast::Parsed> {
-                            path: file.path().to_string(),
-                            roots: vec![],
-                            meta: Default::default(),
-                            phase: ast::Parsed,
-                            node_ids: Default::default(),
-                            synthsized_ids: Default::default(),
-                            file_id,
-                            skip_core_prelude: false,
-                        },
-                    );
+                    return Err(CompileError::Parsing(err));
                 }
             }
         }
@@ -590,6 +576,7 @@ pub fn execute_module(
 fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
     diagnostics.iter().any(|diag| match diag {
         AnyDiagnostic::Parsing(diagnostic) => diagnostic.severity == Severity::Error,
+        AnyDiagnostic::Macro(diagnostic) => diagnostic.severity == Severity::Error,
         AnyDiagnostic::NameResolution(diagnostic) => diagnostic.severity == Severity::Error,
         AnyDiagnostic::Types(diagnostic) => diagnostic.severity == Severity::Error,
     })
@@ -600,6 +587,7 @@ fn error_diagnostic_files(diagnostics: &[AnyDiagnostic]) -> FxHashSet<FileID> {
     for diag in diagnostics {
         let (id, severity) = match diag {
             AnyDiagnostic::Parsing(diagnostic) => (diagnostic.id, &diagnostic.severity),
+            AnyDiagnostic::Macro(diagnostic) => (diagnostic.id, &diagnostic.severity),
             AnyDiagnostic::NameResolution(diagnostic) => (diagnostic.id, &diagnostic.severity),
             AnyDiagnostic::Types(diagnostic) => (diagnostic.id, &diagnostic.severity),
         };
@@ -691,6 +679,30 @@ impl Driver<Typed> {
     /// script's top-level statements run and the final top-level expression
     /// is the program result.
     pub fn compile_executable(&self, entry: Option<&str>) -> Result<Executable, String> {
+        let entry = match entry {
+            Some(name) => crate::backend::Entry::Named(name),
+            None => crate::backend::Entry::Script,
+        };
+        self.with_backend_inputs(entry, |programs, entry| {
+            crate::backend::compile(programs, entry)
+        })
+        .map_err(|error| self.locate_backend_error(&error))
+    }
+
+    /// Compile a service module (ADR 0043 call ABI): each named public
+    /// function becomes a host-callable export in the module's export
+    /// table, dispatched by `Executable::run_export`. `allowed_effects`
+    /// is the service's capability list — compilation rejects an export
+    /// whose effect row reaches outside it.
+    pub fn compile_service(
+        &self,
+        exports: &[String],
+        allowed_effects: &[String],
+    ) -> Result<Executable, String> {
+        let entry = crate::backend::Entry::Exports {
+            names: exports,
+            allowed_effects,
+        };
         self.with_backend_inputs(entry, |programs, entry| {
             crate::backend::compile(programs, entry)
         })
@@ -701,7 +713,7 @@ impl Driver<Typed> {
     /// rejection comes back with its message and, when the span maps to
     /// a source document, that document's path and byte range.
     pub fn check_ownership(&self) -> Result<(), OwnershipRejection> {
-        self.with_backend_inputs(None, |programs, entry| {
+        self.with_backend_inputs(crate::backend::Entry::Script, |programs, entry| {
             crate::backend::check(programs, entry)
         })
         .map_err(|error| {
@@ -716,6 +728,10 @@ impl Driver<Typed> {
     /// Render the backend's middle representation for inspection
     /// (TOOL-10). Same inputs as `compile_executable`.
     pub fn render_mir(&self, entry: Option<&str>) -> Result<String, String> {
+        let entry = match entry {
+            Some(name) => crate::backend::Entry::Named(name),
+            None => crate::backend::Entry::Script,
+        };
         self.with_backend_inputs(entry, |programs, entry| {
             crate::backend::render_mir(programs, entry)
         })
@@ -727,14 +743,10 @@ impl Driver<Typed> {
     /// hand them to the backend.
     fn with_backend_inputs<R>(
         &self,
-        entry: Option<&str>,
+        entry: crate::backend::Entry<'_>,
         run: impl FnOnce(&[crate::backend::ProgramInput<'_>], crate::backend::Entry<'_>) -> R,
     ) -> R {
         let core = crate::compiling::core::typed_program();
-        let entry = match entry {
-            Some(name) => crate::backend::Entry::Named(name),
-            None => crate::backend::Entry::Script,
-        };
         let stdlib = crate::compiling::stdlib::typed_programs();
         // Absolute identity at mint (ADR 0038): every program's symbols
         // already carry their real module stamp.
@@ -842,6 +854,173 @@ pub mod tests {
     use super::*;
     use crate::compiling::module::ModuleId;
     use std::path::PathBuf;
+    use talk_runtime::interp::{Budgets, HostValue, Value};
+    use talk_runtime::io::CaptureIO;
+
+    fn service_with_effects(
+        source: &str,
+        exports: &[&str],
+        allowed_effects: &[&str],
+    ) -> Result<Executable, String> {
+        let typed = Driver::new(vec![Source::from(source)], DriverConfig::new("Svc"))
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+        let names: Vec<String> = exports.iter().map(|name| name.to_string()).collect();
+        let allowed: Vec<String> = allowed_effects.iter().map(|name| name.to_string()).collect();
+        typed.compile_service(&names, &allowed)
+    }
+
+    fn service_executable(source: &str, exports: &[&str]) -> Result<Executable, String> {
+        service_with_effects(source, exports, &["io", "alloc", "async", "panic"])
+    }
+
+    #[test]
+    fn service_export_calls_with_scalar_and_string_arguments() {
+        let exe = service_executable(
+            "pub func double(n: Int) -> Int { n * 2 }\n\npub func shout(text: String) -> String { text + \"!\" }\n",
+            &["double", "shout"],
+        )
+        .expect("service compiles");
+
+        let mut io = CaptureIO::default();
+        let outcome = exe
+            .run_export("double", &[HostValue::Int(21)], Budgets::default(), &mut io)
+            .expect("double runs");
+        assert_eq!(outcome.value, Value::I64(42));
+
+        let mut io = CaptureIO::default();
+        let outcome = exe
+            .run_export("shout", &[HostValue::String(b"hey".to_vec())], Budgets::default(), &mut io)
+            .expect("shout runs");
+        assert_eq!(
+            outcome.string_bytes(&outcome.value).expect("string result"),
+            b"hey!"
+        );
+        let balance = outcome.balance();
+        if balance.result_exact {
+            assert_eq!(
+                balance.live_allocations, balance.result_allocations,
+                "export call leaked allocations"
+            );
+        }
+    }
+
+    #[test]
+    fn service_export_effects_reach_the_host() {
+        let exe = service_executable("pub func speak() -> Int {\n\tprint(\"hi\")\n\t7\n}\n", &[
+            "speak",
+        ])
+        .expect("service compiles");
+        let mut io = CaptureIO::default();
+        let outcome = exe.run_export("speak", &[], Budgets::default(), &mut io).expect("speak runs");
+        assert_eq!(outcome.value, Value::I64(7));
+        assert_eq!(io.out, b"hi\n");
+    }
+
+    #[test]
+    fn service_export_sees_top_level_globals() {
+        let exe = service_executable(
+            "let base = 40\n\npub func plus(n: Int) -> Int { base + n }\n",
+            &["plus"],
+        )
+        .expect("service compiles");
+        let mut io = CaptureIO::default();
+        let outcome = exe
+            .run_export("plus", &[HostValue::Int(2)], Budgets::default(), &mut io)
+            .expect("plus runs");
+        assert_eq!(outcome.value, Value::I64(42));
+    }
+
+    #[test]
+    fn service_export_contract_violations_are_compile_errors() {
+        let private = service_executable("func hidden() -> Int { 1 }\n", &["hidden"]);
+        assert!(private.err().expect("private export").contains("public"));
+
+        let generic = service_executable("pub func same<T>(value: T) -> T { value }\n", &["same"]);
+        assert!(generic.err().expect("generic export").contains("generic"));
+
+        let mutable = service_executable(
+            "pub func bump(mut n: Int) -> Int {\n\tn = n + 1\n\tn\n}\n",
+            &["bump"],
+        );
+        assert!(mutable.err().expect("mut-param export").contains("mut"));
+
+        let missing = service_executable("pub func real() -> Int { 1 }\n", &["fake"]);
+        assert!(
+            missing
+                .err()
+                .expect("missing export")
+                .contains("no function named")
+        );
+    }
+
+    #[test]
+    fn compiled_images_are_deterministic_in_process() {
+        // Two full pipelines over the same source must encode identical
+        // images — the in-process half of the ADR 0043 fixed-point
+        // requirement (the cross-process half lives in talk_tests.rs).
+        let source = "pub func shout(text: String) -> String { text + \"!\" }\n\npub func nap() -> Int { sleep(ms: 0) }\n";
+        let compile = || {
+            service_with_effects(source, &["shout", "nap"], &["io", "alloc"])
+                .expect("service compiles")
+                .encode_bytecode()
+                .expect("encode")
+        };
+        assert_eq!(
+            compile(),
+            compile(),
+            "the same source compiled to different images in one process"
+        );
+    }
+
+    #[test]
+    fn service_effect_gate_is_a_subset_check() {
+        // `sleep` performs 'io through the effect wrapper; `print` would
+        // not do — it writes through the raw io instruction and carries
+        // no effect (the "print is not interceptable" decision).
+        let effectful = "pub func nap() -> Int { sleep(ms: 0) }\n";
+
+        // A pure export compiles under an empty capability list.
+        service_with_effects("pub func double(n: Int) -> Int { n * 2 }\n", &["double"], &[])
+            .expect("pure export needs no capabilities");
+
+        // 'io within the allowed list compiles and runs.
+        let exe = service_with_effects(effectful, &["nap"], &["io"])
+            .expect("allowed effect compiles");
+        let mut io = CaptureIO::default();
+        let outcome = exe.run_export("nap", &[], Budgets::default(), &mut io).expect("nap runs");
+        assert_eq!(outcome.value, Value::I64(0));
+
+        // 'io outside the allowed list is a compile error naming the
+        // effect — the denial is the row check, not a runtime trap.
+        let denied = service_with_effects(effectful, &["nap"], &["alloc"]);
+        let message = denied.err().expect("denied effect");
+        assert!(message.contains("'io"), "{message}");
+        assert!(message.contains("does not allow"), "{message}");
+    }
+
+    #[test]
+    fn service_exports_survive_the_wire_format() {
+        let exe = service_executable("pub func double(n: Int) -> Int { n * 2 }\n", &["double"])
+            .expect("service compiles");
+        let encoded = exe.encode_bytecode().expect("encode");
+        let decoded = talk_runtime::Module::decode_bytecode(&encoded).expect("decode");
+        let mut io = CaptureIO::default();
+        let outcome = talk_runtime::interp::run_export(
+            &decoded,
+            "double",
+            &[HostValue::Int(21)],
+            crate::backend::string_shape(),
+            Budgets::default(),
+            &mut io,
+        )
+        .expect("decoded module runs");
+        assert_eq!(outcome.value, Value::I64(42));
+    }
 
     #[test]
     fn typed_module_exports_only_its_own_schemes() {

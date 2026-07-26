@@ -1,0 +1,15 @@
+let a = [10, 20, 30]
+if let .some(l) = a.last() { print(l) }
+if let .some(p) = a.pop() { print(p) }
+print(a.count)
+if let .some(l) = a.last() { print(l) }
+let total = 0
+loop {
+	if let .some(v) = a.pop() {
+		total = total + v
+	} else {
+		break
+	}
+}
+print(total)
+print(a.count)

@@ -1,0 +1,10 @@
+trees:
+  Identifier @0..3 "foo"
+  Group ( open@3..4 close@12..13
+    Newline @4..5
+    Identifier @6..7 "a"
+    Comma @7..8 ","
+    Newline @8..9
+    Identifier @10..11 "b"
+    Newline @11..12
+  Newline @13..14

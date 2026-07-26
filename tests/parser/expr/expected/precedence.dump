@@ -1,0 +1,23 @@
+tokens:
+  Int @0..1 "1"
+  Plus @2..3 "+"
+  Int @4..5 "2"
+  Star @6..7 "*"
+  Int @8..9 "3"
+  EqualsEquals @10..12 "=="
+  Int @13..14 "7"
+  AmpAmp @15..17 "&&"
+  Bang @18..19 "!"
+  False @19..24 "false"
+  Newline @24..25
+tree:
+  Expr::Binary @0..24 "1 + 2 * 3 == 7 && !false"
+    Expr::Binary @0..14 "1 + 2 * 3 == 7"
+      Expr::Binary @0..9 "1 + 2 * 3"
+        Expr::LiteralInt @0..1 "1"
+        Expr::Binary @4..9 "2 * 3"
+          Expr::LiteralInt @4..5 "2"
+          Expr::LiteralInt @8..9 "3"
+      Expr::LiteralInt @13..14 "7"
+    Expr::Unary @18..24 "!false"
+      Expr::LiteralFalse @19..24 "false"

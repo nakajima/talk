@@ -129,6 +129,24 @@ pub struct Array<Element> {
 		fresh
 	}
 
+	pub func last() -> Optional<&Element> {
+		if self.count == 0 { return Optional.none }
+		Optional.some(self.get(self.count - 1))
+	}
+
+	// The popped slot becomes unreachable before the loaded element's
+	// owner escapes, so CoW sharers keep their copy: unique the buffer
+	// first, exactly like into_iter.
+	pub mut func pop() -> Element? {
+		if self.count == 0 { return Optional.none }
+		self.uniqued_storage()
+		let index = self.count - 1
+		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
+		let element: Element = _load<Element>(ptr: ptr)
+		self.count = index
+		Optional.some(element)
+	}
+
 	pub func is_empty() -> Bool {
 		self.count == 0
 	}

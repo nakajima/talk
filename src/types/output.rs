@@ -167,6 +167,7 @@ pub enum IrScalarOp {
     FloatToIntTrunc,
     IntToFloat,
     ByteToInt,
+    IntToByte,
     /// `add RawPtr ptr offset`: byte-wise pointer arithmetic.
     PtrAdd,
 }

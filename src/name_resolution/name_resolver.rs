@@ -2037,6 +2037,7 @@ impl NameResolver {
                 | InlineIRInstructionKind::IsUnique { .. }
                 | InlineIRInstructionKind::IntToFloat { .. }
                 | InlineIRInstructionKind::ByteToInt { .. }
+                | InlineIRInstructionKind::IntToByte { .. }
                 | InlineIRInstructionKind::Free { .. } => (),
             }
         });

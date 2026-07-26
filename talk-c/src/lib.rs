@@ -2514,8 +2514,7 @@ mod tests {
             .as_nanos();
         let dir = std::env::temp_dir().join(format!("talk-c-path-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("fixture dir");
-        std::fs::write(dir.join("helper.tlk"), "public func seven() -> Int { 7 }\n")
-            .expect("helper");
+        std::fs::write(dir.join("helper.tlk"), "pub func seven() -> Int { 7 }\n").expect("helper");
         let main = dir.join("main.tlk");
         let source = "use package::helper::{ seven }\nseven()\n";
         let Ok(program) = ProgramRunner::run(main.to_string_lossy().into_owned(), source.into())

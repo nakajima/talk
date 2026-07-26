@@ -4,8 +4,9 @@
 // not user-perceived characters. Equality is byte equality: canonically
 // equivalent strings in different normal forms (NFC "é" vs NFD "é")
 // compare unequal.
+use package::Array::{ Array }
 use package::Operators::{ Add, Comparable, Equatable, Subtract }
-use package::Memory::{ ByteStorage, _alloc, _copy, _ptr_add }
+use package::Memory::{ ByteStorage, _alloc, _copy, _ptr_add, _store }
 use package::Ownership::{ Borrowed, CheapClone }
 use package::Optional::{ Optional }
 use package::Iterable::{ IndexIterable }
@@ -26,6 +27,21 @@ pub struct String {
 		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
 		_copy(from: self.storage.base, to: base, length: self.byte_count)
 		String(base: base, byte_count: self.byte_count, capacity: self.byte_count)
+	}
+
+	// The bytes are copied into a fresh buffer, so byte-level string
+	// building needs no raw allocation at the call site (ADR 0043
+	// stage 0: the frontend source set may not use `@_ir`).
+	pub static func from_bytes(bytes: &[Byte]) -> String {
+		let count: Int = bytes.count
+		let base: RawPtr = _alloc<Byte>(count: count)
+		let i = 0
+		loop i < count {
+			let ptr: RawPtr = _ptr_add(ptr: base, offset: i)
+			_store<Byte>(ptr: ptr, value: bytes.get(i))
+			i = i + 1
+		}
+		String(base: base, byte_count: count, capacity: count)
 	}
 }
 
@@ -190,6 +206,19 @@ extend Substring {
 			}
 		}
 
+		true
+	}
+}
+
+extend Substring: Equatable<Substring> {
+	pub func equals(_ rhs: Substring) -> Bool {
+		if self.byte_count != rhs.byte_count { return false }
+
+		let i = 0
+		loop i < self.byte_count {
+			if self.storage.get(self.start + i) != rhs.storage.get(rhs.start + i) { return false }
+			i = i + 1
+		}
 		true
 	}
 }

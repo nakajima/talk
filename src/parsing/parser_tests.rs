@@ -177,7 +177,7 @@ pub mod tests {
         let mut parser = Parser::new("-", FileID(0), lexer);
         parser.advance();
         parser.advance();
-        parser.parse_pattern().unwrap()
+        parser.pattern().unwrap()
     }
 
     #[test]

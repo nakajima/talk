@@ -89,6 +89,7 @@ pub(crate) enum ScalarOp {
     FloatToIntTrunc,
     IntToFloat,
     ByteToInt,
+    IntToByte,
 }
 
 #[derive(Clone, Debug)]
@@ -417,6 +418,8 @@ pub(crate) struct Program {
     pub entry: FuncId,
     /// Number of program globals (one 8-byte static slot each).
     pub global_slots: u32,
+    /// Host-callable entry points (ADR 0043): export name → wrapper.
+    pub exports: Vec<(String, FuncId)>,
 }
 
 impl Program {
@@ -451,10 +454,20 @@ impl Program {
 }
 
 /// How execution starts (`talk run`): a script's top-level statements, or a
-/// named zero-parameter public function.
+/// named zero-parameter public function. `Exports` compiles a service
+/// module instead (ADR 0043 call ABI): each named public function gets a
+/// host-callable wrapper chunk, recorded in the module's export table.
+/// `allowed_effects` is the service's capability list: every export's
+/// latent effect row must stay within it. Typing already guarantees a
+/// body cannot perform outside its row, so the row check IS the denial —
+/// no restricted host wrapper exists.
 pub(crate) enum Entry<'a> {
     Script,
     Named(&'a str),
+    Exports {
+        names: &'a [String],
+        allowed_effects: &'a [String],
+    },
 }
 
 /// The scalar value classification wave 1 accepts.
@@ -1293,6 +1306,10 @@ pub(crate) fn build(
     let entry_result = match entry {
         Entry::Named(name) => builder.build_named_entry(name),
         Entry::Script => builder.build_script_entry(),
+        Entry::Exports {
+            names,
+            allowed_effects,
+        } => builder.build_export_entries(names, allowed_effects),
     };
     let entry_id = match entry_result {
         Ok(id) => id,
@@ -1378,6 +1395,7 @@ pub(crate) fn build(
         entry: entry_id,
         global_slots: u32::try_from(builder.global_slots.len()).unwrap_or_default()
             + u32::from(builder.result_slot.is_some()),
+        exports: builder.exports,
     })
 }
 
@@ -1412,6 +1430,8 @@ struct ProgramBuilder<'a> {
     /// `_with_host`'s unit-returning callback unwinds (ADR 0039); one
     /// extra static slot past the named globals.
     result_slot: Option<u32>,
+    /// Host-callable entry points (ADR 0043): export name → wrapper.
+    exports: Vec<(String, FuncId)>,
     /// Declared types of global slots (for replacement drops).
     global_tys: FxHashMap<u32, Ty>,
     functions: Vec<Function>,
@@ -1506,6 +1526,7 @@ impl<'a> ProgramBuilder<'a> {
             globals: FxHashMap::default(),
             global_slots: FxHashMap::default(),
             result_slot: None,
+            exports: Vec::new(),
             global_tys: FxHashMap::default(),
             functions: Vec::new(),
             func_ids: FxHashMap::default(),
@@ -2798,6 +2819,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     }],
                     entry: 0,
                     global_slots: 0,
+                    exports: Vec::new(),
                 }
                 .render();
                 panic!(
@@ -9506,6 +9528,7 @@ fn scalar_op(op: crate::types::output::IrScalarOp) -> ScalarOp {
         I::FloatToIntTrunc => ScalarOp::FloatToIntTrunc,
         I::IntToFloat => ScalarOp::IntToFloat,
         I::ByteToInt => ScalarOp::ByteToInt,
+        I::IntToByte => ScalarOp::IntToByte,
         I::PtrAdd => unreachable!("pointer arithmetic lowers to Inst::PtrAdd"),
     }
 }

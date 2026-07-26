@@ -1,0 +1,14 @@
+tokens:
+  LeftParen @0..1 "("
+  Identifier @1..2 "a"
+  Comma @2..3 ","
+  Underscore @4..5 "_"
+  Comma @5..6 ","
+  Int @7..8 "3"
+  RightParen @8..9 ")"
+  Newline @9..10
+tree:
+  Pattern::Tuple @0..9 "(a, _, 3)"
+    Pattern::Bind @1..2 "a"
+    Pattern::Wildcard @4..5 "_"
+    Pattern::LiteralInt @7..8 "3"

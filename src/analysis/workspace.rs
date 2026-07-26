@@ -681,12 +681,7 @@ fn parser_error_range(text: &str, err: &ParserError) -> TextRange {
         ParserError::ExplicitSelfParameterNotAllowed { parameter } => {
             TextRange::new(parameter.start, parameter.end)
         }
-        ParserError::DuplicateMacroRule { span, .. }
-        | ParserError::UndefinedMacro { span, .. }
-        | ParserError::MacroArityMismatch { span, .. }
-        | ParserError::InvalidMacroTemplate { span, .. }
-        | ParserError::MacroExpansionLimit { span, .. }
-        | ParserError::LegacyPublicModifier { span }
+        ParserError::LegacyPublicModifier { span }
         | ParserError::VisibilityNotAllowed { span, .. }
         | ParserError::RepeatedVisibilityModifier { span }
         | ParserError::MacroExportUnsupported { span } => TextRange::new(span.start, span.end),
@@ -707,6 +702,14 @@ pub(crate) fn diagnostic_for_any(
             diagnostic.kind.to_string(),
             DiagnosticKind::Parsing(diagnostic.kind.clone()),
             Some(&diagnostic.kind),
+            false,
+            &diagnostic.severity,
+        ),
+        AnyDiagnostic::Macro(diagnostic) => (
+            diagnostic.id,
+            diagnostic.kind.to_string(),
+            DiagnosticKind::Macro(diagnostic.kind.clone()),
+            None,
             false,
             &diagnostic.severity,
         ),

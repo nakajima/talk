@@ -73,6 +73,30 @@ struct Frame {
 /// heap data, so this only bounds runaway recursion.
 const MAX_FRAMES: usize = 1 << 20;
 
+/// Execution budgets (ADR 0043 §7). Defaults are effectively unlimited
+/// (frames keep the historical cap), so script runs are unchanged;
+/// `run_export` callers pass real limits. Exhaustion is an ordinary VM
+/// error on the call that spent the budget.
+#[derive(Debug, Clone, Copy)]
+pub struct Budgets {
+    /// Instructions executed before the run fails.
+    pub instructions: u64,
+    /// Maximum live frames (the historical `MAX_FRAMES` by default).
+    pub frames: usize,
+    /// Ceiling on byte-memory size (statics plus every allocation).
+    pub memory_bytes: usize,
+}
+
+impl Default for Budgets {
+    fn default() -> Self {
+        Self {
+            instructions: u64::MAX,
+            frames: MAX_FRAMES,
+            memory_bytes: usize::MAX,
+        }
+    }
+}
+
 /// Frame.dest sentinel for finalizer frames: their Ret writes nowhere.
 const FINALIZER_DEST: u16 = u16::MAX;
 
@@ -137,6 +161,126 @@ pub fn run_displayed(
     Ok((value, display))
 }
 
+/// A host-supplied argument for `run_export`.
+#[derive(Debug, Clone)]
+pub enum HostValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Byte(u8),
+    /// UTF-8 bytes surfaced to the callee as a core String backed by the
+    /// machine's static prefix: `free`/`retain` on static memory are
+    /// no-ops, so the value can neither leak nor double-free, and a
+    /// mutating callee takes the copy-on-write path.
+    String(Vec<u8>),
+}
+
+/// The record symbols needed to fabricate a core String value. Symbol
+/// identity is owned by the compiler, so the caller supplies them.
+#[derive(Debug, Clone, Copy)]
+pub struct StringShape {
+    pub string: Symbol,
+    pub storage: Symbol,
+}
+
+/// A finished export call: the result value plus the still-live machine
+/// whose byte memory string results point into.
+pub struct RunOutcome<'io> {
+    pub value: Value,
+    machine: Machine<'io>,
+}
+
+impl RunOutcome<'_> {
+    /// The UTF-8 bytes of a String-shaped value in this outcome.
+    pub fn string_bytes(&self, value: &Value) -> Result<&[u8], String> {
+        let Value::Record(_, fields) = value else {
+            return Err("not a string value".into());
+        };
+        let Some((base, len)) = string_bytes(fields) else {
+            return Err("not a string value".into());
+        };
+        self.machine.string_display_bytes(base, len)
+    }
+
+    pub fn balance(&self) -> RunBalance {
+        self.machine.balance(&self.value)
+    }
+
+    pub fn display(&self, names: &ValueNames) -> Result<String, String> {
+        render_value(&self.machine, names, &self.value)
+    }
+}
+
+/// Call an exported function by name on a fresh machine. Each call is a
+/// complete run: the export's wrapper chunk installs the host handlers
+/// and runs global init/teardown, so effects behave exactly as in a
+/// script run.
+pub fn run_export<'io>(
+    module: &Module,
+    name: &str,
+    args: &[HostValue],
+    strings: StringShape,
+    budgets: Budgets,
+    io: &'io mut dyn IO,
+) -> Result<RunOutcome<'io>, String> {
+    let Some(&(_, chunk_index)) = module.exports.iter().find(|(export, _)| export == name) else {
+        return Err(format!("vm: no exported function named `{name}`"));
+    };
+    let target = chunk(module, chunk_index)?;
+    if args.len() != target.arity as usize {
+        return Err(format!(
+            "vm: export `{name}` takes {} arguments, got {}",
+            target.arity,
+            args.len()
+        ));
+    }
+
+    // String arguments live in the machine's static prefix, exactly like
+    // string literals: appended after the module statics, before the
+    // machine snapshots its static length.
+    let mut mem = module.statics.clone();
+    let values: Vec<Value> = args
+        .iter()
+        .map(|arg| match arg {
+            HostValue::Int(v) => Value::I64(*v),
+            HostValue::Float(v) => Value::F64(*v),
+            HostValue::Bool(v) => Value::Bool(*v),
+            HostValue::Byte(v) => Value::Byte(*v),
+            HostValue::String(bytes) => {
+                let base = mem.len() as u32;
+                mem.extend_from_slice(bytes);
+                let len = bytes.len() as i64;
+                Value::Record(
+                    strings.string,
+                    Rc::new(vec![
+                        Value::Record(strings.storage, Rc::new(vec![Value::Ptr(base)])),
+                        Value::I64(len),
+                        Value::I64(len),
+                    ]),
+                )
+            }
+        })
+        .collect();
+
+    let mut machine = Machine {
+        slots: vec![],
+        static_len: mem.len() as u32,
+        mem,
+        allocations: Allocations::default(),
+        boxed: vec![Value::Void],
+        objects: Objects::default(),
+        io,
+    };
+    match run_loop(module, &mut machine, chunk_index, values, &budgets) {
+        Ok(value) => Ok(RunOutcome { value, machine }),
+        Err(err) => Err(format!(
+            "{err} [balance at trap: {} live allocations, {} live 'heap objects]",
+            machine.allocations.live_count(),
+            machine.objects.live_objects()
+        )),
+    }
+}
+
 fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Machine<'io>), String> {
     let mut machine = Machine {
         slots: vec![],
@@ -149,7 +293,7 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
         objects: Objects::default(),
         io,
     };
-    match run_loop(module, &mut machine) {
+    match run_loop(module, &mut machine, module.entry, vec![], &Budgets::default()) {
         Ok(value) => Ok((value, machine)),
         // Balance-at-trap: a runtime trap (double free, use-after-free, …)
         // reports the allocation-balance state alongside the message — the
@@ -162,15 +306,26 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
     }
 }
 
-fn run_loop(module: &Module, machine: &mut Machine) -> Result<Value, String> {
-    let entry = chunk(module, module.entry)?;
+fn run_loop(
+    module: &Module,
+    machine: &mut Machine,
+    entry_index: u32,
+    args: Vec<Value>,
+    budgets: &Budgets,
+) -> Result<Value, String> {
+    let mut fuel = budgets.instructions;
+    let entry = chunk(module, entry_index)?;
     let empty_env: Rc<Vec<Value>> = Rc::new(vec![]);
     let mut next_frame_id: u64 = 0;
     let mut regs_pool: Vec<Vec<Value>> = Vec::new();
+    let mut regs = vec![Value::Void; entry.n_regs as usize];
+    for (index, arg) in args.into_iter().enumerate() {
+        regs[index] = arg;
+    }
     let mut frames = vec![Frame {
-        chunk: module.entry,
+        chunk: entry_index,
         pc: 0,
-        regs: vec![Value::Void; entry.n_regs as usize],
+        regs,
         env: empty_env.clone(),
         dest: 0,
         id: next_frame_id,
@@ -199,6 +354,10 @@ fn run_loop(module: &Module, machine: &mut Machine) -> Result<Value, String> {
     // unwind entry and popped.
     let mut unwinding: Option<(usize, Value)> = None;
     loop {
+        if fuel == 0 {
+            return Err("vm: instruction budget exhausted".into());
+        }
+        fuel -= 1;
         // Region-teardown pump: while a region is finalizing, run its
         // members' finalizer thunks (reverse allocation order) as ordinary
         // frames before executing anything else; the walk's bulk free
@@ -207,7 +366,7 @@ fn run_loop(module: &Module, machine: &mut Machine) -> Result<Value, String> {
             && machine.objects.finalizing()
             && let Some((thunk, object)) = machine.objects.next_finalizer()
         {
-            if frames.len() >= MAX_FRAMES {
+            if frames.len() >= budgets.frames {
                 return Err("vm: call stack overflow".into());
             }
             let Value::Closure(fin_chunk, env) = thunk else {
@@ -252,7 +411,7 @@ fn run_loop(module: &Module, machine: &mut Machine) -> Result<Value, String> {
                 args_start,
                 args_len,
             } => {
-                if frames.len() >= MAX_FRAMES {
+                if frames.len() >= budgets.frames {
                     return Err("vm: call stack overflow".into());
                 }
                 let target = chunk(module, callee)?;
@@ -284,7 +443,7 @@ fn run_loop(module: &Module, machine: &mut Machine) -> Result<Value, String> {
                 args_start,
                 args_len,
             } => {
-                if frames.len() >= MAX_FRAMES {
+                if frames.len() >= budgets.frames {
                     return Err("vm: call stack overflow".into());
                 }
                 let Some(callee_value) = frames[frame_index].regs.get(callee as usize).cloned()
@@ -508,7 +667,7 @@ fn run_loop(module: &Module, machine: &mut Machine) -> Result<Value, String> {
                         }
                     }
                 }
-                exec_local(module, &mut frames[frame_index], machine, local).map_err(|error| {
+                exec_local(module, &mut frames[frame_index], machine, local, budgets).map_err(|error| {
                     if trace_mem()
                         && let Ok(target) = chunk(module, current_chunk)
                     {
@@ -1201,6 +1360,7 @@ fn exec_local(
     frame: &mut Frame,
     machine: &mut Machine,
     insn: Insn,
+    budgets: &Budgets,
 ) -> Result<(), String> {
     match insn {
         Insn::Const { dest, k } => {
@@ -1321,6 +1481,15 @@ fn exec_local(
                 return Err("vm: btoi of a non-byte".into());
             };
             frame.regs[dest as usize] = Value::I64(v as i64);
+        }
+        Insn::IToB { dest, src } => {
+            let Value::I64(v) = frame.regs[src as usize] else {
+                return Err("vm: itob of a non-int".into());
+            };
+            let Ok(b) = u8::try_from(v) else {
+                return Err("vm: itob of a value outside 0..=255".into());
+            };
+            frame.regs[dest as usize] = Value::Byte(b);
         }
         Insn::CellNew { dest, init } => {
             machine.slots.push(frame.regs[init as usize].clone());
@@ -1491,6 +1660,9 @@ fn exec_local(
                 return Err("vm: alloc of a negative count".into());
             }
             let count = usize::try_from(count).map_err(|_| "vm: alloc count out of range")?;
+            if machine.mem.len().saturating_add(count) > budgets.memory_bytes {
+                return Err("vm: memory budget exhausted".into());
+            }
             let addr = machine
                 .allocations
                 .allocate(&mut machine.mem, count)
@@ -1970,6 +2142,229 @@ mod tests {
         (value, machine.objects.live_objects(), io.out.len())
     }
 
+    fn itob_module(k: Value) -> Module {
+        Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::IToB { dest: 1, src: 0 },
+                    Insn::Ret { src: 1 },
+                ],
+                arity: 0,
+                n_regs: 2,
+                unwind: vec![],
+            }],
+            consts: vec![k],
+            arg_pool: vec![],
+            switch_pool: vec![],
+            traps: vec![],
+            statics: vec![],
+            entry: 0,
+            exports: vec![],
+        }
+    }
+
+    fn export_shape() -> StringShape {
+        let sym = |id| {
+            Symbol::Struct(crate::symbol::ModuleSymbolId::new(
+                crate::symbol::ModuleId(1),
+                id,
+            ))
+        };
+        StringShape {
+            string: sym(1),
+            storage: sym(2),
+        }
+    }
+
+    fn export_module(chunk: Chunk, name: &str) -> Module {
+        Module {
+            chunks: vec![chunk],
+            exports: vec![(name.into(), 0)],
+            ..Module::default()
+        }
+    }
+
+    #[test]
+    fn instruction_budget_halts_an_infinite_loop() {
+        let module = export_module(
+            Chunk {
+                name: "spin".into(),
+                code: vec![Insn::Jump { target: 0 }],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            },
+            "spin",
+        );
+        let mut io = CaptureIO::default();
+        let budgets = Budgets {
+            instructions: 1_000,
+            ..Budgets::default()
+        };
+        let err = run_export(&module, "spin", &[], export_shape(), budgets, &mut io)
+            .err()
+            .expect("the loop must exhaust its budget");
+        assert!(err.contains("instruction budget"), "{err}");
+    }
+
+    #[test]
+    fn frame_budget_bounds_recursion() {
+        let module = export_module(
+            Chunk {
+                name: "rec".into(),
+                code: vec![
+                    Insn::Call {
+                        dest: 0,
+                        chunk: 0,
+                        args_start: 0,
+                        args_len: 0,
+                    },
+                    Insn::Ret { src: 0 },
+                ],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            },
+            "rec",
+        );
+        let mut io = CaptureIO::default();
+        let budgets = Budgets {
+            frames: 16,
+            ..Budgets::default()
+        };
+        let err = run_export(&module, "rec", &[], export_shape(), budgets, &mut io)
+            .err()
+            .expect("recursion must exhaust the frame budget");
+        assert!(err.contains("call stack overflow"), "{err}");
+    }
+
+    #[test]
+    fn memory_budget_rejects_an_oversized_allocation() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "grab".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::Alloc { dest: 1, count: 0 },
+                    Insn::Ret { src: 1 },
+                ],
+                arity: 0,
+                n_regs: 2,
+                unwind: vec![],
+            }],
+            consts: vec![Value::I64(1 << 40)],
+            exports: vec![("grab".into(), 0)],
+            ..Module::default()
+        };
+        let mut io = CaptureIO::default();
+        let budgets = Budgets {
+            memory_bytes: 1024,
+            ..Budgets::default()
+        };
+        let err = run_export(&module, "grab", &[], export_shape(), budgets, &mut io)
+            .err()
+            .expect("the allocation must exceed the memory budget");
+        assert!(err.contains("memory budget"), "{err}");
+    }
+
+    #[test]
+    fn run_export_passes_scalar_args() {
+        let module = export_module(
+            Chunk {
+                name: "add".into(),
+                code: vec![Insn::Add { dest: 2, a: 0, b: 1 }, Insn::Ret { src: 2 }],
+                arity: 2,
+                n_regs: 3,
+                unwind: vec![],
+            },
+            "add",
+        );
+        let mut io = CaptureIO::default();
+        let outcome = run_export(
+            &module,
+            "add",
+            &[HostValue::Int(40), HostValue::Int(2)],
+            export_shape(),
+            Budgets::default(),
+            &mut io,
+        )
+        .expect("run");
+        assert_eq!(outcome.value, Value::I64(42));
+    }
+
+    #[test]
+    fn run_export_round_trips_string_arg() {
+        let module = export_module(
+            Chunk {
+                name: "id".into(),
+                code: vec![Insn::Ret { src: 0 }],
+                arity: 1,
+                n_regs: 1,
+                unwind: vec![],
+            },
+            "id",
+        );
+        let mut io = CaptureIO::default();
+        let outcome = run_export(
+            &module,
+            "id",
+            &[HostValue::String(b"hello".to_vec())],
+            export_shape(),
+            Budgets::default(),
+            &mut io,
+        )
+        .expect("run");
+        assert_eq!(
+            outcome.string_bytes(&outcome.value).expect("string"),
+            b"hello"
+        );
+    }
+
+    #[test]
+    fn run_export_rejects_unknown_name_and_bad_arity() {
+        let module = export_module(
+            Chunk {
+                name: "id".into(),
+                code: vec![Insn::Ret { src: 0 }],
+                arity: 1,
+                n_regs: 1,
+                unwind: vec![],
+            },
+            "id",
+        );
+        let mut io = CaptureIO::default();
+        let unknown = run_export(&module, "nope", &[], export_shape(), Budgets::default(), &mut io)
+            .err()
+            .expect("unknown export should error");
+        assert!(unknown.contains("no exported function"), "{unknown}");
+
+        let mut io = CaptureIO::default();
+        let arity = run_export(&module, "id", &[], export_shape(), Budgets::default(), &mut io)
+            .err()
+            .expect("arity mismatch should error");
+        assert!(arity.contains("takes 1 arguments"), "{arity}");
+    }
+
+    #[test]
+    fn itob_converts_in_range_int() {
+        let mut io = CaptureIO::default();
+        let (value, _machine) = run_machine(&itob_module(Value::I64(65)), &mut io).expect("vm run");
+        assert_eq!(value, Value::Byte(65));
+    }
+
+    #[test]
+    fn itob_rejects_out_of_range_int() {
+        for out_of_range in [-1, 256] {
+            let mut io = CaptureIO::default();
+            let err = run_machine(&itob_module(Value::I64(out_of_range)), &mut io)
+                .err()
+                .expect("expected an itob range error");
+            assert!(err.contains("itob"), "unexpected error: {err}");
+        }
+    }
+
     /// main: build two objects, link them into a cycle, mutate through one
     /// alias, read through the other, release both. Finalizers (chunk 1)
     /// write a byte to fd 1 so the walk is observable.
@@ -2066,6 +2461,7 @@ mod tests {
             traps: vec![],
             statics: vec![b'x'],
             entry: 0,
+            exports: vec![],
         }
     }
 
@@ -2102,6 +2498,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
 
         let mut io = CaptureIO::default();
@@ -2171,6 +2568,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
         let mut io = CaptureIO::default();
         let (value, machine) = run_machine(&module, &mut io).expect("vm run");
@@ -2219,6 +2617,7 @@ mod tests {
             traps: vec![],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
         let (value, _, _) = run_with_machine(&module);
         assert_eq!(
@@ -2253,6 +2652,7 @@ mod tests {
             traps: vec!["vm: resumed past a same-frame abort".into()],
             statics: vec![],
             entry: 0,
+            exports: vec![],
         };
         let mut io = CaptureIO::default();
         let value = run(&module, &mut io).expect("same-frame CallCont delivers its value");

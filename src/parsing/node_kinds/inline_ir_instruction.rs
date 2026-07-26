@@ -209,6 +209,8 @@ pub enum InlineIRInstructionKind {
     IntToFloat { dest: Register, val: Value },
     #[doc = "$dest = btoi $val"]
     ByteToInt { dest: Register, val: Value },
+    #[doc = "$dest = itob $val"]
+    IntToByte { dest: Register, val: Value },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
@@ -518,6 +520,9 @@ impl Display for InlineIRInstruction {
             }
             InlineIRInstructionKind::ByteToInt { dest, val } => {
                 write!(f, "{dest} = btoi {}", val)
+            }
+            InlineIRInstructionKind::IntToByte { dest, val } => {
+                write!(f, "{dest} = itob {}", val)
             }
         }
     }

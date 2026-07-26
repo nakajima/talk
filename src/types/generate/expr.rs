@@ -1640,6 +1640,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 a: self.ir_operand(node, instruction, val)?,
                 b: None,
             },
+            K::IntToByte { val, .. } => C::Scalar {
+                op: Op::IntToByte,
+                a: self.ir_operand(node, instruction, val)?,
+                b: None,
+            },
             K::Alloc { ty, count, .. } => C::Alloc {
                 elem: self.ir_annotation_ty(node, ty)?,
                 count: self.ir_operand(node, instruction, count)?,

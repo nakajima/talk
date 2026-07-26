@@ -2416,6 +2416,112 @@ fn mir_and_bytecode_inspection_render() {
 }
 
 #[test]
+fn bytecode_builds_are_deterministic_across_processes() {
+    // ADR 0043's bootstrap fixed point: compiling the same source must
+    // produce byte-identical images, across separate compiler processes
+    // (per-process hash seeding and allocation addresses must not leak
+    // into the artifact). The fixture exercises the demand-driven paths
+    // most likely to depend on map iteration order: generic
+    // monomorphization, conformance dictionaries, closures, enums.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("talk-det-{}-{unique}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("fixture dir");
+    let source = dir.join("prog.tlk");
+    std::fs::write(
+        &source,
+        r#"protocol Greet {
+	func greet() -> String
+}
+
+struct Cat {
+	let name: String
+}
+
+struct Dog {
+	let name: String
+}
+
+extend Cat: Greet {
+	func greet() -> String { "meow " + self.name }
+}
+
+extend Dog: Greet {
+	func greet() -> String { "woof " + self.name }
+}
+
+func chorus<T: Greet>(voices: [T]) -> String {
+	let out = ""
+	for voice in voices {
+		out = out + voice.greet()
+	}
+	out
+}
+
+enum Tree {
+	case leaf(Int)
+	case node(Tree, Tree)
+}
+
+func total(tree: &Tree) -> Int {
+	match tree {
+		.leaf(n) -> n,
+		.node(l, r) -> total(tree: l) + total(tree: r)
+	}
+}
+
+let cats = [Cat(name: "a"), Cat(name: "b")]
+let dogs = [Dog(name: "c")]
+print(chorus(voices: cats))
+print(chorus(voices: dogs))
+print(total(tree: Tree.node(Tree.leaf(1), Tree.node(Tree.leaf(2), Tree.leaf(3)))).show())
+"#,
+    )
+    .expect("write source");
+
+    // The dedicated fixture plus a spread of repo examples: effects and
+    // handlers, iterator/closure glue, and the Unicode tables.
+    let mut subjects = vec![source];
+    for example in [
+        "tests/examples/Effects.tlk",
+        "tests/examples/ForLoop.tlk",
+        "tests/examples/Graphemes.tlk",
+    ] {
+        subjects.push(std::path::PathBuf::from(example));
+    }
+
+    for (ix, subject) in subjects.iter().enumerate() {
+        let mut images = Vec::new();
+        for run in 0..2 {
+            let image = dir.join(format!("prog-{ix}-{run}.tbc"));
+            let build = Command::new(env!("CARGO_BIN_EXE_talk"))
+                .args(["build", "-o"])
+                .arg(&image)
+                .arg(subject)
+                .output()
+                .expect("build image");
+            assert!(
+                build.status.success(),
+                "{}: {}",
+                subject.display(),
+                String::from_utf8_lossy(&build.stderr)
+            );
+            images.push(std::fs::read(&image).expect("read image"));
+        }
+        assert_eq!(
+            images[0],
+            images[1],
+            "{} compiled to different images across processes",
+            subject.display()
+        );
+    }
+
+    std::fs::remove_dir_all(dir).expect("remove fixture dir");
+}
+
+#[test]
 fn build_and_run_image_round_trip() {
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
