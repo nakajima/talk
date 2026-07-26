@@ -123,8 +123,6 @@ The frontend artifact exports category-specific operations rather than one
 file-only parser:
 
 ```text
-lex
-capture_token_tree
 parse_file
 parse_expr
 parse_pattern
@@ -135,6 +133,18 @@ parse_block_items
 The concrete names may differ, but the capabilities are required. Parse
 operations accept an explicit mode for strict compilation versus lenient
 editor recovery and an explicit trivia/comment policy where relevant.
+
+Tokens and token trees are internal to the frontend and do not cross the
+ABI in production. The compiler consumes parse results, which already
+carry the comment tokens and node-meta token extents downstream passes
+need, so no token serialization format or token-kind numbering is shared
+across the boundary. A `lex` export exists as a validation and tooling
+surface: the differential harness compares it against the reference
+lexer during migration, and narrow editor queries (identifier
+validation, token scans) become purpose-built operations rather than a
+token-stream export. Token trees are the macro system's substrate inside
+the frontend; expansion runs where they live, so they never need a wire
+representation.
 
 Every result preserves the information currently required downstream:
 

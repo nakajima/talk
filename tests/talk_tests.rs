@@ -2416,6 +2416,65 @@ fn mir_and_bytecode_inspection_render() {
 }
 
 #[test]
+fn bootstrap_writes_artifact_and_manifest_and_check_detects_staleness() {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("talk-boot-{}-{unique}", std::process::id()));
+    let src_dir = dir.join("frontend");
+    std::fs::create_dir_all(&src_dir).expect("source dir");
+    let source = src_dir.join("Svc.tlk");
+    std::fs::write(&source, "pub func double(n: Int) -> Int { n * 2 }\n").expect("write source");
+    let artifact = dir.join("frontend.tbc");
+
+    let bootstrap = |extra: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_talk"));
+        command
+            .arg("bootstrap")
+            .arg(&src_dir)
+            .args(["--export", "double"])
+            .arg("-o")
+            .arg(&artifact)
+            .args(extra);
+        command.output().expect("run bootstrap")
+    };
+
+    let generate = bootstrap(&[]);
+    assert!(
+        generate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+    assert!(artifact.exists(), "artifact written");
+    let manifest = dir.join("frontend.manifest");
+    let manifest_text = std::fs::read_to_string(&manifest).expect("manifest written");
+    assert!(manifest_text.contains("artifact_digest:"), "{manifest_text}");
+
+    let check = bootstrap(&["--check"]);
+    assert!(
+        check.status.success(),
+        "fresh artifact must pass --check: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    // Editing a source without regenerating must fail the check.
+    std::fs::write(&source, "pub func double(n: Int) -> Int { n + n }\n").expect("edit source");
+    let stale = bootstrap(&["--check"]);
+    assert!(
+        !stale.status.success(),
+        "stale artifact must fail --check"
+    );
+    assert!(
+        String::from_utf8_lossy(&stale.stderr).contains("stale"),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove bootstrap dir");
+}
+
+#[test]
 fn bytecode_builds_are_deterministic_across_processes() {
     // ADR 0043's bootstrap fixed point: compiling the same source must
     // produce byte-identical images, across separate compiler processes

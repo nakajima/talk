@@ -4,7 +4,7 @@ use crate::{
         module::{Module, ModuleEnvironment, ModuleId, ModuleTypes, StableModuleId},
         module_path::LocalModulePaths,
     },
-    diagnostic::{AnyDiagnostic, Diagnostic, Severity},
+    diagnostic::{AnyDiagnostic, Severity},
     lexer::Lexer,
     name::Name,
     name_resolution::{
@@ -12,7 +12,7 @@ use crate::{
         symbol::{Symbol, Symbols},
     },
     node::Node,
-    node_id::{FileID, NodeID},
+    node_id::FileID,
     node_kinds::{
         decl::{DeclKind, ImportPath},
         expr::ExprKind,

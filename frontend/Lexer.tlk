@@ -1,0 +1,319 @@
+// The self-hosted lexer (ADR 0043 stage 2, first slice). Tokens are
+// internal to the frontend: `lex` is a validation export rendering the
+// frozen dump-format token section, compared byte-for-byte against the
+// reference lexer by the differential harness. Coverage grows
+// file-by-file with the harness's corpus list.
+
+enum TokenKind {
+	case identifier
+	case int_number
+	case float_number
+	case string_literal
+	case character_literal
+	case keyword_let
+	case keyword_true
+	case keyword_false
+	case equals
+	case comma
+	case dot
+	case dot_dot
+	case dot_dot_less
+	case left_paren
+	case right_paren
+	case left_bracket
+	case right_bracket
+	case left_brace
+	case right_brace
+	case plus
+	case newline
+}
+
+func kind_name(kind: TokenKind) -> String {
+	match kind {
+		.identifier -> "Identifier",
+		.int_number -> "Int",
+		.float_number -> "Float",
+		.string_literal -> "StringLiteral",
+		.character_literal -> "CharacterLiteral",
+		.keyword_let -> "Let",
+		.keyword_true -> "True",
+		.keyword_false -> "False",
+		.equals -> "Equals",
+		.comma -> "Comma",
+		.dot -> "Dot",
+		.dot_dot -> "DotDot",
+		.dot_dot_less -> "DotDotLess",
+		.left_paren -> "LeftParen",
+		.right_paren -> "RightParen",
+		.left_bracket -> "LeftBracket",
+		.right_bracket -> "RightBracket",
+		.left_brace -> "LeftBrace",
+		.right_brace -> "RightBrace",
+		.plus -> "Plus",
+		.newline -> "Newline"
+	}
+}
+
+struct Token {
+	let kind: TokenKind
+	let start: Int
+	let end: Int
+}
+
+func is_digit(b: Int) -> Bool {
+	b >= 48 && b <= 57
+}
+
+func is_alpha(b: Int) -> Bool {
+	(b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95
+}
+
+func is_alnum(b: Int) -> Bool {
+	is_digit(b: b) || is_alpha(b: b)
+}
+
+func scan(source: String) -> [Token] {
+	let tokens: [Token] = []
+	let view = source.utf8()
+	let n = view.count()
+	let i = 0
+	loop i < n {
+		let b = view.at(index: i)._toInt()
+
+		// Newline runs collapse into one token.
+		if b == 10 {
+			let start = i
+			loop i < n && view.at(index: i)._toInt() == 10 {
+				i = i + 1
+			}
+			tokens.push(Token(kind: .newline, start: start, end: i))
+			continue
+		}
+
+		if b == 32 || b == 9 || b == 13 {
+			i = i + 1
+			continue
+		}
+
+		// Line comments are dropped (the default trivia policy).
+		if b == 47 && i + 1 < n && view.at(index: i + 1)._toInt() == 47 {
+			loop i < n && view.at(index: i)._toInt() != 10 {
+				i = i + 1
+			}
+			continue
+		}
+
+		if is_digit(b: b) {
+			let start = i
+			loop i < n && is_digit(b: view.at(index: i)._toInt()) {
+				i = i + 1
+			}
+			let fractional = i + 1 < n && view.at(index: i)._toInt() == 46 && is_digit(b: view.at(index: i + 1)._toInt())
+			if fractional {
+				i = i + 1
+				loop i < n && is_digit(b: view.at(index: i)._toInt()) {
+					i = i + 1
+				}
+				tokens.push(Token(kind: .float_number, start: start, end: i))
+			} else {
+				tokens.push(Token(kind: .int_number, start: start, end: i))
+			}
+			continue
+		}
+
+		if is_alpha(b: b) {
+			let start = i
+			loop i < n && is_alnum(b: view.at(index: i)._toInt()) {
+				i = i + 1
+			}
+			let word = view.slice(start: start, byte_count: i - start)
+			let kind = match word {
+				"let" -> TokenKind.keyword_let,
+				"true" -> TokenKind.keyword_true,
+				"false" -> TokenKind.keyword_false,
+				_ -> TokenKind.identifier
+			}
+			tokens.push(Token(kind: kind, start: start, end: i))
+			continue
+		}
+
+		// String literal: span includes the quotes; escapes stay raw.
+		if b == 34 {
+			let start = i
+			i = i + 1
+			let open = true
+			loop i < n && open {
+				let c = view.at(index: i)._toInt()
+				if c == 92 {
+					i = i + 2
+				} else {
+					if c == 34 {
+						i = i + 1
+						open = false
+					} else {
+						i = i + 1
+					}
+				}
+			}
+			tokens.push(Token(kind: .string_literal, start: start, end: i))
+			continue
+		}
+
+		if b == 39 {
+			let start = i
+			i = i + 1
+			let open = true
+			loop i < n && open {
+				let c = view.at(index: i)._toInt()
+				if c == 92 {
+					i = i + 2
+				} else {
+					if c == 39 {
+						i = i + 1
+						open = false
+					} else {
+						i = i + 1
+					}
+				}
+			}
+			tokens.push(Token(kind: .character_literal, start: start, end: i))
+			continue
+		}
+
+		if b == 46 {
+			if i + 1 < n && view.at(index: i + 1)._toInt() == 46 {
+				if i + 2 < n && view.at(index: i + 2)._toInt() == 60 {
+					tokens.push(Token(kind: .dot_dot_less, start: i, end: i + 3))
+					i = i + 3
+				} else {
+					tokens.push(Token(kind: .dot_dot, start: i, end: i + 2))
+					i = i + 2
+				}
+			} else {
+				tokens.push(Token(kind: .dot, start: i, end: i + 1))
+				i = i + 1
+			}
+			continue
+		}
+
+		if b == 61 {
+			tokens.push(Token(kind: .equals, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+		if b == 44 {
+			tokens.push(Token(kind: .comma, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+		if b == 40 {
+			tokens.push(Token(kind: .left_paren, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+		if b == 41 {
+			tokens.push(Token(kind: .right_paren, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+		if b == 91 {
+			tokens.push(Token(kind: .left_bracket, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+		if b == 93 {
+			tokens.push(Token(kind: .right_bracket, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+		if b == 123 {
+			tokens.push(Token(kind: .left_brace, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+		if b == 125 {
+			tokens.push(Token(kind: .right_brace, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+		if b == 43 {
+			tokens.push(Token(kind: .plus, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+
+		// Bytes outside the covered surface are skipped; coverage grows
+		// with the harness corpus.
+		i = i + 1
+	}
+	tokens
+}
+
+func append(mut buf: [Byte], text: String) -> Void {
+	let bytes = text.utf8()
+	let i = 0
+	loop i < bytes.count() {
+		buf.push(bytes.at(index: i))
+		i = i + 1
+	}
+}
+
+func append_int(mut buf: [Byte], value: Int) -> Void {
+	append(buf: buf, text: value.show())
+}
+
+// The dump snippet rule: short single-line spans, quoted and escaped.
+func append_snippet(mut buf: [Byte], view: UTF8View, start: Int, end: Int) -> Void {
+	if end <= start || end - start > 40 {
+		return ()
+	}
+	let j = start
+	loop j < end {
+		if view.at(index: j)._toInt() == 10 {
+			return ()
+		}
+		j = j + 1
+	}
+	append(buf: buf, text: " \"")
+	let k = start
+	loop k < end {
+		let c = view.at(index: k)._toInt()
+		if c == 92 {
+			append(buf: buf, text: "\\\\")
+		} else {
+			if c == 34 {
+				append(buf: buf, text: "\\\"")
+			} else {
+				if c == 9 {
+					append(buf: buf, text: "\\t")
+				} else {
+					if c == 13 {
+						append(buf: buf, text: "\\r")
+					} else {
+						buf.push(view.at(index: k))
+					}
+				}
+			}
+		}
+		k = k + 1
+	}
+	append(buf: buf, text: "\"")
+}
+
+pub func lex(source: String) -> String {
+	let tokens = scan(source: source)
+	let view = source.utf8()
+	let out: [Byte] = []
+	append(buf: out, text: "tokens:\n")
+	for token in tokens {
+		append(buf: out, text: "  ")
+		append(buf: out, text: kind_name(kind: token.kind))
+		append(buf: out, text: " @")
+		append_int(buf: out, value: token.start)
+		append(buf: out, text: "..")
+		append_int(buf: out, value: token.end)
+		append_snippet(buf: out, view: view, start: token.start, end: token.end)
+		append(buf: out, text: "\n")
+	}
+	String.from_bytes(bytes: out)
+}

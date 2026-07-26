@@ -101,6 +101,27 @@ async fn main() {
             #[arg(long, value_name = "NAME")]
             entry: Option<String>,
         },
+        /// Regenerate a service artifact and its manifest from a source
+        /// directory, requiring the stage-1/stage-2 fixed point (ADR
+        /// 0043). With --check, verifies the on-disk artifact and
+        /// manifest are current instead of writing.
+        Bootstrap {
+            /// Directory of .tlk sources (non-recursive).
+            #[arg(value_hint = ValueHint::DirPath)]
+            dir: String,
+            /// Where to write the artifact; the manifest lands beside it.
+            #[arg(short, long, value_name = "FILE")]
+            output: String,
+            /// Exported function names (repeatable).
+            #[arg(long = "export", value_name = "NAME")]
+            exports: Vec<String>,
+            /// Effects the exports may perform (repeatable; default none).
+            #[arg(long = "allow-effect", value_name = "EFFECT")]
+            allow_effects: Vec<String>,
+            /// Verify the existing artifact and manifest instead of writing.
+            #[arg(long)]
+            check: bool,
+        },
         /// Validate and execute a bytecode image.
         RunImage {
             #[arg(value_hint = ValueHint::FilePath)]
@@ -627,6 +648,77 @@ async fn main() {
             if let Err(err) = std::fs::write(output, bytes) {
                 eprintln!("error: failed to write {output}: {err}");
                 std::process::exit(1);
+            }
+        }
+        Commands::Bootstrap {
+            dir,
+            output,
+            exports,
+            allow_effects,
+            check,
+        } => {
+            let mut files: Vec<std::path::PathBuf> = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries
+                    .filter_map(|entry| entry.ok())
+                    .map(|entry| entry.path())
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "tlk"))
+                    .collect(),
+                Err(err) => {
+                    eprintln!("error: failed to read {dir}: {err}");
+                    std::process::exit(1);
+                }
+            };
+            files.sort();
+            if files.is_empty() {
+                eprintln!("error: {dir} contains no .tlk sources");
+                std::process::exit(1);
+            }
+            let mut sources = Vec::new();
+            for path in &files {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                match std::fs::read_to_string(path) {
+                    Ok(text) => sources.push((name, text)),
+                    Err(err) => {
+                        eprintln!("error: failed to read {}: {err}", path.display());
+                        std::process::exit(1);
+                    }
+                }
+            }
+
+            let outcome =
+                match talk::compiling::bootstrap::bootstrap(&sources, &exports, &allow_effects) {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
+                };
+            let manifest_path = std::path::Path::new(&output).with_extension("manifest");
+            if *check {
+                let current = std::fs::read(&output).ok().is_some_and(|existing| {
+                    existing == outcome.image
+                }) && std::fs::read_to_string(&manifest_path)
+                    .ok()
+                    .is_some_and(|existing| existing == outcome.manifest.to_text());
+                if !current {
+                    eprintln!(
+                        "error: {output} is stale; regenerate with `talk bootstrap` (without --check)"
+                    );
+                    std::process::exit(1);
+                }
+                println!("{output} is up to date");
+            } else {
+                if let Err(err) = std::fs::write(&output, &outcome.image) {
+                    eprintln!("error: failed to write {output}: {err}");
+                    std::process::exit(1);
+                }
+                if let Err(err) = std::fs::write(&manifest_path, outcome.manifest.to_text()) {
+                    eprintln!("error: failed to write {}: {err}", manifest_path.display());
+                    std::process::exit(1);
+                }
             }
         }
         Commands::RunImage { filename } => {

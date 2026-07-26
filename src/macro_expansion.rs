@@ -104,7 +104,6 @@ use crate::{
         stmt::{Stmt, StmtKind},
         type_annotation::TypeAnnotation,
     },
-    parser_error::ParserError,
 };
 
 const MAX_EXPANSIONS_PER_FILE: usize = 4096;

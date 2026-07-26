@@ -120,10 +120,10 @@ type ParseResult = Result<
     crate::parser_error::ParserError,
 >;
 
-fn dump_with<'a>(source: &'a str, parse: impl FnOnce(Parser<'a>) -> ParseResult) -> String {
-    let mut out = String::new();
-
-    out.push_str("tokens:\n");
+/// The flat token section — the `lex` validation contract (ADR 0043):
+/// what the self-hosted lexer must reproduce byte-for-byte.
+pub fn dump_tokens(source: &str) -> String {
+    let mut out = String::from("tokens:\n");
     let mut lexer = Lexer::new(source);
     loop {
         match lexer.next() {
@@ -144,6 +144,11 @@ fn dump_with<'a>(source: &'a str, parse: impl FnOnce(Parser<'a>) -> ParseResult)
             }
         }
     }
+    out
+}
+
+fn dump_with<'a>(source: &'a str, parse: impl FnOnce(Parser<'a>) -> ParseResult) -> String {
+    let mut out = dump_tokens(source);
 
     let lexer = Lexer::preserving_comments(source);
     let parser = Parser::new(":dump:", FileID(0), lexer);

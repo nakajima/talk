@@ -1,3 +1,4 @@
+pub mod bootstrap;
 pub mod core;
 pub mod driver;
 pub mod manifest;
