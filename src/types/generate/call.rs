@@ -259,8 +259,30 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .iter()
             .map(crate::types::callables::WrittenSlot::of)
             .collect();
-        let init = info
+        // Inaccessible initializers never participate in selection
+        // (ADR 0042): a type whose every initializer is hidden is not
+        // constructible from this file.
+        let inits: Vec<(Symbol, usize)> = info
             .inits
+            .iter()
+            .copied()
+            .filter(|(init, _)| {
+                self.catalog
+                    .member_accessible(*init, self.module_id, expr.id.0)
+            })
+            .collect();
+        if inits.is_empty() && !info.inits.is_empty() {
+            let rendered = self.store.render(&self_ty);
+            self.diagnostics.errors.push((
+                TypeError::InaccessibleMember {
+                    receiver: rendered,
+                    label: "init".into(),
+                },
+                expr.id,
+            ));
+            return Ty::Error;
+        }
+        let init = inits
             .iter()
             .find(|(init, arity)| {
                 *arity == arg_count + 1
@@ -272,8 +294,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                             crate::types::callables::labels_admit(&contract.name.labels, &written)
                         })
             })
-            .or_else(|| info.inits.iter().find(|(_, arity)| *arity == arg_count + 1))
-            .or_else(|| info.inits.first())
+            .or_else(|| inits.iter().find(|(_, arity)| *arity == arg_count + 1))
+            .or_else(|| inits.first())
             .map(|(init, _)| *init);
         let Some(init) = init else {
             self.unsupported(expr.id, "constructing a type with no initializer");
@@ -851,30 +873,50 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
 
         if let Some(info) = self.catalog.structs.get(&symbol).cloned()
-            && let Some(method) = info
-                .statics
-                .get(&label_str)
-                .and_then(|set| self.select_static_overload(set, &label_str, node))
+            && let Some(set) = info.statics.get(&label_str)
         {
-            let theta: Vec<Ty> = info
-                .params
+            // Inaccessible overloads never participate in selection
+            // (ADR 0042).
+            let accessible: Vec<Symbol> = set
                 .iter()
-                .map(|_| Ty::Var(self.store.fresh_ty(self.level, node)))
+                .copied()
+                .filter(|method| {
+                    self.catalog
+                        .member_accessible(*method, self.module_id, node.0)
+                })
                 .collect();
-            self.pin_head_args(symbol, head_segments, &[], &info.params, &theta, node);
-            if !info.params.is_empty() {
-                self.record_instantiation(node, &info.params, &theta);
+            if accessible.is_empty() && !set.is_empty() {
+                let rendered = self.store.render(&Ty::Nominal(symbol, vec![]));
+                self.diagnostics.errors.push((
+                    TypeError::InaccessibleMember {
+                        receiver: rendered,
+                        label: label_str,
+                    },
+                    node,
+                ));
+                return None;
             }
-            let substitution = param_subst(&info.params, &theta);
-            let signature = self.lookup_symbol_ty(method, node).substitute(
-                &substitution,
-                &Default::default(),
-                &Default::default(),
-            );
-            self.artifacts
-                .member_resolutions
-                .insert(node, MemberResolution::Direct(method));
-            return Some(signature);
+            if let Some(method) = self.select_static_overload(&accessible, &label_str, node) {
+                let theta: Vec<Ty> = info
+                    .params
+                    .iter()
+                    .map(|_| Ty::Var(self.store.fresh_ty(self.level, node)))
+                    .collect();
+                self.pin_head_args(symbol, head_segments, &[], &info.params, &theta, node);
+                if !info.params.is_empty() {
+                    self.record_instantiation(node, &info.params, &theta);
+                }
+                let substitution = param_subst(&info.params, &theta);
+                let signature = self.lookup_symbol_ty(method, node).substitute(
+                    &substitution,
+                    &Default::default(),
+                    &Default::default(),
+                );
+                self.artifacts
+                    .member_resolutions
+                    .insert(node, MemberResolution::Direct(method));
+                return Some(signature);
+            }
         }
         None
     }

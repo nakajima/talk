@@ -185,6 +185,22 @@ impl<'e> Elaborator<'e> {
             return Ty::Error;
         };
 
+        // ADR 0042: nested types are members — a private child is
+        // nameable only in its declaring file.
+        if let Some(record) = self.resolved.declarations.get(&child)
+            && record.effective != crate::node_kinds::decl::Visibility::Public
+            && record.file != node.0
+        {
+            self.diagnostics.errors.push((
+                TypeError::InaccessibleMember {
+                    receiver: owner.to_string(),
+                    label: label.to_string(),
+                },
+                node,
+            ));
+            return Ty::Error;
+        }
+
         match child {
             Symbol::TypeAlias(_) => {
                 if !member_generics.is_empty() {

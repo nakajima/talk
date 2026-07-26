@@ -260,6 +260,9 @@ pub(crate) fn stored_field_symbol(
 
 #[derive(Clone, Default, Debug)]
 pub struct TypeOutput {
+    /// The module this check ran under — tooling's member-accessibility
+    /// viewer (ADR 0042) pairs it with the cursor's file.
+    pub module_id: crate::compiling::module::ModuleId,
     /// This module's slice of the type catalog (exported with the module).
     pub catalog: crate::types::catalog::TypeCatalog,
     /// Zonked type of every expression and parameter node. The typed-program

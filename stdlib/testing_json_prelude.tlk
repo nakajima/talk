@@ -1,7 +1,7 @@
 use testing::{ Failure, TestCase, fail, registerTest }
 
-public let __talktalk_tests = Array<TestCase>(capacity: 0)
-public let __talktalk_failures = Array<Failure>(capacity: 0)
+pub let __talktalk_tests = Array<TestCase>(capacity: 0)
+pub let __talktalk_failures = Array<Failure>(capacity: 0)
 let __talktalk_current_test = ""
 let __talktalk_filter_enabled = false
 let __talktalk_filter_name = ""
@@ -74,7 +74,7 @@ func __talktalk_event_end(status: String) {
 	'continue ()
 }
 
-public func __talktalk_runAllAndReport() -> Int {
+pub func __talktalk_runAllAndReport() -> Int {
 	for testCase in __talktalk_tests {
 		__talktalk_current_test = testCase.name.to_string()
 		let failures_before = __talktalk_failures.count

@@ -801,40 +801,38 @@ impl Driver<Typed> {
             None => true,
             Some(id) => id == compiled_as,
         };
-        let (resolved_names, types) = self.phase.program.into_semantic_parts();
+        let (resolved_names, mut types) = self.phase.program.into_semantic_parts();
         let exports = resolved_names.exports();
-        let schemes = types
-            .schemes
-            .into_iter()
-            .filter(|(symbol, _)| own(symbol))
-            // Scheme-level sanitize: a leftover row/effect tail variable
-            // becomes an owner-keyed param AND registers in
-            // eff_params/row_params, so instantiation freshens it on the
-            // importing side (a rigid tail would reject every ambient row
-            // it meets — the http.run regression).
-            .map(|(symbol, scheme)| (symbol, scheme.sanitize_for_export(symbol)))
-            .collect();
-        let symbol_names = resolved_names
-            .symbol_names
-            .into_iter()
-            .filter(|(symbol, _)| own(symbol))
-            .collect();
-        let mut catalog = types.catalog;
         // Synthesized derived rows are compile-local; importers
         // re-synthesize against their own merged catalogs.
-        catalog.strip_synthesized_conformances();
+        types.catalog.strip_synthesized_conformances();
+        // Ship the validated public interface (ADR 0042 §7): exported
+        // names, the semantic closure that types them, and private
+        // suppliers those contracts reference — never unrelated private
+        // schemes or rows. Scheme-level sanitize inside: a leftover
+        // row/effect tail variable becomes an owner-keyed param AND
+        // registers in eff_params/row_params, so instantiation freshens
+        // it on the importing side (a rigid tail would reject every
+        // ambient row it meets — the http.run regression).
+        #[cfg_attr(not(debug_assertions), allow(unused_mut))]
+        let mut interface =
+            crate::compiling::interface::split_public_interface(&resolved_names, types, own);
         // A module's types outlive this store: nothing var-shaped may
         // cross. Finalization guarantees it through the same walk this
         // assertion re-runs; a future catalog field that skips the walk
         // fails loudly here in debug builds.
         #[cfg(debug_assertions)]
-        catalog.debug_assert_portable();
+        interface.types.catalog.debug_assert_portable();
         Module {
-            id: StableModuleId::generate(&name, &exports, &catalog.callable_contracts),
+            id: StableModuleId::generate(
+                &name,
+                &exports,
+                &interface.types.catalog.callable_contracts,
+            ),
             name,
-            symbol_names,
+            symbol_names: interface.symbol_names,
             exports,
-            types: ModuleTypes { schemes, catalog },
+            types: interface.types,
         }
     }
 }
@@ -856,7 +854,7 @@ pub mod tests {
         // `(&Float, Float) -> Float` bug).
         let typed = Driver::new(
             vec![Source::from(
-                "public struct Tiny {\n\tlet x: Int\n\n\tfunc double() -> Int {\n\t\tself.x + self.x\n\t}\n}",
+                "pub struct Tiny {\n\tlet x: Int\n\n\tfunc double() -> Int {\n\t\tself.x + self.x\n\t}\n}",
             )],
             DriverConfig::new("TinyLib"),
         )
@@ -1018,7 +1016,7 @@ pub mod tests {
         let driver_a = Driver::new(
             vec![Source::from(
                 "
-            public struct Hello {
+            pub struct Hello {
                 let x: Int
             }
             ",
@@ -1086,7 +1084,7 @@ pub mod tests {
         let importer_path = current_dir.join("dev/fixtures/qualified_importer.tlk");
         let exportee_path = current_dir.join("dev/fixtures/qualified_exportee.tlk");
 
-        std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
+        std::fs::write(&exportee_path, "pub let exported = 42\n").unwrap();
         std::fs::write(&importer_path, "package::qualified_exportee::exported\n").unwrap();
 
         let driver = Driver::new(
@@ -1114,7 +1112,7 @@ pub mod tests {
         std::fs::create_dir_all(&feature).unwrap();
         let consumer = feature.join("consumer.tlk");
         let sibling = feature.join("sibling.tlk");
-        std::fs::write(&sibling, "public struct Token {}\n").unwrap();
+        std::fs::write(&sibling, "pub struct Token {}\n").unwrap();
         std::fs::write(
             &consumer,
             "use super::sibling::{ Token }\nToken()\nsuper::sibling::Token()\n",
@@ -1145,7 +1143,7 @@ pub mod tests {
         let exportee_path = current_dir.join("dev/fixtures/exportee.tlk");
 
         // Create the test files
-        std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
+        std::fs::write(&exportee_path, "pub let exported = 42\n").unwrap();
         std::fs::write(
             &importer_path,
             "use package::exportee::{ exported }\nexported\n",

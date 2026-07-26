@@ -296,22 +296,22 @@ fn render_unicode_data(gcb_entries: &[(u32, u8)], char_entries: &[(u32, u8)]) ->
          use package::String::{ String }\n\n",
     );
     for (name, value) in CAT_NAMES {
-        let _ = writeln!(out, "public let _GC_{name}: Int = {value}");
+        let _ = writeln!(out, "pub let _GC_{name}: Int = {value}");
     }
     let _ = writeln!(
         out,
-        "\npublic func _gcb_table() -> String {{\n\t\"{gcb_literal}\"\n}}"
+        "\npub func _gcb_table() -> String {{\n\t\"{gcb_literal}\"\n}}"
     );
     out.push_str(
-        "\npublic let _CC_OTHER: Int = 0\n\
-         public let _CC_WHITESPACE: Int = 1\n\
-         public let _CC_ALPHABETIC: Int = 2\n\
-         public let _CC_NUMERIC: Int = 3\n\
-         public let _CC_ALPHANUMERIC: Int = 4\n",
+        "\npub let _CC_OTHER: Int = 0\n\
+         pub let _CC_WHITESPACE: Int = 1\n\
+         pub let _CC_ALPHABETIC: Int = 2\n\
+         pub let _CC_NUMERIC: Int = 3\n\
+         pub let _CC_ALPHANUMERIC: Int = 4\n",
     );
     let _ = writeln!(
         out,
-        "\npublic func _character_class_table() -> String {{\n\t\"{char_literal}\"\n}}"
+        "\npub func _character_class_table() -> String {{\n\t\"{char_literal}\"\n}}"
     );
     out
 }

@@ -417,7 +417,7 @@ impl<'a> ReplInput<'a> {
 
             match token.kind {
                 TokenKind::Newline | TokenKind::Semicolon => {}
-                TokenKind::Public => saw_public = true,
+                TokenKind::Pub | TokenKind::Public => saw_public = true,
                 TokenKind::Let
                 | TokenKind::Func
                 | TokenKind::Struct

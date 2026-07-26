@@ -374,6 +374,7 @@ impl<'a> Parser<'a> {
                 | Typealias
                 | Effect
                 | Use
+                | Pub
                 | Public
                 | Linear
                 | Macro
@@ -397,14 +398,37 @@ impl<'a> Parser<'a> {
         // Make sure to update next_root if adding a case here.
         use TokenKind::*;
         let node: Node = match &current.kind {
-            Public => {
-                self.consume(TokenKind::Public)?;
-                let mut node = self.decl(context, is_static)?;
-                // Set visibility to Public on the declaration
-                if let Node::Decl(ref mut decl) = node {
-                    decl.visibility = Visibility::Public;
+            Pub => {
+                let modifier_span = Span {
+                    file_id: self.file_id,
+                    start: current.start,
+                    end: current.end,
+                };
+                self.consume(TokenKind::Pub)?;
+                if self.peek_is(TokenKind::Pub) || self.peek_is(TokenKind::Public) {
+                    return Err(ParserError::RepeatedVisibilityModifier {
+                        span: modifier_span,
+                    });
                 }
+                let mut node = self.decl(context, is_static)?;
+                let Node::Decl(ref mut decl) = node else {
+                    return Err(ParserError::VisibilityNotAllowed {
+                        what: "a statement",
+                        span: modifier_span,
+                    });
+                };
+                Self::check_pub_admitted(&decl.kind, context, modifier_span)?;
+                decl.visibility = Visibility::Public;
                 node
+            }
+            Public => {
+                return Err(ParserError::LegacyPublicModifier {
+                    span: Span {
+                        file_id: self.file_id,
+                        start: current.start,
+                        end: current.end,
+                    },
+                });
             }
             Linear => {
                 // The prefix form moved to a tick-suffix attribute.
@@ -477,6 +501,50 @@ impl<'a> Parser<'a> {
         };
 
         Ok(node)
+    }
+
+    /// ADR 0042's declaration matrix: which parsed declarations admit a
+    /// `pub` modifier in which body context. Everything else rejects at
+    /// the modifier.
+    fn check_pub_admitted(
+        kind: &DeclKind,
+        context: BlockContext,
+        span: Span,
+    ) -> Result<(), ParserError> {
+        let reject = |what| Err(ParserError::VisibilityNotAllowed { what, span });
+        match kind {
+            DeclKind::Import(_) => reject("an import"),
+            DeclKind::Extend { .. } => reject("an extension"),
+            DeclKind::EnumVariant { .. } => reject("an enum case"),
+            DeclKind::Macro { .. } => Err(ParserError::MacroExportUnsupported { span }),
+            DeclKind::Associated { .. }
+            | DeclKind::MethodRequirement { .. }
+            | DeclKind::InitRequirement { .. } => reject("a protocol requirement"),
+            _ if context == BlockContext::Protocol => reject("a protocol member"),
+            DeclKind::Struct { .. }
+            | DeclKind::Enum { .. }
+            | DeclKind::Protocol { .. }
+            | DeclKind::TypeAlias(..)
+            | DeclKind::Effect { .. } => match context {
+                BlockContext::None
+                | BlockContext::Struct
+                | BlockContext::Enum
+                | BlockContext::Extend => Ok(()),
+                _ => reject("a local declaration"),
+            },
+            DeclKind::Func(_) | DeclKind::FuncSignature(_) | DeclKind::Let { .. } => {
+                match context {
+                    BlockContext::None => Ok(()),
+                    _ => reject("a local declaration"),
+                }
+            }
+            DeclKind::Property { .. } | DeclKind::Method { .. } | DeclKind::Init { .. } => {
+                match context {
+                    BlockContext::Struct | BlockContext::Enum | BlockContext::Extend => Ok(()),
+                    _ => reject("a local declaration"),
+                }
+            }
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]

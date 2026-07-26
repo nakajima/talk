@@ -97,6 +97,26 @@ pub fn rename_at(
         return None;
     }
 
+    // A rename never manufactures a collision (ADR 0042): refuse
+    // conservatively when the new name is already bound to a different
+    // symbol in any scope that binds the renamed one.
+    let creates_collision = module.resolved_names.scopes.values().any(|scope| {
+        let binds_symbol = scope
+            .types
+            .values()
+            .chain(scope.values.values())
+            .any(|&bound| bound == symbol);
+        binds_symbol
+            && scope
+                .types
+                .get(new_name)
+                .or_else(|| scope.values.get(new_name))
+                .is_some_and(|&existing| existing != symbol)
+    });
+    if creates_collision {
+        return None;
+    }
+
     let mut documents = Vec::new();
     for (idx, doc_id) in module.file_id_to_document.iter().enumerate() {
         let Some(ast) = module.asts.get(idx).and_then(|ast| ast.as_ref()) else {
@@ -1027,6 +1047,42 @@ mod tests {
             );
         }
         text
+    }
+
+    // ADR 0042: a rename never manufactures a collision — refuse when
+    // the new name is already bound in a scope binding the renamed
+    // symbol.
+    #[test]
+    fn rename_refuses_to_create_a_collision() {
+        let code = "let first = 1\nlet second = 2\nfirst + second\n";
+        let doc = DocumentInput {
+            id: "rename_collision.tlk".to_string(),
+            path: "rename_collision.tlk".to_string(),
+            version: 0,
+            text: code.to_string(),
+        };
+        let workspace = Workspace::new(vec![doc]).expect("workspace");
+        let offset = code.rfind("first").expect("target") as u32;
+        assert!(
+            rename_at(
+                &workspace,
+                &"rename_collision.tlk".to_string(),
+                offset,
+                "second",
+            )
+            .is_none(),
+            "rename onto an existing binding must refuse"
+        );
+        assert!(
+            rename_at(
+                &workspace,
+                &"rename_collision.tlk".to_string(),
+                offset,
+                "renamed",
+            )
+            .is_some(),
+            "an unclaimed name still renames"
+        );
     }
 
     #[test]

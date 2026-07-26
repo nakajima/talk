@@ -16,6 +16,25 @@ pub mod tests {
             .type_check()
     }
 
+    /// Parse, resolve, and type-check several sibling source files of one
+    /// module, keyed by path for `use package::...` imports.
+    pub fn check_files(files: &[(&str, &'static str)]) -> Driver<Typed> {
+        let sources: Vec<Source> = files
+            .iter()
+            .map(|(path, code)| {
+                Source::in_memory(std::path::PathBuf::from(path), (*code).to_string())
+            })
+            .collect();
+        let config =
+            DriverConfig::new("TypesTest").source_root(std::path::PathBuf::from("."));
+        Driver::new_bare(sources, config)
+            .parse()
+            .expect("parse failed")
+            .resolve_names()
+            .expect("name resolution failed")
+            .type_check()
+    }
+
     /// Compile a library module under an explicit module id (absolute
     /// identity, ADR 0038) against `deps`, returning its exported module.
     /// Register the result with `import_compiled(module, id)`.
@@ -101,6 +120,331 @@ pub mod tests {
             errors.is_empty(),
             "expected no type errors, got: {errors:?}"
         );
+    }
+
+    // ADR 0042: member accessibility is enforced with the access-site
+    // file. Members of a private nominal are file-private.
+    #[test]
+    fn cross_file_field_access_on_a_private_nominal_is_rejected() {
+        let t = check_files(&[
+            (
+                "./lib.tlk",
+                "// no-core\nstruct Secret {\n\tlet value: Int\n}\npub func make() -> Secret { Secret(value: 1) }",
+            ),
+            (
+                "./main.tlk",
+                "// no-core\nuse package::lib::{ make }\nlet s = make()\nlet v = s.value",
+            ),
+        ]);
+        assert!(
+            type_errors(&t).iter().any(|e| e.contains("not accessible")),
+            "expected an inaccessible-member error, got {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn cross_file_method_access_on_a_private_nominal_is_rejected() {
+        let t = check_files(&[
+            (
+                "./lib.tlk",
+                "// no-core\nstruct Secret {\n\tlet value: Int\n\tfunc reveal() -> Int { self.value }\n}\npub func make() -> Secret { Secret(value: 1) }",
+            ),
+            (
+                "./main.tlk",
+                "// no-core\nuse package::lib::{ make }\nlet v = make().reveal()",
+            ),
+        ]);
+        assert!(
+            type_errors(&t).iter().any(|e| e.contains("not accessible")),
+            "expected an inaccessible-member error, got {:?}",
+            type_errors(&t)
+        );
+    }
+
+    // ADR 0042: nested types are members — file-private unless marked
+    // `pub`, from both the constructor path and the annotation path.
+    #[test]
+    fn private_nested_types_are_file_private() {
+        let lib = "// no-core\npub struct Outer {\n\tstruct Hidden {}\n\tpub struct Shown {}\n}";
+        for main in [
+            "// no-core\nuse package::lib::{ Outer }\nlet bad = Outer.Hidden()",
+            "// no-core\nuse package::lib::{ Outer }\nfunc f(x: Outer.Hidden) -> Int { 1 }",
+        ] {
+            let t = check_files(&[("./lib.tlk", lib), ("./main.tlk", main)]);
+            assert!(
+                t.has_errors(),
+                "expected an error for {main:?}, got {:?}",
+                t.diagnostics()
+            );
+        }
+
+        let t = check_files(&[
+            ("./lib.tlk", lib),
+            (
+                "./main.tlk",
+                "// no-core\nuse package::lib::{ Outer }\nlet ok = Outer.Shown()",
+            ),
+        ]);
+        assert!(
+            !t.has_errors(),
+            "expected the public nested type to resolve, got {:?}",
+            t.diagnostics()
+        );
+    }
+
+    // ADR 0042 §7: a compiled module ships its exported names and their
+    // semantic closure, not unrelated private payload — but private
+    // suppliers referenced by public contracts stay.
+    #[test]
+    fn module_interface_omits_unrelated_private_payload() {
+        use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        let module = compile_library(
+            "Trimmed",
+            ModuleId::External(11),
+            "struct Unrelated {\n\tlet n: Int\n}\nfunc helper() -> Int { 1 }\nstruct Supplier {}\npub struct Open {\n\tlet supplier: Supplier\n\n\tinit() {\n\t\tself.supplier = Supplier()\n\t\tself\n\t}\n\n\tpub static func make() -> Open {\n\t\tOpen()\n\t}\n}",
+            ModuleEnvironment::default(),
+        );
+
+        let named = |name: &str| {
+            module
+                .symbol_names
+                .iter()
+                .find(|(_, n)| n.as_str() == name)
+                .map(|(&symbol, _)| symbol)
+        };
+        // Exported and reachable declarations are in the interface.
+        let open = named("Open").expect("Open exported");
+        assert!(module.types.catalog.structs.contains_key(&open));
+        assert!(module.types.schemes.contains_key(&named("make").expect("make exported")));
+        // Unrelated private declarations are not.
+        assert_eq!(named("Unrelated"), None, "private struct leaked");
+        assert_eq!(named("helper"), None, "private helper leaked");
+        // A private field type referenced by a public nominal stays as
+        // a supplier: layout and teardown facts cross the seam.
+        let supplier = named("Supplier").expect("supplier info travels");
+        assert!(module.types.catalog.structs.contains_key(&supplier));
+    }
+
+    // ADR 0042 §1: a conformance is exported only when its COMPLETE
+    // conclusion — head, protocol arguments, context, associated
+    // bindings — is publicly nameable. A private type in the instance
+    // head keeps the row file-private.
+    #[test]
+    fn module_interface_omits_conformances_with_private_conclusions() {
+        use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        let module = compile_library(
+            "RowTrim",
+            ModuleId::External(12),
+            "struct Secret {}\npub struct Box<T> {}\npub protocol Marker {}\nextend Box<Secret>: Marker {}\nextend Box<Int>: Marker {}",
+            ModuleEnvironment::default(),
+        );
+
+        let marker = module
+            .symbol_names
+            .iter()
+            .find(|(_, n)| n.as_str() == "Marker")
+            .map(|(&s, _)| s)
+            .expect("Marker exported");
+        let rows: Vec<_> = module
+            .types
+            .catalog
+            .conformances
+            .values()
+            .filter(|row| row.protocol.protocol == marker)
+            .collect();
+        assert_eq!(
+            rows.len(),
+            1,
+            "only the publicly-nameable conclusion may export: {rows:?}"
+        );
+        // Secret never enters the interface through the omitted row.
+        assert!(
+            !module.symbol_names.values().any(|n| n == "Secret"),
+            "private conclusion symbol leaked into the interface"
+        );
+    }
+
+    // ADR 0042: an explicit initializer needs its own `pub`; only the
+    // synthesized memberwise initializer inherits the nominal's
+    // visibility.
+    #[test]
+    fn explicit_initializer_needs_its_own_pub() {
+        let lib = "// no-core\npub struct Session {\n\tlet token: Int\n\n\tinit(token: Int) {\n\t\tself.token = token\n\t\tself\n\t}\n\n\tpub static func open() -> Session {\n\t\tSession(token: 1)\n\t}\n}";
+        let t = check_files(&[
+            ("./lib.tlk", lib),
+            (
+                "./main.tlk",
+                "// no-core\nuse package::lib::{ Session }\nlet bad = Session(token: 2)",
+            ),
+        ]);
+        assert!(
+            type_errors(&t).iter().any(|e| e.contains("not accessible")),
+            "expected an inaccessible-member error, got {:?}",
+            type_errors(&t)
+        );
+
+        let t = check_files(&[
+            ("./lib.tlk", lib),
+            (
+                "./main.tlk",
+                "// no-core\nuse package::lib::{ Session }\nlet ok = Session.open()",
+            ),
+        ]);
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn private_static_is_rejected_across_files() {
+        let t = check_files(&[
+            (
+                "./lib.tlk",
+                "// no-core\npub struct Tool {\n\tstatic func hidden() -> Int { 1 }\n}",
+            ),
+            (
+                "./main.tlk",
+                "// no-core\nuse package::lib::{ Tool }\nlet v = Tool.hidden()",
+            ),
+        ]);
+        assert!(
+            type_errors(&t).iter().any(|e| e.contains("not accessible")),
+            "expected an inaccessible-member error, got {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn unmarked_member_of_a_public_nominal_is_file_private() {
+        let t = check_files(&[
+            (
+                "./lib.tlk",
+                "// no-core\npub struct Point {\n\tpub let x: Int\n\n\tfunc helper() -> Int { self.x }\n}",
+            ),
+            (
+                "./main.tlk",
+                "// no-core\nuse package::lib::{ Point }\nlet v = Point(x: 1).helper()",
+            ),
+        ]);
+        assert!(
+            type_errors(&t).iter().any(|e| e.contains("not accessible")),
+            "expected an inaccessible-member error, got {:?}",
+            type_errors(&t)
+        );
+    }
+
+    // A witness stays reachable through its public requirement even
+    // though it is not a source-visible inherent member (ADR 0042 §1).
+    #[test]
+    fn private_witness_dispatches_through_public_requirement() {
+        let t = check_files(&[
+            (
+                "./lib.tlk",
+                "// no-core\npub protocol Show {\n\tfunc show() -> Int\n}\npub struct Thing {}\nextend Thing: Show {\n\tfunc show() -> Int { 7 }\n}",
+            ),
+            (
+                "./main.tlk",
+                "// no-core\nuse package::lib::{ Thing, Show }\nlet n = Thing().show()",
+            ),
+        ]);
+        assert_clean(&t);
+    }
+
+    // ADR 0042 §3: a public declaration cannot expose a private
+    // declaration through its source-facing contract.
+    #[test]
+    fn public_signature_exposing_a_private_type_is_rejected() {
+        let t = check("// no-core\nstruct Secret {}\npub func reveal() -> Secret { Secret() }");
+        assert!(
+            type_errors(&t).iter().any(|e| e.contains("exposes")),
+            "expected a public-api-exposes-private error, got {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn public_let_of_a_private_type_is_rejected() {
+        let t = check("// no-core\nstruct Secret {}\npub let secret = Secret()");
+        assert!(
+            type_errors(&t).iter().any(|e| e.contains("exposes")),
+            "expected a public-api-exposes-private error, got {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn public_member_contracts_expose_no_private_types() {
+        let t = check(
+            "// no-core\nstruct Secret {}\npub struct Box {\n\tpub func reveal() -> Secret { Secret() }\n}",
+        );
+        assert!(
+            type_errors(&t).iter().any(|e| e.contains("exposes")),
+            "expected a public-api-exposes-private error, got {:?}",
+            type_errors(&t)
+        );
+
+        let t = check("// no-core\nstruct Secret {}\npub struct Box {\n\tpub let s: Secret\n}");
+        assert!(
+            type_errors(&t).iter().any(|e| e.contains("exposes")),
+            "expected a public-api-exposes-private error, got {:?}",
+            type_errors(&t)
+        );
+
+        // The synthesized memberwise initializer's parameters are part
+        // of the public API closure even over private fields.
+        let t = check("// no-core\nstruct Secret {}\npub struct Box {\n\tlet s: Secret\n}");
+        assert!(
+            type_errors(&t).iter().any(|e| e.contains("exposes")),
+            "expected a public-api-exposes-private error, got {:?}",
+            type_errors(&t)
+        );
+
+        let t = check(
+            "// no-core\nstruct Secret {}\npub enum Holder {\n\tcase empty\n\tcase full(Secret)\n}",
+        );
+        assert!(
+            type_errors(&t).iter().any(|e| e.contains("exposes")),
+            "expected a public-api-exposes-private error, got {:?}",
+            type_errors(&t)
+        );
+    }
+
+    #[test]
+    fn private_body_dependencies_stay_legal() {
+        let t = check(
+            "// no-core\nstruct Secret {\n\tlet n: Int\n}\npub func ok() -> Int { Secret(n: 1).n }",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn public_signature_over_public_types_is_clean() {
+        let t = check(
+            "// no-core\npub struct Point {\n\tpub let x: Int\n}\npub func origin() -> Point { Point(x: 0) }",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn private_members_stay_accessible_in_their_declaring_file() {
+        let t = check(
+            "// no-core\nstruct Secret {\n\tlet value: Int\n\tfunc reveal() -> Int { self.value }\n}\nlet v = Secret(value: 1).reveal()\nlet w = Secret(value: 2).value",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
+    fn cross_file_members_of_a_public_nominal_are_accessible() {
+        let t = check_files(&[
+            (
+                "./lib.tlk",
+                "// no-core\npub struct Point {\n\tpub let x: Int\n\tpub func double() -> Int { self.x + self.x }\n}",
+            ),
+            (
+                "./main.tlk",
+                "// no-core\nuse package::lib::{ Point }\nlet p = Point(x: 2)\nlet a = p.x\nlet b = p.double()",
+            ),
+        ]);
+        assert_clean(&t);
     }
 
     /// LIT-01: every integer literal must fit the signed 64-bit range, with
@@ -2527,7 +2871,7 @@ pub mod tests {
     #[test]
     fn explicit_parameter_modes_apply_in_protocol_requirements() {
         let t = check(
-            "// no-core\npublic protocol Levelled {\n\tfunc level(borrow rhs: Self) -> Self\n\tfunc absorb(consume rhs: Self) -> Self\n}",
+            "// no-core\npub protocol Levelled {\n\tfunc level(borrow rhs: Self) -> Self\n\tfunc absorb(consume rhs: Self) -> Self\n}",
         );
         assert_clean(&t);
     }
@@ -3815,7 +4159,7 @@ pub mod tests {
                     "App.tlk".into(),
                     "use package::Lib::{ helper }\nlet a = helper()\n()",
                 ),
-                Source::in_memory("Lib.tlk".into(), "public func helper() -> Int { 1 }\n"),
+                Source::in_memory("Lib.tlk".into(), "pub func helper() -> Int { 1 }\n"),
             ],
             DriverConfig::new("TypesTest"),
         )
@@ -5243,7 +5587,7 @@ mod with_core {
         let module_a = compile_library(
             "A",
             id_a,
-            "public struct Wrapper {\n\tlet f: () -> Int\n}",
+            "pub struct Wrapper {\n\tpub let f: () -> Int\n}",
             ModuleEnvironment::default(),
         );
 
@@ -5296,7 +5640,7 @@ mod with_core {
         let module_s = compile_library(
             "S",
             id_s,
-            "public struct Box<T> {\n\tlet value: T\n}",
+            "pub struct Box<T> {\n\tlet value: T\n}",
             ModuleEnvironment::default(),
         );
 
@@ -5308,12 +5652,12 @@ mod with_core {
         let module_a = sibling(
             "A",
             id_a,
-            "use S::{ Box }\nextend Box<Int> {\n\tpublic func tag() -> Int { 1 }\n}",
+            "use S::{ Box }\nextend Box<Int> {\n\tpub func tag() -> Int { 1 }\n}",
         );
         let module_b = sibling(
             "B",
             id_b,
-            "use S::{ Box }\nextend Box<Int> {\n\tpublic func tag() -> Int { 2 }\n}",
+            "use S::{ Box }\nextend Box<Int> {\n\tpub func tag() -> Int { 2 }\n}",
         );
 
         let mut modules = ModuleEnvironment::default();
@@ -5361,7 +5705,7 @@ mod with_core {
         let module_a = compile_library(
             "A",
             id_a,
-            "public struct Hello {\n\tlet x: Int\n}\npublic func make(v: Int) -> Hello { Hello(x: v) }",
+            "pub struct Hello {\n\tpub let x: Int\n}\npub func make(v: Int) -> Hello { Hello(x: v) }",
             ModuleEnvironment::default(),
         );
 
@@ -5418,7 +5762,7 @@ mod with_core {
         let module_a = compile_library(
             "A",
             id_a,
-            "public typealias UserId = Int\npublic func make() -> UserId { 1 }",
+            "pub typealias UserId = Int\npub func make() -> UserId { 1 }",
             ModuleEnvironment::default(),
         );
 
@@ -6690,7 +7034,7 @@ func width<static N: Int>() -> Int { N }",
         let module_a = super::tests::compile_library(
             "A",
             id_a,
-            "public struct Grid<static Rows: Int> {}\npublic func grow<static N: Int>(consume g: Grid<N>) -> Grid<N + 1> { Grid() }",
+            "pub struct Grid<static Rows: Int> {}\npub func grow<static N: Int>(consume g: Grid<N>) -> Grid<N + 1> { Grid() }",
             ModuleEnvironment::default(),
         );
 
@@ -8164,7 +8508,7 @@ mod nested_types {
         let module_a = compile_library(
             "A",
             id_a,
-            "public func fizz(a: Int) -> Int {\n\ta\n}\npublic func fizz(flag: Bool) -> Bool {\n\tflag\n}",
+            "pub func fizz(a: Int) -> Int {\n\ta\n}\npub func fizz(flag: Bool) -> Bool {\n\tflag\n}",
             ModuleEnvironment::default(),
         );
 
@@ -8207,7 +8551,7 @@ mod nested_types {
         let module_a = compile_library(
             "A",
             id_a,
-            "public func fizz(a: Int) -> Int {\n\ta\n}\npublic func fizz(flag: Bool) -> Bool {\n\tflag\n}",
+            "pub func fizz(a: Int) -> Int {\n\ta\n}\npub func fizz(flag: Bool) -> Bool {\n\tflag\n}",
             ModuleEnvironment::default(),
         );
 
@@ -8244,7 +8588,7 @@ mod nested_types {
     #[test]
     fn duplicate_public_full_names_still_collide() {
         let t = check(
-            "// no-core\npublic func fizz(a: Int) -> Int {\n\ta\n}\npublic func fizz(a: Int) -> Int {\n\ta\n}",
+            "// no-core\npub func fizz(a: Int) -> Int {\n\ta\n}\npub func fizz(a: Int) -> Int {\n\ta\n}",
         );
         let diagnostics = all_diagnostics(&t);
         assert!(
@@ -8268,7 +8612,7 @@ mod nested_types {
         let module_a = compile_library(
             "A",
             id_a,
-            "public func split(foo fizz) -> Int {\n\tfizz\n}\npublic struct Point {\n\tlet x: Int\n\n\tpublic func scaled(by factor: Int) -> Int {\n\t\tfactor\n\t}\n}",
+            "pub func split(foo fizz) -> Int {\n\tfizz\n}\npub struct Point {\n\tlet x: Int\n\n\tpub func scaled(by factor: Int) -> Int {\n\t\tfactor\n\t}\n}",
             ModuleEnvironment::default(),
         );
 

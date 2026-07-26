@@ -224,6 +224,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             store: &mut *self.store,
             errors: &mut self.diagnostics.errors,
             catalog: &*self.catalog,
+            module_id: self.module_id,
             schemes: &*self.schemes,
             mono: &*self.mono,
             instantiations: &mut self.artifacts.instantiations,

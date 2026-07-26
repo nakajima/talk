@@ -711,11 +711,11 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
 
 ## Lexical and module basics
 
-Comments are `//` line comments. Identifiers are ordinary words; type names are conventionally upper camel case. Statements are separated by newlines; semicolons are accepted but conventionally omitted. Blocks are `{ ... }`. Top-level declarations may be prefixed with `public` to export them. Imports are explicit: `use package::path::{ Foo, bar }`, `use package::path::{ Foo as LocalFoo }`, `use package::path`, or dependency imports such as `use dependency::{ Foo }` / `use dependency`.
+Comments are `//` line comments. Identifiers are ordinary words; type names are conventionally upper camel case. Statements are separated by newlines; semicolons are accepted but conventionally omitted. Blocks are `{ ... }`. Top-level declarations may be prefixed with `pub` to export them. Imports are explicit: `use package::path::{ Foo, bar }`, `use package::path::{ Foo as LocalFoo }`, `use package::path`, or dependency imports such as `use dependency::{ Foo }` / `use dependency`.
 
 ## Declarations
 
-    public let name: Type = expr
+    pub let name: Type = expr
     func f<T>(x: T, y: Int) -> Result { body }
     struct Point {
         let x: Int

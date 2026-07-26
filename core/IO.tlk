@@ -4,7 +4,7 @@ use package::Operators::{ Add, Comparable, Equatable }
 use package::String::{ String }
 use package::Showable::{ Showable }
 
-public enum IORequest {
+pub enum IORequest {
 	case read(Int, RawPtr, Int)
 	case write(Int, RawPtr, Int)
 	case open(RawPtr, Int, Int)
@@ -31,65 +31,65 @@ public enum IORequest {
 	case exit(Int)
 }
 
-public effect 'io(request: IORequest) -> Int
+pub effect 'io(request: IORequest) -> Int
 
-public let EPERM: Int = -1
-public let ENOENT: Int = -2
-public let EIO: Int = -5
-public let EBADF: Int = -9
-public let EAGAIN: Int = -11
-public let EACCES: Int = -13
-public let EEXIST: Int = -17
-public let ENOTDIR: Int = -20
-public let EISDIR: Int = -21
-public let EINVAL: Int = -22
-public let EMFILE: Int = -24
-public let ENOSPC: Int = -28
-public let EPIPE: Int = -32
-public let ETIMEDOUT: Int = -110
-public let ECONNREFUSED: Int = -111
+pub let EPERM: Int = -1
+pub let ENOENT: Int = -2
+pub let EIO: Int = -5
+pub let EBADF: Int = -9
+pub let EAGAIN: Int = -11
+pub let EACCES: Int = -13
+pub let EEXIST: Int = -17
+pub let ENOTDIR: Int = -20
+pub let EISDIR: Int = -21
+pub let EINVAL: Int = -22
+pub let EMFILE: Int = -24
+pub let ENOSPC: Int = -28
+pub let EPIPE: Int = -32
+pub let ETIMEDOUT: Int = -110
+pub let ECONNREFUSED: Int = -111
 
-public let POLLIN: Int = 1
-public let POLLOUT: Int = 4
-public let POLLERR: Int = 8
-public let POLLHUP: Int = 16
+pub let POLLIN: Int = 1
+pub let POLLOUT: Int = 4
+pub let POLLERR: Int = 8
+pub let POLLHUP: Int = 16
 
-public let O_RDONLY: Int = 0
-public let O_WRONLY: Int = 1
-public let O_RDWR: Int = 2
-public let O_CREAT: Int = 64
-public let O_TRUNC: Int = 512
-public let O_APPEND: Int = 1024
-public let O_NONBLOCK: Int = 2048
+pub let O_RDONLY: Int = 0
+pub let O_WRONLY: Int = 1
+pub let O_RDWR: Int = 2
+pub let O_CREAT: Int = 64
+pub let O_TRUNC: Int = 512
+pub let O_APPEND: Int = 1024
+pub let O_NONBLOCK: Int = 2048
 
-public let S_IRUSR: Int = 256
-public let S_IWUSR: Int = 128
-public let S_IXUSR: Int = 64
-public let S_IRGRP: Int = 32
-public let S_IWGRP: Int = 16
-public let S_IXGRP: Int = 8
-public let S_IROTH: Int = 4
-public let S_IWOTH: Int = 2
-public let S_IXOTH: Int = 1
+pub let S_IRUSR: Int = 256
+pub let S_IWUSR: Int = 128
+pub let S_IXUSR: Int = 64
+pub let S_IRGRP: Int = 32
+pub let S_IWGRP: Int = 16
+pub let S_IXGRP: Int = 8
+pub let S_IROTH: Int = 4
+pub let S_IWOTH: Int = 2
+pub let S_IXOTH: Int = 1
 
-public let STDIN_FD: Int = 0
-public let STDOUT_FD: Int = 1
-public let STDERR_FD: Int = 2
+pub let STDIN_FD: Int = 0
+pub let STDOUT_FD: Int = 1
+pub let STDERR_FD: Int = 2
 
-public func sleep(ms: Int) 'io -> Int {
+pub func sleep(ms: Int) 'io -> Int {
 	'io(request: .sleep(ms))
 }
 
 // Low-level open for raw pointers. `path` is expected to point to a
 // NUL-terminated C string.
-public func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {
+pub func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {
 	'io(request: .open(path, flags, mode))
 }
 
 // High-level open for Talk strings: copy the path into fresh memory with
 // a NUL terminator (allocations are zero-filled, so the terminator comes
 // free) and open through the C-string path.
-public func open_path(path: String, flags: Int, mode: Int) '[io, alloc] -> Int {
+pub func open_path(path: String, flags: Int, mode: Int) '[io, alloc] -> Int {
 	let buf = _alloc<Byte>(count: path.byte_count + 1)
 	_copy(from: path.storage.base, to: buf, length: path.byte_count)
 	let fd = _io_open(path: buf, flags: flags, mode: mode)
@@ -97,76 +97,76 @@ public func open_path(path: String, flags: Int, mode: Int) '[io, alloc] -> Int {
 	fd
 }
 
-public func _io_read(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
+pub func _io_read(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
 	'io(request: .read(fd, buf, count))
 }
 
-public func _io_write(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
+pub func _io_write(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
 	'io(request: .write(fd, buf, count))
 }
 
-public func _io_close(fd: Int) 'io -> Int {
+pub func _io_close(fd: Int) 'io -> Int {
 	'io(request: .close(fd))
 }
 
-public func _io_cwd_len() 'io -> Int {
+pub func _io_cwd_len() 'io -> Int {
 	'io(request: .cwd_len)
 }
 
-public func _io_cwd_copy(buf: RawPtr) 'io -> Int {
+pub func _io_cwd_copy(buf: RawPtr) 'io -> Int {
 	'io(request: .cwd_copy(buf))
 }
 
-public func _io_getenv_len(name: RawPtr, name_len: Int) 'io -> Int {
+pub func _io_getenv_len(name: RawPtr, name_len: Int) 'io -> Int {
 	'io(request: .getenv_len(name, name_len))
 }
 
-public func _io_getenv_copy(name: RawPtr, name_len: Int, buf: RawPtr) 'io -> Int {
+pub func _io_getenv_copy(name: RawPtr, name_len: Int, buf: RawPtr) 'io -> Int {
 	'io(request: .getenv_copy(name, name_len, buf))
 }
 
-public func _io_argc() 'io -> Int {
+pub func _io_argc() 'io -> Int {
 	'io(request: .argc)
 }
 
-public func _io_arg_len(index: Int) 'io -> Int {
+pub func _io_arg_len(index: Int) 'io -> Int {
 	'io(request: .arg_len(index))
 }
 
-public func _io_arg_copy(index: Int, buf: RawPtr) 'io -> Int {
+pub func _io_arg_copy(index: Int, buf: RawPtr) 'io -> Int {
 	'io(request: .arg_copy(index, buf))
 }
 
-public func _io_dir_count(path: RawPtr) 'io -> Int {
+pub func _io_dir_count(path: RawPtr) 'io -> Int {
 	'io(request: .dir_count(path))
 }
 
-public func _io_dir_entry_kind(path: RawPtr, index: Int) 'io -> Int {
+pub func _io_dir_entry_kind(path: RawPtr, index: Int) 'io -> Int {
 	'io(request: .dir_entry_kind(path, index))
 }
 
-public func _io_dir_entry_len(path: RawPtr, index: Int) 'io -> Int {
+pub func _io_dir_entry_len(path: RawPtr, index: Int) 'io -> Int {
 	'io(request: .dir_entry_len(path, index))
 }
 
-public func _io_dir_entry_copy(path: RawPtr, index: Int, buf: RawPtr) 'io -> Int {
+pub func _io_dir_entry_copy(path: RawPtr, index: Int, buf: RawPtr) 'io -> Int {
 	'io(request: .dir_entry_copy(path, index, buf))
 }
 
-public func _io_exit(code: Int) 'io -> Never {
+pub func _io_exit(code: Int) 'io -> Never {
 	'io(request: .exit(code))
 	loop {}
 }
 
-public func _io_ctl(fd: Int, op: Int, arg: Int) 'io -> Int {
+pub func _io_ctl(fd: Int, op: Int, arg: Int) 'io -> Int {
 	'io(request: .ctl(fd, op, arg))
 }
 
-public func _io_poll(fds: RawPtr, count: Int, timeout: Int) 'io -> Int {
+pub func _io_poll(fds: RawPtr, count: Int, timeout: Int) 'io -> Int {
 	'io(request: .poll(fds, count, timeout))
 }
 
-public func is_error(result: Int) -> Bool {
+pub func is_error(result: Int) -> Bool {
 	result < 0
 }
 
@@ -175,17 +175,17 @@ public func is_error(result: Int) -> Bool {
 // capacity the caller actually allocated before it becomes a view's
 // length. A lying handler yields wrong data, never an out-of-bounds
 // view. `_io_clamp(n, n)` sanitizes a bare length (negative becomes 0).
-public func _io_clamp(count: Int, capacity: Int) -> Int {
+pub func _io_clamp(count: Int, capacity: Int) -> Int {
 	if count < 0 { return 0 }
 	if count > capacity { return capacity }
 	count
 }
 
-public func write_string(fd: Int, s: String) -> Int {
+pub func write_string(fd: Int, s: String) -> Int {
 	@_ir(fd, s.storage.base, s.byte_count) { %? = io 1 $0 $1 $2 }
 }
 
-public func print_raw(_ s: String) -> Int {
+pub func print_raw(_ s: String) -> Int {
 	write_string(fd: STDOUT_FD, s: s)
 }
 
@@ -196,6 +196,6 @@ func _print_line(s: String) -> () {
 	()
 }
 
-public func print<T: Showable>(_ value: T) -> () {
+pub func print<T: Showable>(_ value: T) -> () {
 	_print_line(s: value.show())
 }

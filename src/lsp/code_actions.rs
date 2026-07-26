@@ -444,6 +444,19 @@ fn parser_quick_fixes(
                 Some(true),
             )]
         }
+        ParserError::LegacyPublicModifier { span } => {
+            let Some(range) = byte_span_to_range_utf16(text, span.start, span.end) else {
+                return vec![];
+            };
+            vec![quick_fix_action(
+                uri,
+                "Replace `public` with `pub`".to_string(),
+                vec![TextEdit::new(range, "pub".to_string())],
+                diagnostic,
+                diag_range,
+                Some(true),
+            )]
+        }
         ParserError::ExplicitSelfParameterNotAllowed { parameter } => {
             let Some((start, end)) = comma_list_item_removal_range(
                 text,

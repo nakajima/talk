@@ -1,4 +1,4 @@
-public protocol ColorfulString where Self: Showable {
+pub protocol ColorfulString where Self: Showable {
 	consuming func bold() -> String {
 		wrap(string: self.show(), code: "1")
 	}

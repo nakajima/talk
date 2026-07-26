@@ -1,38 +1,38 @@
 // no-core
-public protocol Add<RHS> {
+pub protocol Add<RHS> {
 	associated Ret
 	func add(_ rhs: RHS) -> Ret
 }
 
-public protocol Subtract<RHS> {
+pub protocol Subtract<RHS> {
 	associated Ret
 
 	func minus(_ rhs: RHS) -> Ret
 }
 
-public protocol Multiply<RHS> {
+pub protocol Multiply<RHS> {
 	associated Ret
 
 	func multiply(_ rhs: RHS) -> Ret
 }
 
-public protocol Divide<RHS> {
+pub protocol Divide<RHS> {
 	associated Ret
 
 	func divide(_ rhs: RHS) -> Ret
 }
 
-public protocol SubscriptRead<I> {
+pub protocol SubscriptRead<I> {
 	associated T
 
 	func subscript_read(at: I) -> T
 }
 
-public protocol SubscriptWrite<I, T> {
+pub protocol SubscriptWrite<I, T> {
 	mut func subscript_write(at: I, consume value: T) -> Void
 }
 
-public protocol Equatable<RHS = Self> {
+pub protocol Equatable<RHS = Self> {
 	func equals(_ rhs: RHS) -> Bool
 
 	func notEquals(_ rhs: RHS) -> Bool {
@@ -44,217 +44,217 @@ public protocol Equatable<RHS = Self> {
 	}
 }
 
-public protocol Negatable {
+pub protocol Negatable {
 	associated Ret
 
 	func negated() -> Ret
 }
 
-public protocol BitwiseAnd<RHS> {
+pub protocol BitwiseAnd<RHS> {
 	associated Ret
 
 	func bitAnd(_ rhs: RHS) -> Ret
 }
 
-public protocol BitwiseOr<RHS> {
+pub protocol BitwiseOr<RHS> {
 	associated Ret
 
 	func bitOr(_ rhs: RHS) -> Ret
 }
 
-public protocol BitwiseXor<RHS> {
+pub protocol BitwiseXor<RHS> {
 	associated Ret
 
 	func bitXor(_ rhs: RHS) -> Ret
 }
 
-public protocol ShiftLeft<RHS> {
+pub protocol ShiftLeft<RHS> {
 	associated Ret
 
 	func shiftLeft(_ rhs: RHS) -> Ret
 }
 
-public protocol ShiftRight<RHS> {
+pub protocol ShiftRight<RHS> {
 	associated Ret
 
 	func shiftRight(_ rhs: RHS) -> Ret
 }
 
-public protocol Complement {
+pub protocol Complement {
 	associated Ret
 
 	func complement() -> Ret
 }
 
-public protocol Not {
+pub protocol Not {
 	associated Ret
 
 	func not() -> Ret
 }
 
 extend Bool: Not {
-	func not() -> Bool {
+	pub func not() -> Bool {
 		@_ir { %? = cmp Bool %0 == false }
 	}
 }
 
 extend Int: Add<Int> {
-	func add(_ rhs: Int) -> Int {
+	pub func add(_ rhs: Int) -> Int {
 		@_ir { %? = add Int %0 %1 }
 	}
 }
 
 extend Float: Add<Float> {
-	func add(_ rhs: Float) -> Float {
+	pub func add(_ rhs: Float) -> Float {
 		@_ir { %? = add Float %0 %1 }
 	}
 }
 
 extend Int: Subtract<Int> {
-	func minus(_ rhs: Int) -> Int {
+	pub func minus(_ rhs: Int) -> Int {
 		@_ir { %? = sub Int %0 %1 }
 	}
 }
 
 extend Float: Subtract<Float> {
-	func minus(_ rhs: Float) -> Float {
+	pub func minus(_ rhs: Float) -> Float {
 		@_ir { %? = sub Float %0 %1 }
 	}
 }
 
 extend Int: Multiply<Int> {
-	func multiply(_ rhs: Int) -> Int {
+	pub func multiply(_ rhs: Int) -> Int {
 		@_ir { %? = mul Int %0 %1 }
 	}
 }
 
 extend Float: Multiply<Float> {
-	func multiply(_ rhs: Float) -> Float {
+	pub func multiply(_ rhs: Float) -> Float {
 		@_ir { %? = mul Float %0 %1 }
 	}
 }
 
 extend Int: Divide<Int> {
-	func divide(_ rhs: Int) -> Int {
+	pub func divide(_ rhs: Int) -> Int {
 		@_ir { %? = div Int %0 %1 }
 	}
 }
 
 extend Float: Divide<Float> {
-	func divide(_ rhs: Float) -> Float {
+	pub func divide(_ rhs: Float) -> Float {
 		@_ir { %? = div Float %0 %1 }
 	}
 }
 
 extend Int: Equatable<Int> {
-	func equals(_ rhs: Int) -> Bool {
+	pub func equals(_ rhs: Int) -> Bool {
 		@_ir { %? = cmp Int %0 == %1 }
 	}
 }
 
 extend Float: Equatable<Float> {
-	func equals(_ rhs: Float) -> Bool {
+	pub func equals(_ rhs: Float) -> Bool {
 		@_ir { %? = cmp Float %0 == %1 }
 	}
 }
 
 extend Bool: Equatable<Bool> {
-	func equals(_ rhs: Bool) -> Bool {
+	pub func equals(_ rhs: Bool) -> Bool {
 		@_ir { %? = cmp Bool %0 == %1 }
 	}
 }
 
 extend Byte: Equatable<Byte> {
-	func equals(_ rhs: Byte) -> Bool {
+	pub func equals(_ rhs: Byte) -> Bool {
 		@_ir { %? = cmp Byte %0 == %1 }
 	}
 }
 
 extend Int: Negatable {
-	func negated() -> Int {
+	pub func negated() -> Int {
 		@_ir { %? = sub Int 0 %0 }
 	}
 }
 
 extend Int: BitwiseAnd<Int> {
-	func bitAnd(_ rhs: Int) -> Int {
+	pub func bitAnd(_ rhs: Int) -> Int {
 		@_ir { %? = and Int %0 %1 }
 	}
 }
 
 extend Int: BitwiseOr<Int> {
-	func bitOr(_ rhs: Int) -> Int {
+	pub func bitOr(_ rhs: Int) -> Int {
 		@_ir { %? = or Int %0 %1 }
 	}
 }
 
 extend Int: BitwiseXor<Int> {
-	func bitXor(_ rhs: Int) -> Int {
+	pub func bitXor(_ rhs: Int) -> Int {
 		@_ir { %? = xor Int %0 %1 }
 	}
 }
 
 extend Int: ShiftLeft<Int> {
-	func shiftLeft(_ rhs: Int) -> Int {
+	pub func shiftLeft(_ rhs: Int) -> Int {
 		@_ir { %? = shl Int %0 %1 }
 	}
 }
 
 extend Int: ShiftRight<Int> {
-	func shiftRight(_ rhs: Int) -> Int {
+	pub func shiftRight(_ rhs: Int) -> Int {
 		@_ir { %? = shr Int %0 %1 }
 	}
 }
 
 extend Int: Complement {
-	func complement() -> Int {
+	pub func complement() -> Int {
 		@_ir { %? = not Int %0 }
 	}
 }
 
 extend Byte: BitwiseAnd<Byte> {
-	func bitAnd(_ rhs: Byte) -> Byte {
+	pub func bitAnd(_ rhs: Byte) -> Byte {
 		@_ir { %? = and Byte %0 %1 }
 	}
 }
 
 extend Byte: BitwiseOr<Byte> {
-	func bitOr(_ rhs: Byte) -> Byte {
+	pub func bitOr(_ rhs: Byte) -> Byte {
 		@_ir { %? = or Byte %0 %1 }
 	}
 }
 
 extend Byte: BitwiseXor<Byte> {
-	func bitXor(_ rhs: Byte) -> Byte {
+	pub func bitXor(_ rhs: Byte) -> Byte {
 		@_ir { %? = xor Byte %0 %1 }
 	}
 }
 
 extend Byte: ShiftLeft<Int> {
-	func shiftLeft(_ rhs: Int) -> Byte {
+	pub func shiftLeft(_ rhs: Int) -> Byte {
 		@_ir { %? = shl Byte %0 %1 }
 	}
 }
 
 extend Byte: ShiftRight<Int> {
-	func shiftRight(_ rhs: Int) -> Byte {
+	pub func shiftRight(_ rhs: Int) -> Byte {
 		@_ir { %? = shr Byte %0 %1 }
 	}
 }
 
 extend Byte: Complement {
-	func complement() -> Byte {
+	pub func complement() -> Byte {
 		@_ir { %? = not Byte %0 }
 	}
 }
 
 extend Float: Negatable {
-	func negated() -> Float {
+	pub func negated() -> Float {
 		@_ir { %? = sub Float 0.0 %0 }
 	}
 }
 
-public protocol Comparable<RHS>: Equatable<RHS> {
+pub protocol Comparable<RHS>: Equatable<RHS> {
 	func gt(_ rhs: RHS) -> Bool
 
 	func gte(_ rhs: RHS) -> Bool {
@@ -271,7 +271,7 @@ public protocol Comparable<RHS>: Equatable<RHS> {
 }
 
 extend Int: Comparable<Int> {
-	func gt(_ rhs: Int) -> Bool {
+	pub func gt(_ rhs: Int) -> Bool {
 		@_ir { %? = cmp Int %0 > %1 }
 	}
 
@@ -279,21 +279,21 @@ extend Int: Comparable<Int> {
 	// defaults build them from `gt`/`equals` with short-circuit
 	// branches, which blocks call-site inlining of the hottest loop
 	// guards (`i < n`).
-	func gte(_ rhs: Int) -> Bool {
+	pub func gte(_ rhs: Int) -> Bool {
 		@_ir { %? = cmp Int %0 >= %1 }
 	}
 
-	func lt(_ rhs: Int) -> Bool {
+	pub func lt(_ rhs: Int) -> Bool {
 		@_ir { %? = cmp Int %0 < %1 }
 	}
 
-	func lte(_ rhs: Int) -> Bool {
+	pub func lte(_ rhs: Int) -> Bool {
 		@_ir { %? = cmp Int %0 <= %1 }
 	}
 }
 
 extend Float: Comparable<Float> {
-	func gt(_ rhs: Float) -> Bool {
+	pub func gt(_ rhs: Float) -> Bool {
 		@_ir { %? = cmp Float %0 > %1 }
 	}
 
@@ -301,21 +301,21 @@ extend Float: Comparable<Float> {
 	// defaults build them from `gt`/`equals` with short-circuit
 	// branches, which blocks call-site inlining of the hottest loop
 	// guards (`i < n`).
-	func gte(_ rhs: Float) -> Bool {
+	pub func gte(_ rhs: Float) -> Bool {
 		@_ir { %? = cmp Float %0 >= %1 }
 	}
 
-	func lt(_ rhs: Float) -> Bool {
+	pub func lt(_ rhs: Float) -> Bool {
 		@_ir { %? = cmp Float %0 < %1 }
 	}
 
-	func lte(_ rhs: Float) -> Bool {
+	pub func lte(_ rhs: Float) -> Bool {
 		@_ir { %? = cmp Float %0 <= %1 }
 	}
 }
 
 extend Byte: Comparable<Byte> {
-	func gt(_ rhs: Byte) -> Bool {
+	pub func gt(_ rhs: Byte) -> Bool {
 		@_ir { %? = cmp Byte %0 > %1 }
 	}
 
@@ -323,15 +323,15 @@ extend Byte: Comparable<Byte> {
 	// defaults build them from `gt`/`equals` with short-circuit
 	// branches, which blocks call-site inlining of the hottest loop
 	// guards (`i < n`).
-	func gte(_ rhs: Byte) -> Bool {
+	pub func gte(_ rhs: Byte) -> Bool {
 		@_ir { %? = cmp Byte %0 >= %1 }
 	}
 
-	func lt(_ rhs: Byte) -> Bool {
+	pub func lt(_ rhs: Byte) -> Bool {
 		@_ir { %? = cmp Byte %0 < %1 }
 	}
 
-	func lte(_ rhs: Byte) -> Bool {
+	pub func lte(_ rhs: Byte) -> Bool {
 		@_ir { %? = cmp Byte %0 <= %1 }
 	}
 }

@@ -3,32 +3,32 @@ use package::Operators::{ Equatable }
 
 // A recoverable computation result. Libraries can return this when failure
 // is part of their ordinary API rather than an effect or process failure.
-public enum Result<Success, Failure> {
+pub enum Result<Success, Failure> {
 	case ok(Success)
 	case error(Failure)
 
-	func is_ok() -> Bool {
+	pub func is_ok() -> Bool {
 		match self {
 			.ok(_) -> true,
 			.error(_) -> false
 		}
 	}
 
-	func is_error() -> Bool {
+	pub func is_error() -> Bool {
 		match self {
 			.ok(_) -> false,
 			.error(_) -> true
 		}
 	}
 
-	consuming func map<T>(ok: (consume Success) -> T) -> Result<T, Failure> {
+	pub consuming func map<T>(ok: (consume Success) -> T) -> Result<T, Failure> {
 		match self {
 			.ok(val) -> .ok(ok(val)),
 			.error(e) -> .error(e)
 		}
 	}
 
-	consuming func map<T>(err: (consume Failure) -> T) -> Result<Success, T> {
+	pub consuming func map<T>(err: (consume Failure) -> T) -> Result<Success, T> {
 		match self {
 			.ok(ok) -> .ok(ok),
 			.error(e) -> .error(err(e))
@@ -37,7 +37,7 @@ public enum Result<Success, Failure> {
 }
 
 extend<Success, Failure> Result<Success, Failure>: Equatable where Success: Equatable<Success> && Failure: Equatable<Failure> {
-	func equals(_ rhs: Self) -> Bool {
+	pub func equals(_ rhs: Self) -> Bool {
 		match self {
 			.ok(left) -> {
 				match rhs {

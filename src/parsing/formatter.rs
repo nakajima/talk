@@ -751,9 +751,9 @@ impl<'a> Formatter<'a> {
             DeclKind::TypeAlias(lhs, .., rhs) => self.format_type_alias(lhs, rhs),
         };
 
-        // Prepend "public " for public declarations
+        // Prepend "pub " for public declarations
         let doc = if decl.visibility == Visibility::Public {
-            text("public ") + doc
+            text("pub ") + doc
         } else {
             doc
         };
@@ -3531,10 +3531,10 @@ mod formatter_tests {
         );
         assert_eq!(
             format_code(
-                "public enum Optional<Wrapped> {\ncase some(Wrapped)\ncase none\n\nfunc map<T>(transform: (Wrapped) -> T) -> T? {\nmatch self {\n.some(t) -> .some(transform(t)),\n.none -> none\n}\n}\n}",
+                "pub enum Optional<Wrapped> {\ncase some(Wrapped)\ncase none\n\nfunc map<T>(transform: (Wrapped) -> T) -> T? {\nmatch self {\n.some(t) -> .some(transform(t)),\n.none -> none\n}\n}\n}",
                 80
             ),
-            "public enum Optional<Wrapped> {\n\tcase some(Wrapped)\n\tcase none\n\n\tfunc map<T>(transform: (Wrapped) -> T) -> T? {\n\t\tmatch self {\n\t\t\t.some(t) -> .some(transform(t)),\n\t\t\t.none -> none\n\t\t}\n\t}\n}"
+            "pub enum Optional<Wrapped> {\n\tcase some(Wrapped)\n\tcase none\n\n\tfunc map<T>(transform: (Wrapped) -> T) -> T? {\n\t\tmatch self {\n\t\t\t.some(t) -> .some(transform(t)),\n\t\t\t.none -> none\n\t\t}\n\t}\n}"
         );
     }
 
@@ -3927,8 +3927,8 @@ mod formatter_tests {
             "struct FileHandle 'linear {\n\tlet fd: Int\n}"
         );
         assert_eq!(
-            format_code("public struct Token 'linear {\n\tlet id: Int\n}", 80),
-            "public struct Token 'linear {\n\tlet id: Int\n}"
+            format_code("pub struct Token 'linear {\n\tlet id: Int\n}", 80),
+            "pub struct Token 'linear {\n\tlet id: Int\n}"
         );
         assert_eq!(
             format_code("struct Node<T> 'heap {\n\tlet value: T\n}", 80),

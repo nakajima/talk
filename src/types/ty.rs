@@ -156,6 +156,17 @@ impl EffectRow {
         EffectRow { effects, tail }
     }
 
+    /// Every effect label and entry-argument symbol this row names
+    /// (ADR 0042).
+    pub fn referenced_symbols(&self, out: &mut rustc_hash::FxHashSet<Symbol>) {
+        for entry in &self.effects {
+            out.insert(entry.effect);
+            for arg in &entry.args {
+                arg.referenced_symbols(out);
+            }
+        }
+    }
+
     /// The pure, closed row `<>`.
     pub fn pure() -> Self {
         EffectRow {
@@ -577,6 +588,35 @@ impl Ty {
             Ty::Var(_) | Ty::Param(_) | Ty::Error => {}
         }
         ControlFlow::Continue(())
+    }
+
+    /// Every symbol this type names in a source-facing position: nominal
+    /// heads, protocols behind existentials and projections, and effect
+    /// labels — the alphabet of the public API closure (ADR 0042).
+    /// `try_visit` does not descend a function's latent effect row, so
+    /// its entry arguments recurse here.
+    pub fn referenced_symbols(&self, out: &mut rustc_hash::FxHashSet<Symbol>) {
+        let _ = self.try_visit::<()>(&mut |node| {
+            match node {
+                Ty::Nominal(symbol, _) => {
+                    out.insert(*symbol);
+                }
+                Ty::Any { protocol, .. } => {
+                    out.insert(protocol.protocol);
+                }
+                Ty::Proj(_, protocol, _) => {
+                    out.insert(protocol.protocol);
+                }
+                Ty::Func(_, _, eff) => eff.referenced_symbols(out),
+                Ty::Eff(eff) => {
+                    for entry in &eff.effects {
+                        out.insert(entry.effect);
+                    }
+                }
+                _ => {}
+            }
+            ControlFlow::Continue(())
+        });
     }
 
     /// Walk two types in lockstep, visiting every corresponding type pair.
@@ -1105,6 +1145,23 @@ impl Predicate {
             minted_row: false,
         })
     }
+
+    /// Every symbol this predicate names (ADR 0042). `try_visit` never
+    /// yields the `Conforms` protocol head or `EffectEq` rows, so both
+    /// collect here directly.
+    pub fn referenced_symbols(&self, out: &mut rustc_hash::FxHashSet<Symbol>) {
+        if let Predicate::Conforms { protocol, .. } = self {
+            out.insert(protocol.protocol);
+        }
+        if let Predicate::EffectEq(lhs, rhs) = self {
+            lhs.referenced_symbols(out);
+            rhs.referenced_symbols(out);
+        }
+        let _ = self.try_visit::<()>(&mut |ty| {
+            ty.referenced_symbols(out);
+            ControlFlow::Continue(())
+        });
+    }
 }
 
 impl Predicate {
@@ -1179,6 +1236,23 @@ impl Ty {
 }
 
 impl Scheme {
+    /// Every symbol this scheme's contract names: the type, the
+    /// qualified context, and parameter kinds/defaults (ADR 0042).
+    pub fn referenced_symbols(&self, out: &mut rustc_hash::FxHashSet<Symbol>) {
+        self.ty.referenced_symbols(out);
+        for predicate in &self.predicates {
+            predicate.referenced_symbols(out);
+        }
+        for param in &self.params {
+            if let Some(default) = &param.default {
+                default.referenced_symbols(out);
+            }
+            if let ParamKind::Static(value_ty) = &param.kind {
+                value_ty.referenced_symbols(out);
+            }
+        }
+    }
+
     /// Export form of a whole scheme: sanitize the type, and register any
     /// owner-keyed row/effect param the sanitizer mints so instantiation
     /// freshens it on the importing side — a leftover tail variable means

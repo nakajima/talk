@@ -6,7 +6,7 @@ use package::Memory::{ replace }
 use package::Operators::{ Add, Subtract, Comparable, Equatable }
 use package::Ownership::{ Borrowed }
 
-public protocol Iterator {
+pub protocol Iterator {
 	associated Element
 	mut func next() -> Element?
 
@@ -34,7 +34,7 @@ public protocol Iterator {
 }
 
 extend Iterator {
-	mut func index(needle: Element) -> Int? where Element: Equatable<Element> {
+	pub mut func index(needle: Element) -> Int? where Element: Equatable<Element> {
 		let i = 0
 		loop {
 			if let .some(candidate) = self.next() {
@@ -47,7 +47,7 @@ extend Iterator {
 		}
 	}
 
-	consuming func to_array() -> [Element] {
+	pub consuming func to_array() -> [Element] {
 		let result = []
 
 		loop {
@@ -63,7 +63,7 @@ extend Iterator {
 }
 
 extend Iterator: Into<[Element]> {
-	consuming func into() -> [Element] {
+	pub consuming func into() -> [Element] {
 		let result = Array<Element>(capacity: 0)
 		loop {
 			if let .some(value) = self.next() {
@@ -77,13 +77,13 @@ extend Iterator: Into<[Element]> {
 
 // MARK: Iterable
 
-public protocol IntoIterator {
+pub protocol IntoIterator {
 	associated Element
 	associated IntoIter: Iterator where IntoIter.Element == Element
 	consuming func into_iter() -> IntoIter
 }
 
-public protocol Iterable {
+pub protocol Iterable {
 	associated Element
 	associated T: Iterator
 	func iter() -> T
@@ -91,13 +91,13 @@ public protocol Iterable {
 
 // MARK: Map
 
-public struct Map<I, U> where I: Iterator {
-	let inner: I
-	let map: (I.Element) -> U
+pub struct Map<I, U> where I: Iterator {
+	pub let inner: I
+	pub let map: (I.Element) -> U
 }
 
 extend<I, U> Map<I, U>: Iterator where I: Iterator {
-	mut func next() -> U? {
+	pub mut func next() -> U? {
 		if let .some(elem) = self.inner.next() {
 			return .some(self.map(elem))
 		} else {
@@ -108,27 +108,27 @@ extend<I, U> Map<I, U>: Iterator where I: Iterator {
 
 // MARK: Skip
 
-public struct Skip<I: Iterator> {
-	let inner: I
+pub struct Skip<I: Iterator> {
+	pub let inner: I
 }
 
 // MARK: IndexIterable
 
-public protocol IndexIterable {
+pub protocol IndexIterable {
 	associated Element
 	func _index_iterable_count() -> Int
 	func _index_iterable_get(i: Int) -> Element?
 }
 
-public struct IndexIterator<T: IndexIterable> {
-	let inner: &T
-	let position: Int
+pub struct IndexIterator<T: IndexIterable> {
+	pub let inner: &T
+	pub let position: Int
 }
 
 extend<T: IndexIterable> IndexIterator<T>: Borrowed {}
 
 extend<T: IndexIterable> IndexIterator<T>: Iterator {
-	mut func next() -> T.Element? {
+	pub mut func next() -> T.Element? {
 		if self.position > self.inner._index_iterable_count() - 1 { return Optional.none }
 
 		if let .some(value) = self.inner._index_iterable_get(i: self.position) {
@@ -142,18 +142,18 @@ extend<T: IndexIterable> IndexIterator<T>: Iterator {
 
 // MARK: Peek!
 
-public struct Peek<T: Iterator> {
-	let inner: T
-	let peeked: T.Element?
+pub struct Peek<T: Iterator> {
+	pub let inner: T
+	pub let peeked: T.Element?
 	let has_peeked: Bool
 
-	init(inner: T) {
+	pub init(inner: T) {
 		self.inner = inner
 		self.peeked = .none
 		self.has_peeked = false
 	}
 
-	public mut func peek() -> &T.Element? {
+	pub mut func peek() -> &T.Element? {
 		if self.has_peeked { return self.peeked }
 
 		self.peeked = self.inner.next()
@@ -164,7 +164,7 @@ public struct Peek<T: Iterator> {
 }
 
 extend<T: Iterator> Peek<T>: Iterator {
-	mut func next() -> T.Element? {
+	pub mut func next() -> T.Element? {
 		if self.has_peeked {
 			let next = self.inner.next()
 			return replace(place: mut self.peeked, replacement: consume next)

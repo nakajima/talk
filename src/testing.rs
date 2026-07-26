@@ -803,8 +803,8 @@ mod tests {
             src.join("testing.tlk"),
             "effect 'failure(String) -> Never\n\
 struct TestCase { let name: String let block: () -> Void }\n\
-public func test(name: String, block: () -> Void) { () }\n\
-public func assert(pass: Bool, msg: String) 'failure {\n\
+pub func test(name: String, block: () -> Void) { () }\n\
+pub func assert(pass: Bool, msg: String) 'failure {\n\
 \tif !pass { 'failure(msg) }\n\
 }\n",
         )

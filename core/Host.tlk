@@ -4,7 +4,7 @@ use package::Memory::{ alloc }
 use package::Async::{ async }
 use package::String::{ String }
 
-public effect 'panic(message: String) -> Never
+pub effect 'panic(message: String) -> Never
 
 // The host adapter, in source: one arm per request case, each a fixed
 // entry in the runtime's io operation table. Exhaustiveness keeps this
@@ -45,7 +45,7 @@ func _io_host(request: IORequest) -> Int {
 // row this callback declares — the compiler reads it from this
 // signature rather than naming any effect itself. Resumable fallbacks
 // continue; panic is the abortive process-termination fallback.
-public func _with_host(consume body: () '[io, alloc, async, panic] -> ()) -> () {
+pub func _with_host(consume body: () '[io, alloc, async, panic] -> ()) -> () {
 	@handle 'io { request in
 		'continue _io_host(request: request)
 	}

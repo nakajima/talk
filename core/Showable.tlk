@@ -2,7 +2,7 @@
 use package::String::{ String }
 use package::Operators::{ Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable }
 
-public protocol Showable {
+pub protocol Showable {
 	func show() -> String
 }
 
@@ -22,7 +22,7 @@ func _digit(d: Int) -> String {
 }
 
 extend Float {
-	func _trunc() -> Int {
+	pub func _trunc() -> Int {
 		@_ir { %? = trunc %0 }
 	}
 
@@ -39,7 +39,7 @@ extend Int {
 }
 
 extend Int: Showable {
-	func show() -> String {
+	pub func show() -> String {
 		if self == 0 { return "0" }
 		let n = self
 		if self < 0 { n = -self }
@@ -58,7 +58,7 @@ extend Int: Showable {
 }
 
 extend Float: Showable {
-	func show() -> String {
+	pub func show() -> String {
 		if self == 0.0 { return "0.0" }
 		if self < 0.0 {
 			let pos = -self
@@ -85,7 +85,7 @@ extend Float: Showable {
 }
 
 extend Bool: Showable {
-	func show() -> String {
+	pub func show() -> String {
 		if self.equals(true) {
 			"true"
 		} else {
@@ -95,11 +95,11 @@ extend Bool: Showable {
 }
 
 extend String: Showable {
-	func show() -> String {
+	pub func show() -> String {
 		self.to_string()
 	}
 }
 
 extend RawPtr: Showable {
-	func show() -> String { "<ptr>" }
+	pub func show() -> String { "<ptr>" }
 }

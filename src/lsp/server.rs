@@ -1437,6 +1437,14 @@ mod tests {
     }
 
     #[test]
+    fn parser_code_action_migrates_legacy_public_modifier() {
+        assert_eq!(
+            parser_action_rewrite("public func greet() {}", "Replace `public` with `pub`"),
+            "pub func greet() {}"
+        );
+    }
+
+    #[test]
     fn existing_type_code_actions_use_structured_diagnostics() {
         let ambiguous = "protocol A { func m() -> Int }\nprotocol B { func m() -> Int }\nextend Int: A { func m() -> Int { 1 } }\nextend Int: B { func m() -> Int { 2 } }\nlet n = 1\nlet x = n.m()\n";
         assert!(type_action_rewrite(ambiguous, "Use 'A.m(n...)'").contains("let x = A.m(n)"),);
@@ -1796,10 +1804,42 @@ mod tests {
         );
     }
 
+    // ADR 0042: member completion excludes members the access site
+    // cannot use.
+    #[test]
+    fn member_completion_hides_other_files_private_members() {
+        let lib_code = "pub struct Widget {\n\tpub let visible: Int\n\tlet hidden: Int\n\tpub func shown() -> Int { 1 }\n\tfunc concealed() -> Int { 2 }\n}\n";
+        let main_code = "use package::member_completion_lib::{ Widget }\nlet w = Widget(visible: 1, hidden: 2)\nlet v = w.\n";
+        let uri_main =
+            Url::from_file_path(std::env::temp_dir().join("member_completion_main.tlk"))
+                .expect("main uri");
+        let uri_lib = Url::from_file_path(std::env::temp_dir().join("member_completion_lib.tlk"))
+            .expect("lib uri");
+        let workspace =
+            workspace_for_docs(vec![(uri_main.clone(), main_code), (uri_lib, lib_code)]);
+        let document_id = super::document_id_for_uri(&uri_main);
+        let items = crate::analysis::completion::complete_in_workspace(
+            &workspace,
+            &document_id,
+            main_code.find("w.").expect("dot") as u32 + 2,
+        );
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+        assert!(labels.contains(&"visible"), "expected visible in {labels:?}");
+        assert!(labels.contains(&"shown"), "expected shown in {labels:?}");
+        assert!(
+            !labels.contains(&"hidden"),
+            "private field leaked into completion: {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"concealed"),
+            "private method leaked into completion: {labels:?}"
+        );
+    }
+
     #[test]
     fn completion_acceptance_adds_import_from_defining_module() {
         let main_code = "let value = Fo\n";
-        let lib_code = "public struct Foo {}\n";
+        let lib_code = "pub struct Foo {}\n";
         let consumer_code = "use package::completion_auto_import_lib::{ Foo }\nlet used = Foo()\n";
         let uri_main =
             Url::from_file_path(std::env::temp_dir().join("completion_auto_import_main.tlk"))
@@ -1873,7 +1913,7 @@ mod tests {
     #[test]
     fn undefined_name_quick_fix_inserts_separated_import() {
         let main_code = "foo\n";
-        let lib_code = "public let foo = 1\n";
+        let lib_code = "pub let foo = 1\n";
         let consumer_code = "use package::auto_import_path_only_lib::{ foo }\nlet consumed = foo\n";
         let uri_main =
             Url::from_file_path(std::env::temp_dir().join("auto_import_path_only_main.tlk"))
@@ -1923,7 +1963,7 @@ mod tests {
     #[test]
     fn undefined_name_quick_fix_follows_no_core_comment() {
         let main_code = "// no-core\nfoo\n";
-        let lib_code = "public let foo = 1\n";
+        let lib_code = "pub let foo = 1\n";
         let uri_main =
             Url::from_file_path(std::env::temp_dir().join("auto_import_no_core_main.tlk"))
                 .expect("main uri");
@@ -1959,8 +1999,8 @@ mod tests {
     #[test]
     fn undefined_name_quick_fix_appends_to_import_block() {
         let main_code = "use package::auto_import_existing::{ existing }\n\nfoo\n";
-        let existing_code = "public let existing = 1\n";
-        let foo_code = "public let foo = 2\n";
+        let existing_code = "pub let existing = 1\n";
+        let foo_code = "pub let foo = 2\n";
         let uri_main =
             Url::from_file_path(std::env::temp_dir().join("auto_import_existing_main.tlk"))
                 .expect("main uri");
@@ -2267,7 +2307,7 @@ mod tests {
             .expect("file uri");
         let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_across_files_b.tlk"))
             .expect("file uri");
-        let code_a = "public let foo = 1\n";
+        let code_a = "pub let foo = 1\n";
         let code_b = "use package::rename_across_files_a::{ foo }\nfoo\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
@@ -2318,7 +2358,7 @@ mod tests {
             Url::from_file_path(std::env::temp_dir().join("rename_alias_a.tlk")).expect("file uri");
         let uri_b =
             Url::from_file_path(std::env::temp_dir().join("rename_alias_b.tlk")).expect("file uri");
-        let code_a = "public struct Point {}\n";
+        let code_a = "pub struct Point {}\n";
         let code_b = "use package::rename_alias_a::{ Point as Pt }\nlet p = Pt()\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
@@ -2368,7 +2408,7 @@ mod tests {
             .expect("file uri");
         let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_mixed_alias_b.tlk"))
             .expect("file uri");
-        let code_a = "public struct Point {}\n";
+        let code_a = "pub struct Point {}\n";
         let code_b = "use package::rename_mixed_alias_a::{ Point as Pt, Point }\nlet a = Point()\nlet b = Pt()\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
@@ -2487,7 +2527,7 @@ mod tests {
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
         let code_a = "use package::b::{ foo }\nfoo\n";
-        let code_b = "public let foo = 1\n";
+        let code_b = "pub let foo = 1\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
 
@@ -2640,7 +2680,7 @@ extend Person {
   func foo() {}
 }
 "#;
-        let code_b = "public struct Person {}\n";
+        let code_b = "pub struct Person {}\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
         let doc_id = super::document_id_for_uri(&uri_a);
@@ -2764,7 +2804,7 @@ extend Person {
 
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
-        let code_a = "public let foo = 1\n";
+        let code_a = "pub let foo = 1\n";
         let code_b = "use package::a::{ foo }\nfoo\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
@@ -2857,7 +2897,7 @@ extend Person {
 
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
-        let code_a = "public let foo = 1\n";
+        let code_a = "pub let foo = 1\n";
         let code_b = "use package::a::{ foo }\nfoo\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
@@ -2966,7 +3006,7 @@ extend Person {
 
     #[test]
     fn goto_definition_on_cross_file_function_call() {
-        let code_a = "public func helper() -> Int { 1 }\n";
+        let code_a = "pub func helper() -> Int { 1 }\n";
         let code_b = "use package::goto_cross_a::{ helper }\nhelper()\n";
         let uri_a =
             Url::from_file_path(std::env::temp_dir().join("goto_cross_a.tlk")).expect("file uri");

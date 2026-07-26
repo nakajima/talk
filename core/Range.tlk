@@ -7,48 +7,48 @@ use package::Array::{ Array }
 
 /// A half-open interval: `lower` is included, `upper` is not.
 /// `a..<b` desugars to `Range(lower: a, upper: b)`.
-public struct Range<T: Comparable<T>> {
-	let lower: T
-	let upper: T
+pub struct Range<T: Comparable<T>> {
+	pub let lower: T
+	pub let upper: T
 
-	public func contains(element: T) -> Bool {
+	pub func contains(element: T) -> Bool {
 		element >= self.lower && element < self.upper
 	}
 }
 
 /// An inclusive interval: both bounds are included.
 /// `a..b` desugars to `ClosedRange(lower: a, upper: b)`.
-public struct ClosedRange<T: Comparable<T>> {
-	let lower: T
-	let upper: T
+pub struct ClosedRange<T: Comparable<T>> {
+	pub let lower: T
+	pub let upper: T
 
-	public func contains(element: T) -> Bool {
+	pub func contains(element: T) -> Bool {
 		element >= self.lower && element <= self.upper
 	}
 }
 
 extend Range<Int>: Iterable {
-	func iter() -> RangeIterator {
+	pub func iter() -> RangeIterator {
 		RangeIterator(lower: self.lower, upper: self.upper, closed: false)
 	}
 }
 
 extend ClosedRange<Int>: Iterable {
-	func iter() -> RangeIterator {
+	pub func iter() -> RangeIterator {
 		RangeIterator(lower: self.lower, upper: self.upper, closed: true)
 	}
 }
 
-struct RangeIterator {
-	let lower: Int
-	let upper: Int
-	let closed: Bool
-	let current: Int
+pub struct RangeIterator {
+	pub let lower: Int
+	pub let upper: Int
+	pub let closed: Bool
+	pub let current: Int
 	// Explicit exhaustion: a closed range ending at Int's maximum has no
 	// out-of-range sentinel to advance to (incrementing would wrap).
-	let done: Bool
+	pub let done: Bool
 
-	init(lower: Int, upper: Int, closed: Bool) {
+	pub init(lower: Int, upper: Int, closed: Bool) {
 		self.lower = lower
 		self.upper = upper
 		self.closed = closed
@@ -58,7 +58,7 @@ struct RangeIterator {
 }
 
 extend RangeIterator: Iterator<Int> {
-	mut func next() -> Int? {
+	pub mut func next() -> Int? {
 		if self.done { return .none }
 		let value = self.current
 		if value < self.upper {
@@ -72,7 +72,7 @@ extend RangeIterator: Iterator<Int> {
 }
 
 extend Int {
-	func times<T>(fn: (Int) -> T) -> [T] {
+	pub func times<T>(fn: (Int) -> T) -> [T] {
 		(0..<self).iter().map { fn($0) }.to_array()
 	}
 }

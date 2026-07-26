@@ -3,7 +3,7 @@ let _directory_entry_directory = 1
 let _directory_entry_symlink = 3
 
 extend Path {
-	func to_string() -> String {
+	pub func to_string() -> String {
 		if self.components.count == 0 { return "" }
 
 		let str = self.components.get(0).to_string()
@@ -18,7 +18,7 @@ extend Path {
 		str.to_string()
 	}
 
-	func appending(consume component: String) -> Path {
+	pub func appending(consume component: String) -> Path {
 		let count = self.components.count + 1
 		let storage = _storage<String>(capacity: count)
 		let i = 0
@@ -32,15 +32,15 @@ extend Path {
 }
 
 extend Path: Showable {
-	func show() -> String {
+	pub func show() -> String {
 		self.to_string()
 	}
 }
 
-public struct Directory {
-	let path: Path
+pub struct Directory {
+	pub let path: Path
 
-	func entries() -> Array<DirectoryEntry> {
+	pub func entries() -> Array<DirectoryEntry> {
 		@unsafe {
 			let path_string = self.path.to_string()
 			let path_buf = _alloc<Byte>(count: path_string.byte_count + 1)
@@ -95,7 +95,7 @@ public struct Directory {
 		}
 	}
 
-	func walk(fn: (&DirectoryEntry) -> ()) {
+	pub func walk(fn: (&DirectoryEntry) -> ()) {
 		for entry in self.entries() {
 			match entry {
 				.directory(directory) -> {
@@ -108,20 +108,20 @@ public struct Directory {
 	}
 }
 
-public struct FsFile {
-	let path: Path
+pub struct FsFile {
+	pub let path: Path
 }
 
-public typealias File = FsFile
+pub typealias File = FsFile
 
-public enum DirectoryEntry {
+pub enum DirectoryEntry {
 	case directory(Directory)
 	case file(FsFile)
 	case symlink(Path)
 }
 
 extend Directory: Showable {
-	func show() -> String {
+	pub func show() -> String {
 		"Directory(path:" + self.path.to_string() + ")"
 	}
 }

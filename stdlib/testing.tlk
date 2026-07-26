@@ -1,37 +1,37 @@
 use package::ansi
 
-public effect 'fail(message: String) -> ()
-public effect 'registerTest(testCase: TestCase) -> ()
+pub effect 'fail(message: String) -> ()
+pub effect 'registerTest(testCase: TestCase) -> ()
 
-public struct Failure {
-	let test_name: String
-	let assertion: String
+pub struct Failure {
+	pub let test_name: String
+	pub let assertion: String
 }
 
-public struct TestCase {
-	let name: String
-	let block: () -> ()
+pub struct TestCase {
+	pub let name: String
+	pub let block: () -> ()
 }
 
-public func test(consume _ name: String, consume _ block: () -> ()) 'registerTest {
+pub func test(consume _ name: String, consume _ block: () -> ()) 'registerTest {
 	'registerTest(testCase: TestCase(name: name, block: block))
 }
 
-public func assert(_ condition: Bool) 'fail {
+pub func assert(_ condition: Bool) 'fail {
 	if !condition { 'fail(message: "assertion failed") }
 }
 
 // The pre-reset stdlib's name for assert_message; existing programs
 // (talk-syntax among them) call it, so it stays as an alias.
-public func assertMessage(_ condition: Bool, _ message: String) 'fail {
+pub func assertMessage(_ condition: Bool, _ message: String) 'fail {
 	assert_message(condition, message)
 }
 
-public func assert_message(_ condition: Bool, _ message: String) 'fail {
+pub func assert_message(_ condition: Bool, _ message: String) 'fail {
 	if !condition { 'fail(message: message) }
 }
 
-public func report(tests: [TestCase], failures: [Failure]) {
+pub func report(tests: [TestCase], failures: [Failure]) {
 	if failures.is_empty() {
 		print(tests.count.show() + " tests passed.")
 	} else {

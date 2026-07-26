@@ -344,6 +344,17 @@ pub struct TypeAliasInfo {
     pub ty: Ty,
 }
 
+/// Member accessibility (ADR 0042): the member's defining file and
+/// whether it is visible outside that file. Published from the
+/// resolver's declaration records at the generate seam; member lookup
+/// enforces it with the access-site file. Members without an entry
+/// (builtins, compiler-provided members) are unrestricted.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct MemberAccess {
+    pub file: crate::node_id::FileID,
+    pub public: bool,
+}
+
 /// A candidate owner of a member name, for the unique-owner improvement rule
 /// (Jones, FPCA 1995): protocols own their requirement labels, nominals own
 /// their fields/methods.
@@ -415,6 +426,11 @@ pub struct TypeCatalog {
     /// and its declared arity is `params.len()` minus the owner's.
     #[serde(default)]
     pub nominal_owners: FxHashMap<Symbol, Symbol>,
+    /// Member symbol → accessibility (ADR 0042). A derived index over
+    /// the resolver's declaration records, committed at the generate
+    /// seam and merged alongside imported catalogs.
+    #[serde(default)]
+    pub member_visibility: FxHashMap<Symbol, MemberAccess>,
 }
 
 /// One type-carrier the catalog embeds. Raw types sanitize per-`Ty`;
@@ -1031,6 +1047,7 @@ impl TypeCatalog {
         self.callable_contracts.extend(other.callable_contracts);
         self.effects.extend(other.effects);
         self.type_aliases.extend(other.type_aliases);
+        self.member_visibility.extend(other.member_visibility);
         // Row ids shift across the value-dedup above; the committed
         // Deinit index is derived, so rebuild it from the merged rows.
         self.commit_deinit_rows();
@@ -1038,6 +1055,53 @@ impl TypeCatalog {
         // recommit dictionaries over the merged view (idempotent).
         self.commit_dictionaries();
         self.commit_callable_owners();
+    }
+
+    /// Publish member accessibility from the resolver's declaration
+    /// records (ADR 0042). Runs once at the generate seam, after
+    /// collection.
+    pub fn commit_member_visibility(
+        &mut self,
+        resolved: &crate::name_resolution::name_resolver::ResolvedNames,
+    ) {
+        use crate::name_resolution::symbol::SymbolKind;
+        use crate::node_kinds::decl::Visibility;
+        for (&symbol, record) in &resolved.declarations {
+            if matches!(
+                record.role,
+                SymbolKind::Property
+                    | SymbolKind::InstanceMethod
+                    | SymbolKind::StaticMethod
+                    | SymbolKind::Initializer
+                    | SymbolKind::Synthesized
+            ) {
+                self.member_visibility.insert(
+                    symbol,
+                    MemberAccess {
+                        file: record.file,
+                        public: record.effective == Visibility::Public,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Whether `member` is accessible from an access site in `file` of
+    /// the current session's `module` (ADR 0042). Public members are
+    /// accessible everywhere; private members only from their defining
+    /// file. Unrecorded members are unrestricted.
+    pub fn member_accessible(
+        &self,
+        member: Symbol,
+        module: ModuleId,
+        file: crate::node_id::FileID,
+    ) -> bool {
+        match self.member_visibility.get(&member) {
+            None => true,
+            Some(access) => {
+                access.public || (member.module_id() == Some(module) && access.file == file)
+            }
+        }
     }
 
     pub fn add_owner(&mut self, label: &str, owner: MemberOwner) {

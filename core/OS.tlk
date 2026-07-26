@@ -6,8 +6,8 @@ use package::String::{ String }
 use package::Array::{ Array }
 use package::Optional::{ Optional }
 
-public struct OS {
-	public static func cwd() -> String? {
+pub struct OS {
+	pub static func cwd() -> String? {
 		let len = _io_cwd_len()
 		if len < 0 { return Optional.none }
 
@@ -19,7 +19,7 @@ public struct OS {
 		Optional.some(String(base: buf, byte_count: copied, capacity: copied))
 	}
 
-	public static func getenv(name: String) -> String? {
+	pub static func getenv(name: String) -> String? {
 		let len = _io_getenv_len(name: name.storage.base, name_len: name.byte_count)
 		if len < 0 { return Optional.none }
 
@@ -35,7 +35,7 @@ public struct OS {
 		Optional.some(String(base: buf, byte_count: copied, capacity: copied))
 	}
 
-	public static func argc() -> [String] {
+	pub static func argc() -> [String] {
 		let count = _io_argc()
 		let result = Array<String>(capacity: count)
 		let i = 0

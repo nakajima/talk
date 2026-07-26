@@ -2,18 +2,18 @@
 use package::Operators::{ Equatable }
 use package::Result::{ Result }
 
-public enum Optional<Wrapped> {
+pub enum Optional<Wrapped> {
 	case some(Wrapped)
 	case none
 
-	consuming func map<T>(transform: (Wrapped) -> T) -> T? {
+	pub consuming func map<T>(transform: (Wrapped) -> T) -> T? {
 		match self {
 			.some(t) -> .some(transform(t)),
 			.none -> .none
 		}
 	}
 
-	consuming func or(default: () -> Wrapped) -> Wrapped {
+	pub consuming func or(default: () -> Wrapped) -> Wrapped {
 		match self {
 			.some(t) -> t,
 			.none -> default()

@@ -109,6 +109,10 @@ impl<'a> DeclDeclarer<'a> {
     }
 
     pub(super) fn predeclare_nominals(&mut self, decls: &[&Decl]) {
+        // Two same-named nominals in one scope would silently collapse
+        // onto one symbol (same kind) or overwrite each other's entry
+        // (different kinds); ADR 0042 diagnoses instead.
+        let mut seen: rustc_hash::FxHashSet<String> = Default::default();
         for decl in decls.iter() {
             match &decl.kind {
                 DeclKind::Struct {
@@ -120,6 +124,12 @@ impl<'a> DeclDeclarer<'a> {
                 | DeclKind::Protocol {
                     name, name_span, ..
                 } => {
+                    if !seen.insert(name.name_str()) {
+                        self.resolver.diagnostic(
+                            decl.id,
+                            NameResolverError::DuplicateDeclaration(name.name_str()),
+                        );
+                    }
                     let kind = match &decl.kind {
                         DeclKind::Struct { .. } => SymbolKind::Struct,
                         DeclKind::Enum { .. } => SymbolKind::Enum,
@@ -252,8 +262,59 @@ impl<'a> DeclDeclarer<'a> {
                         self.resolver.mark_public(sym);
                         self.resolver.predeclared.insert(lhs.id, sym);
                     }
+                } else {
+                    // ADR 0042: every binder of a public destructuring
+                    // pattern predeclares, so local-source imports and
+                    // compiled modules observe the same export set.
+                    let mut binders = Vec::new();
+                    Self::collect_raw_binders(lhs, &mut binders);
+                    for (name, id, span) in binders {
+                        let name_str = name.name_str();
+                        if exported_names.contains_key(&name_str) {
+                            self.resolver
+                                .diagnostic(id, NameResolverError::DuplicateExport(name_str));
+                            continue;
+                        }
+                        exported_names.insert(name_str, vec![None]);
+                        let resolved =
+                            self.resolver
+                                .declare(&name, SymbolKind::Global, id, span);
+                        if let Ok(sym) = resolved.symbol() {
+                            self.resolver.mark_public(sym);
+                            self.resolver.predeclared.insert(id, sym);
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// Binders a module-scope pattern will declare as Globals, mirroring
+    /// `declare_pattern`'s traversal (record fields bind locals and are
+    /// excluded).
+    fn collect_raw_binders(
+        pattern: &crate::node_kinds::pattern::Pattern,
+        out: &mut Vec<(Name, NodeID, Span)>,
+    ) {
+        match &pattern.kind {
+            PatternKind::Bind(name) => out.push((name.clone(), pattern.id, pattern.span)),
+            PatternKind::Tuple(patterns) => {
+                for pattern in patterns {
+                    Self::collect_raw_binders(pattern, out);
+                }
+            }
+            // Only the first alternative declares; later ones re-resolve.
+            PatternKind::Or(patterns) => {
+                if let Some(first) = patterns.first() {
+                    Self::collect_raw_binders(first, out);
+                }
+            }
+            PatternKind::Variant { fields, .. } => {
+                for field in fields {
+                    Self::collect_raw_binders(field, out);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -767,6 +828,71 @@ impl<'a> DeclDeclarer<'a> {
             }
         );
 
+        // ADR 0042: record the authored visibility on each declared
+        // symbol's record; an authored `pub` concludes public on its
+        // own declaration (members included — owners no longer smear
+        // visibility over their members).
+        match &decl.kind {
+            DeclKind::Let { lhs, .. } if self.block_depth == 0 => {
+                for (_, sym) in lhs.collect_binders() {
+                    self.resolver
+                        .record_declared_visibility(sym, decl.visibility);
+                }
+            }
+            _ => {
+                if let Some(sym) = Self::declared_symbol(&decl.kind) {
+                    self.resolver
+                        .record_declared_visibility(sym, decl.visibility);
+                    if decl.visibility == Visibility::Public {
+                        self.resolver.mark_public(sym);
+                    }
+                }
+            }
+        }
+
+        // ADR 0042: a public member requires a publicly accessible
+        // owner. Public nominals concluded their visibility during
+        // predeclaration, so a private conclusion here is final.
+        let private_owner = match &decl.kind {
+            DeclKind::Struct { name, body, .. }
+            | DeclKind::Enum { name, body, .. }
+            | DeclKind::Protocol { name, body, .. }
+                if decl.visibility == Visibility::Private =>
+            {
+                Some((name.name_str(), body))
+            }
+            DeclKind::Extend { head, body, .. } => {
+                let extended_is_public = head.symbol().map_or(true, |sym| {
+                    // A head without a local record is an imported
+                    // type, which is public by construction.
+                    !self.resolver.phase.declarations.contains_key(&sym)
+                        || self.resolver.phase.is_public(&sym)
+                });
+                if extended_is_public {
+                    None
+                } else {
+                    Some((head.name.name_str(), body))
+                }
+            }
+            _ => None,
+        };
+        if let Some((owner_name, body)) = private_owner {
+            for member in &body.decls {
+                if member.visibility == Visibility::Public {
+                    let member_name = Self::declared_symbol(&member.kind)
+                        .and_then(|sym| self.resolver.phase.symbol_names.get(&sym).cloned())
+                        .unwrap_or_else(|| "member".into());
+                    self.resolver.diagnostic(
+                        member.id,
+                        NameResolverError::PublicMemberPrivateOwner {
+                            member: member_name,
+                            owner: owner_name.clone(),
+                        },
+                    );
+                }
+            }
+        }
+
         // Mark public declarations
         if decl.visibility == Visibility::Public {
             match &decl.kind {
@@ -782,16 +908,21 @@ impl<'a> DeclDeclarer<'a> {
                     if let Ok(sym) = name.symbol() {
                         self.resolver.mark_public(sym);
                     }
-                    // Also mark members (init, methods, nested extends) as public
+                    // Only inherited-visibility members conclude public
+                    // from their owner (ADR 0042): the synthesized
+                    // memberwise initializer, enum cases, and protocol
+                    // requirements. Every other member needs its own
+                    // `pub`, handled by the authored-visibility arm
+                    // above.
                     for member in &body.decls {
                         match &member.kind {
                             DeclKind::Init { name, .. } => {
-                                if let Ok(sym) = name.symbol() {
-                                    self.resolver.mark_public(sym);
-                                }
-                            }
-                            DeclKind::Method { func, .. } => {
-                                if let Ok(sym) = func.name.symbol() {
+                                // Explicit initializers need their own
+                                // `pub`; only the resolver-synthesized
+                                // memberwise init inherits.
+                                if let Ok(sym) = name.symbol()
+                                    && matches!(sym, Symbol::Synthesized(_))
+                                {
                                     self.resolver.mark_public(sym);
                                 }
                             }
@@ -800,21 +931,15 @@ impl<'a> DeclDeclarer<'a> {
                                     self.resolver.mark_public(sym);
                                 }
                             }
-                            DeclKind::Property { name, .. } => {
-                                if let Ok(sym) = name.symbol() {
+                            DeclKind::MethodRequirement { signature, .. }
+                            | DeclKind::InitRequirement { signature } => {
+                                if let Ok(sym) = signature.name.symbol() {
                                     self.resolver.mark_public(sym);
                                 }
                             }
-                            // Handle nested extends (like extend Self: Protocol inside a struct)
-                            DeclKind::Extend {
-                                body: nested_body, ..
-                            } => {
-                                for nested_member in &nested_body.decls {
-                                    if let DeclKind::Method { func, .. } = &nested_member.kind
-                                        && let Ok(sym) = func.name.symbol()
-                                    {
-                                        self.resolver.mark_public(sym);
-                                    }
+                            DeclKind::Associated { generic, .. } => {
+                                if let Ok(sym) = generic.name.symbol() {
+                                    self.resolver.mark_public(sym);
                                 }
                             }
                             _ => {}
@@ -835,40 +960,28 @@ impl<'a> DeclDeclarer<'a> {
             }
         }
 
-        // For Extend blocks, mark methods as public if the extended type is public
-        // This happens regardless of the extend's own visibility
-        if let DeclKind::Extend { head, body, .. } = &decl.kind {
-            // Check if the extended type is public.
-            let extended_type_is_public = head
-                .symbol()
-                .map(|sym| self.resolver.phase.public_symbols.contains(&sym))
-                .unwrap_or(false);
+    }
 
-            if extended_type_is_public {
-                // Mark all methods in this extend as public
-                for member in &body.decls {
-                    match &member.kind {
-                        DeclKind::Method { func, .. } => {
-                            if let Ok(sym) = func.name.symbol() {
-                                self.resolver.mark_public(sym);
-                            }
-                        }
-                        // Handle nested extends (like extend Self: Protocol inside a struct)
-                        DeclKind::Extend {
-                            body: nested_body, ..
-                        } => {
-                            for nested_member in &nested_body.decls {
-                                if let DeclKind::Method { func, .. } = &nested_member.kind
-                                    && let Ok(sym) = func.name.symbol()
-                                {
-                                    self.resolver.mark_public(sym);
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
+    /// The symbol a declaration introduced, for single-symbol kinds.
+    /// `Let` binds through its pattern and is handled separately.
+    fn declared_symbol(kind: &DeclKind) -> Option<Symbol> {
+        match kind {
+            DeclKind::Struct { name, .. }
+            | DeclKind::Enum { name, .. }
+            | DeclKind::Protocol { name, .. }
+            | DeclKind::Effect { name, .. }
+            | DeclKind::EnumVariant { name, .. }
+            | DeclKind::Property { name, .. }
+            | DeclKind::Init { name, .. }
+            | DeclKind::TypeAlias(name, ..) => name.symbol().ok(),
+            DeclKind::Method { func, .. } => func.name.symbol().ok(),
+            DeclKind::FuncSignature(signature) => signature.name.symbol().ok(),
+            DeclKind::Func(func) => func.name.symbol().ok(),
+            DeclKind::Associated { generic, .. } => generic.name.symbol().ok(),
+            DeclKind::MethodRequirement { signature, .. }
+            | DeclKind::InitRequirement { signature } => signature.name.symbol().ok(),
+            DeclKind::Import(_) | DeclKind::Macro { .. } | DeclKind::Extend { .. }
+            | DeclKind::Let { .. } => None,
         }
     }
 

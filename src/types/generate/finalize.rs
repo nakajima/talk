@@ -547,6 +547,7 @@ impl<'a> TypecheckSession<'a> {
 
         (
             TypeOutput {
+                module_id: self.module_id,
                 catalog: self.catalog,
                 node_types,
                 schemes,

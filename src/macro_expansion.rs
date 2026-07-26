@@ -89,22 +89,6 @@ pub fn expand_macros_with_sources(
                 continue;
             }
 
-            if decl.visibility == crate::node_kinds::decl::Visibility::Public {
-                diagnostics.push(
-                    Diagnostic {
-                        id: decl.id,
-                        severity: Severity::Error,
-                        kind: ParserError::InvalidMacroTemplate {
-                            name: name.clone(),
-                            reason: "exported macros are not implemented".into(),
-                            span: decl.span,
-                        },
-                    }
-                    .into(),
-                );
-                continue;
-            }
-
             let key = (ast.file_id, name.clone(), params.len());
             if definitions.contains_key(&key) {
                 diagnostics.push(
@@ -690,19 +674,6 @@ mod tests {
                 })
             )
         }));
-    }
-
-    #[test]
-    fn rejects_exported_macros_until_module_artifacts_exist() {
-        let mut ast = parse("public macro identity($value) = $value\n#identity(1)");
-        let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
-        assert!(diagnostics.iter().any(|diagnostic| matches!(
-            diagnostic,
-            crate::diagnostic::AnyDiagnostic::Parsing(crate::diagnostic::Diagnostic {
-                kind: crate::parser_error::ParserError::InvalidMacroTemplate { reason, .. },
-                ..
-            }) if reason == "exported macros are not implemented"
-        )));
     }
 
     #[test]

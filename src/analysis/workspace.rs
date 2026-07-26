@@ -561,7 +561,7 @@ impl Workspace {
         let mut seen = FxHashSet::default();
         let mut candidates = Vec::new();
 
-        for &symbol in &self.resolved_names.public_symbols {
+        for symbol in self.resolved_names.public_symbols() {
             let Some(&definition) = self.resolved_names.symbols_to_node.get(&symbol) else {
                 continue;
             };
@@ -685,7 +685,11 @@ fn parser_error_range(text: &str, err: &ParserError) -> TextRange {
         | ParserError::UndefinedMacro { span, .. }
         | ParserError::MacroArityMismatch { span, .. }
         | ParserError::InvalidMacroTemplate { span, .. }
-        | ParserError::MacroExpansionLimit { span, .. } => TextRange::new(span.start, span.end),
+        | ParserError::MacroExpansionLimit { span, .. }
+        | ParserError::LegacyPublicModifier { span }
+        | ParserError::VisibilityNotAllowed { span, .. }
+        | ParserError::RepeatedVisibilityModifier { span }
+        | ParserError::MacroExportUnsupported { span } => TextRange::new(span.start, span.end),
         ParserError::UnexpectedEndOfInput(..) => TextRange::new(eof, eof),
         _ => TextRange::new(0, 0),
     }
@@ -1080,7 +1084,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let lib_path = dir.join("lib.tlk");
         let main_path = dir.join("main.tlk");
-        std::fs::write(&lib_path, "public let broken: Int = \"not an int\"\n").expect("lib");
+        std::fs::write(&lib_path, "pub let broken: Int = \"not an int\"\n").expect("lib");
         let main_text = "use package::lib::{ broken }\nprint(broken)\n";
         std::fs::write(&main_path, main_text).expect("main");
 

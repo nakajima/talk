@@ -61,6 +61,21 @@ pub enum NameResolverError {
         name: String,
         candidates: Vec<String>,
     },
+    /// A `pub` member declared inside a nominal that is not itself
+    /// public (ADR 0042): rejected rather than accepted as an
+    /// unreachable export.
+    PublicMemberPrivateOwner {
+        member: String,
+        owner: String,
+    },
+    /// An import binding collides with an existing declaration or
+    /// import of the same name (ADR 0042): never resolved by insertion
+    /// order.
+    ImportCollision {
+        name: String,
+        existing: Symbol,
+        imported: Symbol,
+    },
 }
 
 impl Error for NameResolverError {}
@@ -97,6 +112,18 @@ impl Display for NameResolverError {
                     candidates.join(", ")
                 )
             }
+            Self::PublicMemberPrivateOwner { member, owner } => {
+                write!(
+                    f,
+                    "'{member}' cannot be public because its owner '{owner}' is not public"
+                )
+            }
+            Self::ImportCollision { name, .. } => {
+                write!(
+                    f,
+                    "'{name}' is already bound in this file; rename the import with `as` or remove one of the bindings"
+                )
+            }
         }
     }
 }
@@ -130,6 +157,20 @@ impl Scope {
     }
 }
 
+/// One resolver-owned record per declared symbol (ADR 0042): the
+/// defining file, owning nominal, declaration role, the visibility the
+/// author wrote, and the visibility the compiler concluded. This table
+/// is the single visibility authority; every accessibility question
+/// reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeclarationRecord {
+    pub file: FileID,
+    pub owner: Option<Symbol>,
+    pub role: SymbolKind,
+    pub declared: Visibility,
+    pub effective: Visibility,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ResolvedNames {
     pub scopes: FxHashMap<NodeID, Scope>,
@@ -143,8 +184,25 @@ pub struct ResolvedNames {
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub diagnostics: Vec<AnyDiagnostic>,
     pub mutated_symbols: IndexSet<Symbol>,
-    /// Tracks which symbols are public (visible outside their file)
-    pub public_symbols: FxHashSet<Symbol>,
+    /// Per-symbol visibility records (ADR 0042).
+    pub declarations: FxHashMap<Symbol, DeclarationRecord>,
+}
+
+impl ResolvedNames {
+    /// Whether a locally declared symbol is visible outside its file.
+    pub fn is_public(&self, symbol: &Symbol) -> bool {
+        self.declarations
+            .get(symbol)
+            .is_some_and(|record| record.effective == Visibility::Public)
+    }
+
+    /// Locally declared symbols visible outside their file.
+    pub fn public_symbols(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.declarations
+            .iter()
+            .filter(|(_, record)| record.effective == Visibility::Public)
+            .map(|(&symbol, _)| symbol)
+    }
 }
 
 impl ResolvedNames {
@@ -161,12 +219,12 @@ impl ResolvedNames {
             // Only file-level scopes (node index 0)
 
             for (name, &symbol) in &scope.types {
-                if self.public_symbols.contains(&symbol) && !matches!(symbol, Symbol::Builtin(..)) {
+                if self.is_public(&symbol) && !matches!(symbol, Symbol::Builtin(..)) {
                     res.entry(name.clone()).or_default().push(symbol);
                 }
             }
             for (name, &symbol) in &scope.values {
-                if self.public_symbols.contains(&symbol) && !matches!(symbol, Symbol::Builtin(..)) {
+                if self.is_public(&symbol) && !matches!(symbol, Symbol::Builtin(..)) {
                     res.entry(name.clone()).or_default().push(symbol);
                 }
             }
@@ -179,7 +237,7 @@ impl ResolvedNames {
                 let public: Vec<Symbol> = set
                     .iter()
                     .copied()
-                    .filter(|symbol| self.public_symbols.contains(symbol))
+                    .filter(|symbol| self.is_public(symbol))
                     .collect();
                 if public.len() < 2 {
                     continue;
@@ -232,6 +290,10 @@ pub struct NameResolver {
     // declaring pass reuses the exact symbol, never reuse-by-name, so
     // overload siblings keep distinct declarations.
     pub(super) predeclared: FxHashMap<NodeID, Symbol>,
+    // Explicit `use` bindings by file scope and local name (ADR 0042):
+    // the collision authority for import-vs-import and
+    // declaration-vs-import conflicts.
+    explicit_imports: FxHashMap<(NodeID, String), Symbol>,
 
     // For figuring out child types
     pub(super) nominal_stack: Vec<(Symbol, NodeID)>,
@@ -261,6 +323,7 @@ impl NameResolver {
             pending_locals: Default::default(),
             overload_selected: Default::default(),
             predeclared: Default::default(),
+            explicit_imports: Default::default(),
             nominal_stack: Default::default(),
             for_pattern_roots: Default::default(),
             modules,
@@ -380,6 +443,12 @@ impl NameResolver {
                 .collect();
             declarer.predeclare_type_aliases(&decls);
         }
+
+        // ADR 0042: a public type name may be exported by only one
+        // declaration per module. Runs after predeclaration (each file
+        // scope holds only its own declarations) and before imports
+        // (which add foreign bindings to file scopes).
+        self.check_duplicate_type_exports();
 
         // Process imports (before full declaration phase so extends can see imported types)
         {
@@ -573,10 +642,8 @@ impl NameResolver {
                     match &import.symbols {
                         ImportedSymbols::All => {
                             // Import all public non-builtin symbols
-                            let public_symbols = self.phase.public_symbols.clone();
-                            let Some(source_scope) = self.scopes.get_mut(&source_scope_id) else {
-                                continue;
-                            };
+                            let public_symbols: FxHashSet<Symbol> =
+                                self.phase.public_symbols().collect();
                             for (name, set, _) in target_symbols {
                                 // Skip builtins and private symbols
                                 // (core exports are public by definition)
@@ -588,7 +655,7 @@ impl NameResolver {
                                                 || public_symbols.contains(symbol))
                                     })
                                     .collect();
-                                Self::bind_export_set(source_scope, &name, &set);
+                                self.bind_import(source_scope_id, &name, &set, decl_id);
                             }
                         }
                         ImportedSymbols::Named(named_imports) => {
@@ -609,7 +676,7 @@ impl NameResolver {
                                             .copied()
                                             .filter(|symbol| {
                                                 imported_module
-                                                    || self.phase.public_symbols.contains(symbol)
+                                                    || self.phase.is_public(symbol)
                                             })
                                             .collect();
                                         if set.is_empty() {
@@ -621,12 +688,12 @@ impl NameResolver {
                                             );
                                             continue;
                                         }
-                                        let Some(source_scope) =
-                                            self.scopes.get_mut(&source_scope_id)
-                                        else {
-                                            continue;
-                                        };
-                                        Self::bind_export_set(source_scope, local_name, &set);
+                                        self.bind_import(
+                                            source_scope_id,
+                                            local_name,
+                                            &set,
+                                            decl_id,
+                                        );
                                     }
                                     None => {
                                         // Check if the symbol is a private let binding
@@ -750,6 +817,102 @@ impl NameResolver {
         None
     }
 
+    /// Diagnose public type names exported by more than one declaration
+    /// in this module (ADR 0042). Values coexist through ADR 0041
+    /// callable names and diagnose separately during predeclaration.
+    fn check_duplicate_type_exports(&mut self) {
+        let mut by_name: FxHashMap<String, Vec<Symbol>> = FxHashMap::default();
+        for scope in self.scopes.values() {
+            if scope.node_id.1 != 0 {
+                continue;
+            }
+            for (name, &symbol) in &scope.types {
+                if self.phase.is_public(&symbol)
+                    && matches!(
+                        SymbolKind::of(&symbol),
+                        Some(
+                            SymbolKind::Struct
+                                | SymbolKind::Enum
+                                | SymbolKind::Protocol
+                                | SymbolKind::TypeAlias
+                        )
+                    )
+                {
+                    by_name.entry(name.clone()).or_default().push(symbol);
+                }
+            }
+        }
+        for (name, mut symbols) in by_name {
+            symbols.dedup();
+            if symbols.len() < 2 {
+                continue;
+            }
+            // Deterministic: diagnose every declaration after the first
+            // in file order.
+            let mut nodes: Vec<NodeID> = symbols
+                .iter()
+                .filter_map(|symbol| self.phase.symbols_to_node.get(symbol).copied())
+                .collect();
+            nodes.sort();
+            for node in nodes.into_iter().skip(1) {
+                self.diagnostic(node, NameResolverError::DuplicateExport(name.clone()));
+            }
+        }
+    }
+
+    /// Insert an explicit import binding (ADR 0042). Import insertion
+    /// never overwrites an existing declaration or a different earlier
+    /// import; those are collision diagnostics. Prelude and builtin
+    /// bindings are not declarations of this module and may be shadowed
+    /// by an explicit import.
+    fn bind_import(
+        &mut self,
+        source_scope_id: NodeID,
+        local_name: &str,
+        set: &[Symbol],
+        decl_id: NodeID,
+    ) {
+        let Some(&last) = set.last() else {
+            return;
+        };
+        let key = (source_scope_id, local_name.to_string());
+        let existing = if let Some(&previous) = self.explicit_imports.get(&key) {
+            Some(previous)
+        } else {
+            self.scopes
+                .get(&source_scope_id)
+                .and_then(|scope| {
+                    scope
+                        .types
+                        .get(local_name)
+                        .or_else(|| scope.values.get(local_name))
+                })
+                .copied()
+                // Only this module's own declarations collide; prelude
+                // bindings came from other modules and are shadowable.
+                .filter(|symbol| self.phase.declarations.contains_key(symbol))
+        };
+        if let Some(existing) = existing
+            && existing != last
+            && !set.contains(&existing)
+        {
+            self.diagnostic(
+                decl_id,
+                NameResolverError::ImportCollision {
+                    name: local_name.to_string(),
+                    existing,
+                    imported: last,
+                },
+            );
+            return;
+        }
+        let Some(scope) = self.scopes.get_mut(&source_scope_id) else {
+            return;
+        };
+        Self::bind_export_set(scope, local_name, set);
+        self.explicit_imports.insert(key, last);
+    }
+
     /// Bind an exported set into a scope (ADR 0041): the last symbol takes
     /// the plain name entry, and a multi-symbol callable set registers for
     /// label selection.
@@ -845,7 +1008,7 @@ impl NameResolver {
                 let public: Vec<Symbol> = set
                     .iter()
                     .copied()
-                    .filter(|symbol| self.phase.public_symbols.contains(symbol))
+                    .filter(|symbol| self.phase.is_public(symbol))
                     .collect();
                 if public.is_empty() {
                     return Err(NameResolverError::SymbolNotPublic(symbol_name.to_string()));
@@ -860,7 +1023,7 @@ impl NameResolver {
                 .ok_or_else(|| {
                     NameResolverError::SymbolNotFoundInModule(symbol_name.to_string())
                 })?;
-            let public = self.phase.public_symbols.contains(&symbol);
+            let public = self.phase.is_public(&symbol);
             if !public {
                 return Err(NameResolverError::SymbolNotPublic(symbol_name.to_string()));
             }
@@ -932,12 +1095,22 @@ impl NameResolver {
         let mut segments = text.split('.');
         let head: Name = segments.next()?.to_string().into();
         let mut symbol = self.lookup(&head)?.symbol().ok()?;
+        let current_file = self.current_scope_id.map(|scope| scope.0);
         for segment in segments {
             symbol = *self
                 .phase
                 .child_types
                 .get(&symbol)?
                 .get(&Label::Named(segment.to_string()))?;
+            // ADR 0042: a nested type is a member — file-private unless
+            // marked `pub`. Foreign children carry no record and are
+            // public by construction.
+            if let Some(record) = self.phase.declarations.get(&symbol)
+                && record.effective != Visibility::Public
+                && Some(record.file) != current_file
+            {
+                return None;
+            }
         }
         Some(Name::Resolved(symbol, text))
     }
@@ -1053,9 +1226,26 @@ impl NameResolver {
                 .get(&scope_id)
                 .and_then(|s| s.types.get(&name_str))
             && matches!(existing, Symbol::Global(..))
-            && self.phase.public_symbols.contains(&existing)
+            && self.phase.is_public(&existing)
         {
             return Name::Resolved(existing, name_str);
+        }
+
+        // A module-scope declaration never silently overwrites an
+        // explicit import of the same name (ADR 0042). Predeclared
+        // symbols returning through the reuse paths above never reach
+        // here, so this fires once per genuinely new declaration.
+        if at_module_scope
+            && let Some(&imported) = self.explicit_imports.get(&(scope_id, name_str.clone()))
+        {
+            self.diagnostic(
+                node_id,
+                NameResolverError::ImportCollision {
+                    name: name_str.clone(),
+                    existing: imported,
+                    imported,
+                },
+            );
         }
 
         let resolved = self.mint(name, kind, node_id, span);
@@ -1307,6 +1497,16 @@ impl NameResolver {
 
         self.phase.symbols_to_node.insert(symbol, node_id);
         self.phase.symbol_names.insert(symbol, name_str.clone());
+        self.phase.declarations.insert(
+            symbol,
+            DeclarationRecord {
+                file: node_id.0,
+                owner: self.nominal_stack.last().map(|(owner, _)| *owner),
+                role: kind,
+                declared: Visibility::Private,
+                effective: Visibility::Private,
+            },
+        );
 
         let _ = span;
 
@@ -1315,7 +1515,17 @@ impl NameResolver {
 
     /// Mark a symbol as public (visible outside its file)
     pub(super) fn mark_public(&mut self, symbol: Symbol) {
-        self.phase.public_symbols.insert(symbol);
+        if let Some(record) = self.phase.declarations.get_mut(&symbol) {
+            record.effective = Visibility::Public;
+        }
+    }
+
+    /// Record the visibility the author wrote on a declaration
+    /// (ADR 0042). Effective visibility is concluded separately.
+    pub(super) fn record_declared_visibility(&mut self, symbol: Symbol, visibility: Visibility) {
+        if let Some(record) = self.phase.declarations.get_mut(&symbol) {
+            record.declared = visibility;
+        }
     }
 
     /// Declare a pattern's binders into the current scope. At module

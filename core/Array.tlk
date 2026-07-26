@@ -8,18 +8,18 @@ use package::Showable::{ Showable }
 use package::Ownership::{ Borrowed, CheapClone, Deinit }
 use package::Host::{ panic }
 
-public struct Array<Element> {
-	let storage: Storage<Element>
-	let count: Int
-	let capacity: Int
+pub struct Array<Element> {
+	pub let storage: Storage<Element>
+	pub let count: Int
+	pub let capacity: Int
 
-	init(capacity: Int) {
+	pub init(capacity: Int) {
 		self.capacity = capacity
 		self.count = 0
 		self.storage = _storage<Element>(capacity: capacity)
 	}
 
-	init(storage: Storage<Element>, count: Int, capacity: Int) {
+	pub init(storage: Storage<Element>, count: Int, capacity: Int) {
 		self.storage = storage
 		self.count = count
 		self.capacity = capacity
@@ -34,13 +34,13 @@ public struct Array<Element> {
 		) }
 	}
 
-	func get(_ index: Int) -> &Element {
+	pub func get(_ index: Int) -> &Element {
 		self._check_index(index: index)
 		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
 		_load<Element>(ptr: ptr)
 	}
 
-	mut func push(consume _ value: Element) -> () {
+	pub mut func push(consume _ value: Element) -> () {
 		let new_capacity = if self.capacity == 0 {
 			1
 		} else {
@@ -61,7 +61,7 @@ public struct Array<Element> {
 
 	// Overwrite: the replaced element is loaded out and dropped at scope
 	// exit (deep, per its own deinit) after the new value is written.
-	mut func set(index: Int, consume value: Element) -> Void {
+	pub mut func set(index: Int, consume value: Element) -> Void {
 		self._check_index(index: index)
 		self.uniqued_storage()
 		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
@@ -77,7 +77,7 @@ public struct Array<Element> {
 		_store<Element>(ptr: ptr, value: value)
 	}
 
-	mut func swap(i: Int, j: Int) -> Void {
+	pub mut func swap(i: Int, j: Int) -> Void {
 		self._check_index(index: i)
 		self._check_index(index: j)
 		if i == j { return () }
@@ -87,11 +87,11 @@ public struct Array<Element> {
 		_swap<Element>(a: a, b: b)
 	}
 
-	consuming func map<T>(consume fn: (Element) -> T) -> Map<ArrayIntoIterator<Element>, T> {
+	pub consuming func map<T>(consume fn: (Element) -> T) -> Map<ArrayIntoIterator<Element>, T> {
 		self.into_iter().map(fn: fn)
 	}
 
-	consuming func skip(count: Int) -> ArrayIntoIterator<Element> {
+	pub consuming func skip(count: Int) -> ArrayIntoIterator<Element> {
 		self.into_iter().skip(count: count)
 	}
 
@@ -129,13 +129,13 @@ public struct Array<Element> {
 		fresh
 	}
 
-	func is_empty() -> Bool {
+	pub func is_empty() -> Bool {
 		self.count == 0
 	}
 }
 
 extend<Element> Array<Element> where Element: Comparable<Element> {
-	consuming func sort_by(fn: (Element, Element) -> Bool) -> Self {
+	pub consuming func sort_by(fn: (Element, Element) -> Bool) -> Self {
 		let i = 0
 
 		loop i < self.count - 1 {
@@ -159,13 +159,13 @@ extend<Element> Array<Element> where Element: Comparable<Element> {
 }
 
 extend<Element> Array<Element>: SubscriptRead<Int> {
-	func subscript_read(at: Int) -> &Element {
+	pub func subscript_read(at: Int) -> &Element {
 		self.get(at)
 	}
 }
 
 extend<Element> Array<Element>: SubscriptWrite<Int, Element> {
-	mut func subscript_write(at: Int, consume value: Element) -> Void {
+	pub mut func subscript_write(at: Int, consume value: Element) -> Void {
 		self.set(index: at, value: value)
 	}
 }
@@ -190,7 +190,7 @@ extend<Element> Array<Element>: Deinit {
 	}
 }
 extend<Element: Showable> Array<Element>: Showable {
-	func show() -> String {
+	pub func show() -> String {
 		let result = "["
 		let i = 0
 		loop i < self.count {
@@ -217,31 +217,31 @@ extend<Element: Equatable<Element>> Array<Element>: Equatable {
 }
 
 extend<Element> Array<Element>: Iterable {
-	func iter() -> IndexIterator<[Element]> {
+	pub func iter() -> IndexIterator<[Element]> {
 		IndexIterator(inner: self, position: 0)
 	}
 }
 
 extend<Element> Array<Element>: IndexIterable {
-	func _index_iterable_count() -> Int {
+	pub func _index_iterable_count() -> Int {
 		self.count
 	}
 
-	func _index_iterable_get(i index: Int) -> Optional<&Element> {
+	pub func _index_iterable_get(i index: Int) -> Optional<&Element> {
 		.some(self.get(index))
 	}
 }
 
 // MARK: Consuming iteration
 
-public struct ArrayIntoIterator<T> {
-	let storage: Storage<T>
-	let count: Int
-	let position: Int
+pub struct ArrayIntoIterator<T> {
+	pub let storage: Storage<T>
+	pub let count: Int
+	pub let position: Int
 }
 
 extend<Element> Array<Element>: IntoIterator<Element, ArrayIntoIterator<Element>> {
-	consuming func into_iter() -> ArrayIntoIterator<Element> {
+	pub consuming func into_iter() -> ArrayIntoIterator<Element> {
 		self.uniqued_storage()
 		let storage = self.storage
 		let count = self.count
@@ -253,7 +253,7 @@ extend<Element> Array<Element>: IntoIterator<Element, ArrayIntoIterator<Element>
 }
 
 extend<T> ArrayIntoIterator<T>: Iterator {
-	mut func next() -> T? {
+	pub mut func next() -> T? {
 		if self.position > self.count - 1 { return Optional.none }
 		let index = self.position
 		self.position = self.position + 1
@@ -276,23 +276,23 @@ extend<T> ArrayIntoIterator<T>: Deinit {
 
 // MARK: Mutable iteration
 
-public struct ArrayMutIterator<T> {
-	let storage: &mut Storage<T>
-	let count: Int
-	let position: Int
+pub struct ArrayMutIterator<T> {
+	pub let storage: &mut Storage<T>
+	pub let count: Int
+	pub let position: Int
 }
 
 extend<T> ArrayMutIterator<T>: Borrowed {}
 
 extend<Element> Array<Element> {
-	mut func iter_mut() -> ArrayMutIterator<Element> {
+	pub mut func iter_mut() -> ArrayMutIterator<Element> {
 		let storage = self.uniqued_storage()
 		ArrayMutIterator(storage: storage, count: self.count, position: 0)
 	}
 }
 
 extend<T> ArrayMutIterator<T> {
-	mut func next() -> T? {
+	pub mut func next() -> T? {
 		if self.position > self.count - 1 { return Optional.none }
 		let index = self.position
 		self.position = self.position + 1
@@ -301,7 +301,7 @@ extend<T> ArrayMutIterator<T> {
 		return .some(element)
 	}
 
-	mut func _store_current(consume value: T) -> Void {
+	pub mut func _store_current(consume value: T) -> Void {
 		let ptr: RawPtr = @_ir(self.storage.base, self.position - 1) { %? = gep T $0 $1 }
 		_store<T>(ptr: ptr, value: value)
 	}

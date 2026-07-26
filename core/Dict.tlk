@@ -3,10 +3,10 @@ use package::Optional::{ Optional }
 use package::Operators::{ Add, Equatable }
 use package::String::{ String }
 
-struct DictNode<Value> 'heap {
-	let key: String
-	let value: Value
-	let next: DictNode<Value>?
+pub struct DictNode<Value> 'heap {
+	pub let key: String
+	pub let value: Value
+	pub let next: DictNode<Value>?
 }
 
 func dict_find<Value>(current: DictNode<Value>?, key: String) -> Optional<&Value> {
@@ -26,24 +26,24 @@ func dict_find<Value>(current: DictNode<Value>?, key: String) -> Optional<&Value
 // conses in O(1); lookup walks linearly. A placeholder for a hash table
 // until raw storage can hold heap elements.
 
-public struct Dict<Value> 'heap {
-	let head: DictNode<Value>?
-	let count: Int
+pub struct Dict<Value> 'heap {
+	pub let head: DictNode<Value>?
+	pub let count: Int
 
-	init() {
+	pub init() {
 		self.head = Optional.none
 		self.count = 0
 		self
 	}
 
-	mut func insert(consume key: String, consume value: Value) -> Void {
+	pub mut func insert(consume key: String, consume value: Value) -> Void {
 		self.head = Optional.some(DictNode(key: key, value: value, next: self.head))
 		self.count = self.count + 1
 	}
 }
 
 extend<Value> Dict<Value> {
-	func get(key: String) -> Optional<&Value> {
+	pub func get(key: String) -> Optional<&Value> {
 		dict_find(current: self.head, key: key)
 	}
 }

@@ -8,12 +8,12 @@ use package::Showable::{ Showable }
 use package::String::{ String, Substring, UTF8View }
 use package::Optional::{ Optional }
 
-public struct Request {
-	let raw: String
-	let verb: String
-	let path: String
+pub struct Request {
+	pub let raw: String
+	pub let verb: String
+	pub let path: String
 
-	init(raw: String, verb: String, path: String) {
+	pub init(raw: String, verb: String, path: String) {
 		self.raw = raw
 		self.verb = verb
 		self.path = path
@@ -21,11 +21,11 @@ public struct Request {
 	}
 }
 
-public struct Response {
-	let status: Int
-	let body: String
+pub struct Response {
+	pub let status: Int
+	pub let body: String
 
-	init(status: Int, body: String) {
+	pub init(status: Int, body: String) {
 		self.status = status
 		self.body = body
 		self
@@ -33,25 +33,25 @@ public struct Response {
 }
 
 extend Response: Into<Response> {
-	consuming func into() -> Response { self }
+	pub consuming func into() -> Response { self }
 }
 
 extend String: Into<Response> {
-	consuming func into() -> Response {
+	pub consuming func into() -> Response {
 		Response(status: 200, body: self)
 	}
 }
 
-struct RouteHandler {
-	let invoke: () -> String
+pub struct RouteHandler {
+	pub let invoke: () -> String
 }
 
 // Routes live in a region-allocated ('heap) chain: registration conses,
 // dispatch walks — no fixed slot count.
-struct RouteNode 'heap {
-	let path: String
-	let handler: RouteHandler
-	let next: RouteNode?
+pub struct RouteNode 'heap {
+	pub let path: String
+	pub let handler: RouteHandler
+	pub let next: RouteNode?
 }
 
 func route_walk(current: RouteNode?, path: Substring) -> Response {
@@ -67,17 +67,17 @@ func route_walk(current: RouteNode?, path: Substring) -> Response {
 	}
 }
 
-public struct HttpServer 'heap {
-	let routes: RouteNode?
+pub struct HttpServer 'heap {
+	pub let routes: RouteNode?
 	let route_count: Int
 
-	init() {
+	pub init() {
 		self.routes = Optional.none
 		self.route_count = 0
 		self
 	}
 
-	public mut func get(consume path: String, consume handler: () -> String) -> () {
+	pub mut func get(consume path: String, consume handler: () -> String) -> () {
 		let wrapped = RouteHandler(invoke: handler)
 		let node = RouteNode(path: path, handler: wrapped, next: self.routes)
 		self.routes = Optional.some(node)
@@ -112,11 +112,11 @@ public struct HttpServer 'heap {
 		}
 	}
 
-	func dispatch(path: Substring) -> Response {
+	pub func dispatch(path: Substring) -> Response {
 		route_walk(current: self.routes, path: path)
 	}
 
-	func render(response: Response) -> String {
+	pub func render(response: Response) -> String {
 		let text: String = match response.status {
 			200 -> "OK",
 			404 -> "Not Found",
@@ -139,7 +139,7 @@ public struct HttpServer 'heap {
 		wire_d.add(response.body)
 	}
 
-	public func handle(raw_request: String) -> String {
+	pub func handle(raw_request: String) -> String {
 		let method: Substring = self.extract_method(raw_request: raw_request)
 		if method.equals_string("GET") == false { return self.render(
 			response: Response(status: 404, body: "Not Found")
@@ -149,7 +149,7 @@ public struct HttpServer 'heap {
 		self.render(response: self.dispatch(path: path))
 	}
 
-	public func run(port: Int) -> () {
+	pub func run(port: Int) -> () {
 		let listener_fd = _io_socket(domain: AF_INET, socktype: SOCK_STREAM, proto: 0)
 		_io_bind(fd: listener_fd, addr: 0, port: port)
 		_io_listen(fd: listener_fd, backlog: 128)
@@ -178,8 +178,8 @@ public struct HttpServer 'heap {
 	}
 }
 
-public struct HTTP {
-	public static func Server() -> HttpServer {
+pub struct HTTP {
+	pub static func Server() -> HttpServer {
 		HttpServer()
 	}
 }

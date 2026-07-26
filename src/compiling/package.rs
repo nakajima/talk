@@ -2430,6 +2430,7 @@ fn is_talk_keyword(name: &str) -> bool {
             | "protocol"
             | "import"
             | "use"
+            | "pub"
             | "public"
             | "linear"
             | "static"
@@ -2611,7 +2612,7 @@ mod tests {
         .expect("write dependency manifest");
         fs::write(
             dependency.join("src/lib.tlk"),
-            "public func answer() -> Int { 42 }",
+            "pub func answer() -> Int { 42 }",
         )
         .expect("write dependency source");
         fs::write(
@@ -2675,7 +2676,7 @@ mod tests {
             ),
             (
                 "remote-lib/src/lib.tlk",
-                "public func answer() -> Int { 42 }",
+                "pub func answer() -> Int { 42 }",
             ),
         ] {
             let mut header = tar::Header::new_gnu();
@@ -2764,7 +2765,7 @@ mod tests {
         .expect("write dependency manifest");
         fs::write(
             dependency.join("src/lib.tlk"),
-            "public func answer() -> Int { 42 }",
+            "pub func answer() -> Int { 42 }",
         )
         .expect("write dependency source");
         for arguments in [

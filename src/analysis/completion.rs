@@ -31,6 +31,22 @@ pub struct CompletionAnalysis<'a> {
     pub types: &'a TypeOutput,
 }
 
+/// The access site completion answers for: the session module and the
+/// cursor's file (ADR 0042).
+#[derive(Clone, Copy)]
+struct Viewer {
+    module: crate::compiling::module::ModuleId,
+    file: crate::node_id::FileID,
+}
+
+impl Viewer {
+    fn member_accessible(&self, types: &TypeOutput, symbol: Symbol) -> bool {
+        types
+            .catalog
+            .member_accessible(symbol, self.module, self.file)
+    }
+}
+
 pub fn complete_in_workspace(
     workspace: &Workspace,
     document_id: &DocumentId,
@@ -140,10 +156,14 @@ fn member_completions(analysis: &CompletionAnalysis<'_>, dot_offset: u32) -> Vec
         return vec![];
     };
     let mut items = FxHashMap::default();
+    let viewer = Viewer {
+        module: analysis.types.module_id,
+        file: analysis.ast.file_id,
+    };
     if let Some(symbol) = type_receiver_symbol(&receiver) {
-        add_type_member_items(analysis.types, symbol, &mut items);
+        add_type_member_items(analysis.types, symbol, viewer, &mut items);
     } else if let Some(receiver_ty) = analysis.types.node_types.get(&receiver.id) {
-        add_member_items_for_ty(analysis.types, receiver_ty, &mut items);
+        add_member_items_for_ty(analysis.types, receiver_ty, viewer, &mut items);
     }
 
     let mut items: Vec<CompletionItem> = items.into_values().collect();
@@ -192,13 +212,14 @@ fn type_receiver_symbol(receiver: &Expr) -> Option<Symbol> {
 fn add_member_items_for_ty(
     types: &TypeOutput,
     receiver_ty: &Ty,
+    viewer: Viewer,
     items: &mut FxHashMap<String, CompletionItem>,
 ) {
     match member_lookup_ty(receiver_ty) {
         // Stripped by member_lookup_ty; unreachable here.
         Ty::Unique(_) => {}
         Ty::Nominal(symbol, args) => {
-            add_nominal_member_items(types, *symbol, args, receiver_ty, items);
+            add_nominal_member_items(types, *symbol, args, receiver_ty, viewer, items);
         }
         Ty::Record(row) => {
             for (label, ty) in &row.fields {
@@ -251,11 +272,15 @@ fn add_nominal_member_items(
     symbol: Symbol,
     args: &[Ty],
     receiver_ty: &Ty,
+    viewer: Viewer,
     items: &mut FxHashMap<String, CompletionItem>,
 ) {
     if let Some(info) = types.catalog.structs.get(&symbol) {
         let substitution = param_subst(&info.params, args);
-        for (label, (_, field_ty)) in &info.fields {
+        for (label, (property, field_ty)) in &info.fields {
+            if !viewer.member_accessible(types, *property) {
+                continue;
+            }
             let ty = substitute_ty(field_ty, &substitution);
             add_member_item(
                 items,
@@ -266,6 +291,9 @@ fn add_nominal_member_items(
         }
         for (label, set) in &info.methods {
             for method in set {
+                if !viewer.member_accessible(types, *method) {
+                    continue;
+                }
                 add_symbol_member_item(types, label, *method, &info.params, args, true, items);
             }
         }
@@ -274,6 +302,9 @@ fn add_nominal_member_items(
     if let Some(info) = types.catalog.enums.get(&symbol) {
         for (label, set) in &info.methods {
             for method in set {
+                if !viewer.member_accessible(types, *method) {
+                    continue;
+                }
                 add_symbol_member_item(types, label, *method, &info.params, args, true, items);
             }
         }
@@ -306,6 +337,9 @@ fn add_nominal_member_items(
             // application are completable (ADR 0036): a member on Box<Int>
             // is absent from Box<String>.
             let Some(inherent) = rows.iter().find(|row| {
+                if !viewer.member_accessible(types, row.symbol) {
+                    return false;
+                }
                 let mut probe = FxHashMap::default();
                 row.self_args.iter().zip(args).all(|(pattern, actual)| {
                     crate::types::ty::match_pattern(pattern, actual, &mut probe)
@@ -334,6 +368,7 @@ fn add_nominal_member_items(
 fn add_type_member_items(
     types: &TypeOutput,
     symbol: Symbol,
+    viewer: Viewer,
     items: &mut FxHashMap<String, CompletionItem>,
 ) {
     if let Some(info) = types.catalog.enums.get(&symbol) {
@@ -350,6 +385,9 @@ fn add_type_member_items(
     if let Some(info) = types.catalog.structs.get(&symbol) {
         for (label, set) in &info.statics {
             for method in set {
+                if !viewer.member_accessible(types, *method) {
+                    continue;
+                }
                 add_symbol_member_item(types, label, *method, &info.params, &[], false, items);
             }
         }
@@ -772,21 +810,125 @@ fn visible_symbols(
     }
 
     let mut result: FxHashMap<String, Symbol> = FxHashMap::default();
+    let mut chain: FxHashSet<NodeID> = FxHashSet::default();
     let mut current_id: Option<NodeID> = best.map(|s| s.node_id).or(Some(root_id));
 
     while let Some(id) = current_id {
         let Some(scope) = analysis.resolved_names.scopes.get(&id) else {
             break;
         };
+        chain.insert(id);
 
         for (name, sym) in scope.types.iter().chain(scope.values.iter()) {
+            // Sequential locals re-enter below with per-position facts:
+            // the final scope map keeps only the last same-named binder,
+            // which loses the binding visible before a shadow.
+            // Func-valued binders hoist block-wide (ADR 0013) and stay
+            // on the map path — their own scope wraps the binder span,
+            // which defeats the containment test below.
+            if matches!(sym, Symbol::DeclaredLocal(_) | Symbol::PatternBindLocal(_))
+                && !matches!(
+                    analysis.types.binder_ty(*sym),
+                    Some(crate::types::ty::Ty::Func(..))
+                )
+            {
+                continue;
+            }
             result.entry(name.clone()).or_insert(*sym);
         }
 
         current_id = scope.parent_id;
     }
 
+    // ADR 0013 locals: every binder declared in a chain scope, visible
+    // at the cursor — a `let` after its full declaration, a func-valued
+    // binder block-wide — with the latest pre-cursor binder winning per
+    // name.
+    let mut latest: FxHashMap<String, (u32, Symbol)> = FxHashMap::default();
+    for (&symbol, record) in &analysis.resolved_names.declarations {
+        if record.file != analysis.ast.file_id
+            || !matches!(
+                record.role,
+                crate::name_resolution::symbol::SymbolKind::DeclaredLocal
+                    | crate::name_resolution::symbol::SymbolKind::PatternBindLocal
+            )
+        {
+            continue;
+        }
+        let Some(&node) = analysis.resolved_names.symbols_to_node.get(&symbol) else {
+            continue;
+        };
+        let Some(meta) = analysis.ast.meta.get(&node) else {
+            continue;
+        };
+        let binder_start = meta.start.start;
+        let binder_end = meta.end.end;
+        if !chain.contains(&tightest_scope(analysis, binder_start, binder_end)) {
+            continue;
+        }
+        // Func-valued binders took the map path above.
+        if matches!(
+            analysis.types.binder_ty(symbol),
+            Some(crate::types::ty::Ty::Func(..))
+        ) {
+            continue;
+        }
+        // Visibility begins after the binder's full declaration
+        // (initializer included); match binders and loop binders
+        // have no enclosing `let` and settle at the binder itself.
+        let visible_from = enclosing_let_end(analysis, binder_start).unwrap_or(binder_end);
+        if byte_offset < visible_from {
+            continue;
+        }
+        let Some(name) = analysis.resolved_names.symbol_names.get(&symbol) else {
+            continue;
+        };
+        match latest.get(name.as_str()) {
+            Some((start, _)) if *start >= binder_start => {}
+            _ => {
+                latest.insert(name.clone(), (binder_start, symbol));
+            }
+        }
+    }
+    for (name, (_, symbol)) in latest {
+        result.insert(name, symbol);
+    }
+
     result
+}
+
+/// The deepest scope whose span contains the binder — the scope it was
+/// declared in.
+fn tightest_scope(analysis: &CompletionAnalysis<'_>, start: u32, end: u32) -> NodeID {
+    let root_id = NodeID(analysis.ast.file_id, 0);
+    let mut tightest: Option<(NodeID, u32)> = None;
+    for scope in analysis.resolved_names.scopes.values() {
+        let Some(meta) = analysis.ast.meta.get(&scope.node_id) else {
+            continue;
+        };
+        let (scope_start, scope_end) = (meta.start.start, meta.end.end);
+        if scope_start <= start && end <= scope_end {
+            let size = scope_end - scope_start;
+            if tightest.is_none_or(|(_, best)| size < best) {
+                tightest = Some((scope.node_id, size));
+            }
+        }
+    }
+    tightest.map(|(id, _)| id).unwrap_or(root_id)
+}
+
+/// The end of the `let` declaration containing a binder at
+/// `binder_start`, initializer included.
+fn enclosing_let_end(analysis: &CompletionAnalysis<'_>, binder_start: u32) -> Option<u32> {
+    for node_id in node_ids_at_offset(analysis.ast, binder_start) {
+        let Some(crate::node::Node::Decl(decl)) = analysis.ast.find(node_id) else {
+            continue;
+        };
+        if matches!(decl.kind, crate::node_kinds::decl::DeclKind::Let { .. }) {
+            return analysis.ast.meta.get(&decl.id).map(|meta| meta.end.end);
+        }
+    }
+    None
 }
 
 fn completion_kind(symbol: Symbol) -> Option<CompletionItemKind> {
@@ -893,6 +1035,69 @@ mod tests {
         assert!(
             items.iter().any(|i| i.label == "foo"),
             "expected foo in {items:?}"
+        );
+    }
+
+    // ADR 0042 §6 / ADR 0013: scope completion uses source-position
+    // facts — a sequential local is not suggested before its
+    // declaration, while hoisted local funcs stay visible block-wide.
+    #[test]
+    fn scope_completion_is_sequential_for_locals() {
+        let code = "func f() -> Int {\n\tlet early = 1\n\tx \n\tlet late = 2\n\tlate + early\n}\n";
+        let analyzed = analyze(code);
+        let byte_offset = byte_offset_for(code, "x ", 0) + 1;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "early"),
+            "expected early in {items:?}"
+        );
+        assert!(
+            !items.iter().any(|i| i.label == "late"),
+            "late suggested before its declaration: {items:?}"
+        );
+    }
+
+    // The final scope map keeps only the last same-named binder; the
+    // binding visible BEFORE a later shadow must still complete.
+    #[test]
+    fn scope_completion_keeps_the_binding_before_a_shadow() {
+        let code =
+            "func f() -> Int {\n\tlet value = 1\n\tx \n\tlet value = 2\n\tvalue + value\n}\n";
+        let analyzed = analyze(code);
+        let byte_offset = byte_offset_for(code, "x ", 0) + 1;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "value"),
+            "the pre-shadow binding must complete: {items:?}"
+        );
+    }
+
+    // A binder is visible after its initializer, not inside it.
+    #[test]
+    fn scope_completion_excludes_the_binder_inside_its_initializer() {
+        let code = "func f() -> Int {\n\tlet value = x + 1\n\tvalue\n}\n";
+        let analyzed = analyze(code);
+        let byte_offset = byte_offset_for(code, "x +", 0) + 1;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            !items.iter().any(|i| i.label == "value"),
+            "a binder must not complete inside its own initializer: {items:?}"
+        );
+    }
+
+    #[test]
+    fn scope_completion_keeps_hoisted_local_funcs() {
+        let code = "func f() -> Int {\n\tx \n\tfunc helper() -> Int { 2 }\n\thelper()\n}\n";
+        let analyzed = analyze(code);
+        let byte_offset = byte_offset_for(code, "x ", 0) + 1;
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        assert!(
+            items.iter().any(|i| i.label == "helper"),
+            "expected hoisted helper in {items:?}"
         );
     }
 

@@ -6,7 +6,7 @@ syntax case match
 
 syntax keyword talktalkControl if else loop for in match return break continue
 syntax keyword talktalkDeclaration func let init struct enum case protocol extend associated typealias effect import use from where
-syntax keyword talktalkModifier public linear static mut consuming any as handling
+syntax keyword talktalkModifier pub linear static mut consuming any as handling
 syntax keyword talktalkBoolean true false
 
 syntax match talktalkAttribute "@[A-Za-z0-9_][A-Za-z0-9_]*"

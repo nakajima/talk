@@ -2153,7 +2153,7 @@ pub mod tests {
     #[test]
     fn resolves_named_import() {
         let (asts, resolved) = resolve_multi(&[
-            ("./utils.tlk", "public let helper = 42"),
+            ("./utils.tlk", "pub let helper = 42"),
             ("./main.tlk", "use package::utils::{ helper }\nhelper"),
         ]);
 
@@ -2188,7 +2188,7 @@ pub mod tests {
     #[test]
     fn resolves_import_all() {
         let (asts, resolved) = resolve_multi(&[
-            ("./lib.tlk", "public let a = 1\npublic let b = 2"),
+            ("./lib.tlk", "pub let a = 1\npub let b = 2"),
             ("./main.tlk", "use package::lib\na\nb"),
         ]);
 
@@ -2201,6 +2201,261 @@ pub mod tests {
         // Both 'a' and 'b' should be resolved in main
         let main_ast = &asts[1];
         assert!(main_ast.roots.len() >= 3, "Expected at least 3 roots");
+    }
+
+    // ADR 0042 stage 2: the resolver records each declared symbol's
+    // defining file, owner, role, and visibility in one semantic product.
+    #[test]
+    fn declaration_records_carry_file_owner_role_and_visibility() {
+        use crate::name_resolution::symbol::SymbolKind;
+        use crate::node_kinds::decl::Visibility;
+
+        let (_, resolved) = resolve(
+            "pub struct Account {\n\tpub let display_name: Int\n\tlet token: Int\n\tpub func label() -> Int { 1 }\n}",
+        );
+
+        let symbol_named = |name: &str, role: SymbolKind| {
+            *resolved
+                .symbol_names
+                .iter()
+                .find(|(sym, n)| {
+                    n.as_str() == name
+                        && resolved
+                            .declarations
+                            .get(sym)
+                            .is_some_and(|record| record.role == role)
+                })
+                .unwrap_or_else(|| panic!("no {role:?} symbol named {name}"))
+                .0
+        };
+
+        let account = symbol_named("Account", SymbolKind::Struct);
+        let record = resolved.declarations.get(&account).expect("Account record");
+        assert_eq!(record.file, FileID(0));
+        assert_eq!(record.owner, None);
+        assert_eq!(record.role, SymbolKind::Struct);
+        assert_eq!(record.declared, Visibility::Public);
+        assert_eq!(record.effective, Visibility::Public);
+
+        let display_name = symbol_named("display_name", SymbolKind::Property);
+        let record = resolved.declarations.get(&display_name).expect("record");
+        assert_eq!(record.file, FileID(0));
+        assert_eq!(record.owner, Some(account));
+        assert_eq!(record.role, SymbolKind::Property);
+        assert_eq!(record.declared, Visibility::Public);
+
+        let token = symbol_named("token", SymbolKind::Property);
+        let record = resolved.declarations.get(&token).expect("record");
+        assert_eq!(record.owner, Some(account));
+        assert_eq!(record.declared, Visibility::Private);
+
+        let label = symbol_named("label", SymbolKind::InstanceMethod);
+        let record = resolved.declarations.get(&label).expect("record");
+        assert_eq!(record.owner, Some(account));
+        assert_eq!(record.role, SymbolKind::InstanceMethod);
+        assert_eq!(record.declared, Visibility::Public);
+    }
+
+    #[test]
+    fn public_member_with_private_owner_is_rejected() {
+        for code in [
+            "struct Hidden {\n\tpub func reveal() -> Int { 1 }\n}",
+            "struct Hidden {\n\tpub let field: Int\n}",
+            "struct Outer {\n\tpub struct Inner {}\n}",
+            "struct Hidden {}\nextend Hidden {\n\tpub func reveal() -> Int { 1 }\n}",
+        ] {
+            let (_, resolved) = resolve_err(code);
+            assert!(
+                resolved.diagnostics.iter().any(|d| matches!(
+                    d,
+                    AnyDiagnostic::NameResolution(Diagnostic {
+                        kind: NameResolverError::PublicMemberPrivateOwner { .. },
+                        ..
+                    })
+                )),
+                "expected public-member-private-owner diagnostic for {code:?}, got {:?}",
+                resolved.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn public_member_with_public_owner_is_accepted() {
+        let (_, resolved) =
+            resolve("pub struct Open {}\nextend Open {\n\tpub func fine() -> Int { 1 }\n}");
+        assert!(resolved.diagnostics.is_empty());
+    }
+
+    // ADR 0042 stage 3: import insertion never overwrites an existing
+    // declaration or import; collisions are structured diagnostics.
+    #[test]
+    fn named_import_collision_with_local_declaration_diagnoses() {
+        for local in ["pub let value = 2", "let value = 2"] {
+            let (_, resolved) = resolve_multi(&[
+                ("./lib.tlk", "pub let value = 1"),
+                (
+                    "./main.tlk",
+                    &format!("{local}\nuse package::lib::{{ value }}"),
+                ),
+            ]);
+            assert!(
+                resolved.diagnostics.iter().any(|d| matches!(
+                    d,
+                    AnyDiagnostic::NameResolution(Diagnostic {
+                        kind: NameResolverError::ImportCollision { .. },
+                        ..
+                    })
+                )),
+                "expected import collision with {local:?}, got {:?}",
+                resolved.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn two_named_imports_of_different_symbols_collide() {
+        let (_, resolved) = resolve_multi(&[
+            ("./lib_a.tlk", "pub let shared = 1"),
+            ("./lib_b.tlk", "pub let shared = 2"),
+            (
+                "./main.tlk",
+                "use package::lib_a::{ shared }\nuse package::lib_b::{ shared }",
+            ),
+        ]);
+        assert!(
+            resolved.diagnostics.iter().any(|d| matches!(
+                d,
+                AnyDiagnostic::NameResolution(Diagnostic {
+                    kind: NameResolverError::ImportCollision { .. },
+                    ..
+                })
+            )),
+            "expected import collision, got {:?}",
+            resolved.diagnostics
+        );
+    }
+
+    #[test]
+    fn aliased_import_avoids_collision() {
+        let (_, resolved) = resolve_multi(&[
+            ("./lib_a.tlk", "pub let shared = 1"),
+            ("./lib_b.tlk", "pub let shared = 2"),
+            (
+                "./main.tlk",
+                "use package::lib_a::{ shared }\nuse package::lib_b::{ shared as other }\nshared\nother",
+            ),
+        ]);
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "expected no diagnostics, got {:?}",
+            resolved.diagnostics
+        );
+    }
+
+    #[test]
+    fn import_all_collision_diagnoses() {
+        let (_, resolved) = resolve_multi(&[
+            ("./lib_a.tlk", "pub let shared = 1"),
+            ("./lib_b.tlk", "pub let shared = 2"),
+            ("./main.tlk", "use package::lib_a\nuse package::lib_b"),
+        ]);
+        assert!(
+            resolved.diagnostics.iter().any(|d| matches!(
+                d,
+                AnyDiagnostic::NameResolution(Diagnostic {
+                    kind: NameResolverError::ImportCollision { .. },
+                    ..
+                })
+            )),
+            "expected import collision, got {:?}",
+            resolved.diagnostics
+        );
+    }
+
+    #[test]
+    fn reimporting_the_same_symbol_is_not_a_collision() {
+        let (_, resolved) = resolve_multi(&[
+            ("./lib.tlk", "pub let value = 1"),
+            (
+                "./main.tlk",
+                "use package::lib::{ value }\nuse package::lib\nvalue",
+            ),
+        ]);
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "expected no diagnostics, got {:?}",
+            resolved.diagnostics
+        );
+    }
+
+    // ADR 0042 stage 3: every binder of a public top-level destructuring
+    // declaration is predeclared and exported.
+    #[test]
+    fn public_destructuring_binders_are_importable() {
+        let (_, resolved) = resolve_multi(&[
+            ("./lib.tlk", "pub let (first, second) = (1, 2)"),
+            (
+                "./main.tlk",
+                "use package::lib::{ first, second }\nfirst\nsecond",
+            ),
+        ]);
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "expected no diagnostics, got {:?}",
+            resolved.diagnostics
+        );
+    }
+
+    // ADR 0042: duplicate exported declaration keys diagnose; they are
+    // never resolved by declaration or map order.
+    #[test]
+    fn duplicate_public_type_across_files_diagnoses() {
+        let (_, resolved) = resolve_multi(&[
+            ("./lib_a.tlk", "pub struct Thing {}"),
+            ("./lib_b.tlk", "pub struct Thing {}"),
+        ]);
+        assert!(
+            resolved.diagnostics.iter().any(|d| matches!(
+                d,
+                AnyDiagnostic::NameResolution(Diagnostic {
+                    kind: NameResolverError::DuplicateExport(_),
+                    ..
+                })
+            )),
+            "expected duplicate export, got {:?}",
+            resolved.diagnostics
+        );
+    }
+
+    #[test]
+    fn private_same_named_types_in_separate_files_are_legal() {
+        let (_, resolved) = resolve_multi(&[
+            ("./lib_a.tlk", "struct Helper {}"),
+            ("./lib_b.tlk", "struct Helper {}"),
+        ]);
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "expected no diagnostics, got {:?}",
+            resolved.diagnostics
+        );
+    }
+
+    #[test]
+    fn same_file_duplicate_nominals_diagnose() {
+        for code in ["struct Twice {}\nstruct Twice {}", "struct Twice {}\nenum Twice { case a }"] {
+            let (_, resolved) = resolve_err(code);
+            assert!(
+                resolved.diagnostics.iter().any(|d| matches!(
+                    d,
+                    AnyDiagnostic::NameResolution(Diagnostic {
+                        kind: NameResolverError::DuplicateDeclaration(_),
+                        ..
+                    })
+                )),
+                "expected duplicate declaration for {code:?}, got {:?}",
+                resolved.diagnostics
+            );
+        }
     }
 
     #[test]
@@ -2253,8 +2508,8 @@ pub mod tests {
     #[test]
     fn duplicate_export_emits_error() {
         let code = r#"
-public let a = 1
-public let a = 2
+pub let a = 1
+pub let a = 2
 "#;
         let (_, resolved) = resolve_err(code);
         let has_duplicate_error = resolved.diagnostics.iter().any(|d| {

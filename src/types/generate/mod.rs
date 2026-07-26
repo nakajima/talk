@@ -437,6 +437,7 @@ impl<'a> TypecheckSession<'a> {
         self.catalog.commit_deinit_rows();
         self.catalog.commit_dictionaries();
         self.catalog.commit_callable_owners();
+        self.catalog.commit_member_visibility(self.resolved);
 
         {
             let mut groups = BindingGroupChecker {
@@ -466,6 +467,12 @@ impl<'a> TypecheckSession<'a> {
         self.check_matches(asts);
         self.check_member_references(asts);
         self.check_call_labels(asts);
+        visibility::check_public_api_closure(
+            self.resolved,
+            &self.schemes,
+            &self.catalog,
+            &mut self.diagnostics.errors,
+        );
         self.finalize()
     }
 
@@ -621,6 +628,7 @@ mod labels;
 mod pattern;
 mod stmt;
 mod support;
+mod visibility;
 
 use artifacts::{MarkedSlot, TypeArtifacts};
 use diagnostics::DiagnosticSink;

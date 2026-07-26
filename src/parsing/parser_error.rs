@@ -92,6 +92,23 @@ pub enum ParserError {
         name: String,
         span: Span,
     },
+    /// The removed `public` spelling (ADR 0042); the modifier is `pub`.
+    LegacyPublicModifier {
+        span: Span,
+    },
+    /// `pub` on a declaration or position that admits no visibility
+    /// modifier (ADR 0042 declaration matrix).
+    VisibilityNotAllowed {
+        what: &'static str,
+        span: Span,
+    },
+    RepeatedVisibilityModifier {
+        span: Span,
+    },
+    /// `pub macro` awaits an accepted macro-export design (ADR 0042).
+    MacroExportUnsupported {
+        span: Span,
+    },
     DuplicateMacroRule {
         name: String,
         arity: usize,
@@ -155,6 +172,10 @@ impl ParserError {
             Self::IncompleteFuncSignature(_) => "parser.incomplete-function-signature",
             Self::ConversionError(_) => "parser.conversion",
             Self::LowercaseStaticParameter { .. } => "parser.lowercase-static-parameter",
+            Self::LegacyPublicModifier { .. } => "parser.legacy-public-modifier",
+            Self::VisibilityNotAllowed { .. } => "parser.visibility-not-allowed",
+            Self::RepeatedVisibilityModifier { .. } => "parser.repeated-visibility-modifier",
+            Self::MacroExportUnsupported { .. } => "parser.macro-export-unsupported",
             Self::DuplicateMacroRule { .. } => "macro.duplicate-rule",
             Self::UndefinedMacro { .. } => "macro.undefined",
             Self::MacroArityMismatch { .. } => "macro.arity-mismatch",
@@ -231,6 +252,18 @@ impl Display for ParserError {
                 f,
                 "Static generic parameter `{name}` must begin with an uppercase letter"
             ),
+            Self::LegacyPublicModifier { .. } => {
+                write!(f, "`public` was renamed to `pub`; replace `public` with `pub`")
+            }
+            Self::VisibilityNotAllowed { what, .. } => {
+                write!(f, "`pub` is not allowed on {what}")
+            }
+            Self::RepeatedVisibilityModifier { .. } => {
+                write!(f, "Repeated visibility modifier; write `pub` once")
+            }
+            Self::MacroExportUnsupported { .. } => {
+                write!(f, "Macros cannot be exported; remove `pub`")
+            }
             Self::DuplicateMacroRule { name, arity, .. } => {
                 write!(f, "Duplicate macro rule `#{name}` with {arity} argument(s)")
             }

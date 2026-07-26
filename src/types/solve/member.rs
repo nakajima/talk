@@ -255,6 +255,25 @@ impl<'s> Solver<'s> {
             })
     }
 
+    /// Whether `member` may be accessed from this constraint's access
+    /// site (ADR 0042).
+    fn member_accessible(&self, member: Symbol, origin: CtOrigin) -> bool {
+        self.catalog
+            .member_accessible(member, self.module_id, origin.node.0)
+    }
+
+    /// Report a member that exists but is hidden from the access site.
+    fn inaccessible_member(&mut self, receiver: &Ty, label: String, origin: CtOrigin) {
+        let rendered = self.store.render(receiver);
+        self.errors.push((
+            TypeError::InaccessibleMember {
+                receiver: rendered,
+                label,
+            },
+            origin.node,
+        ));
+    }
+
     pub(super) fn try_member(
         &mut self,
         receiver: Ty,
@@ -510,6 +529,13 @@ impl<'s> Solver<'s> {
                 None
             }
             Ty::Nominal(symbol, args) => {
+                // A member that exists but is hidden from the access
+                // site (ADR 0042) never participates in dispatch; the
+                // label may still resolve through a public protocol
+                // requirement below. Only when nothing resolves does a
+                // hidden candidate turn the unknown-member error into
+                // an inaccessible-member one.
+                let mut hidden = false;
                 if let Some(info) = self.catalog.structs.get(&symbol) {
                     let substitution: FxHashMap<Symbol, Ty> = info
                         .params
@@ -518,40 +544,94 @@ impl<'s> Solver<'s> {
                         .zip(args.iter().cloned())
                         .collect();
                     if let Some((property, field_ty)) = info.fields.get(&label_str) {
-                        // A closure field's row is THIS instance's: splice
-                        // the head's trailing `Ty::Eff` args over the
-                        // field's quantified tails. A head without eff
-                        // args (an annotation or import that never met a
-                        // construction) reads with fresh rows instead.
-                        let mut eff_args = args
-                            .iter()
-                            .filter_map(|arg| match arg {
-                                Ty::Eff(row) => Some(row.clone()),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>()
-                            .into_iter();
-                        let eff_rows: FxHashMap<Symbol, EffectRow> = info
-                            .eff_params
-                            .iter()
-                            .map(|&param| {
-                                let row = eff_args.next().unwrap_or_else(|| {
-                                    EffectRow::open(self.store.fresh_eff(self.level, origin.node))
-                                });
-                                (param, row)
-                            })
-                            .collect();
-                        let field_ty = field_ty
-                            .substitute(&substitution, &Default::default(), &Default::default())
-                            .substitute_eff_rows(&eff_rows);
-                        queue.push(Constraint::Eq(member, field_ty, origin));
-                        self.member_resolutions
-                            .insert(origin.node, MemberResolution::Direct(*property));
-                        return None;
+                        if !self.member_accessible(*property, origin) {
+                            hidden = true;
+                        } else {
+                            // A closure field's row is THIS instance's: splice
+                            // the head's trailing `Ty::Eff` args over the
+                            // field's quantified tails. A head without eff
+                            // args (an annotation or import that never met a
+                            // construction) reads with fresh rows instead.
+                            let mut eff_args = args
+                                .iter()
+                                .filter_map(|arg| match arg {
+                                    Ty::Eff(row) => Some(row.clone()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .into_iter();
+                            let eff_rows: FxHashMap<Symbol, EffectRow> = info
+                                .eff_params
+                                .iter()
+                                .map(|&param| {
+                                    let row = eff_args.next().unwrap_or_else(|| {
+                                        EffectRow::open(
+                                            self.store.fresh_eff(self.level, origin.node),
+                                        )
+                                    });
+                                    (param, row)
+                                })
+                                .collect();
+                            let field_ty = field_ty
+                                .substitute(
+                                    &substitution,
+                                    &Default::default(),
+                                    &Default::default(),
+                                )
+                                .substitute_eff_rows(&eff_rows);
+                            queue.push(Constraint::Eq(member, field_ty, origin));
+                            self.member_resolutions
+                                .insert(origin.node, MemberResolution::Direct(*property));
+                            return None;
+                        }
                     }
                     if let Some(set) = info.methods.get(&label_str) {
-                        let set = set.clone();
-                        let method = self.select_method_overload(&set, &label_str, origin)?;
+                        // Inaccessible overloads never participate in
+                        // selection (ADR 0042).
+                        let accessible: Vec<Symbol> = set
+                            .iter()
+                            .copied()
+                            .filter(|method| self.member_accessible(*method, origin))
+                            .collect();
+                        if accessible.is_empty() {
+                            hidden |= !set.is_empty();
+                        } else {
+                            let method =
+                                self.select_method_overload(&accessible, &label_str, origin)?;
+                            return self.dispatch_nominal_method(
+                                method,
+                                &substitution,
+                                self_receiver.clone(),
+                                label,
+                                member,
+                                origin,
+                                queue,
+                            );
+                        }
+                    }
+                }
+                // Methods on enums dispatch exactly like struct methods:
+                // instantiate the (possibly generic) scheme, pin self,
+                // and the member is the self-dropped signature.
+                if let Some(info) = self.catalog.enums.get(&symbol)
+                    && let Some(set) = info.methods.get(&label_str)
+                {
+                    let accessible: Vec<Symbol> = set
+                        .iter()
+                        .copied()
+                        .filter(|method| self.member_accessible(*method, origin))
+                        .collect();
+                    if accessible.is_empty() {
+                        hidden |= !set.is_empty();
+                    } else {
+                        let substitution: FxHashMap<Symbol, Ty> = info
+                            .params
+                            .iter()
+                            .map(|param| param.symbol)
+                            .zip(args.iter().cloned())
+                            .collect();
+                        let method =
+                            self.select_method_overload(&accessible, &label_str, origin)?;
                         return self.dispatch_nominal_method(
                             method,
                             &substitution,
@@ -562,30 +642,6 @@ impl<'s> Solver<'s> {
                             queue,
                         );
                     }
-                }
-                // Methods on enums dispatch exactly like struct methods:
-                // instantiate the (possibly generic) scheme, pin self,
-                // and the member is the self-dropped signature.
-                if let Some(info) = self.catalog.enums.get(&symbol)
-                    && let Some(set) = info.methods.get(&label_str)
-                {
-                    let set = set.clone();
-                    let substitution: FxHashMap<Symbol, Ty> = info
-                        .params
-                        .iter()
-                        .map(|param| param.symbol)
-                        .zip(args.iter().cloned())
-                        .collect();
-                    let method = self.select_method_overload(&set, &label_str, origin)?;
-                    return self.dispatch_nominal_method(
-                        method,
-                        &substitution,
-                        self_receiver.clone(),
-                        label,
-                        member,
-                        origin,
-                        queue,
-                    );
                 }
                 // `clone` is a real marker-protocol requirement, but its
                 // implementation is compiler-provided because retaining an
@@ -668,6 +724,19 @@ impl<'s> Solver<'s> {
                         origin,
                     });
                 }
+                // ADR 0042: rows hidden from the access site never
+                // participate in selection.
+                hidden |= self
+                    .catalog
+                    .extend_members
+                    .get(&symbol)
+                    .and_then(|members| members.get(&label_str))
+                    .is_some_and(|rows| {
+                        !rows.is_empty()
+                            && rows
+                                .iter()
+                                .all(|row| !self.member_accessible(row.symbol, origin))
+                    });
                 // Candidate instance rows for this label: the receiver's
                 // complete application selects among them. Locally declared
                 // rows are disjoint (overlap is rejected at collection),
@@ -682,6 +751,7 @@ impl<'s> Solver<'s> {
                             let rows = members.get(&label_str)?;
                             let matching: Vec<_> = rows
                                 .iter()
+                                .filter(|row| self.member_accessible(row.symbol, origin))
                                 .filter(|row| {
                                     let mut probe = FxHashMap::default();
                                     row.self_args.iter().zip(&args).all(|(pattern, actual)| {
@@ -812,6 +882,10 @@ impl<'s> Solver<'s> {
                         }
                         MemberDispatch::NoCandidate => {}
                     }
+                }
+                if hidden {
+                    self.inaccessible_member(&diagnostic_receiver, label_str, origin);
+                    return None;
                 }
                 let rendered = self.store.render(&diagnostic_receiver);
                 self.errors.push((

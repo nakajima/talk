@@ -5733,9 +5733,18 @@ pub mod tests {
         }
     }
 
+    fn parse_error(code: &'static str) -> ParserError {
+        let lexer = Lexer::new(code);
+        let parser = Parser::new("-", FileID(0), lexer);
+        match parser.parse() {
+            Ok(_) => panic!("Expected parse of {code:?} to fail"),
+            Err(err) => err,
+        }
+    }
+
     #[test]
-    fn parses_public_func() {
-        let parsed = parse("public func greet() {}");
+    fn parses_pub_func() {
+        let parsed = parse("pub func greet() {}");
 
         let decl = parsed.roots[0].as_decl();
         assert_eq!(decl.visibility, Visibility::Public);
@@ -5743,8 +5752,8 @@ pub mod tests {
     }
 
     #[test]
-    fn parses_public_struct() {
-        let parsed = parse("public struct Point {}");
+    fn parses_pub_struct() {
+        let parsed = parse("pub struct Point {}");
 
         let decl = parsed.roots[0].as_decl();
         assert_eq!(decl.visibility, Visibility::Public);
@@ -5752,12 +5761,190 @@ pub mod tests {
     }
 
     #[test]
-    fn parses_public_let() {
-        let parsed = parse("public let x = 5");
+    fn parses_pub_let() {
+        let parsed = parse("pub let x = 5");
 
         let decl = parsed.roots[0].as_decl();
         assert_eq!(decl.visibility, Visibility::Public);
         assert!(matches!(decl.kind, DeclKind::Let { .. }));
+    }
+
+    #[test]
+    fn parses_pub_top_level_decls() {
+        for code in [
+            "pub enum E { case a }",
+            "pub protocol P { func f() -> Int }",
+            "pub typealias A = Int",
+            "pub effect 'log(message: String) -> Void",
+        ] {
+            let parsed = parse(code);
+            let decl = parsed.roots[0].as_decl();
+            assert_eq!(decl.visibility, Visibility::Public, "in {code:?}");
+        }
+    }
+
+    #[test]
+    fn parses_pub_members() {
+        let parsed = parse(
+            "struct Account {\n\
+             \tpub let display_name: String\n\
+             \tlet token: String\n\
+             \tpub init(display_name: String) { self.display_name = display_name }\n\
+             \tpub func name() -> String { self.display_name }\n\
+             \tpub static func default_name() -> String { \"anon\" }\n\
+             \tfunc authenticate() -> Bool { false }\n\
+             }",
+        );
+
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Struct { body, .. } = &decl.kind else {
+            panic!("Expected struct, got {:?}", decl.kind);
+        };
+
+        let visibilities: Vec<Visibility> =
+            body.decls.iter().map(|decl| decl.visibility).collect();
+        assert_eq!(
+            visibilities,
+            vec![
+                Visibility::Public,
+                Visibility::Private,
+                Visibility::Public,
+                Visibility::Public,
+                Visibility::Public,
+                Visibility::Private,
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_pub_nested_nominal_and_alias() {
+        let parsed = parse(
+            "struct Outer {\n\
+             \tpub struct Inner {}\n\
+             \tpub typealias A = Int\n\
+             }",
+        );
+
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Struct { body, .. } = &decl.kind else {
+            panic!("Expected struct, got {:?}", decl.kind);
+        };
+        for decl in &body.decls {
+            assert_eq!(decl.visibility, Visibility::Public);
+        }
+    }
+
+    #[test]
+    fn parses_pub_inherent_extension_member() {
+        let parsed = parse(
+            "extend Account {\n\
+             \tpub func summary() -> String { \"\" }\n\
+             \tfunc helper() -> String { \"\" }\n\
+             }",
+        );
+
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Extend { body, .. } = &decl.kind else {
+            panic!("Expected extend, got {:?}", decl.kind);
+        };
+        assert_eq!(body.decls[0].visibility, Visibility::Public);
+        assert_eq!(body.decls[1].visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn parses_private_func_by_default_with_pub_keyword() {
+        let parsed = parse("func greet() {}");
+
+        let decl = parsed.roots[0].as_decl();
+        assert_eq!(decl.visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn legacy_public_modifier_is_a_migration_error() {
+        assert!(matches!(
+            parse_error("public func greet() {}"),
+            ParserError::LegacyPublicModifier { .. }
+        ));
+        assert!(matches!(
+            parse_error("public struct Point {}"),
+            ParserError::LegacyPublicModifier { .. }
+        ));
+    }
+
+    #[test]
+    fn repeated_visibility_modifier_is_an_error() {
+        assert!(matches!(
+            parse_error("pub pub func greet() {}"),
+            ParserError::RepeatedVisibilityModifier { .. }
+        ));
+        assert!(matches!(
+            parse_error("pub public func greet() {}"),
+            ParserError::RepeatedVisibilityModifier { .. }
+        ));
+    }
+
+    #[test]
+    fn pub_not_admitted_on_imports() {
+        assert!(matches!(
+            parse_error("pub use collections"),
+            ParserError::VisibilityNotAllowed { .. }
+        ));
+    }
+
+    #[test]
+    fn pub_not_admitted_on_statements() {
+        assert!(matches!(
+            parse_error("pub 1 + 2"),
+            ParserError::VisibilityNotAllowed { .. }
+        ));
+    }
+
+    #[test]
+    fn pub_not_admitted_on_locals() {
+        assert!(matches!(
+            parse_error("func f() { pub let x = 5 }"),
+            ParserError::VisibilityNotAllowed { .. }
+        ));
+        assert!(matches!(
+            parse_error("func f() { pub func g() {} }"),
+            ParserError::VisibilityNotAllowed { .. }
+        ));
+    }
+
+    #[test]
+    fn pub_not_admitted_on_enum_cases() {
+        assert!(matches!(
+            parse_error("enum E { pub case a }"),
+            ParserError::VisibilityNotAllowed { .. }
+        ));
+    }
+
+    #[test]
+    fn pub_not_admitted_in_protocol_bodies() {
+        assert!(matches!(
+            parse_error("protocol P { pub func f() -> Int }"),
+            ParserError::VisibilityNotAllowed { .. }
+        ));
+        assert!(matches!(
+            parse_error("protocol P { pub init(x: Int) }"),
+            ParserError::VisibilityNotAllowed { .. }
+        ));
+    }
+
+    #[test]
+    fn pub_not_admitted_on_extends() {
+        assert!(matches!(
+            parse_error("pub extend Point { }"),
+            ParserError::VisibilityNotAllowed { .. }
+        ));
+    }
+
+    #[test]
+    fn pub_macro_is_unsupported_export() {
+        assert!(matches!(
+            parse_error("pub macro twice($x) = $x + $x"),
+            ParserError::MacroExportUnsupported { .. }
+        ));
     }
 
     #[test]

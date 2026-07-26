@@ -10,31 +10,31 @@ use package::Ownership::{ Borrowed, CheapClone }
 use package::Optional::{ Optional }
 use package::Iterable::{ IndexIterable }
 
-public struct String {
-	let storage: ByteStorage
-	let byte_count: Int
-	let capacity: Int
+pub struct String {
+	pub let storage: ByteStorage
+	pub let byte_count: Int
+	pub let capacity: Int
 
-	init(base: RawPtr, byte_count: Int, capacity: Int) {
+	pub init(base: RawPtr, byte_count: Int, capacity: Int) {
 		self.storage = ByteStorage(base: base)
 		self.byte_count = byte_count
 		self.capacity = capacity
 		self
 	}
 
-	func to_string() -> String {
+	pub func to_string() -> String {
 		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
 		_copy(from: self.storage.base, to: base, length: self.byte_count)
 		String(base: base, byte_count: self.byte_count, capacity: self.byte_count)
 	}
 }
 
-public struct Substring {
-	let storage: ByteStorage
-	let start: Int
-	let byte_count: Int
+pub struct Substring {
+	pub let storage: ByteStorage
+	pub let start: Int
+	pub let byte_count: Int
 
-	init(storage: ByteStorage, start: Int, byte_count: Int) {
+	pub init(storage: ByteStorage, start: Int, byte_count: Int) {
 		self.storage = storage
 		self.start = start
 		self.byte_count = byte_count
@@ -49,18 +49,18 @@ extend String: CheapClone {}
 // A borrowed view of a string's raw UTF-8 bytes. Offsets are byte
 // offsets: `slice` can split a multi-byte character, so anything
 // character-shaped should iterate instead.
-public struct UTF8View {
-	let storage: ByteStorage
-	let start: Int
-	let byte_count: Int
+pub struct UTF8View {
+	pub let storage: ByteStorage
+	pub let start: Int
+	pub let byte_count: Int
 
-	func count() -> Int { self.byte_count }
+	pub func count() -> Int { self.byte_count }
 
-	func at(index: Int) -> Byte {
+	pub func at(index: Int) -> Byte {
 		self.storage.get(self.start + index)
 	}
 
-	func slice(start: Int, byte_count: Int) -> Substring {
+	pub func slice(start: Int, byte_count: Int) -> Substring {
 		Substring(
 			storage: self.storage,
 			start: self.start + start,
@@ -71,7 +71,7 @@ public struct UTF8View {
 
 extend UTF8View: Borrowed {}
 
-public protocol StringMethods {
+pub protocol StringMethods {
 	func as_substring() -> Substring
 	func utf8() -> UTF8View
 	func find(needle: String) -> Int?
@@ -81,44 +81,44 @@ public protocol StringMethods {
 }
 
 extend String: StringMethods {
-	func as_substring() -> Substring {
+	pub func as_substring() -> Substring {
 		Substring(storage: self.storage, start: 0, byte_count: self.byte_count)
 	}
 
-	func utf8() -> UTF8View {
+	pub func utf8() -> UTF8View {
 		UTF8View(storage: self.storage, start: 0, byte_count: self.byte_count)
 	}
 
-	func find(needle: String) -> Int? {
+	pub func find(needle: String) -> Int? {
 		self.as_substring().find(needle: needle)
 	}
 
-	func find_from(needle: String, start: Int) -> Int? {
+	pub func find_from(needle: String, start: Int) -> Int? {
 		self.as_substring().find_from(needle: needle, start: start)
 	}
 
-	func starts_with(needle: String) -> Bool {
+	pub func starts_with(needle: String) -> Bool {
 		self.as_substring().starts_with(needle: needle)
 	}
 
-	func ends_with(needle: String) -> Bool {
+	pub func ends_with(needle: String) -> Bool {
 		self.as_substring().ends_with(needle: needle)
 	}
 }
 
 extend Substring {
-	func utf8() -> UTF8View {
+	pub func utf8() -> UTF8View {
 		UTF8View(storage: self.storage, start: self.start, byte_count: self.byte_count)
 	}
 
-	func find(needle: String) -> Int? {
+	pub func find(needle: String) -> Int? {
 		self.find_from(needle: needle, start: 0)
 	}
 
 	// The found offset is a UTF-8 byte offset, valid as `utf8().slice`
 	// input. Byte-wise search is exact for UTF-8: a needle can only
 	// match at character boundaries of itself.
-	func find_from(needle: String, start: Int) -> Int? {
+	pub func find_from(needle: String, start: Int) -> Int? {
 		if start < 0 { return Optional.none }
 		if self.byte_count < start { return Optional.none }
 		if needle.byte_count == 0 { return Optional.some(start) }
@@ -140,14 +140,14 @@ extend Substring {
 		Optional.none
 	}
 
-	func to_string() -> String {
+	pub func to_string() -> String {
 		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
 		let source: RawPtr = _ptr_add(ptr: self.storage.base, offset: self.start)
 		_copy(from: source, to: base, length: self.byte_count)
 		String(base: base, byte_count: self.byte_count, capacity: self.byte_count)
 	}
 
-	func equals_string(_ rhs: String) -> Bool {
+	pub func equals_string(_ rhs: String) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 
 		let i = 0
@@ -161,7 +161,7 @@ extend Substring {
 		true
 	}
 
-	func starts_with(needle: String) -> Bool {
+	pub func starts_with(needle: String) -> Bool {
 		if needle.count() > self.count() { return false }
 		let chars = self.iter()
 		let needle_chars = needle.iter()
@@ -177,7 +177,7 @@ extend Substring {
 		true
 	}
 
-	func ends_with(needle: String) -> Bool {
+	pub func ends_with(needle: String) -> Bool {
 		if needle.count() > self.count() { return false }
 		let chars = self.iter().skip(count: self.count() - needle.count())
 		let needle_chars = needle.iter()
@@ -195,13 +195,13 @@ extend Substring {
 }
 
 extend Substring: Add<String> {
-	func add(_ rhs: String) -> String {
+	pub func add(_ rhs: String) -> String {
 		self.to_string() + rhs
 	}
 }
 
 extend String: Add<String> {
-	func add(_ rhs: String) -> String {
+	pub func add(_ rhs: String) -> String {
 		let selfLen: Int = self.byte_count
 		let rhsLen: Int = rhs.byte_count
 		let newLen: Int = selfLen + rhsLen
@@ -215,7 +215,7 @@ extend String: Add<String> {
 }
 
 extend String: Equatable<String> {
-	func equals(_ rhs: String) -> Bool {
+	pub func equals(_ rhs: String) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 
 		let i = 0

@@ -68,6 +68,10 @@ pub struct Solver<'s> {
     pub store: &'s mut VarStore,
     pub errors: &'s mut Vec<(TypeError, NodeID)>,
     pub catalog: &'s TypeCatalog,
+    /// The session's module, for member accessibility (ADR 0042):
+    /// private members admit access only from their defining file, which
+    /// is only meaningful for symbols of this module.
+    pub module_id: crate::compiling::module::ModuleId,
     pub schemes: &'s FxHashMap<Symbol, Scheme>,
     pub mono: &'s FxHashMap<Symbol, Ty>,
     pub instantiations: &'s mut FxHashMap<NodeID, Vec<(Symbol, Ty)>>,

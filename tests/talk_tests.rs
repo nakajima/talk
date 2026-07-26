@@ -1010,15 +1010,15 @@ fn run_suppresses_a_unit_result() {
 #[test]
 fn run_executes_an_explicit_entry_function() {
     let source = b"// no-core\n\
-        public func one() -> Int { return 1 }\n\
-        public func two() -> Int { return 2 }\n";
+        pub func one() -> Int { return 1 }\n\
+        pub func two() -> Int { return 2 }\n";
     assert_runs(source, &["--entry", "two"], b"2\n");
 }
 
 #[test]
 fn run_falls_back_to_main_when_there_is_no_script_body() {
     assert_runs(
-        b"public func main() -> Int { return 41 + 1 }\n",
+        b"pub func main() -> Int { return 41 + 1 }\n",
         &[],
         b"42\n",
     );
@@ -2219,7 +2219,7 @@ fn test_command_resolves_the_package_root_from_a_path_argument() {
     .expect("root manifest");
     std::fs::write(
         root.join("src/lib.tlk"),
-        "public func answer() -> Int {\n\t42\n}\n",
+        "pub func answer() -> Int {\n\t42\n}\n",
     )
     .expect("library source");
     std::fs::write(
@@ -2295,7 +2295,7 @@ fn package_run_and_test_use_the_locked_graph() {
     .expect("dependency manifest");
     std::fs::write(
         dependency.join("src/lib.tlk"),
-        "public func answer_for(n: Int) -> Int {\n\tn + 2\n}\n",
+        "pub func answer_for(n: Int) -> Int {\n\tn + 2\n}\n",
     )
     .expect("dependency source");
     std::fs::write(
@@ -2857,7 +2857,7 @@ fn run_package_entry_flag_selects_the_named_function() {
     .expect("manifest");
     std::fs::write(
         dir.join("src/main.tlk"),
-        "public func alt() -> Int {\n\tprint(\"alt ran\")\n\t7\n}\nprint(\"script ran\")\n",
+        "pub func alt() -> Int {\n\tprint(\"alt ran\")\n\t7\n}\nprint(\"script ran\")\n",
     )
     .expect("main");
     let install = Command::new(env!("CARGO_BIN_EXE_talk"))
@@ -3176,7 +3176,7 @@ fn run_module_initialization_may_perform_ambient_effects() {
     // top-level binding's initializer can perform an ambient effect —
     // under a named entry too, where lets still initialize first.
     assert_runs(
-        b"func f() -> Int {\n\t'async()\n\t3\n}\nlet ready = f()\npublic func go() -> () {\n\tprint(ready)\n}\n",
+        b"func f() -> Int {\n\t'async()\n\t3\n}\nlet ready = f()\npub func go() -> () {\n\tprint(ready)\n}\n",
         &["--entry", "go"],
         b"3\n",
     );
@@ -3273,7 +3273,7 @@ fn run_initializes_globals_for_named_entries() {
     // A named entry gets the same LINK-02 slot discipline scripts get:
     // ordered initialization (non-literal initializers included),
     // mutation, and guarded teardown.
-    let source = b"let counter = 0\nlet name = \"talk\" + \"!\"\npublic func main() -> Void {\n\tcounter = counter + 1\n\tprint(counter)\n\tprint(name)\n}\n";
+    let source = b"let counter = 0\nlet name = \"talk\" + \"!\"\npub func main() -> Void {\n\tcounter = counter + 1\n\tprint(counter)\n\tprint(name)\n}\n";
     assert_runs(source, &["--entry", "main"], b"1\ntalk!\n");
 }
 

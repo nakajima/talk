@@ -6,6 +6,9 @@ pub enum TokenKind {
 
     Import,
     Use,
+    Pub,
+    /// The removed ADR 0042 spelling of `pub`, kept as a token so the
+    /// parser can issue the focused migration diagnostic.
     Public,
     Linear,
     Macro,
@@ -204,6 +207,7 @@ impl TokenKind {
             TokenKind::Extend => "extend",
             TokenKind::Import => "import",
             TokenKind::Use => "use",
+            TokenKind::Pub => "pub",
             TokenKind::Public => "public",
             TokenKind::Linear => "linear",
             TokenKind::Macro => "macro",

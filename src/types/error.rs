@@ -80,6 +80,18 @@ pub enum TypeError {
         receiver: String,
         label: String,
     },
+    /// The member exists but is not visible from the access site's file
+    /// (ADR 0042).
+    InaccessibleMember {
+        receiver: String,
+        label: String,
+    },
+    /// A public declaration's source-facing contract references a
+    /// private declaration (ADR 0042 §3).
+    PublicApiExposesPrivate {
+        name: String,
+        dependency: String,
+    },
     UnknownMemberOnInferred {
         label: String,
     },
@@ -324,6 +336,8 @@ impl TypeError {
             Self::IntegerLiteralOutOfRange { .. } => "type.integer-literal-out-of-range",
             Self::InfiniteType { .. } => "type.infinite-type",
             Self::UnknownMember { .. } => "type.unknown-member",
+            Self::InaccessibleMember { .. } => "type.inaccessible-member",
+            Self::PublicApiExposesPrivate { .. } => "type.public-api-exposes-private",
             Self::UnknownMemberOnInferred { .. } => "type.unknown-member-on-inferred",
             Self::NotAFunction { .. } => "type.not-a-function",
             Self::InvalidAssignmentTarget => "type.invalid-assignment-target",
@@ -484,6 +498,18 @@ impl Display for TypeError {
             }
             TypeError::UnknownMember { receiver, label } => {
                 write!(f, "Unknown member '{label}' on {receiver}")
+            }
+            TypeError::InaccessibleMember { receiver, label } => {
+                write!(
+                    f,
+                    "'{label}' on {receiver} is not accessible from this file"
+                )
+            }
+            TypeError::PublicApiExposesPrivate { name, dependency } => {
+                write!(
+                    f,
+                    "Public declaration '{name}' exposes private declaration '{dependency}'; mark '{dependency}' pub or hide '{name}'"
+                )
             }
             TypeError::UnknownMemberOnInferred { label } => {
                 write!(

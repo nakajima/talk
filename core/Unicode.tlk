@@ -27,7 +27,7 @@ func _is_continuation(b: Int) -> Bool {
 	b < 192
 }
 
-public func _utf8_decode(storage: ByteStorage, offset: Int, end: Int) -> Int {
+pub func _utf8_decode(storage: ByteStorage, offset: Int, end: Int) -> Int {
 	let replacement: Int = 65533
 	let b0: Int = storage.get(offset)._toInt()
 
@@ -117,7 +117,7 @@ func _entry_value(storage: ByteStorage, index: Int) -> Int {
 // The scalar's grapheme-cluster-break category (a _GC_* constant), via
 // binary search over the generated boundary list. O(log n) with ~12
 // probes; ASCII short-circuits.
-public func _grapheme_category(scalar: Int) -> Int {
+pub func _grapheme_category(scalar: Int) -> Int {
 	if scalar == 13 { return _GC_CR }
 	if scalar == 10 { return _GC_LF }
 	if scalar < 32 { return _GC_CONTROL }
@@ -171,29 +171,29 @@ func _character_class(scalar: Int) -> Int {
 	v - (v / 32) * 32
 }
 
-public func scalar_is_whitespace(scalar: Int) -> Bool {
+pub func scalar_is_whitespace(scalar: Int) -> Bool {
 	_character_class(scalar: scalar) == _CC_WHITESPACE
 }
 
-public func scalar_is_alphabetic(scalar: Int) -> Bool {
+pub func scalar_is_alphabetic(scalar: Int) -> Bool {
 	let cat: Int = _character_class(scalar: scalar)
 	cat == _CC_ALPHABETIC || cat == _CC_ALPHANUMERIC
 }
 
-public func scalar_is_numeric(scalar: Int) -> Bool {
+pub func scalar_is_numeric(scalar: Int) -> Bool {
 	let cat: Int = _character_class(scalar: scalar)
 	cat == _CC_NUMERIC || cat == _CC_ALPHANUMERIC
 }
 
-public func scalar_is_alphanumeric(scalar: Int) -> Bool {
+pub func scalar_is_alphanumeric(scalar: Int) -> Bool {
 	scalar_is_alphabetic(scalar: scalar) || scalar_is_numeric(scalar: scalar)
 }
 
-public func scalar_is_ascii_digit(scalar: Int) -> Bool {
+pub func scalar_is_ascii_digit(scalar: Int) -> Bool {
 	47 < scalar && scalar < 58
 }
 
-public func scalar_is_ascii_hexdigit(scalar: Int) -> Bool {
+pub func scalar_is_ascii_hexdigit(scalar: Int) -> Bool {
 	if scalar_is_ascii_digit(scalar: scalar) { return true }
 	if 64 < scalar && scalar < 71 { return true }
 	96 < scalar && scalar < 103
@@ -255,7 +255,7 @@ func _joins(prev: Int, cat: Int, emoji: Int, incb: Int, ri_run: Int) -> Bool {
 // at true boundaries, all UAX #29 rule state (GB11's emoji sequence,
 // GB9c's conjunct chain, GB12/13's regional-indicator parity) is local to
 // this one scan — the iterator carries none.
-public func _next_boundary(storage: ByteStorage, offset: Int, end: Int) -> Int {
+pub func _next_boundary(storage: ByteStorage, offset: Int, end: Int) -> Int {
 	let head: Int = _utf8_decode(storage: storage, offset: offset, end: end)
 	let head_cat: Int = _grapheme_category(scalar: _packed_scalar(packed: head))
 	let pos: Int = offset + _packed_size(packed: head)
@@ -326,20 +326,20 @@ public func _next_boundary(storage: ByteStorage, offset: Int, end: Int) -> Int {
 }
 
 // One user-perceived character: a borrowed view of a cluster's bytes.
-public struct Character {
-	let storage: ByteStorage
-	let start: Int
-	let byte_count: Int
+pub struct Character {
+	pub let storage: ByteStorage
+	pub let start: Int
+	pub let byte_count: Int
 
-	func utf8_count() -> Int {
+	pub func utf8_count() -> Int {
 		self.byte_count
 	}
 
-	func as_substring() -> Substring {
+	pub func as_substring() -> Substring {
 		Substring(storage: self.storage, start: self.start, byte_count: self.byte_count)
 	}
 
-	func to_string() -> String {
+	pub func to_string() -> String {
 		self.as_substring().to_string()
 	}
 
@@ -356,27 +356,27 @@ public struct Character {
 		)
 	}
 
-	func is_whitespace() -> Bool {
+	pub func is_whitespace() -> Bool {
 		scalar_is_whitespace(scalar: self.first_scalar())
 	}
 
-	func is_alphabetic() -> Bool {
+	pub func is_alphabetic() -> Bool {
 		scalar_is_alphabetic(scalar: self.first_scalar())
 	}
 
-	func is_numeric() -> Bool {
+	pub func is_numeric() -> Bool {
 		scalar_is_numeric(scalar: self.first_scalar())
 	}
 
-	func is_alphanumeric() -> Bool {
+	pub func is_alphanumeric() -> Bool {
 		scalar_is_alphanumeric(scalar: self.first_scalar())
 	}
 
-	func is_ascii_digit() -> Bool {
+	pub func is_ascii_digit() -> Bool {
 		scalar_is_ascii_digit(scalar: self.first_scalar())
 	}
 
-	func is_ascii_hexdigit() -> Bool {
+	pub func is_ascii_hexdigit() -> Bool {
 		scalar_is_ascii_hexdigit(scalar: self.first_scalar())
 	}
 }
@@ -387,7 +387,7 @@ extend Character: CheapClone {}
 // Byte equality of the cluster — same semantic as String equality, so
 // canonically equivalent characters in different normal forms differ.
 extend Character: Equatable {
-	func equals(_ rhs: Character) -> Bool {
+	pub func equals(_ rhs: Character) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 		let idx = 0
 		loop idx < self.byte_count {
@@ -402,27 +402,27 @@ extend Character: Equatable {
 }
 
 extend Character: Showable {
-	func show() -> String {
+	pub func show() -> String {
 		self.to_string()
 	}
 }
 
 extend Character: Add<String> {
-	func add(_ rhs: String) -> String {
+	pub func add(_ rhs: String) -> String {
 		"hi"
 	}
 }
 
-public struct CharacterIterator {
-	let storage: ByteStorage
-	let offset: Int
-	let end: Int
+pub struct CharacterIterator {
+	pub let storage: ByteStorage
+	pub let offset: Int
+	pub let end: Int
 }
 
 extend CharacterIterator: Borrowed {}
 
 extend CharacterIterator: Iterator<Character> {
-	mut func next() -> Character? {
+	pub mut func next() -> Character? {
 		if self.end <= self.offset { return Optional.none }
 		let next_offset: Int = _next_boundary(
 			storage: self.storage,
@@ -442,16 +442,16 @@ extend CharacterIterator: Iterator<Character> {
 
 // A Unicode-scalar view. Values are scalar code points as Ints; malformed
 // UTF-8 yields U+FFFD while advancing by the decoder's maximal subpart.
-public struct ScalarIterator {
-	let storage: ByteStorage
-	let offset: Int
-	let end: Int
+pub struct ScalarIterator {
+	pub let storage: ByteStorage
+	pub let offset: Int
+	pub let end: Int
 }
 
 extend ScalarIterator: Borrowed {}
 
 extend ScalarIterator: Iterator<Int> {
-	mut func next() -> Int? {
+	pub mut func next() -> Int? {
 		if self.end <= self.offset { return Optional.none }
 		let packed: Int = _utf8_decode(
 			storage: self.storage,
@@ -464,13 +464,13 @@ extend ScalarIterator: Iterator<Int> {
 }
 
 extend String: Iterable {
-	func iter() -> CharacterIterator {
+	pub func iter() -> CharacterIterator {
 		CharacterIterator(storage: self.storage, offset: 0, end: self.byte_count)
 	}
 }
 
 extend Substring: Iterable {
-	func iter() -> CharacterIterator {
+	pub func iter() -> CharacterIterator {
 		CharacterIterator(
 			storage: self.storage,
 			offset: self.start,
@@ -480,13 +480,13 @@ extend Substring: Iterable {
 }
 
 extend String {
-	func scalars() -> ScalarIterator {
+	pub func scalars() -> ScalarIterator {
 		ScalarIterator(storage: self.storage, offset: 0, end: self.byte_count)
 	}
 }
 
 extend Substring {
-	func scalars() -> ScalarIterator {
+	pub func scalars() -> ScalarIterator {
 		ScalarIterator(
 			storage: self.storage,
 			offset: self.start,
@@ -497,7 +497,7 @@ extend Substring {
 
 extend Substring {
 	// O(n): counts extended grapheme clusters by scanning boundaries.
-	func count() -> Int {
+	pub func count() -> Int {
 		let n = 0
 		let scan = self.start
 		let stop: Int = self.start + self.byte_count
@@ -511,7 +511,7 @@ extend Substring {
 
 extend String {
 	// O(n): counts extended grapheme clusters by scanning boundaries.
-	func count() -> Int {
+	pub func count() -> Int {
 		self.as_substring().count()
 	}
 }
