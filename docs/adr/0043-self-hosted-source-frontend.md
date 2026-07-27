@@ -434,7 +434,7 @@ The parser port is underway on the same differential loop, one dump
 category at a time. The frontend is now a multi-file package —
 `Lexer.tlk`, `Ast.tlk`, `Parser.tlk`, `Dump.tlk`, linked with ordinary
 `use package::…` imports (verified to resolve for the bootstrap
-command's in-memory sources). Two slices are in:
+command's in-memory sources). Four slices are in:
 
 - **Block items**: let declarations, literal and binding patterns, the
   Pratt expression core (full operator precedence ladder, unary
