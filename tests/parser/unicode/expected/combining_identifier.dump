@@ -1,0 +1,5 @@
+tokens:
+  Let @0..3 "let"
+  Identifier @4..8 "cafe"
+  lexer error: Unexpected character: '\u{301}'
+parse error: parser.lexer Lex error at line 1, column 9: Unexpected character: '\u{301}'

@@ -131,12 +131,34 @@ mod tests {
         );
     }
 
-    /// The stage-2 differential harness (ADR 0043): the self-hosted
-    /// lexer's `lex` validation export must reproduce the Rust lexer's
-    /// dump-format token section byte-for-byte. The covered list grows
-    /// file-by-file as the Talk lexer's surface grows.
+    /// Run a `String -> String` validation export from the frontend
+    /// image and return its output.
+    fn run_string_export(module: &talk_runtime::Module, name: &str, source: &str) -> String {
+        let mut io = CaptureIO::default();
+        let run = talk_runtime::interp::run_export(
+            module,
+            name,
+            &[HostValue::String(source.as_bytes().to_vec())],
+            crate::backend::string_shape(),
+            Budgets::default(),
+            &mut io,
+        )
+        .unwrap_or_else(|error| panic!("{name} failed: {error}"));
+        String::from_utf8(
+            run.string_bytes(&run.value)
+                .unwrap_or_else(|_| panic!("{name} returns a string"))
+                .to_vec(),
+        )
+        .unwrap_or_else(|error| panic!("{name} output is UTF-8: {error}"))
+    }
+
+    /// The stage-2 differential harness (ADR 0043): each self-hosted
+    /// validation export must reproduce the Rust frontend's dump format
+    /// byte-for-byte. The lexer exports (`lex`, `trees`) cover the whole
+    /// corpus; the parser exports cover the directories listed per
+    /// category and grow as the Talk parser's surface grows.
     #[test]
-    fn talk_lexer_matches_rust_lexer_on_covered_corpus() {
+    fn talk_frontend_matches_rust_frontend_on_covered_corpus() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let frontend_dir = root.join("frontend");
         let mut names: Vec<_> = std::fs::read_dir(&frontend_dir)
@@ -158,33 +180,86 @@ mod tests {
 
         let outcome = bootstrap(
             &sources,
-            &["lex".into()],
+            &[
+                "lex".into(),
+                "trees".into(),
+                "parse_block_items".into(),
+                "parse_expr".into(),
+                "parse_pattern".into(),
+                "parse_type".into(),
+            ],
             &["alloc".into(), "panic".into()],
         )
         .expect("frontend bootstraps");
         let module = talk_runtime::Module::decode_bytecode(&outcome.image).expect("image decodes");
 
-        let covered = ["tests/parser/literals.tlk", "tests/parser/comments.tlk"];
+        let mut covered: Vec<std::path::PathBuf> = Vec::new();
+        for dir in [
+            "tests/parser",
+            "tests/parser/expr",
+            "tests/parser/pattern",
+            "tests/parser/type",
+            "tests/parser/block",
+            "tests/parser/tokentree",
+            "tests/parser/lenient",
+            "tests/parser/unicode",
+            "core",
+            "stdlib",
+            "tests/examples",
+            "examples",
+        ] {
+            for entry in std::fs::read_dir(root.join(dir)).expect("corpus dir") {
+                let path = entry.expect("corpus entry").path();
+                if path.extension().is_some_and(|ext| ext == "tlk") {
+                    covered.push(path);
+                }
+            }
+        }
+        covered.sort();
         for path in covered {
-            let source = std::fs::read_to_string(root.join(path)).expect("read corpus source");
-            let mut io = CaptureIO::default();
-            let run = talk_runtime::interp::run_export(
-                &module,
-                "lex",
-                &[HostValue::String(source.clone().into_bytes())],
-                crate::backend::string_shape(),
-                Budgets::default(),
-                &mut io,
-            )
-            .unwrap_or_else(|error| panic!("lex({path}) failed: {error}"));
-            let talk_tokens = String::from_utf8(
-                run.string_bytes(&run.value)
-                    .expect("lex returns a string")
-                    .to_vec(),
-            )
-            .expect("lex output is UTF-8");
+            let path = path.display().to_string();
+            let source = std::fs::read_to_string(&path).expect("read corpus source");
+            let talk_tokens = run_string_export(&module, "lex", &source);
             let rust_tokens = crate::parsing::dump::dump_tokens(&source);
             assert_eq!(talk_tokens, rust_tokens, "token divergence on {path}");
+
+            let talk_trees = run_string_export(&module, "trees", &source);
+            let rust_trees = crate::parsing::dump::dump_token_trees(&source);
+            assert_eq!(talk_trees, rust_trees, "tree divergence on {path}");
+        }
+
+        let parse_categories: [(&str, &str, fn(&str) -> String); 4] = [
+            (
+                "tests/parser/block",
+                "parse_block_items",
+                crate::parsing::dump::dump_block_items,
+            ),
+            ("tests/parser/expr", "parse_expr", crate::parsing::dump::dump_expr),
+            (
+                "tests/parser/pattern",
+                "parse_pattern",
+                crate::parsing::dump::dump_pattern,
+            ),
+            ("tests/parser/type", "parse_type", crate::parsing::dump::dump_type),
+        ];
+        for (dir, export, rust_dump) in parse_categories {
+            let mut fixtures: Vec<std::path::PathBuf> = std::fs::read_dir(root.join(dir))
+                .expect("parse corpus dir")
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "tlk"))
+                .collect();
+            fixtures.sort();
+            for path in fixtures {
+                let path = path.display().to_string();
+                let source = std::fs::read_to_string(&path).expect("read corpus source");
+                let talk_dump = run_string_export(&module, export, &source);
+                assert_eq!(
+                    talk_dump,
+                    rust_dump(&source),
+                    "parse divergence on {path}"
+                );
+            }
         }
     }
 

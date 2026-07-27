@@ -1,0 +1,20 @@
+tokens:
+  LeftBrace @0..1 "{"
+  Identifier @2..3 "x"
+  Comma @3..4 ","
+  Identifier @5..6 "y"
+  Colon @6..7 ":"
+  LeftParen @8..9 "("
+  Identifier @9..10 "a"
+  Comma @10..11 ","
+  Identifier @12..13 "b"
+  RightParen @13..14 ")"
+  Comma @14..15 ","
+  DotDot @16..18 ".."
+  RightBrace @19..20 "}"
+  Newline @20..21
+tree:
+  Pattern::Record @0..20 "{ x, y: (a, b), .. }"
+    Pattern::Tuple @8..14 "(a, b)"
+      Pattern::Bind @9..10 "a"
+      Pattern::Bind @12..13 "b"

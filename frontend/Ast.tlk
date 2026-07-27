@@ -1,0 +1,209 @@
+// The self-hosted parser's typed AST (ADR 0043 stage 2). Parse results
+// are the frontend's real product — the dump renderer in Dump.tlk is
+// only the validation view of this tree. Nodes carry byte spans; kinds
+// and child field order mirror the reference node kinds so the rendered
+// tree lines up with the frozen dump format. Coverage grows with the
+// parser: kinds appear here as their grammar lands.
+//
+// Nodes are plain values ('heap references cannot sit in array storage),
+// so self-recursive expression links go through arrays, exactly like
+// the lexer's token trees: `binary` carries `[lhs, rhs]`, `call`
+// carries its callee as a one-element array.
+
+use package::Lexer::{ TokenKind }
+
+pub enum MemberLabel {
+	case named(String)
+	case positional(Int)
+}
+
+// A function type's declared effect row (`'[io]`, `'io`, or the open
+// default). Not rendered in the dump; carried for the real product.
+pub struct EffectSet {
+	pub let names: [String]
+	pub let open: Bool
+}
+
+pub enum GenericArg {
+	// Static-value arguments (ADR 0035) stay unported for now.
+	case type_arg(TypeAnnotation)
+}
+
+pub struct RecordFieldTypeAnnotation {
+	pub let label: String
+	pub let value: TypeAnnotation
+	pub let start: Int
+	pub let end: Int
+}
+
+pub struct AnyAssocBinding {
+	pub let name: String
+	pub let value: TypeAnnotation
+	pub let start: Int
+	pub let end: Int
+}
+
+pub enum TypeAnnotationKind {
+	// mutable, inner as a one-element array.
+	case borrow(Bool, [TypeAnnotation])
+	// `*T`: a uniquely-owned value; inner as a one-element array.
+	case unique([TypeAnnotation])
+	// Parameters (borrow-by-default already applied), effects, and the
+	// return type as a one-element array.
+	case func_type([TypeAnnotation], EffectSet, [TypeAnnotation])
+	// The base as a one-element array, then the member name and its
+	// explicit generic arguments.
+	case nominal_path([TypeAnnotation], String, [GenericArg])
+	case nominal(String, [GenericArg])
+	case tuple([TypeAnnotation])
+	case record_type([RecordFieldTypeAnnotation])
+	// The protocol head as a one-element array, then `Assoc = T` bindings.
+	case any_type([TypeAnnotation], [AnyAssocBinding])
+}
+
+pub struct TypeAnnotation {
+	pub let kind: TypeAnnotationKind
+	pub let start: Int
+	pub let end: Int
+}
+
+// A block argument (`{ x, y in … }`). Ownership modes and type
+// annotations join when their grammar is ported. Mirrors the reference
+// quirk: the span starts AFTER the name (the reference pushes its
+// source location once the name is already consumed).
+pub struct Parameter {
+	pub let name: String
+	pub let start: Int
+	pub let end: Int
+}
+
+pub struct Block {
+	pub let params: [Parameter]
+	pub let body: [Item]
+	pub let start: Int
+	pub let end: Int
+}
+
+pub enum ExprKind {
+	case literal_int(String)
+	case literal_float(String)
+	case literal_true
+	case literal_false
+	case literal_string(String)
+	case literal_character(String)
+	case variable(String)
+	// The operand, as a one-element array.
+	case unary(TokenKind, [Expr])
+	// `[lhs, rhs]`.
+	case binary(TokenKind, [Expr])
+	// The callee as a one-element array, then the arguments — type args
+	// and trailing blocks join when their grammar is ported.
+	case call([Expr], [CallArg])
+	// The receiver as a zero- (leading dot) or one-element array.
+	case member(MemberLabel, [Expr])
+	// A dot with no member name after it: LSP-supporting recovery node,
+	// receiver as a zero- or one-element array.
+	case incomplete_member([Expr])
+	case tuple([Expr])
+	case block(Block)
+}
+
+pub struct Expr {
+	pub let kind: ExprKind
+	pub let start: Int
+	pub let end: Int
+}
+
+pub struct CallArg {
+	pub let label: String?
+	pub let value: Expr
+	pub let start: Int
+	pub let end: Int
+}
+
+pub enum PatternKind {
+	case bind(String)
+	case wildcard
+	case literal_int(String)
+	case literal_float(String)
+	case literal_character(String)
+	case literal_string(String)
+	case literal_true
+	case literal_false
+	case tuple([Pattern])
+	case or_pattern([Pattern])
+	// Enum path (none for a leading dot), variant name, field patterns,
+	// and one label per field (labels select fixed payload slots).
+	// Explicit head generics stay unported for now.
+	case variant(String?, String, [Pattern], [String?])
+	// Dotted struct path, field patterns, parallel field names, and
+	// whether a `..` rest closed the list.
+	case struct_pattern(String, [Pattern], [String], Bool)
+	case record([RecordFieldPattern])
+}
+
+pub struct Pattern {
+	pub let kind: PatternKind
+	pub let start: Int
+	pub let end: Int
+}
+
+pub enum RecordFieldPatternKind {
+	case bind_field(String)
+	case equals_field(String, Pattern)
+	case rest_field
+}
+
+pub struct RecordFieldPattern {
+	pub let kind: RecordFieldPatternKind
+	pub let start: Int
+	pub let end: Int
+}
+
+pub struct ImportedSymbol {
+	pub let name: String
+	pub let alias: String?
+}
+
+pub enum ImportedSymbols {
+	case all
+	case named([ImportedSymbol])
+}
+
+pub struct Import {
+	pub let symbols: ImportedSymbols
+	pub let path: String
+	pub let local: Bool
+}
+
+pub enum DeclKind {
+	case let_decl(Pattern, TypeAnnotation?, Expr?)
+	case import_decl(Import)
+}
+
+pub struct Decl {
+	pub let kind: DeclKind
+	pub let start: Int
+	pub let end: Int
+}
+
+pub enum StmtKind {
+	case expr_stmt(Expr)
+}
+
+pub struct Stmt {
+	pub let kind: StmtKind
+	pub let start: Int
+	pub let end: Int
+}
+
+pub enum Item {
+	case decl_item(Decl)
+	case stmt_item(Stmt)
+	// A bare expression root (the expr category parse).
+	case expr_item(Expr)
+	// A bare pattern root (the pattern category parse).
+	case pattern_item(Pattern)
+	// A bare type-annotation root (the type category parse).
+	case type_item(TypeAnnotation)
+}

@@ -1,0 +1,8 @@
+tokens:
+  Let @0..3 "let"
+  Identifier @4..7 "bad"
+  Equals @8..9 "="
+  lexer error: Invalid escape: 'q'
+tree:
+diagnostics:
+  error parser.lexer Lex error at line 1, column 14: Invalid escape: 'q'

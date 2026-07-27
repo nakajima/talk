@@ -1,0 +1,25 @@
+tokens:
+  Let @0..3 "let"
+  Identifier @4..5 "x"
+  Equals @6..7 "="
+  LeftBrace @8..9 "{"
+  Int @10..11 "1"
+  RightBrace @12..13 "}"
+  Newline @13..14
+  Identifier @14..19 "print"
+  LeftParen @19..20 "("
+  Identifier @20..21 "x"
+  RightParen @21..22 ")"
+  Newline @22..23
+tree:
+  Decl::Let @0..13 "let x = { 1 }"
+    Pattern::Bind @4..5 "x"
+    Expr::Block @8..13 "{ 1 }"
+      Block @10..13 "1 }"
+        Stmt::Expr @10..11 "1"
+          Expr::LiteralInt @10..11 "1"
+  Stmt::Expr @14..22 "print(x)"
+    Expr::Call @14..22 "print(x)"
+      Expr::Variable @14..19 "print"
+      CallArg @20..21 "x"
+        Expr::Variable @20..21 "x"

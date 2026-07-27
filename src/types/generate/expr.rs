@@ -78,28 +78,28 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.check_inferred_against_expected(expr.id, expected, found, reason);
                 return;
             }
-            match &expr.kind {
-                ExprKind::Member(None, ..) | ExprKind::Func(..) => {
-                    self.check_expr(expr, &inner, reason, ctx);
-                    return;
-                }
-                ExprKind::Call { callee, .. }
-                    if matches!(callee.kind, ExprKind::Member(None, ..)) =>
-                {
-                    self.check_expr(expr, &inner, reason, ctx);
-                    return;
-                }
-                _ => {}
+            // A borrow source may already hold or produce a first-class
+            // borrow, so it reconciles against the borrow-typed slot
+            // directly (loan installation, permission matching, and the
+            // deferred borrow-result judgment). Everything else is a
+            // construction: it can only build an owned value, so checking
+            // mode continues against the peeled inner type — coercion
+            // sites propagate through literals, match arms, and block
+            // tails (Rust RFC 401's coercion-propagating expressions) —
+            // and the built value is borrowed at the boundary.
+            if Self::is_borrow_source(expr) {
+                let found = self.infer_expr(expr, ctx);
+                self.emit_immediate_borrow_check(
+                    expr.id,
+                    expected_kind,
+                    (*inner).clone(),
+                    expected.clone(),
+                    found,
+                    reason,
+                );
+                return;
             }
-            let found = self.infer_expr(expr, ctx);
-            self.emit_immediate_borrow_check(
-                expr.id,
-                expected_kind,
-                (*inner).clone(),
-                expected.clone(),
-                found,
-                reason,
-            );
+            self.check_expr(expr, &inner, reason, ctx);
             return;
         }
 
@@ -263,6 +263,37 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
     }
 
+    /// An expression whose value may already be a first-class borrow: a
+    /// place read (variable, member path, subscript), any call or
+    /// operator application, an effect perform, a cast, inline IR, a
+    /// bare name reference, or a recovery node whose type is opaque.
+    /// These reconcile against a borrow-typed slot through the
+    /// immediate-borrow machinery. Every other expression is a
+    /// construction that can only produce an owned value, so checking
+    /// mode pushes the slot's inner type into it — an overlooked kind
+    /// here degrades to donation (an extra retain), never to rejection.
+    fn is_borrow_source(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Variable(..)
+            | ExprKind::Member(Some(_), ..)
+            | ExprKind::Subscript(..)
+            | ExprKind::Binary(..)
+            | ExprKind::Unary(..)
+            | ExprKind::Propagate(..)
+            | ExprKind::ForceUnwrap(..)
+            | ExprKind::CallEffect { .. }
+            | ExprKind::InlineIR(..)
+            | ExprKind::As(..)
+            | ExprKind::MacroCall { .. }
+            | ExprKind::Incomplete(..)
+            | ExprKind::Constructor(..) => true,
+            // Leading-dot calls construct variants; every other call's
+            // result is opaque until its member or scheme resolves.
+            ExprKind::Call { callee, .. } => !matches!(callee.kind, ExprKind::Member(None, ..)),
+            _ => false,
+        }
+    }
+
     /// A place expression names borrowable storage: a variable, or a field
     /// path rooted at one. Everything else evaluates to an owned rvalue
     /// temp, which a borrow-typed slot outside an application must reject.
@@ -393,7 +424,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             // slot must keep the eager equality that drives inference,
             // except the legacy Apply deferrals above.
             (Ty::Borrow(..), _) => false,
-            (Ty::Var(_), Ty::Borrow(..)) | (Ty::Param(_), Ty::Var(_)) => reason == CtReason::Apply,
+            (Ty::Var(_), Ty::Borrow(..)) => reason.coerces_borrows(),
+            (Ty::Param(_), Ty::Var(_)) => reason == CtReason::Apply,
             (Ty::Var(_), _) => false,
             // A concrete owned slot fed a still-unsolved value: the value
             // may yet resolve borrowed (a binding whose initializer is a

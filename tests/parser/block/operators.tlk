@@ -1,0 +1,7 @@
+let a = 1 + 2 * 3 == 7 && !false
+let b = 1..3
+let c = 0..<10
+let d = 1 << 4 | 2 & 3 ^ 4
+let e = a && b == c || true
+let f = 10 / 2 - 3
+let g = ~5

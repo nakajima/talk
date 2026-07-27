@@ -1,0 +1,13 @@
+tokens:
+  Attribute @1..4 "_ir"
+  LeftBrace @5..6 "{"
+  IRRegister @8..9 "0"
+  Equals @10..11 "="
+  Identifier @12..15 "cmp"
+  Identifier @16..19 "Int"
+  IRRegister @21..22 "1"
+  Plus @23..24 "+"
+  IRRegister @26..27 "2"
+  RightBrace @28..29 "}"
+  Newline @29..30
+parse error: parser.unexpected-token Unexpected token: expected one of `<`, `!=`, `==`, `<=`, `>`, `>=`, got `+`

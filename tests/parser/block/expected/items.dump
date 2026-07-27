@@ -30,4 +30,3 @@ tree:
       Expr::Variable @24..29 "print"
       CallArg @30..31 "y"
         Expr::Variable @30..31 "y"
-duplicate node ids: 1

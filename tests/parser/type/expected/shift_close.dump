@@ -1,0 +1,12 @@
+tokens:
+  Identifier @0..3 "Set"
+  Less @3..4 "<"
+  Identifier @4..7 "Set"
+  Less @7..8 "<"
+  Identifier @8..11 "Int"
+  GreaterGreater @11..13 ">>"
+  Newline @13..14
+tree:
+  TypeAnnotation::Nominal @0..13 "Set<Set<Int>>"
+    TypeAnnotation::Nominal @4..11 "Set<Int"
+      TypeAnnotation::Nominal @8..11 "Int"

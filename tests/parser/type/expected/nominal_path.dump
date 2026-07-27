@@ -1,0 +1,12 @@
+tokens:
+  Identifier @0..5 "Array"
+  Less @5..6 "<"
+  Identifier @6..9 "Int"
+  Greater @9..10 ">"
+  Dot @10..11 "."
+  Identifier @11..19 "Iterator"
+  Newline @19..20
+tree:
+  TypeAnnotation::NominalPath @11..19 "Iterator"
+    TypeAnnotation::Nominal @0..10 "Array<Int>"
+      TypeAnnotation::Nominal @6..9 "Int"

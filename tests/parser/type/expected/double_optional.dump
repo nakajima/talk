@@ -1,0 +1,9 @@
+tokens:
+  Identifier @0..3 "Int"
+  QuestionMark @3..4 "?"
+  QuestionMark @4..5 "?"
+  Newline @5..6
+tree:
+  TypeAnnotation::Nominal @0..5 "Int??"
+    TypeAnnotation::Nominal @0..4 "Int?"
+      TypeAnnotation::Nominal @0..3 "Int"

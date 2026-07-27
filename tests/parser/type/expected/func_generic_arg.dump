@@ -1,0 +1,16 @@
+tokens:
+  Identifier @0..4 "Dict"
+  Less @4..5 "<"
+  LeftParen @5..6 "("
+  Identifier @6..9 "Int"
+  RightParen @9..10 ")"
+  Arrow @11..13 "->"
+  Identifier @14..18 "Bool"
+  Greater @18..19 ">"
+  Newline @19..20
+tree:
+  TypeAnnotation::Nominal @0..19 "Dict<(Int) -> Bool>"
+    TypeAnnotation::Func @5..18 "(Int) -> Bool"
+      TypeAnnotation::Borrow @6..9 "Int"
+        TypeAnnotation::Nominal @6..9 "Int"
+      TypeAnnotation::Nominal @14..18 "Bool"

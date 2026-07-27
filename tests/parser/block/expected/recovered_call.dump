@@ -1,0 +1,13 @@
+tokens:
+  Identifier @0..5 "print"
+  LeftParen @5..6 "("
+  Int @6..7 "1"
+  Newline @7..8
+tree:
+  Stmt::Expr @0..7 "print(1"
+    Expr::Call @0..7 "print(1"
+      Expr::Variable @0..5 "print"
+      CallArg @6..7 "1"
+        Expr::LiteralInt @6..7 "1"
+diagnostics:
+  error parser.unexpected-token Unexpected token: expected `)`, got end of input

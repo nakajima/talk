@@ -1,0 +1,8 @@
+tokens:
+  Let @0..3 "let"
+  Identifier @4..7 "bad"
+  Equals @8..9 "="
+  lexer error: Invalid unicode escape
+tree:
+diagnostics:
+  error parser.lexer Lex error at line 1, column 21: Invalid unicode escape

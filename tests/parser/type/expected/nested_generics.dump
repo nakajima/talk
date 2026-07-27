@@ -1,0 +1,15 @@
+tokens:
+  Identifier @0..4 "Dict"
+  Less @4..5 "<"
+  Identifier @5..8 "Int"
+  Comma @8..9 ","
+  LeftBracket @10..11 "["
+  Identifier @11..17 "String"
+  RightBracket @17..18 "]"
+  Greater @18..19 ">"
+  Newline @19..20
+tree:
+  TypeAnnotation::Nominal @0..19 "Dict<Int, [String]>"
+    TypeAnnotation::Nominal @5..8 "Int"
+    TypeAnnotation::Nominal @10..18 "[String]"
+      TypeAnnotation::Nominal @11..17 "String"

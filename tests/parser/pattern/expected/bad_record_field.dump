@@ -1,0 +1,6 @@
+tokens:
+  LeftBrace @0..1 "{"
+  Int @2..3 "1"
+  RightBrace @4..5 "}"
+  Newline @5..6
+parse error: parser.unexpected-token Unexpected token: expected a record field, got an integer literal

@@ -1,0 +1,8 @@
+greet(volume: 3, name: "loud")
+make()
+chain(1)(2)
+sum(1 + 2 * 3, count)
+wrap(
+	first,
+	second,
+)

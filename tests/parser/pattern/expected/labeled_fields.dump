@@ -1,0 +1,17 @@
+tokens:
+  Dot @0..1 "."
+  Identifier @1..5 "pair"
+  LeftParen @5..6 "("
+  Identifier @6..11 "first"
+  Colon @11..12 ":"
+  Identifier @13..14 "a"
+  Comma @14..15 ","
+  Identifier @16..22 "second"
+  Colon @22..23 ":"
+  Int @24..25 "2"
+  RightParen @25..26 ")"
+  Newline @26..27
+tree:
+  Pattern::Variant @0..26 ".pair(first: a, second: 2)"
+    Pattern::Bind @13..14 "a"
+    Pattern::LiteralInt @24..25 "2"

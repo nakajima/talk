@@ -246,4 +246,4 @@ tokens:
   RightParen @667..668 ")"
   RightParen @668..669 ")"
   Newline @669..670
-parse error: parser.unexpected-token Unexpected token. Expected ,, got "Some(Token { kind: Colon, start: 555, end: 556, line: 39, col: 18 })"
+parse error: parser.unexpected-token Unexpected token: expected `,`, got `:`

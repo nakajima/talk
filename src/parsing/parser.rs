@@ -1422,9 +1422,9 @@ impl<'a> Parser<'a> {
                     is_open = true;
                 } else {
                     return Err(ParserError::UnexpectedToken {
-                        expected: "effect name".into(),
-                        actual: format!("{:?}", self.current),
-                        token: None,
+                        expected: "an effect name".into(),
+                        actual: "end of input".into(),
+                        token: self.current.clone(),
                     });
                 }
             }
@@ -2801,18 +2801,29 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            let tok = self.push_source_location();
-            let (name, _name_span) = self.identifier()?;
-            let pattern = if self.peek_is(TokenKind::Colon) {
+            // Decide the field form up front: only the shorthand builds a
+            // node here, so only it may push a source location (a push
+            // the colon form never popped used to skew the whole struct
+            // pattern's span onto the last colon field).
+            let colon_form = self.peek_is(TokenKind::Identifier)
+                && matches!(
+                    self.next.as_ref().map(|token| token.kind),
+                    Some(TokenKind::Colon)
+                );
+            let (name, pattern) = if colon_form {
+                let (name, _name_span) = self.identifier()?;
                 self.consume(TokenKind::Colon)?;
-                self.pattern()?
+                (name, self.pattern()?)
             } else {
+                let tok = self.push_source_location();
+                let (name, _name_span) = self.identifier()?;
                 // Shorthand `x` binds the field to a same-named local.
-                self.save_meta(tok, |id, span| Pattern {
+                let pattern = self.save_meta(tok, |id, span| Pattern {
                     id,
                     span,
                     kind: PatternKind::Bind(Name::Raw(name.clone())),
-                })?
+                })?;
+                (name, pattern)
             };
             field_names.push(Name::Raw(name));
             fields.push(Node::Pattern(pattern));
@@ -2885,10 +2896,12 @@ impl<'a> Parser<'a> {
                         self.save_meta(tok, |id, span| RecordFieldPattern { id, span, kind })?;
                     fields.push(field);
                 }
-                pat => {
-                    return Err(ParserError::BadLabel(format!(
-                        "Patter not handled: {pat:?}"
-                    )));
+                _ => {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "a record field".into(),
+                        actual: "end of input".into(),
+                        token: self.current.clone(),
+                    });
                 }
             }
             self.consume(TokenKind::Comma).ok();
@@ -3324,12 +3337,20 @@ impl<'a> Parser<'a> {
 
         self.skip_newlines();
 
-        let mut lhs: Option<Node> = None;
         let mut handler = Precedence::handler(&self.current)?;
-
-        if let Some(prefix) = handler.prefix {
-            lhs = Some(prefix(self, precedence.can_assign())?);
-        }
+        let Some(prefix) = handler.prefix else {
+            // The current token cannot begin an expression; error here
+            // rather than letting the infix loop discover it can never
+            // make progress.
+            let current = self.current.clone();
+            self.advance();
+            return Err(ParserError::UnexpectedToken {
+                expected: "an expression".into(),
+                actual: "end of input".into(),
+                token: current,
+            });
+        };
+        let mut lhs = prefix(self, precedence.can_assign())?;
 
         let mut i = 0;
 
@@ -3341,13 +3362,7 @@ impl<'a> Parser<'a> {
             i += 1;
 
             if let Some(infix) = handler.infix {
-                if let Some(previous_lhs) = lhs {
-                    lhs = Some(infix(
-                        self,
-                        precedence.can_assign(),
-                        previous_lhs.into_expr()?,
-                    )?);
-                }
+                lhs = infix(self, precedence.can_assign(), lhs.into_expr()?)?;
             } else {
                 break;
             }
@@ -3362,16 +3377,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        #[allow(clippy::expect_fun_call)]
-        if let Some(lhs) = lhs {
-            self.check_as(lhs)
-        } else {
-            self.advance();
-            Err(ParserError::UnexpectedEndOfInput(Some(format!(
-                "expected lhs. {:?}",
-                self.ast
-            ))))
-        }
+        self.check_as(lhs)
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -5627,8 +5633,12 @@ impl<'a> Parser<'a> {
                     self.advance();
                     Ok(current)
                 } else {
+                    let spellings: Vec<String> = possible_tokens
+                        .iter()
+                        .map(|kind| format!("`{}`", kind.as_str()))
+                        .collect();
                     Err(ParserError::UnexpectedToken {
-                        expected: format!("{possible_tokens:?}").into(),
+                        expected: format!("one of {}", spellings.join(", ")).into(),
                         actual: format!("{current:?}"),
                         token: Some(current),
                     })

@@ -1,0 +1,7 @@
+tokens:
+  Star @0..1 "*"
+  Identifier @1..7 "Buffer"
+  Newline @7..8
+tree:
+  TypeAnnotation::Unique @0..7 "*Buffer"
+    TypeAnnotation::Nominal @1..7 "Buffer"

@@ -1,6 +1,6 @@
 # 0043 - Self-host the source frontend before procedural macros
 
-Status: proposed
+Status: accepted (implementation in progress)
 
 Date: 2026-07-26
 
@@ -369,3 +369,143 @@ The self-hosting project is complete when:
 11. `cargo check --workspace --exclude www` and
     `cargo test --workspace --exclude www` pass; and
 12. measured parse and editor latency are recorded and accepted before cutover.
+
+## Status
+
+2026-07-26: accepted; in progress on branch `self-hosted-frontend`.
+
+### Stage 0 — done
+
+`String.from_bytes`, `Int._toByte` (new `itob` IR op), `Substring:
+Equatable<Substring>`, and `Array.pop`/`last`, each with tests.
+
+### Host platform — done
+
+- **Service compilation and the call ABI.** `compile_service(exports,
+  allowed_effects)` compiles named public functions into a module export
+  table (wire format v3, validated on decode); `Executable::run_export`
+  calls one on a fresh machine with scalar and string arguments and
+  reads structured results (including strings) while the machine is
+  alive. Each export wraps in the ordinary `_with_host` entry machinery,
+  so effects behave exactly as in a script run.
+- **Capability list.** An export's published effect row must stay within
+  `allowed_effects`; typing is the denial, and no second host wrapper
+  exists. Known gap: an effect reaching an export only through protocol
+  dispatch vanishes into the generalized row tail and is not denied —
+  the restrictive host `IO` implementation remains the runtime boundary,
+  as section 7 already requires.
+- **Budgets.** `Budgets { instructions, frames, memory_bytes }` on
+  `run_export`; exhaustion is an ordinary VM error attributed to the
+  call. Script runs are unchanged.
+- **Determinism and provenance.** Byte-identical rebuilds are verified
+  across separate compiler processes; `ArtifactManifest` records the
+  wire-format version plus source and artifact digests, with fail-closed
+  verification distinguishing version skew, artifact tampering, and
+  source edits.
+- **Bootstrap.** `talk bootstrap <dir> -o <artifact> --export …
+  [--allow-effect …] [--check]` compiles the source set twice with fresh
+  pipelines, requires the byte-identical fixed point, and writes the
+  artifact and manifest together; `--check` is the CI gate. Until the
+  self-hosted frontend drives parsing, the fixed point is a determinism
+  guarantee; the command already has the stage-0/stage-1 shape.
+
+### Stage 1 (freeze the frontend contract) — done
+
+Normalized parse dumps (tokens, tree with spans and meta extents,
+comments, diagnostics) with a golden corpus under `tests/parser/`;
+public category entry points (`parse_expr`, `parse_pattern`,
+`parse_type`, `parse_block_items` — whole-input, imports rejected in
+block items); `parse_lenient` freezing the per-file degradation inside
+the parser; token trees (`group`/`capture`, strict imbalance errors
+carrying both spans); macro-expansion diagnostics evicted from
+`ParserError` into `MacroError` so the parser's diagnostic schema has
+one owner; and parser messages rewritten to be user-readable before
+being pinned in the goldens.
+
+### Stage 2 (the Talk frontend) — in progress
+
+`frontend/Lexer.tlk` implements the lexer and token trees. The `lex`
+and `trees` validation exports reproduce the reference dumps
+byte-for-byte over the whole corpus — `tests/parser/**` (including
+unicode identifiers and lexer errors), `core/`, `stdlib/`, and both
+example directories — with no known divergences.
+
+The parser port is underway on the same differential loop, one dump
+category at a time. The frontend is now a multi-file package —
+`Lexer.tlk`, `Ast.tlk`, `Parser.tlk`, `Dump.tlk`, linked with ordinary
+`use package::…` imports (verified to resolve for the bootstrap
+command's in-memory sources). Two slices are in:
+
+- **Block items**: let declarations, literal and binding patterns, the
+  Pratt expression core (full operator precedence ladder, unary
+  operators, calls with labeled arguments, close-paren recovery
+  diagnostics), and import rejection, byte-identical to
+  `dump_block_items` over its corpus directory.
+- **Expressions**: the whole-input category entry, member access
+  (named, positional, leading-dot, and the trailing-dot
+  `Expr::Incomplete` recovery), tuples with both closer-recovery paths,
+  block expressions with the block-argument rollback probe, and the
+  malformed-expression error shapes.
+- **Patterns**: the full pattern grammar except explicit generics —
+  dotted variant paths, labeled payload fields, struct patterns with
+  shorthand and rest, record patterns, or-patterns, tuples, and the
+  leading-dot form.
+- **Types**: the full annotation grammar except the static-value
+  language — borrows and `*T`, function types with ownership-mode
+  parameters (borrow-by-default applied at parse time) and effect rows,
+  tuples, `?` and `[T]` sugar, record types, nominal paths with generic
+  arguments (including the `>>` split for nested closers), and
+  `any P<Assoc = T>`. Typed `let` declarations ride along in the
+  block-items category.
+
+Grammar not yet ported fails with a distinctive `talk-parser.unported`
+code so a divergence names the missing construct instead of silently
+mismatching. The Talk AST stores nodes as plain values with
+self-recursive links routed through arrays (region storage does not
+scan array elements, so `'heap` nodes cannot sit in them); parse
+results remain the real product, the dump renderer only its validation
+view.
+
+Several dump-format cleanups landed with the slices, each an
+unreproducible-by-design leak removed before goldens could pin it: the
+`duplicate node ids` line (reported the reference parser's internal
+`NodeID` allocation — statement wrappers deliberately share their
+payload expression's id); the missing-expression error that embedded
+the `Debug` dump of the entire AST; `consume_any`'s expected-token
+list rendered via `Debug` rather than as token spellings; the
+record-pattern fallthrough error, which printed a token kind's `Debug`
+form; and the effect-row error, which printed a whole token's `Debug`
+form. Two behavior fixes rode along rather than being enshrined: a
+token that cannot begin an expression now errors immediately, where the
+reference previously spun the infix loop against a progress guard
+(consuming nothing) and reported a misleading `infinite-loop`
+diagnostic; and a struct pattern with a colon field no longer reports a
+span skewed onto its last field (the field pushed a source location
+that only the shorthand branch ever popped — a stale entry the pattern's
+own span then consumed).
+
+The Consequences section's prediction has already paid out: porting the
+frontend exposed (and led to fixes for) two compiler bugs — a
+recursive-group skeleton that lost parameter borrows under mutual
+recursion, and a double release of borrowed match payloads bound through
+loop elements.
+
+Further compiler findings from the port, still open:
+
+- **`let x = f()?` loses its binding.** Propagation in a `let`
+  initializer fails resolution with "Undefined name: x"; the inline
+  form (`f()? + 1`) works. This is why the Talk parser threads an
+  explicit failure field instead of `Result` + `?`.
+- **Cross-enum variant names break leading-dot if-lets.** Once two
+  enums share a variant name (`ExprKind.tuple` / `PatternKind.tuple`),
+  `if let .tuple(…) = expr.kind` fails with "enum not yet known —
+  annotate the scrutinee" even though the scrutinee's type is fully
+  known. A qualified head (`if let ExprKind.tuple(…)`) resolves it;
+  `match` over an annotated parameter is unaffected.
+- **Borrow donation misses array literals in argument position.**
+  `f(receiver: [lhs])` with `lhs` a borrow-by-default parameter is
+  rejected ("element has type &Expr") while the same literal is
+  accepted through an annotated `let` or inside a constructor argument.
+- **Irrefutable if-let warning spans are useless.** An if-let over a
+  single-variant enum correctly warns that the implicit else-arm never
+  runs, but the diagnostic points at 1:1 of the file.

@@ -1,0 +1,6 @@
+tokens:
+  Int @0..1 "1"
+  Plus @2..3 "+"
+  RightParen @4..5 ")"
+  Newline @5..6
+parse error: parser.unexpected-token Unexpected token: expected an expression, got `)`

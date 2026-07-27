@@ -1,0 +1,11 @@
+tokens:
+  Identifier @0..6 "Result"
+  Dot @6..7 "."
+  Identifier @7..9 "ok"
+  LeftParen @9..10 "("
+  Identifier @10..15 "value"
+  RightParen @15..16 ")"
+  Newline @16..17
+tree:
+  Pattern::Variant @0..16 "Result.ok(value)"
+    Pattern::Bind @10..15 "value"

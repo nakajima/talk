@@ -1,0 +1,20 @@
+tokens:
+  LeftParen @0..1 "("
+  Mut @1..4 "mut"
+  LeftBracket @5..6 "["
+  Identifier @6..10 "Byte"
+  RightBracket @10..11 "]"
+  Comma @11..12 ","
+  Identifier @13..20 "consume"
+  Identifier @21..27 "String"
+  RightParen @27..28 ")"
+  Arrow @29..31 "->"
+  Identifier @32..36 "Void"
+  Newline @36..37
+tree:
+  TypeAnnotation::Func @0..36 "(mut [Byte], consume String) -> Void"
+    TypeAnnotation::Borrow @5..11 "[Byte]"
+      TypeAnnotation::Nominal @5..11 "[Byte]"
+        TypeAnnotation::Nominal @6..10 "Byte"
+    TypeAnnotation::Nominal @21..27 "String"
+    TypeAnnotation::Nominal @32..36 "Void"

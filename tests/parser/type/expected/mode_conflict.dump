@@ -1,0 +1,10 @@
+tokens:
+  LeftParen @0..1 "("
+  Mut @1..4 "mut"
+  Amp @5..6 "&"
+  Identifier @6..9 "Int"
+  RightParen @9..10 ")"
+  Arrow @11..13 "->"
+  Identifier @14..18 "Void"
+  Newline @18..19
+parse error: parser.param-mode-borrow-conflict Parameter mode `mut` conflicts with its type: the annotation is already a borrow. The mode decides borrowing — drop the `&` from the annotation, or drop the mode

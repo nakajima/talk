@@ -1,0 +1,16 @@
+tokens:
+  LeftParen @0..1 "("
+  Identifier @1..4 "Int"
+  RightParen @4..5 ")"
+  SingleQuote @6..7 "'"
+  LeftBracket @7..8 "["
+  Identifier @8..10 "io"
+  RightBracket @10..11 "]"
+  Arrow @12..14 "->"
+  Identifier @15..19 "Bool"
+  Newline @19..20
+tree:
+  TypeAnnotation::Func @0..19 "(Int) '[io] -> Bool"
+    TypeAnnotation::Borrow @1..4 "Int"
+      TypeAnnotation::Nominal @1..4 "Int"
+    TypeAnnotation::Nominal @15..19 "Bool"

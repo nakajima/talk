@@ -1,0 +1,15 @@
+tokens:
+  LeftBrace @0..1 "{"
+  Identifier @1..2 "x"
+  Colon @2..3 ":"
+  Identifier @4..7 "Int"
+  Comma @7..8 ","
+  Identifier @9..10 "y"
+  Colon @10..11 ":"
+  Identifier @12..16 "Bool"
+  RightBrace @16..17 "}"
+  Newline @17..18
+tree:
+  TypeAnnotation::Record @0..17 "{x: Int, y: Bool}"
+    TypeAnnotation::Nominal @4..7 "Int"
+    TypeAnnotation::Nominal @12..16 "Bool"

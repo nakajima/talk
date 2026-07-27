@@ -218,4 +218,3 @@ tree:
                 Stmt::Expr @349..350 "0"
                   Expr::LiteralInt @349..350 "0"
       TypeAnnotation::Nominal @300..303 "Int"
-duplicate node ids: 10

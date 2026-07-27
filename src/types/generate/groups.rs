@@ -410,15 +410,41 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         // binder out of dependency order — reuse it (it sits at the outer
         // level, so this group conservatively won't generalize what it
         // touches).
+        let mut signature_skeletons: rustc_hash::FxHashSet<Symbol> = Default::default();
         for binder in binders {
             match &decls[binder] {
                 TopEntry::Let {
-                    decl, annotation, ..
+                    decl,
+                    annotation,
+                    rhs,
                 } => {
                     if !self.mono.contains_key(binder) {
-                        let skeleton = match annotation {
-                            Some(annotation) => self.lower_annotation(annotation),
-                            None => Ty::Var(self.store.fresh_ty(self.level, decl.id)),
+                        let skeleton = match (annotation, rhs) {
+                            (Some(annotation), _) => self.lower_annotation(annotation),
+                            // A fully-annotated monomorphic `func`
+                            // binder's in-group uses see its declared
+                            // signature, not a bare variable. Generic
+                            // and partially-annotated funcs keep the
+                            // variable skeleton: their annotations need
+                            // the declared-givens context the definition
+                            // pass sets up.
+                            (
+                                None,
+                                Some(Expr {
+                                    kind: ExprKind::Func(func),
+                                    ..
+                                }),
+                            ) if func.generics.is_empty()
+                                && func.where_clause.is_none()
+                                && func
+                                    .params
+                                    .iter()
+                                    .all(|param| param.type_annotation.is_some()) =>
+                            {
+                                signature_skeletons.insert(*binder);
+                                self.body().func_signature_skeleton(func, decl.id)
+                            }
+                            (None, _) => Ty::Var(self.store.fresh_ty(self.level, decl.id)),
                         };
                         self.mono.insert(*binder, skeleton);
                     }
@@ -458,13 +484,29 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             {
                 if let Some(rhs) = rhs {
                     let expected = self.mono[binder].clone();
-                    let reason = if annotation.is_some() {
-                        CtReason::Annotation
+                    // A signature skeleton takes the member route —
+                    // infer the definition and equate — so the checking
+                    // path's effect handling is untouched; the skeleton
+                    // exists for in-group USES only.
+                    if signature_skeletons.contains(binder)
+                        && let Expr {
+                            kind: ExprKind::Func(func),
+                            ..
+                        } = rhs
+                    {
+                        let ty = self
+                            .body()
+                            .infer_func(func, &group_ctx.with_binder(*binder));
+                        self.emit_eq(expected, ty, rhs.id, CtReason::Recursion);
                     } else {
-                        CtReason::Recursion
-                    };
-                    self.body()
-                        .check_expr(rhs, &expected, reason, &group_ctx.with_binder(*binder));
+                        let reason = if annotation.is_some() {
+                            CtReason::Annotation
+                        } else {
+                            CtReason::Recursion
+                        };
+                        self.body()
+                            .check_expr(rhs, &expected, reason, &group_ctx.with_binder(*binder));
+                    }
                 }
                 // Value restriction (Wright 1995): only syntactic values of
                 // unmutated binders generalize.

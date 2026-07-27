@@ -1,0 +1,18 @@
+tokens:
+  LeftParen @0..1 "("
+  Int @1..2 "1"
+  Comma @2..3 ","
+  Int @4..5 "2"
+  Star @6..7 "*"
+  Int @8..9 "3"
+  Comma @9..10 ","
+  Identifier @11..12 "x"
+  RightParen @12..13 ")"
+  Newline @13..14
+tree:
+  Expr::Tuple @0..13 "(1, 2 * 3, x)"
+    Expr::LiteralInt @1..2 "1"
+    Expr::Binary @4..9 "2 * 3"
+      Expr::LiteralInt @4..5 "2"
+      Expr::LiteralInt @8..9 "3"
+    Expr::Variable @11..12 "x"

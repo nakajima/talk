@@ -1,0 +1,11 @@
+tokens:
+  Amp @0..1 "&"
+  Mut @1..4 "mut"
+  LeftBracket @5..6 "["
+  Identifier @6..9 "Int"
+  RightBracket @9..10 "]"
+  Newline @10..11
+tree:
+  TypeAnnotation::Borrow @0..10 "&mut [Int]"
+    TypeAnnotation::Nominal @5..10 "[Int]"
+      TypeAnnotation::Nominal @6..9 "Int"

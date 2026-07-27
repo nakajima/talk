@@ -1,0 +1,11 @@
+tokens:
+  LeftParen @0..1 "("
+  Identifier @1..4 "Int"
+  Comma @4..5 ","
+  Identifier @6..10 "Bool"
+  RightParen @10..11 ")"
+  Newline @11..12
+tree:
+  TypeAnnotation::Tuple @0..11 "(Int, Bool)"
+    TypeAnnotation::Nominal @1..4 "Int"
+    TypeAnnotation::Nominal @6..10 "Bool"

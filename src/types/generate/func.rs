@@ -16,6 +16,55 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// Infer a function literal: parameters from annotations or fresh vars,
     /// a fresh open ambient effect row (Koka-style), body joined into the
     /// return type.
+    /// The declared shape of a `func` for recursive-group skeletons:
+    /// annotated parameters (modes applied) and return, fresh variables
+    /// elsewhere. No binding and no body — the definition pass still
+    /// checks the whole function against this skeleton. A bare-variable
+    /// skeleton would let an in-group call bind a parameter to its
+    /// argument's unborrowed type and then clash with the annotated
+    /// definition (found porting the frontend, ADR 0043).
+    pub(super) fn func_signature_skeleton(&mut self, func: &Func, node: NodeID) -> Ty {
+        // A concrete skeleton makes in-group call sites check argument
+        // labels immediately, so the label contract (ADR 0041) must be
+        // registered with it — the same idempotent entry `infer_func`
+        // makes later.
+        if func.origin == crate::node_kinds::func::FuncOrigin::Decl
+            && let Ok(symbol) = func.name.symbol()
+        {
+            self.catalog
+                .callable_contracts
+                .entry(symbol)
+                .or_insert_with(|| crate::types::callables::CallableContract {
+                    name: crate::types::callables::CallableName::from_params(
+                        func.name.name_str(),
+                        &func.params,
+                        false,
+                    ),
+                    role: crate::types::callables::CallableRole::Function,
+                });
+        }
+        let params: Vec<Ty> = func
+            .params
+            .iter()
+            .map(|param| {
+                let ty = match &param.type_annotation {
+                    Some(annotation) => self.lower_annotation(annotation),
+                    None => Ty::Var(self.store.fresh_ty(self.level, param.id)),
+                };
+                elaborate::apply_param_mode(self.catalog, param, ty, self.diagnostics)
+            })
+            .collect();
+        let ret = match func.ret.as_ref() {
+            Some(annotation) => self.lower_annotation(annotation),
+            None => Ty::Var(self.store.fresh_ty(self.level, node)),
+        };
+        Ty::Func(
+            params,
+            Box::new(ret),
+            EffectRow::open(self.store.fresh_eff(self.level, node)),
+        )
+    }
+
     pub(super) fn infer_func(&mut self, func: &Func, ctx: &Ctx) -> Ty {
         // A named `func` declaration publishes its argument-label contract
         // (ADR 0041). Closures never do, and collection-registered roles

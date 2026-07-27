@@ -1,0 +1,307 @@
+// Validation view of the self-hosted parse (ADR 0043 stage 2): renders
+// the frozen dump format — token section, tree section with byte spans
+// and snippets, diagnostics — byte-for-byte against the reference
+// `dump_block_items`. Only Rust and this file know the dump format;
+// the AST in Ast.tlk is the real product.
+
+use package::Lexer::{ lex, append, append_int, append_snippet, indent }
+use package::Parser::{
+	ParseOutcome, Fail,
+	parse_block_items_source, parse_expr_source, parse_pattern_source, parse_type_source
+}
+use package::Ast::{
+	Expr, ExprKind, CallArg, Parameter, Block,
+	Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
+	TypeAnnotation, TypeAnnotationKind, GenericArg,
+	RecordFieldTypeAnnotation, AnyAssocBinding,
+	Decl, DeclKind, Stmt, StmtKind, Item
+}
+
+func node_line(mut buf: [Byte], view: UTF8View, label: String, start: Int, end: Int, depth: Int) -> Void {
+	indent(buf: buf, depth: depth)
+	append(buf: buf, text: label)
+	append(buf: buf, text: " @")
+	append_int(buf: buf, value: start)
+	append(buf: buf, text: "..")
+	append_int(buf: buf, value: end)
+	append_snippet(buf: buf, view: view, start: start, end: end)
+	append(buf: buf, text: "\n")
+}
+
+func expr_label(kind: &ExprKind) -> String {
+	match kind {
+		.literal_int(_) -> "Expr::LiteralInt",
+		.literal_float(_) -> "Expr::LiteralFloat",
+		.literal_true -> "Expr::LiteralTrue",
+		.literal_false -> "Expr::LiteralFalse",
+		.literal_string(_) -> "Expr::LiteralString",
+		.literal_character(_) -> "Expr::LiteralCharacter",
+		.variable(_) -> "Expr::Variable",
+		.unary(_, _) -> "Expr::Unary",
+		.binary(_, _) -> "Expr::Binary",
+		.call(_, _) -> "Expr::Call",
+		.member(_, _) -> "Expr::Member",
+		.incomplete_member(_) -> "Expr::Incomplete",
+		.tuple(_) -> "Expr::Tuple",
+		.block(_) -> "Expr::Block"
+	}
+}
+
+func pattern_label(kind: &PatternKind) -> String {
+	match kind {
+		.bind(_) -> "Pattern::Bind",
+		.wildcard -> "Pattern::Wildcard",
+		.literal_int(_) -> "Pattern::LiteralInt",
+		.literal_float(_) -> "Pattern::LiteralFloat",
+		.literal_character(_) -> "Pattern::LiteralCharacter",
+		.literal_string(_) -> "Pattern::LiteralString",
+		.literal_true -> "Pattern::LiteralTrue",
+		.literal_false -> "Pattern::LiteralFalse",
+		.tuple(_) -> "Pattern::Tuple",
+		.or_pattern(_) -> "Pattern::Or",
+		.variant(_, _, _, _) -> "Pattern::Variant",
+		.struct_pattern(_, _, _, _) -> "Pattern::Struct",
+		.record(_) -> "Pattern::Record"
+	}
+}
+
+func render_expr(mut buf: [Byte], view: UTF8View, expr: &Expr, depth: Int) -> Void {
+	node_line(buf: buf, view: view, label: expr_label(kind: expr.kind), start: expr.start, end: expr.end, depth: depth)
+	if let .unary(_, operands) = expr.kind {
+		for operand in operands {
+			render_expr(buf: buf, view: view, expr: operand, depth: depth + 1)
+		}
+	}
+	if let .binary(_, operands) = expr.kind {
+		for operand in operands {
+			render_expr(buf: buf, view: view, expr: operand, depth: depth + 1)
+		}
+	}
+	if let .call(callee, args) = expr.kind {
+		for target in callee {
+			render_expr(buf: buf, view: view, expr: target, depth: depth + 1)
+		}
+		for arg in args {
+			render_call_arg(buf: buf, view: view, arg: arg, depth: depth + 1)
+		}
+	}
+	if let .member(_, receiver) = expr.kind {
+		for target in receiver {
+			render_expr(buf: buf, view: view, expr: target, depth: depth + 1)
+		}
+	}
+	if let .incomplete_member(receiver) = expr.kind {
+		for target in receiver {
+			render_expr(buf: buf, view: view, expr: target, depth: depth + 1)
+		}
+	}
+	if let ExprKind.tuple(items) = expr.kind {
+		for item in items {
+			render_expr(buf: buf, view: view, expr: item, depth: depth + 1)
+		}
+	}
+	if let .block(inner) = expr.kind {
+		render_block(buf: buf, view: view, block: inner, depth: depth + 1)
+	}
+}
+
+func render_block(mut buf: [Byte], view: UTF8View, block: &Block, depth: Int) -> Void {
+	node_line(buf: buf, view: view, label: "Block", start: block.start, end: block.end, depth: depth)
+	for param in block.params {
+		render_parameter(buf: buf, view: view, param: param, depth: depth + 1)
+	}
+	for item in block.body {
+		render_item(buf: buf, view: view, item: item, depth: depth + 1)
+	}
+}
+
+func render_parameter(mut buf: [Byte], view: UTF8View, param: &Parameter, depth: Int) -> Void {
+	node_line(buf: buf, view: view, label: "Parameter", start: param.start, end: param.end, depth: depth)
+}
+
+func render_call_arg(mut buf: [Byte], view: UTF8View, arg: &CallArg, depth: Int) -> Void {
+	node_line(buf: buf, view: view, label: "CallArg", start: arg.start, end: arg.end, depth: depth)
+	render_expr(buf: buf, view: view, expr: arg.value, depth: depth + 1)
+}
+
+func type_label(kind: &TypeAnnotationKind) -> String {
+	match kind {
+		.borrow(_, _) -> "TypeAnnotation::Borrow",
+		.unique(_) -> "TypeAnnotation::Unique",
+		.func_type(_, _, _) -> "TypeAnnotation::Func",
+		.nominal_path(_, _, _) -> "TypeAnnotation::NominalPath",
+		.nominal(_, _) -> "TypeAnnotation::Nominal",
+		.tuple(_) -> "TypeAnnotation::Tuple",
+		.record_type(_) -> "TypeAnnotation::Record",
+		.any_type(_, _) -> "TypeAnnotation::Any"
+	}
+}
+
+func render_type(mut buf: [Byte], view: UTF8View, annotation: &TypeAnnotation, depth: Int) -> Void {
+	node_line(buf: buf, view: view, label: type_label(kind: annotation.kind), start: annotation.start, end: annotation.end, depth: depth)
+	if let .borrow(_, inner) = annotation.kind {
+		for target in inner {
+			render_type(buf: buf, view: view, annotation: target, depth: depth + 1)
+		}
+	}
+	if let .unique(inner) = annotation.kind {
+		for target in inner {
+			render_type(buf: buf, view: view, annotation: target, depth: depth + 1)
+		}
+	}
+	if let .func_type(params, _, returns) = annotation.kind {
+		for param in params {
+			render_type(buf: buf, view: view, annotation: param, depth: depth + 1)
+		}
+		for target in returns {
+			render_type(buf: buf, view: view, annotation: target, depth: depth + 1)
+		}
+	}
+	if let .nominal_path(base, _, member_generics) = annotation.kind {
+		for target in base {
+			render_type(buf: buf, view: view, annotation: target, depth: depth + 1)
+		}
+		render_generic_args(buf: buf, view: view, args: member_generics, depth: depth + 1)
+	}
+	if let TypeAnnotationKind.nominal(_, generics) = annotation.kind {
+		render_generic_args(buf: buf, view: view, args: generics, depth: depth + 1)
+	}
+	if let TypeAnnotationKind.tuple(items) = annotation.kind {
+		for item in items {
+			render_type(buf: buf, view: view, annotation: item, depth: depth + 1)
+		}
+	}
+	if let .record_type(fields) = annotation.kind {
+		// Record type fields are not visited nodes: only values render,
+		// at the record's child depth.
+		for field in fields {
+			render_type(buf: buf, view: view, annotation: field.value, depth: depth + 1)
+		}
+	}
+	if let .any_type(protocol_head, bindings) = annotation.kind {
+		for target in protocol_head {
+			render_type(buf: buf, view: view, annotation: target, depth: depth + 1)
+		}
+		// Assoc bindings are not visited nodes either: values only.
+		for binding in bindings {
+			render_type(buf: buf, view: view, annotation: binding.value, depth: depth + 1)
+		}
+	}
+}
+
+// Generic arguments are not nodes: a type argument's annotation renders
+// directly at the surrounding node's child depth.
+func render_generic_args(mut buf: [Byte], view: UTF8View, args: &[GenericArg], depth: Int) -> Void {
+	for arg in args {
+		match arg {
+			.type_arg(annotation) -> render_type(buf: buf, view: view, annotation: annotation, depth: depth)
+		}
+	}
+}
+
+func render_pattern(mut buf: [Byte], view: UTF8View, pattern: &Pattern, depth: Int) -> Void {
+	node_line(buf: buf, view: view, label: pattern_label(kind: pattern.kind), start: pattern.start, end: pattern.end, depth: depth)
+	if let PatternKind.tuple(items) = pattern.kind {
+		for item in items {
+			render_pattern(buf: buf, view: view, pattern: item, depth: depth + 1)
+		}
+	}
+	if let .or_pattern(alternatives) = pattern.kind {
+		for alternative in alternatives {
+			render_pattern(buf: buf, view: view, pattern: alternative, depth: depth + 1)
+		}
+	}
+	if let .variant(_, _, fields, _) = pattern.kind {
+		for field in fields {
+			render_pattern(buf: buf, view: view, pattern: field, depth: depth + 1)
+		}
+	}
+	if let .struct_pattern(_, fields, _, _) = pattern.kind {
+		for field in fields {
+			render_pattern(buf: buf, view: view, pattern: field, depth: depth + 1)
+		}
+	}
+	if let .record(fields) = pattern.kind {
+		// Record fields are not nodes of their own in the dump: only a
+		// colon field's value pattern renders, at the record's child
+		// depth (shorthand binds and `..` render nothing).
+		for field in fields {
+			if let .equals_field(_, value) = field.kind {
+				render_pattern(buf: buf, view: view, pattern: value, depth: depth + 1)
+			}
+		}
+	}
+}
+
+func render_decl(mut buf: [Byte], view: UTF8View, decl: &Decl, depth: Int) -> Void {
+	let label = match decl.kind {
+		.let_decl(_, _, _) -> "Decl::Let",
+		.import_decl(_) -> "Decl::Import"
+	}
+	node_line(buf: buf, view: view, label: label, start: decl.start, end: decl.end, depth: depth)
+	if let .let_decl(lhs, annotation, rhs) = decl.kind {
+		render_pattern(buf: buf, view: view, pattern: lhs, depth: depth + 1)
+		if let .some(target) = annotation {
+			render_type(buf: buf, view: view, annotation: target, depth: depth + 1)
+		}
+		if let .some(value) = rhs {
+			render_expr(buf: buf, view: view, expr: value, depth: depth + 1)
+		}
+	}
+}
+
+func render_stmt(mut buf: [Byte], view: UTF8View, stmt: &Stmt, depth: Int) -> Void {
+	node_line(buf: buf, view: view, label: "Stmt::Expr", start: stmt.start, end: stmt.end, depth: depth)
+	match stmt.kind {
+		.expr_stmt(e) -> render_expr(buf: buf, view: view, expr: e, depth: depth + 1)
+	}
+}
+
+func render_item(mut buf: [Byte], view: UTF8View, item: &Item, depth: Int) -> Void {
+	match item {
+		.decl_item(decl) -> render_decl(buf: buf, view: view, decl: decl, depth: depth),
+		.stmt_item(stmt) -> render_stmt(buf: buf, view: view, stmt: stmt, depth: depth),
+		.expr_item(expr) -> render_expr(buf: buf, view: view, expr: expr, depth: depth),
+		.pattern_item(pattern) -> render_pattern(buf: buf, view: view, pattern: pattern, depth: depth),
+		.type_item(annotation) -> render_type(buf: buf, view: view, annotation: annotation, depth: depth)
+	}
+}
+
+// A category validation export's full dump: token section, then the
+// tree (or the parse error), then diagnostics.
+func render_dump(source: String, outcome: ParseOutcome) -> String {
+	let out: [Byte] = []
+	append(buf: out, text: lex(source: source))
+	if let .some(failure) = outcome.failure {
+		append(buf: out, text: "parse error: " + failure.code + " " + failure.message + "\n")
+		return String.from_bytes(bytes: out)
+	}
+	append(buf: out, text: "tree:\n")
+	let view = source.utf8()
+	for item in outcome.items {
+		render_item(buf: out, view: view, item: item, depth: 1)
+	}
+	if outcome.diags.is_empty() == false {
+		append(buf: out, text: "diagnostics:\n")
+		for diag in outcome.diags {
+			append(buf: out, text: "  error " + diag.code + " " + diag.message + "\n")
+		}
+	}
+	String.from_bytes(bytes: out)
+}
+
+pub func parse_block_items(source: String) -> String {
+	render_dump(source: source, outcome: parse_block_items_source(source: source))
+}
+
+pub func parse_expr(source: String) -> String {
+	render_dump(source: source, outcome: parse_expr_source(source: source))
+}
+
+pub func parse_pattern(source: String) -> String {
+	render_dump(source: source, outcome: parse_pattern_source(source: source))
+}
+
+pub func parse_type(source: String) -> String {
+	render_dump(source: source, outcome: parse_type_source(source: source))
+}

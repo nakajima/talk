@@ -15,4 +15,4 @@ tree:
         Expr::LiteralInt @9..10 "1"
         Expr::LiteralInt @13..14 "2"
 diagnostics:
-  error parser.unexpected-token Unexpected token. Expected ), got "Some(Token { kind: EOF, start: 15, end: 15, line: 1, col: 0 })"
+  error parser.unexpected-token Unexpected token: expected `)`, got end of input

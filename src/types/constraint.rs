@@ -69,6 +69,20 @@ impl CtReason {
             other => other,
         }
     }
+
+    /// Coercion sites for the borrow-donation rule when the slot is still
+    /// unsolved: a borrow-typed value meeting an unsolved slot at these
+    /// positions defers to the owned-coercion judgment — the slot may yet
+    /// resolve owned, and donation decides then — instead of eagerly
+    /// equating the borrow into the variable. Concrete owned slots defer
+    /// under every reason already (`check_inferred_against_expected`'s
+    /// found-borrow arm); this set only governs unsolved slots, where
+    /// deferral trades against the eager equalities that drive inference.
+    /// Invariant positions (nested and callback parameters) stay eager
+    /// deliberately: coercion never applies under a type constructor.
+    pub fn coerces_borrows(self) -> bool {
+        matches!(self, CtReason::Apply | CtReason::ArrayElement)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

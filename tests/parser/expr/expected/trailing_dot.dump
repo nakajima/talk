@@ -1,0 +1,9 @@
+tokens:
+  Identifier @0..5 "value"
+  Dot @5..6 "."
+  Newline @6..7
+tree:
+  Expr::Incomplete @0..6 "value."
+    Expr::Variable @0..5 "value"
+diagnostics:
+  error parser.expected-identifier Expected an identifier, got a newline

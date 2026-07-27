@@ -1,0 +1,14 @@
+tokens:
+  Identifier @0..1 "a"
+  Dot @1..2 "."
+  Identifier @2..3 "b"
+  Dot @3..4 "."
+  Identifier @4..5 "c"
+  Dot @5..6 "."
+  Int @6..7 "0"
+  Newline @7..8
+tree:
+  Expr::Member @0..7 "a.b.c.0"
+    Expr::Member @0..5 "a.b.c"
+      Expr::Member @0..3 "a.b"
+        Expr::Variable @0..1 "a"

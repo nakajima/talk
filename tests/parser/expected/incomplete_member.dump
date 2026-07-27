@@ -11,4 +11,4 @@ tree:
     Expr::Incomplete @12..18 "thing."
       Expr::Variable @12..17 "thing"
 diagnostics:
-  error parser.expected-identifier Expected identifier, got: Some(Token { kind: Newline, start: 18, end: 19, line: 1, col: 0 })
+  error parser.expected-identifier Expected an identifier, got a newline

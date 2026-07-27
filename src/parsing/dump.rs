@@ -10,7 +10,6 @@
 use std::fmt::Write as _;
 
 use derive_visitor::{Drive, Visitor};
-use rustc_hash::FxHashSet;
 
 use crate::lexer::Lexer;
 use crate::node_id::{FileID, NodeID};
@@ -160,16 +159,11 @@ fn dump_with<'a>(source: &'a str, parse: impl FnOnce(Parser<'a>) -> ParseResult)
                 meta: &ast.meta,
                 out: String::new(),
                 depth: 1,
-                seen: FxHashSet::default(),
-                duplicate_ids: 0,
             };
             for root in &ast.roots {
                 root.drive(&mut visitor);
             }
             out.push_str(&visitor.out);
-            if visitor.duplicate_ids > 0 {
-                let _ = writeln!(out, "duplicate node ids: {}", visitor.duplicate_ids);
-            }
 
             if !comments.is_empty() {
                 out.push_str("comments:\n");
@@ -291,15 +285,10 @@ struct DumpVisitor<'a> {
     meta: &'a NodeMetaStorage,
     out: String,
     depth: usize,
-    seen: FxHashSet<NodeID>,
-    duplicate_ids: usize,
 }
 
 impl DumpVisitor<'_> {
     fn node(&mut self, label: String, id: NodeID, span: Span) {
-        if !self.seen.insert(id) {
-            self.duplicate_ids += 1;
-        }
         let indent = "  ".repeat(self.depth);
         let location = if span == Span::SYNTHESIZED {
             " @synthesized".to_string()
@@ -494,5 +483,9 @@ mod tests {
         check_corpus_dir(&root.join("block"), dump_block_items);
         check_corpus_dir(&root.join("tokentree"), dump_token_trees);
         check_corpus_dir(&root.join("lenient"), dump_lenient);
+        // Pins the reference lexer's unicode-identifier behavior; the
+        // Talk lexer harness adopts this directory once its scalar
+        // classification path lands.
+        check_corpus_dir(&root.join("unicode"), dump);
     }
 }

@@ -1,0 +1,2 @@
+let total: Int = 1 + 2
+let names: [String]? = .none

@@ -11,4 +11,4 @@ tokens:
   Int @18..19 "2"
   RightBrace @20..21 "}"
   Newline @21..22
-parse error: parser.unexpected-token Unexpected token. Expected ,, got "Some(Token { kind: Colon, start: 4, end: 5, line: 0, col: 5 })"
+parse error: parser.unexpected-token Unexpected token: expected `,`, got `:`

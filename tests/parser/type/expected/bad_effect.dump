@@ -1,0 +1,12 @@
+tokens:
+  LeftParen @0..1 "("
+  Identifier @1..4 "Int"
+  RightParen @4..5 ")"
+  SingleQuote @6..7 "'"
+  LeftBracket @7..8 "["
+  Plus @8..9 "+"
+  RightBracket @9..10 "]"
+  Arrow @11..13 "->"
+  Identifier @14..18 "Bool"
+  Newline @18..19
+parse error: parser.unexpected-token Unexpected token: expected an effect name, got `+`

@@ -39,7 +39,7 @@ impl From<&str> for ExpectedSyntax {
 impl Display for ExpectedSyntax {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Token(token) => write!(f, "{}", token.as_str()),
+            Self::Token(token) => write!(f, "`{}`", token.as_str()),
             Self::Description(description) => f.write_str(description),
         }
     }
@@ -160,6 +160,28 @@ impl ParserError {
     }
 }
 
+/// A token kind described for a user-facing message: literal spellings
+/// in backticks, classes of token in words.
+fn describe_kind(kind: &TokenKind) -> String {
+    match kind {
+        TokenKind::EOF => "end of input".into(),
+        TokenKind::Newline => "a newline".into(),
+        TokenKind::Identifier => "an identifier".into(),
+        TokenKind::Int => "an integer literal".into(),
+        TokenKind::Float => "a float literal".into(),
+        TokenKind::StringLiteral => "a string literal".into(),
+        TokenKind::CharacterLiteral => "a character literal".into(),
+        other => format!("`{}`", other.as_str()),
+    }
+}
+
+fn describe(token: &Option<Token>) -> String {
+    match token {
+        Some(token) => describe_kind(&token.kind),
+        None => "end of input".into(),
+    }
+}
+
 impl Display for ParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -177,27 +199,36 @@ impl Display for ParserError {
             }
             Self::UnexpectedEndOfInput(expected) => {
                 if let Some(expected) = expected {
-                    write!(f, "Unexpected end of input. Expected {expected:?}")
+                    write!(f, "Unexpected end of input; expected {expected}")
                 } else {
-                    write!(f, "Unexpected end of input.")
+                    write!(f, "Unexpected end of input")
                 }
             }
             Self::UnexpectedToken {
-                expected, actual, ..
+                expected,
+                actual,
+                token,
             } => {
-                write!(f, "Unexpected token. Expected {expected}, got {actual:?}")
+                // The token names itself when present; `actual` is the
+                // fallback for sites without one.
+                let got = match token {
+                    Some(token) => describe_kind(&token.kind),
+                    None => actual.clone(),
+                };
+                write!(f, "Unexpected token: expected {expected}, got {got}")
             }
             Self::InfiniteLoop(current) => {
                 write!(
                     f,
-                    "Parser failed to make forward progress. Stuck at {current:?}"
+                    "Parser failed to make forward progress at {}",
+                    describe(current)
                 )
             }
             Self::UnbalancedLocationStack => {
                 write!(f, "Unbalanced source location stack")
             }
             Self::ExpectedIdentifier(current) => {
-                write!(f, "Expected identifier, got: {current:?}")
+                write!(f, "Expected an identifier, got {}", describe(current))
             }
             Self::BadLabel(label) => write!(f, "Unable to parse label: {label}"),
             Self::IntegerLiteralOutOfRange { literal } => write!(
@@ -205,8 +236,14 @@ impl Display for ParserError {
                 "Integer literal {literal} is outside the signed 64-bit range"
             ),
             Self::CannotAssign => write!(f, "Cannot assign in this context"),
-            Self::ExpectedDecl(actual) => write!(f, "Expected declaration, got {actual:?}"),
-            Self::LetNotAllowed(context) => write!(f, "Cannot use `let` in {context:?} body"),
+            Self::ExpectedDecl(actual) => {
+                write!(f, "Expected a declaration, got {}", describe_kind(actual))
+            }
+            Self::LetNotAllowed(context) => write!(
+                f,
+                "Cannot use `let` in {} body",
+                format!("{context:?}").to_lowercase()
+            ),
             Self::InitNotAllowed(_context) => write!(f, "Cannot use `init` in this context"),
             Self::ExplicitSelfParameterNotAllowed { .. } => {
                 write!(
@@ -222,7 +259,8 @@ impl Display for ParserError {
             }
             Self::ConformanceListNotAllowed { context, .. } => write!(
                 f,
-                "Cannot declare conformances on {context:?}; use an `extend` block instead"
+                "Cannot declare conformances on {}; use an `extend` block instead",
+                format!("{context:?}").to_lowercase()
             ),
             Self::IncompleteFuncSignature(msg) => write!(f, "{}", msg),
             Self::ConversionError(msg) => write!(f, "{}", msg),

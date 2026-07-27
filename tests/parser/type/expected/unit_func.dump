@@ -1,0 +1,9 @@
+tokens:
+  LeftParen @0..1 "("
+  RightParen @1..2 ")"
+  Arrow @3..5 "->"
+  Identifier @6..10 "Void"
+  Newline @10..11
+tree:
+  TypeAnnotation::Func @0..10 "() -> Void"
+    TypeAnnotation::Nominal @6..10 "Void"

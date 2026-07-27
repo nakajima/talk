@@ -3397,11 +3397,55 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         self.invalidated_views.extend(views);
     }
 
+    /// Rule 1 (docs/ownership-rethink-plan.md): a consume that is not
+    /// the value's last use donates a reference instead of moving —
+    /// ownership is an optimization the compiler discovers at the true
+    /// last use (Perceus: Reinking, Xie, de Moura & Leijen, PLDI 2021),
+    /// never a proof burden. Inside a loop the binding's uses recur, so
+    /// an outer binding always shares. Linear and unique values keep
+    /// move semantics: duplicating one is what those markers exist to
+    /// prevent.
+    fn consume_donates(&self, local: LocalId, ty: &Ty) -> bool {
+        if is_linear(self.program_builder, ty)
+            || self.unique_locals.contains(&local)
+            || self.in_return_consume
+            || !self.can_release(ty)
+        {
+            return false;
+        }
+        let remaining = self
+            .locals
+            .iter()
+            .find(|(_, candidate)| **candidate == local)
+            .and_then(|(symbol, _)| self.use_counts.get(symbol))
+            .copied()
+            .unwrap_or(0);
+        let bound_outside_loop = self
+            .owned_loop_depth
+            .get(&local)
+            .is_some_and(|depth| self.loop_stack.len() > *depth);
+        remaining > 0 || bound_outside_loop || self.has_live_view(local)
+    }
+
     fn consume_operand(&mut self, operand: Operand) -> bool {
         let Operand::Local(local) = operand else {
             return true;
         };
         if let Some(position) = self.stmt_temps.iter().position(|temp| *temp == local) {
+            // An arm bind registered as a temp is a named binding with
+            // possibly more uses: a non-last-use consume donates here
+            // exactly as below, or later consumes double-spend the one
+            // owned reference (the sequential-if-let double release).
+            if let Some(ty) = self.owned_tys.get(&local).cloned()
+                && needs_drop(self.program_builder, &ty)
+                && self.consume_donates(local, &ty)
+            {
+                if let Err(error) = self.retain_value(operand, &ty, Span::SYNTHESIZED) {
+                    self.deferred_errors.push(error);
+                }
+                self.record_flow(verify::FlowEvent::Use(local));
+                return true;
+            }
             // Consuming a temp removes it from this path's live list
             // only. owned_tys is a type table shared across sibling
             // control-flow arms (merge restores moved/stmt_temps per
@@ -3418,38 +3462,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.push(Inst::RegionAcquire { src: operand });
                 return true;
             }
-            // Rule 1 (docs/ownership-rethink-plan.md): a consume that
-            // is not the value's last use donates a reference instead
-            // of moving — ownership is an optimization the compiler
-            // discovers at the true last use (Perceus: Reinking, Xie,
-            // de Moura & Leijen, PLDI 2021), never a proof burden.
-            // Inside a loop the binding's uses recur, so an outer
-            // binding always shares. Linear and unique values keep move
-            // semantics: duplicating one is what those markers exist to
-            // prevent.
-            if !is_linear(self.program_builder, &ty)
-                && !self.unique_locals.contains(&local)
-                && !self.in_return_consume
-                && self.can_release(&ty)
-            {
-                let remaining = self
-                    .locals
-                    .iter()
-                    .find(|(_, candidate)| **candidate == local)
-                    .and_then(|(symbol, _)| self.use_counts.get(symbol))
-                    .copied()
-                    .unwrap_or(0);
-                let bound_outside_loop = self
-                    .owned_loop_depth
-                    .get(&local)
-                    .is_some_and(|depth| self.loop_stack.len() > *depth);
-                if remaining > 0 || bound_outside_loop || self.has_live_view(local) {
-                    if let Err(error) = self.retain_value(operand, &ty, Span::SYNTHESIZED) {
-                        self.deferred_errors.push(error);
-                    }
-                    self.record_flow(verify::FlowEvent::Use(local));
-                    return true;
+            if self.consume_donates(local, &ty) {
+                if let Err(error) = self.retain_value(operand, &ty, Span::SYNTHESIZED) {
+                    self.deferred_errors.push(error);
                 }
+                self.record_flow(verify::FlowEvent::Use(local));
+                return true;
             }
             // Only a live `&mut` loan blocks the move: shared loans
             // snapshot (the adjudicated exclusivity rule — conflicts
@@ -5347,6 +5365,20 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     });
                     local
                 };
+                // Register with the value's concrete type when the
+                // aliased temporary carries one: a desugared binding's
+                // pattern type can be an unreduced projection (a
+                // for-loop's iterator), which the release classifier
+                // cannot see through.
+                let value_ty = match value {
+                    Operand::Local(source) => self.owned_tys.get(&source).cloned(),
+                    _ => None,
+                };
+                // Consume before the symbol points at the aliased local:
+                // a handoff moves the same value under a new owner, so it
+                // must not read as a not-last-use consume of the binding
+                // (which would donate a reference nothing releases).
+                self.consume_binding(value, ty, pattern.span)?;
                 self.locals.insert(*symbol, local);
                 self.local_tys.insert(local, ty.clone());
                 self.propagate_view(Operand::Local(local), value);
@@ -5367,16 +5399,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         loop_depth: self.loop_stack.len(),
                     });
                 }
-                // Register with the value's concrete type when the
-                // aliased temporary carries one: a desugared binding's
-                // pattern type can be an unreduced projection (a
-                // for-loop's iterator), which the release classifier
-                // cannot see through.
-                let value_ty = match value {
-                    Operand::Local(source) => self.owned_tys.get(&source).cloned(),
-                    _ => None,
-                };
-                self.consume_binding(value, ty, pattern.span)?;
                 self.own_local(local, value_ty.as_ref().unwrap_or(ty));
                 Ok(())
             }

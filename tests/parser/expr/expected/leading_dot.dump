@@ -1,0 +1,12 @@
+tokens:
+  Dot @0..1 "."
+  Identifier @1..5 "some"
+  LeftParen @5..6 "("
+  Int @6..7 "1"
+  RightParen @7..8 ")"
+  Newline @8..9
+tree:
+  Expr::Call @0..8 ".some(1)"
+    Expr::Member @0..5 ".some"
+    CallArg @6..7 "1"
+      Expr::LiteralInt @6..7 "1"

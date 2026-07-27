@@ -1,0 +1,1 @@
+(mut [Byte], consume String) -> Void

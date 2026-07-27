@@ -959,6 +959,139 @@ pub mod tests {
     }
 
     #[test]
+    fn sequential_borrowed_if_lets_compile_and_run() {
+        // Bug: the for-loop payload `item` is borrow-typed (`&Shade` out
+        // of `next()`'s Optional), but `settle_owned_match` registered it
+        // as an arm-owned temporary with its borrow stripped — so each
+        // sequential `if let` compiled as an owning match and released it,
+        // a double release the balance verifier panics on at compile.
+        let source = "enum Shade {\n\
+            \tcase light(String)\n\
+            \tcase dark(String)\n\
+            }\n\
+            \n\
+            func bump(mut buf: [Int], x: &String) -> Void {\n\
+            \tbuf.push(x.byte_count)\n\
+            }\n\
+            \n\
+            pub func tally() -> Int {\n\
+            \tlet shades = [Shade.light(\"day\"), Shade.dark(\"noon\")]\n\
+            \tlet buf: [Int] = []\n\
+            \tfor item in shades {\n\
+            \t\tif let .light(x) = item {\n\
+            \t\t\tbump(buf: buf, x: x)\n\
+            \t\t}\n\
+            \t\tif let .dark(x) = item {\n\
+            \t\t\tbump(buf: buf, x: x)\n\
+            \t\t}\n\
+            \t}\n\
+            \tbuf.count\n\
+            }\n";
+        let exe = service_executable(source, &["tally"]).expect("service compiles");
+        let mut io = CaptureIO::default();
+        let outcome = exe
+            .run_export("tally", &[], Budgets::default(), &mut io)
+            .expect("tally runs");
+        assert_eq!(outcome.value, Value::I64(2));
+        let balance = outcome.balance();
+        if balance.result_exact {
+            assert_eq!(
+                balance.live_allocations, balance.result_allocations,
+                "sequential if-lets unbalanced the refcounts"
+            );
+        }
+    }
+
+    #[test]
+    fn array_literal_of_borrowed_param_at_call_argument() {
+        // A literal argument checks against the callee's borrow-by-default
+        // param type: the peel must keep pushing the element type inward
+        // so a borrowed element coerces by donation, exactly as it does
+        // through an annotated let or a constructor argument. Array,
+        // tuple, and record constructions all share the peel path.
+        let source = "func show(items: [String]) -> Int {\n\
+            \titems.count\n\
+            }\n\
+            \n\
+            func pair(items: (String, Int)) -> Int {\n\
+            \titems.1\n\
+            }\n\
+            \n\
+            func rec(entry: { name: String }) -> Int {\n\
+            \tentry.name.byte_count\n\
+            }\n\
+            \n\
+            pub func direct(lhs: String) -> Int {\n\
+            \tshow(items: [lhs]) + pair(items: (lhs, 2)) + rec(entry: { name: lhs })\n\
+            }\n";
+        let exe = service_executable(source, &["direct"]).expect("service compiles");
+        let mut io = CaptureIO::default();
+        let outcome = exe
+            .run_export("direct", &[HostValue::String(b"hey".to_vec())], Budgets::default(), &mut io)
+            .expect("direct runs");
+        assert_eq!(outcome.value, Value::I64(6));
+        let balance = outcome.balance();
+        if balance.result_exact {
+            assert_eq!(
+                balance.live_allocations, balance.result_allocations,
+                "borrowed element donation unbalanced the refcounts"
+            );
+        }
+    }
+
+    #[test]
+    fn control_flow_arguments_of_borrowed_param() {
+        // Checking mode must propagate through every construction under a
+        // peeled borrow-by-default param — match (and the ifs that desugar
+        // to it), blocks, and literals whose element type only the callee
+        // knows (the unannotated let resolves through the deferred
+        // donation judgment when the call pins its element type).
+        let source = "func show(items: [String]) -> Int {\n\
+            \titems.count\n\
+            }\n\
+            \n\
+            func via_if(lhs: String, flag: Bool) -> Int {\n\
+            \tshow(items: if flag { [lhs] } else { [] })\n\
+            }\n\
+            \n\
+            func via_match(lhs: String, flag: Bool) -> Int {\n\
+            \tshow(items: match flag {\n\
+            \t\ttrue -> [lhs, lhs],\n\
+            \t\tfalse -> []\n\
+            \t})\n\
+            }\n\
+            \n\
+            func via_block(lhs: String) -> Int {\n\
+            \tshow(items: {\n\
+            \t\tlet tag = 1;\n\
+            \t\t[lhs, lhs, lhs]\n\
+            \t})\n\
+            }\n\
+            \n\
+            func via_plain_let(lhs: String) -> Int {\n\
+            \tlet items = [lhs, lhs, lhs, lhs]\n\
+            \tshow(items: items)\n\
+            }\n\
+            \n\
+            pub func tally(lhs: String) -> Int {\n\
+            \tvia_if(lhs: lhs, flag: true) + via_match(lhs: lhs, flag: true) + via_block(lhs: lhs) + via_plain_let(lhs: lhs)\n\
+            }\n";
+        let exe = service_executable(source, &["tally"]).expect("service compiles");
+        let mut io = CaptureIO::default();
+        let outcome = exe
+            .run_export("tally", &[HostValue::String(b"hey".to_vec())], Budgets::default(), &mut io)
+            .expect("tally runs");
+        assert_eq!(outcome.value, Value::I64(10));
+        let balance = outcome.balance();
+        if balance.result_exact {
+            assert_eq!(
+                balance.live_allocations, balance.result_allocations,
+                "borrowed donations through control flow unbalanced the refcounts"
+            );
+        }
+    }
+
+    #[test]
     fn compiled_images_are_deterministic_in_process() {
         // Two full pipelines over the same source must encode identical
         // images — the in-process half of the ADR 0043 fixed-point

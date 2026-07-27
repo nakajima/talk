@@ -1,0 +1,11 @@
+tokens:
+  Identifier @0..6 "Point3"
+  LeftBrace @7..8 "{"
+  Identifier @9..10 "x"
+  Comma @10..11 ","
+  DotDot @12..14 ".."
+  RightBrace @15..16 "}"
+  Newline @16..17
+tree:
+  Pattern::Struct @0..16 "Point3 { x, .. }"
+    Pattern::Bind @9..10 "x"

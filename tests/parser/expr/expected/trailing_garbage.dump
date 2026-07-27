@@ -4,4 +4,4 @@ tokens:
   Int @4..5 "2"
   Int @6..7 "2"
   Newline @7..8
-parse error: parser.unexpected-token Unexpected token. Expected end of input, got "2"
+parse error: parser.unexpected-token Unexpected token: expected end of input, got an integer literal

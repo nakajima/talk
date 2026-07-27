@@ -9,4 +9,4 @@ tokens:
   Newline @20..21
   RightBrace @21..22 "}"
   Newline @22..23
-parse error: parser.expected-identifier Expected identifier, got: Some(Token { kind: LeftBrace, start: 7, end: 8, line: 0, col: 8 })
+parse error: parser.expected-identifier Expected an identifier, got `{`

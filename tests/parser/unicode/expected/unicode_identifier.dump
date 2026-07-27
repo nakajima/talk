@@ -1,0 +1,10 @@
+tokens:
+  Let @0..3 "let"
+  Identifier @4..9 "café"
+  Equals @10..11 "="
+  Int @12..14 "42"
+  Newline @14..15
+tree:
+  Decl::Let @0..14 "let café = 42"
+    Pattern::Bind @4..9 "café"
+    Expr::LiteralInt @12..14 "42"

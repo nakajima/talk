@@ -1,0 +1,13 @@
+tokens:
+  Any @0..3 "any"
+  Identifier @4..14 "Comparable"
+  Less @14..15 "<"
+  Identifier @15..22 "Element"
+  Equals @23..24 "="
+  Identifier @25..28 "Int"
+  Greater @28..29 ">"
+  Newline @29..30
+tree:
+  TypeAnnotation::Any @0..29 "any Comparable<Element = Int>"
+    TypeAnnotation::Nominal @4..14 "Comparable"
+    TypeAnnotation::Nominal @25..28 "Int"

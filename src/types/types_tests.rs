@@ -3,6 +3,26 @@ pub mod tests {
     use crate::compiling::driver::{Driver, DriverConfig, Source, Typed};
     use crate::diagnostic::AnyDiagnostic;
 
+    /// Mutually recursive top-level functions with borrowed-array
+    /// parameters must type-check: the recursive-group skeleton and the
+    /// definition must agree on the borrow (found porting the frontend,
+    /// ADR 0043).
+    #[test]
+    fn mutually_recursive_borrowed_array_params_type_check() {
+        let driver = Driver::new(
+            vec![Source::from(
+                "enum Node {\n\tcase leaf(Int)\n\tcase branch([Node])\n}\n\nfunc sum_list(list: &[Node]) -> Int {\n\tlet total = 0\n\tlet i = 0\n\tloop i < list.count {\n\t\ttotal = total + sum_tree(tree: list.get(i))\n\t\ti = i + 1\n\t}\n\ttotal\n}\n\nfunc sum_tree(tree: &Node) -> Int {\n\tmatch tree {\n\t\t.leaf(n) -> n,\n\t\t.branch(children) -> sum_list(list: children)\n\t}\n}\n\nprint(sum_tree(tree: Node.branch([Node.leaf(1), Node.leaf(2)])).show())\n",
+            )],
+            DriverConfig::new("TypesTest"),
+        )
+        .parse()
+        .expect("parse")
+        .resolve_names()
+        .expect("resolve")
+        .type_check();
+        assert!(!driver.has_errors(), "{:?}", driver.diagnostics());
+    }
+
     /// Parse, resolve, and type-check a source string. Mirrors
     /// `name_resolver_tests::tests::resolve`. Sources should start with
     /// `// no-core` to opt out of the core prelude for isolation.
