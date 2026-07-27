@@ -16,14 +16,19 @@ use crate::compiling::manifest::ArtifactManifest;
 pub struct BootstrapOutcome {
     pub image: Vec<u8>,
     pub manifest: ArtifactManifest,
+    /// The ABI descriptor (ADR 0043 §5), when the service declares a
+    /// schema root.
+    pub abi: Option<String>,
 }
 
-/// One compile of the source set to an encoded service image.
+/// One compile of the source set to an encoded service image, plus the
+/// ABI descriptor when a schema root is named.
 fn compile_stage(
     sources: &[(String, String)],
     exports: &[String],
     allowed_effects: &[String],
-) -> Result<Vec<u8>, String> {
+    schema_root: Option<&str>,
+) -> Result<(Vec<u8>, Option<String>), String> {
     let inputs: Vec<Source> = sources
         .iter()
         .map(|(name, text)| Source::in_memory(name.into(), text.clone()))
@@ -46,31 +51,38 @@ fn compile_stage(
             messages.join("\n")
         ));
     }
+    let abi = schema_root
+        .map(|root| crate::compiling::abi::describe(&typed.phase.program, root))
+        .transpose()?;
     let executable = typed.compile_service(exports, allowed_effects)?;
-    executable
+    let image = executable
         .encode_bytecode()
-        .map_err(|error| format!("bootstrap encode failed: {error:?}"))
+        .map_err(|error| format!("bootstrap encode failed: {error:?}"))?;
+    Ok((image, abi))
 }
 
-/// Regenerate the artifact and manifest for a source set. The source
-/// list is `(name, content)` pairs; names participate in the digest,
-/// so renames invalidate the manifest exactly like edits.
+/// Regenerate the artifact, manifest, and ABI descriptor for a source
+/// set. The source list is `(name, content)` pairs; names participate
+/// in the digest, so renames invalidate the manifest exactly like
+/// edits.
 pub fn bootstrap(
     sources: &[(String, String)],
     exports: &[String],
     allowed_effects: &[String],
+    schema_root: Option<&str>,
 ) -> Result<BootstrapOutcome, String> {
-    let stage1 = compile_stage(sources, exports, allowed_effects)?;
-    let stage2 = compile_stage(sources, exports, allowed_effects)?;
-    if stage1 != stage2 {
+    let (stage1, abi1) = compile_stage(sources, exports, allowed_effects, schema_root)?;
+    let (stage2, abi2) = compile_stage(sources, exports, allowed_effects, schema_root)?;
+    if stage1 != stage2 || abi1 != abi2 {
         return Err(
             "bootstrap did not reach a fixed point: stage-1 and stage-2 artifacts differ".into(),
         );
     }
-    let manifest = ArtifactManifest::compute(sources, &stage1);
+    let manifest = ArtifactManifest::compute(sources, &stage1, abi1.as_deref());
     Ok(BootstrapOutcome {
         image: stage1,
         manifest,
+        abi: abi1,
     })
 }
 
@@ -95,12 +107,13 @@ mod tests {
             &sources,
             &["double".into(), "shout".into()],
             &["alloc".into()],
+            None,
         )
         .expect("bootstrap succeeds");
 
         outcome
             .manifest
-            .verify(&sources, &outcome.image)
+            .verify(&sources, &outcome.image, None)
             .expect("manifest verifies its own output");
 
         let module = talk_runtime::Module::decode_bytecode(&outcome.image).expect("image decodes");
@@ -120,11 +133,11 @@ mod tests {
     #[test]
     fn manifest_goes_stale_when_a_source_changes() {
         let sources = frontendish_sources();
-        let outcome = bootstrap(&sources, &["double".into()], &[]).expect("bootstrap succeeds");
+        let outcome = bootstrap(&sources, &["double".into()], &[], None).expect("bootstrap succeeds");
 
         let mut edited = sources.clone();
         edited[0].1.push_str("\n// edited\n");
-        let stale = outcome.manifest.verify(&edited, &outcome.image);
+        let stale = outcome.manifest.verify(&edited, &outcome.image, None);
         assert!(
             stale.err().expect("edited source must fail").contains("sources"),
             "source edits must invalidate the manifest"
@@ -160,39 +173,7 @@ mod tests {
     #[test]
     fn talk_frontend_matches_rust_frontend_on_covered_corpus() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let frontend_dir = root.join("frontend");
-        let mut names: Vec<_> = std::fs::read_dir(&frontend_dir)
-            .expect("frontend/ exists")
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "tlk"))
-            .collect();
-        names.sort();
-        let sources: Vec<(String, String)> = names
-            .iter()
-            .map(|path| {
-                (
-                    path.file_name().expect("name").to_string_lossy().into_owned(),
-                    std::fs::read_to_string(path).expect("read frontend source"),
-                )
-            })
-            .collect();
-
-        let outcome = bootstrap(
-            &sources,
-            &[
-                "lex".into(),
-                "trees".into(),
-                "parse".into(),
-                "parse_lenient".into(),
-                "parse_block_items".into(),
-                "parse_expr".into(),
-                "parse_pattern".into(),
-                "parse_type".into(),
-            ],
-            &["alloc".into(), "panic".into()],
-        )
-        .expect("frontend bootstraps");
+        let outcome = crate::compiling::frontend::regenerate(root).expect("frontend bootstraps");
         let module = talk_runtime::Module::decode_bytecode(&outcome.image).expect("image decodes");
 
         let mut covered: Vec<std::path::PathBuf> = Vec::new();
@@ -272,12 +253,39 @@ mod tests {
                 );
             }
         }
+
+        // The strong staleness gate (ADR 0043 §3): the artifact this
+        // compiler regenerates from the current sources must be the
+        // checked-in one, byte for byte. The digest-only gate in
+        // compiling::frontend catches source edits cheaply; this one
+        // also catches compiler codegen drift.
+        let checked_in = std::fs::read(crate::compiling::frontend::artifact_path(root)).expect(
+            "bootstrap/frontend.tbc is missing; regenerate with `talk bootstrap`",
+        );
+        assert!(
+            checked_in == outcome.image,
+            "checked-in frontend artifact differs from a fresh bootstrap; regenerate with `talk bootstrap`"
+        );
+        let manifest_text = std::fs::read_to_string(crate::compiling::frontend::manifest_path(root))
+            .expect("bootstrap/frontend.manifest is missing; regenerate with `talk bootstrap`");
+        assert_eq!(
+            manifest_text,
+            outcome.manifest.to_text(),
+            "checked-in frontend manifest is stale; regenerate with `talk bootstrap`"
+        );
+        let abi_text = std::fs::read_to_string(crate::compiling::frontend::abi_path(root))
+            .expect("bootstrap/frontend.abi is missing; regenerate with `talk bootstrap`");
+        assert_eq!(
+            Some(abi_text),
+            outcome.abi,
+            "checked-in frontend ABI descriptor is stale; regenerate with `talk bootstrap`"
+        );
     }
 
     #[test]
     fn bootstrap_surfaces_compile_errors() {
         let broken = vec![("Svc.tlk".into(), "pub func broken(".into())];
-        let error = bootstrap(&broken, &["broken".into()], &[])
+        let error = bootstrap(&broken, &["broken".into()], &[], None)
             .err()
             .expect("broken source must fail");
         assert!(error.contains("parse failed"), "{error}");
@@ -292,7 +300,7 @@ mod tests {
             "Svc.tlk".into(),
             "pub func nap() -> Int { sleep(ms: 0) }\n".into(),
         )];
-        let denied = bootstrap(&effectful, &["nap".into()], &[])
+        let denied = bootstrap(&effectful, &["nap".into()], &[], None)
             .err()
             .expect("denied effect must fail");
         assert!(denied.contains("'io"), "{denied}");

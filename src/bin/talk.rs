@@ -103,15 +103,19 @@ async fn main() {
         },
         /// Regenerate a service artifact and its manifest from a source
         /// directory, requiring the stage-1/stage-2 fixed point (ADR
-        /// 0043). With --check, verifies the on-disk artifact and
-        /// manifest are current instead of writing.
+        /// 0043). With no directory, regenerates the self-hosted
+        /// frontend artifact (bootstrap/frontend.tbc) from frontend/ in
+        /// the current directory. With --check, verifies the on-disk
+        /// artifact and manifest are current instead of writing.
         Bootstrap {
-            /// Directory of .tlk sources (non-recursive).
+            /// Directory of .tlk sources (non-recursive); omit for the
+            /// frontend profile.
             #[arg(value_hint = ValueHint::DirPath)]
-            dir: String,
-            /// Where to write the artifact; the manifest lands beside it.
+            dir: Option<String>,
+            /// Where to write the artifact; the manifest lands beside
+            /// it. Required with an explicit source directory.
             #[arg(short, long, value_name = "FILE")]
-            output: String,
+            output: Option<String>,
             /// Exported function names (repeatable).
             #[arg(long = "export", value_name = "NAME")]
             exports: Vec<String>,
@@ -657,52 +661,90 @@ async fn main() {
             allow_effects,
             check,
         } => {
-            let mut files: Vec<std::path::PathBuf> = match std::fs::read_dir(&dir) {
-                Ok(entries) => entries
-                    .filter_map(|entry| entry.ok())
-                    .map(|entry| entry.path())
-                    .filter(|path| path.extension().is_some_and(|ext| ext == "tlk"))
-                    .collect(),
-                Err(err) => {
-                    eprintln!("error: failed to read {dir}: {err}");
+            // With no source directory, this is the frontend profile:
+            // the export list, allowed effects, and artifact paths all
+            // come from one place (ADR 0043).
+            let (outcome, output) = if let Some(dir) = dir {
+                let Some(output) = output.clone() else {
+                    eprintln!("error: --output is required with an explicit source directory");
                     std::process::exit(1);
-                }
-            };
-            files.sort();
-            if files.is_empty() {
-                eprintln!("error: {dir} contains no .tlk sources");
-                std::process::exit(1);
-            }
-            let mut sources = Vec::new();
-            for path in &files {
-                let name = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                match std::fs::read_to_string(path) {
-                    Ok(text) => sources.push((name, text)),
+                };
+                let mut files: Vec<std::path::PathBuf> = match std::fs::read_dir(dir) {
+                    Ok(entries) => entries
+                        .filter_map(|entry| entry.ok())
+                        .map(|entry| entry.path())
+                        .filter(|path| path.extension().is_some_and(|ext| ext == "tlk"))
+                        .collect(),
                     Err(err) => {
-                        eprintln!("error: failed to read {}: {err}", path.display());
+                        eprintln!("error: failed to read {dir}: {err}");
                         std::process::exit(1);
                     }
+                };
+                files.sort();
+                if files.is_empty() {
+                    eprintln!("error: {dir} contains no .tlk sources");
+                    std::process::exit(1);
                 }
-            }
-
-            let outcome =
-                match talk::compiling::bootstrap::bootstrap(&sources, &exports, &allow_effects) {
-                    Ok(outcome) => outcome,
+                let mut sources = Vec::new();
+                for path in &files {
+                    let name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    match std::fs::read_to_string(path) {
+                        Ok(text) => sources.push((name, text)),
+                        Err(err) => {
+                            eprintln!("error: failed to read {}: {err}", path.display());
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                match talk::compiling::bootstrap::bootstrap(&sources, exports, allow_effects, None) {
+                    Ok(outcome) => (outcome, output),
                     Err(err) => {
                         eprintln!("error: {err}");
                         std::process::exit(1);
                     }
-                };
+                }
+            } else {
+                if !exports.is_empty() || !allow_effects.is_empty() || output.is_some() {
+                    eprintln!(
+                        "error: the frontend profile fixes its own output, exports, and effects; pass a source directory to override them"
+                    );
+                    std::process::exit(1);
+                }
+                let root = std::env::current_dir().unwrap_or_else(|err| {
+                    eprintln!("error: cannot resolve current directory: {err}");
+                    std::process::exit(1);
+                });
+                match talk::compiling::frontend::regenerate(&root) {
+                    Ok(outcome) => (
+                        outcome,
+                        talk::compiling::frontend::artifact_path(&root)
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
+                }
+            };
             let manifest_path = std::path::Path::new(&output).with_extension("manifest");
+            let abi_path = std::path::Path::new(&output).with_extension("abi");
             if *check {
+                let abi_current = match &outcome.abi {
+                    Some(abi) => std::fs::read_to_string(&abi_path)
+                        .ok()
+                        .is_some_and(|existing| existing == *abi),
+                    None => !abi_path.exists(),
+                };
                 let current = std::fs::read(&output).ok().is_some_and(|existing| {
                     existing == outcome.image
                 }) && std::fs::read_to_string(&manifest_path)
                     .ok()
-                    .is_some_and(|existing| existing == outcome.manifest.to_text());
+                    .is_some_and(|existing| existing == outcome.manifest.to_text())
+                    && abi_current;
                 if !current {
                     eprintln!(
                         "error: {output} is stale; regenerate with `talk bootstrap` (without --check)"
@@ -711,12 +753,25 @@ async fn main() {
                 }
                 println!("{output} is up to date");
             } else {
+                if let Some(parent) = std::path::Path::new(&output).parent()
+                    && !parent.as_os_str().is_empty()
+                    && let Err(err) = std::fs::create_dir_all(parent)
+                {
+                    eprintln!("error: failed to create {}: {err}", parent.display());
+                    std::process::exit(1);
+                }
                 if let Err(err) = std::fs::write(&output, &outcome.image) {
                     eprintln!("error: failed to write {output}: {err}");
                     std::process::exit(1);
                 }
                 if let Err(err) = std::fs::write(&manifest_path, outcome.manifest.to_text()) {
                     eprintln!("error: failed to write {}: {err}", manifest_path.display());
+                    std::process::exit(1);
+                }
+                if let Some(abi) = &outcome.abi
+                    && let Err(err) = std::fs::write(&abi_path, abi)
+                {
+                    eprintln!("error: failed to write {}: {err}", abi_path.display());
                     std::process::exit(1);
                 }
             }

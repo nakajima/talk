@@ -1,6 +1,9 @@
+pub mod abi;
 pub mod bootstrap;
+pub mod bridge;
 pub mod core;
 pub mod driver;
+pub mod frontend;
 pub mod manifest;
 pub(crate) mod interface;
 pub mod module;

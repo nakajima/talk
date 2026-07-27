@@ -14,6 +14,9 @@ pub struct ArtifactManifest {
     pub source_digest: String,
     /// Digest of the artifact bytes themselves.
     pub artifact_digest: String,
+    /// Digest of the ABI descriptor (ADR 0043 §5), when the service
+    /// declares a schema.
+    pub abi_digest: Option<String>,
 }
 
 /// Digest a source set independent of supply order: entries sort by name
@@ -43,18 +46,25 @@ pub fn artifact_digest(image: &[u8]) -> String {
 }
 
 impl ArtifactManifest {
-    pub fn compute(sources: &[(String, String)], image: &[u8]) -> Self {
+    pub fn compute(sources: &[(String, String)], image: &[u8], abi: Option<&str>) -> Self {
         Self {
             format_version: talk_runtime::bytecode::FORMAT_VERSION,
             source_digest: source_digest(sources),
             artifact_digest: artifact_digest(image),
+            abi_digest: abi.map(|text| artifact_digest(text.as_bytes())),
         }
     }
 
-    /// Fail-closed validation: the artifact bytes and the sources must
-    /// both match, and the recorded format version must be the one this
-    /// compiler loads.
-    pub fn verify(&self, sources: &[(String, String)], image: &[u8]) -> Result<(), String> {
+    /// Fail-closed validation: the artifact bytes, the sources, and the
+    /// ABI descriptor (when the manifest records one) must all match,
+    /// and the recorded format version must be the one this compiler
+    /// loads.
+    pub fn verify(
+        &self,
+        sources: &[(String, String)],
+        image: &[u8],
+        abi: Option<&str>,
+    ) -> Result<(), String> {
         if self.format_version != talk_runtime::bytecode::FORMAT_VERSION {
             return Err(format!(
                 "artifact manifest records bytecode format {} but this compiler loads {}; regenerate the artifact",
@@ -73,20 +83,42 @@ impl ArtifactManifest {
                     .into(),
             );
         }
+        match (&self.abi_digest, abi) {
+            (None, None) => {}
+            (Some(recorded), Some(text)) => {
+                if *recorded != artifact_digest(text.as_bytes()) {
+                    return Err(
+                        "ABI descriptor does not match its manifest; regenerate the artifact"
+                            .into(),
+                    );
+                }
+            }
+            (Some(_), None) => {
+                return Err("the manifest records an ABI descriptor but none was supplied".into())
+            }
+            (None, Some(_)) => {
+                return Err("an ABI descriptor was supplied but the manifest records none".into())
+            }
+        }
         Ok(())
     }
 
     pub fn to_text(&self) -> String {
-        format!(
+        let mut text = format!(
             "format_version: {}\nsource_digest: {}\nartifact_digest: {}\n",
             self.format_version, self.source_digest, self.artifact_digest
-        )
+        );
+        if let Some(abi_digest) = &self.abi_digest {
+            text.push_str(&format!("abi_digest: {abi_digest}\n"));
+        }
+        text
     }
 
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut format_version = None;
         let mut source_digest = None;
         let mut artifact_digest = None;
+        let mut abi_digest = None;
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() {
@@ -106,6 +138,7 @@ impl ArtifactManifest {
                 }
                 "source_digest" => source_digest = Some(value.to_string()),
                 "artifact_digest" => artifact_digest = Some(value.to_string()),
+                "abi_digest" => abi_digest = Some(value.to_string()),
                 unknown => return Err(format!("unknown manifest key: `{unknown}`")),
             }
         }
@@ -113,6 +146,7 @@ impl ArtifactManifest {
             format_version: format_version.ok_or("manifest missing format_version")?,
             source_digest: source_digest.ok_or("manifest missing source_digest")?,
             artifact_digest: artifact_digest.ok_or("manifest missing artifact_digest")?,
+            abi_digest,
         })
     }
 }
@@ -130,7 +164,7 @@ mod tests {
 
     #[test]
     fn manifest_round_trips_through_text() {
-        let manifest = ArtifactManifest::compute(&sources(), b"image-bytes");
+        let manifest = ArtifactManifest::compute(&sources(), b"image-bytes", Some("abi text"));
         let parsed = ArtifactManifest::parse(&manifest.to_text()).expect("parse");
         assert_eq!(parsed, manifest);
     }
@@ -149,20 +183,22 @@ mod tests {
 
     #[test]
     fn verification_fails_closed_on_any_mismatch() {
-        let manifest = ArtifactManifest::compute(&sources(), b"image-bytes");
-        manifest.verify(&sources(), b"image-bytes").expect("clean");
+        let manifest = ArtifactManifest::compute(&sources(), b"image-bytes", Some("abi text"));
+        manifest
+            .verify(&sources(), b"image-bytes", Some("abi text"))
+            .expect("clean");
 
-        let tampered = manifest.verify(&sources(), b"other-bytes");
+        let tampered = manifest.verify(&sources(), b"other-bytes", Some("abi text"));
         assert!(tampered.err().expect("tampered image").contains("artifact"));
 
         let mut edited = sources();
         edited[0].1.push_str("\n// edited");
-        let stale = manifest.verify(&edited, b"image-bytes");
+        let stale = manifest.verify(&edited, b"image-bytes", Some("abi text"));
         assert!(stale.err().expect("edited source").contains("sources"));
 
         let mut wrong_version = manifest.clone();
         wrong_version.format_version += 1;
-        let version = wrong_version.verify(&sources(), b"image-bytes");
+        let version = wrong_version.verify(&sources(), b"image-bytes", Some("abi text"));
         assert!(version.err().expect("format skew").contains("format"));
     }
 }

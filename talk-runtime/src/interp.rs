@@ -191,6 +191,37 @@ pub struct RunOutcome<'io> {
 }
 
 impl RunOutcome<'_> {
+    /// Bridge access (ADR 0043 §5): read one 8-byte word of the
+    /// machine's memory, for walking array storage out of a returned
+    /// value graph.
+    pub fn read_word(&self, addr: u32) -> Result<u64, String> {
+        self.machine.read_word(addr)
+    }
+
+    /// Bridge access: one raw byte of the machine's memory (byte-array
+    /// element storage).
+    pub fn read_byte(&self, addr: u32) -> Result<u8, String> {
+        self.machine.check_access(addr, 1, "load")?;
+        self.machine
+            .mem
+            .get(addr as usize)
+            .copied()
+            .ok_or_else(|| "vm: load out of bounds".into())
+    }
+
+    /// Bridge access: a boxed arena slot — the storage representation of
+    /// record, enum, and nested-array elements inside arrays.
+    pub fn boxed_value(&self, handle: u64) -> Result<&Value, String> {
+        let handle = handle as usize;
+        if handle == 0 {
+            return Err("vm: load of a bad arena handle".into());
+        }
+        self.machine
+            .boxed
+            .get(handle)
+            .ok_or_else(|| "vm: load of a bad arena handle".into())
+    }
+
     /// The UTF-8 bytes of a String-shaped value in this outcome.
     pub fn string_bytes(&self, value: &Value) -> Result<&[u8], String> {
         let Value::Record(_, fields) = value else {

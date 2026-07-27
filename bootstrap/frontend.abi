@@ -1,0 +1,443 @@
+abi_version: 1
+root: ParseOutcome
+
+struct AnyAssocBinding @ struct:65535.8
+	name: String
+	value: TypeAnnotation
+	start: Int
+	end: Int
+
+enum ArgMode @ enum:65535.25
+	mut_mode
+	consume_mode
+	copy_mode
+	borrow_mode
+
+struct Block @ struct:65535.27
+	params: [Parameter]
+	body: [Item]
+	start: Int
+	end: Int
+
+struct Body @ struct:65535.22
+	decls: [Decl]
+	start: Int
+	end: Int
+
+struct CallArg @ struct:65535.33
+	label: String?
+	mode: ArgMode?
+	value: Expr
+	start: Int
+	end: Int
+
+enum CaptureMode @ enum:65535.14
+	copy_capture
+	move_capture
+	borrow_shared
+	borrow_mut
+
+struct CaptureSpec @ struct:65535.15
+	mode: CaptureMode
+	name: String
+	start: Int
+	end: Int
+
+struct Comment @ struct:65535.48
+	start: Int
+	end: Int
+
+struct Decl @ struct:65535.42
+	kind: DeclKind
+	is_public: Bool
+	start: Int
+	end: Int
+
+enum DeclKind @ enum:65535.41
+	let_decl(Pattern, TypeAnnotation?, Expr?)
+	import_decl(Import)
+	func_decl(Func)
+	func_signature(FuncSignature)
+	struct_decl(String, [GenericDecl], WhereClause?, Body, Bool, Bool)
+	enum_decl(String, [GenericDecl], WhereClause?, Body, Bool)
+	protocol_decl(String, [GenericDecl], WhereClause?, Body, [TypeAnnotation])
+	enum_variant(String, [GenericDecl], [TypeAnnotation], [String?], TypeAnnotation?)
+	extend_decl([GenericDecl], TypeApplication, [TypeAnnotation], WhereClause?, Body)
+	init_decl([Parameter], Block)
+	property(String, Bool, TypeAnnotation?, Expr?)
+	method(Func, Bool, ReceiverMode)
+	method_requirement(FuncSignature, ReceiverMode)
+	init_requirement(FuncSignature)
+	typealias_decl(String, TypeAnnotation)
+	effect_decl(String, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation)
+	associated_decl(GenericDecl, WhereClause?)
+	macro_decl(String, [String], Expr)
+
+struct EffectSet @ struct:65535.2
+	names: [String]
+	open: Bool
+
+struct Expr @ struct:65535.32
+	kind: ExprKind
+	start: Int
+	end: Int
+
+enum ExprKind @ enum:65535.28
+	literal_int(String)
+	literal_float(String)
+	literal_true
+	literal_false
+	literal_string(String)
+	literal_character(String)
+	variable(String)
+	unary(TokenKind, [Expr])
+	binary(TokenKind, [Expr])
+	call([Expr], [GenericArg], [CallArg], [Block])
+	constructor(String, [[GenericArg]])
+	member(MemberLabel, [Expr])
+	incomplete_member([Expr])
+	tuple([Expr])
+	block(Block)
+	literal_array([Expr])
+	subscript_expr([Expr])
+	func_expr(Func)
+	unsafe_expr(Block)
+	if_expr([Expr], Block, Block)
+	match_expr([Expr], [MatchArm])
+	as_cast([Expr], TypeAnnotation)
+	propagate([Expr])
+	force_unwrap([Expr])
+	unreachable_expr
+	call_effect(String, [GenericArg], [CallArg])
+	record_literal([RecordField], [Expr])
+	inline_ir([Expr], IRInstruction)
+	macro_call(String, [Expr])
+
+struct Fail @ struct:65535.62
+	code: String
+	message: String
+
+struct Func @ struct:65535.20
+	name: String
+	effects: EffectSet
+	generics: [GenericDecl]
+	captures: [CaptureSpec]
+	where_clause: WhereClause?
+	params: [Parameter]
+	body: Block
+	ret: TypeAnnotation?
+	start: Int
+	end: Int
+	meta_start: Int
+	meta_end: Int
+
+struct FuncSignature @ struct:65535.21
+	name: String
+	params: [Parameter]
+	effects: EffectSet
+	generics: [GenericDecl]
+	where_clause: WhereClause?
+	ret: TypeAnnotation?
+	start: Int
+	end: Int
+
+enum GenericArg @ enum:65535.3
+	type_arg(TypeAnnotation)
+	static_arg(StaticExpr)
+
+struct GenericDecl @ struct:65535.16
+	name: String
+	generics: [GenericDecl]
+	conformances: [TypeAnnotation]
+	default_value: GenericArg?
+	static_ty: TypeAnnotation?
+	start: Int
+	end: Int
+
+struct IRInstruction @ struct:65535.30
+	name: String
+	dest: String?
+	ty: TypeAnnotation?
+	values: [IRValue]
+	op: TokenKind?
+
+enum IRValue @ enum:65535.29
+	reg(Int)
+	int_value(Int)
+	float_value(String)
+	bool_value(Bool)
+	void_value
+	bind(Int)
+
+struct Import @ struct:65535.40
+	symbols: ImportedSymbols
+	path: String
+	local: Bool
+
+struct ImportedSymbol @ struct:65535.38
+	name: String
+	alias: String?
+
+enum ImportedSymbols @ enum:65535.39
+	all
+	named([ImportedSymbol])
+
+enum Item @ enum:65535.45
+	decl_item(Decl)
+	stmt_item(Stmt)
+	expr_item(Expr)
+	pattern_item(Pattern)
+	type_item(TypeAnnotation)
+
+struct MatchArm @ struct:65535.26
+	pattern: Pattern
+	body: Block
+	start: Int
+	end: Int
+
+enum MemberLabel @ enum:65535.1
+	named(String)
+	positional(Int)
+
+enum ParamLabel @ enum:65535.12
+	named(String)
+	omitted
+
+enum ParamMode @ enum:65535.11
+	borrow_param
+	mut_param
+	consume_param
+	consume_mut_param
+
+struct Parameter @ struct:65535.13
+	label: ParamLabel?
+	name: String
+	name_start: Int
+	name_end: Int
+	mode: ParamMode?
+	annotation: TypeAnnotation?
+	start: Int
+	end: Int
+
+struct ParseOutcome @ struct:65535.63
+	items: [Item]
+	failure: Fail?
+	diags: [Fail]
+	comments: [Comment]
+
+struct Pattern @ struct:65535.35
+	kind: PatternKind
+	start: Int
+	end: Int
+	meta_start: Int
+	meta_end: Int
+
+enum PatternKind @ enum:65535.34
+	bind(String)
+	wildcard
+	literal_int(String)
+	literal_float(String)
+	literal_character(String)
+	literal_string(String)
+	literal_true
+	literal_false
+	tuple([Pattern])
+	or_pattern([Pattern])
+	variant(String?, [[GenericArg]], String, [Pattern], [String?])
+	struct_pattern(String, [[GenericArg]], [Pattern], [String], Bool)
+	record([RecordFieldPattern])
+
+enum ReceiverMode @ enum:65535.24
+	none_receiver
+	ref_receiver
+	consuming_receiver
+
+struct RecordField @ struct:65535.31
+	label: String
+	value: Expr
+	start: Int
+	end: Int
+
+struct RecordFieldPattern @ struct:65535.37
+	kind: RecordFieldPatternKind
+	start: Int
+	end: Int
+
+enum RecordFieldPatternKind @ enum:65535.36
+	bind_field(String)
+	equals_field(String, Pattern)
+	rest_field
+
+struct RecordFieldTypeAnnotation @ struct:65535.7
+	label: String
+	value: TypeAnnotation
+	start: Int
+	end: Int
+
+struct StaticExpr @ struct:65535.6
+	kind: StaticExprKind
+	start: Int
+	end: Int
+
+enum StaticExprKind @ enum:65535.5
+	int_literal(String)
+	bool_literal(Bool)
+	unqualified_case(String)
+	static_path(TypeAnnotation)
+	static_group([StaticExpr])
+	static_op(StaticOpKind, [StaticExpr])
+
+enum StaticOpKind @ enum:65535.4
+	add
+	sub
+	mul
+
+struct Stmt @ struct:65535.44
+	kind: StmtKind
+	start: Int
+	end: Int
+
+enum StmtKind @ enum:65535.43
+	expr_stmt(Expr)
+	if_stmt(Expr, Block, Block?)
+	return_stmt(Expr?)
+	break_stmt
+	assignment([Expr])
+	loop_stmt(Expr?, Block)
+	for_stmt(Expr, Pattern, Block, ArgMode?)
+	continue_stmt
+	resume_stmt(Expr?)
+	handle_stmt(String, Block)
+
+enum TokenKind @ enum:65535.46
+	identifier
+	int_number
+	float_number
+	string_literal
+	character_literal
+	keyword_let
+	keyword_true
+	keyword_false
+	equals
+	comma
+	dot
+	dot_dot
+	dot_dot_dot
+	dot_dot_less
+	left_paren
+	right_paren
+	left_bracket
+	right_bracket
+	left_brace
+	right_brace
+	newline
+	underscore
+	keyword_any
+	keyword_as
+	keyword_func
+	keyword_if
+	keyword_else
+	keyword_loop
+	keyword_enum
+	keyword_case
+	keyword_match
+	keyword_return
+	keyword_struct
+	keyword_extend
+	keyword_break
+	keyword_init
+	keyword_protocol
+	keyword_import
+	keyword_use
+	keyword_pub
+	keyword_public
+	keyword_linear
+	keyword_macro
+	keyword_static
+	keyword_associated
+	keyword_typealias
+	keyword_effect
+	keyword_handling
+	keyword_in
+	keyword_continue
+	keyword_unreachable
+	keyword_mut
+	keyword_consuming
+	keyword_for
+	plus
+	plus_equals
+	minus
+	minus_equals
+	arrow
+	star
+	star_equals
+	slash
+	slash_equals
+	percent
+	bang
+	bang_equals
+	equals_equals
+	less
+	less_equals
+	less_less
+	greater
+	greater_equals
+	greater_greater
+	amp
+	amp_amp
+	amp_equals
+	pipe
+	pipe_pipe
+	colon
+	double_colon
+	question_mark
+	semicolon
+	at_sign
+	tilde
+	tilde_equals
+	caret
+	caret_equals
+	attribute
+	dollar
+	bound_var
+	hash
+	ir_register
+	effect_name
+	single_quote
+	eof
+
+struct TypeAnnotation @ struct:65535.10
+	kind: TypeAnnotationKind
+	start: Int
+	end: Int
+
+enum TypeAnnotationKind @ enum:65535.9
+	borrow(Bool, [TypeAnnotation])
+	unique([TypeAnnotation])
+	func_type([TypeAnnotation], EffectSet, [TypeAnnotation])
+	nominal_path([TypeAnnotation], String, [GenericArg])
+	nominal(String, [GenericArg])
+	tuple([TypeAnnotation])
+	record_type([RecordFieldTypeAnnotation])
+	any_type([TypeAnnotation], [AnyAssocBinding])
+
+struct TypeApplication @ struct:65535.23
+	name: String
+	args: [GenericArg]
+	start: Int
+	end: Int
+
+struct WhereClause @ struct:65535.19
+	predicates: [WherePredicate]
+	start: Int
+	end: Int
+
+struct WherePredicate @ struct:65535.18
+	kind: WherePredicateKind
+	start: Int
+	end: Int
+
+enum WherePredicateKind @ enum:65535.17
+	type_eq(GenericArg, GenericArg)
+	static_cmp(Bool, GenericArg, GenericArg)
+	conforms(TypeAnnotation, [TypeAnnotation])

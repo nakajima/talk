@@ -13,6 +13,11 @@
 
 mod inline;
 mod lower;
+
+/// The compiler-to-runtime symbol mapping, for the frontend result
+/// bridge (ADR 0043 §5): the identities in a returned value graph are
+/// runtime symbols.
+pub(crate) use lower::runtime_symbol;
 mod mir;
 mod regalloc;
 

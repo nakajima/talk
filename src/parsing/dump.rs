@@ -146,6 +146,66 @@ pub fn dump_tokens(source: &str) -> String {
     out
 }
 
+/// Render the post-token dump sections for an already-built AST — the
+/// bridge's round-trip surface (ADR 0043 §5). Byte-identical to
+/// `dump_with`'s rendering: tree, comments, and diagnostics (which the
+/// bridge carries as code/message pairs; every parse diagnostic the
+/// corpus produces is an error). A hard failure replaces everything
+/// with the `parse error:` line, exactly like the parser's own path.
+pub fn render_bridged(
+    source: &str,
+    roots: &[crate::node::Node],
+    meta: &crate::node_meta_storage::NodeMetaStorage,
+    comments: &[(u32, u32)],
+    failure: Option<&(String, String)>,
+    diags: &[(String, String)],
+) -> String {
+    use derive_visitor::Drive;
+    let mut out = String::new();
+    if let Some((code, message)) = failure {
+        let _ = writeln!(out, "parse error: {code} {message}");
+        return out;
+    }
+    out.push_str("tree:\n");
+    let mut visitor = DumpVisitor {
+        source,
+        meta,
+        out: String::new(),
+        depth: 1,
+    };
+    for root in roots {
+        root.drive(&mut visitor);
+    }
+    out.push_str(&visitor.out);
+    if !comments.is_empty() {
+        out.push_str("comments:\n");
+        for (start, end) in comments {
+            let _ = writeln!(out, "  @{}..{}{}", start, end, snippet(source, *start, *end));
+        }
+    }
+    if !diags.is_empty() {
+        out.push_str("diagnostics:\n");
+        for (code, message) in diags {
+            let _ = writeln!(out, "  error {code} {message}");
+        }
+    }
+    out
+}
+
+/// A reference dump with its token section stripped: what the bridged
+/// rendering must reproduce (tokens are internal to the frontend and do
+/// not cross the ABI).
+pub fn dump_after_tokens(source: &str) -> String {
+    let full = dump(source);
+    if let Some(index) = full.find("\ntree:\n") {
+        return full[index + 1..].to_string();
+    }
+    if let Some(index) = full.find("\nparse error:") {
+        return full[index + 1..].to_string();
+    }
+    full
+}
+
 fn dump_with<'a>(source: &'a str, parse: impl FnOnce(Parser<'a>) -> ParseResult) -> String {
     let mut out = dump_tokens(source);
 
