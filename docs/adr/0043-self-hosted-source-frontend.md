@@ -687,6 +687,56 @@ ABI. Sub-spans the Talk AST does not yet carry (name spans, label
 spans) and call-arg origins are fabricated as synthesized/written —
 invisible to the dump contract; they get real values in the
 field-completeness pass before consumers that need them cut over.
-What remains: that field-completeness pass, then Stage 4's consumer
-cutover through `frontend::load` + `bridge::adapt`, then Stage 5's
-removal of the Rust lexer/parser.
+
+**The field-completeness pass has its instrument**:
+`bridged_results_carry_full_fidelity_over_corpus` (gated behind
+`TALK_FIDELITY=1` while its worklist is open) Debug-renders the
+bridged AST and the Rust parser's AST with node identities normalized
+away and requires them identical — every span, label, mode, and
+origin, not just what the dump shows. Its current failures enumerate
+the known worklist: name/label/mode sub-spans and the `BareString`
+call-arg origin across roughly twenty-five node kinds, each needing a
+field in `Ast.tlk`, capture in `Parser.tlk` matching the reference's
+span semantics, and adapter threading. Separately, consumer scouting
+found what the formatter and LSP need beyond spans: per-node meta
+token positions *and lines*, and per-node identifier token lists.
+
+**Decided: the frontend owns full meta (option A).** Parse results
+will carry it; the adapter stays a converter. The architecture, sized
+against the reference's actual machinery rather than a wholesale
+location-stack port:
+
+- The reference's meta start/end tokens are redundant with spans
+  (`span.start` *is* `meta.start.start` by construction, and the port
+  reproduces every span byte-for-byte), so a Talk-side **post-parse
+  annotator** recovers them from the token stream: the token at
+  `span.start`, the token ending at `span.end` — with the `>>`-split
+  closers as the known special case. Token line/col (the reference
+  stamps them at `make()` time: 0-based line, character-counted col,
+  reset on newline) are computed by a position pass over the token
+  list. This derivation runs *inside the frontend*, so §6's
+  adapter-must-not-reinterpret rule is untouched.
+- The one irreducible new recording is the **identifier log**: the
+  reference pushes identifier tokens onto the *top* location-stack
+  frame from exactly three ports — `identifier()`, and `consume`/
+  `consume_any` when the consumed kind is Identifier. The Talk parser
+  mirrors those three ports into a flat append-only log; the
+  annotator attributes each logged token to the deepest meta-bearing
+  node whose span contains it (children claim theirs first), which
+  matches top-of-stack attribution for every construct analyzed —
+  and the gate below adjudicates any residue empirically, including
+  the id-sharing statement wrappers whose meta the payload owns.
+- `ParseOutcome` gains a `metas` array in the canonical pre-order the
+  bridge adapter already walks; the adapter zips them onto the nodes
+  it builds (converting token kinds through a full kind table),
+  populating `NodeMetaStorage` for every node instead of the current
+  sparse two cases.
+- Validation: the `TALK_FIDELITY` gate grows a meta comparison —
+  bridged versus Rust-parsed meta rendered in tree order — holding
+  meta to the same byte-identical standard as everything else.
+
+What remains: the field-completeness pass (name/label/mode sub-spans
+and `BareString` origin) and this meta work, both driven by the
+fidelity gate; then Stage 4's consumer cutover through
+`frontend::load` + `bridge::adapt`; then Stage 5's removal of the
+Rust lexer/parser.

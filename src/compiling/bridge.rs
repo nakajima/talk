@@ -1856,6 +1856,108 @@ mod tests {
         }
     }
 
+    /// Debug-format an AST with node identities normalized away: ids are
+    /// minted in different orders by the parser and the bridge, and the
+    /// for-loop hidden bindings embed them. Everything else — every span,
+    /// label, origin, mode — must match.
+    fn fidelity(roots: &[Node]) -> String {
+        let mut out = String::new();
+        for root in roots {
+            out.push_str(&format!("{root:#?}\n"));
+        }
+        let mut normalized = String::new();
+        for line in out.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("id: NodeID(") {
+                continue;
+            }
+            let line = if let Some(index) = line.find("__for_src_") {
+                format!("{}__for_src_N\",", &line[..index])
+            } else if let Some(index) = line.find("__for_iter_") {
+                format!("{}__for_iter_N\",", &line[..index])
+            } else {
+                line.to_string()
+            };
+            normalized.push_str(&line);
+            normalized.push('\n');
+        }
+        normalized
+    }
+
+    /// The field-completeness gate (ADR 0043 §4/§5): beyond the dump
+    /// contract, the bridged AST must carry every field the Rust
+    /// parser's AST carries — name spans, label spans, modes, origins.
+    /// Failures here are the worklist of fields the Talk AST does not
+    /// yet carry. Gated behind TALK_FIDELITY=1 while that worklist is
+    /// open (known: name/label/mode sub-spans and the BareString
+    /// call-arg origin, fabricated by the adapter today); the gate
+    /// comes off when the pass completes.
+    #[test]
+    fn bridged_results_carry_full_fidelity_over_corpus() {
+        if std::env::var("TALK_FIDELITY").is_err() {
+            return;
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = crate::compiling::frontend::load(root).expect("frontend artifact loads");
+        let abi_text = std::fs::read_to_string(crate::compiling::frontend::abi_path(root))
+            .expect("ABI descriptor exists");
+        let schema = parse_schema(&abi_text).expect("ABI descriptor parses");
+
+        let mut covered: Vec<std::path::PathBuf> = Vec::new();
+        for dir in [
+            "tests/parser",
+            "tests/parser/expr",
+            "tests/parser/pattern",
+            "tests/parser/type",
+            "tests/parser/block",
+            "tests/parser/tokentree",
+            "tests/parser/lenient",
+            "tests/parser/unicode",
+            "core",
+            "stdlib",
+            "tests/examples",
+            "examples",
+        ] {
+            for entry in std::fs::read_dir(root.join(dir)).expect("corpus dir") {
+                let path = entry.expect("corpus entry").path();
+                if path.extension().is_some_and(|ext| ext == "tlk") {
+                    covered.push(path);
+                }
+            }
+        }
+        covered.sort();
+
+        for path in covered {
+            let source = std::fs::read_to_string(&path).expect("read corpus source");
+            let lexer = crate::parsing::lexing::lexer::Lexer::preserving_comments(&source);
+            let parser =
+                crate::parsing::parser::Parser::new(":bridge:", crate::node_id::FileID(0), lexer);
+            let Ok((reference, _, _)) = parser.parse_with_comments() else {
+                // Hard failures carry no tree; the dump round trip
+                // already pins their rendering.
+                continue;
+            };
+            let mut io = CaptureIO::default();
+            let run = talk_runtime::interp::run_export(
+                &module,
+                "parse_file_source",
+                &[HostValue::String(source.into_bytes())],
+                crate::backend::string_shape(),
+                Budgets::default(),
+                &mut io,
+            )
+            .unwrap_or_else(|error| panic!("parse_file_source failed on {}: {error}", path.display()));
+            let bridged = adapt(&run, &schema)
+                .unwrap_or_else(|error| panic!("bridging failed on {}: {error}", path.display()));
+            assert_eq!(
+                fidelity(&bridged.roots),
+                fidelity(&reference.roots),
+                "fidelity divergence on {}",
+                path.display()
+            );
+        }
+    }
+
     /// The descriptor's own round trip: what `describe` emits,
     /// `parse_schema` reads back, and the checked-in copy is it.
     #[test]
