@@ -10,9 +10,9 @@ use package::Parser::{
 	parse_file_source, parse_block_items_source, parse_expr_source, parse_pattern_source, parse_type_source
 }
 use package::Ast::{
-	Expr, ExprKind, CallArg, Parameter, Block, MatchArm,
+	Expr, ExprKind, CallArg, Parameter, Block, MatchArm, RecordField,
 	Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
-	TypeAnnotation, TypeAnnotationKind, GenericArg,
+	TypeAnnotation, TypeAnnotationKind, GenericArg, StaticExpr, StaticExprKind,
 	RecordFieldTypeAnnotation, AnyAssocBinding,
 	Decl, DeclKind, Stmt, StmtKind, Item,
 	Func, FuncSignature, Body, GenericDecl, WhereClause, WherePredicate,
@@ -47,7 +47,8 @@ func expr_label(kind: &ExprKind) -> String {
 		.variable(_) -> "Expr::Variable",
 		.unary(_, _) -> "Expr::Unary",
 		.binary(_, _) -> "Expr::Binary",
-		.call(_, _) -> "Expr::Call",
+		.call(_, _, _, _) -> "Expr::Call",
+		.constructor(_, _) -> "Expr::Constructor",
 		.member(_, _) -> "Expr::Member",
 		.incomplete_member(_) -> "Expr::Incomplete",
 		.tuple(_) -> "Expr::Tuple",
@@ -57,7 +58,15 @@ func expr_label(kind: &ExprKind) -> String {
 		.if_expr(_, _, _) -> "Expr::If",
 		.match_expr(_, _) -> "Expr::Match",
 		.func_expr(_) -> "Expr::Func",
-		.unsafe_expr(_) -> "Expr::Unsafe"
+		.unsafe_expr(_) -> "Expr::Unsafe",
+		.as_cast(_, _) -> "Expr::As",
+		.propagate(_) -> "Expr::Propagate",
+		.force_unwrap(_) -> "Expr::ForceUnwrap",
+		.unreachable_expr -> "Expr::Unreachable",
+		.call_effect(_, _, _) -> "Expr::CallEffect",
+		.record_literal(_, _) -> "Expr::RecordLiteral",
+		.inline_ir(_, _) -> "Expr::InlineIR",
+		.macro_call(_, _) -> "Expr::MacroCall"
 	}
 }
 
@@ -73,8 +82,8 @@ func pattern_label(kind: &PatternKind) -> String {
 		.literal_false -> "Pattern::LiteralFalse",
 		.tuple(_) -> "Pattern::Tuple",
 		.or_pattern(_) -> "Pattern::Or",
-		.variant(_, _, _, _) -> "Pattern::Variant",
-		.struct_pattern(_, _, _, _) -> "Pattern::Struct",
+		.variant(_, _, _, _, _) -> "Pattern::Variant",
+		.struct_pattern(_, _, _, _, _) -> "Pattern::Struct",
 		.record(_) -> "Pattern::Record"
 	}
 }
@@ -91,12 +100,25 @@ func render_expr(mut buf: [Byte], view: UTF8View, expr: &Expr, depth: Int) -> Vo
 			render_expr(buf: buf, view: view, expr: operand, depth: depth + 1)
 		}
 	}
-	if let .call(callee, args) = expr.kind {
+	if let .call(callee, type_args, args, blocks) = expr.kind {
 		for target in callee {
 			render_expr(buf: buf, view: view, expr: target, depth: depth + 1)
 		}
+		for type_arg in type_args {
+			render_generic_arg(buf: buf, view: view, arg: type_arg, depth: depth + 1)
+		}
 		for arg in args {
 			render_call_arg(buf: buf, view: view, arg: arg, depth: depth + 1)
+		}
+		for trailing in blocks {
+			render_block(buf: buf, view: view, block: trailing, depth: depth + 1)
+		}
+	}
+	if let .constructor(_, segments) = expr.kind {
+		for segment in segments {
+			for type_arg in segment {
+				render_generic_arg(buf: buf, view: view, arg: type_arg, depth: depth + 1)
+			}
 		}
 	}
 	if let .member(_, receiver) = expr.kind {
@@ -148,6 +170,55 @@ func render_expr(mut buf: [Byte], view: UTF8View, expr: &Expr, depth: Int) -> Vo
 	if let .unsafe_expr(inner) = expr.kind {
 		render_block(buf: buf, view: view, block: inner, depth: depth + 1)
 	}
+	if let .as_cast(operands, annotation) = expr.kind {
+		for operand in operands {
+			render_expr(buf: buf, view: view, expr: operand, depth: depth + 1)
+		}
+		render_type(buf: buf, view: view, annotation: annotation, depth: depth + 1)
+	}
+	if let .propagate(operands) = expr.kind {
+		for operand in operands {
+			render_expr(buf: buf, view: view, expr: operand, depth: depth + 1)
+		}
+	}
+	if let .force_unwrap(operands) = expr.kind {
+		for operand in operands {
+			render_expr(buf: buf, view: view, expr: operand, depth: depth + 1)
+		}
+	}
+	if let .call_effect(_, type_args, args) = expr.kind {
+		for type_arg in type_args {
+			render_generic_arg(buf: buf, view: view, arg: type_arg, depth: depth + 1)
+		}
+		for arg in args {
+			render_call_arg(buf: buf, view: view, arg: arg, depth: depth + 1)
+		}
+	}
+	if let .record_literal(fields, spread) = expr.kind {
+		for field in fields {
+			render_record_field(buf: buf, view: view, field: field, depth: depth + 1)
+		}
+		for spread_value in spread {
+			render_expr(buf: buf, view: view, expr: spread_value, depth: depth + 1)
+		}
+	}
+	// Only an @_ir node's binds render; the instruction's registers,
+	// values, and type operand are not visited nodes.
+	if let .inline_ir(binds, _) = expr.kind {
+		for bind in binds {
+			render_expr(buf: buf, view: view, expr: bind, depth: depth + 1)
+		}
+	}
+	if let .macro_call(_, args) = expr.kind {
+		for arg in args {
+			render_expr(buf: buf, view: view, expr: arg, depth: depth + 1)
+		}
+	}
+}
+
+func render_record_field(mut buf: [Byte], view: UTF8View, field: &RecordField, depth: Int) -> Void {
+	node_line(buf: buf, view: view, label: "RecordField", start: field.start, end: field.end, depth: depth)
+	render_expr(buf: buf, view: view, expr: field.value, depth: depth + 1)
 }
 
 // The Func node's span is its body's; the whole declaration's extents
@@ -217,11 +288,34 @@ func render_generic_decl(mut buf: [Byte], view: UTF8View, generic: &GenericDecl,
 	if let .some(default_value) = generic.default_value {
 		render_generic_arg(buf: buf, view: view, arg: default_value, depth: depth + 1)
 	}
+	if let .some(static_ty) = generic.static_ty {
+		render_type(buf: buf, view: view, annotation: static_ty, depth: depth + 1)
+	}
 }
 
 func render_generic_arg(mut buf: [Byte], view: UTF8View, arg: &GenericArg, depth: Int) -> Void {
 	match arg {
-		.type_arg(annotation) -> render_type(buf: buf, view: view, annotation: annotation, depth: depth)
+		.type_arg(annotation) -> render_type(buf: buf, view: view, annotation: annotation, depth: depth),
+		.static_arg(expr) -> render_static_expr(buf: buf, view: view, expr: expr, depth: depth)
+	}
+}
+
+// Static expressions are not visited nodes: only nested Path
+// annotations render, at the surrounding depth.
+func render_static_expr(mut buf: [Byte], view: UTF8View, expr: &StaticExpr, depth: Int) -> Void {
+	match expr.kind {
+		.static_path(annotation) -> render_type(buf: buf, view: view, annotation: annotation, depth: depth),
+		.static_group(inner) -> {
+			for e in inner {
+				render_static_expr(buf: buf, view: view, expr: e, depth: depth)
+			}
+		},
+		.static_op(_, operands) -> {
+			for e in operands {
+				render_static_expr(buf: buf, view: view, expr: e, depth: depth)
+			}
+		},
+		_ -> {}
 	}
 }
 
@@ -231,6 +325,10 @@ func render_where_clause(mut buf: [Byte], view: UTF8View, wc: &WhereClause, dept
 	for predicate in wc.predicates {
 		match predicate.kind {
 			.type_eq(lhs, rhs) -> {
+				render_generic_arg(buf: buf, view: view, arg: lhs, depth: depth)
+				render_generic_arg(buf: buf, view: view, arg: rhs, depth: depth)
+			},
+			.static_cmp(_, lhs, rhs) -> {
 				render_generic_arg(buf: buf, view: view, arg: lhs, depth: depth)
 				render_generic_arg(buf: buf, view: view, arg: rhs, depth: depth)
 			},
@@ -356,9 +454,7 @@ func render_type(mut buf: [Byte], view: UTF8View, annotation: &TypeAnnotation, d
 // directly at the surrounding node's child depth.
 func render_generic_args(mut buf: [Byte], view: UTF8View, args: &[GenericArg], depth: Int) -> Void {
 	for arg in args {
-		match arg {
-			.type_arg(annotation) -> render_type(buf: buf, view: view, annotation: annotation, depth: depth)
-		}
+		render_generic_arg(buf: buf, view: view, arg: arg, depth: depth)
 	}
 }
 
@@ -401,12 +497,22 @@ func render_pattern(mut buf: [Byte], view: UTF8View, pattern: &Pattern, depth: I
 			render_pattern(buf: buf, view: view, pattern: alternative, depth: depth + 1)
 		}
 	}
-	if let .variant(_, _, fields, _) = pattern.kind {
+	if let .variant(_, segment_generics, _, fields, _) = pattern.kind {
+		for segment in segment_generics {
+			for arg in segment {
+				render_generic_arg(buf: buf, view: view, arg: arg, depth: depth + 1)
+			}
+		}
 		for field in fields {
 			render_pattern(buf: buf, view: view, pattern: field, depth: depth + 1)
 		}
 	}
-	if let .struct_pattern(_, fields, _, _) = pattern.kind {
+	if let .struct_pattern(_, segment_generics, fields, _, _) = pattern.kind {
+		for segment in segment_generics {
+			for arg in segment {
+				render_generic_arg(buf: buf, view: view, arg: arg, depth: depth + 1)
+			}
+		}
 		for field in fields {
 			render_pattern(buf: buf, view: view, pattern: field, depth: depth + 1)
 		}
@@ -560,7 +666,8 @@ func stmt_label(kind: &StmtKind) -> String {
 		.loop_stmt(_, _) -> "Stmt::Loop",
 		.for_stmt(_, _, _, _) -> "Stmt::For",
 		.continue_stmt -> "Stmt::Continue",
-		.resume_stmt(_) -> "Stmt::Resume"
+		.resume_stmt(_) -> "Stmt::Resume",
+		.handle_stmt(_, _) -> "Stmt::Handling"
 	}
 }
 
@@ -602,7 +709,8 @@ func render_stmt(mut buf: [Byte], view: UTF8View, stmt: &Stmt, depth: Int) -> Vo
 			if let .some(e) = rhs {
 				render_expr(buf: buf, view: view, expr: e, depth: depth + 1)
 			}
-		}
+		},
+		.handle_stmt(_, body) -> render_block(buf: buf, view: view, block: body, depth: depth + 1)
 	}
 }
 

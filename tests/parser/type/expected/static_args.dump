@@ -1,0 +1,11 @@
+tokens:
+  Identifier @0..11 "InlineArray"
+  Less @11..12 "<"
+  Identifier @12..16 "Byte"
+  Comma @16..17 ","
+  Int @18..20 "16"
+  Greater @20..21 ">"
+  Newline @21..22
+tree:
+  TypeAnnotation::Nominal @0..21 "InlineArray<Byte, 16>"
+    TypeAnnotation::Nominal @12..16 "Byte"

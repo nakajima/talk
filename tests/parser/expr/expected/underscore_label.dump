@@ -1,0 +1,17 @@
+tokens:
+  Identifier @0..4 "call"
+  LeftParen @4..5 "("
+  Underscore @5..6 "_"
+  Colon @6..7 ":"
+  Int @8..9 "1"
+  Comma @9..10 ","
+  Identifier @11..12 "x"
+  RightParen @12..13 ")"
+  Newline @13..14
+tree:
+  Expr::Call @0..13 "call(_: 1, x)"
+    Expr::Variable @0..4 "call"
+    CallArg @5..9 "_: 1"
+      Expr::LiteralInt @8..9 "1"
+    CallArg @11..12 "x"
+      Expr::Variable @11..12 "x"

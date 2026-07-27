@@ -1,0 +1,20 @@
+tokens:
+  Identifier @0..5 "items"
+  Dot @5..6 "."
+  Identifier @6..9 "map"
+  LeftBrace @10..11 "{"
+  BoundVar @13..14 "0"
+  Star @15..16 "*"
+  Int @17..18 "2"
+  RightBrace @19..20 "}"
+  Newline @20..21
+tree:
+  Expr::Call @0..20 "items.map { $0 * 2 }"
+    Expr::Member @0..9 "items.map"
+      Expr::Variable @0..5 "items"
+    Block @10..20 "{ $0 * 2 }"
+      Parameter @synthesized
+      Stmt::Expr @13..18 "0 * 2"
+        Expr::Binary @13..18 "0 * 2"
+          Expr::Variable @13..14 "0"
+          Expr::LiteralInt @17..18 "2"

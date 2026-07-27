@@ -1,0 +1,10 @@
+tokens:
+  LeftBracket @0..1 "["
+  Identifier @1..5 "Byte"
+  Semicolon @5..6 ";"
+  Int @7..9 "32"
+  RightBracket @9..10 "]"
+  Newline @10..11
+tree:
+  TypeAnnotation::Nominal @0..10 "[Byte; 32]"
+    TypeAnnotation::Nominal @1..5 "Byte"

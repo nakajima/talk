@@ -1,0 +1,17 @@
+tokens:
+  Identifier @0..5 "Outer"
+  Less @5..6 "<"
+  Identifier @6..9 "Int"
+  Greater @9..10 ">"
+  Dot @10..11 "."
+  Identifier @11..16 "Inner"
+  LeftBrace @17..18 "{"
+  Identifier @19..24 "value"
+  Colon @24..25 ":"
+  Identifier @26..27 "v"
+  RightBrace @28..29 "}"
+  Newline @29..30
+tree:
+  Pattern::Struct @0..29 "Outer<Int>.Inner { value: v }"
+    TypeAnnotation::Nominal @6..9 "Int"
+    Pattern::Bind @26..27 "v"

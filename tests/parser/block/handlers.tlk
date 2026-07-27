@@ -1,0 +1,7 @@
+@handle 'io { request in
+	'continue host(request: request)
+}
+@handle 'async {
+	'continue
+}
+loop {}

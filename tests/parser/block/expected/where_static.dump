@@ -1,0 +1,43 @@
+tokens:
+  Func @0..4 "func"
+  Identifier @5..11 "narrow"
+  Less @11..12 "<"
+  Static @12..18 "static"
+  Identifier @19..20 "N"
+  Colon @20..21 ":"
+  Identifier @22..25 "Int"
+  Greater @25..26 ">"
+  LeftParen @26..27 "("
+  Identifier @27..28 "x"
+  Colon @28..29 ":"
+  Identifier @30..33 "Int"
+  RightParen @33..34 ")"
+  Arrow @35..37 "->"
+  Identifier @38..41 "Int"
+  Identifier @42..47 "where"
+  Identifier @48..49 "N"
+  Less @50..51 "<"
+  Int @52..53 "8"
+  AmpAmp @54..56 "&&"
+  Identifier @57..58 "N"
+  LessEquals @59..61 "<="
+  Int @62..64 "16"
+  LeftBrace @65..66 "{"
+  Newline @66..67
+  Identifier @68..69 "x"
+  Newline @69..70
+  RightBrace @70..71 "}"
+  Newline @71..72
+tree:
+  Decl::Func @0..71
+    Func @65..71 tokens=0..71
+      GenericDecl @12..25 "static N: Int"
+        TypeAnnotation::Nominal @22..25 "Int"
+      TypeAnnotation::Nominal @48..49 "N"
+      TypeAnnotation::Nominal @57..58 "N"
+      Parameter @28..33 ": Int"
+        TypeAnnotation::Nominal @30..33 "Int"
+      Block @65..71
+        Stmt::Expr @68..69 "x"
+          Expr::Variable @68..69 "x"
+      TypeAnnotation::Nominal @38..41 "Int"

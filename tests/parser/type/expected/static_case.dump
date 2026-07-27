@@ -1,0 +1,11 @@
+tokens:
+  Identifier @0..4 "Flag"
+  Less @4..5 "<"
+  Dot @5..6 "."
+  Identifier @6..8 "on"
+  Comma @8..9 ","
+  True @10..14 "true"
+  Greater @14..15 ">"
+  Newline @15..16
+tree:
+  TypeAnnotation::Nominal @0..15 "Flag<.on, true>"

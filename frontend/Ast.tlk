@@ -25,8 +25,40 @@ pub struct EffectSet {
 }
 
 pub enum GenericArg {
-	// Static-value arguments (ADR 0035) stay unported for now.
 	case type_arg(TypeAnnotation)
+	// An ADR 0035 static-value argument.
+	case static_arg(StaticExpr)
+}
+
+pub enum StaticOpKind {
+	case add
+	case sub
+	case mul
+}
+
+// The ADR 0035 static index language (`16`, `N + 1`, `(M) * 2`, `.on`).
+// Not a dump-visited node: only nested Path annotations render, at the
+// surrounding depth.
+pub enum StaticExprKind {
+	case int_literal(String)
+	case bool_literal(Bool)
+	// A fieldless enum case whose owner is inferred from the static
+	// parameter's declared value type.
+	case unqualified_case(String)
+	// A name-like operand — a static parameter reference or a fieldless
+	// enum case path — kept as an annotation so name resolution visits
+	// it like every other type reference.
+	case static_path(TypeAnnotation)
+	// Parenthesized grouping; the inner expression as a one-element array.
+	case static_group([StaticExpr])
+	// `[lhs, rhs]`.
+	case static_op(StaticOpKind, [StaticExpr])
+}
+
+pub struct StaticExpr {
+	pub let kind: StaticExprKind
+	pub let start: Int
+	pub let end: Int
 }
 
 pub struct RecordFieldTypeAnnotation {
@@ -112,19 +144,22 @@ pub struct CaptureSpec {
 	pub let end: Int
 }
 
-// A declared generic parameter (`T: Proto = Default`). ADR 0035 static
-// value parameters stay unported.
+// A declared generic parameter (`T: Proto = Default`, or the ADR 0035
+// static form `static N: Int` whose declared value type is static_ty).
 pub struct GenericDecl {
 	pub let name: String
 	pub let generics: [GenericDecl]
 	pub let conformances: [TypeAnnotation]
 	pub let default_value: GenericArg?
+	pub let static_ty: TypeAnnotation?
 	pub let start: Int
 	pub let end: Int
 }
 
 pub enum WherePredicateKind {
 	case type_eq(GenericArg, GenericArg)
+	// `N < M` (strict) or `N <= M` (ADR 0035).
+	case static_cmp(Bool, GenericArg, GenericArg)
 	// The conforming type, then its `&`-joined protocols.
 	case conforms(TypeAnnotation, [TypeAnnotation])
 }
@@ -228,9 +263,13 @@ pub enum ExprKind {
 	case unary(TokenKind, [Expr])
 	// `[lhs, rhs]`.
 	case binary(TokenKind, [Expr])
-	// The callee as a one-element array, then the arguments — type args
-	// and trailing blocks join when their grammar is ported.
-	case call([Expr], [CallArg])
+	// The callee as a one-element array, explicit generic arguments,
+	// the arguments, then a trailing block closure as a zero- or
+	// one-element array.
+	case call([Expr], [GenericArg], [CallArg], [Block])
+	// A specialized type reference (`Opt<Int>`, `Res<Int>.A<Bool>`):
+	// the dotted path and one generic-argument list per path segment.
+	case constructor(String, [[GenericArg]])
 	// The receiver as a zero- (leading dot) or one-element array.
 	case member(MemberLabel, [Expr])
 	// A dot with no member name after it: LSP-supporting recovery node,
@@ -251,6 +290,54 @@ pub enum ExprKind {
 	case if_expr([Expr], Block, Block)
 	// The scrutinee as a one-element array, then the arms.
 	case match_expr([Expr], [MatchArm])
+	// `expr as Type`: the operand as a one-element array.
+	case as_cast([Expr], TypeAnnotation)
+	// Postfix `?` early propagation; the operand as a one-element array.
+	case propagate([Expr])
+	// Postfix `!`: the operand, then the hidden failure expression —
+	// `unreachable` spanning the bang until desugaring sends it to 'panic.
+	case force_unwrap([Expr])
+	case unreachable_expr
+	// `'effect(args)`: the effect name (sigil excluded), explicit
+	// generic arguments, then the arguments.
+	case call_effect(String, [GenericArg], [CallArg])
+	// `{ label: value, ...spread }`: the fields, then the spread
+	// expression as a zero- or one-element array.
+	case record_literal([RecordField], [Expr])
+	// `@_ir(binds…) { %d = instr … }`: the bind expressions, then the
+	// instruction. Only the binds render in the dump.
+	case inline_ir([Expr], IRInstruction)
+	// `#name(args)`.
+	case macro_call(String, [Expr])
+}
+
+// An inline-IR value operand.
+pub enum IRValue {
+	case reg(Int)
+	case int_value(Int)
+	case float_value(String)
+	case bool_value(Bool)
+	case void_value
+	// `$N`: a reference to the Nth bind expression.
+	case bind(Int)
+}
+
+// One @_ir instruction: its name, optional destination register lexeme
+// (`?` requests a fresh one), optional operand type, value operands in
+// instruction order, and the `cmp` comparator.
+pub struct IRInstruction {
+	pub let name: String
+	pub let dest: String?
+	pub let ty: TypeAnnotation?
+	pub let values: [IRValue]
+	pub let op: TokenKind?
+}
+
+pub struct RecordField {
+	pub let label: String
+	pub let value: Expr
+	pub let start: Int
+	pub let end: Int
 }
 
 pub struct Expr {
@@ -261,6 +348,7 @@ pub struct Expr {
 
 pub struct CallArg {
 	pub let label: String?
+	pub let mode: ArgMode?
 	pub let value: Expr
 	pub let start: Int
 	pub let end: Int
@@ -277,13 +365,13 @@ pub enum PatternKind {
 	case literal_false
 	case tuple([Pattern])
 	case or_pattern([Pattern])
-	// Enum path (none for a leading dot), variant name, field patterns,
-	// and one label per field (labels select fixed payload slots).
-	// Explicit head generics stay unported for now.
-	case variant(String?, String, [Pattern], [String?])
-	// Dotted struct path, field patterns, parallel field names, and
-	// whether a `..` rest closed the list.
-	case struct_pattern(String, [Pattern], [String], Bool)
+	// Enum path (none for a leading dot), one explicit generic-argument
+	// list per path segment, variant name, field patterns, and one label
+	// per field (labels select fixed payload slots).
+	case variant(String?, [[GenericArg]], String, [Pattern], [String?])
+	// Dotted struct path, per-segment generic arguments, field patterns,
+	// parallel field names, and whether a `..` rest closed the list.
+	case struct_pattern(String, [[GenericArg]], [Pattern], [String], Bool)
 	case record([RecordFieldPattern])
 }
 
@@ -376,6 +464,9 @@ pub enum StmtKind {
 	case continue_stmt
 	// `'continue expr?` — resumes the enclosing effect handler.
 	case resume_stmt(Expr?)
+	// `@handle 'effect { body }` — the effect name (sigil excluded) and
+	// the handler block.
+	case handle_stmt(String, Block)
 }
 
 pub struct Stmt {

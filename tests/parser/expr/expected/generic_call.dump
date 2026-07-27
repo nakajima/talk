@@ -1,0 +1,19 @@
+tokens:
+  Identifier @0..5 "_load"
+  Less @5..6 "<"
+  Identifier @6..13 "Element"
+  Greater @13..14 ">"
+  LeftParen @14..15 "("
+  Identifier @15..22 "pointer"
+  Comma @22..23 ","
+  Identifier @24..29 "index"
+  RightParen @29..30 ")"
+  Newline @30..31
+tree:
+  Expr::Call @0..30 "_load<Element>(pointer, index)"
+    Expr::Variable @0..5 "_load"
+    TypeAnnotation::Nominal @6..13 "Element"
+    CallArg @15..22 "pointer"
+      Expr::Variable @15..22 "pointer"
+    CallArg @24..29 "index"
+      Expr::Variable @24..29 "index"

@@ -501,12 +501,45 @@ slices, in landing order:
   truncation point (its 2-token lookahead), modeled as
   `pos + 1 >= token_count` at failure time. `parse_lenient` wraps the
   same parse, degrading a hard failure to an empty tree plus one
-  diagnostic. The `@_ir` attribute parses far enough to reproduce the
-  corpus's pinned `cmp` operator error; instruction success paths stay
-  unported. Multi-clause `if` conditions that would require duplicating
-  the else block (the reference clones it per clause) are deferred with
-  an `unported` marker until the AST grows a deep-copy walk — move-only
-  Strings make implicit cloning impossible.
+  diagnostic.
+- **Whole-file `core/` and `stdlib/` coverage**: everything the live
+  corpus exercises from the former `unported` list, landed
+  feature-by-feature against new pinned fixtures (a temporary
+  env-gated survey test reported each file's first divergence until
+  all 37 files were clean, then was deleted). Trailing-block calls
+  (`foo { … }`, `foo(x) { y in … }`, and the popped parenthesized
+  final block argument) with `$N` positional-parameter synthesis via a
+  `max_positional_block_arg` walk (synthesized `Parameter
+  @synthesized` nodes; trailing blocks themselves are not walked
+  into); paren-less leading-string-argument calls; generic call
+  arguments with the adjacency contract and `Expr::Constructor`
+  references via `flatten_type_path` (per-segment argument lists,
+  padded to the dotted path); `as` casts; postfix `?` propagation and
+  `!` force-unwrap (whose hidden failure renders as
+  `Expr::Unreachable` spanning the bang); float-lexed positional
+  member chains (`x.0.1` splits into two members, both spanning the
+  chain); `_:` argument labels and call-site ownership modes (which
+  also veto the trailing-block pop); effect calls
+  (`'io(request: …)`, `'alloc<Int>(n)` — the node's span starts after
+  the sigil); record literals with `...spread` (the Talk lexer gained
+  the reference's `DotDotDot` token; `{ x: Int in … }` in expression
+  position stays a record-literal collision error, pinned);
+  block-parameter type annotations (reachable only through
+  closure-position blocks); let-else and or-pattern lets desugared to
+  the reference's synthesized single/two-arm match with binder
+  collection; multi-clause `if` folding in both positions — the
+  else-block duplication that motivated the deep-copy deferral turned
+  out to need only a value copy, since the reference's
+  `freshened_block` renews node ids but never spans; `@handle`
+  effect handlers (`Stmt::Handling`, span starting after the `@`);
+  the full `@_ir` instruction set (disjoint dest/dest-less tables,
+  every `ir_value` form including `void`; only binds render as dump
+  children, and the node's span ends before the closing brace); and
+  ADR 0035 `static N: Int` generic parameters with the
+  uppercase-initial check. Static generic *arguments*, comparison
+  predicates, static parameter defaults, and `[T; N]` inline-array
+  types keep their `unported` markers — nothing in `core/`, `stdlib/`,
+  or the corpus exercises them.
 
 Grammar not yet ported fails with a distinctive `talk-parser.unported`
 code so a divergence names the missing construct instead of silently
@@ -562,18 +595,30 @@ Further compiler findings from the port, still open:
   single-variant enum correctly warns that the implicit else-arm never
   runs, but the diagnostic points at 1:1 of the file.
 
-With every dump category green, what remains for Stage 2 is growing the
-parse-covered corpus toward whole-file parses of `core/` and `stdlib/`
-(the lex/trees harness already covers them; the parse harness covers
-`tests/parser/**`). That means porting the grammar still marked
-`unported`, none of which any pinned fixture exercises: `as` casts,
-trailing-block and paren-less string calls, record literals and record
-spread, generic call arguments and `Expr::Constructor` references, the
-ADR 0035 static language (static parameters, arguments, and comparison
-predicates), let-else and or-pattern let desugaring, multi-clause `if`
-duplication (needs an AST deep-copy walk), float-lexed positional
-member chains (`x.0.1`), `_:` argument labels and argument ownership
-modes, effect handlers (`@handle`), `@_ir` instruction success paths,
-`[T; N]` inline-array types, and block-parameter type annotations.
-After that: the bridge slice (ABI descriptor plus the generated Rust
-adapter for parse results) and the checked-in-artifact cutover wiring.
+**`core/` and `stdlib/` are now parse-covered whole-file**: both
+directories sit in the harness's parse-category table alongside the
+seven `tests/parser` directories, every file byte-identical.
+
+**The grammar port is complete — no `unported` markers remain.** The
+final sweep landed the pieces the live corpus never exercised, each
+against new pinned fixtures: the full ADR 0035 static language
+(static generic arguments with the `+`/`-`/`*` index grammar,
+parenthesized groups and the `(N) * 2` reinterpretation, unqualified
+cases, static parameter defaults, and `<`/`<=` comparison
+where-predicates — `StaticExpr` is not a dump-visited node, so only
+nested Path annotations render, at the surrounding depth); `[T; N]`
+inline-array types (an implied `InlineArray` head, like `[T]` implies
+`Array`); qualified pattern heads with per-segment generic arguments
+(`Opt<Int>.some(x)`, `Outer<Int>.Inner { … }`, with the reference's
+variant-takes-no-generics and bare-generic-head errors pinned — their
+`actual` fields turn out to be dead: `UnexpectedToken`'s Display names
+the token itself, so no Debug leak existed); the `unreachable` and
+`#macro(...)` expression prefixes; and `@"…"` quoted identifiers in
+the Talk lexer (an ordinary Identifier token whose span excludes the
+`@` and quotes, with the empty/unterminated/backslash error positions
+pinned). With every reference prefix handler ported, the
+`talk-parser.unported` machinery itself is deleted — the prefix
+fallthrough now reports the reference's own expected-an-expression
+error. What remains for Stage 2: the bridge slice (ABI descriptor
+plus the generated Rust adapter for parse results) and the
+checked-in-artifact cutover wiring.

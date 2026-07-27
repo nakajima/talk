@@ -1,0 +1,3 @@
+let base = { a: 1, b: 2 }
+let extended = { c: 3, ...base }
+let empty = {}

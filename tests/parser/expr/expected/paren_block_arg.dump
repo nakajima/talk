@@ -1,0 +1,24 @@
+tokens:
+  Identifier @0..6 "reduce"
+  LeftParen @6..7 "("
+  Int @7..8 "0"
+  Comma @8..9 ","
+  LeftBrace @10..11 "{"
+  BoundVar @13..14 "0"
+  Plus @15..16 "+"
+  BoundVar @18..19 "1"
+  RightBrace @20..21 "}"
+  RightParen @21..22 ")"
+  Newline @22..23
+tree:
+  Expr::Call @0..22 "reduce(0, { $0 + $1 })"
+    Expr::Variable @0..6 "reduce"
+    CallArg @7..8 "0"
+      Expr::LiteralInt @7..8 "0"
+    Block @13..21 "0 + $1 }"
+      Parameter @synthesized
+      Parameter @synthesized
+      Stmt::Expr @13..19 "0 + $1"
+        Expr::Binary @13..19 "0 + $1"
+          Expr::Variable @13..14 "0"
+          Expr::Variable @18..19 "1"

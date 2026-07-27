@@ -17,6 +17,7 @@ pub enum TokenKind {
 	case comma
 	case dot
 	case dot_dot
+	case dot_dot_dot
 	case dot_dot_less
 	case left_paren
 	case right_paren
@@ -119,6 +120,7 @@ pub func kind_name(kind: TokenKind) -> String {
 		.comma -> "Comma",
 		.dot -> "Dot",
 		.dot_dot -> "DotDot",
+		.dot_dot_dot -> "DotDotDot",
 		.dot_dot_less -> "DotDotLess",
 		.left_paren -> "LeftParen",
 		.right_paren -> "RightParen",
@@ -220,6 +222,7 @@ pub func kind_spelling(kind: TokenKind) -> String {
 		.comma -> ",",
 		.dot -> ".",
 		.dot_dot -> "..",
+		.dot_dot_dot -> "...",
 		.dot_dot_less -> "..<",
 		.left_paren -> "(",
 		.right_paren -> ")",
@@ -769,6 +772,44 @@ pub func scan(source: String) -> ScanResult {
 			i = j
 			continue
 		}
+		// @"..." spells a literal identifier, letting keywords be used
+		// as names: an ordinary Identifier token whose span excludes the
+		// @ and the quotes.
+		if b == at_byte && i + 1 < n && view.at(index: i + 1)._toInt() == quote_byte {
+			let start = i + 2
+			let j = start
+			let open = true
+			let bad = false
+			loop j < n && open {
+				let c = view.at(index: j)._toInt()
+				if c == newline_byte { break }
+				if c == backslash_byte {
+					error = Optional.some("Invalid escape: '\\\\'")
+					error_pos = j
+					bad = true
+					break
+				}
+				if c == quote_byte {
+					open = false
+				} else {
+					j = j + 1
+				}
+			}
+			if bad { break }
+			if open {
+				error = Optional.some("Unterminated string")
+				error_pos = j
+				break
+			}
+			if j == start {
+				error = Optional.some("Empty quoted identifier")
+				error_pos = j
+				break
+			}
+			tokens.push(Token(kind: .identifier, start: start, end: j))
+			i = j + 1
+			continue
+		}
 		if b == at_byte && i + 1 < n && is_alnum(b: view.at(index: i + 1)._toInt()) {
 			let end = ident_end(view: view, n: n, i: i + 1)
 			tokens.push(Token(kind: .attribute, start: i + 1, end: end))
@@ -794,7 +835,10 @@ pub func scan(source: String) -> ScanResult {
 
 		if b == dot_byte {
 			if i + 1 < n && view.at(index: i + 1)._toInt() == dot_byte {
-				if i + 2 < n && view.at(index: i + 2)._toInt() == less_byte {
+				if i + 2 < n && view.at(index: i + 2)._toInt() == dot_byte {
+					tokens.push(Token(kind: .dot_dot_dot, start: i, end: i + 3))
+					i = i + 3
+				} else if i + 2 < n && view.at(index: i + 2)._toInt() == less_byte {
 					tokens.push(Token(kind: .dot_dot_less, start: i, end: i + 3))
 					i = i + 3
 				} else {

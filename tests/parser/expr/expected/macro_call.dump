@@ -1,0 +1,17 @@
+tokens:
+  Hash @0..1 "#"
+  Identifier @1..10 "stringify"
+  LeftParen @10..11 "("
+  Identifier @11..12 "a"
+  Plus @13..14 "+"
+  Int @15..16 "1"
+  Comma @16..17 ","
+  Identifier @18..19 "b"
+  RightParen @19..20 ")"
+  Newline @20..21
+tree:
+  Expr::MacroCall @0..20 "#stringify(a + 1, b)"
+    Expr::Binary @11..16 "a + 1"
+      Expr::Variable @11..12 "a"
+      Expr::LiteralInt @15..16 "1"
+    Expr::Variable @18..19 "b"

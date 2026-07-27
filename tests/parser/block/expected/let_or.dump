@@ -1,0 +1,32 @@
+tokens:
+  Let @0..3 "let"
+  Dot @4..5 "."
+  Identifier @5..6 "a"
+  LeftParen @6..7 "("
+  Identifier @7..8 "x"
+  RightParen @8..9 ")"
+  Pipe @10..11 "|"
+  Dot @12..13 "."
+  Identifier @13..14 "b"
+  LeftParen @14..15 "("
+  Identifier @15..16 "x"
+  RightParen @16..17 ")"
+  Equals @18..19 "="
+  Identifier @20..26 "source"
+  LeftParen @26..27 "("
+  RightParen @27..28 ")"
+  Newline @28..29
+tree:
+  Decl::Let @0..28 "let .a(x) | .b(x) = source()"
+    Pattern::Bind @synthesized
+    Expr::Match @synthesized
+      Expr::Call @20..28 "source()"
+        Expr::Variable @20..26 "source"
+      MatchArm @synthesized
+        Pattern::Or @4..17 ".a(x) | .b(x)"
+          Pattern::Variant @4..9 ".a(x)"
+            Pattern::Bind @7..8 "x"
+          Pattern::Variant @12..17 ".b(x)"
+            Pattern::Bind @15..16 "x"
+        Block @synthesized
+          Expr::Variable @synthesized

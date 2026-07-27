@@ -1,0 +1,15 @@
+tokens:
+  Identifier @0..3 "Opt"
+  Less @3..4 "<"
+  Identifier @4..7 "Int"
+  Greater @7..8 ">"
+  Dot @8..9 "."
+  Identifier @9..13 "some"
+  Less @13..14 "<"
+  Identifier @14..18 "Bool"
+  Greater @18..19 ">"
+  LeftParen @19..20 "("
+  Identifier @20..21 "x"
+  RightParen @21..22 ")"
+  Newline @22..23
+parse error: parser.unexpected-token Unexpected token: expected no generic arguments on a variant pattern, got `(`

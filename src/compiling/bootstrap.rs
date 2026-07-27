@@ -230,9 +230,11 @@ mod tests {
             assert_eq!(talk_trees, rust_trees, "tree divergence on {path}");
         }
 
-        let parse_categories: [(&str, &str, fn(&str) -> String); 7] = [
+        let parse_categories: [(&str, &str, fn(&str) -> String); 9] = [
             ("tests/parser", "parse", crate::parsing::dump::dump),
             ("tests/parser/unicode", "parse", crate::parsing::dump::dump),
+            ("core", "parse", crate::parsing::dump::dump),
+            ("stdlib", "parse", crate::parsing::dump::dump),
             (
                 "tests/parser/lenient",
                 "parse_lenient",

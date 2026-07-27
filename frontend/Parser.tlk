@@ -1,11 +1,9 @@
 // The self-hosted parser (ADR 0043 stage 2). A port of the reference
 // recursive-descent/Pratt parser over the Talk lexer's token stream,
-// growing construct-by-construct against the frozen dump corpus.
+// validated construct-by-construct against the frozen dump corpus.
 //
 // Errors carry the reference diagnostic code and rendered message so
-// the validation dump matches byte-for-byte. Grammar not yet ported
-// fails loudly with the `talk-parser.unported` code: the differential
-// harness surfaces it as a divergence naming the missing construct.
+// the validation dump matches byte-for-byte.
 //
 // The reference parser streams tokens with previous/current/next plus
 // a previous-before-newline cursor for span ends. Here the scanner runs
@@ -16,12 +14,13 @@
 
 use package::Lexer::{ Token, TokenKind, ScanResult, Comment, scan, kind_spelling, append, append_int }
 use package::Ast::{
-	Expr, ExprKind, CallArg, MemberLabel, Parameter, Block,
+	Expr, ExprKind, CallArg, MemberLabel, Parameter, Block, RecordField,
 	Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
 	TypeAnnotation, TypeAnnotationKind, GenericArg, EffectSet,
+	StaticExpr, StaticExprKind, StaticOpKind,
 	RecordFieldTypeAnnotation, AnyAssocBinding,
 	Decl, DeclKind, Import, ImportedSymbol, ImportedSymbols,
-	Stmt, StmtKind, Item, MatchArm, ArgMode,
+	Stmt, StmtKind, Item, MatchArm, ArgMode, IRValue, IRInstruction,
 	ParamMode, ParamLabel, CaptureMode, CaptureSpec, GenericDecl,
 	WherePredicateKind, WherePredicate, WhereClause,
 	Func, FuncSignature, Body, TypeApplication, ReceiverMode
@@ -95,6 +94,212 @@ func all_boolean(clauses: &[ConditionalClause]) -> Bool {
 		if clause_is_boolean(clause: clause) == false { return false }
 	}
 	true
+}
+
+// A member chain flattened into a dotted type path with per-segment
+// generic arguments, or not-a-path (the reference `flatten_type_path`
+// returns an Option).
+enum TypePath {
+	case not_a_path
+	case path(String, [[GenericArg]])
+}
+
+func count_path_segments(path: String) -> Int {
+	let bytes = path.utf8()
+	let n = bytes.count()
+	let count = 1
+	let i = 0
+	loop i < n {
+		if bytes.at(index: i)._toInt() == 46 { count = count + 1 } // "."
+		i = i + 1
+	}
+	count
+}
+
+func flatten_type_path(expr: &Expr) -> TypePath {
+	match expr.kind {
+		.variable(name) -> {
+			let no_args: [GenericArg] = []
+			return .path(name, [no_args])
+		},
+		.constructor(name, segments) -> {
+			// A constructor minted without explicit args records no
+			// segments; pad so the lists parallel the path.
+			let copied: [[GenericArg]] = segments
+			loop copied.count < count_path_segments(path: name) {
+				let empty: [GenericArg] = []
+				copied.push(empty)
+			}
+			return .path(name, copied)
+		},
+		.member(label, receiver) -> {
+			if let .named(member_name) = label {
+				if receiver.count == 0 { return .not_a_path }
+				match flatten_type_path(expr: receiver[0]) {
+					.path(path, segments) -> {
+						let empty: [GenericArg] = []
+						segments.push(empty)
+						return .path(path + "." + member_name, segments)
+					},
+					.not_a_path -> return .not_a_path
+				}
+			}
+			.not_a_path
+		},
+		_ -> .not_a_path
+	}
+}
+
+// A trailing-block closure with no declared parameters synthesizes one
+// positional parameter per `$N` its body references (the reference
+// `prepare_closure_block`).
+func prepare_closure_block(consume block: Block) -> Block {
+	if block.params.count > 0 { return block }
+	let max_index = max_bound_var_in_block(block: block)
+	if max_index < 0 { return block }
+	let params: [Parameter] = []
+	let i = 0
+	loop i <= max_index {
+		let no_label: ParamLabel? = .none
+		let no_mode: ParamMode? = .none
+		let no_annotation: TypeAnnotation? = .none
+		params.push(Parameter(label: no_label, name: "$" + i.show(), name_start: -1, name_end: -1, mode: no_mode, annotation: no_annotation, start: -1, end: -1))
+		i = i + 1
+	}
+	let body = block.body
+	Block(params: params, body: body, start: block.start, end: block.end)
+}
+
+// The index of a `$N` bound-variable name, or -1 for anything else.
+func bound_var_index(name: String) -> Int {
+	let bytes = name.utf8()
+	let n = bytes.count()
+	if n < 2 { return -1 }
+	if bytes.at(index: 0)._toInt() != 36 { return -1 } // "$"
+	let value = 0
+	let i = 1
+	loop i < n {
+		let b = bytes.at(index: i)._toInt()
+		if b < 48 || b > 57 { return -1 }
+		value = value * 10 + (b - 48)
+		i = i + 1
+	}
+	value
+}
+
+func max_int(a: Int, b: Int) -> Int {
+	if a > b { return a }
+	b
+}
+
+// The highest `$N` referenced in a block, or -1 — the reference
+// `max_positional_block_arg` walk. Trailing blocks themselves are not
+// walked into, matching the reference.
+func max_bound_var_in_block(block: &Block) -> Int {
+	let best = -1
+	for item in block.body {
+		best = max_int(a: best, b: max_bound_var_in_item(item: item))
+	}
+	best
+}
+
+func max_bound_var_in_item(item: &Item) -> Int {
+	match item {
+		.decl_item(d) -> max_bound_var_in_decl(decl: d),
+		.stmt_item(s) -> max_bound_var_in_stmt(stmt: s),
+		.expr_item(e) -> max_bound_var_in_expr(expr: e),
+		.pattern_item(_) -> -1,
+		.type_item(_) -> -1
+	}
+}
+
+func max_bound_var_in_decl(decl: &Decl) -> Int {
+	match decl.kind {
+		.let_decl(_, _, rhs) -> max_bound_var_in_optional_expr(expr: rhs),
+		.property(_, _, _, value) -> max_bound_var_in_optional_expr(expr: value),
+		_ -> -1
+	}
+}
+
+func max_bound_var_in_optional_expr(expr: &Expr?) -> Int {
+	if let .some(e) = expr { return max_bound_var_in_expr(expr: e) }
+	-1
+}
+
+func max_bound_var_in_optional_block(block: &Block?) -> Int {
+	if let .some(b) = block { return max_bound_var_in_block(block: b) }
+	-1
+}
+
+func max_bound_var_in_exprs(exprs: &[Expr]) -> Int {
+	let best = -1
+	for e in exprs {
+		best = max_int(a: best, b: max_bound_var_in_expr(expr: e))
+	}
+	best
+}
+
+func max_bound_var_in_stmt(stmt: &Stmt) -> Int {
+	match stmt.kind {
+		.expr_stmt(e) -> max_bound_var_in_expr(expr: e),
+		.if_stmt(cond, then_block, else_block) -> max_int(a: max_bound_var_in_expr(expr: cond), b: max_int(a: max_bound_var_in_block(block: then_block), b: max_bound_var_in_optional_block(block: else_block))),
+		.return_stmt(e) -> max_bound_var_in_optional_expr(expr: e),
+		.break_stmt -> -1,
+		.assignment(parts) -> max_bound_var_in_exprs(exprs: parts),
+		.loop_stmt(cond, body) -> max_int(a: max_bound_var_in_optional_expr(expr: cond), b: max_bound_var_in_block(block: body)),
+		.for_stmt(iterable, _, body, _) -> max_int(a: max_bound_var_in_expr(expr: iterable), b: max_bound_var_in_block(block: body)),
+		.continue_stmt -> -1,
+		.resume_stmt(e) -> max_bound_var_in_optional_expr(expr: e),
+		.handle_stmt(_, body) -> max_bound_var_in_block(block: body)
+	}
+}
+
+func max_bound_var_in_expr(expr: &Expr) -> Int {
+	match expr.kind {
+		.variable(name) -> bound_var_index(name: name),
+		.unary(_, operands) -> max_bound_var_in_exprs(exprs: operands),
+		.binary(_, operands) -> max_bound_var_in_exprs(exprs: operands),
+		.call(callee, _, args, _) -> {
+			let best = max_bound_var_in_exprs(exprs: callee)
+			for arg in args {
+				best = max_int(a: best, b: max_bound_var_in_expr(expr: arg.value))
+			}
+			best
+		},
+		.member(_, receiver) -> max_bound_var_in_exprs(exprs: receiver),
+		.tuple(items) -> max_bound_var_in_exprs(exprs: items),
+		.literal_array(items) -> max_bound_var_in_exprs(exprs: items),
+		.subscript_expr(parts) -> max_bound_var_in_exprs(exprs: parts),
+		.block(inner) -> max_bound_var_in_block(block: inner),
+		.unsafe_expr(inner) -> max_bound_var_in_block(block: inner),
+		.if_expr(cond, then_block, else_block) -> max_int(a: max_bound_var_in_exprs(exprs: cond), b: max_int(a: max_bound_var_in_block(block: then_block), b: max_bound_var_in_block(block: else_block))),
+		.match_expr(scrutinee, arms) -> {
+			let best = max_bound_var_in_exprs(exprs: scrutinee)
+			for arm in arms {
+				best = max_int(a: best, b: max_bound_var_in_block(block: arm.body))
+			}
+			best
+		},
+		.as_cast(operands, _) -> max_bound_var_in_exprs(exprs: operands),
+		.propagate(operands) -> max_bound_var_in_exprs(exprs: operands),
+		.force_unwrap(operands) -> max_bound_var_in_exprs(exprs: operands),
+		.call_effect(_, _, args) -> {
+			let best = -1
+			for arg in args {
+				best = max_int(a: best, b: max_bound_var_in_expr(expr: arg.value))
+			}
+			best
+		},
+		.record_literal(fields, spread) -> {
+			let best = max_bound_var_in_exprs(exprs: spread)
+			for field in fields {
+				best = max_int(a: best, b: max_bound_var_in_expr(expr: field.value))
+			}
+			best
+		},
+		.macro_call(_, args) -> max_bound_var_in_exprs(exprs: args),
+		_ -> -1
+	}
 }
 
 // Precedence levels, mirroring the reference `Precedence` enum's order.
@@ -276,6 +481,15 @@ func dummy_stmt() -> Stmt {
 	Stmt(kind: .expr_stmt(dummy_expr()), start: 0, end: 0)
 }
 
+func dummy_static_expr() -> StaticExpr {
+	StaticExpr(kind: .int_literal("0"), start: 0, end: 0)
+}
+
+func static_op_node(op: StaticOpKind, consume lhs: StaticExpr, consume rhs: StaticExpr, end: Int) -> StaticExpr {
+	let start = lhs.start
+	StaticExpr(kind: .static_op(op, [lhs, rhs]), start: start, end: end)
+}
+
 func dummy_decl_kind() -> DeclKind {
 	.let_decl(dummy_pattern(), .none, .none)
 }
@@ -288,7 +502,8 @@ func dummy_generic_decl() -> GenericDecl {
 	let no_generics: [GenericDecl] = []
 	let no_conformances: [TypeAnnotation] = []
 	let no_default: GenericArg? = .none
-	GenericDecl(name: "", generics: no_generics, conformances: no_conformances, default_value: no_default, start: 0, end: 0)
+	let no_static_ty: TypeAnnotation? = .none
+	GenericDecl(name: "", generics: no_generics, conformances: no_conformances, default_value: no_default, static_ty: no_static_ty, start: 0, end: 0)
 }
 
 func dummy_predicate() -> WherePredicate {
@@ -297,6 +512,15 @@ func dummy_predicate() -> WherePredicate {
 
 // A macro parameter must be identifier-shaped: its first byte may not
 // be a digit (the reference checks `is_alphabetic || '_'`).
+// The reference checks `char::is_uppercase` on the first character;
+// ASCII suffices for the static-parameter names the grammar admits.
+func starts_uppercase(name: String) -> Bool {
+	let bytes = name.utf8()
+	if bytes.count() == 0 { return false }
+	let b = bytes.at(index: 0)._toInt()
+	b >= 65 && b <= 90
+}
+
 func macro_param_is_identifier_shaped(name: String) -> Bool {
 	let bytes = name.utf8()
 	if bytes.count() == 0 { return false }
@@ -319,6 +543,152 @@ func dummy_block() -> Block {
 func synthesized_block(consume body: [Item]) -> Block {
 	let no_params: [Parameter] = []
 	Block(params: no_params, body: body, start: 0 - 1, end: 0 - 1)
+}
+
+// The reference deep-copies blocks with freshened node ids when a
+// multi-clause `if` duplicates its else block; spans are unchanged, so
+// a value copy is the same tree.
+func copy_block(block: &Block) -> Block {
+	Block(params: block.params, body: block.body, start: block.start, end: block.end)
+}
+
+func copy_optional_block(block: &Block?) -> Block? {
+	if let .some(b) = block { return .some(copy_block(block: b)) }
+	.none
+}
+
+// Does the pattern contain alternatives anywhere? Or-pattern lets
+// desugar to a single-arm match (see `desugar_let_else`).
+func pattern_contains_or(pattern: &Pattern) -> Bool {
+	match pattern.kind {
+		.or_pattern(_) -> true,
+		.tuple(items) -> any_pattern_contains_or(patterns: items),
+		.variant(_, _, _, fields, _) -> any_pattern_contains_or(patterns: fields),
+		.record(fields) -> {
+			for field in fields {
+				if let .equals_field(_, value) = field.kind {
+					if pattern_contains_or(pattern: value) { return true }
+				}
+			}
+			false
+		},
+		.struct_pattern(_, _, fields, _, _) -> any_pattern_contains_or(patterns: fields),
+		_ -> false
+	}
+}
+
+func any_pattern_contains_or(patterns: &[Pattern]) -> Bool {
+	for p in patterns {
+		if pattern_contains_or(pattern: p) { return true }
+	}
+	false
+}
+
+// Binder names in declaration order (the reference
+// `collect_pattern_binder_names`); or-patterns contribute the first
+// alternative's binders only.
+func collect_pattern_binders(pattern: &Pattern, mut names: [String]) -> Void {
+	match pattern.kind {
+		.bind(name) -> names.push(name),
+		.tuple(items) -> collect_all_pattern_binders(patterns: items, names: names),
+		.variant(_, _, _, fields, _) -> collect_all_pattern_binders(patterns: fields, names: names),
+		.or_pattern(items) -> {
+			if items.count > 0 {
+				collect_pattern_binders(pattern: items[0], names: names)
+			}
+		},
+		.record(fields) -> {
+			for field in fields {
+				match field.kind {
+					.bind_field(name) -> names.push(name),
+					.equals_field(_, value) -> collect_pattern_binders(pattern: value, names: names),
+					.rest_field -> {}
+				}
+			}
+		},
+		.struct_pattern(_, _, fields, _, _) -> collect_all_pattern_binders(patterns: fields, names: names),
+		_ -> {}
+	}
+}
+
+func collect_all_pattern_binders(patterns: &[Pattern], mut names: [String]) -> Void {
+	for p in patterns {
+		collect_pattern_binders(pattern: p, names: names)
+	}
+}
+
+// Desugars `let PAT = EXPR else { BODY }` into a synthesized match (the
+// reference `desugar_let_else`); or-pattern lets take the same road
+// with no else arm:
+// - 0 binders: `let _ = match EXPR { PAT -> (), _ -> BODY }`
+// - 1 binder:  `let x = match EXPR { PAT -> x, _ -> BODY }`
+// - N binders: `let (a, b) = match EXPR { PAT -> (a, b), _ -> BODY }`
+func desugar_let_else(consume pattern: Pattern, consume annotation: TypeAnnotation?, consume rhs: Expr?, consume else_body: Block?, start: Int, end: Int) -> Decl {
+	let no_items: [Expr] = []
+	let scrutinee = Expr(kind: .tuple(no_items), start: 0 - 1, end: 0 - 1)
+	if let .some(r) = rhs { scrutinee = r }
+	// A `let pattern: T = …` annotation pins the scrutinee.
+	if let .some(a) = annotation {
+		scrutinee = Expr(kind: .as_cast([scrutinee], a), start: 0 - 1, end: 0 - 1)
+	}
+	let names: [String] = []
+	collect_pattern_binders(pattern: pattern, names: names)
+
+	let empty_items: [Expr] = []
+	let success_expr = Expr(kind: .tuple(empty_items), start: 0 - 1, end: 0 - 1)
+	if names.count == 1 {
+		success_expr = Expr(kind: .variable(names[0]), start: 0 - 1, end: 0 - 1)
+	}
+	if names.count > 1 {
+		let variables: [Expr] = []
+		for name in names {
+			variables.push(Expr(kind: .variable(name), start: 0 - 1, end: 0 - 1))
+		}
+		success_expr = Expr(kind: .tuple(variables), start: 0 - 1, end: 0 - 1)
+	}
+	let success_items: [Item] = [.expr_item(success_expr)]
+	let arms: [MatchArm] = [MatchArm(pattern: pattern, body: synthesized_block(body: success_items), start: 0 - 1, end: 0 - 1)]
+	// With an else, a miss runs it (let-else); without one (or-pattern
+	// lets), a miss is the match machinery's miss.
+	if let .some(eb) = else_body {
+		let wildcard = Pattern(kind: .wildcard, start: 0 - 1, end: 0 - 1, meta_start: 0 - 1, meta_end: 0 - 1)
+		arms.push(MatchArm(pattern: wildcard, body: eb, start: 0 - 1, end: 0 - 1))
+	}
+	let match_expr = Expr(kind: .match_expr([scrutinee], arms), start: 0 - 1, end: 0 - 1)
+
+	let outer = Pattern(kind: .wildcard, start: 0 - 1, end: 0 - 1, meta_start: 0 - 1, meta_end: 0 - 1)
+	if names.count == 1 {
+		outer = Pattern(kind: .bind(names[0]), start: 0 - 1, end: 0 - 1, meta_start: 0 - 1, meta_end: 0 - 1)
+	}
+	if names.count > 1 {
+		let binds: [Pattern] = []
+		for name in names {
+			binds.push(Pattern(kind: .bind(name), start: 0 - 1, end: 0 - 1, meta_start: 0 - 1, meta_end: 0 - 1))
+		}
+		outer = Pattern(kind: .tuple(binds), start: 0 - 1, end: 0 - 1, meta_start: 0 - 1, meta_end: 0 - 1)
+	}
+	let no_annotation: TypeAnnotation? = .none
+	Decl(kind: .let_decl(outer, no_annotation, .some(match_expr)), is_public: false, start: start, end: end)
+}
+
+// One folded conditional layer (`build_conditional_expr`'s body): a
+// boolean clause becomes an if expression, a let clause a two-arm match.
+func clause_expr(consume clause: ConditionalClause, consume success: Block, consume failure: Block, start: Int, end: Int) -> Expr {
+	match clause {
+		.boolean(cond) -> {
+			let cond_arr: [Expr] = [cond]
+			return Expr(kind: .if_expr(cond_arr, success, failure), start: start, end: end)
+		},
+		.let_clause(pat, scrutinee) -> {
+			let wildcard = Pattern(kind: .wildcard, start: 0 - 1, end: 0 - 1, meta_start: 0 - 1, meta_end: 0 - 1)
+			let arms: [MatchArm] = [
+				MatchArm(pattern: pat, body: success, start: 0 - 1, end: 0 - 1),
+				MatchArm(pattern: wildcard, body: failure, start: 0 - 1, end: 0 - 1)
+			]
+			let scrutinee_arr: [Expr] = [scrutinee]
+			return Expr(kind: .match_expr(scrutinee_arr, arms), start: start, end: end)
+		}
+	}
 }
 
 func decl_is_import(decl: &Decl) -> Bool {
@@ -481,12 +851,6 @@ struct Parser {
 	mut func fail(code: String, message: String) -> Void {
 		if self.is_failed() { return () }
 		self.failed = .some(Fail(code: code, message: message))
-	}
-
-	// Grammar not yet ported: fail with a distinctive code so the
-	// differential harness names the missing construct.
-	mut func unported(what: String) -> Void {
-		self.fail(code: "talk-parser.unported", message: "not yet ported: " + what)
 	}
 
 	mut func fail_expected(kind: TokenKind) -> Void {
@@ -709,7 +1073,10 @@ struct Parser {
 				self.fail_cannot_assign()
 				return lhs
 			}
-			self.unported(what: "`as` casts")
+			let start = lhs.start
+			let annotation = self.type_annotation()
+			if self.is_failed() { return dummy_expr() }
+			return Expr(kind: .as_cast([lhs], annotation), start: start, end: self.span_end())
 		}
 		lhs
 	}
@@ -729,8 +1096,68 @@ struct Parser {
 		if k == .keyword_func { return self.func_expr_prefix() }
 		if k == .attribute { return self.attribute_prefix() }
 		if k == .bound_var { return self.bound_var_expr() }
-		self.unported(what: "expression prefix for " + describe_kind(kind: k))
+		if k == .effect_name { return self.effect_callee() }
+		if k == .keyword_unreachable { return self.unreachable_prefix() }
+		if k == .hash { return self.macro_call() }
+		// Unreachable while has_prefix stays in sync with the arms above;
+		// fail like the caller's gate if they ever drift.
+		self.advance()
+		self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected an expression, got " + describe_kind(kind: k))
 		dummy_expr()
+	}
+
+	mut func unreachable_prefix() -> Expr {
+		let tok = self.current()
+		self.advance()
+		Expr(kind: .unreachable_expr, start: tok.start, end: self.span_end())
+	}
+
+	// `#name(args)`.
+	mut func macro_call() -> Expr {
+		let start_tok = self.current()
+		self.consume(kind: .hash)
+		let name = self.identifier()
+		if self.is_failed() { return dummy_expr() }
+		self.consume(kind: .left_paren)
+		if self.is_failed() { return dummy_expr() }
+		let args: [Expr] = []
+		loop self.did_match(kind: .right_paren) == false {
+			if self.is_failed() { return dummy_expr() }
+			args.push(self.require_expr(e: self.expr_with_precedence(prec: prec_assignment)))
+			if self.is_failed() { return dummy_expr() }
+			if self.did_match(kind: .right_paren) { break }
+			self.consume(kind: .comma)
+			if self.is_failed() { return dummy_expr() }
+		}
+		Expr(kind: .macro_call(name, args), start: start_tok.start, end: self.span_end())
+	}
+
+	// `'effect(args)`: an effect call. The node's span starts at the
+	// name (the token's span excludes the sigil).
+	mut func effect_callee() -> Expr {
+		let tok = self.current()
+		self.advance()
+		let name = self.lexeme(token: tok)
+		let type_args: [GenericArg] = []
+		if self.peek_is(kind: .less) {
+			self.advance()
+			type_args = self.generic_args_list()
+			if self.is_failed() { return dummy_expr() }
+		}
+		self.consume(kind: .left_paren)
+		if self.is_failed() { return dummy_expr() }
+		let args: [CallArg] = []
+		if self.did_match(kind: .right_paren) {
+			// Empty argument list.
+		} else {
+			if self.at_delimiter_recovery_boundary() {
+				self.record_expected(kind: .right_paren)
+			} else {
+				args = self.arguments()
+				self.consume_or_recover_closer_after_newline(kind: .right_paren)
+			}
+		}
+		Expr(kind: .call_effect(name, type_args, args), start: tok.start, end: self.span_end())
 	}
 
 	// A macro-template binder (`$x`): a variable whose name keeps the
@@ -745,10 +1172,27 @@ struct Parser {
 	mut func infix(can_assign: Bool, lhs: Expr) -> Expr {
 		let k = self.current().kind
 		if k == .dot { return self.member_infix(can_assign: can_assign, lhs: lhs) }
-		if k == .bang { self.unported(what: "postfix force-unwrap"); return lhs }
-		if k == .question_mark { self.unported(what: "optional propagation"); return lhs }
+		if k == .bang { return self.force_unwrap(lhs: lhs) }
+		if k == .question_mark { return self.propagate(lhs: lhs) }
 		if k == .left_bracket { return self.subscript(can_assign: can_assign, lhs: lhs) }
 		self.binary(lhs: lhs)
+	}
+
+	// Postfix `!`: the hidden failure expression starts as `unreachable`
+	// spanning the bang; desugaring sends it to 'panic.
+	mut func force_unwrap(lhs: Expr) -> Expr {
+		let start = lhs.start
+		let bang = self.current()
+		self.advance()
+		let failure = Expr(kind: .unreachable_expr, start: bang.start, end: bang.end)
+		Expr(kind: .force_unwrap([lhs, failure]), start: start, end: self.span_end())
+	}
+
+	// Postfix `?` early propagation.
+	mut func propagate(lhs: Expr) -> Expr {
+		let start = lhs.start
+		self.advance()
+		Expr(kind: .propagate([lhs]), start: start, end: self.span_end())
 	}
 
 	mut func literal() -> Expr {
@@ -855,8 +1299,29 @@ struct Parser {
 		}
 		if cur.kind == .float_number {
 			// `x.0.1` lexes `0.1` as one float; the reference splits it
-			// into two positional accesses.
-			self.unported(what: "float-lexed positional member chains")
+			// into two positional accesses, both spanning the chain.
+			self.advance()
+			let text = self.lexeme(token: cur)
+			let bytes = text.utf8()
+			let n = bytes.count()
+			let dot_index = -1
+			let j = 0
+			loop j < n {
+				if bytes.at(index: j)._toInt() == 46 { dot_index = j; break } // "."
+				j = j + 1
+			}
+			if dot_index > 0 {
+				let first = parse_decimal(text: self.slice_text(start: cur.start, end: cur.start + dot_index))
+				let second = parse_decimal(text: self.slice_text(start: cur.start + dot_index + 1, end: cur.end))
+				if let .some(first_value) = first {
+					if let .some(second_value) = second {
+						let inner = Expr(kind: .member(.positional(first_value), [lhs]), start: start, end: self.span_end())
+						let outer = Expr(kind: .member(.positional(second_value), [inner]), start: start, end: self.span_end())
+						return self.member_postfix(member: outer, can_assign: can_assign)
+					}
+				}
+			}
+			self.fail(code: "parser.bad-label", message: "Unable to parse label: " + text)
 			return dummy_expr()
 		}
 		self.record_expected_identifier()
@@ -1036,43 +1501,34 @@ struct Parser {
 	// two-arm match with synthesized arms. Multi-clause chains duplicate
 	// the else block in the reference; the port defers them until the
 	// AST grows a deep-copy walk.
+	// Clauses fold right-to-left into nested conditionals; only the
+	// outermost carries source spans. Every inner layer duplicates the
+	// alternative (the reference deep-copies it with freshened ids).
 	mut func build_conditional_expr(consume clauses: [ConditionalClause], consume body: Block, consume alt: Block, start: Int, end: Int) -> Expr {
-		if clauses.count > 1 {
-			self.unported(what: "multi-clause `if` conditions")
-			return dummy_expr()
-		}
-		if let .some(clause) = clauses.pop() {
-			match clause {
-				.boolean(cond) -> {
-					let cond_arr: [Expr] = [cond]
-					Expr(kind: .if_expr(cond_arr, body, alt), start: start, end: end)
-				},
-				.let_clause(pat, scrutinee) -> {
-					let wildcard = Pattern(kind: .wildcard, start: 0 - 1, end: 0 - 1, meta_start: 0 - 1, meta_end: 0 - 1)
-					let arms: [MatchArm] = [
-						MatchArm(pattern: pat, body: body, start: 0 - 1, end: 0 - 1),
-						MatchArm(pattern: wildcard, body: alt, start: 0 - 1, end: 0 - 1)
-					]
-					let scrutinee_arr: [Expr] = [scrutinee]
-					Expr(kind: .match_expr(scrutinee_arr, arms), start: start, end: end)
+		let success = body
+		let result = dummy_expr()
+		loop true {
+			let popped = clauses.pop()
+			if let .some(clause) = popped {
+				if clauses.count == 0 {
+					result = clause_expr(clause: clause, success: success, failure: alt, start: start, end: end)
+					break
 				}
+				let failure = copy_block(block: alt)
+				let e = clause_expr(clause: clause, success: success, failure: failure, start: 0 - 1, end: 0 - 1)
+				let wrapped: [Item] = [.expr_item(e)]
+				success = synthesized_block(body: wrapped)
+			} else {
+				break
 			}
-		} else {
-			dummy_expr()
 		}
+		result
 	}
 
 	// Boolean `if` chains fold right-to-left into nested statements; only
 	// the outermost carries source spans (the reference synthesizes the
-	// inner chain). Multi-condition chains with an else duplicate it in
-	// the reference; deferred with the deep-copy walk.
+	// inner chain), and each inner layer duplicates the else block.
 	mut func build_boolean_statement(consume clauses: [ConditionalClause], consume body: Block, consume alt: Block?, start: Int, end: Int) -> Stmt {
-		if clauses.count > 1 {
-			if let .some(_) = alt {
-				self.unported(what: "multi-condition `if` statements with `else`")
-				return dummy_stmt()
-			}
-		}
 		let inner = body
 		let outer_alt = alt
 		let result = dummy_stmt()
@@ -1088,8 +1544,8 @@ struct Parser {
 					result = Stmt(kind: .if_stmt(cond, inner, outer_alt), start: start, end: end)
 					break
 				}
-				let no_alt: Block? = .none
-				let s = Stmt(kind: .if_stmt(cond, inner, no_alt), start: 0 - 1, end: 0 - 1)
+				let failure = copy_optional_block(block: outer_alt)
+				let s = Stmt(kind: .if_stmt(cond, inner, failure), start: 0 - 1, end: 0 - 1)
 				let wrapped: [Item] = [.stmt_item(s)]
 				inner = synthesized_block(body: wrapped)
 			} else {
@@ -1291,8 +1747,7 @@ struct Parser {
 		let start_tok = self.current()
 		self.consume(kind: .left_brace)
 		if self.peek_is_record_literal() {
-			self.unported(what: "record literals")
-			return dummy_expr()
+			return self.record_literal_body(start_tok: start_tok)
 		}
 		let inner = self.block(context: .plain, consumes_left_brace: false)
 		Expr(kind: .block(inner), start: start_tok.start, end: self.span_end())
@@ -1301,11 +1756,52 @@ struct Parser {
 	mut func peek_is_record_literal() -> Bool {
 		self.skip_newlines()
 		let cur = self.current()
-		// The reference also treats `...` spread as a record head; the
-		// Talk lexer has no `...` token (nothing in the corpus produces
-		// one), so that check joins with record-literal support.
+		if cur.kind == .dot_dot_dot { return true }
 		if cur.kind == .identifier { return self.next_kind() == .colon }
 		false
+	}
+
+	// `{ label: value, ...spread }` with the `{` already consumed (the
+	// reference `record_literal_body`). A spread must close the record.
+	mut func record_literal_body(start_tok: Token) -> Expr {
+		let fields: [RecordField] = []
+		let spread: [Expr] = []
+		loop true {
+			if self.did_match(kind: .right_brace) { break }
+			self.skip_newlines()
+			if self.at_delimiter_recovery_boundary() {
+				self.record_expected(kind: .right_brace)
+				break
+			}
+			if self.peek_is(kind: .dot_dot_dot) {
+				self.advance()
+				spread.push(self.require_expr(e: self.expr_with_precedence(prec: prec_assignment)))
+				if self.is_failed() { return dummy_expr() }
+				self.consume_or_recover_closer_after_newline(kind: .right_brace)
+				break
+			}
+			let field_tok = self.current()
+			let label = self.identifier()
+			if self.is_failed() { return dummy_expr() }
+			self.consume(kind: .colon)
+			if self.is_failed() { return dummy_expr() }
+			let value = self.require_expr(e: self.expr_with_precedence(prec: prec_assignment))
+			if self.is_failed() { return dummy_expr() }
+			fields.push(RecordField(label: label, value: value, start: field_tok.start, end: self.span_end()))
+			self.skip_newlines()
+			if self.peek_is(kind: .right_brace) {
+				let _ = self.did_match(kind: .comma)
+			} else {
+				if self.at_delimiter_recovery_boundary() || self.prev_was_newline() {
+					self.record_expected(kind: .right_brace)
+					break
+				}
+				self.consume(kind: .comma)
+				if self.is_failed() { return dummy_expr() }
+			}
+			self.skip_newlines()
+		}
+		Expr(kind: .record_literal(fields, spread), start: start_tok.start, end: self.span_end())
 	}
 
 	// The shared block body (the reference `block`). With
@@ -1377,15 +1873,15 @@ struct Parser {
 				return none
 			}
 			let param_start = self.current().start
+			let annotation: TypeAnnotation? = .none
 			if self.did_match(kind: .colon) {
 				// A real argument list from here on: annotation errors
 				// propagate rather than rolling back.
-				self.unported(what: "block parameter type annotations")
-				return params
+				annotation = .some(self.type_annotation())
+				if self.is_failed() { return params }
 			}
 			let no_label: ParamLabel? = .none
-			let no_annotation: TypeAnnotation? = .none
-			params.push(Parameter(label: no_label, name: name, name_start: name_tok.start, name_end: name_tok.end, mode: mode, annotation: no_annotation, start: param_start, end: self.span_end()))
+			params.push(Parameter(label: no_label, name: name, name_start: name_tok.start, name_end: name_tok.end, mode: mode, annotation: annotation, start: param_start, end: self.span_end()))
 			if self.did_match(kind: .comma) {
 				// Next parameter.
 			} else {
@@ -1434,6 +1930,13 @@ struct Parser {
 		false
 	}
 
+	// The reference `closure_block`: a plain block that synthesizes `$N`
+	// positional parameters when its body references bound variables but
+	// declares no argument list.
+	mut func closure_block() -> Block {
+		prepare_closure_block(block: self.block(context: .plain, consumes_left_brace: true))
+	}
+
 	// Postfix call forms off a just-parsed callee. Returns the (possibly
 	// extended) expression and whether a call consumed it — the caller's
 	// assignment check only runs when nothing did.
@@ -1441,29 +1944,89 @@ struct Parser {
 		let cur = self.current()
 		if cur.kind == .less && self.pos > 0 {
 			if self.token_at(index: self.pos - 1).end == cur.start {
-				self.unported(what: "generic call arguments")
-				return (callee, false)
+				self.advance()
+				let type_args = self.generic_args_list()
+				if self.is_failed() { return (dummy_expr(), true) }
+				if self.did_match(kind: .left_paren) {
+					self.skip_newlines()
+					return (self.call(callee: callee, type_args: type_args, can_assign: can_assign), true)
+				}
+				// `Path<Args>` without a call: a specialized type
+				// reference — members chain off it or it stands alone
+				// (typing rejects bare type values with a real
+				// diagnostic). The args land on the segment they follow.
+				match flatten_type_path(expr: callee) {
+					.path(path, segments) -> {
+						if let .some(last) = segments.pop() {
+							for arg in consume type_args {
+								last.push(arg)
+							}
+							segments.push(last)
+						}
+						return (Expr(kind: .constructor(path, segments), start: callee.start, end: self.span_end()), true)
+					},
+					.not_a_path -> {
+						self.consume(kind: .left_paren)
+						if self.is_failed() { return (dummy_expr(), true) }
+						self.skip_newlines()
+						return (self.call(callee: callee, type_args: type_args, can_assign: can_assign), true)
+					}
+				}
 			}
 		}
 		if self.did_match(kind: .left_paren) {
 			self.skip_newlines()
-			return (self.call(callee: callee, can_assign: can_assign), true)
+			let no_type_args: [GenericArg] = []
+			return (self.call(callee: callee, type_args: no_type_args, can_assign: can_assign), true)
 		}
+		// Call parens may be omitted before a leading string argument:
+		// `foo "sup"` and `foo "sup" { … }`.
 		if self.peek_is(kind: .string_literal) && self.prev_was_newline() == false {
-			self.unported(what: "paren-less string calls")
-			return (callee, false)
+			return (self.call_with_leading_string_arg(callee: callee, can_assign: can_assign), true)
 		}
 		// Trailing-block calls only where the context allows them: inside
 		// a control-flow header the `{` opens the construct's body.
 		if self.allows_trailing_blocks() && self.peek_is(kind: .left_brace) {
-			self.unported(what: "trailing-block calls")
-			return (callee, false)
+			return (self.call_with_trailing_block_only(callee: callee), true)
 		}
 		(callee, false)
 	}
 
+	// A call with only a trailing block (no parens): `foo { block }`.
+	mut func call_with_trailing_block_only(callee: Expr) -> Expr {
+		let start = callee.start
+		let no_type_args: [GenericArg] = []
+		let no_args: [CallArg] = []
+		let trailing = self.closure_block()
+		Expr(kind: .call([callee], no_type_args, no_args, [trailing]), start: start, end: self.span_end())
+	}
+
+	// A call whose parens are omitted before a leading string argument
+	// (ADR 0041: the paren-less form omits that argument's label by
+	// syntax, like a trailing block omits the final one).
+	mut func call_with_leading_string_arg(callee: Expr, can_assign: Bool) -> Expr {
+		let start = callee.start
+		let args: [CallArg] = [self.argument()]
+		loop self.did_match(kind: .comma) {
+			if self.is_failed() { return dummy_expr() }
+			args.push(self.argument())
+		}
+		if self.is_failed() { return dummy_expr() }
+		let blocks: [Block] = []
+		if self.allows_trailing_blocks() && self.peek_is(kind: .left_brace) {
+			blocks.push(self.closure_block())
+		}
+		let no_type_args: [GenericArg] = []
+		let call_expr = Expr(kind: .call([callee], no_type_args, args, blocks), start: start, end: self.span_end())
+		if self.peek_is(kind: .left_paren) {
+			let (chained, _) = self.check_call(callee: call_expr, can_assign: can_assign)
+			return chained
+		}
+		call_expr
+	}
+
 	// The opening paren is already consumed.
-	mut func call(callee: Expr, can_assign: Bool) -> Expr {
+	mut func call(callee: Expr, type_args: [GenericArg], can_assign: Bool) -> Expr {
 		let start = callee.start
 		self.skip_newlines()
 		let args: [CallArg] = []
@@ -1477,10 +2040,38 @@ struct Parser {
 				self.consume_or_recover_closer_after_newline(kind: .right_paren)
 			}
 		}
+		let blocks: [Block] = []
 		if self.allows_trailing_blocks() && self.peek_is(kind: .left_brace) {
-			self.unported(what: "trailing-block calls")
+			blocks.push(self.closure_block())
+		} else {
+			// The reference pops a final parenthesized `{ … }` argument
+			// (unlabeled) into the trailing-block slot.
+			if let .some(arg) = args.pop() {
+				let label = arg.label
+				let mode = arg.mode
+				let value = arg.value
+				let arg_start = arg.start
+				let arg_end = arg.end
+				let is_plain = true
+				if let .some(_) = label { is_plain = false }
+				if let .some(_) = mode { is_plain = false }
+				if is_plain {
+					let v_start = value.start
+					let v_end = value.end
+					match value.kind {
+						.block(inner) -> blocks.push(prepare_closure_block(block: inner)),
+						other_kind -> {
+							let no_label: String? = .none
+							let no_mode: ArgMode? = .none
+							args.push(CallArg(label: no_label, mode: no_mode, value: Expr(kind: other_kind, start: v_start, end: v_end), start: arg_start, end: arg_end))
+						}
+					}
+				} else {
+					args.push(CallArg(label: label, mode: mode, value: value, start: arg_start, end: arg_end))
+				}
+			}
 		}
-		let call_expr = Expr(kind: .call([callee], args), start: start, end: self.span_end())
+		let call_expr = Expr(kind: .call([callee], type_args, args, blocks), start: start, end: self.span_end())
 		if self.peek_is(kind: .left_paren) {
 			let (chained, _) = self.check_call(callee: call_expr, can_assign: can_assign)
 			return chained
@@ -1507,29 +2098,24 @@ struct Parser {
 
 	mut func argument() -> CallArg {
 		let start_tok = self.current()
+		// ADR 0041: `_:` parses as a written label (never valid —
+		// semantic analysis reports it and the LSP can remove it).
 		if start_tok.kind == .underscore && self.next_kind() == .colon {
-			self.unported(what: "`_:` argument labels")
-			return CallArg(label: .none, value: dummy_expr(), start: 0, end: 0)
+			self.advance()
+			self.consume(kind: .colon)
+			let mode = self.arg_mode()
+			let value = self.require_expr(e: self.expr_with_precedence(prec: prec_assignment))
+			let underscore_label: String? = .some("_")
+			return CallArg(label: underscore_label, mode: mode, value: value, start: start_tok.start, end: self.span_end())
 		}
 		let label: String? = .none
 		if start_tok.kind == .identifier && self.next_kind() == .colon {
 			label = .some(self.identifier())
 			self.consume(kind: .colon)
 		}
-		if self.peek_is(kind: .keyword_mut) {
-			self.unported(what: "argument ownership modes")
-			return CallArg(label: label, value: dummy_expr(), start: 0, end: 0)
-		}
-		let marker = self.current()
-		if marker.kind == .identifier && self.next_kind() == .identifier {
-			let text = self.lexeme(token: marker)
-			if text == "consume" || text == "copy" || text == "borrow" {
-				self.unported(what: "argument ownership modes")
-				return CallArg(label: label, value: dummy_expr(), start: 0, end: 0)
-			}
-		}
+		let mode = self.arg_mode()
 		let value = self.require_expr(e: self.expr_with_precedence(prec: prec_assignment))
-		CallArg(label: label, value: value, start: start_tok.start, end: self.span_end())
+		CallArg(label: label, mode: mode, value: value, start: start_tok.start, end: self.span_end())
 	}
 
 	// MARK: Patterns
@@ -1568,7 +2154,8 @@ struct Parser {
 			if self.is_failed() { return dummy_pattern() }
 			let (fields, labels) = self.pattern_fields()
 			if self.is_failed() { return dummy_pattern() }
-			kind = .variant(.none, variant_name, fields, labels)
+			let no_generics: [[GenericArg]] = []
+			kind = .variant(.none, no_generics, variant_name, fields, labels)
 		} else if k == .left_paren {
 			self.advance()
 			let items: [Pattern] = []
@@ -1601,35 +2188,62 @@ struct Parser {
 
 	// A pattern opening with a name: a dotted path may end in a struct
 	// pattern or a variant; a bare single name binds.
+	// A dotted head may name a nested type, and every segment may take
+	// adjacent generic args (`Res<Int>.A<Bool>.pair`, `Outer<Int>.Inner
+	// { … }`): collect the whole path, then decide struct vs variant by
+	// what follows.
 	mut func named_pattern(start_tok: Token) -> PatternKind {
 		let head = self.lexeme(token: start_tok)
 		self.advance()
 		let segments = [head]
+		let no_args: [GenericArg] = []
+		let segment_generics: [[GenericArg]] = [no_args]
 		loop true {
 			if self.peek_adjacent_less() {
-				self.unported(what: "generic arguments in patterns")
-				return .wildcard
+				self.consume(kind: .less)
+				let args = self.generic_args_list()
+				if self.is_failed() { return .wildcard }
+				let _ = segment_generics.pop()
+				segment_generics.push(args)
 			}
 			if self.did_match(kind: .dot) {
 				segments.push(self.identifier())
 				if self.is_failed() { return .wildcard }
+				let empty: [GenericArg] = []
+				segment_generics.push(empty)
 			} else {
 				break
 			}
 		}
 		if self.peek_is(kind: .left_brace) {
 			self.consume(kind: .left_brace)
-			return self.struct_pattern_body(name: join_path(segments: segments))
+			return self.struct_pattern_body(name: join_path(segments: segments), generics: segment_generics)
 		}
 		if segments.count > 1 {
 			let variant_name = ""
 			if let .some(last) = segments.pop() {
 				variant_name = last
 			}
+			// The final segment is the variant, which takes no generic
+			// args of its own.
+			if let .some(variant_generics) = segment_generics.pop() {
+				if variant_generics.count > 0 {
+					self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected no generic arguments on a variant pattern, got " + describe_kind(kind: self.current().kind))
+					return .wildcard
+				}
+			}
 			let path = join_path(segments: segments)
 			let (fields, labels) = self.pattern_fields()
 			if self.is_failed() { return .wildcard }
-			return .variant(.some(path), variant_name, fields, labels)
+			return .variant(.some(path), segment_generics, variant_name, fields, labels)
+		}
+		let has_generics = false
+		if segment_generics.count > 0 {
+			if segment_generics[0].count > 0 { has_generics = true }
+		}
+		if has_generics {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a member or struct pattern after generic arguments, got " + describe_kind(kind: self.current().kind))
+			return .wildcard
 		}
 		let name = ""
 		if let .some(only) = segments.pop() {
@@ -1662,7 +2276,7 @@ struct Parser {
 	}
 
 	// The opening brace is already consumed.
-	mut func struct_pattern_body(name: String) -> PatternKind {
+	mut func struct_pattern_body(name: String, consume generics: [[GenericArg]]) -> PatternKind {
 		self.skip_newlines()
 		let fields: [Pattern] = []
 		let field_names: [String] = []
@@ -1694,7 +2308,7 @@ struct Parser {
 			self.did_match(kind: .comma)
 			self.skip_newlines()
 		}
-		.struct_pattern(name, fields, field_names, rest)
+		.struct_pattern(name, generics, fields, field_names, rest)
 	}
 
 	// The opening brace is already consumed.
@@ -1755,7 +2369,15 @@ struct Parser {
 			rhs = .some(self.require_expr(e: self.expr()))
 		}
 		if self.did_match(kind: .keyword_else) {
-			self.unported(what: "let-else")
+			let else_body = self.block(context: .if_body, consumes_left_brace: true)
+			return desugar_let_else(pattern: lhs, annotation: annotation, rhs: rhs, else_body: .some(else_body), start: start_tok.start, end: self.span_end())
+		}
+		// An or-pattern let takes the same desugaring road (a single-arm
+		// match, no else): alternatives bind the same names, and a miss
+		// is the match machinery's miss.
+		if pattern_contains_or(pattern: lhs) {
+			let no_else: Block? = .none
+			return desugar_let_else(pattern: lhs, annotation: annotation, rhs: rhs, else_body: no_else, start: start_tok.start, end: self.span_end())
 		}
 		Decl(kind: .let_decl(lhs, annotation, rhs), is_public: false, start: start_tok.start, end: self.span_end())
 	}
@@ -1799,12 +2421,16 @@ struct Parser {
 		if self.did_match(kind: .left_bracket) {
 			let element = self.type_annotation()
 			if self.is_failed() { return dummy_type() }
+			let name = "Array"
+			let generics: [GenericArg] = [.type_arg(element)]
 			if self.did_match(kind: .semicolon) {
-				self.unported(what: "`[T; N]` inline-array types")
-				return dummy_type()
+				// `[T; N]`: an exact-size inline array.
+				name = "InlineArray"
+				generics.push(self.generic_argument())
+				if self.is_failed() { return dummy_type() }
 			}
 			self.consume(kind: .right_bracket)
-			let base = TypeAnnotation(kind: .nominal("Array", [.type_arg(element)]), start: start_tok.start, end: self.span_end())
+			let base = TypeAnnotation(kind: .nominal(name, generics), start: start_tok.start, end: self.span_end())
 			return self.nominal_type_path(base: base)
 		}
 		if self.did_match(kind: .left_brace) {
@@ -2031,22 +2657,104 @@ struct Parser {
 		TypeAnnotation(kind: .any_type([head], bindings), start: start, end: self.span_end())
 	}
 
-	// One generic argument (ADR 0035). Static-value arguments are still
-	// unported; anything type-shaped parses as a type annotation.
+	// One generic argument or static-predicate operand (ADR 0035). A
+	// literal or arithmetic form is a static expression; anything else
+	// parses as a type annotation — and if arithmetic FOLLOWS it, the
+	// annotation becomes the name-like left operand of a static
+	// expression (`N + 1`).
 	mut func generic_argument() -> GenericArg {
 		if self.starts_static_literal() || self.peek_is(kind: .dot) {
-			self.unported(what: "static generic arguments")
-			return .type_arg(dummy_type())
+			return .static_arg(self.static_expr())
 		}
 		if self.peek_is(kind: .left_paren) {
 			return self.parenthesized_generic_argument()
 		}
 		let annotation = self.type_annotation()
+		if self.is_failed() { return .type_arg(annotation) }
 		if self.peek_is(kind: .plus) || self.peek_is(kind: .minus) || self.peek_is(kind: .star) {
-			self.unported(what: "static generic arguments")
-			return .type_arg(dummy_type())
+			let lhs = self.static_path_node(annotation: annotation)
+			return .static_arg(self.static_expr_from(lhs: lhs))
 		}
 		.type_arg(annotation)
+	}
+
+	// The static index language (ADR 0035 §3): `+`/`-` over terms, terms
+	// are `*` over primaries.
+	mut func static_expr() -> StaticExpr {
+		let lhs = self.static_expr_term()
+		if self.is_failed() { return dummy_static_expr() }
+		self.static_expr_from(lhs: lhs)
+	}
+
+	// Continue `*`, then `+`/`-` chains after an already-parsed left
+	// operand (`N * 2 + 1` arrives here with `N` alone parsed).
+	mut func static_expr_from(consume lhs: StaticExpr) -> StaticExpr {
+		loop self.did_match(kind: .star) {
+			let rhs = self.static_expr_primary()
+			if self.is_failed() { return dummy_static_expr() }
+			lhs = static_op_node(op: .mul, lhs: lhs, rhs: rhs, end: self.span_end())
+		}
+		loop true {
+			let is_add = self.did_match(kind: .plus)
+			let is_sub = false
+			if is_add == false {
+				is_sub = self.did_match(kind: .minus)
+			}
+			if is_add == false && is_sub == false { break }
+			let rhs = self.static_expr_term()
+			if self.is_failed() { return dummy_static_expr() }
+			let op: StaticOpKind = .add
+			if is_sub { op = .sub }
+			lhs = static_op_node(op: op, lhs: lhs, rhs: rhs, end: self.span_end())
+		}
+		lhs
+	}
+
+	mut func static_expr_term() -> StaticExpr {
+		let lhs = self.static_expr_primary()
+		if self.is_failed() { return dummy_static_expr() }
+		loop self.did_match(kind: .star) {
+			let rhs = self.static_expr_primary()
+			if self.is_failed() { return dummy_static_expr() }
+			lhs = static_op_node(op: .mul, lhs: lhs, rhs: rhs, end: self.span_end())
+		}
+		lhs
+	}
+
+	mut func static_expr_primary() -> StaticExpr {
+		let cur = self.current()
+		if cur.kind == .int_number {
+			self.advance()
+			return StaticExpr(kind: .int_literal(self.lexeme(token: cur)), start: cur.start, end: self.span_end())
+		}
+		if cur.kind == .keyword_true || cur.kind == .keyword_false {
+			self.advance()
+			return StaticExpr(kind: .bool_literal(cur.kind == .keyword_true), start: cur.start, end: self.span_end())
+		}
+		if cur.kind == .dot {
+			self.advance()
+			let name = self.identifier()
+			if self.is_failed() { return dummy_static_expr() }
+			return StaticExpr(kind: .unqualified_case(name), start: cur.start, end: self.span_end())
+		}
+		// In committed static context `(` is grouping, not a tuple type.
+		if cur.kind == .left_paren {
+			self.advance()
+			let inner = self.static_expr()
+			if self.is_failed() { return dummy_static_expr() }
+			self.consume(kind: .right_paren)
+			if self.is_failed() { return dummy_static_expr() }
+			return StaticExpr(kind: .static_group([inner]), start: cur.start, end: self.span_end())
+		}
+		let annotation = self.type_annotation()
+		if self.is_failed() { return dummy_static_expr() }
+		self.static_path_node(annotation: annotation)
+	}
+
+	// Wrap an already-parsed annotation as a static Path operand.
+	mut func static_path_node(consume annotation: TypeAnnotation) -> StaticExpr {
+		let start = annotation.start
+		StaticExpr(kind: .static_path(annotation), start: start, end: self.span_end())
 	}
 
 	func starts_static_literal() -> Bool {
@@ -2054,9 +2762,9 @@ struct Parser {
 		k == .int_number || k == .keyword_true || k == .keyword_false
 	}
 
-	// `(` in generic-argument position: a parenthesized type, tuple, or
-	// function type (static groups are unported with the rest of the
-	// static language).
+	// `(` in generic-argument position: a static group (`(2 + 2)`,
+	// `(N + 1) * 2`), a parenthesized type, a tuple type, or a function
+	// type.
 	mut func parenthesized_generic_argument() -> GenericArg {
 		let start_tok = self.current()
 		self.consume(kind: .left_paren)
@@ -2069,8 +2777,15 @@ struct Parser {
 		}
 		let inner = self.generic_argument()
 		if self.is_failed() { return .type_arg(dummy_type()) }
-		let annotation = match inner {
-			.type_arg(value) -> value
+		let annotation = dummy_type()
+		match inner {
+			.static_arg(expr) -> {
+				self.consume(kind: .right_paren)
+				if self.is_failed() { return .type_arg(dummy_type()) }
+				let group = StaticExpr(kind: .static_group([expr]), start: start_tok.start, end: self.span_end())
+				return .static_arg(self.static_expr_from(lhs: group))
+			},
+			.type_arg(value) -> { annotation = value }
 		}
 		if self.did_match(kind: .comma) {
 			let modes: [TypeParamMode] = [.unadorned]
@@ -2080,8 +2795,11 @@ struct Parser {
 		}
 		self.consume(kind: .right_paren)
 		if self.peek_is(kind: .plus) || self.peek_is(kind: .minus) || self.peek_is(kind: .star) {
-			self.unported(what: "static generic arguments")
-			return .type_arg(dummy_type())
+			// `(N) * 2`: the parenthesized name was a static operand
+			// after all.
+			let path = self.static_path_node(annotation: annotation)
+			let group = StaticExpr(kind: .static_group([path]), start: start_tok.start, end: self.span_end())
+			return .static_arg(self.static_expr_from(lhs: group))
 		}
 		// `(A) -> B` (and effect rows) are single-parameter function
 		// types; a bare `(A)` is the 1-tuple spelling.
@@ -2565,12 +3283,30 @@ struct Parser {
 	}
 
 	mut func generic_param() -> GenericDecl {
-		// ADR 0035: `static N: Int` declares a static value parameter.
-		if self.peek_is(kind: .keyword_static) {
-			self.unported(what: "static generic parameters")
-			return dummy_generic_decl()
-		}
 		let start_tok = self.current()
+		// ADR 0035: `static N: Int` declares a static value parameter —
+		// the colon introduces its declared value type, not a
+		// conformance list. Static defaults (`= expr`) stay unported.
+		if self.did_match(kind: .keyword_static) {
+			let name = self.identifier()
+			if self.is_failed() { return dummy_generic_decl() }
+			if starts_uppercase(name: name) == false {
+				self.fail(code: "parser.lowercase-static-parameter", message: "Static generic parameter `" + name + "` must begin with an uppercase letter")
+				return dummy_generic_decl()
+			}
+			self.consume(kind: .colon)
+			if self.is_failed() { return dummy_generic_decl() }
+			let static_ty = self.type_annotation()
+			if self.is_failed() { return dummy_generic_decl() }
+			let default_value: GenericArg? = .none
+			if self.did_match(kind: .equals) {
+				default_value = .some(.static_arg(self.static_expr()))
+				if self.is_failed() { return dummy_generic_decl() }
+			}
+			let no_generics: [GenericDecl] = []
+			let no_conformances: [TypeAnnotation] = []
+			return GenericDecl(name: name, generics: no_generics, conformances: no_conformances, default_value: default_value, static_ty: .some(static_ty), start: start_tok.start, end: self.span_end())
+		}
 		let name = self.identifier()
 		if self.is_failed() { return dummy_generic_decl() }
 		let generics = self.generics_list()
@@ -2585,7 +3321,8 @@ struct Parser {
 			default_value = .some(.type_arg(self.type_annotation()))
 			if self.is_failed() { return dummy_generic_decl() }
 		}
-		GenericDecl(name: name, generics: generics, conformances: conformances, default_value: default_value, start: start_tok.start, end: self.span_end())
+		let no_static_ty: TypeAnnotation? = .none
+		GenericDecl(name: name, generics: generics, conformances: conformances, default_value: default_value, static_ty: no_static_ty, start: start_tok.start, end: self.span_end())
 	}
 
 	mut func conformances_list() -> [TypeAnnotation] {
@@ -2632,14 +3369,25 @@ struct Parser {
 			if self.is_failed() { return dummy_predicate() }
 			return WherePredicate(kind: .type_eq(lhs, rhs), start: start_tok.start, end: self.span_end())
 		}
-		if self.peek_is(kind: .less) || self.peek_is(kind: .less_equals) {
-			self.unported(what: "static comparison predicates")
-			return dummy_predicate()
+		if self.did_match(kind: .less) {
+			let rhs = self.generic_argument()
+			if self.is_failed() { return dummy_predicate() }
+			return WherePredicate(kind: .static_cmp(true, lhs, rhs), start: start_tok.start, end: self.span_end())
+		}
+		if self.did_match(kind: .less_equals) {
+			let rhs = self.generic_argument()
+			if self.is_failed() { return dummy_predicate() }
+			return WherePredicate(kind: .static_cmp(false, lhs, rhs), start: start_tok.start, end: self.span_end())
 		}
 		self.consume(kind: .colon)
 		if self.is_failed() { return dummy_predicate() }
-		let ty = match lhs {
-			.type_arg(t) -> t
+		let ty = dummy_type()
+		match lhs {
+			.type_arg(t) -> { ty = t },
+			.static_arg(_) -> {
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a type before `:` in a where predicate, got " + describe_kind(kind: self.current().kind))
+				return dummy_predicate()
+			}
 		}
 		let protocols: [TypeAnnotation] = [self.type_annotation()]
 		if self.is_failed() { return dummy_predicate() }
@@ -2766,13 +3514,17 @@ struct Parser {
 
 	// `@_ir { %d = instr … }`: only the `cmp` operator error path is
 	// exercised by the corpus; instruction success stays unported.
+	// `@_ir(binds…) { %d = instr … }` (the reference `inline_ir`). The
+	// node's span ends before the closing brace: the reference saves the
+	// instruction's meta, then consumes the `}`.
 	mut func inline_ir(start: Int) -> Expr {
+		let binds: [Expr] = []
 		if self.did_match(kind: .left_paren) {
 			loop true {
 				if self.did_match(kind: .right_paren) { break }
 				if self.did_match(kind: .eof) { break }
 				if self.is_failed() { return dummy_expr() }
-				let _ = self.require_expr(e: self.expr())
+				binds.push(self.require_expr(e: self.expr()))
 				if self.is_failed() { return dummy_expr() }
 				let _ = self.did_match(kind: .comma)
 			}
@@ -2780,44 +3532,115 @@ struct Parser {
 		self.consume(kind: .left_brace)
 		if self.is_failed() { return dummy_expr() }
 		let cur = self.current()
+		let dest: String? = .none
 		if cur.kind == .ir_register {
+			dest = .some(self.lexeme(token: cur))
 			self.advance()
 			self.consume(kind: .equals)
 			if self.is_failed() { return dummy_expr() }
-			let instr = self.identifier()
-			if self.is_failed() { return dummy_expr() }
-			if instr == "cmp" {
-				let _ = self.type_annotation()
-				if self.is_failed() { return dummy_expr() }
-				self.ir_value()
-				if self.is_failed() { return dummy_expr() }
-				self.skip_semicolons_and_newlines()
-				let op = self.current()
-				if op.kind == .less || op.kind == .bang_equals || op.kind == .equals_equals || op.kind == .less_equals || op.kind == .greater || op.kind == .greater_equals {
-					self.advance()
-				} else {
-					self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected one of `<`, `!=`, `==`, `<=`, `>`, `>=`, got " + describe_kind(kind: op.kind))
-					return dummy_expr()
-				}
-				self.ir_value()
-				if self.is_failed() { return dummy_expr() }
-				self.unported(what: "@_ir instruction lowering")
-				return dummy_expr()
-			}
-			self.unported(what: "@_ir `" + instr + "` instructions")
+		}
+		let instr = self.identifier()
+		if self.is_failed() { return dummy_expr() }
+		let has_dest = false
+		if let .some(_) = dest { has_dest = true }
+		// (has type operand, value-operand count) per instruction; the
+		// dest and dest-less tables are disjoint, like the reference's
+		// two match blocks.
+		let has_ty = false
+		let value_count = -1
+		if has_dest {
+			if instr == "cmp" { has_ty = true; value_count = 0 }
+			if instr == "add" || instr == "sub" || instr == "mul" || instr == "div" || instr == "and" || instr == "or" || instr == "xor" || instr == "shl" || instr == "shr" { has_ty = true; value_count = 2 }
+			if instr == "not" || instr == "alloc" || instr == "load" || instr == "take" { has_ty = true; value_count = 1 }
+			if instr == "gep" || instr == "inline_get" { has_ty = true; value_count = 2 }
+			if instr == "io" { value_count = 4 }
+			if instr == "trunc" || instr == "is_unique" || instr == "itof" || instr == "btoi" || instr == "itob" { value_count = 1 }
+		} else {
+			if instr == "store" || instr == "swap" { has_ty = true; value_count = 2 }
+			if instr == "retain" { has_ty = true; value_count = 1 }
+			if instr == "copy" { has_ty = true; value_count = 3 }
+			if instr == "free" { value_count = 1 }
+		}
+		if value_count < 0 {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected supported @_ir instr, got " + instr)
 			return dummy_expr()
 		}
-		self.unported(what: "@_ir blocks without a destination register")
-		dummy_expr()
+		let ty: TypeAnnotation? = .none
+		if has_ty {
+			ty = .some(self.type_annotation())
+			if self.is_failed() { return dummy_expr() }
+		}
+		let op: TokenKind? = .none
+		let values: [IRValue] = []
+		if instr == "cmp" {
+			values.push(self.ir_value())
+			if self.is_failed() { return dummy_expr() }
+			self.skip_semicolons_and_newlines()
+			let op_tok = self.current()
+			if op_tok.kind == .less || op_tok.kind == .bang_equals || op_tok.kind == .equals_equals || op_tok.kind == .less_equals || op_tok.kind == .greater || op_tok.kind == .greater_equals {
+				self.advance()
+				op = .some(op_tok.kind)
+			} else {
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected one of `<`, `!=`, `==`, `<=`, `>`, `>=`, got " + describe_kind(kind: op_tok.kind))
+				return dummy_expr()
+			}
+			values.push(self.ir_value())
+			if self.is_failed() { return dummy_expr() }
+		} else {
+			let i = 0
+			loop i < value_count {
+				values.push(self.ir_value())
+				if self.is_failed() { return dummy_expr() }
+				i = i + 1
+			}
+		}
+		let end = self.span_end()
+		self.consume(kind: .right_brace)
+		if self.is_failed() { return dummy_expr() }
+		let instruction = IRInstruction(name: instr, dest: dest, ty: ty, values: values, op: op)
+		Expr(kind: .inline_ir(binds, instruction), start: start, end: end)
 	}
 
-	mut func ir_value() -> Void {
-		let k = self.current().kind
-		if k == .ir_register || k == .int_number || k == .float_number || k == .keyword_true || k == .keyword_false || k == .bound_var {
-			self.advance()
-			return ()
+	mut func ir_value() -> IRValue {
+		let cur = self.current()
+		let k = cur.kind
+		if k == .ir_register {
+			if let .some(index) = parse_decimal(text: self.lexeme(token: cur)) {
+				self.advance()
+				return .reg(index)
+			}
 		}
-		self.unported(what: "IR value forms")
+		if k == .int_number {
+			if let .some(value) = parse_decimal(text: self.lexeme(token: cur)) {
+				self.advance()
+				return .int_value(value)
+			}
+		}
+		if k == .float_number {
+			let text = self.lexeme(token: cur)
+			self.advance()
+			return .float_value(text)
+		}
+		if k == .keyword_true {
+			self.advance()
+			return .bool_value(true)
+		}
+		if k == .keyword_false {
+			self.advance()
+			return .bool_value(false)
+		}
+		if k == .bound_var {
+			if let .some(index) = parse_decimal(text: self.lexeme(token: cur)) {
+				self.advance()
+				return .bind(index)
+			}
+		}
+		if k == .identifier && self.lexeme(token: cur) == "void" {
+			self.advance()
+			return .void_value
+		}
+		self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected IR, got " + describe_kind(kind: k))
+		return .void_value
 	}
 
 	// MARK: Roots
@@ -3000,6 +3823,23 @@ struct Parser {
 		self.reject_pub(what: "a local declaration")
 	}
 
+	// `@handle 'effect { body }`: the span starts at the attribute name
+	// (the token's span excludes the sigil).
+	mut func effect_handler() -> Stmt {
+		let start_tok = self.current()
+		self.advance()
+		let name_tok = self.current()
+		if name_tok.kind == .effect_name {
+			self.advance()
+		} else {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected effect name (must start with '), got " + describe_kind(kind: name_tok.kind))
+			return dummy_stmt()
+		}
+		let body = self.block(context: .plain, consumes_left_brace: true)
+		if self.is_failed() { return dummy_stmt() }
+		Stmt(kind: .handle_stmt(self.lexeme(token: name_tok), body), start: start_tok.start, end: self.span_end())
+	}
+
 	mut func stmt() -> Stmt {
 		self.skip_semicolons_and_newlines()
 		let cur = self.current()
@@ -3015,8 +3855,7 @@ struct Parser {
 			return Stmt(kind: .break_stmt, start: start_tok.start, end: self.span_end())
 		}
 		if k == .attribute && self.lexeme(token: cur) == "handle" {
-			self.unported(what: "effect handlers")
-			return dummy_stmt()
+			return self.effect_handler()
 		}
 		if k == .effect_name && self.lexeme(token: cur) == "continue" {
 			return self.resume_stmt()

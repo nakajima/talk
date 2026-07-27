@@ -1,0 +1,1 @@
+let doubled = items.map { x: Int in x * 2 }

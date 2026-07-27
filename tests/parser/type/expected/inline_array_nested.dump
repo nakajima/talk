@@ -1,0 +1,17 @@
+tokens:
+  LeftBracket @0..1 "["
+  LeftBracket @1..2 "["
+  Identifier @2..5 "Int"
+  Semicolon @5..6 ";"
+  Identifier @7..8 "N"
+  RightBracket @8..9 "]"
+  Semicolon @9..10 ";"
+  Identifier @11..12 "M"
+  RightBracket @12..13 "]"
+  Newline @13..14
+tree:
+  TypeAnnotation::Nominal @0..13 "[[Int; N]; M]"
+    TypeAnnotation::Nominal @1..9 "[Int; N]"
+      TypeAnnotation::Nominal @2..5 "Int"
+      TypeAnnotation::Nominal @7..8 "N"
+    TypeAnnotation::Nominal @11..12 "M"

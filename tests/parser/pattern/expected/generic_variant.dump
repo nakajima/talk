@@ -1,0 +1,15 @@
+tokens:
+  Identifier @0..3 "Opt"
+  Less @3..4 "<"
+  Identifier @4..7 "Int"
+  Greater @7..8 ">"
+  Dot @8..9 "."
+  Identifier @9..13 "some"
+  LeftParen @13..14 "("
+  Identifier @14..15 "x"
+  RightParen @15..16 ")"
+  Newline @16..17
+tree:
+  Pattern::Variant @0..16 "Opt<Int>.some(x)"
+    TypeAnnotation::Nominal @4..7 "Int"
+    Pattern::Bind @14..15 "x"

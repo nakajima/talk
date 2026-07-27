@@ -1,0 +1,9 @@
+tokens:
+  Identifier @0..5 "print"
+  StringLiteral @6..13 "\"hello\""
+  Newline @13..14
+tree:
+  Expr::Call @0..13 "print \"hello\""
+    Expr::Variable @0..5 "print"
+    CallArg @6..13 "\"hello\""
+      Expr::LiteralString @6..13 "\"hello\""

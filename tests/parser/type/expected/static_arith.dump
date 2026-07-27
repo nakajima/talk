@@ -1,0 +1,18 @@
+tokens:
+  Identifier @0..6 "Matrix"
+  Less @6..7 "<"
+  Identifier @7..8 "N"
+  Plus @9..10 "+"
+  Int @11..12 "1"
+  Comma @12..13 ","
+  LeftParen @14..15 "("
+  Identifier @15..16 "M"
+  RightParen @16..17 ")"
+  Star @18..19 "*"
+  Int @20..21 "2"
+  Greater @21..22 ">"
+  Newline @22..23
+tree:
+  TypeAnnotation::Nominal @0..22 "Matrix<N + 1, (M) * 2>"
+    TypeAnnotation::Nominal @7..8 "N"
+    TypeAnnotation::Nominal @15..16 "M"

@@ -1,0 +1,42 @@
+tokens:
+  Let @0..3 "let"
+  Dot @4..5 "."
+  Identifier @5..9 "some"
+  LeftParen @9..10 "("
+  Identifier @10..11 "y"
+  RightParen @11..12 ")"
+  Colon @12..13 ":"
+  Identifier @14..17 "Int"
+  QuestionMark @17..18 "?"
+  Equals @19..20 "="
+  Identifier @21..25 "find"
+  LeftParen @25..26 "("
+  Int @26..27 "2"
+  RightParen @27..28 ")"
+  Else @29..33 "else"
+  LeftBrace @34..35 "{"
+  Newline @35..36
+  Return @37..43 "return"
+  Newline @43..44
+  RightBrace @44..45 "}"
+  Newline @45..46
+tree:
+  Decl::Let @0..45
+    Pattern::Bind @synthesized
+    Expr::Match @synthesized
+      Expr::As @synthesized
+        Expr::Call @21..28 "find(2)"
+          Expr::Variable @21..25 "find"
+          CallArg @26..27 "2"
+            Expr::LiteralInt @26..27 "2"
+        TypeAnnotation::Nominal @14..18 "Int?"
+          TypeAnnotation::Nominal @14..17 "Int"
+      MatchArm @synthesized
+        Pattern::Variant @4..12 ".some(y)"
+          Pattern::Bind @10..11 "y"
+        Block @synthesized
+          Expr::Variable @synthesized
+      MatchArm @synthesized
+        Pattern::Wildcard @synthesized
+        Block @34..45
+          Stmt::Return @37..43 "return"

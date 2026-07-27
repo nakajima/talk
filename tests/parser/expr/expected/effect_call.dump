@@ -1,0 +1,27 @@
+tokens:
+  EffectName @1..3 "io"
+  LeftParen @3..4 "("
+  Identifier @4..11 "request"
+  Colon @11..12 ":"
+  Dot @13..14 "."
+  Identifier @14..20 "socket"
+  LeftParen @20..21 "("
+  Identifier @21..27 "domain"
+  Comma @27..28 ","
+  Identifier @29..37 "socktype"
+  Comma @37..38 ","
+  Identifier @39..44 "proto"
+  RightParen @44..45 ")"
+  RightParen @45..46 ")"
+  Newline @46..47
+tree:
+  Expr::CallEffect @1..46
+    CallArg @4..45
+      Expr::Call @13..45 ".socket(domain, socktype, proto)"
+        Expr::Member @13..20 ".socket"
+        CallArg @21..27 "domain"
+          Expr::Variable @21..27 "domain"
+        CallArg @29..37 "socktype"
+          Expr::Variable @29..37 "socktype"
+        CallArg @39..44 "proto"
+          Expr::Variable @39..44 "proto"

@@ -1,0 +1,19 @@
+tokens:
+  Let @0..3 "let"
+  Identifier @4..7 "add"
+  Equals @8..9 "="
+  LeftBrace @10..11 "{"
+  Identifier @12..13 "x"
+  Colon @13..14 ":"
+  Identifier @15..18 "Int"
+  Comma @18..19 ","
+  Identifier @20..21 "y"
+  Colon @21..22 ":"
+  Identifier @23..26 "Int"
+  In @27..29 "in"
+  Identifier @30..31 "x"
+  Plus @32..33 "+"
+  Identifier @34..35 "y"
+  RightBrace @36..37 "}"
+  Newline @37..38
+parse error: parser.unexpected-token Unexpected token: expected `,`, got `in`

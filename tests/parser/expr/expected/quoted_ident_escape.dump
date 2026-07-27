@@ -1,0 +1,3 @@
+tokens:
+  lexer error: Invalid escape: '\\'
+parse error: parser.lexer Lex error at line 1, column 3: Invalid escape: '\\'

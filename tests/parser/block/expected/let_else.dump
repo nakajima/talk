@@ -1,0 +1,99 @@
+tokens:
+  Let @0..3 "let"
+  Dot @4..5 "."
+  Identifier @5..9 "some"
+  LeftParen @9..10 "("
+  Identifier @10..11 "x"
+  RightParen @11..12 ")"
+  Equals @13..14 "="
+  Identifier @15..19 "find"
+  LeftParen @19..20 "("
+  Int @20..21 "1"
+  RightParen @21..22 ")"
+  Else @23..27 "else"
+  LeftBrace @28..29 "{"
+  Newline @29..30
+  Return @31..37 "return"
+  Newline @37..38
+  RightBrace @38..39 "}"
+  Newline @39..40
+  Let @40..43 "let"
+  LeftParen @44..45 "("
+  Identifier @45..46 "a"
+  Comma @46..47 ","
+  Identifier @48..49 "b"
+  RightParen @49..50 ")"
+  Equals @51..52 "="
+  Identifier @53..57 "pair"
+  LeftParen @57..58 "("
+  RightParen @58..59 ")"
+  Else @60..64 "else"
+  LeftBrace @65..66 "{"
+  Newline @66..67
+  Return @68..74 "return"
+  Newline @74..75
+  RightBrace @75..76 "}"
+  Newline @76..77
+  Let @77..80 "let"
+  Dot @81..82 "."
+  Identifier @82..86 "none"
+  Equals @87..88 "="
+  Identifier @89..94 "check"
+  LeftParen @94..95 "("
+  RightParen @95..96 ")"
+  Else @97..101 "else"
+  LeftBrace @102..103 "{"
+  Newline @103..104
+  Return @105..111 "return"
+  Newline @111..112
+  RightBrace @112..113 "}"
+  Newline @113..114
+tree:
+  Decl::Let @0..39
+    Pattern::Bind @synthesized
+    Expr::Match @synthesized
+      Expr::Call @15..22 "find(1)"
+        Expr::Variable @15..19 "find"
+        CallArg @20..21 "1"
+          Expr::LiteralInt @20..21 "1"
+      MatchArm @synthesized
+        Pattern::Variant @4..12 ".some(x)"
+          Pattern::Bind @10..11 "x"
+        Block @synthesized
+          Expr::Variable @synthesized
+      MatchArm @synthesized
+        Pattern::Wildcard @synthesized
+        Block @28..39
+          Stmt::Return @31..37 "return"
+  Decl::Let @40..76
+    Pattern::Tuple @synthesized
+      Pattern::Bind @synthesized
+      Pattern::Bind @synthesized
+    Expr::Match @synthesized
+      Expr::Call @53..59 "pair()"
+        Expr::Variable @53..57 "pair"
+      MatchArm @synthesized
+        Pattern::Tuple @44..50 "(a, b)"
+          Pattern::Bind @45..46 "a"
+          Pattern::Bind @48..49 "b"
+        Block @synthesized
+          Expr::Tuple @synthesized
+            Expr::Variable @synthesized
+            Expr::Variable @synthesized
+      MatchArm @synthesized
+        Pattern::Wildcard @synthesized
+        Block @65..76
+          Stmt::Return @68..74 "return"
+  Decl::Let @77..113
+    Pattern::Wildcard @synthesized
+    Expr::Match @synthesized
+      Expr::Call @89..96 "check()"
+        Expr::Variable @89..94 "check"
+      MatchArm @synthesized
+        Pattern::Variant @81..86 ".none"
+        Block @synthesized
+          Expr::Tuple @synthesized
+      MatchArm @synthesized
+        Pattern::Wildcard @synthesized
+        Block @102..113
+          Stmt::Return @105..111 "return"

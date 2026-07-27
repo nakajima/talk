@@ -1,0 +1,9 @@
+tokens:
+  Identifier @0..5 "value"
+  As @6..8 "as"
+  Identifier @9..12 "Int"
+  Newline @12..13
+tree:
+  Expr::As @0..12 "value as Int"
+    Expr::Variable @0..5 "value"
+    TypeAnnotation::Nominal @9..12 "Int"

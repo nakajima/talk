@@ -1,0 +1,28 @@
+tokens:
+  If @0..2 "if"
+  Identifier @3..4 "a"
+  Comma @4..5 ","
+  Identifier @6..7 "b"
+  LeftBrace @8..9 "{"
+  Int @10..11 "1"
+  RightBrace @12..13 "}"
+  Else @14..18 "else"
+  LeftBrace @19..20 "{"
+  Int @21..22 "2"
+  RightBrace @23..24 "}"
+  Newline @24..25
+tree:
+  Expr::If @0..24 "if a, b { 1 } else { 2 }"
+    Expr::Variable @3..4 "a"
+    Block @synthesized
+      Expr::If @synthesized
+        Expr::Variable @6..7 "b"
+        Block @8..13 "{ 1 }"
+          Stmt::Expr @10..11 "1"
+            Expr::LiteralInt @10..11 "1"
+        Block @19..24 "{ 2 }"
+          Stmt::Expr @21..22 "2"
+            Expr::LiteralInt @21..22 "2"
+    Block @19..24 "{ 2 }"
+      Stmt::Expr @21..22 "2"
+        Expr::LiteralInt @21..22 "2"

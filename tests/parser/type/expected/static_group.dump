@@ -1,0 +1,15 @@
+tokens:
+  Identifier @0..6 "Buffer"
+  Less @6..7 "<"
+  LeftParen @7..8 "("
+  Identifier @8..9 "N"
+  Plus @10..11 "+"
+  Int @12..13 "2"
+  RightParen @13..14 ")"
+  Star @15..16 "*"
+  Int @17..18 "3"
+  Greater @18..19 ">"
+  Newline @19..20
+tree:
+  TypeAnnotation::Nominal @0..19 "Buffer<(N + 2) * 3>"
+    TypeAnnotation::Nominal @8..9 "N"

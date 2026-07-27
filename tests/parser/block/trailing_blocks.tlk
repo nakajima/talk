@@ -1,0 +1,9 @@
+let doubled = items.map { $0 * 2 }
+each(items) { item in
+	print(item)
+}
+let total = items.reduce(0) { acc, item in acc + item }
+spawn { work() }
+let empty = supply {}
+print "count:", total
+assert "message" { total > 0 }

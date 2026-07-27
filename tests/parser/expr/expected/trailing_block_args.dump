@@ -1,0 +1,27 @@
+tokens:
+  Identifier @0..3 "zip"
+  LeftParen @3..4 "("
+  Identifier @4..5 "a"
+  Comma @5..6 ","
+  Identifier @7..8 "b"
+  RightParen @8..9 ")"
+  LeftBrace @10..11 "{"
+  Identifier @12..16 "pair"
+  In @17..19 "in"
+  Identifier @20..24 "pair"
+  Dot @24..25 "."
+  Identifier @25..30 "first"
+  RightBrace @31..32 "}"
+  Newline @32..33
+tree:
+  Expr::Call @0..32 "zip(a, b) { pair in pair.first }"
+    Expr::Variable @0..3 "zip"
+    CallArg @4..5 "a"
+      Expr::Variable @4..5 "a"
+    CallArg @7..8 "b"
+      Expr::Variable @7..8 "b"
+    Block @10..32 "{ pair in pair.first }"
+      Parameter @17..16
+      Stmt::Expr @20..30 "pair.first"
+        Expr::Member @20..30 "pair.first"
+          Expr::Variable @20..24 "pair"

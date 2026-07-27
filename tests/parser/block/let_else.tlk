@@ -1,0 +1,9 @@
+let .some(x) = find(1) else {
+	return
+}
+let (a, b) = pair() else {
+	return
+}
+let .none = check() else {
+	return
+}

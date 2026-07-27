@@ -1,0 +1,3 @@
+struct Buffer<Element, static Count: Int> {
+	func count() -> Int { Count }
+}

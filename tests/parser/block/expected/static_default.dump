@@ -1,0 +1,23 @@
+tokens:
+  Struct @0..6 "struct"
+  Identifier @7..11 "Ring"
+  Less @11..12 "<"
+  Identifier @12..19 "Element"
+  Comma @19..20 ","
+  Static @21..27 "static"
+  Identifier @28..33 "Count"
+  Colon @33..34 ":"
+  Identifier @35..38 "Int"
+  Equals @39..40 "="
+  Int @41..42 "8"
+  Greater @42..43 ">"
+  LeftBrace @44..45 "{"
+  Newline @45..46
+  RightBrace @46..47 "}"
+  Newline @47..48
+tree:
+  Decl::Struct @0..47
+    GenericDecl @12..19 "Element"
+    GenericDecl @21..42 "static Count: Int = 8"
+      TypeAnnotation::Nominal @35..38 "Int"
+    Body @44..47

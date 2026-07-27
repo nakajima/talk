@@ -1,0 +1,3 @@
+tokens:
+  lexer error: Empty quoted identifier
+parse error: parser.lexer Lex error at line 1, column 2: Empty quoted identifier

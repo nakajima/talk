@@ -1,0 +1,9 @@
+tokens:
+  Identifier @0..4 "pair"
+  Dot @4..5 "."
+  Float @5..8 "0.1"
+  Newline @8..9
+tree:
+  Expr::Member @0..8 "pair.0.1"
+    Expr::Member @0..8 "pair.0.1"
+      Expr::Variable @0..4 "pair"

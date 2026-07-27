@@ -1,0 +1,22 @@
+let p = @_ir(count) { %? = alloc Element $0 }
+@_ir(value, ptr) { store Element $0 $1 }
+let v = @_ir(ptr) { %? = load Element $0 }
+@_ir(from, to, length) { copy Byte $0 $1 $2 }
+@_ir(a, b) { swap Element $0 $1 }
+let t = @_ir(place) { %? = take Element $0 }
+@_ir(ptr) { free $0 }
+@_ir(value) { retain Element $0 }
+let g = @_ir(base, index) { %? = gep Element $0 $1 }
+let u = @_ir(ptr) { %? = is_unique $0 }
+let c = @_ir { %? = cmp Bool %0 == false }
+let s = @_ir { %? = cmp Int %0 < %1 }
+let a = @_ir { %? = add Int %0 %1 }
+let o = @_ir { %? = xor Int %0 %1 }
+let n = @_ir { %? = not Bool %0 }
+let f = @_ir { %? = itof %0 }
+let bi = @_ir { %? = btoi %0 }
+let ib = @_ir { %? = itob %0 }
+let tr = @_ir { %? = trunc %0 }
+let x = @_ir(fd) { %? = io 3 $0 0 0 }
+let e = @_ir(index) { %? = inline_get Element %0 $0 }
+let vv = @_ir { %? = take Int void }

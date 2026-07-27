@@ -1,0 +1,2 @@
+struct Ring<Element, static Count: Int = 8> {
+}

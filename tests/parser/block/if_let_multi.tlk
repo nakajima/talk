@@ -1,0 +1,5 @@
+if let .some(x) = m, x > 1 {
+	print(x)
+} else {
+	print(0)
+}

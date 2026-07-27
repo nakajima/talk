@@ -1,0 +1,39 @@
+tokens:
+  If @0..2 "if"
+  Identifier @3..4 "a"
+  Comma @4..5 ","
+  Identifier @6..7 "b"
+  LeftBrace @8..9 "{"
+  Newline @9..10
+  Identifier @11..15 "work"
+  LeftParen @15..16 "("
+  RightParen @16..17 ")"
+  Newline @17..18
+  RightBrace @18..19 "}"
+  Else @20..24 "else"
+  LeftBrace @25..26 "{"
+  Newline @26..27
+  Identifier @28..36 "fallback"
+  LeftParen @36..37 "("
+  RightParen @37..38 ")"
+  Newline @38..39
+  RightBrace @39..40 "}"
+  Newline @40..41
+tree:
+  Stmt::If @0..40
+    Expr::Variable @3..4 "a"
+    Block @synthesized
+      Stmt::If @synthesized
+        Expr::Variable @6..7 "b"
+        Block @8..19
+          Stmt::Expr @11..17 "work()"
+            Expr::Call @11..17 "work()"
+              Expr::Variable @11..15 "work"
+        Block @25..40
+          Stmt::Expr @28..38 "fallback()"
+            Expr::Call @28..38 "fallback()"
+              Expr::Variable @28..36 "fallback"
+    Block @25..40
+      Stmt::Expr @28..38 "fallback()"
+        Expr::Call @28..38 "fallback()"
+          Expr::Variable @28..36 "fallback"

@@ -1,0 +1,64 @@
+tokens:
+  If @0..2 "if"
+  Let @3..6 "let"
+  Dot @7..8 "."
+  Identifier @8..12 "some"
+  LeftParen @12..13 "("
+  Identifier @13..14 "x"
+  RightParen @14..15 ")"
+  Equals @16..17 "="
+  Identifier @18..19 "m"
+  Comma @19..20 ","
+  Identifier @21..22 "x"
+  Greater @23..24 ">"
+  Int @25..26 "1"
+  LeftBrace @27..28 "{"
+  Newline @28..29
+  Identifier @30..35 "print"
+  LeftParen @35..36 "("
+  Identifier @36..37 "x"
+  RightParen @37..38 ")"
+  Newline @38..39
+  RightBrace @39..40 "}"
+  Else @41..45 "else"
+  LeftBrace @46..47 "{"
+  Newline @47..48
+  Identifier @49..54 "print"
+  LeftParen @54..55 "("
+  Int @55..56 "0"
+  RightParen @56..57 ")"
+  Newline @57..58
+  RightBrace @58..59 "}"
+  Newline @59..60
+tree:
+  Stmt::Expr @0..59
+    Expr::Match @0..59
+      Expr::Variable @18..19 "m"
+      MatchArm @synthesized
+        Pattern::Variant @7..15 ".some(x)"
+          Pattern::Bind @13..14 "x"
+        Block @synthesized
+          Expr::If @synthesized
+            Expr::Binary @21..26 "x > 1"
+              Expr::Variable @21..22 "x"
+              Expr::LiteralInt @25..26 "1"
+            Block @27..40
+              Stmt::Expr @30..38 "print(x)"
+                Expr::Call @30..38 "print(x)"
+                  Expr::Variable @30..35 "print"
+                  CallArg @36..37 "x"
+                    Expr::Variable @36..37 "x"
+            Block @46..59
+              Stmt::Expr @49..57 "print(0)"
+                Expr::Call @49..57 "print(0)"
+                  Expr::Variable @49..54 "print"
+                  CallArg @55..56 "0"
+                    Expr::LiteralInt @55..56 "0"
+      MatchArm @synthesized
+        Pattern::Wildcard @synthesized
+        Block @46..59
+          Stmt::Expr @49..57 "print(0)"
+            Expr::Call @49..57 "print(0)"
+              Expr::Variable @49..54 "print"
+              CallArg @55..56 "0"
+                Expr::LiteralInt @55..56 "0"

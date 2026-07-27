@@ -1,0 +1,7 @@
+tokens:
+  Identifier @0..3 "Opt"
+  Less @3..4 "<"
+  Identifier @4..7 "Int"
+  Greater @7..8 ">"
+  Newline @8..9
+parse error: parser.unexpected-token Unexpected token: expected a member or struct pattern after generic arguments, got end of input

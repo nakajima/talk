@@ -1,0 +1,11 @@
+tokens:
+  Identifier @0..5 "maybe"
+  Dot @5..6 "."
+  Identifier @6..11 "value"
+  Bang @11..12 "!"
+  Newline @12..13
+tree:
+  Expr::ForceUnwrap @0..12 "maybe.value!"
+    Expr::Member @0..11 "maybe.value"
+      Expr::Variable @0..5 "maybe"
+    Expr::Unreachable @11..12 "!"

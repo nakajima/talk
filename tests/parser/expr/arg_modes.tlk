@@ -1,0 +1,1 @@
+take(consume x, mut y, borrow z, label: copy w)

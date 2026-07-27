@@ -1,0 +1,37 @@
+tokens:
+  Struct @0..6 "struct"
+  Identifier @7..13 "Buffer"
+  Less @13..14 "<"
+  Identifier @14..21 "Element"
+  Comma @21..22 ","
+  Static @23..29 "static"
+  Identifier @30..35 "Count"
+  Colon @35..36 ":"
+  Identifier @37..40 "Int"
+  Greater @40..41 ">"
+  LeftBrace @42..43 "{"
+  Newline @43..44
+  Func @45..49 "func"
+  Identifier @50..55 "count"
+  LeftParen @55..56 "("
+  RightParen @56..57 ")"
+  Arrow @58..60 "->"
+  Identifier @61..64 "Int"
+  LeftBrace @65..66 "{"
+  Identifier @67..72 "Count"
+  RightBrace @73..74 "}"
+  Newline @74..75
+  RightBrace @75..76 "}"
+  Newline @76..77
+tree:
+  Decl::Struct @0..76
+    GenericDecl @14..21 "Element"
+    GenericDecl @23..40 "static Count: Int"
+      TypeAnnotation::Nominal @37..40 "Int"
+    Body @42..76
+      Decl::Method @45..74 "func count() -> Int { Count }"
+        Func @65..74 tokens=45..74 "{ Count }"
+          Block @65..74 "{ Count }"
+            Stmt::Expr @67..72 "Count"
+              Expr::Variable @67..72 "Count"
+          TypeAnnotation::Nominal @61..64 "Int"
