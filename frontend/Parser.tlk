@@ -14,14 +14,17 @@
 // and the previous-before-newline cursor is recovered by scanning
 // backward past newline tokens.
 
-use package::Lexer::{ Token, TokenKind, ScanResult, scan, kind_spelling, append }
+use package::Lexer::{ Token, TokenKind, ScanResult, Comment, scan, kind_spelling, append, append_int }
 use package::Ast::{
 	Expr, ExprKind, CallArg, MemberLabel, Parameter, Block,
 	Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
 	TypeAnnotation, TypeAnnotationKind, GenericArg, EffectSet,
 	RecordFieldTypeAnnotation, AnyAssocBinding,
 	Decl, DeclKind, Import, ImportedSymbol, ImportedSymbols,
-	Stmt, StmtKind, Item
+	Stmt, StmtKind, Item, MatchArm, ArgMode,
+	ParamMode, ParamLabel, CaptureMode, CaptureSpec, GenericDecl,
+	WherePredicateKind, WherePredicate, WhereClause,
+	Func, FuncSignature, Body, TypeApplication, ReceiverMode
 }
 
 // A function-type parameter's ownership-mode prefix (ADR 0018), held
@@ -31,6 +34,67 @@ enum TypeParamMode {
 	case mut_mode
 	case consume_mode
 	case consume_mut_mode
+}
+
+// The body context a block parses under (the reference `BlockContext`):
+// it decides brace recovery (if/loop), the no-brace single-statement
+// form (match arms), and member dispatch inside nominal bodies.
+enum BlockContext {
+	case plain
+	case func_body
+	case if_body
+	case loop_body
+	case match_arm_body
+	case struct_body
+	case enum_body
+	case protocol_body
+	case extend_body
+}
+
+func context_is_nominal(context: BlockContext) -> Bool {
+	context == .struct_body || context == .enum_body || context == .protocol_body || context == .extend_body
+}
+
+// Whether trailing-block calls are allowed at the cursor (the reference
+// `ParseContext`): disabled inside control-flow headers, where the `{`
+// belongs to the construct's body.
+enum ParseContext {
+	case top_level
+	case match_scrutinee
+	case if_condition
+	case loop_condition
+	case for_iterable
+}
+
+// One comma-separated `if` condition clause: a boolean expression or a
+// `let pattern = scrutinee` binder.
+enum ConditionalClause {
+	case boolean(Expr)
+	case let_clause(Pattern, Expr)
+}
+
+func context_is_top_level(context: &ParseContext) -> Bool {
+	match context {
+		.top_level -> true,
+		.match_scrutinee -> false,
+		.if_condition -> false,
+		.loop_condition -> false,
+		.for_iterable -> false
+	}
+}
+
+func clause_is_boolean(clause: &ConditionalClause) -> Bool {
+	match clause {
+		.boolean(_) -> true,
+		.let_clause(_, _) -> false
+	}
+}
+
+func all_boolean(clauses: &[ConditionalClause]) -> Bool {
+	for clause in clauses {
+		if clause_is_boolean(clause: clause) == false { return false }
+	}
+	true
 }
 
 // Precedence levels, mirroring the reference `Precedence` enum's order.
@@ -66,6 +130,36 @@ pub struct ParseOutcome {
 	pub let items: [Item]
 	pub let failure: Fail?
 	pub let diags: [Fail]
+	pub let comments: [Comment]
+}
+
+// The reference lex-error rendering: 1-based line, 0-based column,
+// derived from the scan cursor at the point of failure. Columns count
+// CHARACTERS (the reference bumps per char), so continuation bytes
+// don't count.
+func lexer_error_message(source: String, pos: Int, message: String) -> String {
+	let view = source.utf8()
+	let line = 0
+	let col = 0
+	let i = 0
+	loop i < pos {
+		let b = view.at(index: i)._toInt()
+		if b == blank_newline_byte {
+			line = line + 1
+			col = 0
+		} else if b < 128 || b >= 192 {
+			col = col + 1
+		}
+		i = i + 1
+	}
+	let buf: [Byte] = []
+	append(buf: buf, text: "Lex error at line ")
+	append_int(buf: buf, value: line + 1)
+	append(buf: buf, text: ", column ")
+	append_int(buf: buf, value: col)
+	append(buf: buf, text: ": ")
+	append(buf: buf, text: message)
+	String.from_bytes(bytes: buf)
 }
 
 // A kind described for a user-facing message (the reference
@@ -175,26 +269,61 @@ func parse_decimal(text: String) -> Int? {
 }
 
 func dummy_pattern() -> Pattern {
-	Pattern(kind: .wildcard, start: 0, end: 0)
+	Pattern(kind: .wildcard, start: 0, end: 0, meta_start: 0 - 1, meta_end: 0 - 1)
 }
 
 func dummy_stmt() -> Stmt {
 	Stmt(kind: .expr_stmt(dummy_expr()), start: 0, end: 0)
 }
 
+func dummy_decl_kind() -> DeclKind {
+	.let_decl(dummy_pattern(), .none, .none)
+}
+
 func dummy_decl() -> Decl {
-	Decl(kind: .let_decl(dummy_pattern(), .none, .none), start: 0, end: 0)
+	Decl(kind: dummy_decl_kind(), is_public: false, start: 0, end: 0)
+}
+
+func dummy_generic_decl() -> GenericDecl {
+	let no_generics: [GenericDecl] = []
+	let no_conformances: [TypeAnnotation] = []
+	let no_default: GenericArg? = .none
+	GenericDecl(name: "", generics: no_generics, conformances: no_conformances, default_value: no_default, start: 0, end: 0)
+}
+
+func dummy_predicate() -> WherePredicate {
+	WherePredicate(kind: .type_eq(.type_arg(dummy_type()), .type_arg(dummy_type())), start: 0, end: 0)
+}
+
+// A macro parameter must be identifier-shaped: its first byte may not
+// be a digit (the reference checks `is_alphabetic || '_'`).
+func macro_param_is_identifier_shaped(name: String) -> Bool {
+	let bytes = name.utf8()
+	if bytes.count() == 0 { return false }
+	let b = bytes.at(index: 0)._toInt()
+	if b >= 48 && b <= 57 { return false }
+	true
 }
 
 func dummy_type() -> TypeAnnotation {
 	TypeAnnotation(kind: .nominal("", []), start: 0, end: 0)
 }
 
+func dummy_block() -> Block {
+	let no_params: [Parameter] = []
+	let no_body: [Item] = []
+	Block(params: no_params, body: no_body, start: 0, end: 0)
+}
+
+// The reference span for synthesized nodes (desugared conditionals).
+func synthesized_block(consume body: [Item]) -> Block {
+	let no_params: [Parameter] = []
+	Block(params: no_params, body: body, start: 0 - 1, end: 0 - 1)
+}
+
 func decl_is_import(decl: &Decl) -> Bool {
-	match decl.kind {
-		.import_decl(_) -> true,
-		.let_decl(_, _, _) -> false
-	}
+	if let .import_decl(_) = decl.kind { return true }
+	false
 }
 
 func item_is_import(item: &Item) -> Bool {
@@ -242,6 +371,20 @@ struct Parser {
 	let failed: Fail?
 	let diags: [Fail]
 	let items: [Item]
+	// The trailing-block context stack (the reference `context_stack`).
+	let contexts: [ParseContext]
+	// An assignment parsed inside the expression grammar (the reference
+	// returns `Node::Stmt` there): at most one, claimed by the statement
+	// layer or rejected by `require_expr`.
+	let assign_slot: [Stmt]
+	// In where-predicate operands `<` doubles as the static comparison
+	// operator (ADR 0035): when set, a generic-argument list must sit
+	// adjacent to its head name.
+	let angle_adjacency: Bool
+	// A scan failure (pre-rendered `Lex error at …`): the token list is
+	// truncated at the failure, and the reference reports the lex error
+	// instead of any downstream missing-token symptom.
+	let lex_error_message: String?
 
 	// MARK: Token stream
 
@@ -476,6 +619,42 @@ struct Parser {
 		""
 	}
 
+	// MARK: Contexts and assignment plumbing
+
+	func allows_trailing_blocks() -> Bool {
+		let n = self.contexts.count
+		if n == 0 { return true }
+		context_is_top_level(context: self.contexts[n - 1])
+	}
+
+	func has_pending_assign() -> Bool {
+		self.assign_slot.count > 0
+	}
+
+	mut func fail_cannot_assign() -> Void {
+		self.fail(code: "parser.cannot-assign", message: "Cannot assign in this context")
+	}
+
+	// The reference `into_expr`: a node that parsed as an assignment
+	// statement cannot stand where an expression is required.
+	mut func require_expr(consume e: Expr) -> Expr {
+		if self.has_pending_assign() {
+			let _ = self.assign_slot.pop()
+			self.fail_cannot_assign()
+		}
+		e
+	}
+
+	// A control-flow condition: trailing-block calls are disabled (the
+	// following `{` belongs to the construct's body) and an assignment
+	// is rejected — a condition must be an expression.
+	mut func condition(ctx: ParseContext) -> Expr {
+		self.contexts.push(ctx)
+		let e = self.expr()
+		let _ = self.contexts.pop()
+		self.require_expr(e: e)
+	}
+
 	// MARK: Expressions
 
 	mut func expr() -> Expr {
@@ -503,6 +682,13 @@ struct Parser {
 			let kind = self.current().kind
 			if prec < infix_precedence(kind: kind) { } else { break }
 			if has_infix(kind: kind) == false { break }
+			if self.has_pending_assign() {
+				// The reference feeds the assignment statement to the next
+				// infix handler's `into_expr`, which rejects it.
+				let _ = self.assign_slot.pop()
+				self.fail_cannot_assign()
+				return dummy_expr()
+			}
 			i = i + 1
 			lhs = self.infix(can_assign: can_assign, lhs: lhs)
 			if self.is_failed() { return dummy_expr() }
@@ -518,6 +704,11 @@ struct Parser {
 
 	mut func check_as(lhs: Expr) -> Expr {
 		if self.did_match(kind: .keyword_as) {
+			if self.has_pending_assign() {
+				let _ = self.assign_slot.pop()
+				self.fail_cannot_assign()
+				return lhs
+			}
 			self.unported(what: "`as` casts")
 		}
 		lhs
@@ -532,8 +723,23 @@ struct Parser {
 		if k == .dot { return self.member_prefix(can_assign: can_assign) }
 		if k == .left_paren { return self.tuple() }
 		if k == .left_brace { return self.block_expr() }
+		if k == .left_bracket { return self.array_literal() }
+		if k == .keyword_if { return self.if_expr_prefix() }
+		if k == .keyword_match { return self.match_expr_prefix() }
+		if k == .keyword_func { return self.func_expr_prefix() }
+		if k == .attribute { return self.attribute_prefix() }
+		if k == .bound_var { return self.bound_var_expr() }
 		self.unported(what: "expression prefix for " + describe_kind(kind: k))
 		dummy_expr()
+	}
+
+	// A macro-template binder (`$x`): a variable whose name keeps the
+	// sigil; the span excludes it (the token's own quirk).
+	mut func bound_var_expr() -> Expr {
+		let tok = self.current()
+		self.advance()
+		let name = "$" + self.lexeme(token: tok)
+		Expr(kind: .variable(name), start: tok.start, end: self.span_end())
 	}
 
 	mut func infix(can_assign: Bool, lhs: Expr) -> Expr {
@@ -541,7 +747,7 @@ struct Parser {
 		if k == .dot { return self.member_infix(can_assign: can_assign, lhs: lhs) }
 		if k == .bang { self.unported(what: "postfix force-unwrap"); return lhs }
 		if k == .question_mark { self.unported(what: "optional propagation"); return lhs }
-		if k == .left_bracket { self.unported(what: "subscripts"); return lhs }
+		if k == .left_bracket { return self.subscript(can_assign: can_assign, lhs: lhs) }
 		self.binary(lhs: lhs)
 	}
 
@@ -598,8 +804,12 @@ struct Parser {
 		if did_call { return extended }
 		if can_assign {
 			if self.did_match(kind: .equals) {
-				self.unported(what: "assignment statements")
-				return extended
+				let rhs = self.require_expr(e: self.expr())
+				if self.is_failed() { return dummy_expr() }
+				let lhs_start = extended.start
+				let parts: [Expr] = [extended, rhs]
+				self.assign_slot.push(Stmt(kind: .assignment(parts), start: lhs_start, end: self.span_end()))
+				return dummy_expr()
 			}
 		}
 		extended
@@ -664,16 +874,22 @@ struct Parser {
 
 	// The shared member tail: postfix calls, then the assignment check —
 	// which, unlike after a plain variable, runs even when a call landed.
+	// Reference quirk: a member assignment's statement span starts at the
+	// RHS (the reference pushes a fresh source location after the `=`).
 	mut func member_postfix(member: Expr, can_assign: Bool) -> Expr {
 		self.skip_semicolons_and_continuation_newlines()
 		let (extended, _) = self.check_call(callee: member, can_assign: can_assign)
 		if self.is_failed() { return dummy_expr() }
 		if self.did_match(kind: .equals) {
 			if can_assign {
-				self.unported(what: "assignment statements")
-				return extended
+				let rhs_tok = self.current()
+				let rhs = self.require_expr(e: self.expr())
+				if self.is_failed() { return dummy_expr() }
+				let parts: [Expr] = [extended, rhs]
+				self.assign_slot.push(Stmt(kind: .assignment(parts), start: rhs_tok.start, end: self.span_end()))
+				return dummy_expr()
 			}
-			self.fail(code: "parser.cannot-assign", message: "Cannot assign in this context")
+			self.fail_cannot_assign()
 			return extended
 		}
 		extended
@@ -681,6 +897,353 @@ struct Parser {
 
 	mut func record_expected_identifier() -> Void {
 		self.diags.push(Fail(code: "parser.expected-identifier", message: "Expected an identifier, got " + describe_kind(kind: self.current().kind)))
+	}
+
+	// MARK: Arrays and subscripts
+
+	mut func array_literal() -> Expr {
+		let start_tok = self.current()
+		self.consume(kind: .left_bracket)
+		let items: [Expr] = []
+		loop true {
+			self.skip_newlines()
+			if self.did_match(kind: .right_bracket) { break }
+			if self.at_delimiter_recovery_boundary() {
+				self.record_expected(kind: .right_bracket)
+				break
+			}
+			items.push(self.require_expr(e: self.expr()))
+			if self.is_failed() { return dummy_expr() }
+			let _ = self.did_match(kind: .comma)
+		}
+		Expr(kind: .literal_array(items), start: start_tok.start, end: self.span_end())
+	}
+
+	mut func subscript(can_assign: Bool, lhs: Expr) -> Expr {
+		let start = lhs.start
+		self.consume(kind: .left_bracket)
+		let index = self.require_expr(e: self.expr_with_precedence(prec: prec_assignment))
+		if self.is_failed() { return dummy_expr() }
+		self.consume_or_recover_closer(kind: .right_bracket)
+		if self.is_failed() { return dummy_expr() }
+		let parts: [Expr] = [lhs, index]
+		let sub = Expr(kind: .subscript_expr(parts), start: start, end: self.span_end())
+		if self.did_match(kind: .equals) {
+			if can_assign == false {
+				self.fail_cannot_assign()
+				return dummy_expr()
+			}
+			let rhs = self.require_expr(e: self.expr_with_precedence(prec: prec_assignment))
+			if self.is_failed() { return dummy_expr() }
+			let assign_parts: [Expr] = [sub, rhs]
+			self.assign_slot.push(Stmt(kind: .assignment(assign_parts), start: start, end: self.span_end()))
+			return dummy_expr()
+		}
+		sub
+	}
+
+	// MARK: Control flow
+
+	// `if` in expression position: the else branch is mandatory (a
+	// missing one records a diagnostic and recovers empty).
+	mut func if_expr_prefix() -> Expr {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_if)
+		let clauses = self.conditional_clauses()
+		if self.is_failed() { return dummy_expr() }
+		let body = self.block(context: .if_body, consumes_left_brace: true)
+		if self.is_failed() { return dummy_expr() }
+		let alt = dummy_block()
+		if self.did_match(kind: .keyword_else) {
+			alt = self.else_block(expr_position: true)
+		} else {
+			self.record_expected(kind: .keyword_else)
+			let no_body: [Item] = []
+			alt = synthesized_block(body: no_body)
+		}
+		if self.is_failed() { return dummy_expr() }
+		self.build_conditional_expr(clauses: clauses, body: body, alt: alt, start: start_tok.start, end: self.span_end())
+	}
+
+	mut func if_stmt() -> Stmt {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_if)
+		let clauses = self.conditional_clauses()
+		if self.is_failed() { return dummy_stmt() }
+		let body = self.block(context: .if_body, consumes_left_brace: true)
+		if self.is_failed() { return dummy_stmt() }
+		let alt: Block? = .none
+		if self.did_match(kind: .keyword_else) {
+			alt = .some(self.else_block(expr_position: false))
+			if self.is_failed() { return dummy_stmt() }
+		}
+		if all_boolean(clauses: clauses) {
+			return self.build_boolean_statement(clauses: clauses, body: body, alt: alt, start: start_tok.start, end: self.span_end())
+		}
+		// Pattern-bearing ifs desugar to a match expression; a missing
+		// else recovers as an empty synthesized block (no diagnostic in
+		// statement position).
+		let alt_block = dummy_block()
+		if let .some(b) = alt {
+			alt_block = b
+		} else {
+			let no_body: [Item] = []
+			alt_block = synthesized_block(body: no_body)
+		}
+		let e = self.build_conditional_expr(clauses: clauses, body: body, alt: alt_block, start: start_tok.start, end: self.span_end())
+		if self.is_failed() { return dummy_stmt() }
+		let e_start = e.start
+		let e_end = e.end
+		Stmt(kind: .expr_stmt(e), start: e_start, end: e_end)
+	}
+
+	// The alternative after an already-consumed `else`; `else if` chains
+	// nest inside a synthesized block.
+	mut func else_block(expr_position: Bool) -> Block {
+		if self.peek_is(kind: .keyword_if) == false {
+			return self.block(context: .if_body, consumes_left_brace: true)
+		}
+		let items: [Item] = []
+		if expr_position {
+			items.push(.expr_item(self.if_expr_prefix()))
+		} else {
+			items.push(.stmt_item(self.if_stmt()))
+		}
+		synthesized_block(body: items)
+	}
+
+	mut func conditional_clauses() -> [ConditionalClause] {
+		let clauses: [ConditionalClause] = []
+		loop true {
+			if self.did_match(kind: .keyword_let) {
+				let pat = self.pattern()
+				if self.is_failed() { return clauses }
+				self.consume(kind: .equals)
+				if self.is_failed() { return clauses }
+				let scrutinee = self.condition(ctx: .if_condition)
+				clauses.push(.let_clause(pat, scrutinee))
+			} else {
+				clauses.push(.boolean(self.condition(ctx: .if_condition)))
+			}
+			if self.is_failed() { return clauses }
+			if self.did_match(kind: .comma) == false { break }
+		}
+		clauses
+	}
+
+	// The desugared conditional (the reference `build_conditional_expr`):
+	// a boolean clause becomes an if expression, a pattern clause a
+	// two-arm match with synthesized arms. Multi-clause chains duplicate
+	// the else block in the reference; the port defers them until the
+	// AST grows a deep-copy walk.
+	mut func build_conditional_expr(consume clauses: [ConditionalClause], consume body: Block, consume alt: Block, start: Int, end: Int) -> Expr {
+		if clauses.count > 1 {
+			self.unported(what: "multi-clause `if` conditions")
+			return dummy_expr()
+		}
+		if let .some(clause) = clauses.pop() {
+			match clause {
+				.boolean(cond) -> {
+					let cond_arr: [Expr] = [cond]
+					Expr(kind: .if_expr(cond_arr, body, alt), start: start, end: end)
+				},
+				.let_clause(pat, scrutinee) -> {
+					let wildcard = Pattern(kind: .wildcard, start: 0 - 1, end: 0 - 1, meta_start: 0 - 1, meta_end: 0 - 1)
+					let arms: [MatchArm] = [
+						MatchArm(pattern: pat, body: body, start: 0 - 1, end: 0 - 1),
+						MatchArm(pattern: wildcard, body: alt, start: 0 - 1, end: 0 - 1)
+					]
+					let scrutinee_arr: [Expr] = [scrutinee]
+					Expr(kind: .match_expr(scrutinee_arr, arms), start: start, end: end)
+				}
+			}
+		} else {
+			dummy_expr()
+		}
+	}
+
+	// Boolean `if` chains fold right-to-left into nested statements; only
+	// the outermost carries source spans (the reference synthesizes the
+	// inner chain). Multi-condition chains with an else duplicate it in
+	// the reference; deferred with the deep-copy walk.
+	mut func build_boolean_statement(consume clauses: [ConditionalClause], consume body: Block, consume alt: Block?, start: Int, end: Int) -> Stmt {
+		if clauses.count > 1 {
+			if let .some(_) = alt {
+				self.unported(what: "multi-condition `if` statements with `else`")
+				return dummy_stmt()
+			}
+		}
+		let inner = body
+		let outer_alt = alt
+		let result = dummy_stmt()
+		loop true {
+			let popped = clauses.pop()
+			if let .some(clause) = popped {
+				let cond = dummy_expr()
+				match clause {
+					.boolean(c) -> { cond = c },
+					.let_clause(_, _) -> {}
+				}
+				if clauses.count == 0 {
+					result = Stmt(kind: .if_stmt(cond, inner, outer_alt), start: start, end: end)
+					break
+				}
+				let no_alt: Block? = .none
+				let s = Stmt(kind: .if_stmt(cond, inner, no_alt), start: 0 - 1, end: 0 - 1)
+				let wrapped: [Item] = [.stmt_item(s)]
+				inner = synthesized_block(body: wrapped)
+			} else {
+				break
+			}
+		}
+		result
+	}
+
+	mut func match_expr_prefix() -> Expr {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_match)
+		self.contexts.push(.match_scrutinee)
+		let scrutinee = self.require_expr(e: self.expr())
+		let _ = self.contexts.pop()
+		if self.is_failed() { return dummy_expr() }
+		// A missing `{` records a diagnostic and yields an empty match.
+		self.skip_newlines()
+		if self.peek_is(kind: .left_brace) {
+			self.advance()
+		} else {
+			self.record_expected(kind: .left_brace)
+			let no_arms: [MatchArm] = []
+			let scrutinee_arr: [Expr] = [scrutinee]
+			return Expr(kind: .match_expr(scrutinee_arr, no_arms), start: start_tok.start, end: self.span_end())
+		}
+		let arms: [MatchArm] = []
+		loop true {
+			self.skip_newlines()
+			if self.did_match(kind: .right_brace) { break }
+			if self.peek_is(kind: .eof) {
+				self.record_expected(kind: .right_brace)
+				break
+			}
+			let arm_tok = self.current()
+			let pat = self.pattern()
+			if self.is_failed() { return dummy_expr() }
+			self.consume(kind: .arrow)
+			if self.is_failed() { return dummy_expr() }
+			let body = self.block(context: .match_arm_body, consumes_left_brace: true)
+			if self.is_failed() { return dummy_expr() }
+			arms.push(MatchArm(pattern: pat, body: body, start: arm_tok.start, end: self.span_end()))
+			let _ = self.did_match(kind: .comma)
+			self.skip_newlines()
+		}
+		let scrutinee_arr: [Expr] = [scrutinee]
+		Expr(kind: .match_expr(scrutinee_arr, arms), start: start_tok.start, end: self.span_end())
+	}
+
+	mut func loop_stmt() -> Stmt {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_loop)
+		let cond: Expr? = .none
+		if self.peek_is(kind: .left_brace) == false {
+			cond = .some(self.condition(ctx: .loop_condition))
+			if self.is_failed() { return dummy_stmt() }
+		}
+		let body = self.block(context: .loop_body, consumes_left_brace: true)
+		if self.is_failed() { return dummy_stmt() }
+		Stmt(kind: .loop_stmt(cond, body), start: start_tok.start, end: self.span_end())
+	}
+
+	mut func for_stmt() -> Stmt {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_for)
+		let pat = self.pattern()
+		if self.is_failed() { return dummy_stmt() }
+		self.consume(kind: .keyword_in)
+		if self.is_failed() { return dummy_stmt() }
+		self.contexts.push(.for_iterable)
+		let mode = self.arg_mode()
+		let iterable = self.require_expr(e: self.expr())
+		let _ = self.contexts.pop()
+		if self.is_failed() { return dummy_stmt() }
+		let body = self.block(context: .loop_body, consumes_left_brace: true)
+		if self.is_failed() { return dummy_stmt() }
+		// Reference quirk: block arguments on the body replace the loop
+		// pattern (`for x in xs { y in … }` iterates as `y`), which
+		// inherits the Parameter's meta (its after-name span) as extents.
+		if body.params.count > 0 {
+			let name_start = body.params[0].name_start
+			let name_end = body.params[0].name_end
+			let param_start = body.params[0].start
+			let param_end = body.params[0].end
+			pat = Pattern(kind: .bind(self.slice_text(start: name_start, end: name_end)), start: name_start, end: name_end, meta_start: param_start, meta_end: param_end)
+			let b_start = body.start
+			let b_end = body.end
+			let no_params: [Parameter] = []
+			body = Block(params: no_params, body: body.body, start: b_start, end: b_end)
+		}
+		Stmt(kind: .for_stmt(iterable, pat, body, mode), start: start_tok.start, end: self.span_end())
+	}
+
+	// An ownership marker on a for-loop's iterable, only when a plain
+	// name follows (`consume` alone is an ordinary variable).
+	mut func arg_mode() -> ArgMode? {
+		if self.peek_is(kind: .keyword_mut) {
+			self.advance()
+			return .some(.mut_mode)
+		}
+		let cur = self.current()
+		if cur.kind == .identifier && self.next_kind() == .identifier {
+			let text = self.lexeme(token: cur)
+			let mode: ArgMode? = .none
+			if text == "consume" { mode = .some(.consume_mode) }
+			if text == "copy" { mode = .some(.copy_mode) }
+			if text == "borrow" { mode = .some(.borrow_mode) }
+			if let .some(m) = mode {
+				self.advance()
+				return .some(m)
+			}
+		}
+		.none
+	}
+
+	mut func return_stmt() -> Stmt {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_return)
+		if self.at_implicit_statement_end() {
+			let no_rhs: Expr? = .none
+			return Stmt(kind: .return_stmt(no_rhs), start: start_tok.start, end: self.span_end())
+		}
+		let rhs = self.require_expr(e: self.expr_with_precedence(prec: prec_none))
+		if self.is_failed() { return dummy_stmt() }
+		Stmt(kind: .return_stmt(.some(rhs)), start: start_tok.start, end: self.span_end())
+	}
+
+	mut func continue_stmt() -> Stmt {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_continue)
+		if self.at_implicit_statement_end() == false {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected end of statement (`continue` takes no value; use `'continue` to resume an effect handler), got " + describe_kind(kind: self.current().kind))
+			return dummy_stmt()
+		}
+		Stmt(kind: .continue_stmt, start: start_tok.start, end: self.span_end())
+	}
+
+	// `'continue expr?` — resumes the enclosing effect handler.
+	mut func resume_stmt() -> Stmt {
+		let start_tok = self.current()
+		self.advance()
+		let rhs: Expr? = .none
+		if self.at_implicit_statement_end() == false {
+			rhs = .some(self.require_expr(e: self.expr()))
+			if self.is_failed() { return dummy_stmt() }
+		}
+		Stmt(kind: .resume_stmt(rhs), start: start_tok.start, end: self.span_end())
+	}
+
+	// A value-carrying statement keyword followed by any of these
+	// carries no value.
+	func at_implicit_statement_end() -> Bool {
+		let k = self.current().kind
+		k == .newline || k == .semicolon || k == .right_brace || k == .eof
 	}
 
 	// MARK: Tuples and blocks
@@ -692,7 +1255,7 @@ struct Parser {
 		if self.did_match(kind: .right_paren) {
 			return Expr(kind: .tuple(items), start: start_tok.start, end: self.span_end())
 		}
-		items.push(self.expr_with_precedence(prec: prec_assignment))
+		items.push(self.require_expr(e: self.expr_with_precedence(prec: prec_assignment)))
 		if self.is_failed() { return dummy_expr() }
 		if self.did_match(kind: .right_paren) {
 			return Expr(kind: .tuple(items), start: start_tok.start, end: self.span_end())
@@ -714,7 +1277,7 @@ struct Parser {
 				recovered_closer = true
 				break
 			}
-			items.push(self.expr_with_precedence(prec: prec_assignment))
+			items.push(self.require_expr(e: self.expr_with_precedence(prec: prec_assignment)))
 			if self.is_failed() { return dummy_expr() }
 			if self.did_match(kind: .comma) == false { break }
 		}
@@ -731,7 +1294,7 @@ struct Parser {
 			self.unported(what: "record literals")
 			return dummy_expr()
 		}
-		let inner = self.block_after_brace()
+		let inner = self.block(context: .plain, consumes_left_brace: false)
 		Expr(kind: .block(inner), start: start_tok.start, end: self.span_end())
 	}
 
@@ -745,12 +1308,37 @@ struct Parser {
 		false
 	}
 
-	// The `{` is already consumed. Body items go through the declaration
-	// dispatch, exactly like roots (non-keywords fall through to
-	// statements).
-	mut func block_after_brace() -> Block {
+	// The shared block body (the reference `block`). With
+	// `consumes_left_brace` the span starts at the `{`; without, the
+	// caller consumed it and the span starts at the first body token.
+	// Match-arm bodies without a brace hold exactly one statement, and
+	// if/loop bodies recover from a missing brace with an empty block.
+	// Body items go through the declaration dispatch, exactly like roots
+	// (non-keywords fall through to statements).
+	mut func block(context: BlockContext, consumes_left_brace: Bool) -> Block {
 		self.skip_newlines()
 		let start_tok = self.current()
+		if context == .match_arm_body && self.peek_is(kind: .left_brace) == false {
+			let s = self.stmt()
+			if self.is_failed() { return dummy_block() }
+			let no_params: [Parameter] = []
+			let body: [Item] = [.stmt_item(s)]
+			return Block(params: no_params, body: body, start: start_tok.start, end: self.span_end())
+		}
+		if consumes_left_brace {
+			if self.peek_is(kind: .left_brace) {
+				self.advance()
+			} else {
+				if context == .if_body || context == .loop_body {
+					self.record_expected(kind: .left_brace)
+					let no_params: [Parameter] = []
+					let no_body: [Item] = []
+					return Block(params: no_params, body: no_body, start: start_tok.start, end: self.span_end())
+				}
+				self.fail_expected(kind: .left_brace)
+				return dummy_block()
+			}
+		}
 		let params = self.block_args()
 		self.skip_semicolons_and_newlines()
 		let body: [Item] = []
@@ -761,7 +1349,7 @@ struct Parser {
 				break
 			}
 			if self.is_failed() { break }
-			body.push(self.decl())
+			body.push(self.decl(context: context, is_static: false))
 			if self.is_failed() { break }
 			self.skip_semicolons_and_newlines()
 		}
@@ -779,7 +1367,9 @@ struct Parser {
 		let checkpoint = self.pos
 		let params: [Parameter] = []
 		loop true {
-			self.probe_param_mode()
+			let mode = self.param_mode()
+			self.skip_semicolons_and_newlines()
+			let name_tok = self.current()
 			let name = self.identifier()
 			if self.is_failed() {
 				self.pos = checkpoint
@@ -793,7 +1383,9 @@ struct Parser {
 				self.unported(what: "block parameter type annotations")
 				return params
 			}
-			params.push(Parameter(name: name, start: param_start, end: self.span_end()))
+			let no_label: ParamLabel? = .none
+			let no_annotation: TypeAnnotation? = .none
+			params.push(Parameter(label: no_label, name: name, name_start: name_tok.start, name_end: name_tok.end, mode: mode, annotation: no_annotation, start: param_start, end: self.span_end()))
 			if self.did_match(kind: .comma) {
 				// Next parameter.
 			} else {
@@ -807,26 +1399,32 @@ struct Parser {
 		params
 	}
 
-	// The ownership-mode probe ahead of a block argument name; modes are
-	// consumed (and, for now, discarded — Parameter carries none yet).
-	mut func probe_param_mode() -> Void {
+	// An optional ownership-mode prefix on a parameter (ADR 0018): `mut`
+	// is a hard keyword; `consume`/`borrow` are contextual and only read
+	// as modes when a parameter name follows.
+	mut func param_mode() -> ParamMode? {
 		self.skip_semicolons_and_newlines()
 		if self.peek_is(kind: .keyword_mut) {
 			self.advance()
-			return ()
+			return .some(.mut_param)
 		}
 		let cur = self.current()
 		if cur.kind == .identifier {
 			let text = self.lexeme(token: cur)
 			if text == "consume" && self.next_is_parameter_name(allow_mut: true) {
 				self.advance()
-				if self.peek_is(kind: .keyword_mut) { self.advance() }
-				return ()
+				if self.peek_is(kind: .keyword_mut) {
+					self.advance()
+					return .some(.consume_mut_param)
+				}
+				return .some(.consume_param)
 			}
 			if text == "borrow" && self.next_is_parameter_name(allow_mut: false) {
 				self.advance()
+				return .some(.borrow_param)
 			}
 		}
+		.none
 	}
 
 	func next_is_parameter_name(allow_mut: Bool) -> Bool {
@@ -855,7 +1453,9 @@ struct Parser {
 			self.unported(what: "paren-less string calls")
 			return (callee, false)
 		}
-		if self.peek_is(kind: .left_brace) {
+		// Trailing-block calls only where the context allows them: inside
+		// a control-flow header the `{` opens the construct's body.
+		if self.allows_trailing_blocks() && self.peek_is(kind: .left_brace) {
 			self.unported(what: "trailing-block calls")
 			return (callee, false)
 		}
@@ -877,7 +1477,7 @@ struct Parser {
 				self.consume_or_recover_closer_after_newline(kind: .right_paren)
 			}
 		}
-		if self.peek_is(kind: .left_brace) {
+		if self.allows_trailing_blocks() && self.peek_is(kind: .left_brace) {
 			self.unported(what: "trailing-block calls")
 		}
 		let call_expr = Expr(kind: .call([callee], args), start: start, end: self.span_end())
@@ -928,7 +1528,7 @@ struct Parser {
 				return CallArg(label: label, value: dummy_expr(), start: 0, end: 0)
 			}
 		}
-		let value = self.expr_with_precedence(prec: prec_assignment)
+		let value = self.require_expr(e: self.expr_with_precedence(prec: prec_assignment))
 		CallArg(label: label, value: value, start: start_tok.start, end: self.span_end())
 	}
 
@@ -988,15 +1588,15 @@ struct Parser {
 			return dummy_pattern()
 		}
 		if self.peek_is(kind: .pipe) {
-			let first = Pattern(kind: kind, start: start_tok.start, end: self.span_end())
+			let first = Pattern(kind: kind, start: start_tok.start, end: self.span_end(), meta_start: 0 - 1, meta_end: 0 - 1)
 			let patterns = [first]
 			loop self.did_match(kind: .pipe) {
 				patterns.push(self.pattern())
 				if self.is_failed() { return dummy_pattern() }
 			}
-			return Pattern(kind: .or_pattern(patterns), start: start_tok.start, end: self.span_end())
+			return Pattern(kind: .or_pattern(patterns), start: start_tok.start, end: self.span_end(), meta_start: 0 - 1, meta_end: 0 - 1)
 		}
-		Pattern(kind: kind, start: start_tok.start, end: self.span_end())
+		Pattern(kind: kind, start: start_tok.start, end: self.span_end(), meta_start: 0 - 1, meta_end: 0 - 1)
 	}
 
 	// A pattern opening with a name: a dotted path may end in a struct
@@ -1087,7 +1687,7 @@ struct Parser {
 				fields.push(self.pattern())
 			} else {
 				// Shorthand `x` binds the field to a same-named local.
-				fields.push(Pattern(kind: .bind(self.lexeme(token: name_tok)), start: name_tok.start, end: self.span_end()))
+				fields.push(Pattern(kind: .bind(self.lexeme(token: name_tok)), start: name_tok.start, end: self.span_end(), meta_start: 0 - 1, meta_end: 0 - 1))
 			}
 			if self.is_failed() { break }
 			field_names.push(field_name)
@@ -1152,12 +1752,12 @@ struct Parser {
 		}
 		let rhs: Expr? = .none
 		if self.did_match(kind: .equals) {
-			rhs = .some(self.expr())
+			rhs = .some(self.require_expr(e: self.expr()))
 		}
 		if self.did_match(kind: .keyword_else) {
 			self.unported(what: "let-else")
 		}
-		Decl(kind: .let_decl(lhs, annotation, rhs), start: start_tok.start, end: self.span_end())
+		Decl(kind: .let_decl(lhs, annotation, rhs), is_public: false, start: start_tok.start, end: self.span_end())
 	}
 
 	// MARK: Type annotations
@@ -1229,12 +1829,24 @@ struct Parser {
 			if self.is_failed() { return dummy_type() }
 		}
 		let generics: [GenericArg] = []
-		if self.did_match(kind: .less) {
+		if self.angle_generic_args_allowed() && self.did_match(kind: .less) {
 			generics = self.generic_args_list()
 			if self.is_failed() { return dummy_type() }
 		}
 		let base = TypeAnnotation(kind: .nominal(name, generics), start: start_tok.start, end: self.span_end())
 		self.nominal_type_path(base: base)
+	}
+
+	// Whether `<` at the cursor opens a generic-argument list; see
+	// `angle_adjacency`.
+	func angle_generic_args_allowed() -> Bool {
+		if self.angle_adjacency == false { return true }
+		if self.pos == 0 { return true }
+		let cur = self.current()
+		if cur.kind == .less {
+			return self.token_at(index: self.pos - 1).end == cur.start
+		}
+		true
 	}
 
 	mut func generic_args_list() -> [GenericArg] {
@@ -1258,7 +1870,7 @@ struct Parser {
 			let member = self.identifier()
 			if self.is_failed() { return base }
 			let member_generics: [GenericArg] = []
-			if self.did_match(kind: .less) {
+			if self.angle_generic_args_allowed() && self.did_match(kind: .less) {
 				member_generics = self.generic_args_list()
 				if self.is_failed() { return base }
 			}
@@ -1501,7 +2113,7 @@ struct Parser {
 			self.consume(kind: .right_brace)
 			symbols = .named(names)
 		}
-		Decl(kind: .import_decl(Import(symbols: symbols, path: path, local: local)), start: start_tok.start, end: self.span_end())
+		Decl(kind: .import_decl(Import(symbols: symbols, path: path, local: local)), is_public: false, start: start_tok.start, end: self.span_end())
 	}
 
 	// The dotted module path and whether its head names a local root
@@ -1517,11 +2129,702 @@ struct Parser {
 		(path, local)
 	}
 
+	// MARK: Declaration parsers
+
+	// The shared func grammar (the reference `func`): in protocol bodies
+	// a bodyless func is a requirement signature. The Func node's span
+	// is its body's; the whole declaration's extents ride as meta.
+	mut func func_parts(context: BlockContext, consume_func_keyword: Bool) -> DeclKind {
+		let start_tok = self.current()
+		if consume_func_keyword {
+			self.consume(kind: .keyword_func)
+			if self.is_failed() { return dummy_decl_kind() }
+		}
+		// The reference recovers a missing name with a placeholder; the
+		// name is not part of the dump contract.
+		let name = "#fn"
+		self.skip_semicolons_and_newlines()
+		let cur = self.current()
+		if cur.kind == .identifier || cur.kind == .keyword_use {
+			name = self.identifier()
+		}
+		let generics = self.generics_list()
+		if self.is_failed() { return dummy_decl_kind() }
+		let captures = self.capture_specs()
+		if self.is_failed() { return dummy_decl_kind() }
+		self.consume(kind: .left_paren)
+		if self.is_failed() { return dummy_decl_kind() }
+		let params = self.parameters()
+		if self.is_failed() { return dummy_decl_kind() }
+		self.consume(kind: .right_paren)
+		if self.is_failed() { return dummy_decl_kind() }
+		let effects = self.effect_set()
+		if self.is_failed() { return dummy_decl_kind() }
+		let ret: TypeAnnotation? = .none
+		if self.did_match(kind: .arrow) {
+			ret = .some(self.type_annotation())
+			if self.is_failed() { return dummy_decl_kind() }
+		}
+		let wc = self.where_clause()
+		if self.is_failed() { return dummy_decl_kind() }
+		if context == .protocol_body && self.peek_is(kind: .left_brace) == false {
+			return .func_signature(FuncSignature(name: name, params: params, effects: effects, generics: generics, where_clause: wc, ret: ret, start: start_tok.start, end: self.span_end()))
+		}
+		let body = self.block(context: .func_body, consumes_left_brace: true)
+		if self.is_failed() { return dummy_decl_kind() }
+		let b_start = body.start
+		let b_end = body.end
+		return .func_decl(Func(name: name, effects: effects, generics: generics, captures: captures, where_clause: wc, params: params, body: body, ret: ret, start: b_start, end: b_end, meta_start: start_tok.start, meta_end: self.span_end()))
+	}
+
+	mut func func_decl_parse(context: BlockContext) -> Decl {
+		let start_tok = self.current()
+		let kind = self.func_parts(context: context, consume_func_keyword: true)
+		if self.is_failed() { return dummy_decl() }
+		Decl(kind: kind, is_public: false, start: start_tok.start, end: self.span_end())
+	}
+
+	mut func func_expr_prefix() -> Expr {
+		let start_tok = self.current()
+		let kind = self.func_parts(context: .plain, consume_func_keyword: true)
+		if self.is_failed() { return dummy_expr() }
+		match kind {
+			.func_decl(f) -> Expr(kind: .func_expr(f), start: start_tok.start, end: self.span_end()),
+			_ -> {
+				self.fail(code: "parser.incomplete-function-signature", message: "func must have a body")
+				dummy_expr()
+			}
+		}
+	}
+
+	mut func method_decl(context: BlockContext, is_static: Bool, receiver: ReceiverMode) -> Decl {
+		let start_tok = self.current()
+		let kind = self.func_parts(context: context, consume_func_keyword: true)
+		if self.is_failed() { return dummy_decl() }
+		let d_end = self.span_end()
+		match kind {
+			.func_decl(f) -> {
+				self.reject_explicit_self(params: f.params, is_static: is_static)
+				if self.is_failed() { return dummy_decl() }
+				Decl(kind: .method(f, is_static, receiver), is_public: false, start: start_tok.start, end: d_end)
+			},
+			.func_signature(sig) -> {
+				self.reject_explicit_self(params: sig.params, is_static: is_static)
+				if self.is_failed() { return dummy_decl() }
+				Decl(kind: .method_requirement(sig, receiver), is_public: false, start: start_tok.start, end: d_end)
+			},
+			_ -> dummy_decl()
+		}
+	}
+
+	mut func method_decl_with_mode(context: BlockContext, is_static: Bool, receiver: ReceiverMode) -> Decl {
+		if context_is_nominal(context: context) == false {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected method declaration, got " + describe_kind(kind: self.current().kind))
+			return dummy_decl()
+		}
+		if is_static {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected instance method receiver modifier, got " + describe_kind(kind: self.current().kind))
+			return dummy_decl()
+		}
+		self.method_decl(context: context, is_static: is_static, receiver: receiver)
+	}
+
+	// Methods never declare `self`; the receiver mode keyword does.
+	mut func reject_explicit_self(params: &[Parameter], is_static: Bool) -> Void {
+		if is_static { return () }
+		if params.count == 0 { return () }
+		if params[0].name == "self" {
+			self.fail(code: "parser.explicit-self-parameter", message: "Methods do not declare `self`; use `func`, `mut func`, or `consuming func`")
+		}
+	}
+
+	mut func init_decl_parse() -> Decl {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_init)
+		self.consume(kind: .left_paren)
+		if self.is_failed() { return dummy_decl() }
+		let params = self.parameters()
+		if self.is_failed() { return dummy_decl() }
+		self.consume(kind: .right_paren)
+		if self.is_failed() { return dummy_decl() }
+		let body = self.block(context: .func_body, consumes_left_brace: true)
+		if self.is_failed() { return dummy_decl() }
+		Decl(kind: .init_decl(params, body), is_public: false, start: start_tok.start, end: self.span_end())
+	}
+
+	// A protocol initializer requirement: `init(params)` with no body.
+	mut func init_requirement_parse() -> Decl {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_init)
+		self.consume(kind: .left_paren)
+		if self.is_failed() { return dummy_decl() }
+		let params = self.parameters()
+		if self.is_failed() { return dummy_decl() }
+		self.consume(kind: .right_paren)
+		if self.is_failed() { return dummy_decl() }
+		if self.peek_is(kind: .left_brace) {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected an init requirement without a body, got `{`")
+			return dummy_decl()
+		}
+		let no_generics: [GenericDecl] = []
+		let no_wc: WhereClause? = .none
+		let no_ret: TypeAnnotation? = .none
+		let no_names: [String] = []
+		let sig = FuncSignature(name: "init", params: params, effects: EffectSet(names: no_names, open: true), generics: no_generics, where_clause: no_wc, ret: no_ret, start: start_tok.start, end: self.span_end())
+		Decl(kind: .init_requirement(sig), is_public: false, start: start_tok.start, end: self.span_end())
+	}
+
+	mut func property_decl(is_static: Bool) -> Decl {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_let)
+		let name = self.identifier()
+		if self.is_failed() { return dummy_decl() }
+		let annotation: TypeAnnotation? = .none
+		if self.did_match(kind: .colon) {
+			annotation = .some(self.type_annotation())
+			if self.is_failed() { return dummy_decl() }
+		}
+		let default_value: Expr? = .none
+		if self.did_match(kind: .equals) {
+			default_value = .some(self.require_expr(e: self.expr()))
+			if self.is_failed() { return dummy_decl() }
+		}
+		Decl(kind: .property(name, is_static, annotation, default_value), is_public: false, start: start_tok.start, end: self.span_end())
+	}
+
+	mut func variant_decl(expect_case: Bool) -> Decl {
+		let start_tok = self.current()
+		if expect_case {
+			self.consume(kind: .keyword_case)
+		}
+		let name = self.identifier()
+		if self.is_failed() { return dummy_decl() }
+		let generics = self.generics_list()
+		if self.is_failed() { return dummy_decl() }
+		let payloads: [TypeAnnotation] = []
+		let labels: [String?] = []
+		if self.did_match(kind: .left_paren) {
+			loop self.did_match(kind: .right_paren) == false {
+				if self.is_failed() { return dummy_decl() }
+				if self.peek_is(kind: .identifier) && self.next_kind() == .colon {
+					let label = self.identifier()
+					self.consume(kind: .colon)
+					payloads.push(self.type_annotation())
+					labels.push(.some(label))
+				} else {
+					payloads.push(self.type_annotation())
+					labels.push(.none)
+				}
+				if self.is_failed() { return dummy_decl() }
+				let _ = self.did_match(kind: .comma)
+			}
+		}
+		let result: TypeAnnotation? = .none
+		if self.did_match(kind: .arrow) {
+			result = .some(self.type_annotation())
+			if self.is_failed() { return dummy_decl() }
+		}
+		Decl(kind: .enum_variant(name, generics, payloads, labels, result), is_public: false, start: start_tok.start, end: self.span_end())
+	}
+
+	mut func nominal_decl(entry: TokenKind, context: BlockContext) -> Decl {
+		let start_tok = self.current()
+		self.consume(kind: entry)
+		let name = self.identifier()
+		if self.is_failed() { return dummy_decl() }
+		let generics = self.generics_list()
+		if self.is_failed() { return dummy_decl() }
+		// Tick-suffix declaration attributes: `struct Node 'heap { … }`,
+		// `struct Token 'linear { … }`.
+		let is_linear = false
+		let is_heap = false
+		loop self.peek_is(kind: .effect_name) {
+			let attr_tok = self.current()
+			self.advance()
+			let attribute = self.lexeme(token: attr_tok)
+			if attribute == "linear" {
+				is_linear = true
+			} else if attribute == "heap" && context == .struct_body {
+				is_heap = true
+			} else if attribute == "heap" {
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected 'heap applies to struct declarations only, got " + describe_kind(kind: .effect_name))
+				return dummy_decl()
+			} else {
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a declaration attribute ('heap or 'linear), got " + describe_kind(kind: .effect_name))
+				return dummy_decl()
+			}
+		}
+		if is_linear && is_heap {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected at most one of 'heap and 'linear (aliased references cannot be consumed exactly once), got " + describe_kind(kind: self.current().kind))
+			return dummy_decl()
+		}
+		let conformances: [TypeAnnotation] = []
+		if self.did_match(kind: .colon) {
+			if context == .protocol_body {
+				conformances = self.conformances_list()
+				if self.is_failed() { return dummy_decl() }
+			} else {
+				let what = if context == .struct_body { "struct" } else { "enum" }
+				self.fail(code: "parser.conformance-list-not-allowed", message: "Cannot declare conformances on " + what + "; use an `extend` block instead")
+				return dummy_decl()
+			}
+		}
+		let wc = self.where_clause()
+		if self.is_failed() { return dummy_decl() }
+		let body = self.body_parse(context: context)
+		if self.is_failed() { return dummy_decl() }
+		let d_end = self.span_end()
+		if context == .enum_body {
+			return Decl(kind: .enum_decl(name, generics, wc, body, is_linear), is_public: false, start: start_tok.start, end: d_end)
+		}
+		if context == .struct_body {
+			return Decl(kind: .struct_decl(name, generics, wc, body, is_linear, is_heap), is_public: false, start: start_tok.start, end: d_end)
+		}
+		Decl(kind: .protocol_decl(name, generics, wc, body, conformances), is_public: false, start: start_tok.start, end: d_end)
+	}
+
+	mut func extend_parse() -> Decl {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_extend)
+		let binders = self.generics_list()
+		if self.is_failed() { return dummy_decl() }
+		let head = self.type_application()
+		if self.is_failed() { return dummy_decl() }
+		let conformances: [TypeAnnotation] = []
+		if self.did_match(kind: .colon) {
+			conformances = self.conformances_list()
+			if self.is_failed() { return dummy_decl() }
+		}
+		let wc = self.where_clause()
+		if self.is_failed() { return dummy_decl() }
+		let body = self.body_parse(context: .extend_body)
+		if self.is_failed() { return dummy_decl() }
+		Decl(kind: .extend_decl(binders, head, conformances, wc, body), is_public: false, start: start_tok.start, end: self.span_end())
+	}
+
+	// A nominal application (`Name<Args>`): the extension head grammar —
+	// sugar and non-nominal forms fail at the offending token.
+	mut func type_application() -> TypeApplication {
+		let start_tok = self.current()
+		let name = self.identifier()
+		if self.is_failed() {
+			let no_args: [GenericArg] = []
+			return TypeApplication(name: "", args: no_args, start: 0, end: 0)
+		}
+		loop self.did_match(kind: .double_colon) {
+			name = name + "::" + self.identifier()
+			if self.is_failed() {
+				let no_args: [GenericArg] = []
+				return TypeApplication(name: "", args: no_args, start: 0, end: 0)
+			}
+		}
+		let args: [GenericArg] = []
+		if self.did_match(kind: .less) {
+			args = self.generic_args_list()
+		}
+		TypeApplication(name: name, args: args, start: start_tok.start, end: self.span_end())
+	}
+
+	mut func typealias_parse() -> Decl {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_typealias)
+		let name = self.identifier()
+		if self.is_failed() { return dummy_decl() }
+		self.consume(kind: .equals)
+		if self.is_failed() { return dummy_decl() }
+		let rhs = self.type_annotation()
+		if self.is_failed() { return dummy_decl() }
+		Decl(kind: .typealias_decl(name, rhs), is_public: false, start: start_tok.start, end: self.span_end())
+	}
+
+	mut func effect_decl_parse() -> Decl {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_effect)
+		let name_tok = self.current()
+		if name_tok.kind == .effect_name { } else {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected effect name (must start with '), got " + describe_kind(kind: name_tok.kind))
+			return dummy_decl()
+		}
+		self.advance()
+		let name = self.lexeme(token: name_tok)
+		let generics = self.generics_list()
+		if self.is_failed() { return dummy_decl() }
+		self.consume(kind: .left_paren)
+		if self.is_failed() { return dummy_decl() }
+		let params = self.parameters()
+		if self.is_failed() { return dummy_decl() }
+		self.consume(kind: .right_paren)
+		self.consume(kind: .arrow)
+		if self.is_failed() { return dummy_decl() }
+		let ret = self.type_annotation()
+		if self.is_failed() { return dummy_decl() }
+		let wc = self.where_clause()
+		if self.is_failed() { return dummy_decl() }
+		Decl(kind: .effect_decl(name, generics, wc, params, ret), is_public: false, start: start_tok.start, end: self.span_end())
+	}
+
+	mut func associated_parse() -> Decl {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_associated)
+		let generic = self.generic_param()
+		if self.is_failed() { return dummy_decl() }
+		let wc = self.where_clause()
+		if self.is_failed() { return dummy_decl() }
+		Decl(kind: .associated_decl(generic, wc), is_public: false, start: start_tok.start, end: self.span_end())
+	}
+
+	// A module-local declarative macro rule (ADR 0026).
+	mut func macro_decl_parse() -> Decl {
+		let start_tok = self.current()
+		self.consume(kind: .keyword_macro)
+		let name = self.identifier()
+		if self.is_failed() { return dummy_decl() }
+		self.consume(kind: .left_paren)
+		if self.is_failed() { return dummy_decl() }
+		let params: [String] = []
+		loop self.did_match(kind: .right_paren) == false {
+			if self.is_failed() { return dummy_decl() }
+			let param_tok = self.current()
+			if param_tok.kind == .bound_var { } else {
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected macro parameter such as `$value`, got " + describe_kind(kind: param_tok.kind))
+				return dummy_decl()
+			}
+			let param_name = self.lexeme(token: param_tok)
+			if macro_param_is_identifier_shaped(name: param_name) == false {
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected identifier-shaped macro parameter, got " + describe_kind(kind: param_tok.kind))
+				return dummy_decl()
+			}
+			self.advance()
+			params.push(param_name)
+			if self.did_match(kind: .right_paren) { break }
+			self.consume(kind: .comma)
+			if self.is_failed() { return dummy_decl() }
+		}
+		self.consume(kind: .equals)
+		if self.is_failed() { return dummy_decl() }
+		let template = self.require_expr(e: self.expr())
+		if self.is_failed() { return dummy_decl() }
+		Decl(kind: .macro_decl(name, params, template), is_public: false, start: start_tok.start, end: self.span_end())
+	}
+
+	// A nominal declaration's member list (the reference `body`): decls
+	// only — a statement here is a conversion error.
+	mut func body_parse(context: BlockContext) -> Body {
+		self.skip_newlines()
+		let start_tok = self.current()
+		self.consume(kind: .left_brace)
+		self.skip_semicolons_and_newlines()
+		let decls: [Decl] = []
+		loop self.did_match(kind: .right_brace) == false {
+			if self.is_failed() { break }
+			if context == .enum_body && self.peek_is(kind: .keyword_case) {
+				decls.push(self.variant_decl(expect_case: true))
+				if self.is_failed() { break }
+				loop self.did_match(kind: .comma) {
+					decls.push(self.variant_decl(expect_case: false))
+					if self.is_failed() { break }
+				}
+				continue
+			}
+			if context == .protocol_body && self.peek_is(kind: .keyword_associated) {
+				decls.push(self.associated_parse())
+				continue
+			}
+			decls.push(self.require_decl(item: self.decl(context: context, is_static: false)))
+			if self.is_failed() { break }
+			self.skip_semicolons_and_newlines()
+		}
+		Body(decls: decls, start: start_tok.start, end: self.span_end())
+	}
+
+	mut func require_decl(consume item: Item) -> Decl {
+		match item {
+			.decl_item(d) -> d,
+			_ -> {
+				self.fail(code: "parser.conversion", message: "could not convert node to Decl")
+				dummy_decl()
+			}
+		}
+	}
+
+	// MARK: Generics and signatures
+
+	// A `<`-opened generic PARAMETER list (`<T: Proto, U = Int>`).
+	mut func generics_list() -> [GenericDecl] {
+		let generics: [GenericDecl] = []
+		if self.did_match(kind: .less) {
+			loop true {
+				if self.did_match_generic_close() { break }
+				if self.did_match(kind: .eof) { break }
+				generics.push(self.generic_param())
+				if self.is_failed() { break }
+				let _ = self.did_match(kind: .comma)
+			}
+		}
+		generics
+	}
+
+	mut func generic_param() -> GenericDecl {
+		// ADR 0035: `static N: Int` declares a static value parameter.
+		if self.peek_is(kind: .keyword_static) {
+			self.unported(what: "static generic parameters")
+			return dummy_generic_decl()
+		}
+		let start_tok = self.current()
+		let name = self.identifier()
+		if self.is_failed() { return dummy_generic_decl() }
+		let generics = self.generics_list()
+		if self.is_failed() { return dummy_generic_decl() }
+		let conformances: [TypeAnnotation] = []
+		if self.did_match(kind: .colon) {
+			conformances = self.conformances_list()
+			if self.is_failed() { return dummy_generic_decl() }
+		}
+		let default_value: GenericArg? = .none
+		if self.did_match(kind: .equals) {
+			default_value = .some(.type_arg(self.type_annotation()))
+			if self.is_failed() { return dummy_generic_decl() }
+		}
+		GenericDecl(name: name, generics: generics, conformances: conformances, default_value: default_value, start: start_tok.start, end: self.span_end())
+	}
+
+	mut func conformances_list() -> [TypeAnnotation] {
+		let list: [TypeAnnotation] = []
+		loop true {
+			list.push(self.type_annotation())
+			if self.is_failed() { return list }
+			if self.did_match(kind: .comma) == false { break }
+		}
+		list
+	}
+
+	mut func where_clause() -> WhereClause? {
+		self.skip_newlines()
+		let cur = self.current()
+		if cur.kind == .identifier && self.lexeme(token: cur) == "where" { } else { return .none }
+		self.advance()
+		let predicates: [WherePredicate] = []
+		loop true {
+			predicates.push(self.where_predicate())
+			if self.is_failed() { break }
+			if self.did_match(kind: .amp_amp) == false { break }
+		}
+		.some(WhereClause(predicates: predicates, start: cur.start, end: self.span_end()))
+	}
+
+	// In where-predicate operands `<` doubles as the static comparison
+	// operator (ADR 0035), so a generic-argument list there must be
+	// adjacent to its head (`Foo<Int>`, not `Foo < Int`).
+	mut func where_predicate() -> WherePredicate {
+		let saved = self.angle_adjacency
+		self.angle_adjacency = true
+		let result = self.where_predicate_restricted()
+		self.angle_adjacency = saved
+		result
+	}
+
+	mut func where_predicate_restricted() -> WherePredicate {
+		let start_tok = self.current()
+		let lhs = self.generic_argument()
+		if self.is_failed() { return dummy_predicate() }
+		if self.did_match(kind: .equals_equals) {
+			let rhs = self.generic_argument()
+			if self.is_failed() { return dummy_predicate() }
+			return WherePredicate(kind: .type_eq(lhs, rhs), start: start_tok.start, end: self.span_end())
+		}
+		if self.peek_is(kind: .less) || self.peek_is(kind: .less_equals) {
+			self.unported(what: "static comparison predicates")
+			return dummy_predicate()
+		}
+		self.consume(kind: .colon)
+		if self.is_failed() { return dummy_predicate() }
+		let ty = match lhs {
+			.type_arg(t) -> t
+		}
+		let protocols: [TypeAnnotation] = [self.type_annotation()]
+		if self.is_failed() { return dummy_predicate() }
+		loop self.did_match(kind: .amp) {
+			protocols.push(self.type_annotation())
+			if self.is_failed() { return dummy_predicate() }
+		}
+		WherePredicate(kind: .conforms(ty, protocols), start: start_tok.start, end: self.span_end())
+	}
+
+	// A declared parameter list (funcs, inits, effects). ADR 0041 labels:
+	// `_ name` omits the external label, `foo fizz` names it.
+	mut func parameters() -> [Parameter] {
+		let params: [Parameter] = []
+		loop true {
+			let mode = self.param_mode()
+			let label: ParamLabel? = .none
+			let name = ""
+			let name_start = 0
+			let name_end = 0
+			if self.peek_is(kind: .underscore) && self.next_kind() == .identifier {
+				self.advance()
+				self.skip_semicolons_and_newlines()
+				let name_tok = self.current()
+				name = self.identifier()
+				name_start = name_tok.start
+				name_end = name_tok.end
+				label = .some(.omitted)
+			} else {
+				self.skip_semicolons_and_newlines()
+				let first_tok = self.current()
+				if first_tok.kind == .identifier || first_tok.kind == .keyword_use { } else {
+					if let .some(_) = mode {
+						// A mode keyword must be followed by a parameter name.
+						self.fail(code: "parser.expected-identifier", message: "Expected an identifier, got " + describe_kind(kind: first_tok.kind))
+						return params
+					}
+					break
+				}
+				let first = self.identifier()
+				if self.peek_is(kind: .identifier) {
+					// Mode keywords never read as external labels; a second
+					// mode spelling here is a repeated/misordered mode.
+					if first == "consume" || first == "borrow" {
+						self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected parameter name, got an identifier")
+						return params
+					}
+					let name_tok = self.current()
+					name = self.identifier()
+					name_start = name_tok.start
+					name_end = name_tok.end
+					label = .some(.named(first))
+				} else {
+					name = first
+					name_start = first_tok.start
+					name_end = first_tok.end
+				}
+			}
+			let param_start = self.current().start
+			let annotation: TypeAnnotation? = .none
+			if self.did_match(kind: .colon) {
+				annotation = .some(self.type_annotation())
+				if self.is_failed() { return params }
+			}
+			params.push(Parameter(label: label, name: name, name_start: name_start, name_end: name_end, mode: mode, annotation: annotation, start: param_start, end: self.span_end()))
+			if self.did_match(kind: .comma) { } else { break }
+		}
+		params
+	}
+
+	// A capture list on a func head (`func f[x, &y, copy z](…)`).
+	mut func capture_specs() -> [CaptureSpec] {
+		let captures: [CaptureSpec] = []
+		if self.did_match(kind: .left_bracket) == false { return captures }
+		loop true {
+			if self.did_match(kind: .right_bracket) { break }
+			if self.did_match(kind: .eof) { break }
+			let mode: CaptureMode = .copy_capture
+			if self.did_match(kind: .amp) {
+				if self.did_match(kind: .keyword_mut) {
+					mode = .borrow_mut
+				} else {
+					mode = .borrow_shared
+				}
+			} else if self.did_match(kind: .keyword_consuming) {
+				mode = .move_capture
+			} else {
+				let cur = self.current()
+				if cur.kind == .identifier && self.lexeme(token: cur) == "copy" {
+					self.advance()
+				}
+			}
+			self.skip_semicolons_and_newlines()
+			let name_tok = self.current()
+			let name = self.identifier()
+			if self.is_failed() { break }
+			captures.push(CaptureSpec(mode: mode, name: name, start: name_tok.start, end: name_tok.end))
+			if self.did_match(kind: .right_bracket) { return captures }
+			self.consume(kind: .comma)
+			if self.is_failed() { break }
+		}
+		captures
+	}
+
+	// MARK: Attributes
+
+	mut func attribute_prefix() -> Expr {
+		let attr_tok = self.current()
+		self.advance()
+		let attr = self.lexeme(token: attr_tok)
+		if attr == "_ir" {
+			return self.inline_ir(start: attr_tok.start)
+		}
+		if attr == "unsafe" {
+			let block = self.block(context: .plain, consumes_left_brace: true)
+			if self.is_failed() { return dummy_expr() }
+			return Expr(kind: .unsafe_expr(block), start: attr_tok.start, end: self.span_end())
+		}
+		// The reference rejects other expression attributes with the
+		// cannot-assign error (its own recovery TODO).
+		self.fail_cannot_assign()
+		dummy_expr()
+	}
+
+	// `@_ir { %d = instr … }`: only the `cmp` operator error path is
+	// exercised by the corpus; instruction success stays unported.
+	mut func inline_ir(start: Int) -> Expr {
+		if self.did_match(kind: .left_paren) {
+			loop true {
+				if self.did_match(kind: .right_paren) { break }
+				if self.did_match(kind: .eof) { break }
+				if self.is_failed() { return dummy_expr() }
+				let _ = self.require_expr(e: self.expr())
+				if self.is_failed() { return dummy_expr() }
+				let _ = self.did_match(kind: .comma)
+			}
+		}
+		self.consume(kind: .left_brace)
+		if self.is_failed() { return dummy_expr() }
+		let cur = self.current()
+		if cur.kind == .ir_register {
+			self.advance()
+			self.consume(kind: .equals)
+			if self.is_failed() { return dummy_expr() }
+			let instr = self.identifier()
+			if self.is_failed() { return dummy_expr() }
+			if instr == "cmp" {
+				let _ = self.type_annotation()
+				if self.is_failed() { return dummy_expr() }
+				self.ir_value()
+				if self.is_failed() { return dummy_expr() }
+				self.skip_semicolons_and_newlines()
+				let op = self.current()
+				if op.kind == .less || op.kind == .bang_equals || op.kind == .equals_equals || op.kind == .less_equals || op.kind == .greater || op.kind == .greater_equals {
+					self.advance()
+				} else {
+					self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected one of `<`, `!=`, `==`, `<=`, `>`, `>=`, got " + describe_kind(kind: op.kind))
+					return dummy_expr()
+				}
+				self.ir_value()
+				if self.is_failed() { return dummy_expr() }
+				self.unported(what: "@_ir instruction lowering")
+				return dummy_expr()
+			}
+			self.unported(what: "@_ir `" + instr + "` instructions")
+			return dummy_expr()
+		}
+		self.unported(what: "@_ir blocks without a destination register")
+		dummy_expr()
+	}
+
+	mut func ir_value() -> Void {
+		let k = self.current().kind
+		if k == .ir_register || k == .int_number || k == .float_number || k == .keyword_true || k == .keyword_false || k == .bound_var {
+			self.advance()
+			return ()
+		}
+		self.unported(what: "IR value forms")
+	}
+
 	// MARK: Roots
 
 	mut func next_root() -> Item {
 		if is_decl_keyword(kind: self.current().kind) {
-			return self.decl()
+			return self.decl(context: .plain, is_static: false)
 		}
 		.stmt_item(self.stmt())
 	}
@@ -1529,53 +2832,215 @@ struct Parser {
 	// Declaration dispatch: block bodies route through here directly
 	// (unlike roots, which gate on `is_decl_keyword` first), so
 	// non-keyword tokens fall through to statements.
-	mut func decl() -> Item {
+	mut func decl(context: BlockContext, is_static: Bool) -> Item {
 		self.skip_semicolons_and_newlines()
-		let k = self.current().kind
-		if k == .keyword_let {
-			return .decl_item(self.let_decl())
+		let cur = self.current()
+		let k = cur.kind
+		if k == .keyword_pub {
+			return self.pub_decl(context: context, is_static: is_static)
+		}
+		if k == .keyword_public {
+			self.fail(code: "parser.legacy-public-modifier", message: "`public` was renamed to `pub`; replace `public` with `pub`")
+			return .decl_item(dummy_decl())
+		}
+		if k == .keyword_linear {
+			// The prefix form moved to a tick-suffix attribute.
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected `struct Name 'linear { ... }` (the `linear struct` prefix moved to a declaration attribute), got " + describe_kind(kind: k))
+			return .decl_item(dummy_decl())
+		}
+		if k == .keyword_static {
+			self.advance()
+			return self.decl(context: context, is_static: true)
+		}
+		if k == .keyword_mut {
+			self.advance()
+			return .decl_item(self.method_decl_with_mode(context: context, is_static: is_static, receiver: .ref_receiver))
+		}
+		if k == .keyword_consuming {
+			self.advance()
+			return .decl_item(self.method_decl_with_mode(context: context, is_static: is_static, receiver: .consuming_receiver))
 		}
 		if k == .keyword_use {
 			return .decl_item(self.import_decl())
 		}
+		if k == .keyword_macro {
+			if context == .plain {
+				return .decl_item(self.macro_decl_parse())
+			}
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a top-level macro declaration, got " + describe_kind(kind: k))
+			return .decl_item(dummy_decl())
+		}
+		if k == .keyword_effect {
+			return .decl_item(self.effect_decl_parse())
+		}
+		if k == .keyword_typealias {
+			return .decl_item(self.typealias_parse())
+		}
+		if k == .keyword_protocol {
+			return .decl_item(self.nominal_decl(entry: .keyword_protocol, context: .protocol_body))
+		}
+		if k == .keyword_enum {
+			return .decl_item(self.nominal_decl(entry: .keyword_enum, context: .enum_body))
+		}
+		if k == .keyword_extend {
+			return .decl_item(self.extend_parse())
+		}
+		if k == .keyword_struct {
+			return .decl_item(self.nominal_decl(entry: .keyword_struct, context: .struct_body))
+		}
 		if k == .keyword_init {
+			if context == .extend_body || context == .struct_body {
+				return .decl_item(self.init_decl_parse())
+			}
+			if context == .protocol_body {
+				return .decl_item(self.init_requirement_parse())
+			}
 			self.fail(code: "parser.init-not-allowed", message: "Cannot use `init` in this context")
 			return .decl_item(dummy_decl())
 		}
-		if is_decl_keyword(kind: k) || k == .keyword_static {
-			self.unported(what: "`" + kind_spelling(kind: k) + "` declarations")
-			return .decl_item(dummy_decl())
+		if k == .keyword_case {
+			return .decl_item(self.variant_decl(expect_case: true))
+		}
+		if k == .keyword_let {
+			if context == .extend_body || context == .struct_body {
+				return .decl_item(self.property_decl(is_static: is_static))
+			}
+			if context == .enum_body {
+				self.fail(code: "parser.let-not-allowed", message: "Cannot use `let` in enum body")
+				return .decl_item(dummy_decl())
+			}
+			return .decl_item(self.let_decl())
+		}
+		if k == .keyword_func {
+			if context_is_nominal(context: context) {
+				return .decl_item(self.method_decl(context: context, is_static: is_static, receiver: .none_receiver))
+			}
+			return .decl_item(self.func_decl_parse(context: context))
 		}
 		.stmt_item(self.stmt())
+	}
+
+	// ADR 0042's declaration matrix: which parsed declarations admit a
+	// `pub` modifier in which body context.
+	mut func pub_decl(context: BlockContext, is_static: Bool) -> Item {
+		self.consume(kind: .keyword_pub)
+		if self.peek_is(kind: .keyword_pub) || self.peek_is(kind: .keyword_public) {
+			self.fail(code: "parser.repeated-visibility-modifier", message: "Repeated visibility modifier; write `pub` once")
+			return .decl_item(dummy_decl())
+		}
+		let item = self.decl(context: context, is_static: is_static)
+		if self.is_failed() { return item }
+		match item {
+			.decl_item(d) -> {
+				self.check_pub_admitted(kind: d.kind, context: context)
+				if self.is_failed() { return .decl_item(dummy_decl()) }
+				let d_start = d.start
+				let d_end = d.end
+				return .decl_item(Decl(kind: d.kind, is_public: true, start: d_start, end: d_end))
+			},
+			_ -> {
+				self.fail(code: "parser.visibility-not-allowed", message: "`pub` is not allowed on a statement")
+				return .decl_item(dummy_decl())
+			}
+		}
+	}
+
+	mut func reject_pub(what: String) -> Void {
+		self.fail(code: "parser.visibility-not-allowed", message: "`pub` is not allowed on " + what)
+	}
+
+	mut func check_pub_admitted(kind: &DeclKind, context: BlockContext) -> Void {
+		match kind {
+			.import_decl(_) -> self.reject_pub(what: "an import"),
+			.extend_decl(_, _, _, _, _) -> self.reject_pub(what: "an extension"),
+			.enum_variant(_, _, _, _, _) -> self.reject_pub(what: "an enum case"),
+			.macro_decl(_, _, _) -> self.fail(code: "parser.macro-export-unsupported", message: "Macros cannot be exported; remove `pub`"),
+			.associated_decl(_, _) -> self.reject_pub(what: "a protocol requirement"),
+			.method_requirement(_, _) -> self.reject_pub(what: "a protocol requirement"),
+			.init_requirement(_) -> self.reject_pub(what: "a protocol requirement"),
+			_ -> {
+				if context == .protocol_body {
+					self.reject_pub(what: "a protocol member")
+					return ()
+				}
+				match kind {
+					.struct_decl(_, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
+					.enum_decl(_, _, _, _, _) -> self.check_pub_context_nominal(context: context),
+					.protocol_decl(_, _, _, _, _) -> self.check_pub_context_nominal(context: context),
+					.typealias_decl(_, _) -> self.check_pub_context_nominal(context: context),
+					.effect_decl(_, _, _, _, _) -> self.check_pub_context_nominal(context: context),
+					.func_decl(_) -> self.check_pub_context_top(context: context),
+					.func_signature(_) -> self.check_pub_context_top(context: context),
+					.let_decl(_, _, _) -> self.check_pub_context_top(context: context),
+					.property(_, _, _, _) -> self.check_pub_context_member(context: context),
+					.method(_, _, _) -> self.check_pub_context_member(context: context),
+					.init_decl(_, _) -> self.check_pub_context_member(context: context),
+					_ -> {}
+				}
+			}
+		}
+	}
+
+	// Nominal/alias/effect declarations: public at the top level or
+	// nested in a nominal body.
+	mut func check_pub_context_nominal(context: BlockContext) -> Void {
+		if context == .plain || context == .struct_body || context == .enum_body || context == .extend_body { return () }
+		self.reject_pub(what: "a local declaration")
+	}
+
+	// Funcs and lets: public at the top level only.
+	mut func check_pub_context_top(context: BlockContext) -> Void {
+		if context == .plain { return () }
+		self.reject_pub(what: "a local declaration")
+	}
+
+	// Members: public inside a nominal body.
+	mut func check_pub_context_member(context: BlockContext) -> Void {
+		if context == .struct_body || context == .enum_body || context == .extend_body { return () }
+		self.reject_pub(what: "a local declaration")
 	}
 
 	mut func stmt() -> Stmt {
 		self.skip_semicolons_and_newlines()
 		let cur = self.current()
 		let k = cur.kind
-		if k == .keyword_if || k == .keyword_loop || k == .keyword_for || k == .keyword_return || k == .keyword_continue || k == .keyword_break {
-			self.unported(what: "`" + kind_spelling(kind: k) + "` statements")
-			return dummy_stmt()
+		if k == .keyword_if { return self.if_stmt() }
+		if k == .keyword_loop { return self.loop_stmt() }
+		if k == .keyword_for { return self.for_stmt() }
+		if k == .keyword_return { return self.return_stmt() }
+		if k == .keyword_continue { return self.continue_stmt() }
+		if k == .keyword_break {
+			let start_tok = self.current()
+			self.consume(kind: .keyword_break)
+			return Stmt(kind: .break_stmt, start: start_tok.start, end: self.span_end())
 		}
 		if k == .attribute && self.lexeme(token: cur) == "handle" {
 			self.unported(what: "effect handlers")
 			return dummy_stmt()
 		}
 		if k == .effect_name && self.lexeme(token: cur) == "continue" {
-			self.unported(what: "`'continue` statements")
-			return dummy_stmt()
+			return self.resume_stmt()
 		}
-		// An expression statement shares its expression's span.
+		// An expression statement shares its expression's span — unless
+		// the expression grammar parsed an assignment, which IS the
+		// statement.
 		let e = self.expr()
+		if self.has_pending_assign() {
+			if let .some(s) = self.assign_slot.pop() {
+				return s
+			}
+		}
 		let start = e.start
 		let end = e.end
 		Stmt(kind: .expr_stmt(e), start: start, end: end)
 	}
 
-	// The block-items category loop (the reference `parse_category`):
+	// The file/block-items category loop (the reference `parse_category`):
 	// the stale `current` read before the skip drives both the progress
-	// guard and the EOF check, faithfully to the reference quirk.
-	mut func parse_items() -> Void {
+	// guard and the EOF check, faithfully to the reference quirk. Imports
+	// are file-level only; the block-items category rejects them after
+	// they parse.
+	mut func parse_items(allow_imports: Bool) -> Void {
 		self.skip_semicolons_and_newlines()
 		let last_start = 0 - 1
 		loop true {
@@ -1590,9 +3055,7 @@ struct Parser {
 			if stale.kind == .eof { return () }
 			let item = self.next_root()
 			if self.is_failed() { return () }
-			// Imports are file-level only: the block-items category
-			// rejects them after they parse, like the reference loop.
-			if item_is_import(item: item) {
+			if allow_imports == false && item_is_import(item: item) {
 				self.fail(code: "parser.import-in-block-items", message: "imports are not allowed in block items")
 				return ()
 			}
@@ -1602,11 +3065,20 @@ struct Parser {
 	}
 
 	// The expression category (the reference `parse_expr`): one
-	// expression owning the whole input.
+	// expression owning the whole input. An assignment is a legal root
+	// here — the reference pushes whatever node the expression grammar
+	// produced.
 	mut func parse_expr_root() -> Void {
 		self.skip_semicolons_and_newlines()
 		let root = self.expr()
 		if self.is_failed() { return () }
+		if self.has_pending_assign() {
+			if let .some(s) = self.assign_slot.pop() {
+				self.items.push(.stmt_item(s))
+				self.require_end_of_input()
+				return ()
+			}
+		}
 		self.items.push(.expr_item(root))
 		self.require_end_of_input()
 	}
@@ -1637,66 +3109,88 @@ struct Parser {
 		self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected end of input, got " + describe_kind(kind: self.current().kind))
 	}
 
-	consuming func finish() -> ParseOutcome {
-		ParseOutcome(items: self.items, failure: self.failed, diags: self.diags)
+	consuming func finish(consume comments: [Comment]) -> ParseOutcome {
+		let failure = self.failed
+		if let .some(message) = self.lex_error_message {
+			// The reference reports the lex failure instead of the
+			// downstream missing-token symptom whenever the parse pulled
+			// tokens up to the truncation point (its 2-token lookahead),
+			// and always when the parse otherwise succeeded.
+			let masked = true
+			if let .some(_) = failure {
+				masked = self.pos + 1 >= self.token_count
+			}
+			if masked {
+				failure = .some(Fail(code: "parser.lexer", message: message))
+			}
+		}
+		ParseOutcome(items: self.items, failure: failure, diags: self.diags, comments: comments)
 	}
 }
 
-func make_parser(source: String, tokens: [Token]) -> Parser {
+func make_parser(source: String, tokens: [Token], lex_error: String?) -> Parser {
 	let source_len = source.utf8().count()
 	let token_count = tokens.count
 	let no_fail: Fail? = .none
 	let no_diags: [Fail] = []
 	let no_items: [Item] = []
-	Parser(tokens: tokens, token_count: token_count, source: source, source_len: source_len, pos: 0, split_greater: false, failed: no_fail, diags: no_diags, items: no_items)
+	let contexts: [ParseContext] = [.top_level]
+	let assign_slot: [Stmt] = []
+	Parser(tokens: tokens, token_count: token_count, source: source, source_len: source_len, pos: 0, split_greater: false, failed: no_fail, diags: no_diags, items: no_items, contexts: contexts, assign_slot: assign_slot, angle_adjacency: false, lex_error_message: lex_error)
 }
 
-func scan_failure_outcome() -> ParseOutcome {
-	let no_items: [Item] = []
-	let no_diags: [Fail] = []
-	ParseOutcome(items: no_items, failure: .some(Fail(code: "talk-parser.unported", message: "not yet ported: lexer-error surfacing")), diags: no_diags)
+// A scan failure pre-renders its message; the token list is truncated
+// at the failure point and the parse proceeds over what scanned.
+func scan_parser(source: String, consume result: ScanResult) -> Parser {
+	let lex_error: String? = .none
+	if let .some(message) = result.error {
+		lex_error = .some(lexer_error_message(source: source, pos: result.error_pos, message: message))
+	}
+	make_parser(source: source, tokens: result.tokens, lex_error: lex_error)
+}
+
+// Parse a whole input as a file (ADR 0043 file category): block items
+// plus file-level imports.
+pub func parse_file_source(source: String) -> ParseOutcome {
+	let result = scan(source: source)
+	let comments = result.comments
+	let parser = scan_parser(source: source, result: result)
+	parser.parse_items(allow_imports: true)
+	parser.finish(comments: comments)
 }
 
 // Parse a whole input as block items (ADR 0043 category entry).
 pub func parse_block_items_source(source: String) -> ParseOutcome {
 	let result = scan(source: source)
-	if let .some(_) = result.error {
-		return scan_failure_outcome()
-	}
-	let parser = make_parser(source: source, tokens: result.tokens)
-	parser.parse_items()
-	parser.finish()
+	let comments = result.comments
+	let parser = scan_parser(source: source, result: result)
+	parser.parse_items(allow_imports: false)
+	parser.finish(comments: comments)
 }
 
 // Parse a whole input as one expression (ADR 0043 category entry).
 pub func parse_expr_source(source: String) -> ParseOutcome {
 	let result = scan(source: source)
-	if let .some(_) = result.error {
-		return scan_failure_outcome()
-	}
-	let parser = make_parser(source: source, tokens: result.tokens)
+	let comments = result.comments
+	let parser = scan_parser(source: source, result: result)
 	parser.parse_expr_root()
-	parser.finish()
+	parser.finish(comments: comments)
 }
 
 // Parse a whole input as one pattern (ADR 0043 category entry).
 pub func parse_pattern_source(source: String) -> ParseOutcome {
 	let result = scan(source: source)
-	if let .some(_) = result.error {
-		return scan_failure_outcome()
-	}
-	let parser = make_parser(source: source, tokens: result.tokens)
+	let comments = result.comments
+	let parser = scan_parser(source: source, result: result)
 	parser.parse_pattern_root()
-	parser.finish()
+	parser.finish(comments: comments)
 }
 
 // Parse a whole input as one type annotation (ADR 0043 category entry).
 pub func parse_type_source(source: String) -> ParseOutcome {
 	let result = scan(source: source)
-	if let .some(_) = result.error {
-		return scan_failure_outcome()
-	}
-	let parser = make_parser(source: source, tokens: result.tokens)
+	let comments = result.comments
+	let parser = scan_parser(source: source, result: result)
 	parser.parse_type_root()
-	parser.finish()
+	parser.finish(comments: comments)
 }

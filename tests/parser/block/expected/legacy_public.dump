@@ -1,0 +1,10 @@
+tokens:
+  Public @0..6 "public"
+  Func @7..11 "func"
+  Identifier @12..13 "f"
+  LeftParen @13..14 "("
+  RightParen @14..15 ")"
+  LeftBrace @16..17 "{"
+  RightBrace @17..18 "}"
+  Newline @18..19
+parse error: parser.legacy-public-modifier `public` was renamed to `pub`; replace `public` with `pub`

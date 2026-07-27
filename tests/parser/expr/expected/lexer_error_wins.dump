@@ -1,0 +1,5 @@
+tokens:
+  Int @0..1 "1"
+  Plus @2..3 "+"
+  lexer error: Unterminated string
+parse error: parser.lexer Lex error at line 2, column 0: Unterminated string

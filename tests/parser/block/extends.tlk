@@ -1,0 +1,9 @@
+extend Point: Greet {
+	func greet() -> String { "point" }
+}
+extend<T> Wrapper<T> {
+	func get() -> T { value }
+}
+extend Opt<Int> where Int: Show {
+	func show_it() -> String { "opt" }
+}

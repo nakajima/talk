@@ -1,0 +1,95 @@
+tokens:
+  Protocol @0..8 "protocol"
+  Identifier @9..14 "Greet"
+  LeftBrace @15..16 "{"
+  Newline @16..17
+  Func @18..22 "func"
+  Identifier @23..28 "greet"
+  LeftParen @28..29 "("
+  RightParen @29..30 ")"
+  Arrow @31..33 "->"
+  Identifier @34..40 "String"
+  Newline @40..41
+  Func @42..46 "func"
+  Identifier @47..51 "loud"
+  LeftParen @51..52 "("
+  RightParen @52..53 ")"
+  Arrow @54..56 "->"
+  Identifier @57..63 "String"
+  LeftBrace @64..65 "{"
+  Newline @65..66
+  Identifier @68..73 "greet"
+  LeftParen @73..74 "("
+  RightParen @74..75 ")"
+  Newline @75..76
+  RightBrace @77..78 "}"
+  Newline @78..79
+  Init @80..84 "init"
+  LeftParen @84..85 "("
+  Identifier @85..89 "name"
+  Colon @89..90 ":"
+  Identifier @91..97 "String"
+  RightParen @97..98 ")"
+  Newline @98..99
+  Associated @100..110 "associated"
+  Identifier @111..115 "Item"
+  Colon @115..116 ":"
+  Identifier @117..121 "Show"
+  Newline @121..122
+  Mut @123..126 "mut"
+  Func @127..131 "func"
+  Identifier @132..138 "rename"
+  LeftParen @138..139 "("
+  Identifier @139..141 "to"
+  Identifier @142..146 "name"
+  Colon @146..147 ":"
+  Identifier @148..154 "String"
+  RightParen @154..155 ")"
+  Newline @155..156
+  RightBrace @156..157 "}"
+  Newline @157..158
+  Protocol @158..166 "protocol"
+  Identifier @167..171 "Loud"
+  Colon @171..172 ":"
+  Identifier @173..178 "Greet"
+  LeftBrace @179..180 "{"
+  Newline @180..181
+  Func @182..186 "func"
+  Identifier @187..192 "shout"
+  LeftParen @192..193 "("
+  RightParen @193..194 ")"
+  Arrow @195..197 "->"
+  Identifier @198..204 "String"
+  Newline @204..205
+  RightBrace @205..206 "}"
+  Newline @206..207
+tree:
+  Decl::Protocol @0..157
+    Body @15..157
+      Decl::MethodRequirement @18..40 "func greet() -> String"
+        FuncSignature @18..40 "func greet() -> String"
+          TypeAnnotation::Nominal @34..40 "String"
+      Decl::Method @42..78
+        Func @64..78 tokens=42..78
+          Block @64..78
+            Stmt::Expr @68..75 "greet()"
+              Expr::Call @68..75 "greet()"
+                Expr::Variable @68..73 "greet"
+          TypeAnnotation::Nominal @57..63 "String"
+      Decl::InitRequirement @80..98 "init(name: String)"
+        FuncSignature @80..98 "init(name: String)"
+          Parameter @89..97 ": String"
+            TypeAnnotation::Nominal @91..97 "String"
+      Decl::Associated @100..121 "associated Item: Show"
+        GenericDecl @111..121 "Item: Show"
+          TypeAnnotation::Nominal @117..121 "Show"
+      Decl::MethodRequirement @127..155 "func rename(to name: String)"
+        FuncSignature @127..155 "func rename(to name: String)"
+          Parameter @146..154 ": String"
+            TypeAnnotation::Nominal @148..154 "String"
+  Decl::Protocol @158..206
+    Body @179..206
+      Decl::MethodRequirement @182..204 "func shout() -> String"
+        FuncSignature @182..204 "func shout() -> String"
+          TypeAnnotation::Nominal @198..204 "String"
+    TypeAnnotation::Nominal @173..178 "Greet"

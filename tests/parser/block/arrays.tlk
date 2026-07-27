@@ -1,0 +1,7 @@
+let xs = [1, 2, 3]
+let nested = [[1], [2, 3]]
+let empty = []
+let first = xs[0]
+let deep = grid[1][2]
+let range = 1..<10
+let ch = 'z'

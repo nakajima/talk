@@ -1,0 +1,11 @@
+tokens:
+  Init @0..4 "init"
+  LeftParen @4..5 "("
+  Identifier @5..6 "x"
+  Colon @6..7 ":"
+  Identifier @8..11 "Int"
+  RightParen @11..12 ")"
+  LeftBrace @13..14 "{"
+  RightBrace @14..15 "}"
+  Newline @15..16
+parse error: parser.unexpected-token Unexpected token: expected an expression, got `init`

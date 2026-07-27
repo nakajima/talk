@@ -1,0 +1,6 @@
+x = 1
+point.x = 2
+items[0] = 3
+self.name = name
+obj.method().field = 4
+total = total + 1

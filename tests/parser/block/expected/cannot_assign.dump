@@ -1,0 +1,9 @@
+tokens:
+  Identifier @0..1 "f"
+  LeftParen @1..2 "("
+  Identifier @2..3 "x"
+  Equals @4..5 "="
+  Int @6..7 "1"
+  RightParen @7..8 ")"
+  Newline @8..9
+parse error: parser.cannot-assign Cannot assign in this context

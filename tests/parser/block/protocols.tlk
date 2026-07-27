@@ -1,0 +1,12 @@
+protocol Greet {
+	func greet() -> String
+	func loud() -> String {
+		greet()
+	}
+	init(name: String)
+	associated Item: Show
+	mut func rename(to name: String)
+}
+protocol Loud: Greet {
+	func shout() -> String
+}

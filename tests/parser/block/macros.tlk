@@ -1,0 +1,1 @@
+macro double($x) = $x + $x

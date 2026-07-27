@@ -1,0 +1,7 @@
+tokens:
+  Pub @0..3 "pub"
+  Int @4..5 "1"
+  Plus @6..7 "+"
+  Int @8..9 "2"
+  Newline @9..10
+parse error: parser.visibility-not-allowed `pub` is not allowed on a statement

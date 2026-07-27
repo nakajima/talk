@@ -1,0 +1,43 @@
+use package::Helper::{ helper }
+
+protocol Greet {
+	func greet() -> String
+}
+
+pub struct Cat {
+	let name: String
+
+	pub init(name: String) {
+		self.name = name
+		self
+	}
+}
+
+extend Cat: Greet {
+	func greet() -> String { "meow " + self.name }
+}
+
+enum Tree {
+	case leaf(Int)
+	case node(Tree, Tree)
+}
+
+func total(tree: &Tree) -> Int {
+	match tree {
+		.leaf(n) -> n,
+		.node(l, r) -> total(tree: l) + total(tree: r)
+	}
+}
+
+func chorus<T: Greet>(voices: [T]) -> String {
+	let out = ""
+	for voice in voices {
+		out = out + voice.greet()
+	}
+	out
+}
+
+let double = { n in n * 2 }
+let cats = [Cat(name: "a"), Cat(name: "b")]
+print(chorus(voices: cats))
+print(double(21))

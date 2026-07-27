@@ -1,0 +1,7 @@
+if ready {
+	print(1)
+} else {
+	print(2)
+}
+if done { print(3) }
+if a { print(4) } else if b { print(5) } else { print(6) }

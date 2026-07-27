@@ -1,0 +1,13 @@
+match word {
+	"func" -> 1,
+	"if" | "else" -> 2,
+	_ -> 0
+}
+match shape {
+	.circle(r) -> r * r,
+	.rect(w, h) -> {
+		print(w)
+		w * h
+	}
+}
+match count { 0 -> "none", _ -> "some" }

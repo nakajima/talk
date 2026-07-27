@@ -1,0 +1,6 @@
+if let .some(v) = value {
+	print(v)
+} else {
+	print(0)
+}
+if let (a, b) = pair { print(a + b) }

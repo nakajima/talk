@@ -1,0 +1,23 @@
+pub struct Point {
+	let x: Int
+	let y: Int
+	init(x: Int, y: Int) {
+		self.x = x
+		self.y = y
+	}
+	pub func magnitude() -> Int {
+		x * x + y * y
+	}
+	mut func reset() {
+		self.x = 0
+	}
+	static func origin() -> Point {
+		Point(x: 0, y: 0)
+	}
+}
+struct Wrapper<T> {
+	let value: T
+}
+struct Node 'heap {
+	let next: Int
+}

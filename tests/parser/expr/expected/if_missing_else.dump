@@ -1,0 +1,16 @@
+tokens:
+  If @0..2 "if"
+  Identifier @3..7 "flag"
+  LeftBrace @8..9 "{"
+  Int @10..11 "1"
+  RightBrace @12..13 "}"
+  Newline @13..14
+tree:
+  Expr::If @0..13 "if flag { 1 }"
+    Expr::Variable @3..7 "flag"
+    Block @8..13 "{ 1 }"
+      Stmt::Expr @10..11 "1"
+        Expr::LiteralInt @10..11 "1"
+    Block @synthesized
+diagnostics:
+  error parser.unexpected-token Unexpected token: expected `else`, got end of input

@@ -1,0 +1,14 @@
+tokens:
+  Newline @18..19
+  Let @19..22 "let"
+  Identifier @23..24 "x"
+  Equals @25..26 "="
+  Int @27..28 "1"
+  Newline @48..49
+tree:
+  Decl::Let @19..28 "let x = 1"
+    Pattern::Bind @23..24 "x"
+    Expr::LiteralInt @27..28 "1"
+comments:
+  @0..18 "// leading comment"
+  @29..48 "// trailing comment"

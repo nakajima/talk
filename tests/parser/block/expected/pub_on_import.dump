@@ -1,0 +1,6 @@
+tokens:
+  Pub @0..3 "pub"
+  Use @4..7 "use"
+  Identifier @8..11 "foo"
+  Newline @11..12
+parse error: parser.visibility-not-allowed `pub` is not allowed on an import

@@ -1,0 +1,85 @@
+tokens:
+  If @0..2 "if"
+  Let @3..6 "let"
+  Dot @7..8 "."
+  Identifier @8..12 "some"
+  LeftParen @12..13 "("
+  Identifier @13..14 "v"
+  RightParen @14..15 ")"
+  Equals @16..17 "="
+  Identifier @18..23 "value"
+  LeftBrace @24..25 "{"
+  Newline @25..26
+  Identifier @27..32 "print"
+  LeftParen @32..33 "("
+  Identifier @33..34 "v"
+  RightParen @34..35 ")"
+  Newline @35..36
+  RightBrace @36..37 "}"
+  Else @38..42 "else"
+  LeftBrace @43..44 "{"
+  Newline @44..45
+  Identifier @46..51 "print"
+  LeftParen @51..52 "("
+  Int @52..53 "0"
+  RightParen @53..54 ")"
+  Newline @54..55
+  RightBrace @55..56 "}"
+  Newline @56..57
+  If @57..59 "if"
+  Let @60..63 "let"
+  LeftParen @64..65 "("
+  Identifier @65..66 "a"
+  Comma @66..67 ","
+  Identifier @68..69 "b"
+  RightParen @69..70 ")"
+  Equals @71..72 "="
+  Identifier @73..77 "pair"
+  LeftBrace @78..79 "{"
+  Identifier @80..85 "print"
+  LeftParen @85..86 "("
+  Identifier @86..87 "a"
+  Plus @88..89 "+"
+  Identifier @90..91 "b"
+  RightParen @91..92 ")"
+  RightBrace @93..94 "}"
+  Newline @94..95
+tree:
+  Stmt::Expr @0..56
+    Expr::Match @0..56
+      Expr::Variable @18..23 "value"
+      MatchArm @synthesized
+        Pattern::Variant @7..15 ".some(v)"
+          Pattern::Bind @13..14 "v"
+        Block @24..37
+          Stmt::Expr @27..35 "print(v)"
+            Expr::Call @27..35 "print(v)"
+              Expr::Variable @27..32 "print"
+              CallArg @33..34 "v"
+                Expr::Variable @33..34 "v"
+      MatchArm @synthesized
+        Pattern::Wildcard @synthesized
+        Block @43..56
+          Stmt::Expr @46..54 "print(0)"
+            Expr::Call @46..54 "print(0)"
+              Expr::Variable @46..51 "print"
+              CallArg @52..53 "0"
+                Expr::LiteralInt @52..53 "0"
+  Stmt::Expr @57..94 "if let (a, b) = pair { print(a + b) }"
+    Expr::Match @57..94 "if let (a, b) = pair { print(a + b) }"
+      Expr::Variable @73..77 "pair"
+      MatchArm @synthesized
+        Pattern::Tuple @64..70 "(a, b)"
+          Pattern::Bind @65..66 "a"
+          Pattern::Bind @68..69 "b"
+        Block @78..94 "{ print(a + b) }"
+          Stmt::Expr @80..92 "print(a + b)"
+            Expr::Call @80..92 "print(a + b)"
+              Expr::Variable @80..85 "print"
+              CallArg @86..91 "a + b"
+                Expr::Binary @86..91 "a + b"
+                  Expr::Variable @86..87 "a"
+                  Expr::Variable @90..91 "b"
+      MatchArm @synthesized
+        Pattern::Wildcard @synthesized
+        Block @synthesized

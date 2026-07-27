@@ -1,0 +1,8 @@
+tokens:
+  Let @0..3 "let"
+  Identifier @4..5 "s"
+  Equals @6..7 "="
+  Int @8..9 "1"
+  Plus @10..11 "+"
+  lexer error: Unterminated string
+parse error: parser.unexpected-token Unexpected token: expected an expression, got `let`

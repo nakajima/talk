@@ -311,9 +311,20 @@ pub struct Token {
 	pub let end: Int
 }
 
+// A dropped line comment's span, preserved for the parse dump's
+// comments section.
+pub struct Comment {
+	pub let start: Int
+	pub let end: Int
+}
+
 pub struct ScanResult {
 	pub let tokens: [Token]
+	pub let comments: [Comment]
 	pub let error: String?
+	// The scan cursor when the error was detected (line/col derive from
+	// it); meaningless without an error.
+	pub let error_pos: Int
 }
 
 // ASCII bytes the scanner dispatches on (spans are byte offsets and
@@ -371,19 +382,21 @@ func is_space(b: Int) -> Bool {
 enum CharProbe {
 	case literal(Int)
 	case not_literal
-	case failed(String)
+	// The message and the scan cursor at the failure.
+	case failed(String, Int)
 }
 
 enum EscapeProbe {
 	case fine(Int)
-	case failed(String)
+	// The message and the scan cursor at the failure.
+	case failed(String, Int)
 }
 
 // Validate one escape starting AFTER the backslash; returns the index
 // after the escape. Mirrors the reference `scan_literal_escape`.
 func scan_escape(view: UTF8View, n: Int, after: Int, allow_tick: Bool, unterminated: String) -> EscapeProbe {
 	if after >= n {
-		return EscapeProbe.failed(unterminated)
+		return EscapeProbe.failed(unterminated, n)
 	}
 	let e = view.at(index: after)._toInt()
 	if e == lower_n_byte || e == lower_t_byte || e == lower_r_byte || e == quote_byte || e == backslash_byte || e == newline_byte {
@@ -394,7 +407,7 @@ func scan_escape(view: UTF8View, n: Int, after: Int, allow_tick: Bool, untermina
 	}
 	if e == lower_u_byte {
 		if after + 1 >= n || view.at(index: after + 1)._toInt() != open_brace_byte {
-			return EscapeProbe.failed("Invalid unicode escape")
+			return EscapeProbe.failed("Invalid unicode escape", after + 1)
 		}
 		let i = after + 2
 		let value = 0
@@ -405,16 +418,19 @@ func scan_escape(view: UTF8View, n: Int, after: Int, allow_tick: Bool, untermina
 			i = i + 1
 		}
 		let closed = i < n && view.at(index: i)._toInt() == close_brace_byte
-		if closed == false || digits < 1 || digits > 6 {
-			return EscapeProbe.failed("Invalid unicode escape")
+		if closed == false {
+			return EscapeProbe.failed("Invalid unicode escape", i)
+		}
+		if digits < 1 || digits > 6 {
+			return EscapeProbe.failed("Invalid unicode escape", i + 1)
 		}
 		let surrogate = value >= 55296 && value <= 57343
 		if value > 1114111 || surrogate {
-			return EscapeProbe.failed("Invalid unicode escape")
+			return EscapeProbe.failed("Invalid unicode escape", i + 1)
 		}
 		return EscapeProbe.fine(i + 1)
 	}
-	EscapeProbe.failed("Invalid escape: '" + view.slice(start: after, byte_count: 1).to_string() + "'")
+	EscapeProbe.failed("Invalid escape: '" + view.slice(start: after, byte_count: 1).to_string() + "'", after + 1)
 }
 
 func is_hex(b: Int) -> Bool {
@@ -442,7 +458,7 @@ func probe_character(view: UTF8View, n: Int, after_tick: Int) -> CharProbe {
 	loop {
 		if i >= n {
 			if definite {
-				return CharProbe.failed("Unterminated character literal")
+				return CharProbe.failed("Unterminated character literal", n)
 			}
 			return CharProbe.not_literal
 		}
@@ -451,7 +467,7 @@ func probe_character(view: UTF8View, n: Int, after_tick: Int) -> CharProbe {
 			if saw_content {
 				return CharProbe.literal(i + 1)
 			}
-			return CharProbe.failed("Empty character literal")
+			return CharProbe.failed("Empty character literal", i)
 		}
 		if c == newline_byte {
 			return CharProbe.not_literal
@@ -460,8 +476,8 @@ func probe_character(view: UTF8View, n: Int, after_tick: Int) -> CharProbe {
 			saw_content = true
 			definite = true
 			let escape = scan_escape(view: view, n: n, after: i + 1, allow_tick: true, unterminated: "Unterminated character literal")
-			if let .failed(message) = escape {
-				return CharProbe.failed(message)
+			if let .failed(message, failed_at) = escape {
+				return CharProbe.failed(message, failed_at)
 			}
 			if let .fine(next) = escape {
 				i = next
@@ -504,6 +520,14 @@ func ident_end(view: UTF8View, n: Int, i: Int) -> Int {
 // Render a scalar for an "Unexpected character" message the way the
 // reference does: raw when it stands on its own, `\u{…}` escaped when
 // it would be invisible (approximated by "not alphanumeric").
+// A UTF-8 scalar's byte length from its lead byte.
+func scalar_byte_length(b: Int) -> Int {
+	if b < 128 { return 1 }
+	if b < 224 { return 2 }
+	if b < 240 { return 3 }
+	4
+}
+
 func describe_scalar(view: UTF8View, n: Int, i: Int) -> String {
 	let packed = _utf8_decode(storage: view.storage, offset: view.start + i, end: view.start + n)
 	let scalar = packed / 8
@@ -539,7 +563,9 @@ func to_hex(value: Int) -> String {
 
 pub func scan(source: String) -> ScanResult {
 	let tokens: [Token] = []
+	let comments: [Comment] = []
 	let error: String? = Optional.none
+	let error_pos = 0
 	let view = source.utf8()
 	let n = view.count()
 	let i = 0
@@ -561,11 +587,14 @@ pub func scan(source: String) -> ScanResult {
 			continue
 		}
 
-		// Line comments are dropped (the default trivia policy).
+		// Line comments drop from the token stream; their spans are
+		// preserved for the parse dump's comments section.
 		if b == slash_byte && i + 1 < n && view.at(index: i + 1)._toInt() == slash_byte {
+			let start = i
 			loop i < n && view.at(index: i)._toInt() != newline_byte {
 				i = i + 1
 			}
+			comments.push(Comment(start: start, end: i))
 			continue
 		}
 
@@ -646,8 +675,9 @@ pub func scan(source: String) -> ScanResult {
 				let c = view.at(index: i)._toInt()
 				if c == backslash_byte {
 					let escape = scan_escape(view: view, n: n, after: i + 1, allow_tick: false, unterminated: "Unterminated string")
-					if let .failed(message) = escape {
+					if let .failed(message, failed_at) = escape {
 						error = Optional.some(message)
+						error_pos = failed_at
 						bad = true
 					}
 					if let .fine(next) = escape {
@@ -667,6 +697,7 @@ pub func scan(source: String) -> ScanResult {
 			}
 			if open {
 				error = Optional.some("Unterminated string")
+				error_pos = i
 				break
 			}
 			tokens.push(Token(kind: .string_literal, start: start, end: i))
@@ -711,8 +742,9 @@ pub func scan(source: String) -> ScanResult {
 				continue
 			}
 			let probe = probe_character(view: view, n: n, after_tick: i + 1)
-			if let .failed(message) = probe {
+			if let .failed(message, failed_at) = probe {
 				error = Optional.some(message)
+				error_pos = failed_at
 				break
 			}
 			if let .literal(end) = probe {
@@ -840,16 +872,18 @@ pub func scan(source: String) -> ScanResult {
 			continue
 		}
 
-		// Anything else is a lex error, like the reference lexer.
+		// Anything else is a lex error, like the reference lexer, which
+		// consumes the character before erroring.
 		let unexpected = if b < 128 {
 			glyph.to_string()
 		} else {
 			describe_scalar(view: view, n: n, i: i)
 		}
 		error = Optional.some("Unexpected character: '" + unexpected + "'")
+		error_pos = i + scalar_byte_length(b: b)
 		break
 	}
-	ScanResult(tokens: tokens, error: error)
+	ScanResult(tokens: tokens, comments: comments, error: error, error_pos: error_pos)
 }
 
 func is_operator(kind: TokenKind) -> Bool {

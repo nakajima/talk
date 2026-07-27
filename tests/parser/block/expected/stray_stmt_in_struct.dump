@@ -1,0 +1,13 @@
+tokens:
+  Struct @0..6 "struct"
+  Identifier @7..8 "S"
+  LeftBrace @9..10 "{"
+  Newline @10..11
+  Identifier @12..17 "print"
+  LeftParen @17..18 "("
+  Int @18..19 "1"
+  RightParen @19..20 ")"
+  Newline @20..21
+  RightBrace @21..22 "}"
+  Newline @22..23
+parse error: parser.conversion could not convert node to Decl

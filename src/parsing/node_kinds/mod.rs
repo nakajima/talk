@@ -32,11 +32,13 @@ macro_rules! impl_into_node {
             type Error = $crate::parsing::parser_error::ParserError;
 
             fn try_from(node: $crate::parsing::node::Node) -> Result<$ty, Self::Error> {
+                // The node's Debug form stays out of the message: this is
+                // a user-facing diagnostic (a statement where a declaration
+                // is required), not a debugging aid.
                 let $crate::parsing::node::Node::$variant(val) = node else {
                     return Err(Self::Error::ConversionError(format!(
-                        "could not convert node to {:?}: {:?}",
-                        stringify!($ty),
-                        node
+                        "could not convert node to {}",
+                        stringify!($ty)
                     )));
                 };
 

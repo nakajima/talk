@@ -1,0 +1,141 @@
+tokens:
+  Enum @0..4 "enum"
+  Identifier @5..10 "Shape"
+  LeftBrace @11..12 "{"
+  Newline @12..13
+  Case @14..18 "case"
+  Identifier @19..25 "circle"
+  LeftParen @25..26 "("
+  Identifier @26..31 "Float"
+  RightParen @31..32 ")"
+  Newline @32..33
+  Case @34..38 "case"
+  Identifier @39..43 "rect"
+  LeftParen @43..44 "("
+  Identifier @44..49 "width"
+  Colon @49..50 ":"
+  Identifier @51..56 "Float"
+  Comma @56..57 ","
+  Identifier @58..64 "height"
+  Colon @64..65 ":"
+  Identifier @66..71 "Float"
+  RightParen @71..72 ")"
+  Newline @72..73
+  Case @74..78 "case"
+  Identifier @79..84 "empty"
+  Newline @84..85
+  RightBrace @85..86 "}"
+  Newline @86..87
+  Enum @87..91 "enum"
+  Identifier @92..96 "Tree"
+  EffectName @98..104 "linear"
+  LeftBrace @105..106 "{"
+  Newline @106..107
+  Case @108..112 "case"
+  Identifier @113..117 "leaf"
+  LeftParen @117..118 "("
+  Identifier @118..121 "Int"
+  RightParen @121..122 ")"
+  Comma @122..123 ","
+  Identifier @124..128 "node"
+  LeftParen @128..129 "("
+  Identifier @129..132 "Int"
+  Comma @132..133 ","
+  Identifier @134..137 "Int"
+  RightParen @137..138 ")"
+  Newline @138..139
+  RightBrace @139..140 "}"
+  Newline @140..141
+  Enum @141..145 "enum"
+  Identifier @146..149 "Opt"
+  Less @149..150 "<"
+  Identifier @150..151 "T"
+  Greater @151..152 ">"
+  LeftBrace @153..154 "{"
+  Newline @154..155
+  Case @156..160 "case"
+  Identifier @161..165 "some"
+  LeftParen @165..166 "("
+  Identifier @166..167 "T"
+  RightParen @167..168 ")"
+  Newline @168..169
+  Case @170..174 "case"
+  Identifier @175..179 "none"
+  Newline @179..180
+  Func @181..185 "func"
+  Identifier @186..196 "or_default"
+  LeftParen @196..197 "("
+  Identifier @197..205 "fallback"
+  Colon @205..206 ":"
+  Identifier @207..208 "T"
+  RightParen @208..209 ")"
+  Arrow @210..212 "->"
+  Identifier @213..214 "T"
+  LeftBrace @215..216 "{"
+  Newline @216..217
+  Match @219..224 "match"
+  Identifier @225..229 "self"
+  LeftBrace @230..231 "{"
+  Newline @231..232
+  Dot @235..236 "."
+  Identifier @236..240 "some"
+  LeftParen @240..241 "("
+  Identifier @241..242 "v"
+  RightParen @242..243 ")"
+  Arrow @244..246 "->"
+  Identifier @247..248 "v"
+  Comma @248..249 ","
+  Newline @249..250
+  Dot @253..254 "."
+  Identifier @254..258 "none"
+  Arrow @259..261 "->"
+  Identifier @262..270 "fallback"
+  Newline @270..271
+  RightBrace @273..274 "}"
+  Newline @274..275
+  RightBrace @276..277 "}"
+  Newline @277..278
+  RightBrace @278..279 "}"
+  Newline @279..280
+tree:
+  Decl::Enum @0..86
+    Body @11..86
+      Decl::EnumVariant @14..32 "case circle(Float)"
+        TypeAnnotation::Nominal @26..31 "Float"
+      Decl::EnumVariant @34..72 "case rect(width: Float, height: Float)"
+        TypeAnnotation::Nominal @51..56 "Float"
+        TypeAnnotation::Nominal @66..71 "Float"
+      Decl::EnumVariant @74..84 "case empty"
+  Decl::Enum @87..140
+    Body @105..140
+      Decl::EnumVariant @108..122 "case leaf(Int)"
+        TypeAnnotation::Nominal @118..121 "Int"
+      Decl::EnumVariant @124..138 "node(Int, Int)"
+        TypeAnnotation::Nominal @129..132 "Int"
+        TypeAnnotation::Nominal @134..137 "Int"
+  Decl::Enum @141..279
+    GenericDecl @150..151 "T"
+    Body @153..279
+      Decl::EnumVariant @156..168 "case some(T)"
+        TypeAnnotation::Nominal @166..167 "T"
+      Decl::EnumVariant @170..179 "case none"
+      Decl::Method @181..277
+        Func @215..277 tokens=181..277
+          Parameter @205..208 ": T"
+            TypeAnnotation::Nominal @207..208 "T"
+          Block @215..277
+            Stmt::Expr @219..274
+              Expr::Match @219..274
+                Expr::Variable @225..229 "self"
+                MatchArm @235..248 ".some(v) -> v"
+                  Pattern::Variant @235..243 ".some(v)"
+                    Pattern::Bind @241..242 "v"
+                  Block @247..248 "v"
+                    Stmt::Expr @247..248 "v"
+                      Expr::Variable @247..248 "v"
+                MatchArm @253..270 ".none -> fallback"
+                  Pattern::Variant @253..258 ".none"
+                  Block @262..270 "fallback"
+                    Stmt::Expr @262..270 "fallback"
+                      Expr::Variable @262..270 "fallback"
+          TypeAnnotation::Nominal @213..214 "T"

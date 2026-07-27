@@ -1,0 +1,13 @@
+tokens:
+  Enum @0..4 "enum"
+  Identifier @5..6 "E"
+  LeftBrace @7..8 "{"
+  Newline @8..9
+  Let @10..13 "let"
+  Identifier @14..15 "x"
+  Equals @16..17 "="
+  Int @18..19 "1"
+  Newline @19..20
+  RightBrace @20..21 "}"
+  Newline @21..22
+parse error: parser.let-not-allowed Cannot use `let` in enum body

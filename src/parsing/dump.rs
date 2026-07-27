@@ -483,9 +483,6 @@ mod tests {
         check_corpus_dir(&root.join("block"), dump_block_items);
         check_corpus_dir(&root.join("tokentree"), dump_token_trees);
         check_corpus_dir(&root.join("lenient"), dump_lenient);
-        // Pins the reference lexer's unicode-identifier behavior; the
-        // Talk lexer harness adopts this directory once its scalar
-        // classification path lands.
         check_corpus_dir(&root.join("unicode"), dump);
     }
 }

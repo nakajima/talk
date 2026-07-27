@@ -1,0 +1,24 @@
+tokens:
+  Return @0..6 "return"
+  Int @7..9 "42"
+  Newline @9..10
+  Return @10..16 "return"
+  Newline @16..17
+  Continue @17..25 "continue"
+  Newline @25..26
+  Break @26..31 "break"
+  Newline @31..32
+  EffectName @33..41 "continue"
+  Int @42..43 "5"
+  Newline @43..44
+  EffectName @45..53 "continue"
+  Newline @53..54
+tree:
+  Stmt::Return @0..9 "return 42"
+    Expr::LiteralInt @7..9 "42"
+  Stmt::Return @10..16 "return"
+  Stmt::Continue @17..25 "continue"
+  Stmt::Break @26..31 "break"
+  Stmt::Resume @33..43 "continue 5"
+    Expr::LiteralInt @42..43 "5"
+  Stmt::Resume @45..53 "continue"

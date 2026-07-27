@@ -67,12 +67,144 @@ pub struct TypeAnnotation {
 	pub let end: Int
 }
 
-// A block argument (`{ x, y in … }`). Ownership modes and type
-// annotations join when their grammar is ported. Mirrors the reference
-// quirk: the span starts AFTER the name (the reference pushes its
-// source location once the name is already consumed).
+// A parameter's ownership mode (ADR 0018); none = unadorned (defaulting
+// is decided during desugaring).
+pub enum ParamMode {
+	case borrow_param
+	case mut_param
+	case consume_param
+	case consume_mut_param
+}
+
+// A parameter's external argument label (ADR 0041); none = the
+// one-token shorthand (binder doubles as label).
+pub enum ParamLabel {
+	case named(String)
+	case omitted
+}
+
+// A declared parameter — function, init, effect, or block argument.
+// Mirrors the reference quirk: the span starts AFTER the name (the
+// reference pushes its source location once the name is consumed); the
+// name's own span rides along for the for-loop block-arg replacement.
 pub struct Parameter {
+	pub let label: ParamLabel?
 	pub let name: String
+	pub let name_start: Int
+	pub let name_end: Int
+	pub let mode: ParamMode?
+	pub let annotation: TypeAnnotation?
+	pub let start: Int
+	pub let end: Int
+}
+
+pub enum CaptureMode {
+	case copy_capture
+	case move_capture
+	case borrow_shared
+	case borrow_mut
+}
+
+pub struct CaptureSpec {
+	pub let mode: CaptureMode
+	pub let name: String
+	pub let start: Int
+	pub let end: Int
+}
+
+// A declared generic parameter (`T: Proto = Default`). ADR 0035 static
+// value parameters stay unported.
+pub struct GenericDecl {
+	pub let name: String
+	pub let generics: [GenericDecl]
+	pub let conformances: [TypeAnnotation]
+	pub let default_value: GenericArg?
+	pub let start: Int
+	pub let end: Int
+}
+
+pub enum WherePredicateKind {
+	case type_eq(GenericArg, GenericArg)
+	// The conforming type, then its `&`-joined protocols.
+	case conforms(TypeAnnotation, [TypeAnnotation])
+}
+
+pub struct WherePredicate {
+	pub let kind: WherePredicateKind
+	pub let start: Int
+	pub let end: Int
+}
+
+pub struct WhereClause {
+	pub let predicates: [WherePredicate]
+	pub let start: Int
+	pub let end: Int
+}
+
+// A named function, declaration or expression form. The node's span is
+// its body's; the whole declaration's extents render as `tokens=`.
+pub struct Func {
+	pub let name: String
+	pub let effects: EffectSet
+	pub let generics: [GenericDecl]
+	pub let captures: [CaptureSpec]
+	pub let where_clause: WhereClause?
+	pub let params: [Parameter]
+	pub let body: Block
+	pub let ret: TypeAnnotation?
+	pub let start: Int
+	pub let end: Int
+	pub let meta_start: Int
+	pub let meta_end: Int
+}
+
+// A bodyless func in a protocol: a requirement signature.
+pub struct FuncSignature {
+	pub let name: String
+	pub let params: [Parameter]
+	pub let effects: EffectSet
+	pub let generics: [GenericDecl]
+	pub let where_clause: WhereClause?
+	pub let ret: TypeAnnotation?
+	pub let start: Int
+	pub let end: Int
+}
+
+// A nominal declaration's member list.
+pub struct Body {
+	pub let decls: [Decl]
+	pub let start: Int
+	pub let end: Int
+}
+
+// An extension head (`extend Name<Args>`): a name plus arguments only.
+pub struct TypeApplication {
+	pub let name: String
+	pub let args: [GenericArg]
+	pub let start: Int
+	pub let end: Int
+}
+
+pub enum ReceiverMode {
+	case none_receiver
+	case ref_receiver
+	case consuming_receiver
+}
+
+// An ownership marker on a for-loop's iterable (ADR 0021): `consume xs`
+// iterates by moving, `mut xs` by exclusive borrow.
+pub enum ArgMode {
+	case mut_mode
+	case consume_mode
+	case copy_mode
+	case borrow_mode
+}
+
+// One `pattern -> body` arm of a match. Desugared conditionals (if-let)
+// synthesize arms with no source span.
+pub struct MatchArm {
+	pub let pattern: Pattern
+	pub let body: Block
 	pub let start: Int
 	pub let end: Int
 }
@@ -106,6 +238,19 @@ pub enum ExprKind {
 	case incomplete_member([Expr])
 	case tuple([Expr])
 	case block(Block)
+	case literal_array([Expr])
+	// `[lhs, index]`.
+	case subscript_expr([Expr])
+	// A `func` literal in expression position.
+	case func_expr(Func)
+	// `@unsafe { … }`.
+	case unsafe_expr(Block)
+	// A conditional in expression position (and the desugared form of
+	// pattern-bearing if statements): condition as a one-element array,
+	// then the success and failure blocks.
+	case if_expr([Expr], Block, Block)
+	// The scrutinee as a one-element array, then the arms.
+	case match_expr([Expr], [MatchArm])
 }
 
 pub struct Expr {
@@ -146,6 +291,11 @@ pub struct Pattern {
 	pub let kind: PatternKind
 	pub let start: Int
 	pub let end: Int
+	// Node-meta token extents, where they diverge from the span (-1 =
+	// same). Only the for-loop block-arg replacement produces this: the
+	// pattern inherits the Parameter's meta, which starts after the name.
+	pub let meta_start: Int
+	pub let meta_end: Int
 }
 
 pub enum RecordFieldPatternKind {
@@ -179,16 +329,53 @@ pub struct Import {
 pub enum DeclKind {
 	case let_decl(Pattern, TypeAnnotation?, Expr?)
 	case import_decl(Import)
+	case func_decl(Func)
+	case func_signature(FuncSignature)
+	// name, generics, where, body, 'linear, 'heap.
+	case struct_decl(String, [GenericDecl], WhereClause?, Body, Bool, Bool)
+	// name, generics, where, body, 'linear.
+	case enum_decl(String, [GenericDecl], WhereClause?, Body, Bool)
+	// name, generics, where, body, conformances.
+	case protocol_decl(String, [GenericDecl], WhereClause?, Body, [TypeAnnotation])
+	// name, generics, payloads, per-payload labels, GADT result.
+	case enum_variant(String, [GenericDecl], [TypeAnnotation], [String?], TypeAnnotation?)
+	// binders, head, conformances, where, body.
+	case extend_decl([GenericDecl], TypeApplication, [TypeAnnotation], WhereClause?, Body)
+	case init_decl([Parameter], Block)
+	// name, is_static, annotation, default value.
+	case property(String, Bool, TypeAnnotation?, Expr?)
+	case method(Func, Bool, ReceiverMode)
+	case method_requirement(FuncSignature, ReceiverMode)
+	case init_requirement(FuncSignature)
+	case typealias_decl(String, TypeAnnotation)
+	// name, generics, where, params, return type.
+	case effect_decl(String, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation)
+	case associated_decl(GenericDecl, WhereClause?)
+	// name, parameter names, template.
+	case macro_decl(String, [String], Expr)
 }
 
 pub struct Decl {
 	pub let kind: DeclKind
+	pub let is_public: Bool
 	pub let start: Int
 	pub let end: Int
 }
 
 pub enum StmtKind {
 	case expr_stmt(Expr)
+	// A boolean-only if statement; pattern-bearing ifs desugar to a
+	// match in `expr_stmt` (matching the reference).
+	case if_stmt(Expr, Block, Block?)
+	case return_stmt(Expr?)
+	case break_stmt
+	// `[lhs, rhs]`.
+	case assignment([Expr])
+	case loop_stmt(Expr?, Block)
+	case for_stmt(Expr, Pattern, Block, ArgMode?)
+	case continue_stmt
+	// `'continue expr?` — resumes the enclosing effect handler.
+	case resume_stmt(Expr?)
 }
 
 pub struct Stmt {

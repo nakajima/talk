@@ -1,0 +1,28 @@
+tokens:
+  Use @0..3 "use"
+  Identifier @4..11 "package"
+  DoubleColon @11..13 "::"
+  Identifier @13..19 "Helper"
+  Newline @19..20
+  Use @20..23 "use"
+  Identifier @24..35 "collections"
+  DoubleColon @35..37 "::"
+  LeftBrace @37..38 "{"
+  Identifier @39..43 "List"
+  Comma @43..44 ","
+  Identifier @45..48 "Map"
+  As @49..51 "as"
+  Identifier @52..56 "Dict"
+  RightBrace @57..58 "}"
+  Newline @58..59
+  Let @59..62 "let"
+  Identifier @63..64 "x"
+  Equals @65..66 "="
+  Int @67..68 "1"
+  Newline @68..69
+tree:
+  Decl::Import @0..19 "use package::Helper"
+  Decl::Import @20..58 "use collections::{ List, Map as Dict }"
+  Decl::Let @59..68 "let x = 1"
+    Pattern::Bind @63..64 "x"
+    Expr::LiteralInt @67..68 "1"

@@ -1,0 +1,12 @@
+loop running {
+	count = count + 1
+	if count > 3 { break }
+}
+loop {
+	break
+}
+for x in items {
+	print(x)
+}
+for i in 0..3 { total = total + i }
+for c in consume chars { print(c) }

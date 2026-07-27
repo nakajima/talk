@@ -1,0 +1,10 @@
+tokens:
+  Struct @0..6 "struct"
+  Identifier @7..8 "S"
+  Colon @8..9 ":"
+  Identifier @10..15 "Greet"
+  LeftBrace @16..17 "{"
+  Newline @17..18
+  RightBrace @18..19 "}"
+  Newline @19..20
+parse error: parser.conformance-list-not-allowed Cannot declare conformances on struct; use an `extend` block instead

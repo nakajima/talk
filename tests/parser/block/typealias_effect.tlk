@@ -1,0 +1,3 @@
+typealias Name = String
+pub typealias Pair = (Int, Int)
+effect 'log(message: String) -> Void

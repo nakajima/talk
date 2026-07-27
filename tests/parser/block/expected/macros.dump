@@ -1,0 +1,16 @@
+tokens:
+  Macro @0..5 "macro"
+  Identifier @6..12 "double"
+  LeftParen @12..13 "("
+  BoundVar @14..15 "x"
+  RightParen @15..16 ")"
+  Equals @17..18 "="
+  BoundVar @20..21 "x"
+  Plus @22..23 "+"
+  BoundVar @25..26 "x"
+  Newline @26..27
+tree:
+  Decl::Macro @0..26 "macro double($x) = $x + $x"
+    Expr::Binary @20..26 "x + $x"
+      Expr::Variable @20..21 "x"
+      Expr::Variable @25..26 "x"

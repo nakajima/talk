@@ -183,6 +183,8 @@ mod tests {
             &[
                 "lex".into(),
                 "trees".into(),
+                "parse".into(),
+                "parse_lenient".into(),
                 "parse_block_items".into(),
                 "parse_expr".into(),
                 "parse_pattern".into(),
@@ -228,7 +230,14 @@ mod tests {
             assert_eq!(talk_trees, rust_trees, "tree divergence on {path}");
         }
 
-        let parse_categories: [(&str, &str, fn(&str) -> String); 4] = [
+        let parse_categories: [(&str, &str, fn(&str) -> String); 7] = [
+            ("tests/parser", "parse", crate::parsing::dump::dump),
+            ("tests/parser/unicode", "parse", crate::parsing::dump::dump),
+            (
+                "tests/parser/lenient",
+                "parse_lenient",
+                crate::parsing::dump::dump_lenient,
+            ),
             (
                 "tests/parser/block",
                 "parse_block_items",

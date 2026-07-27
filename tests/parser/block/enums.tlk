@@ -1,0 +1,18 @@
+enum Shape {
+	case circle(Float)
+	case rect(width: Float, height: Float)
+	case empty
+}
+enum Tree 'linear {
+	case leaf(Int), node(Int, Int)
+}
+enum Opt<T> {
+	case some(T)
+	case none
+	func or_default(fallback: T) -> T {
+		match self {
+			.some(v) -> v,
+			.none -> fallback
+		}
+	}
+}

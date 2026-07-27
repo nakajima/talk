@@ -1,0 +1,11 @@
+tokens:
+  Pub @0..3 "pub"
+  Pub @4..7 "pub"
+  Func @8..12 "func"
+  Identifier @13..14 "f"
+  LeftParen @14..15 "("
+  RightParen @15..16 ")"
+  LeftBrace @17..18 "{"
+  RightBrace @18..19 "}"
+  Newline @19..20
+parse error: parser.repeated-visibility-modifier Repeated visibility modifier; write `pub` once

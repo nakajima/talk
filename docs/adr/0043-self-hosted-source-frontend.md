@@ -434,7 +434,11 @@ The parser port is underway on the same differential loop, one dump
 category at a time. The frontend is now a multi-file package —
 `Lexer.tlk`, `Ast.tlk`, `Parser.tlk`, `Dump.tlk`, linked with ordinary
 `use package::…` imports (verified to resolve for the bootstrap
-command's in-memory sources). Four slices are in:
+command's in-memory sources). **Every dump category is now in**: all
+seven corpus directories (`tests/parser` root, `unicode/`, `lenient/`,
+`block/`, `expr/`, `pattern/`, `type/`) are harness-covered
+byte-for-byte, alongside `lex` and `trees` over the whole corpus. The
+slices, in landing order:
 
 - **Block items**: let declarations, literal and binding patterns, the
   Pratt expression core (full operator precedence ladder, unary
@@ -457,6 +461,52 @@ command's in-memory sources). Four slices are in:
   arguments (including the `>>` split for nested closers), and
   `any P<Assoc = T>`. Typed `let` declarations ride along in the
   block-items category.
+- **Statements and control flow**: `match` with arm blocks and
+  `-> expr` bodies, `if`/`else`/`else if` (boolean chains fold into
+  nested statements with synthesized inner spans; pattern-bearing ifs
+  desugar at parse time into two-arm matches with `@synthesized` arms,
+  exactly like the reference), `loop`, `for`-in with iterable ownership
+  markers and the block-arg pattern-replacement quirk (whose replaced
+  pattern inherits the Parameter's inverted meta extents —
+  `tokens=16..15` — pinned as-is), `return`/`break`/`continue`/
+  `'continue`, assignment statements (which escape the reference's
+  expression grammar as `Node::Stmt`; the port carries them in a
+  one-slot field with a `require_expr` guard reproducing `into_expr`'s
+  `parser.cannot-assign` at every expression-required site), range
+  operators, array literals, subscripts (including subscript
+  assignment), and the trailing-block context stack that keeps a
+  control-flow header's `{` attached to its body. A member assignment's
+  statement span starts at the RHS (the reference pushes its location
+  after the `=`) — pinned, not fixed.
+- **Declarations**: `func` (labels, ownership modes, generics with
+  bounds and defaults, capture lists, effect rows, where clauses,
+  signature-vs-body split in protocol bodies), `struct`/`enum`/
+  `protocol` with tick attributes (`'heap`, `'linear`), conformance
+  gating, and members (properties, inits, methods with `mut`/
+  `consuming`/`static` and the explicit-`self` rejection), `extend`
+  with binders and heads, enum variants (labels, multi-case lines, GADT
+  results), `typealias`, `effect`, `associated`, top-level `macro`
+  rules, and the full ADR 0042 `pub` admission matrix with its error
+  ladder. The `Func` node renders its body's span with the
+  declaration's extents as `tokens=` — the only place the corpus
+  exercises meta extents besides the for-loop quirk.
+- **The file category and the remaining directories**: the whole-file
+  strict parse (`parse_with_comments`) with file-level imports, the
+  comments section (the Talk lexer now preserves dropped line-comment
+  spans), lexer-error surfacing as `parser.lexer` with the reference's
+  1-based-line/0-based-CHARACTER-counted-column rendering (including
+  the consume-before-error position for unexpected characters), and the
+  reference's lazy-pull masking rule — a lex failure replaces a
+  downstream parse error exactly when the parse's cursor reached the
+  truncation point (its 2-token lookahead), modeled as
+  `pos + 1 >= token_count` at failure time. `parse_lenient` wraps the
+  same parse, degrading a hard failure to an empty tree plus one
+  diagnostic. The `@_ir` attribute parses far enough to reproduce the
+  corpus's pinned `cmp` operator error; instruction success paths stay
+  unported. Multi-clause `if` conditions that would require duplicating
+  the else block (the reference clones it per clause) are deferred with
+  an `unported` marker until the AST grows a deep-copy walk — move-only
+  Strings make implicit cloning impossible.
 
 Grammar not yet ported fails with a distinctive `talk-parser.unported`
 code so a divergence names the missing construct instead of silently
@@ -474,8 +524,10 @@ payload expression's id); the missing-expression error that embedded
 the `Debug` dump of the entire AST; `consume_any`'s expected-token
 list rendered via `Debug` rather than as token spellings; the
 record-pattern fallthrough error, which printed a token kind's `Debug`
-form; and the effect-row error, which printed a whole token's `Debug`
-form. Two behavior fixes rode along rather than being enshrined: a
+form; the effect-row error, which printed a whole token's `Debug`
+form; and the node-to-declaration conversion error, which printed the
+entire offending node's `Debug` form (now just "could not convert node
+to Decl", pinned by a stray-statement-in-struct fixture). Two behavior fixes rode along rather than being enshrined: a
 token that cannot begin an expression now errors immediately, where the
 reference previously spun the infix loop against a progress guard
 (consuming nothing) and reported a misleading `infinite-loop`
@@ -509,3 +561,19 @@ Further compiler findings from the port, still open:
 - **Irrefutable if-let warning spans are useless.** An if-let over a
   single-variant enum correctly warns that the implicit else-arm never
   runs, but the diagnostic points at 1:1 of the file.
+
+With every dump category green, what remains for Stage 2 is growing the
+parse-covered corpus toward whole-file parses of `core/` and `stdlib/`
+(the lex/trees harness already covers them; the parse harness covers
+`tests/parser/**`). That means porting the grammar still marked
+`unported`, none of which any pinned fixture exercises: `as` casts,
+trailing-block and paren-less string calls, record literals and record
+spread, generic call arguments and `Expr::Constructor` references, the
+ADR 0035 static language (static parameters, arguments, and comparison
+predicates), let-else and or-pattern let desugaring, multi-clause `if`
+duplication (needs an AST deep-copy walk), float-lexed positional
+member chains (`x.0.1`), `_:` argument labels and argument ownership
+modes, effect handlers (`@handle`), `@_ir` instruction success paths,
+`[T; N]` inline-array types, and block-parameter type annotations.
+After that: the bridge slice (ABI descriptor plus the generated Rust
+adapter for parse results) and the checked-in-artifact cutover wiring.

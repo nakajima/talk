@@ -1,0 +1,186 @@
+tokens:
+  Pub @0..3 "pub"
+  Struct @4..10 "struct"
+  Identifier @11..16 "Point"
+  LeftBrace @17..18 "{"
+  Newline @18..19
+  Let @20..23 "let"
+  Identifier @24..25 "x"
+  Colon @25..26 ":"
+  Identifier @27..30 "Int"
+  Newline @30..31
+  Let @32..35 "let"
+  Identifier @36..37 "y"
+  Colon @37..38 ":"
+  Identifier @39..42 "Int"
+  Newline @42..43
+  Init @44..48 "init"
+  LeftParen @48..49 "("
+  Identifier @49..50 "x"
+  Colon @50..51 ":"
+  Identifier @52..55 "Int"
+  Comma @55..56 ","
+  Identifier @57..58 "y"
+  Colon @58..59 ":"
+  Identifier @60..63 "Int"
+  RightParen @63..64 ")"
+  LeftBrace @65..66 "{"
+  Newline @66..67
+  Identifier @69..73 "self"
+  Dot @73..74 "."
+  Identifier @74..75 "x"
+  Equals @76..77 "="
+  Identifier @78..79 "x"
+  Newline @79..80
+  Identifier @82..86 "self"
+  Dot @86..87 "."
+  Identifier @87..88 "y"
+  Equals @89..90 "="
+  Identifier @91..92 "y"
+  Newline @92..93
+  RightBrace @94..95 "}"
+  Newline @95..96
+  Pub @97..100 "pub"
+  Func @101..105 "func"
+  Identifier @106..115 "magnitude"
+  LeftParen @115..116 "("
+  RightParen @116..117 ")"
+  Arrow @118..120 "->"
+  Identifier @121..124 "Int"
+  LeftBrace @125..126 "{"
+  Newline @126..127
+  Identifier @129..130 "x"
+  Star @131..132 "*"
+  Identifier @133..134 "x"
+  Plus @135..136 "+"
+  Identifier @137..138 "y"
+  Star @139..140 "*"
+  Identifier @141..142 "y"
+  Newline @142..143
+  RightBrace @144..145 "}"
+  Newline @145..146
+  Mut @147..150 "mut"
+  Func @151..155 "func"
+  Identifier @156..161 "reset"
+  LeftParen @161..162 "("
+  RightParen @162..163 ")"
+  LeftBrace @164..165 "{"
+  Newline @165..166
+  Identifier @168..172 "self"
+  Dot @172..173 "."
+  Identifier @173..174 "x"
+  Equals @175..176 "="
+  Int @177..178 "0"
+  Newline @178..179
+  RightBrace @180..181 "}"
+  Newline @181..182
+  Static @183..189 "static"
+  Func @190..194 "func"
+  Identifier @195..201 "origin"
+  LeftParen @201..202 "("
+  RightParen @202..203 ")"
+  Arrow @204..206 "->"
+  Identifier @207..212 "Point"
+  LeftBrace @213..214 "{"
+  Newline @214..215
+  Identifier @217..222 "Point"
+  LeftParen @222..223 "("
+  Identifier @223..224 "x"
+  Colon @224..225 ":"
+  Int @226..227 "0"
+  Comma @227..228 ","
+  Identifier @229..230 "y"
+  Colon @230..231 ":"
+  Int @232..233 "0"
+  RightParen @233..234 ")"
+  Newline @234..235
+  RightBrace @236..237 "}"
+  Newline @237..238
+  RightBrace @238..239 "}"
+  Newline @239..240
+  Struct @240..246 "struct"
+  Identifier @247..254 "Wrapper"
+  Less @254..255 "<"
+  Identifier @255..256 "T"
+  Greater @256..257 ">"
+  LeftBrace @258..259 "{"
+  Newline @259..260
+  Let @261..264 "let"
+  Identifier @265..270 "value"
+  Colon @270..271 ":"
+  Identifier @272..273 "T"
+  Newline @273..274
+  RightBrace @274..275 "}"
+  Newline @275..276
+  Struct @276..282 "struct"
+  Identifier @283..287 "Node"
+  EffectName @289..293 "heap"
+  LeftBrace @294..295 "{"
+  Newline @295..296
+  Let @297..300 "let"
+  Identifier @301..305 "next"
+  Colon @305..306 ":"
+  Identifier @307..310 "Int"
+  Newline @310..311
+  RightBrace @311..312 "}"
+  Newline @312..313
+tree:
+  Decl::Struct @4..239
+    Body @17..239
+      Decl::Property @20..30 "let x: Int"
+        TypeAnnotation::Nominal @27..30 "Int"
+      Decl::Property @32..42 "let y: Int"
+        TypeAnnotation::Nominal @39..42 "Int"
+      Decl::Init @44..95
+        Parameter @50..55 ": Int"
+          TypeAnnotation::Nominal @52..55 "Int"
+        Parameter @58..63 ": Int"
+          TypeAnnotation::Nominal @60..63 "Int"
+        Block @65..95
+          Stmt::Assignment @78..79 "x"
+            Expr::Member @69..75 "self.x"
+              Expr::Variable @69..73 "self"
+            Expr::Variable @78..79 "x"
+          Stmt::Assignment @91..92 "y"
+            Expr::Member @82..88 "self.y"
+              Expr::Variable @82..86 "self"
+            Expr::Variable @91..92 "y"
+      Decl::Method @101..145
+        Func @125..145 tokens=101..145
+          Block @125..145
+            Stmt::Expr @129..142 "x * x + y * y"
+              Expr::Binary @129..142 "x * x + y * y"
+                Expr::Binary @129..134 "x * x"
+                  Expr::Variable @129..130 "x"
+                  Expr::Variable @133..134 "x"
+                Expr::Binary @137..142 "y * y"
+                  Expr::Variable @137..138 "y"
+                  Expr::Variable @141..142 "y"
+          TypeAnnotation::Nominal @121..124 "Int"
+      Decl::Method @151..181
+        Func @164..181 tokens=151..181
+          Block @164..181
+            Stmt::Assignment @177..178 "0"
+              Expr::Member @168..174 "self.x"
+                Expr::Variable @168..172 "self"
+              Expr::LiteralInt @177..178 "0"
+      Decl::Method @190..237
+        Func @213..237 tokens=190..237
+          Block @213..237
+            Stmt::Expr @217..234 "Point(x: 0, y: 0)"
+              Expr::Call @217..234 "Point(x: 0, y: 0)"
+                Expr::Variable @217..222 "Point"
+                CallArg @223..227 "x: 0"
+                  Expr::LiteralInt @226..227 "0"
+                CallArg @229..233 "y: 0"
+                  Expr::LiteralInt @232..233 "0"
+          TypeAnnotation::Nominal @207..212 "Point"
+  Decl::Struct @240..275
+    GenericDecl @255..256 "T"
+    Body @258..275
+      Decl::Property @261..273 "let value: T"
+        TypeAnnotation::Nominal @272..273 "T"
+  Decl::Struct @276..312
+    Body @294..312
+      Decl::Property @297..310 "let next: Int"
+        TypeAnnotation::Nominal @307..310 "Int"

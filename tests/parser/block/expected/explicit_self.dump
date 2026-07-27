@@ -1,0 +1,16 @@
+tokens:
+  Struct @0..6 "struct"
+  Identifier @7..8 "S"
+  LeftBrace @9..10 "{"
+  Newline @10..11
+  Func @12..16 "func"
+  Identifier @17..18 "f"
+  LeftParen @18..19 "("
+  Identifier @19..23 "self"
+  RightParen @23..24 ")"
+  LeftBrace @25..26 "{"
+  RightBrace @26..27 "}"
+  Newline @27..28
+  RightBrace @28..29 "}"
+  Newline @29..30
+parse error: parser.explicit-self-parameter Methods do not declare `self`; use `func`, `mut func`, or `consuming func`
