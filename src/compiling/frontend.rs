@@ -185,6 +185,37 @@ pub fn parse_source(
     })
 }
 
+/// Run one of the frontend's `String -> String` validation exports
+/// (the dump surface) through the embedded session.
+pub fn dump_export(name: &str, source: &str) -> Result<String, String> {
+    SESSION.with(|cell| {
+        let session = cell
+            .get_or_init(|| {
+                let module = load_embedded()?;
+                let schema = crate::compiling::abi::parse_schema(EMBEDDED_ABI)?;
+                Ok((module, schema))
+            })
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let (module, _) = session;
+        let mut io = talk_runtime::io::CaptureIO::default();
+        let run = talk_runtime::interp::run_export(
+            module,
+            name,
+            &[talk_runtime::interp::HostValue::String(
+                source.as_bytes().to_vec(),
+            )],
+            crate::backend::string_shape(),
+            talk_runtime::interp::Budgets::default(),
+            &mut io,
+        )?;
+        let bytes = run
+            .string_bytes(&run.value)
+            .map_err(|error| format!("{name} did not return a string: {error}"))?;
+        String::from_utf8(bytes.to_vec()).map_err(|error| format!("{name} output is not UTF-8: {error}"))
+    })
+}
+
 /// Lex one source through the frontend artifact (ADR 0043 Stage 5):
 /// the token stream with comments included as LineComment tokens,
 /// plus whether the scan completed without a lex error.

@@ -1,5 +1,5 @@
 use crate::{
-    lexer::LexerError, parser::BlockContext, span::Span, token::Token, token_kind::TokenKind,
+    lexing::LexerError, span::Span, token::Token, token_kind::TokenKind,
 };
 use std::{error::Error, fmt::Display};
 
@@ -42,6 +42,25 @@ impl Display for ExpectedSyntax {
             Self::Token(token) => write!(f, "`{}`", token.as_str()),
             Self::Description(description) => f.write_str(description),
         }
+    }
+}
+
+#[derive(PartialEq, Clone, Copy, Debug, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+pub enum BlockContext {
+    Struct,
+    Protocol,
+    Enum,
+    Func,
+    If,
+    Loop,
+    MatchArmBody,
+    Extend,
+    None,
+}
+
+impl BlockContext {
+    pub fn allows_conformances(&self) -> bool {
+        matches!(self, BlockContext::Extend | BlockContext::Protocol)
     }
 }
 

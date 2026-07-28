@@ -172,14 +172,21 @@ pub mod tests {
             )))
         );
 
-        assert_eq!(
-            *tree
-                .1
-                .symbols_to_node
-                .get(&Symbol::Global(GlobalId::from(1)))
-                .unwrap(),
-            NodeID(FileID(0), 1)
-        );
+        // The declaration node: the binding pattern of the `let`
+        // (id numbering is the frontend adapter's, not asserted).
+        let declaration = *tree
+            .1
+            .symbols_to_node
+            .get(&Symbol::Global(GlobalId::from(1)))
+            .unwrap();
+        let node = tree.0.find(declaration).expect("declaration node exists");
+        assert!(matches!(
+            node,
+            crate::node::Node::Pattern(crate::node_kinds::pattern::Pattern {
+                kind: crate::node_kinds::pattern::PatternKind::Bind(_),
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -2128,9 +2135,6 @@ pub mod tests {
 
     /// Helper to resolve multiple files with isolated modules enabled
     fn resolve_multi(files: &[(&str, &str)]) -> (Vec<AST<NameResolved>>, ResolvedNames) {
-        use crate::lexer::Lexer;
-        use crate::parser::Parser;
-
         let modules = ModuleEnvironment::default();
         let mut name_resolver = NameResolver::with_source_root(
             Rc::new(modules),
@@ -2140,9 +2144,8 @@ pub mod tests {
         let mut parseds = Vec::new();
 
         for (i, (path, code)) in files.iter().enumerate() {
-            let lexer = Lexer::new(code);
-            let parser = Parser::new(path.to_string(), FileID(i as u32), lexer);
-            let ast = parser.parse().unwrap().0;
+            let (ast, _) =
+                crate::compiling::frontend::parse_ast(code, FileID(i as u32), path).unwrap();
             parseds.push(ast);
         }
 

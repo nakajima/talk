@@ -171,88 +171,14 @@ mod tests {
     /// corpus; the parser exports cover the directories listed per
     /// category and grow as the Talk parser's surface grows.
     #[test]
-    fn talk_frontend_matches_rust_frontend_on_covered_corpus() {
+    fn checked_in_frontend_artifacts_are_a_fixed_point() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let outcome = crate::compiling::frontend::regenerate(root).expect("frontend bootstraps");
-        let module = talk_runtime::Module::decode_bytecode(&outcome.image).expect("image decodes");
 
-        let mut covered: Vec<std::path::PathBuf> = Vec::new();
-        for dir in [
-            "tests/parser",
-            "tests/parser/expr",
-            "tests/parser/pattern",
-            "tests/parser/type",
-            "tests/parser/block",
-            "tests/parser/tokentree",
-            "tests/parser/lenient",
-            "tests/parser/unicode",
-            "core",
-            "stdlib",
-            "tests/examples",
-            "examples",
-        ] {
-            for entry in std::fs::read_dir(root.join(dir)).expect("corpus dir") {
-                let path = entry.expect("corpus entry").path();
-                if path.extension().is_some_and(|ext| ext == "tlk") {
-                    covered.push(path);
-                }
-            }
-        }
-        covered.sort();
-        for path in covered {
-            let path = path.display().to_string();
-            let source = std::fs::read_to_string(&path).expect("read corpus source");
-            let talk_tokens = run_string_export(&module, "lex", &source);
-            let rust_tokens = crate::parsing::dump::dump_tokens(&source);
-            assert_eq!(talk_tokens, rust_tokens, "token divergence on {path}");
-
-            let talk_trees = run_string_export(&module, "trees", &source);
-            let rust_trees = crate::parsing::dump::dump_token_trees(&source);
-            assert_eq!(talk_trees, rust_trees, "tree divergence on {path}");
-        }
-
-        let parse_categories: [(&str, &str, fn(&str) -> String); 9] = [
-            ("tests/parser", "parse", crate::parsing::dump::dump),
-            ("tests/parser/unicode", "parse", crate::parsing::dump::dump),
-            ("core", "parse", crate::parsing::dump::dump),
-            ("stdlib", "parse", crate::parsing::dump::dump),
-            (
-                "tests/parser/lenient",
-                "parse_lenient",
-                crate::parsing::dump::dump_lenient,
-            ),
-            (
-                "tests/parser/block",
-                "parse_block_items",
-                crate::parsing::dump::dump_block_items,
-            ),
-            ("tests/parser/expr", "parse_expr", crate::parsing::dump::dump_expr),
-            (
-                "tests/parser/pattern",
-                "parse_pattern",
-                crate::parsing::dump::dump_pattern,
-            ),
-            ("tests/parser/type", "parse_type", crate::parsing::dump::dump_type),
-        ];
-        for (dir, export, rust_dump) in parse_categories {
-            let mut fixtures: Vec<std::path::PathBuf> = std::fs::read_dir(root.join(dir))
-                .expect("parse corpus dir")
-                .filter_map(|entry| entry.ok())
-                .map(|entry| entry.path())
-                .filter(|path| path.extension().is_some_and(|ext| ext == "tlk"))
-                .collect();
-            fixtures.sort();
-            for path in fixtures {
-                let path = path.display().to_string();
-                let source = std::fs::read_to_string(&path).expect("read corpus source");
-                let talk_dump = run_string_export(&module, export, &source);
-                assert_eq!(
-                    talk_dump,
-                    rust_dump(&source),
-                    "parse divergence on {path}"
-                );
-            }
-        }
+        // The Rust frontend is retired (ADR 0043 Stage 5): the frozen
+        // dump format now lives in the pinned goldens
+        // (`parser_dump_corpus_matches_expected`), and this harness
+        // keeps the regeneration gates.
 
         // The strong staleness gate (ADR 0043 §3): the artifact this
         // compiler regenerates from the current sources must be the

@@ -118,7 +118,7 @@ pub mod tests {
                 type_annotation: None,
                 rhs: Some(any_expr!(ExprKind::Func(Func {
                     origin: FuncOrigin::Decl,
-                    id: NodeID(FileID(0), 2),
+                    id: NodeID::ANY,
                     name: Name::Raw("fizz".into()),
                     name_span: Span::ANY,
                     generics: vec![],

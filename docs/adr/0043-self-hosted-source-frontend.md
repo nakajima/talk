@@ -906,10 +906,18 @@ identifier), and the REPL's declaration probe all read
 `frontend::lex`. No production code path touches the Rust lexer or
 parser any longer.
 
-What remains for Stage 5's final slice: delete the Rust
-lexer/parser. Their remaining uses are the validation apparatus
-itself — the differential harness's reference side, the bridged
-fidelity comparison, the seam test, and the parser test suite. That
-deletion retires the reference comparisons (the dump corpus becomes
-pinned goldens) and leaves the stage-1/stage-2 fixed point as the
-permanent CI gate.
+**Stage 5 is COMPLETE: the Rust lexer and parser are deleted**
+(−14,654 lines net in the final slice). The golden corpus now runs
+the frontend's own dump exports against the pinned `expected/` files;
+the differential harness's reference side is retired, with the
+regeneration and fixed-point gates kept
+(`checked_in_frontend_artifacts_are_a_fixed_point`); the bridged
+fidelity and round-trip comparisons — migration instruments whose
+job was done — are deleted with their reference; and the parser test
+suite went with its subject, leaving a slim assertion-DSL module
+whose `parse` runs the frontend. Kept: `Token`/`TokenKind`, the
+keyword table (the formatter reads it), `LexerError` and
+`BlockContext` (moved to surviving modules; `ParserError` payloads),
+and the node/meta/span data model. Talk is now the single owner of
+the source grammar, end to end — the precondition this ADR set for
+the procedural-macro project.

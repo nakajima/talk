@@ -103,14 +103,15 @@ impl LowerTrailingBlocks {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::Lexer;
-    use crate::parser::Parser;
 
     #[test]
     fn trailing_blocks_become_anonymous_func_arguments() {
-        let lexer = Lexer::new("foo(1) { x in x }\nbar { $0 }\nbaz {}\n");
-        let parser = Parser::new("-", crate::node_id::FileID(0), lexer);
-        let (mut ast, _) = parser.parse().expect("parse");
+        let (mut ast, _) = crate::compiling::frontend::parse_ast(
+            "foo(1) { x in x }\nbar { $0 }\nbaz {}\n",
+            crate::node_id::FileID(0),
+            "-",
+        )
+        .expect("parse");
         LowerTrailingBlocks::run(&mut ast);
 
         let mut calls = 0;

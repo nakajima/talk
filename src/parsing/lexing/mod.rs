@@ -1,9 +1,37 @@
 pub mod keywords;
-pub mod lexer;
 pub mod token;
 pub mod token_kind;
 
-use lexer::LexerError;
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum LexerError {
+    ExpectedChar { expected: char, actual: char },
+    UnexpectedInput(char),
+    InvalidEscape(char),
+    UnexpectedEOF,
+    InvalidUnicodeEscape,
+    EmptyCharacterLiteral,
+    UnterminatedCharacterLiteral,
+    UnterminatedString,
+    EmptyQuotedIdentifier,
+}
+
+impl LexerError {
+    pub fn message(&self) -> String {
+        match &self {
+            Self::ExpectedChar { expected, actual } => {
+                format!("Expected character: {expected:?}, got: {actual:?}")
+            }
+            Self::UnexpectedInput(ch) => format!("Unexpected character: {ch:?}"),
+            Self::UnexpectedEOF => "Unexpected end of file".to_string(),
+            Self::InvalidEscape(ch) => format!("Invalid escape: {ch:?}"),
+            Self::InvalidUnicodeEscape => "Invalid unicode escape".to_string(),
+            Self::EmptyCharacterLiteral => "Empty character literal".to_string(),
+            Self::UnterminatedCharacterLiteral => "Unterminated character literal".to_string(),
+            Self::UnterminatedString => "Unterminated string".to_string(),
+            Self::EmptyQuotedIdentifier => "Empty quoted identifier".to_string(),
+        }
+    }
+}
 
 /// Process escape sequences in a string literal.
 /// The input should NOT include surrounding quotes.

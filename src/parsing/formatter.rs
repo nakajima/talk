@@ -3066,14 +3066,12 @@ pub fn format<Phase: ASTPhase>(ast: &AST<Phase>, width: usize) -> String {
 mod formatter_tests {
     use super::*;
     use crate::ast::Parsed;
-    use crate::lexer::Lexer;
     use crate::node_id::FileID;
-    use crate::parser::Parser;
 
     fn parse(code: &str) -> AST<Parsed> {
-        let lexer = Lexer::preserving_comments(code);
-        let parser = Parser::new("-", FileID(0), lexer);
-        parser.parse().unwrap().0
+        crate::compiling::frontend::parse_ast(code, FileID(0), "-")
+            .unwrap()
+            .0
     }
 
     fn format_code(input: &str, width: usize) -> String {

@@ -287,34 +287,28 @@ pub struct Driver<Phase: DriverPhase = Initial> {
 #[cfg(test)]
 mod frontend_parse_tests {
     use super::*;
-    use crate::{lexer::Lexer, parser::Parser};
 
-    /// The Stage 4 driver seam: one source parsed through the frontend
-    /// artifact assembles into the same AST shape the Rust parser
-    /// builds (full equivalence is the bridge fidelity suite; this
-    /// pins the driver-facing assembly — ids, file identity, spans).
+    /// The Stage 4 driver seam: one source parsed through the
+    /// frontend artifact assembles into the compiler's parse AST with
+    /// per-file identity and continued id minting. (Byte equivalence
+    /// with the retired Rust parser was proven by the migration
+    /// harness; the goldens pin the format.)
     #[test]
     fn frontend_parse_matches() {
         let source = "struct Pair {\n\tlet a: Int\n}\n\nfunc make() -> Pair {\n\tPair(a: 4)\n}\n";
         let file_id = FileID(3);
-        let (ast, diagnostics) = crate::compiling::frontend::parse_ast(source, file_id, "seam.tlk")
-            .expect("parses");
+        let (ast, diagnostics) =
+            crate::compiling::frontend::parse_ast(source, file_id, "seam.tlk").expect("parses");
         assert!(diagnostics.is_empty());
-        let reference = Parser::new("seam.tlk", file_id, Lexer::new(source))
-            .parse()
-            .expect("reference parses")
-            .0;
-        assert_eq!(ast.roots.len(), reference.roots.len());
+        assert_eq!(ast.roots.len(), 2);
         assert_eq!(ast.file_id, file_id);
-        assert!(ast.node_ids.last >= reference.roots.len() as u32);
-        let first_span = match (&ast.roots[0], &reference.roots[0]) {
-            (crate::node::Node::Decl(ours), crate::node::Node::Decl(theirs)) => {
-                (ours.span, theirs.span)
-            }
-            other => panic!("unexpected root shapes: {other:?}"),
+        assert!(ast.node_ids.last > 0);
+        let crate::node::Node::Decl(first) = &ast.roots[0] else {
+            panic!("expected a decl root");
         };
-        assert_eq!(first_span.0.start, first_span.1.start);
-        assert_eq!(first_span.0.file_id, file_id);
+        assert_eq!(first.span.start, 0);
+        assert_eq!(first.span.file_id, file_id);
+        assert!(ast.meta.get(&first.id).is_some());
     }
 }
 
