@@ -125,7 +125,13 @@ fn candidate(function: &Function) -> Option<Candidate> {
     let mut writes_param = false;
     for block in &function.blocks {
         match block.term {
-            Some(Term::Goto(_, _) | Term::Branch { .. } | Term::Return(_) | Term::Trap(_)) => {}
+            Some(
+                Term::Goto(_, _)
+                | Term::Branch { .. }
+                | Term::Switch { .. }
+                | Term::Return(_)
+                | Term::Trap(_),
+            ) => {}
             _ => return None,
         }
         if !block.insts.iter().all(primitive) {
@@ -287,6 +293,15 @@ fn inline_round(program: &mut Program) -> u64 {
                         cond: remap(*cond, &args, base, body.arity),
                         then_block: then_block + block_base,
                         else_block: else_block + block_base,
+                    }),
+                    Some(Term::Switch {
+                        tag,
+                        targets,
+                        default,
+                    }) => Some(Term::Switch {
+                        tag: remap(*tag, &args, base, body.arity),
+                        targets: targets.iter().map(|target| target + block_base).collect(),
+                        default: default + block_base,
                     }),
                     Some(Term::Return(value)) => {
                         // The callee's return becomes the call's result

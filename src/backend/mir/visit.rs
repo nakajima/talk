@@ -166,7 +166,7 @@ pub(crate) fn visit_inst(inst: &mut Inst, visit: &mut impl FnMut(Slot, &mut Loca
 
 pub(crate) fn visit_term(term: &mut Term, visit: &mut impl FnMut(Slot, &mut LocalId)) {
     match term {
-        Term::Branch { cond: op, .. } | Term::Return(op) => {
+        Term::Branch { cond: op, .. } | Term::Switch { tag: op, .. } | Term::Return(op) => {
             if let Operand::Local(local) = op {
                 visit(Slot::Use, local);
             }

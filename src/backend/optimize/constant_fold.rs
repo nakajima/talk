@@ -129,7 +129,9 @@ impl ConstantFolder {
                 }
                 changed
             }
-            Term::Branch { cond, .. } | Term::Return(cond) => self.resolve(cond),
+            Term::Branch { cond, .. } | Term::Switch { tag: cond, .. } | Term::Return(cond) => {
+                self.resolve(cond)
+            }
             Term::Trap(_) | Term::UnwindRet => false,
         }
     }

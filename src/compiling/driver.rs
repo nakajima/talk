@@ -962,7 +962,7 @@ pub mod tests {
         .expect("service compiles");
         let mut stats = exe.stats();
         assert_eq!(stats.vm.runs(), 0);
-        assert_eq!(stats.optimizations.passes.len(), 6);
+        assert_eq!(stats.optimizations.passes.len(), 7);
         assert!(
             stats
                 .optimizations
@@ -988,6 +988,26 @@ pub mod tests {
         let rendered = stats.render();
         assert!(rendered.contains("Optimization statistics"), "{rendered}");
         assert!(rendered.contains("VM instruction statistics"), "{rendered}");
+    }
+
+    #[test]
+    fn enum_matches_lower_to_runtime_switch_dispatch() {
+        let source = "enum Choice {\n\tcase zero, one, two\n}\npub func choose() -> Int {\n\tlet choice = Choice.two\n\tmatch choice {\n\t\t.zero -> 0,\n\t\t.one -> 1,\n\t\t.two -> 2\n\t}\n}\n";
+        let exe = service_executable(source, &["choose"]).expect("service compiles");
+        assert!(
+            exe.optimization_stats()
+                .passes
+                .iter()
+                .any(|pass| pass.name == "match_switch" && pass.applied > 0),
+            "expected match switch optimization"
+        );
+        assert!(exe.render_bytecode().contains("switch r"));
+
+        let mut io = CaptureIO::default();
+        let outcome = exe
+            .run_export("choose", &[], Budgets::default(), &mut io)
+            .expect("choose runs");
+        assert_eq!(outcome.value, Value::I64(2));
     }
 
     #[test]

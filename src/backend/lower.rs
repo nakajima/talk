@@ -177,6 +177,7 @@ fn lower_function(
     statics: &mut StaticsPool,
     effects: &mut EffectPool,
 ) -> Result<Chunk, BackendError> {
+    let switch_pool_start = module.switch_pool.len();
     let mut lowering = Lowering {
         code: Vec::new(),
         next_reg: function.n_locals,
@@ -212,7 +213,11 @@ fn lower_function(
         .iter()
         .map(|(pc, block)| (*pc, lowering.block_starts[*block]))
         .collect();
-    thread_and_compact(&mut lowering.code, &mut unwind);
+    thread_and_compact(
+        &mut lowering.code,
+        &mut unwind,
+        &mut lowering.module.switch_pool[switch_pool_start..],
+    );
     unwind.sort_unstable_by_key(|(suspension, _)| *suspension);
 
     let n_regs = lowering.max_reg.max(function.arity).max(1);
@@ -229,19 +234,23 @@ fn lower_function(
 /// chases through chains of bare jumps (the residue of empty blocks
 /// and inline splices), and a jump to the immediately following pc is
 /// deleted, with every surviving target and unwind entry renumbered.
-fn thread_and_compact(code: &mut Vec<Insn>, unwind: &mut [(u32, u32)]) {
+fn thread_and_compact(code: &mut Vec<Insn>, unwind: &mut [(u32, u32)], switch_targets: &mut [u32]) {
     // Removing a jump can turn another jump into a fallthrough; a few
     // rounds reach the fixpoint.
     for _ in 0..8 {
         let before = code.len();
-        thread_and_compact_once(code, unwind);
+        thread_and_compact_once(code, unwind, switch_targets);
         if code.len() == before {
             break;
         }
     }
 }
 
-fn thread_and_compact_once(code: &mut Vec<Insn>, unwind: &mut [(u32, u32)]) {
+fn thread_and_compact_once(
+    code: &mut Vec<Insn>,
+    unwind: &mut [(u32, u32)],
+    switch_targets: &mut [u32],
+) {
     let chase = |code: &[Insn], start: u32| -> u32 {
         let mut target = start;
         // A hop cap guards degenerate jump cycles (`loop {}`).
@@ -281,6 +290,9 @@ fn thread_and_compact_once(code: &mut Vec<Insn>, unwind: &mut [(u32, u32)]) {
     }
     for (_, cleanup) in unwind.iter_mut() {
         *cleanup = chase(code, *cleanup);
+    }
+    for target in switch_targets.iter_mut() {
+        *target = chase(code, *target);
     }
     // Compact away jumps to the next pc.
     let mut new_pc: Vec<u32> = Vec::with_capacity(code.len());
@@ -323,6 +335,9 @@ fn thread_and_compact_once(code: &mut Vec<Insn>, unwind: &mut [(u32, u32)]) {
         *suspension = remap(*suspension, &new_pc);
         *cleanup = remap(*cleanup, &new_pc);
     }
+    for target in switch_targets {
+        *target = remap(*target, &new_pc);
+    }
 }
 
 /// A jump operand waiting for its block's final pc.
@@ -335,6 +350,10 @@ enum Patch {
         pc: usize,
         then_block: usize,
         else_block: usize,
+    },
+    Switch {
+        targets_start: usize,
+        blocks: Vec<usize>,
     },
 }
 
@@ -532,6 +551,50 @@ impl Lowering<'_> {
                     cond,
                     then_target: 0,
                     else_target: 0,
+                });
+            }
+            Term::Switch {
+                tag,
+                targets,
+                default,
+            } => {
+                if targets
+                    .iter()
+                    .chain(std::iter::once(default))
+                    .any(|target| !self.block_params[*target].is_empty())
+                {
+                    return Err(BackendError::new(
+                        "backend bug: switch edge into a parameterized block".into(),
+                        Span::SYNTHESIZED,
+                    ));
+                }
+                let targets_len = u16::try_from(targets.len() + 1).map_err(|_| {
+                    BackendError::new(
+                        "backend bug: switch has too many targets".into(),
+                        Span::SYNTHESIZED,
+                    )
+                })?;
+                let targets_start = u32::try_from(self.module.switch_pool.len()).map_err(|_| {
+                    BackendError::new(
+                        "backend bug: switch pool is too large".into(),
+                        Span::SYNTHESIZED,
+                    )
+                })?;
+                let pool_start = self.module.switch_pool.len();
+                self.module
+                    .switch_pool
+                    .resize(pool_start + targets.len() + 1, 0);
+                let mut blocks = targets.clone();
+                blocks.push(*default);
+                self.patches.push(Patch::Switch {
+                    targets_start: pool_start,
+                    blocks,
+                });
+                let tag = self.reg(*tag);
+                self.code.push(Insn::Switch {
+                    tag,
+                    targets_start,
+                    targets_len,
                 });
             }
             Term::Return(value) => {
@@ -1126,6 +1189,18 @@ impl Lowering<'_> {
                     {
                         *then_target = self.block_starts[*then_block];
                         *else_target = self.block_starts[*else_block];
+                    }
+                }
+                Patch::Switch {
+                    targets_start,
+                    blocks,
+                } => {
+                    for (target, block) in self.module.switch_pool
+                        [*targets_start..*targets_start + blocks.len()]
+                        .iter_mut()
+                        .zip(blocks)
+                    {
+                        *target = self.block_starts[*block];
                     }
                 }
             }

@@ -185,6 +185,21 @@ fn run(
                     );
                 }
             }
+            Some(Term::Switch {
+                targets, default, ..
+            }) => {
+                for target in targets.iter().copied().chain(std::iter::once(*default)) {
+                    join_into(
+                        target,
+                        &state,
+                        &mut in_states,
+                        &mut worklist,
+                        &mut reported_joins,
+                        errors,
+                        name,
+                    );
+                }
+            }
             Some(Term::Return(_)) | Some(Term::UnwindRet) => {
                 for (local, &s) in state.iter().enumerate() {
                     if s == OWNED {

@@ -7,6 +7,7 @@ mod branch_fold;
 mod constant_fold;
 mod dead_code;
 mod inline_small;
+mod match_switch;
 mod simplify_block_params;
 mod unreachable_blocks;
 
@@ -52,6 +53,7 @@ struct Counters {
     branch_fold: u64,
     dead_code: u64,
     inline_small: u64,
+    match_switch: u64,
     simplify_block_params: u64,
     unreachable_blocks: u64,
 }
@@ -77,6 +79,10 @@ impl Counters {
                     applied: self.inline_small,
                 },
                 OptimizationPassStats {
+                    name: "match_switch",
+                    applied: self.match_switch,
+                },
+                OptimizationPassStats {
                     name: "simplify_block_params",
                     applied: self.simplify_block_params,
                 },
@@ -95,6 +101,8 @@ fn simplify(function: &mut Function, counters: &mut Counters) {
         counters.constant_fold += constant_fold.applied;
         let branch_fold = branch_fold::run(function);
         counters.branch_fold += branch_fold.applied;
+        let match_switch = match_switch::run(function);
+        counters.match_switch += match_switch.applied;
         let unreachable_blocks = unreachable_blocks::run(function);
         counters.unreachable_blocks += unreachable_blocks.applied;
         let simplify_block_params = simplify_block_params::run(function);
@@ -104,6 +112,7 @@ fn simplify(function: &mut Function, counters: &mut Counters) {
 
         if !constant_fold.changed
             && !branch_fold.changed
+            && !match_switch.changed
             && !unreachable_blocks.changed
             && !simplify_block_params.changed
             && !dead_code.changed

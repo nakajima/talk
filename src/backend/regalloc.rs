@@ -49,6 +49,14 @@ fn successors(block: &BlockData) -> Vec<usize> {
             out.push(then_block);
             out.push(else_block);
         }
+        Some(Term::Switch {
+            ref targets,
+            default,
+            ..
+        }) => {
+            out.extend(targets.iter().copied());
+            out.push(default);
+        }
         _ => {}
     }
     out
@@ -215,6 +223,14 @@ fn layout_blocks(function: &mut Function) {
             }) => {
                 *then_block = position[*then_block];
                 *else_block = position[*else_block];
+            }
+            Some(Term::Switch {
+                targets, default, ..
+            }) => {
+                for target in targets {
+                    *target = position[*target];
+                }
+                *default = position[*default];
             }
             _ => {}
         }

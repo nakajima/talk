@@ -155,6 +155,18 @@ pub(super) fn plan(blocks: &[BlockData], records: &[FlowRecord]) -> Plan {
                 pred_edges[*then_block].push((id, 0));
                 pred_edges[*else_block].push((id, 1));
             }
+            Some(Term::Switch {
+                targets, default, ..
+            }) => {
+                for (position, target) in targets
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(*default))
+                    .enumerate()
+                {
+                    pred_edges[target].push((id, position));
+                }
+            }
             _ => {}
         }
     }

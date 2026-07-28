@@ -392,6 +392,13 @@ pub(crate) enum Term {
         then_block: BlockId,
         else_block: BlockId,
     },
+    /// Direct dispatch by a nonnegative enum tag. `targets[tag]` is the
+    /// selected edge when present; every other value takes `default`.
+    Switch {
+        tag: Operand,
+        targets: Vec<BlockId>,
+        default: BlockId,
+    },
     Return(Operand),
     Trap(&'static str),
     /// End of an unwind cleanup block.
@@ -2745,6 +2752,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         then_block
                     } else {
                         else_block
+                    };
+                    let old = (*slot, Vec::new());
+                    *slot = edge;
+                    old
+                }
+                Some(Term::Switch {
+                    targets, default, ..
+                }) => {
+                    let slot = if *position < targets.len() {
+                        &mut targets[*position]
+                    } else {
+                        default
                     };
                     let old = (*slot, Vec::new());
                     *slot = edge;

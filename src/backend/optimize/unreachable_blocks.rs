@@ -47,6 +47,17 @@ impl Reachability {
                         pending.push(else_block);
                     }
                 }
+                Some(Term::Switch {
+                    ref targets,
+                    default,
+                    ..
+                }) => {
+                    for target in targets.iter().copied().chain(std::iter::once(default)) {
+                        if !reachable[target] {
+                            pending.push(target);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -100,6 +111,14 @@ impl Reachability {
                 }) => {
                     *then_block = remap[*then_block];
                     *else_block = remap[*else_block];
+                }
+                Some(Term::Switch {
+                    targets, default, ..
+                }) => {
+                    for target in targets {
+                        *target = remap[*target];
+                    }
+                    *default = remap[*default];
                 }
                 _ => {}
             }
